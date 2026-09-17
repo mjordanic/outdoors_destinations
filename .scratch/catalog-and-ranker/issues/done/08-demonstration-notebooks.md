@@ -16,13 +16,13 @@ and ratings/UI are future work.
 **Prior art:** Fixture from ticket 01, `rank_dayhikes` from 05, DriveTime stub
 from 06. README from 07 points at these notebooks.
 
-- [ ] At least one notebook under `notebooks/` executes with `uv run` / the
+- [x] At least one notebook under `notebooks/` executes with `uv run` / the
       project kernel against the committed OSM fixture
-- [ ] The notebook shows ingest keep/drop counts and the kept DayHike names
-- [ ] The notebook shows Ranking for one Seed and for two dissimilar Seeds
-- [ ] The notebook demonstrates unknown Seed failure
-- [ ] The notebook shows DriveTime filtering with a stub client, and states
+- [x] The notebook shows ingest keep/drop counts and the kept DayHike names
+- [x] The notebook shows Ranking for one Seed and for two dissimilar Seeds
+- [x] The notebook demonstrates unknown Seed failure
+- [x] The notebook shows DriveTime filtering with a stub client, and states
       that real routing needs local Valhalla tiles
-- [ ] Limitations are written in the notebook: Catalog unit is named
+- [x] Limitations are written in the notebook: Catalog unit is named
       `route=hiking` relations in a length band; no scraped reviews; no webpage
       ratings yet

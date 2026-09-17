@@ -62,6 +62,12 @@ The same seams the CLI wraps:
 
 Docstrings on those functions use the glossary in `CONTEXT.md`.
 
+## Demonstration notebooks
+
+[`notebooks/catalog-and-ranker.ipynb`](notebooks/catalog-and-ranker.ipynb)
+runs against the committed OSM fixture (no Geofabrik, no live Valhalla).
+Open it with the project interpreter after `uv sync`.
+
 ## Attribution (ODbL)
 
 OpenStreetMap data is © OpenStreetMap contributors, licensed under the Open
