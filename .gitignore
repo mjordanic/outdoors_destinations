@@ -1,0 +1,31 @@
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+*.egg-info/
+
+# bulky local extracts and routing tiles (rebuild from scripts)
+data/osm/
+data/valhalla/
+data/*.tif
+data/*.tiff
+data/*.pbf
+data/catalog.sqlite
+
+# env / secrets
+.env
+.env.local
+.env.*.local
+
+# agent worktrees
+.agents/worktrees/
+.claude/worktrees/
+.claude/settings.local.json
+
+# os / editor
+.DS_Store
+*.local
