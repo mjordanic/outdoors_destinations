@@ -1,4 +1,5 @@
 from dayhike.catalog import (
+    AmbiguousSeedName,
     AmenityFact,
     AmenityFacts,
     Catalog,
@@ -7,11 +8,15 @@ from dayhike.catalog import (
     Hiker,
     IngestReport,
     Label,
+    SeedNameError,
     Trailhead,
+    UnknownSeedName,
     build_catalog,
+    resolve_seed,
 )
 
 __all__ = [
+    "AmbiguousSeedName",
     "AmenityFact",
     "AmenityFacts",
     "Catalog",
@@ -20,6 +25,9 @@ __all__ = [
     "Hiker",
     "IngestReport",
     "Label",
+    "SeedNameError",
     "Trailhead",
+    "UnknownSeedName",
     "build_catalog",
+    "resolve_seed",
 ]

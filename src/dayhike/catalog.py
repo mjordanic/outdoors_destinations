@@ -167,6 +167,44 @@ class _OsmRelation:
     tags: dict[str, str]
 
 
+class SeedNameError(ValueError):
+    """A Seed name did not resolve to exactly one Catalog DayHike."""
+
+
+class UnknownSeedName(SeedNameError):
+    """No Catalog DayHike matched the Seed name."""
+
+
+class AmbiguousSeedName(SeedNameError):
+    """More than one Catalog DayHike matched the Seed name."""
+
+    def __init__(self, message: str, candidates: tuple[str, ...]) -> None:
+        super().__init__(message)
+        self.candidates = candidates
+
+
+def resolve_seed(catalog: Catalog, name: str) -> int:
+    """Return the DayHike id for a Seed name in an already-built Catalog.
+
+    Matching is a case-insensitive exact match after strip: the query and each
+    DayHike name are compared with ``str.casefold`` once leading and trailing
+    whitespace is removed. This does not rank and does not read OSM.
+    """
+    query = name.strip().casefold()
+    matches = [
+        hike for hike in catalog.dayhikes if hike.name.strip().casefold() == query
+    ]
+    if len(matches) == 1:
+        return matches[0].id
+    if not matches:
+        raise UnknownSeedName(f"Unknown Seed name {name!r}")
+    candidates = tuple(hike.name for hike in matches)
+    raise AmbiguousSeedName(
+        f"Seed name {name!r} matches more than one DayHike: {', '.join(candidates)}",
+        candidates,
+    )
+
+
 def build_catalog(osm_path: Path | str, catalog_path: Path | str) -> Catalog:
     osm_path = Path(osm_path)
     catalog_path = Path(catalog_path)
