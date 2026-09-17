@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="dayhike-fixture">
+  <!-- Lengths use meridians so 1° latitude ≈ 111.195 km at R=6371000 m.
+       5 km → Δlat 0.0449660803; 8 km → 0.0719457285; 30 km → 0.2697964818. -->
+
+  <!-- Ridge Walk (~10 km, named, in-band). Difficulty = max(hiking, mountain_hiking). -->
+  <node id="1" lat="45.0000000000" lon="15.0000000000" version="1"/>
+  <node id="2" lat="45.0449660803" lon="15.0000000000" version="1"/>
+  <node id="3" lat="45.0899321606" lon="15.0000000000" version="1"/>
+  <way id="101" version="1">
+    <nd ref="1"/>
+    <nd ref="2"/>
+    <tag k="highway" v="path"/>
+    <tag k="sac_scale" v="hiking"/>
+  </way>
+  <way id="102" version="1">
+    <nd ref="2"/>
+    <nd ref="3"/>
+    <tag k="highway" v="path"/>
+    <tag k="sac_scale" v="mountain_hiking"/>
+  </way>
+  <relation id="1001" version="1">
+    <member type="way" ref="101" role=""/>
+    <member type="way" ref="102" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Ridge Walk"/>
+  </relation>
+
+  <!-- Valley Path (~5 km, named, in-band). No sac_scale on member ways. -->
+  <node id="10" lat="45.2000000000" lon="15.1000000000" version="1"/>
+  <node id="11" lat="45.2449660803" lon="15.1000000000" version="1"/>
+  <way id="201" version="1">
+    <nd ref="10"/>
+    <nd ref="11"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <relation id="1002" version="1">
+    <member type="way" ref="201" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Valley Path"/>
+  </relation>
+
+  <!-- Unnamed in-band hiking relation (~5 km). -->
+  <node id="20" lat="45.3000000000" lon="15.2000000000" version="1"/>
+  <node id="21" lat="45.3449660803" lon="15.2000000000" version="1"/>
+  <way id="301" version="1">
+    <nd ref="20"/>
+    <nd ref="21"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <relation id="1003" version="1">
+    <member type="way" ref="301" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+  </relation>
+
+  <!-- Long Traverse (~30 km, named, out of band). -->
+  <node id="30" lat="45.4000000000" lon="15.3000000000" version="1"/>
+  <node id="31" lat="45.6697964818" lon="15.3000000000" version="1"/>
+  <way id="401" version="1">
+    <nd ref="30"/>
+    <nd ref="31"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <relation id="1004" version="1">
+    <member type="way" ref="401" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Long Traverse"/>
+  </relation>
+
+  <!-- Via Dinarica Red: named, ~8 km (would be in-band), iwn superroute. -->
+  <node id="40" lat="45.5000000000" lon="15.4000000000" version="1"/>
+  <node id="41" lat="45.5719457285" lon="15.4000000000" version="1"/>
+  <way id="501" version="1">
+    <nd ref="40"/>
+    <nd ref="41"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <relation id="1005" version="1">
+    <member type="way" ref="501" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Via Dinarica Red"/>
+    <tag k="network" v="iwn"/>
+  </relation>
+</osm>

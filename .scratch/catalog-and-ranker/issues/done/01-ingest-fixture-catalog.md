@@ -25,20 +25,20 @@ accept real PBFs onto gitignored `data/catalog.sqlite`.
 and Testing Decisions for `build_catalog`, ADR-0001, ADR-0002, and `CONTEXT.md`.
 Use DayHike, Trailhead, Catalog, Difficulty, Hiker as names in the public API.
 
-- [ ] `uv` project named `dayhike` runs `uv run pytest`
-- [ ] A committed OSM fixture contains two named in-band hiking relations, one
+- [x] `uv` project named `dayhike` runs `uv run pytest`
+- [x] A committed OSM fixture contains two named in-band hiking relations, one
       unnamed, one named out-of-band, and one long-distance network relation
-- [ ] `build_catalog` on that fixture persists exactly the two in-band named
+- [x] `build_catalog` on that fixture persists exactly the two in-band named
       DayHikes and no others
-- [ ] Each kept DayHike has a Trailhead lat/lon and a length inside 2–25 km
-- [ ] Difficulty is the maximum `sac_scale` on member ways, or a distinct
+- [x] Each kept DayHike has a Trailhead lat/lon and a length inside 2–25 km
+- [x] Difficulty is the maximum `sac_scale` on member ways, or a distinct
       missing value — not silently T1
-- [ ] The ingest report counts kept vs dropped by reason (unnamed, length,
+- [x] The ingest report counts kept vs dropped by reason (unnamed, length,
       network/superroute)
-- [ ] A second `build_catalog` on the same bytes yields the same DayHike
+- [x] A second `build_catalog` on the same bytes yields the same DayHike
       identities
-- [ ] SQLite includes an empty `labels` table with `hiker_id`, `dayhike_id`,
+- [x] SQLite includes an empty `labels` table with `hiker_id`, `dayhike_id`,
       `score`, `created_at`
-- [ ] OSM attribution is stored with the Catalog
-- [ ] Tests never read `data/` or the network; Catalog paths are temp dirs
-- [ ] `data/catalog.sqlite` remains gitignored for real extracts
+- [x] OSM attribution is stored with the Catalog
+- [x] Tests never read `data/` or the network; Catalog paths are temp dirs
+- [x] `data/catalog.sqlite` remains gitignored for real extracts
