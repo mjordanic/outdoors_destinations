@@ -6,7 +6,7 @@ import sqlite3
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
+from typing import Iterable, Mapping, Protocol, Sequence
 
 EARTH_RADIUS_M = 6_371_000
 MIN_LENGTH_M = 2_000
@@ -101,14 +101,33 @@ class Scaler:
 
 
 @dataclass(frozen=True)
+class Origin:
+    latitude: float
+    longitude: float
+
+
+@dataclass(frozen=True)
+class DriveTime:
+    hours: float
+
+
+@dataclass(frozen=True)
 class RankedDayHike:
     dayhike: DayHike
     score: float
+    drive_time: DriveTime | None = None
 
 
 @dataclass(frozen=True)
 class Ranking:
     items: tuple[RankedDayHike, ...]
+
+
+class MatrixClient(Protocol):
+    def sources_to_targets(
+        self, origin: Origin, trailheads: Sequence[Trailhead]
+    ) -> Sequence[float | None]:
+        """Return DriveTime in seconds for each Trailhead, or None if unreachable."""
 
 
 @dataclass(frozen=True)
@@ -304,6 +323,41 @@ def rank_dayhikes(catalog: Catalog, seeds: Sequence[str]) -> Ranking:
         ranked.append(RankedDayHike(dayhike=hike, score=score))
     ranked.sort(key=lambda item: (-item.score, item.dayhike.id))
     return Ranking(items=tuple(ranked))
+
+
+_SECONDS_PER_HOUR = 3600.0
+
+
+def filter_by_drive_time(
+    ranking: Ranking,
+    origin: Origin,
+    max_hours: float,
+    matrix_client: MatrixClient,
+) -> Ranking:
+    """Drop DayHikes whose DriveTime from Origin is missing or above max hours.
+
+    Matrix times are seconds; None means unreachable and is dropped, not filled
+    in. Remaining items keep Ranking order and report DriveTime in hours.
+    Inclusive of max_hours.
+    """
+    if not ranking.items:
+        return Ranking(items=())
+    trailheads = [item.dayhike.trailhead for item in ranking.items]
+    times_s = matrix_client.sources_to_targets(origin, trailheads)
+    kept: list[RankedDayHike] = []
+    for item, time_s in zip(ranking.items, times_s):
+        if time_s is None or not math.isfinite(time_s) or time_s < 0:
+            continue
+        hours = time_s / _SECONDS_PER_HOUR
+        if hours <= max_hours:
+            kept.append(
+                RankedDayHike(
+                    dayhike=item.dayhike,
+                    score=item.score,
+                    drive_time=DriveTime(hours=hours),
+                )
+            )
+    return Ranking(items=tuple(kept))
 
 
 def build_catalog(osm_path: Path | str, catalog_path: Path | str) -> Catalog:

@@ -15,13 +15,13 @@ matrix HTTP client; Docker tiles are optional developer docs only.
 **Prior art:** Ranking from ticket 05, ADR-0004, PRD stories 25–29. Public seam
 `filter_by_drive_time`. `CONTEXT.md` Origin, DriveTime, Trailhead, Ranking.
 
-- [ ] `filter_by_drive_time` keeps DayHikes with finite DriveTime under max
+- [x] `filter_by_drive_time` keeps DayHikes with finite DriveTime under max
       hours and preserves similarity order
-- [ ] Null/unreachable matrix entries are dropped, not given a fake time
-- [ ] Calling rank without Origin does not require Valhalla
-- [ ] Tests stub the matrix client (seconds vs null); they do not build tiles
+- [x] Null/unreachable matrix entries are dropped, not given a fake time
+- [x] Calling rank without Origin does not require Valhalla
+- [x] Tests stub the matrix client (seconds vs null); they do not build tiles
       or start Docker
-- [ ] CLI accepts Origin coordinates and max hours and prints DriveTime when
+- [x] CLI accepts Origin coordinates and max hours and prints DriveTime when
       filtering
-- [ ] Optional compose/docs for local Valhalla mention `/sources_to_targets`,
+- [x] Optional compose/docs for local Valhalla mention `/sources_to_targets`,
       not isochrones as the filter
