@@ -59,12 +59,23 @@ class Difficulty:
 
 
 @dataclass(frozen=True)
+class FeatureVector:
+    length_m: float
+    elevation_min_m: float | None
+    elevation_max_m: float | None
+    elevation_gain_m: float | None
+    difficulty_ordinal: int | None
+    amenity_facts: AmenityFacts
+
+
+@dataclass(frozen=True)
 class DayHike:
     id: int
     name: str
     trailhead: Trailhead
     length_m: float
     difficulty: Difficulty
+    feature_vector: FeatureVector
 
 
 @dataclass(frozen=True)
@@ -115,6 +126,27 @@ class Catalog:
                     "SELECT dayhike_id, latitude, longitude FROM trailheads"
                 )
             }
+            vectors = {
+                dayhike_id: FeatureVector(
+                    length_m=length_m,
+                    elevation_min_m=elevation_min_m,
+                    elevation_max_m=elevation_max_m,
+                    elevation_gain_m=elevation_gain_m,
+                    difficulty_ordinal=difficulty_ordinal,
+                    amenity_facts=trailheads[dayhike_id].amenity_facts,
+                )
+                for (
+                    dayhike_id,
+                    length_m,
+                    elevation_min_m,
+                    elevation_max_m,
+                    elevation_gain_m,
+                    difficulty_ordinal,
+                ) in connection.execute(
+                    "SELECT dayhike_id, length_m, elevation_min_m, elevation_max_m, "
+                    "elevation_gain_m, difficulty_ordinal FROM feature_vectors"
+                )
+            }
             dayhikes = tuple(
                 DayHike(
                     id=dayhike_id,
@@ -122,6 +154,7 @@ class Catalog:
                     trailhead=trailheads[dayhike_id],
                     length_m=length_m,
                     difficulty=Difficulty(sac_scale=sac_scale),
+                    feature_vector=vectors[dayhike_id],
                 )
                 for dayhike_id, name, length_m, sac_scale in connection.execute(
                     "SELECT id, name, length_m, difficulty FROM dayhikes ORDER BY id"
@@ -208,7 +241,7 @@ def resolve_seed(catalog: Catalog, name: str) -> int:
 def build_catalog(osm_path: Path | str, catalog_path: Path | str) -> Catalog:
     osm_path = Path(osm_path)
     catalog_path = Path(catalog_path)
-    nodes, ways, relations, amenities = _parse_osm(osm_path)
+    nodes, ways, relations, amenities, node_elevations = _parse_osm(osm_path)
     report_counts = {"unnamed": 0, "length": 0, "network": 0}
     kept: list[DayHike] = []
     for relation in relations:
@@ -218,7 +251,9 @@ def build_catalog(osm_path: Path | str, catalog_path: Path | str) -> Catalog:
         if drop_reason is not None:
             report_counts[drop_reason] += 1
             continue
-        kept.append(_dayhike_from_relation(relation, nodes, ways, amenities))
+        kept.append(
+            _dayhike_from_relation(relation, nodes, ways, amenities, node_elevations)
+        )
     kept.sort(key=lambda hike: hike.id)
     report = IngestReport(
         kept=len(kept),
@@ -237,20 +272,26 @@ def _parse_osm(
     dict[int, _OsmWay],
     list[_OsmRelation],
     list[tuple[str, float, float]],
+    dict[int, float],
 ]:
     root = ET.parse(path).getroot()
     nodes: dict[int, tuple[float, float]] = {}
     ways: dict[int, _OsmWay] = {}
     relations: list[_OsmRelation] = []
     amenities: list[tuple[str, float, float]] = []
+    node_elevations: dict[int, float] = {}
     for element in root:
         if element.tag == "node":
             latitude = float(element.attrib["lat"])
             longitude = float(element.attrib["lon"])
-            nodes[int(element.attrib["id"])] = (latitude, longitude)
-            kind = _amenity_kind(_tags(element))
+            node_id = int(element.attrib["id"])
+            nodes[node_id] = (latitude, longitude)
+            tags = _tags(element)
+            kind = _amenity_kind(tags)
             if kind is not None:
                 amenities.append((kind, latitude, longitude))
+            if "ele" in tags:
+                node_elevations[node_id] = float(tags["ele"])
         elif element.tag == "way":
             nds = tuple(int(nd.attrib["ref"]) for nd in element if nd.tag == "nd")
             ways[int(element.attrib["id"])] = _OsmWay(nds, _tags(element))
@@ -263,7 +304,7 @@ def _parse_osm(
             relations.append(
                 _OsmRelation(int(element.attrib["id"]), members, _tags(element))
             )
-    return nodes, ways, relations, amenities
+    return nodes, ways, relations, amenities, node_elevations
 
 
 def _amenity_kind(tags: Mapping[str, str]) -> str | None:
@@ -315,19 +356,35 @@ def _dayhike_from_relation(
     nodes: Mapping[int, tuple[float, float]],
     ways: Mapping[int, _OsmWay],
     amenities: Sequence[tuple[str, float, float]],
+    node_elevations: Mapping[int, float],
 ) -> DayHike:
-    points = _relation_points(relation, nodes, ways)
+    vertices = _relation_vertices(relation, nodes, ways)
+    points = [point for _, point in vertices]
     latitude, longitude = points[0]
+    length_m = _linestring_length_m(points)
+    sac_scale = _max_sac_scale(relation, ways)
+    amenity_facts = _amenity_facts_at(latitude, longitude, amenities)
+    elevation_min_m, elevation_max_m, elevation_gain_m = _elevation_stats(
+        vertices, node_elevations
+    )
     return DayHike(
         id=relation.id,
         name=relation.tags["name"].strip(),
         trailhead=Trailhead(
             latitude=latitude,
             longitude=longitude,
-            amenity_facts=_amenity_facts_at(latitude, longitude, amenities),
+            amenity_facts=amenity_facts,
         ),
-        length_m=_linestring_length_m(points),
-        difficulty=Difficulty(sac_scale=_max_sac_scale(relation, ways)),
+        length_m=length_m,
+        difficulty=Difficulty(sac_scale=sac_scale),
+        feature_vector=FeatureVector(
+            length_m=length_m,
+            elevation_min_m=elevation_min_m,
+            elevation_max_m=elevation_max_m,
+            elevation_gain_m=elevation_gain_m,
+            difficulty_ordinal=None if sac_scale is None else SAC_SCALE_RANK.get(sac_scale),
+            amenity_facts=amenity_facts,
+        ),
     )
 
 
@@ -364,12 +421,30 @@ def _amenity_facts_from_map(facts: Mapping[str, AmenityFact]) -> AmenityFacts:
     )
 
 
-def _relation_points(
+def _elevation_stats(
+    vertices: Sequence[tuple[int, tuple[float, float]]],
+    node_elevations: Mapping[int, float],
+) -> tuple[float | None, float | None, float | None]:
+    elevations = [
+        node_elevations[node_id]
+        for node_id, _ in vertices
+        if node_id in node_elevations
+    ]
+    if not elevations:
+        return None, None, None
+    gain_m = 0.0
+    for start, end in zip(elevations, elevations[1:]):
+        if end > start:
+            gain_m += end - start
+    return min(elevations), max(elevations), gain_m
+
+
+def _relation_vertices(
     relation: _OsmRelation,
     nodes: Mapping[int, tuple[float, float]],
     ways: Mapping[int, _OsmWay],
-) -> list[tuple[float, float]]:
-    points: list[tuple[float, float]] = []
+) -> list[tuple[int, tuple[float, float]]]:
+    vertices: list[tuple[int, tuple[float, float]]] = []
     for member_type, member_id in relation.members:
         if member_type != "way":
             continue
@@ -380,9 +455,18 @@ def _relation_points(
             point = nodes.get(node_id)
             if point is None:
                 continue
-            if not points or points[-1] != point:
-                points.append(point)
-    return points
+            if vertices and vertices[-1][1] == point:
+                continue
+            vertices.append((node_id, point))
+    return vertices
+
+
+def _relation_points(
+    relation: _OsmRelation,
+    nodes: Mapping[int, tuple[float, float]],
+    ways: Mapping[int, _OsmWay],
+) -> list[tuple[float, float]]:
+    return [point for _, point in _relation_vertices(relation, nodes, ways)]
 
 
 def _max_sac_scale(relation: _OsmRelation, ways: Mapping[int, _OsmWay]) -> str | None:
@@ -447,6 +531,14 @@ def _write_sqlite(path: Path, dayhikes: Iterable[DayHike], report: IngestReport)
                 nearest_m REAL,
                 PRIMARY KEY (dayhike_id, kind)
             );
+            CREATE TABLE feature_vectors (
+                dayhike_id INTEGER PRIMARY KEY REFERENCES dayhikes(id),
+                length_m REAL NOT NULL,
+                elevation_min_m REAL,
+                elevation_max_m REAL,
+                elevation_gain_m REAL,
+                difficulty_ordinal INTEGER
+            );
             CREATE TABLE labels (
                 hiker_id TEXT NOT NULL,
                 dayhike_id INTEGER NOT NULL,
@@ -499,6 +591,22 @@ def _write_sqlite(path: Path, dayhikes: Iterable[DayHike], report: IngestReport)
                     ("restaurant_cafe", hike.trailhead.amenity_facts.restaurant_cafe),
                     ("drinking_water", hike.trailhead.amenity_facts.drinking_water),
                 )
+            ],
+        )
+        connection.executemany(
+            "INSERT INTO feature_vectors (dayhike_id, length_m, elevation_min_m, "
+            "elevation_max_m, elevation_gain_m, difficulty_ordinal) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    hike.id,
+                    hike.feature_vector.length_m,
+                    hike.feature_vector.elevation_min_m,
+                    hike.feature_vector.elevation_max_m,
+                    hike.feature_vector.elevation_gain_m,
+                    hike.feature_vector.difficulty_ordinal,
+                )
+                for hike in dayhikes
             ],
         )
         connection.commit()

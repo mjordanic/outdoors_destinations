@@ -15,11 +15,11 @@ No scaler and no Ranking yet.
 ticket 01. PRD stories 14–15. ADR-0003 (intrinsic features). `CONTEXT.md`
 FeatureVector.
 
-- [ ] `build_catalog` persists a FeatureVector per DayHike
-- [ ] The vector includes length, Difficulty ordinal, Hut/parking/restaurant-
+- [x] `build_catalog` persists a FeatureVector per DayHike
+- [x] The vector includes length, Difficulty ordinal, Hut/parking/restaurant-
       cafe/water counts and nearest distances
-- [ ] Missing elevation is a distinct missing value, not zero; when `ele` exists
+- [x] Missing elevation is a distinct missing value, not zero; when `ele` exists
       on the fixture geometry, min/max or gain is present
-- [ ] No DriveTime, Origin, or isochrone field exists on the FeatureVector
-- [ ] Tests assert FeatureVector values from the fixture by hand, through
+- [x] No DriveTime, Origin, or isochrone field exists on the FeatureVector
+- [x] Tests assert FeatureVector values from the fixture by hand, through
       `build_catalog`
