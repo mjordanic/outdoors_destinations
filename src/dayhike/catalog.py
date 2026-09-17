@@ -9,13 +9,14 @@ from pathlib import Path
 from typing import Iterable, Mapping, Protocol, Sequence
 
 EARTH_RADIUS_M = 6_371_000
-MIN_LENGTH_M = 2_000
+MIN_LENGTH_M = 2_000  # inclusive DayHike length band
 MAX_LENGTH_M = 25_000
-AMENITY_RADIUS_M = 1_000
+AMENITY_RADIUS_M = 1_000  # great-circle from Trailhead; zero counts are valid
 OSM_ATTRIBUTION = "© OpenStreetMap contributors"
 HUT_TOURISM = frozenset({"alpine_hut", "wilderness_hut"})
 RESTAURANT_CAFE_AMENITY = frozenset({"restaurant", "cafe"})
 AMENITY_KINDS = ("hut", "parking", "restaurant_cafe", "drinking_water")
+# Intrinsic FeatureVector columns only. DriveTime is query-time, not a feature.
 FEATURE_NAMES = (
     "length_m",
     "elevation_min_m",
@@ -361,6 +362,12 @@ def filter_by_drive_time(
 
 
 def build_catalog(osm_path: Path | str, catalog_path: Path | str) -> Catalog:
+    """Ingest an OSM snapshot into a Catalog of named DayHikes.
+
+    Unnamed relations, out-of-band lengths, and iwn/nwn superroutes are
+    counted in the ingest report and are not DayHikes. Attribution is stored
+    with the Catalog. DriveTime is not computed at ingest.
+    """
     osm_path = Path(osm_path)
     catalog_path = Path(catalog_path)
     nodes, ways, relations, amenities, node_elevations = _parse_osm(osm_path)
@@ -397,7 +404,7 @@ def _parse_osm(
     list[tuple[str, float, float]],
     dict[int, float],
 ]:
-    root = ET.parse(path).getroot()
+    root = ET.parse(path).getroot()  # OSM XML (the committed fixture), not PBF.
     nodes: dict[int, tuple[float, float]] = {}
     ways: dict[int, _OsmWay] = {}
     relations: list[_OsmRelation] = []
@@ -431,6 +438,7 @@ def _parse_osm(
 
 
 def _amenity_kind(tags: Mapping[str, str]) -> str | None:
+    # Node-tagged amenities only; way/relation amenities are not counted.
     if tags.get("tourism") in HUT_TOURISM:
         return "hut"
     amenity = tags.get("amenity")
@@ -465,6 +473,7 @@ def _drop_reason(
 
 
 def _is_network_superroute(relation: _OsmRelation, length_m: float) -> bool:
+    # iwn/long nwn relations are corridors, not a day outing a Hiker can name as a Seed.
     network = relation.tags.get("network")
     if network == "iwn":
         return True
@@ -483,6 +492,7 @@ def _dayhike_from_relation(
 ) -> DayHike:
     vertices = _relation_vertices(relation, nodes, ways)
     points = [point for _, point in vertices]
+    # First assembled vertex is the Trailhead (not a parking-proximity pick).
     latitude, longitude = points[0]
     length_m = _linestring_length_m(points)
     sac_scale = _max_sac_scale(relation, ways)
@@ -554,6 +564,7 @@ def _elevation_stats(
         if node_id in node_elevations
     ]
     if not elevations:
+        # OSM ele absent: missing, not zero. A DEM is out of this milestone.
         return None, None, None
     gain_m = 0.0
     for start, end in zip(elevations, elevations[1:]):
@@ -593,6 +604,7 @@ def _relation_points(
 
 
 def _max_sac_scale(relation: _OsmRelation, ways: Mapping[int, _OsmWay]) -> str | None:
+    # Strictest member-way sac_scale. Missing stays None, not silently "hiking".
     best: tuple[int, str] | None = None
     for member_type, member_id in relation.members:
         if member_type != "way":

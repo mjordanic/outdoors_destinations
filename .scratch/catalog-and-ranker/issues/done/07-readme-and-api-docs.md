@@ -16,11 +16,11 @@ No new ranking behaviour.
 **Prior art:** PRD Further Notes, ADRs 0001–0004, `CONTEXT.md`. The CLI from
 tickets 05–06 is the documented entry point.
 
-- [ ] README covers install (`uv sync`), ingest of the committed fixture, rank
+- [x] README covers install (`uv sync`), ingest of the committed fixture, rank
       by Seed, optional Origin/max hours, ODbL attribution, and what is
       gitignored under `data/`
-- [ ] README states Seed names must exist in the Catalog and that DriveTime is
+- [x] README states Seed names must exist in the Catalog and that DriveTime is
       not a FeatureVector column
-- [ ] Public seams have docstrings using glossary terms (DayHike, Seed,
+- [x] Public seams have docstrings using glossary terms (DayHike, Seed,
       Ranking, Origin, DriveTime)
-- [ ] Valhalla compose/docs (from ticket 06) are linked from the README
+- [x] Valhalla compose/docs (from ticket 06) are linked from the README

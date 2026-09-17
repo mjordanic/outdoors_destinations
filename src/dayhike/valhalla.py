@@ -7,6 +7,7 @@ from typing import Sequence
 from dayhike.catalog import Origin, Trailhead
 
 DEFAULT_VALHALLA_URL = "http://127.0.0.1:8002"
+# Matrix, not /isochrone. Chunk Trailheads so each POST stays a small batch.
 MATRIX_BATCH_SIZE = 50
 
 
@@ -39,6 +40,7 @@ class ValhallaMatrixClient:
                 {"lat": trailhead.latitude, "lon": trailhead.longitude}
                 for trailhead in trailheads
             ],
+            # Car DriveTime from Origin to Trailhead; not an isochrone polygon.
             "costing": "auto",
         }
         request = urllib.request.Request(
@@ -54,6 +56,7 @@ class ValhallaMatrixClient:
 
 
 def _matrix_seconds(cell: object) -> float | None:
+    # Missing time means unreachable: leave None; never invent a DriveTime.
     if not isinstance(cell, dict):
         return None
     time = cell.get("time")
