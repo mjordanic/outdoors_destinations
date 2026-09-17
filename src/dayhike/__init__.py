@@ -9,10 +9,13 @@ from dayhike.catalog import (
     Hiker,
     IngestReport,
     Label,
+    RankedDayHike,
+    Ranking,
     SeedNameError,
     Trailhead,
     UnknownSeedName,
     build_catalog,
+    rank_dayhikes,
     resolve_seed,
 )
 
@@ -27,9 +30,12 @@ __all__ = [
     "Hiker",
     "IngestReport",
     "Label",
+    "RankedDayHike",
+    "Ranking",
     "SeedNameError",
     "Trailhead",
     "UnknownSeedName",
     "build_catalog",
+    "rank_dayhikes",
     "resolve_seed",
 ]

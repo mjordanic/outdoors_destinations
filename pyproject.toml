@@ -5,6 +5,9 @@ description = "Local Catalog of DayHikes from OpenStreetMap"
 requires-python = ">=3.13"
 dependencies = []
 
+[project.scripts]
+dayhike = "dayhike.cli:main"
+
 [build-system]
 requires = ["uv_build>=0.11.13,<0.12.0"]
 build-backend = "uv_build"

@@ -16,6 +16,21 @@ OSM_ATTRIBUTION = "© OpenStreetMap contributors"
 HUT_TOURISM = frozenset({"alpine_hut", "wilderness_hut"})
 RESTAURANT_CAFE_AMENITY = frozenset({"restaurant", "cafe"})
 AMENITY_KINDS = ("hut", "parking", "restaurant_cafe", "drinking_water")
+FEATURE_NAMES = (
+    "length_m",
+    "elevation_min_m",
+    "elevation_max_m",
+    "elevation_gain_m",
+    "difficulty_ordinal",
+    "hut_count",
+    "hut_nearest_m",
+    "parking_count",
+    "parking_nearest_m",
+    "restaurant_cafe_count",
+    "restaurant_cafe_nearest_m",
+    "drinking_water_count",
+    "drinking_water_nearest_m",
+)
 
 SAC_SCALE_RANK = {
     "hiking": 1,
@@ -79,6 +94,24 @@ class DayHike:
 
 
 @dataclass(frozen=True)
+class Scaler:
+    feature_names: tuple[str, ...]
+    mean: tuple[float, ...]
+    scale: tuple[float, ...]
+
+
+@dataclass(frozen=True)
+class RankedDayHike:
+    dayhike: DayHike
+    score: float
+
+
+@dataclass(frozen=True)
+class Ranking:
+    items: tuple[RankedDayHike, ...]
+
+
+@dataclass(frozen=True)
 class Label:
     hiker_id: str
     dayhike_id: int
@@ -101,6 +134,7 @@ class Catalog:
     ingest_report: IngestReport
     attribution: str
     labels: tuple[Label, ...]
+    scaler: Scaler
 
     @classmethod
     def open(cls, path: Path | str) -> Catalog:
@@ -171,6 +205,16 @@ class Catalog:
                     "SELECT hiker_id, dayhike_id, score, created_at FROM labels"
                 )
             )
+            scaler_rows = list(
+                connection.execute(
+                    "SELECT feature_name, mean, scale FROM scaler ORDER BY position"
+                )
+            )
+            scaler = Scaler(
+                feature_names=tuple(name for name, _, _ in scaler_rows),
+                mean=tuple(mean for _, mean, _ in scaler_rows),
+                scale=tuple(scale for _, _, scale in scaler_rows),
+            )
             return cls(
                 path=path,
                 dayhikes=dayhikes,
@@ -182,6 +226,7 @@ class Catalog:
                 ),
                 attribution=meta["attribution"],
                 labels=labels,
+                scaler=scaler,
             )
         finally:
             connection.close()
@@ -238,6 +283,29 @@ def resolve_seed(catalog: Catalog, name: str) -> int:
     )
 
 
+def rank_dayhikes(catalog: Catalog, seeds: Sequence[str]) -> Ranking:
+    """Rank Catalog DayHikes by maximum cosine similarity to named Seeds.
+
+    Similarity is cosine of FeatureVectors after the Catalog StandardScaler.
+    Seeds are resolved with ``resolve_seed`` and omitted from the Ranking.
+    """
+    seed_ids = {resolve_seed(catalog, name) for name in seeds}
+    seed_scaled = [
+        _scale_vector(hike.feature_vector, catalog.scaler)
+        for hike in catalog.dayhikes
+        if hike.id in seed_ids
+    ]
+    ranked: list[RankedDayHike] = []
+    for hike in catalog.dayhikes:
+        if hike.id in seed_ids:
+            continue
+        scaled = _scale_vector(hike.feature_vector, catalog.scaler)
+        score = max(_cosine(scaled, seed_vector) for seed_vector in seed_scaled)
+        ranked.append(RankedDayHike(dayhike=hike, score=score))
+    ranked.sort(key=lambda item: (-item.score, item.dayhike.id))
+    return Ranking(items=tuple(ranked))
+
+
 def build_catalog(osm_path: Path | str, catalog_path: Path | str) -> Catalog:
     osm_path = Path(osm_path)
     catalog_path = Path(catalog_path)
@@ -261,7 +329,8 @@ def build_catalog(osm_path: Path | str, catalog_path: Path | str) -> Catalog:
         dropped_length=report_counts["length"],
         dropped_network=report_counts["network"],
     )
-    _write_sqlite(catalog_path, kept, report)
+    scaler = _fit_scaler(kept)
+    _write_sqlite(catalog_path, kept, report, scaler)
     return Catalog.open(catalog_path)
 
 
@@ -501,7 +570,78 @@ def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * EARTH_RADIUS_M * math.asin(math.sqrt(a))
 
 
-def _write_sqlite(path: Path, dayhikes: Iterable[DayHike], report: IngestReport) -> None:
+def _optional(value: float | None) -> float:
+    return math.nan if value is None else value
+
+
+def _feature_row(vector: FeatureVector) -> tuple[float, ...]:
+    facts = vector.amenity_facts
+    return (
+        vector.length_m,
+        _optional(vector.elevation_min_m),
+        _optional(vector.elevation_max_m),
+        _optional(vector.elevation_gain_m),
+        math.nan if vector.difficulty_ordinal is None else float(vector.difficulty_ordinal),
+        float(facts.hut.count),
+        _optional(facts.hut.nearest_m),
+        float(facts.parking.count),
+        _optional(facts.parking.nearest_m),
+        float(facts.restaurant_cafe.count),
+        _optional(facts.restaurant_cafe.nearest_m),
+        float(facts.drinking_water.count),
+        _optional(facts.drinking_water.nearest_m),
+    )
+
+
+def _fit_scaler(dayhikes: Sequence[DayHike]) -> Scaler:
+    rows = [_feature_row(hike.feature_vector) for hike in dayhikes]
+    n_features = len(FEATURE_NAMES)
+    if not rows:
+        zeros = (0.0,) * n_features
+        ones = (1.0,) * n_features
+        return Scaler(FEATURE_NAMES, zeros, ones)
+    n = len(rows)
+    fill: list[float] = []
+    for j in range(n_features):
+        present = [row[j] for row in rows if not math.isnan(row[j])]
+        fill.append((sum(present) / len(present)) if present else 0.0)
+    filled = [
+        tuple(fill[j] if math.isnan(row[j]) else row[j] for j in range(n_features))
+        for row in rows
+    ]
+    mean: list[float] = []
+    scale: list[float] = []
+    for j in range(n_features):
+        column = [row[j] for row in filled]
+        column_mean = sum(column) / n
+        variance = sum((value - column_mean) ** 2 for value in column) / n
+        column_scale = math.sqrt(variance)
+        mean.append(column_mean)
+        scale.append(1.0 if column_scale == 0.0 else column_scale)
+    return Scaler(FEATURE_NAMES, tuple(mean), tuple(scale))
+
+
+def _scale_vector(vector: FeatureVector, scaler: Scaler) -> tuple[float, ...]:
+    return tuple(
+        0.0 if math.isnan(value) else (value - mean) / scale
+        for value, mean, scale in zip(
+            _feature_row(vector), scaler.mean, scaler.scale, strict=True
+        )
+    )
+
+
+def _cosine(left: Sequence[float], right: Sequence[float]) -> float:
+    dot = sum(a * b for a, b in zip(left, right, strict=True))
+    left_norm = math.sqrt(sum(a * a for a in left))
+    right_norm = math.sqrt(sum(b * b for b in right))
+    if left_norm == 0.0 or right_norm == 0.0:
+        return 0.0
+    return dot / (left_norm * right_norm)
+
+
+def _write_sqlite(
+    path: Path, dayhikes: Iterable[DayHike], report: IngestReport, scaler: Scaler
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         path.unlink()
@@ -544,6 +684,12 @@ def _write_sqlite(path: Path, dayhikes: Iterable[DayHike], report: IngestReport)
                 dayhike_id INTEGER NOT NULL,
                 score REAL NOT NULL,
                 created_at TEXT NOT NULL
+            );
+            CREATE TABLE scaler (
+                position INTEGER PRIMARY KEY,
+                feature_name TEXT NOT NULL,
+                mean REAL NOT NULL,
+                scale REAL NOT NULL
             );
             """
         )
@@ -607,6 +753,15 @@ def _write_sqlite(path: Path, dayhikes: Iterable[DayHike], report: IngestReport)
                     hike.feature_vector.difficulty_ordinal,
                 )
                 for hike in dayhikes
+            ],
+        )
+        connection.executemany(
+            "INSERT INTO scaler (position, feature_name, mean, scale) VALUES (?, ?, ?, ?)",
+            [
+                (position, name, mean, scale)
+                for position, (name, mean, scale) in enumerate(
+                    zip(scaler.feature_names, scaler.mean, scaler.scale, strict=True)
+                )
             ],
         )
         connection.commit()

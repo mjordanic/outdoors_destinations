@@ -18,12 +18,12 @@ resolution. CLI prints id, name, score. No Origin, no Valhalla.
 **Prior art:** FeatureVectors (03), resolve (04), ADR-0003, PRD stories 16–18 and
 22–24. Public seam `rank_dayhikes`. `CONTEXT.md` Ranking, Seed, FeatureVector.
 
-- [ ] `build_catalog` fits a StandardScaler on Catalog FeatureVectors and
+- [x] `build_catalog` fits a StandardScaler on Catalog FeatureVectors and
       persists it in the same SQLite file
-- [ ] `rank_dayhikes` with one fixture Seed returns the other in-band DayHike
+- [x] `rank_dayhikes` with one fixture Seed returns the other in-band DayHike
       with a similarity score, and does not include the Seed
-- [ ] Two Seeds: a candidate close to only one Seed outranks a midpoint —
+- [x] Two Seeds: a candidate close to only one Seed outranks a midpoint —
       score is max, not mean
-- [ ] Ranking is deterministic on the fixture across two runs
-- [ ] CLI wraps `rank_dayhikes` and prints id, name, score
-- [ ] Tests do not use the network or Valhalla
+- [x] Ranking is deterministic on the fixture across two runs
+- [x] CLI wraps `rank_dayhikes` and prints id, name, score
+- [x] Tests do not use the network or Valhalla
