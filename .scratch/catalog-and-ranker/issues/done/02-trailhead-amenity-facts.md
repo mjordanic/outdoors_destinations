@@ -15,11 +15,11 @@ Catalog. Amenities are features of the Trailhead, not a second Catalog key.
 same fixture with a Hut, cafe, parking, and water near one Trailhead and not
 the other. PRD stories 9–13. `CONTEXT.md` AmenityFact, Hut, Trailhead.
 
-- [ ] The ingest fixture places amenities so one in-band DayHike has nearby
+- [x] The ingest fixture places amenities so one in-band DayHike has nearby
       Hut, cafe, parking, and water, and the other has none of them in 1 km
-- [ ] `build_catalog` writes AmenityFacts: counts and nearest distances for
+- [x] `build_catalog` writes AmenityFacts: counts and nearest distances for
       Hut, parking, restaurant/cafe, drinking water
-- [ ] Zero counts are stored, not omitted, and that DayHike remains in the
+- [x] Zero counts are stored, not omitted, and that DayHike remains in the
       Catalog
-- [ ] Restaurant/cafe does not create or delete DayHikes
-- [ ] Tests go through `build_catalog`, not by querying OSM internals
+- [x] Restaurant/cafe does not create or delete DayHikes
+- [x] Tests go through `build_catalog`, not by querying OSM internals

@@ -1,4 +1,6 @@
 from dayhike.catalog import (
+    AmenityFact,
+    AmenityFacts,
     Catalog,
     DayHike,
     Difficulty,
@@ -10,6 +12,8 @@ from dayhike.catalog import (
 )
 
 __all__ = [
+    "AmenityFact",
+    "AmenityFacts",
     "Catalog",
     "DayHike",
     "Difficulty",

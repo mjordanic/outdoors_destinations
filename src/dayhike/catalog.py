@@ -11,7 +11,11 @@ from typing import Iterable, Mapping, Sequence
 EARTH_RADIUS_M = 6_371_000
 MIN_LENGTH_M = 2_000
 MAX_LENGTH_M = 25_000
+AMENITY_RADIUS_M = 1_000
 OSM_ATTRIBUTION = "© OpenStreetMap contributors"
+HUT_TOURISM = frozenset({"alpine_hut", "wilderness_hut"})
+RESTAURANT_CAFE_AMENITY = frozenset({"restaurant", "cafe"})
+AMENITY_KINDS = ("hut", "parking", "restaurant_cafe", "drinking_water")
 
 SAC_SCALE_RANK = {
     "hiking": 1,
@@ -29,9 +33,24 @@ class Hiker:
 
 
 @dataclass(frozen=True)
+class AmenityFact:
+    count: int
+    nearest_m: float | None
+
+
+@dataclass(frozen=True)
+class AmenityFacts:
+    hut: AmenityFact
+    parking: AmenityFact
+    restaurant_cafe: AmenityFact
+    drinking_water: AmenityFact
+
+
+@dataclass(frozen=True)
 class Trailhead:
     latitude: float
     longitude: float
+    amenity_facts: AmenityFacts
 
 
 @dataclass(frozen=True)
@@ -79,8 +98,19 @@ class Catalog:
         try:
             meta = dict(connection.execute("SELECT key, value FROM catalog_meta"))
             report_data = json.loads(meta["ingest_report"])
+            amenity_rows: dict[int, dict[str, AmenityFact]] = {}
+            for dayhike_id, kind, count, nearest_m in connection.execute(
+                "SELECT dayhike_id, kind, count, nearest_m FROM amenity_facts"
+            ):
+                amenity_rows.setdefault(dayhike_id, {})[kind] = AmenityFact(
+                    count=count, nearest_m=nearest_m
+                )
             trailheads = {
-                dayhike_id: Trailhead(latitude=latitude, longitude=longitude)
+                dayhike_id: Trailhead(
+                    latitude=latitude,
+                    longitude=longitude,
+                    amenity_facts=_amenity_facts_from_map(amenity_rows[dayhike_id]),
+                )
                 for dayhike_id, latitude, longitude in connection.execute(
                     "SELECT dayhike_id, latitude, longitude FROM trailheads"
                 )
@@ -140,7 +170,7 @@ class _OsmRelation:
 def build_catalog(osm_path: Path | str, catalog_path: Path | str) -> Catalog:
     osm_path = Path(osm_path)
     catalog_path = Path(catalog_path)
-    nodes, ways, relations = _parse_osm(osm_path)
+    nodes, ways, relations, amenities = _parse_osm(osm_path)
     report_counts = {"unnamed": 0, "length": 0, "network": 0}
     kept: list[DayHike] = []
     for relation in relations:
@@ -150,7 +180,7 @@ def build_catalog(osm_path: Path | str, catalog_path: Path | str) -> Catalog:
         if drop_reason is not None:
             report_counts[drop_reason] += 1
             continue
-        kept.append(_dayhike_from_relation(relation, nodes, ways))
+        kept.append(_dayhike_from_relation(relation, nodes, ways, amenities))
     kept.sort(key=lambda hike: hike.id)
     report = IngestReport(
         kept=len(kept),
@@ -164,17 +194,25 @@ def build_catalog(osm_path: Path | str, catalog_path: Path | str) -> Catalog:
 
 def _parse_osm(
     path: Path,
-) -> tuple[dict[int, tuple[float, float]], dict[int, _OsmWay], list[_OsmRelation]]:
+) -> tuple[
+    dict[int, tuple[float, float]],
+    dict[int, _OsmWay],
+    list[_OsmRelation],
+    list[tuple[str, float, float]],
+]:
     root = ET.parse(path).getroot()
     nodes: dict[int, tuple[float, float]] = {}
     ways: dict[int, _OsmWay] = {}
     relations: list[_OsmRelation] = []
+    amenities: list[tuple[str, float, float]] = []
     for element in root:
         if element.tag == "node":
-            nodes[int(element.attrib["id"])] = (
-                float(element.attrib["lat"]),
-                float(element.attrib["lon"]),
-            )
+            latitude = float(element.attrib["lat"])
+            longitude = float(element.attrib["lon"])
+            nodes[int(element.attrib["id"])] = (latitude, longitude)
+            kind = _amenity_kind(_tags(element))
+            if kind is not None:
+                amenities.append((kind, latitude, longitude))
         elif element.tag == "way":
             nds = tuple(int(nd.attrib["ref"]) for nd in element if nd.tag == "nd")
             ways[int(element.attrib["id"])] = _OsmWay(nds, _tags(element))
@@ -187,7 +225,20 @@ def _parse_osm(
             relations.append(
                 _OsmRelation(int(element.attrib["id"]), members, _tags(element))
             )
-    return nodes, ways, relations
+    return nodes, ways, relations, amenities
+
+
+def _amenity_kind(tags: Mapping[str, str]) -> str | None:
+    if tags.get("tourism") in HUT_TOURISM:
+        return "hut"
+    amenity = tags.get("amenity")
+    if amenity == "parking":
+        return "parking"
+    if amenity in RESTAURANT_CAFE_AMENITY:
+        return "restaurant_cafe"
+    if amenity == "drinking_water":
+        return "drinking_water"
+    return None
 
 
 def _tags(element: ET.Element) -> dict[str, str]:
@@ -225,15 +276,53 @@ def _dayhike_from_relation(
     relation: _OsmRelation,
     nodes: Mapping[int, tuple[float, float]],
     ways: Mapping[int, _OsmWay],
+    amenities: Sequence[tuple[str, float, float]],
 ) -> DayHike:
     points = _relation_points(relation, nodes, ways)
     latitude, longitude = points[0]
     return DayHike(
         id=relation.id,
         name=relation.tags["name"].strip(),
-        trailhead=Trailhead(latitude=latitude, longitude=longitude),
+        trailhead=Trailhead(
+            latitude=latitude,
+            longitude=longitude,
+            amenity_facts=_amenity_facts_at(latitude, longitude, amenities),
+        ),
         length_m=_linestring_length_m(points),
         difficulty=Difficulty(sac_scale=_max_sac_scale(relation, ways)),
+    )
+
+
+def _amenity_facts_at(
+    latitude: float,
+    longitude: float,
+    amenities: Sequence[tuple[str, float, float]],
+) -> AmenityFacts:
+    distances: dict[str, list[float]] = {kind: [] for kind in AMENITY_KINDS}
+    for kind, amenity_lat, amenity_lon in amenities:
+        distance_m = _haversine_m(latitude, longitude, amenity_lat, amenity_lon)
+        if distance_m <= AMENITY_RADIUS_M:
+            distances[kind].append(distance_m)
+    return AmenityFacts(
+        hut=_amenity_fact(distances["hut"]),
+        parking=_amenity_fact(distances["parking"]),
+        restaurant_cafe=_amenity_fact(distances["restaurant_cafe"]),
+        drinking_water=_amenity_fact(distances["drinking_water"]),
+    )
+
+
+def _amenity_fact(distances_m: Sequence[float]) -> AmenityFact:
+    if not distances_m:
+        return AmenityFact(count=0, nearest_m=None)
+    return AmenityFact(count=len(distances_m), nearest_m=min(distances_m))
+
+
+def _amenity_facts_from_map(facts: Mapping[str, AmenityFact]) -> AmenityFacts:
+    return AmenityFacts(
+        hut=facts["hut"],
+        parking=facts["parking"],
+        restaurant_cafe=facts["restaurant_cafe"],
+        drinking_water=facts["drinking_water"],
     )
 
 
@@ -313,6 +402,13 @@ def _write_sqlite(path: Path, dayhikes: Iterable[DayHike], report: IngestReport)
                 latitude REAL NOT NULL,
                 longitude REAL NOT NULL
             );
+            CREATE TABLE amenity_facts (
+                dayhike_id INTEGER NOT NULL REFERENCES dayhikes(id),
+                kind TEXT NOT NULL,
+                count INTEGER NOT NULL,
+                nearest_m REAL,
+                PRIMARY KEY (dayhike_id, kind)
+            );
             CREATE TABLE labels (
                 hiker_id TEXT NOT NULL,
                 dayhike_id INTEGER NOT NULL,
@@ -351,6 +447,20 @@ def _write_sqlite(path: Path, dayhikes: Iterable[DayHike], report: IngestReport)
             [
                 (hike.id, hike.trailhead.latitude, hike.trailhead.longitude)
                 for hike in dayhikes
+            ],
+        )
+        connection.executemany(
+            "INSERT INTO amenity_facts (dayhike_id, kind, count, nearest_m) "
+            "VALUES (?, ?, ?, ?)",
+            [
+                (hike.id, kind, fact.count, fact.nearest_m)
+                for hike in dayhikes
+                for kind, fact in (
+                    ("hut", hike.trailhead.amenity_facts.hut),
+                    ("parking", hike.trailhead.amenity_facts.parking),
+                    ("restaurant_cafe", hike.trailhead.amenity_facts.restaurant_cafe),
+                    ("drinking_water", hike.trailhead.amenity_facts.drinking_water),
+                )
             ],
         )
         connection.commit()

@@ -86,4 +86,20 @@
     <tag k="name" v="Via Dinarica Red"/>
     <tag k="network" v="iwn"/>
   </relation>
+
+  <!-- Amenities due north of Ridge Walk Trailhead (45, 15). Distances use
+       Δlat = d / R × 180/π with R = 6371000 m. None of these is within 1 km
+       of Valley Path (45.2, 15.1). -->
+  <node id="50" lat="45.0008993216" lon="15.0000000000" version="1">
+    <tag k="amenity" v="cafe"/>
+  </node>
+  <node id="51" lat="45.0022483040" lon="15.0000000000" version="1">
+    <tag k="tourism" v="alpine_hut"/>
+  </node>
+  <node id="52" lat="45.0035972864" lon="15.0000000000" version="1">
+    <tag k="amenity" v="parking"/>
+  </node>
+  <node id="53" lat="45.0049462688" lon="15.0000000000" version="1">
+    <tag k="amenity" v="drinking_water"/>
+  </node>
 </osm>
