@@ -144,10 +144,22 @@ def test_notebook_states_catalog_limitations() -> None:
     assert "future work" in folded
 
 
+def test_notebook_shows_ingest_stages_and_resume() -> None:
+    output, markdown, source = _run_notebooks()
+
+    assert "filter:" in output
+    assert "relations:" in output
+    assert "interrupted" in output
+    assert "resumed, already complete" in output
+    assert "route=hiking" in markdown
+
+
 def test_readme_points_at_demonstration_notebooks() -> None:
     text = README.read_text()
     assert "notebooks/catalog-and-ranker.ipynb" in text
     assert "notebooks/working-with-the-catalog.ipynb" in text
+    assert "notebooks/ingest-a-snapshot.ipynb" in text
+
 
 
 def _tagged_names(output: str, tag: str) -> list[str]:

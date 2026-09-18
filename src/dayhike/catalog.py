@@ -5,13 +5,14 @@ import math
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Callable
 from typing import Iterable, Mapping, Protocol, Sequence
 
 import numpy as np
 from sklearn.neighbors import BallTree
 from sklearn.preprocessing import StandardScaler
 
-from dayhike.osm import OsmRelation, OsmSnapshot, OsmWay, parse_osm
+from dayhike.osm import OsmRelation, OsmSnapshot, OsmWay
 
 EARTH_RADIUS_M = 6_371_000
 MIN_LENGTH_M = 2_000  # inclusive DayHike length band
@@ -329,56 +330,35 @@ def filter_by_drive_time(
 def build_catalog(
     osm_path: Path | str | Sequence[Path | str],
     catalog_path: Path | str,
+    *,
+    progress: Callable[[str], None] | None = None,
+    fresh: bool = False,
 ) -> Catalog:
     """Ingest OSM XML or PBF snapshot(s) into a Catalog of named DayHikes.
+
+    Streams the snapshot in passes and keeps only hiking-route members and
+    amenities in a work file next to the Catalog, so the source does not need
+    to fit in RAM. Re-running the same inputs resumes that work file.
+    ``fresh=True`` discards it and starts again. ``progress`` receives one
+    line per stage (filter, relations, ways, nodes, access, assemble, write).
 
     Unnamed relations, out-of-band lengths, and iwn/nwn superroutes are
     counted in the ingest report and are not DayHikes. Attribution is stored
     with the Catalog. DriveTime is not computed at ingest. Replaces the
-    SQLite file if it exists; overlapping snapshots keep one row per OSM id.
+    SQLite file if it exists, only after the new file is complete; overlapping
+    snapshots keep one row per OSM id.
     """
+    from dayhike.ingest import emit_progress, run_ingest
+
     catalog_path = Path(catalog_path)
-    snapshot = OsmSnapshot()
-    for path in _osm_paths(osm_path):
-        snapshot.merge(parse_osm(path))
-    access_tree = _access_tree(snapshot.access_points)
-    amenity_index = _amenity_index(snapshot.amenities)
-    report_counts = {"unnamed": 0, "length": 0, "network": 0}
-    kept: list[DayHike] = []
-    seen_ids: set[int] = set()
-    for relation in snapshot.relations:
-        if relation.id in seen_ids:
-            continue
-        seen_ids.add(relation.id)
-        if relation.tags.get("route") != "hiking":
-            continue
-        vertices = _relation_vertices(relation, snapshot.nodes, snapshot.ways)
-        points = [point for _, point in vertices]
-        length_m = _linestring_length_m(points)
-        drop_reason = _drop_reason(relation, length_m)
-        if drop_reason is not None:
-            report_counts[drop_reason] += 1
-            continue
-        kept.append(
-            _dayhike_from_relation(
-                relation,
-                snapshot,
-                vertices,
-                points,
-                length_m,
-                access_tree,
-                amenity_index,
-            )
-        )
-    kept.sort(key=lambda hike: hike.id)
-    report = IngestReport(
-        kept=len(kept),
-        dropped_unnamed=report_counts["unnamed"],
-        dropped_length=report_counts["length"],
-        dropped_network=report_counts["network"],
+    kept, report, work_path = run_ingest(
+        _osm_paths(osm_path), catalog_path, progress=progress, fresh=fresh
     )
     scaler = _fit_scaler(kept)
+    emit_progress(progress, "write", str(catalog_path))
     _write_sqlite(catalog_path, kept, report, scaler)
+    if work_path.exists():
+        work_path.unlink()
     return Catalog.open(catalog_path)
 
 
@@ -727,9 +707,10 @@ def _write_sqlite(
     if len({hike.id for hike in dayhikes}) != len(dayhikes):
         raise ValueError("duplicate DayHike ids in catalog ingest")
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        path.unlink()
-    connection = sqlite3.connect(path)
+    tmp = path.with_name(path.name + ".tmp")
+    if tmp.exists():
+        tmp.unlink()
+    connection = sqlite3.connect(tmp)
     try:
         connection.executescript(
             """
@@ -849,5 +830,10 @@ def _write_sqlite(
             ],
         )
         connection.commit()
-    finally:
+    except Exception:
         connection.close()
+        if tmp.exists():
+            tmp.unlink()
+        raise
+    connection.close()
+    tmp.replace(path)

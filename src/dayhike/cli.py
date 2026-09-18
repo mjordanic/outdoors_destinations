@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from dayhike.catalog import (
@@ -32,6 +33,17 @@ def main(argv: list[str] | None = None) -> int:
         default=Path("data/catalog.sqlite"),
         help="SQLite Catalog path (default: data/catalog.sqlite)",
     )
+    ingest.add_argument(
+        "--fresh",
+        action="store_true",
+        help="Ignore an existing ingest work file and start from the snapshot",
+    )
+    ingest.add_argument(
+        "--list",
+        action="store_true",
+        dest="list_dayhikes",
+        help="Print kept DayHikes as id, name, length_m after ingest",
+    )
     fetch = subparsers.add_parser(
         "fetch-extracts",
         help="Download Geofabrik PBFs into data/osm (does not ingest)",
@@ -62,7 +74,9 @@ def main(argv: list[str] | None = None) -> int:
     rank.add_argument("seeds", nargs="+", help="Seed DayHike names")
     args = parser.parse_args(argv)
     if args.command == "ingest":
-        return _ingest(args.osm, args.catalog)
+        return _ingest(
+            args.osm, args.catalog, fresh=args.fresh, list_dayhikes=args.list_dayhikes
+        )
     if args.command == "fetch-extracts":
         return _fetch_extracts(args.dest)
     if (args.origin is None) != (args.max_hours is None):
@@ -70,12 +84,24 @@ def main(argv: list[str] | None = None) -> int:
     return _rank(args.catalog, args.seeds, args.origin, args.max_hours, args.valhalla_url)
 
 
-def _ingest(osm_paths: list[Path], catalog_path: Path) -> int:
-    catalog = build_catalog(osm_paths, catalog_path)
+def _ingest(
+    osm_paths: list[Path],
+    catalog_path: Path,
+    *,
+    fresh: bool = False,
+    list_dayhikes: bool = False,
+) -> int:
+    catalog = build_catalog(
+        osm_paths,
+        catalog_path,
+        progress=lambda message: print(message, file=sys.stderr, flush=True),
+        fresh=fresh,
+    )
     print(catalog.path)
     print(catalog.ingest_report)
-    for hike in catalog.dayhikes:
-        print(f"{hike.id}\t{hike.name}\t{hike.length_m}")
+    if list_dayhikes:
+        for hike in catalog.dayhikes:
+            print(f"{hike.id}\t{hike.name}\t{hike.length_m}")
     return 0
 
 

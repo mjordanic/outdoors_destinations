@@ -39,6 +39,16 @@ def test_readme_states_ingest_replaces_catalog_and_does_not_append() -> None:
     assert "DriveTime is not a FeatureVector column" in text
 
 
+def test_readme_documents_ingest_progress_resume_and_work_file() -> None:
+    text = README.read_text()
+
+    assert "--list" in text
+    assert "--fresh" in text
+    assert "catalog.sqlite.work" in text
+    assert "stderr" in text.casefold()
+    assert "europe-latest.osm.pbf" in text
+
+
 def test_readme_links_valhalla_compose_and_docs() -> None:
     text = README.read_text()
 

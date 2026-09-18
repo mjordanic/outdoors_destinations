@@ -82,15 +82,18 @@ mkdir -p data
 uv run dayhike ingest tests/fixtures/catalog.osm --catalog data/catalog.sqlite
 ```
 
-Expected output (numbers are metres; length is a hair over 10 km / 5 km because
-it is computed on the sphere):
+Stdout is the Catalog path and the ingest report (numbers are metres; length is
+a hair over 10 km / 5 km because it is computed on the sphere):
 
 ```
 data/catalog.sqlite
 IngestReport(kept=2, dropped_unnamed=1, dropped_length=1, dropped_network=1)
-1001	Ridge Walk	10000.00…
-1002	Valley Path	5000.00…
 ```
+
+Progress (`filter:`, `relations:`, `ways:`, `nodes:`, `access:`, `assemble:`,
+`write:`) goes to **stderr**. Add `--list` to print kept DayHikes as
+`id`, name, `length_m`. `--fresh` ignores a leftover work file and starts
+again.
 
 Same thing from Python:
 
@@ -104,9 +107,10 @@ for hike in catalog.dayhikes:
 ```
 
 `build_catalog` **replaces** the SQLite file if it already exists; it does not
-append. XML and PBF are both accepted (pyosmium). Multiple files (or a
-directory) in **one** run merge into one Catalog. See **Ingest replaces the
-Catalog** below if you ingest more than one country.
+append. The previous Catalog stays on disk until the new file is complete. XML
+and PBF are both accepted (pyosmium). Multiple files (or a directory) in
+**one** run become one Catalog. See **Ingest replaces the Catalog** below if
+you ingest more than one country.
 
 ## 2. Open the Catalog later (it is a SQLite database)
 
@@ -344,17 +348,19 @@ curl -L -o data/osm/croatia-latest.osm.pbf.md5 \
 On macOS use `md5` / `shasum` against the hash in the `.md5` file if `md5sum`
 is missing.
 
-**4. Ingest into the Catalog** (this overwrites `data/catalog.sqlite` if it
-already exists)
+**4. Ingest into the Catalog** (this replaces `data/catalog.sqlite` when the
+new file is complete)
 
 ```bash
 uv run dayhike ingest data/osm/croatia-latest.osm.pbf \
   --catalog data/catalog.sqlite
 ```
 
-Wait until it prints an `IngestReport` and a list of kept DayHikes. Unnamed
-relations, routes outside 2–25 km, and iwn/nwn superroutes are counted as
-dropped and are **not** DayHikes.
+Stderr shows stage lines while it runs. Stdout is the path and an
+`IngestReport`. Unnamed relations, routes outside 2–25 km, and iwn/nwn
+superroutes are counted as dropped and are **not** DayHikes. If the process
+stops before `write:`, run the same command again; it resumes from
+`data/catalog.sqlite.work`. `--fresh` discards that work file.
 
 **5. See which names you can use as Seeds**
 
@@ -438,27 +444,48 @@ does not append).
    `data/osm/nord-est-latest.osm.pbf`, not a `Download (1).pbf` in Downloads).
 5. Run the ingest command from walkthrough A step 4.
 
-### Optional: shrink a country PBF with osmium
+### How ingest runs
 
-A full country PBF includes roads, buildings, and everything else. Ingest can
-use it, but RAM use is high. [osmium-tool](https://osmcode.org/osmium-tool/)
-(`brew install osmium-tool` on macOS) can keep hiking routes and amenities:
+Ingest does not load the full OSM snapshot into RAM. A continent PBF (for example
+Geofabrik `europe-latest.osm.pbf`) is a valid input.
+
+1. **Filter.** If [osmium-tool](https://osmcode.org/osmium-tool/) is on `PATH`
+   (`brew install osmium-tool` on macOS) and the input is PBF, ingest writes a
+   hiking-and-amenity extract next to the source
+   (`europe-latest.catalog.osm.pbf`). Referenced member ways and nodes are
+   kept. Buildings, shops, and the rest of the map are dropped. XML skips the
+   filter. A file already named `*.catalog.osm.pbf` is read as-is. If `osmium`
+   is missing, ingest reads the source file in several passes instead.
+2. **Work file.** Relations, member ways, needed nodes, and amenities go to
+   `data/catalog.sqlite.work` (same directory as the Catalog). Driveable
+   highways are kept only when they fall inside the Trailhead access radius
+   around a kept DayHike endpoint. That radius is `TRAILHEAD_ACCESS_RADIUS_M`
+   in the package (the same band used to pick a Trailhead).
+3. **Progress.** Each stage prints to stderr: `filter`, `relations`, `ways`,
+   `nodes`, `access`, `assemble`, `write`.
+4. **Resume.** The same `dayhike ingest` command on the same inputs continues
+   the work file. `--fresh` (or `build_catalog(..., fresh=True)`) starts over.
+   A `progress` callback on `build_catalog` receives the same stage lines.
+5. **Replace.** The new Catalog is written to a temp file and renamed onto
+   `catalog.sqlite` only when it is complete. A kill during ingest leaves the
+   previous Catalog in place.
+
+See [`docs/adr/0005-streaming-ingest.md`](docs/adr/0005-streaming-ingest.md).
+
+The unfiltered Geofabrik file stays in `data/osm/` as the source. Catalog
+ingest may use the hiking extract; Valhalla must **not** — DriveTime needs
+roads, and `prepare-roads.sh` builds a separate car-only PBF. See **Valhalla
+(DriveTime only)** below.
+
+Equivalent osmium filter if you want to run it yourself:
 
 ```bash
 osmium tags-filter data/osm/croatia-latest.osm.pbf \
-  nwr/route=hiking \
+  r/route=hiking \
   nwr/tourism=alpine_hut,wilderness_hut \
   nwr/amenity=parking,restaurant,cafe,drinking_water \
-  -o data/osm/croatia-hiking.osm.pbf
-
-uv run dayhike ingest data/osm/croatia-hiking.osm.pbf \
-  --catalog data/catalog.sqlite
+  -o data/osm/croatia-latest.catalog.osm.pbf
 ```
-
-Keep the **unfiltered** Geofabrik file in `data/osm/` as the source. Catalog
-ingest can use the hiking-only extract above; Valhalla must **not** — DriveTime
-needs roads, and `prepare-roads.sh` builds a separate car-only PBF. See
-**Valhalla (DriveTime only)** below.
 
 ### What ingest keeps
 
@@ -473,12 +500,13 @@ a Seed. Unnamed forest paths never appear.
 
 ### Ingest replaces the Catalog
 
-Each `dayhike ingest` (and `build_catalog`) **deletes** the SQLite file if it
-exists and writes a new one. Rows from a previous ingest are not kept.
+Each `dayhike ingest` (and `build_catalog`) writes a **new** Catalog and
+replaces the SQLite file when that write finishes. It does not append. Rows
+from a previous ingest are not kept.
 
-Several OSM files in **one** command are merged in memory, then that new file
-is written. The same OSM relation id in two extracts (for example a route on
-the Croatia–Slovenia border) becomes **one** DayHike, not two rows.
+Several OSM files in **one** command become one Catalog. The same OSM relation
+id in two extracts (for example a route on the Croatia–Slovenia border)
+becomes **one** DayHike, not two rows.
 
 ```bash
 # One Catalog with Croatia and Slovenia
@@ -731,6 +759,7 @@ tiles.
 The same seams the CLI wraps:
 
 - `build_catalog` — OSM XML or PBF snapshot(s) → Catalog of DayHikes
+  (`progress=` for stage lines, `fresh=True` to ignore a work file)
 - `Catalog.open` — load an already-built SQLite Catalog
 - `resolve_seed` — Seed name → DayHike id (must exist in the Catalog)
 - `rank_dayhikes` — Catalog + Seeds → Ranking
@@ -748,6 +777,9 @@ Docstrings on those functions use the glossary in `CONTEXT.md`.
   max-not-mean), unknown Seed failure, stubbed DriveTime.
 - [`notebooks/working-with-the-catalog.ipynb`](notebooks/working-with-the-catalog.ipynb) —
   SQLite tables, `Catalog.open`, and how to work with DayHike objects.
+- [`notebooks/ingest-a-snapshot.ipynb`](notebooks/ingest-a-snapshot.ipynb) —
+  ingest stages, progress, resume after a kill, and unused OSM objects, all
+  on the committed fixture.
 
 Both run against the committed OSM fixture (no Geofabrik, no live Valhalla).
 Open them with the project interpreter after `uv sync`.
@@ -767,6 +799,7 @@ DayHikes.
 Bulky local files stay out of git:
 
 - `data/catalog.sqlite` — Catalog built from ingest
+- `data/catalog.sqlite.work` — in-progress ingest (resume handle)
 - `data/osm/` — Geofabrik / osmium extracts
 - `data/valhalla/` — road PBF and routing tiles (`compose.yaml`,
   `prepare-roads.sh`, `prepare-highways.sh`, and `mjolnir.drive-time.json`

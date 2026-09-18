@@ -141,6 +141,16 @@ def test_valhalla_compose_is_tracked_and_tiles_are_ignored() -> None:
     assert ignore_code("data/valhalla/croatia-latest-roads.osm.pbf") == 0
 
 
+def test_ingest_work_file_is_gitignored() -> None:
+    repo = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        ["git", "check-ignore", "-q", "data/catalog.sqlite.work"],
+        cwd=repo,
+        check=False,
+    )
+    assert result.returncode == 0
+
+
 def test_build_catalog_writes_only_to_the_given_path(tmp_path: Path) -> None:
     path = tmp_path / "nested" / "catalog.sqlite"
     catalog = build_catalog(FIXTURE, path)
@@ -170,7 +180,33 @@ def test_cli_ingest_writes_catalog_and_prints_report(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert path.is_file()
     assert "kept=2" in result.stdout
-    assert "Ridge Walk" in result.stdout
-    assert "Valley Path" in result.stdout
+    assert "Ridge Walk" not in result.stdout
+    assert "Valley Path" not in result.stdout
+    for stage in ("filter", "relations", "ways", "nodes", "access", "assemble", "write"):
+        assert f"{stage}:" in result.stderr
     catalog = Catalog.open(path)
     assert {hike.id for hike in catalog.dayhikes} == KEPT_IDS
+
+
+def test_cli_ingest_list_prints_dayhike_names(tmp_path: Path) -> None:
+    path = tmp_path / "catalog.sqlite"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "dayhike",
+            "ingest",
+            str(FIXTURE),
+            "--catalog",
+            str(path),
+            "--list",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Ridge Walk" in result.stdout
+    assert "Valley Path" in result.stdout
