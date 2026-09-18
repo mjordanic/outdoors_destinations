@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="dayhike-fixture">
+  <!-- ~5 km south→north. Parking is 100 m north of the last node, not the first. -->
+  <node id="1" lat="45.0000000000" lon="15.0000000000" version="1"/>
+  <node id="2" lat="45.0449660803" lon="15.0000000000" version="1"/>
+  <node id="3" lat="45.0458654019" lon="15.0000000000" version="1">
+    <tag k="amenity" v="parking"/>
+  </node>
+  <way id="101" version="1">
+    <nd ref="1"/>
+    <nd ref="2"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <relation id="3001" version="1">
+    <member type="way" ref="101" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Parking End Path"/>
+  </relation>
+</osm>

@@ -12,6 +12,7 @@ def test_readme_covers_install_ingest_rank_origin_odbl_and_gitignore() -> None:
     assert "uv sync" in text
     assert "tests/fixtures/catalog.osm" in text
     assert "build_catalog" in text
+    assert "dayhike ingest" in text
     assert "dayhike rank" in text
     assert "--origin" in text
     assert "--max-hours" in text
@@ -33,7 +34,7 @@ def test_readme_links_valhalla_compose_and_docs() -> None:
     text = README.read_text()
 
     assert "docs/valhalla.md" in text
-    assert "docs/valhalla/compose.yaml" in text
+    assert "data/valhalla/compose.yaml" in text
 
 
 def test_public_seams_have_glossary_docstrings() -> None:

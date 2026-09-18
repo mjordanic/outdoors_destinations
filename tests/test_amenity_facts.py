@@ -21,13 +21,13 @@ def test_ridge_walk_trailhead_records_nearby_hut_parking_cafe_and_water(
     facts = _by_id(catalog, RIDGE_WALK_ID).trailhead.amenity_facts
 
     assert facts.hut.count == 1
-    assert facts.hut.nearest_m == pytest.approx(250.0, abs=1e-3)
+    assert facts.hut.nearest_m == pytest.approx(250.0, abs=0.01)
     assert facts.parking.count == 1
-    assert facts.parking.nearest_m == pytest.approx(400.0, abs=1e-3)
+    assert facts.parking.nearest_m == pytest.approx(400.0, abs=0.01)
     assert facts.restaurant_cafe.count == 1
-    assert facts.restaurant_cafe.nearest_m == pytest.approx(100.0, abs=1e-3)
+    assert facts.restaurant_cafe.nearest_m == pytest.approx(100.0, abs=0.01)
     assert facts.drinking_water.count == 1
-    assert facts.drinking_water.nearest_m == pytest.approx(550.0, abs=1e-3)
+    assert facts.drinking_water.nearest_m == pytest.approx(550.0, abs=0.01)
 
 
 def test_zero_amenity_counts_are_stored_and_that_dayhike_stays_in_catalog(

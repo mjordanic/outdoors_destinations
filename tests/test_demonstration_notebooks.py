@@ -145,7 +145,9 @@ def test_notebook_states_catalog_limitations() -> None:
 
 
 def test_readme_points_at_demonstration_notebooks() -> None:
-    assert "notebooks/catalog-and-ranker.ipynb" in README.read_text()
+    text = README.read_text()
+    assert "notebooks/catalog-and-ranker.ipynb" in text
+    assert "notebooks/working-with-the-catalog.ipynb" in text
 
 
 def _tagged_names(output: str, tag: str) -> list[str]:

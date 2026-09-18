@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="dayhike-fixture">
+  <!-- OSM ele is free text in the wild: units, approximations, junk. -->
+  <node id="1" lat="45.0000000000" lon="15.0000000000" version="1">
+    <tag k="ele" v="200 m"/>
+  </node>
+  <node id="2" lat="45.0449660803" lon="15.0000000000" version="1">
+    <tag k="ele" v="~500m"/>
+  </node>
+  <node id="99" lat="45.1000000000" lon="15.0000000000" version="1">
+    <tag k="ele" v="unknown"/>
+  </node>
+  <way id="101" version="1">
+    <nd ref="1"/>
+    <nd ref="2"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <relation id="7001" version="1">
+    <member type="way" ref="101" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Messy Ele Path"/>
+  </relation>
+</osm>

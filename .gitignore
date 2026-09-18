@@ -10,7 +10,8 @@ __pycache__/
 
 # bulky local extracts and routing tiles (rebuild from scripts)
 data/osm/
-data/valhalla/
+data/valhalla/*
+!data/valhalla/compose.yaml
 data/*.tif
 data/*.tiff
 data/*.pbf

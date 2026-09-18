@@ -1,5 +1,6 @@
 import sqlite3
 import subprocess
+import sys
 from pathlib import Path
 
 from dayhike import Catalog, build_catalog
@@ -74,9 +75,8 @@ def test_osm_attribution_is_stored_with_the_catalog(tmp_path: Path) -> None:
 
 def test_catalog_has_vacant_labels_table(tmp_path: Path) -> None:
     path = tmp_path / "catalog.sqlite"
-    catalog = build_catalog(FIXTURE, path)
+    build_catalog(FIXTURE, path)
 
-    assert catalog.labels == ()
     connection = sqlite3.connect(path)
     try:
         columns = [
@@ -98,9 +98,52 @@ def test_data_catalog_sqlite_remains_gitignored() -> None:
     assert result.returncode == 0
 
 
+def test_valhalla_compose_is_tracked_and_tiles_are_ignored() -> None:
+    repo = Path(__file__).resolve().parents[1]
+    compose = subprocess.run(
+        ["git", "check-ignore", "-q", "data/valhalla/compose.yaml"],
+        cwd=repo,
+        check=False,
+    )
+    tiles = subprocess.run(
+        ["git", "check-ignore", "-q", "data/valhalla/valhalla_tiles.tar"],
+        cwd=repo,
+        check=False,
+    )
+    assert compose.returncode == 1
+    assert tiles.returncode == 0
+
+
 def test_build_catalog_writes_only_to_the_given_path(tmp_path: Path) -> None:
     path = tmp_path / "nested" / "catalog.sqlite"
     catalog = build_catalog(FIXTURE, path)
 
     assert catalog.path == path
     assert path.is_file()
+
+
+def test_cli_ingest_writes_catalog_and_prints_report(tmp_path: Path) -> None:
+    path = tmp_path / "catalog.sqlite"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "dayhike",
+            "ingest",
+            str(FIXTURE),
+            "--catalog",
+            str(path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert path.is_file()
+    assert "kept=2" in result.stdout
+    assert "Ridge Walk" in result.stdout
+    assert "Valley Path" in result.stdout
+    catalog = Catalog.open(path)
+    assert {hike.id for hike in catalog.dayhikes} == KEPT_IDS

@@ -3,7 +3,10 @@ name = "dayhike"
 version = "0.1.0"
 description = "Local Catalog of DayHikes from OpenStreetMap"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "osmium>=4.3.1",
+    "scikit-learn>=1.9.1",
+]
 
 [project.scripts]
 dayhike = "dayhike.cli:main"

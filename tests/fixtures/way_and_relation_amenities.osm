@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="dayhike-fixture">
+  <!-- ~5 km. Hut and parking are ways; cafe is a parking multipolygon relation. -->
+  <node id="1" lat="45.0000000000" lon="15.0000000000" version="1"/>
+  <node id="2" lat="45.0449660803" lon="15.0000000000" version="1"/>
+  <way id="101" version="1">
+    <nd ref="1"/>
+    <nd ref="2"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <relation id="5001" version="1">
+    <member type="way" ref="101" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Way Amenity Path"/>
+  </relation>
+
+  <node id="10" lat="45.0008993216" lon="15.0000000000" version="1"/>
+  <node id="11" lat="45.0008993216" lon="15.0008993216" version="1"/>
+  <node id="12" lat="45.0017986432" lon="15.0008993216" version="1"/>
+  <node id="13" lat="45.0017986432" lon="15.0000000000" version="1"/>
+  <way id="201" version="1">
+    <nd ref="10"/>
+    <nd ref="11"/>
+    <nd ref="12"/>
+    <nd ref="13"/>
+    <nd ref="10"/>
+    <tag k="amenity" v="parking"/>
+  </way>
+
+  <node id="20" lat="45.0004496608" lon="14.9991006784" version="1"/>
+  <node id="21" lat="45.0004496608" lon="14.9995500000" version="1"/>
+  <node id="22" lat="45.0008993216" lon="14.9995500000" version="1"/>
+  <node id="23" lat="45.0008993216" lon="14.9991006784" version="1"/>
+  <way id="301" version="1">
+    <nd ref="20"/>
+    <nd ref="21"/>
+    <nd ref="22"/>
+    <nd ref="23"/>
+    <nd ref="20"/>
+    <tag k="tourism" v="alpine_hut"/>
+    <tag k="building" v="yes"/>
+  </way>
+
+  <node id="30" lat="45.0000000000" lon="15.0008993216" version="1"/>
+  <node id="31" lat="45.0004496608" lon="15.0008993216" version="1"/>
+  <node id="32" lat="45.0004496608" lon="15.0013486432" version="1"/>
+  <node id="33" lat="45.0000000000" lon="15.0013486432" version="1"/>
+  <way id="401" version="1">
+    <nd ref="30"/>
+    <nd ref="31"/>
+    <nd ref="32"/>
+    <nd ref="33"/>
+    <nd ref="30"/>
+  </way>
+  <relation id="6001" version="1">
+    <member type="way" ref="401" role="outer"/>
+    <tag k="type" v="multipolygon"/>
+    <tag k="amenity" v="cafe"/>
+  </relation>
+</osm>

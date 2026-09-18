@@ -1,0 +1,12 @@
+services:
+  valhalla:
+    image: ghcr.io/gis-ops/docker-valhalla/valhalla:latest
+    ports:
+      - "8002:8002"
+    volumes:
+      # This compose file lives in data/valhalla. Drop regional .osm.pbf
+      # files in the same directory before the first `docker compose up`.
+      # The image builds routing tiles here and serves
+      # POST /sources_to_targets on port 8002. Do not use /isochrone as a
+      # Catalog or Ranking filter.
+      - .:/custom_files
