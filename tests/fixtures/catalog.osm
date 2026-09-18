@@ -100,7 +100,7 @@
   </relation>
 
   <!-- Amenities due north of Ridge Walk Trailhead (45, 15). Distances use
-       Δlat = d / R × 180/π with R = 6371000 m. None of these is within 1 km
+       Δlat = d / R × 180/π with R = 6371000 m. None of these is within 20 km
        of Valley Path (45.2, 15.1). -->
   <node id="50" lat="45.0008993216" lon="15.0000000000" version="1">
     <tag k="amenity" v="cafe"/>

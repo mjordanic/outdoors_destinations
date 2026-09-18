@@ -16,8 +16,8 @@ from dayhike.osm import OsmRelation, OsmSnapshot, OsmWay, parse_osm
 EARTH_RADIUS_M = 6_371_000
 MIN_LENGTH_M = 2_000  # inclusive DayHike length band
 MAX_LENGTH_M = 25_000
-AMENITY_RADIUS_M = 1_000  # great-circle from Trailhead; zero counts are valid
-TRAILHEAD_ACCESS_RADIUS_M = 1_000  # parking / driveable highway near an endpoint
+AMENITY_RADIUS_M = 20_000  # great-circle from Trailhead; zero counts are valid
+TRAILHEAD_ACCESS_RADIUS_M = 5_000  # parking / driveable highway near an endpoint
 OSM_ATTRIBUTION = "© OpenStreetMap contributors"
 AMENITY_KINDS = ("hut", "parking", "restaurant_cafe", "drinking_water")
 # Intrinsic FeatureVector columns only. DriveTime is query-time, not a feature.

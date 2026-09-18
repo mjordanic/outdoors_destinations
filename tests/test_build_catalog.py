@@ -125,18 +125,20 @@ def test_data_catalog_sqlite_remains_gitignored() -> None:
 
 def test_valhalla_compose_is_tracked_and_tiles_are_ignored() -> None:
     repo = Path(__file__).resolve().parents[1]
-    compose = subprocess.run(
-        ["git", "check-ignore", "-q", "data/valhalla/compose.yaml"],
-        cwd=repo,
-        check=False,
-    )
-    tiles = subprocess.run(
-        ["git", "check-ignore", "-q", "data/valhalla/valhalla_tiles.tar"],
-        cwd=repo,
-        check=False,
-    )
-    assert compose.returncode == 1
-    assert tiles.returncode == 0
+
+    def ignore_code(path: str) -> int:
+        return subprocess.run(
+            ["git", "check-ignore", "-q", path],
+            cwd=repo,
+            check=False,
+        ).returncode
+
+    assert ignore_code("data/valhalla/compose.yaml") == 1
+    assert ignore_code("data/valhalla/mjolnir.drive-time.json") == 1
+    assert ignore_code("data/valhalla/prepare-roads.sh") == 1
+    assert ignore_code("data/valhalla/prepare-highways.sh") == 1
+    assert ignore_code("data/valhalla/valhalla_tiles.tar") == 0
+    assert ignore_code("data/valhalla/croatia-latest-roads.osm.pbf") == 0
 
 
 def test_build_catalog_writes_only_to_the_given_path(tmp_path: Path) -> None:

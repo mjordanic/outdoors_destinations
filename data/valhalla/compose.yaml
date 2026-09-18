@@ -4,9 +4,27 @@ services:
     ports:
       - "8002:8002"
     volumes:
-      # This compose file lives in data/valhalla. Drop regional .osm.pbf
-      # files in the same directory before the first `docker compose up`.
-      # The image builds routing tiles here and serves
+      # This compose file lives in data/valhalla. Drop one road .osm.pbf
+      # (see prepare-roads.sh or prepare-highways.sh) in the same directory before the first
+      # `docker compose up`. The image builds routing tiles here and serves
       # POST /sources_to_targets on port 8002. Do not use /isochrone as a
       # Catalog or Ranking filter.
       - .:/custom_files
+    # Merge mjolnir.drive-time.json before the image builds tiles so the
+    # graph omits pedestrian-only ways, bicycle-only ways, and driveways.
+    # Changing those flags does not rebuild existing tiles; wipe
+    # valhalla_tiles/, valhalla_tiles.tar, and file_hashes.txt first.
+    # Paths are literals (no $VARS): Compose would otherwise leave $$ behind
+    # and bash would treat $$ as the container PID.
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -euo pipefail
+        if [ -f /custom_files/mjolnir.drive-time.json ]; then
+          if [ -f /custom_files/valhalla.json ]; then
+            jq -s '.[0] * .[1]' /custom_files/valhalla.json /custom_files/mjolnir.drive-time.json | sponge /custom_files/valhalla.json
+          else
+            cp /custom_files/mjolnir.drive-time.json /custom_files/valhalla.json
+          fi
+        fi
+        exec /valhalla/scripts/run.sh build_tiles

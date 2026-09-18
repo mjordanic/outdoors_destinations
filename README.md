@@ -47,8 +47,11 @@ call on your machine.
 | `tests/fixtures/catalog.osm` | Tiny OSM XML **oracle** for tests and demos | yes |
 | `data/catalog.sqlite` | The Catalog you work with (SQLite database) | **gitignored** |
 | `data/osm/` | Geofabrik / osmium extracts you download | gitignored |
-| `data/valhalla/` | OSM PBF + Valhalla routing tiles Docker builds | gitignored |
+| `data/valhalla/` | Road PBF + Valhalla routing tiles Docker builds | gitignored |
 | `data/valhalla/compose.yaml` | How to run Valhalla | yes |
+| `data/valhalla/prepare-roads.sh` | osmium filter: car roads only, no buildings | yes |
+| `data/valhalla/prepare-highways.sh` | osmium filter: motorway/trunk/primary only | yes |
+| `data/valhalla/mjolnir.drive-time.json` | Valhalla flags: no walk/bike/driveways | yes |
 | `data/valhalla/*.osm.pbf` | Road extract for tiles | **gitignored** |
 
 `uv sync` does **not** download OSM and does **not** install Valhalla. Tests
@@ -62,7 +65,7 @@ XML file with five hiking relations so ingest and ranking have a known answer:
 
 | OSM relation | Name | What happens |
 | --- | --- | --- |
-| 1001 | Ridge Walk | **Kept.** ~10 km, `sac_scale=mountain_hiking`, Hut/cafe/parking/water within 1 km of the Trailhead, elevation tags on nodes. |
+| 1001 | Ridge Walk | **Kept.** ~10 km, `sac_scale=mountain_hiking`, Hut/cafe/parking/water within 20 km of the Trailhead, elevation tags on nodes. |
 | 1002 | Valley Path | **Kept.** ~5 km, no `sac_scale`, no nearby amenities, no `ele`. |
 | 1003 | *(unnamed)* | Dropped (`dropped_unnamed`). |
 | 1004 | Long Traverse | Dropped: ~30 km, outside the 2–25 km band (`dropped_length`). |
@@ -100,9 +103,10 @@ for hike in catalog.dayhikes:
     print(hike.id, hike.name, hike.length_m, hike.difficulty.sac_scale)
 ```
 
-`build_catalog` **replaces** the SQLite file if it already exists. XML and PBF
-are both accepted (pyosmium). Multiple files (or a directory) merge into one
-Catalog.
+`build_catalog` **replaces** the SQLite file if it already exists; it does not
+append. XML and PBF are both accepted (pyosmium). Multiple files (or a
+directory) in **one** run merge into one Catalog. See **Ingest replaces the
+Catalog** below if you ingest more than one country.
 
 ## 2. Open the Catalog later (it is a SQLite database)
 
@@ -217,7 +221,8 @@ uv run dayhike rank --catalog data/catalog.sqlite \
 ```
 
 That needs a **running** local Valhalla on `http://127.0.0.1:8002` (override
-with `--valhalla-url`). See [docs/valhalla.md](docs/valhalla.md) and
+with `--valhalla-url`), built from a car-only roads PBF
+(`prepare-roads.sh`). See [docs/valhalla.md](docs/valhalla.md) and
 [data/valhalla/compose.yaml](data/valhalla/compose.yaml).
 
 Python, with the real client:
@@ -450,19 +455,45 @@ uv run dayhike ingest data/osm/croatia-hiking.osm.pbf \
   --catalog data/catalog.sqlite
 ```
 
-Keep the **unfiltered** PBF if you will also build Valhalla tiles (DriveTime
-needs the road network). See **Valhalla (DriveTime only)** below.
+Keep the **unfiltered** Geofabrik file in `data/osm/` as the source. Catalog
+ingest can use the hiking-only extract above; Valhalla must **not** — DriveTime
+needs roads, and `prepare-roads.sh` builds a separate car-only PBF. See
+**Valhalla (DriveTime only)** below.
 
 ### What ingest keeps
 
 Same rules as the fixture: named `route=hiking` relations whose geometry is
-2–25 km. Amenities on nodes, ways, and tagged relations within 1 km of the
+2–25 km. Amenities on nodes, ways, and tagged relations within 20 km of the
 Trailhead. The Trailhead is the LineString endpoint nearer a parking lot or
-driveable highway within 1 km, otherwise the first vertex. Ways in a route
+driveable highway within 5 km, otherwise the first vertex. Ways in a route
 relation are reversed as needed so the geometry is one continuous line.
 
 A hike that is not a named `route=hiking` relation in this Catalog cannot be
 a Seed. Unnamed forest paths never appear.
+
+### Ingest replaces the Catalog
+
+Each `dayhike ingest` (and `build_catalog`) **deletes** the SQLite file if it
+exists and writes a new one. Rows from a previous ingest are not kept.
+
+Several OSM files in **one** command are merged in memory, then that new file
+is written. The same OSM relation id in two extracts (for example a route on
+the Croatia–Slovenia border) becomes **one** DayHike, not two rows.
+
+```bash
+# One Catalog with Croatia and Slovenia
+uv run dayhike ingest \
+  data/osm/croatia-latest.osm.pbf \
+  data/osm/slovenia-latest.osm.pbf \
+  --catalog data/catalog.sqlite
+
+# Replaces that Catalog with Croatia only. Slovenia is gone.
+uv run dayhike ingest data/osm/croatia-latest.osm.pbf \
+  --catalog data/catalog.sqlite
+```
+
+To add a country later, put its PBF next to the others and ingest the **whole
+directory** (or list every file you want) again.
 
 ## Valhalla (DriveTime only)
 
@@ -480,26 +511,76 @@ You need **Docker Desktop** (or another Docker Engine) running. Image docs:
 [gis-ops/docker-valhalla](https://github.com/gis-ops/docker-valhalla). Extra
 notes: [docs/valhalla.md](docs/valhalla.md).
 
-### Same PBF kind as ingest — not the same folder
+### Car-only graph (what changed, and why)
+
+DriveTime is car travel time. The first tile build is slow if Valhalla has to
+parse a full Geofabrik extract (buildings, POIs, landuse, footways, …) and
+build walk/bike edges we never query. Two layers strip that:
+
+1. **An osmium prepare script** writes one PBF into `data/valhalla/`. Pick
+   one; both drop buildings, amenities, landuse, footways, paths, steps,
+   pedestrian streets, and cycleways.
+
+   | Script | Keeps | Use for |
+   | --- | --- | --- |
+   | `prepare-roads.sh` → `*-roads.osm.pbf` | Motorway through residential, `service` (not driveways), `track`, ferries, turn restrictions | DriveTime to Trailheads |
+   | `prepare-highways.sh` → `*-highways.osm.pbf` | `motorway`, `trunk`, `primary` (plus `_link` ramps) and ferries | Long-distance travel across Europe; much smaller file |
+
+   `prepare-highways.sh` omits turn restrictions on purpose: osmium would
+   otherwise pull the small `from`/`via`/`to` member ways into the extract.
+   It will **not** reach most Trailheads. Use `prepare-roads.sh` for ranking
+   with `--origin`.
+
+2. **`data/valhalla/mjolnir.drive-time.json`** is merged into `valhalla.json`
+   on every `docker compose up`. It sets `include_pedestrian`,
+   `include_bicycle`, and `include_driveways` to `false`, so even an
+   unfiltered PBF does not grow walk-only, bike-only, or driveway edges.
+
+On-road cycle lanes (`cycleway=lane` on a car road) stay; they are tags on
+roads we keep. Separate `highway=cycleway` ways are removed.
+
+`data/osm/` stays the unfiltered source. Do not overwrite it with the roads
+PBF. Do **not** copy the whole `data/osm/` tree into `data/valhalla/`: if
+Valhalla sees two or more extracts it warns
+([valhalla#3925](https://github.com/valhalla/valhalla/issues/3925)) and can
+build a bad graph.
 
 | | Catalog ingest | Valhalla tiles |
 | --- | --- | --- |
-| File | Geofabrik `*-latest.osm.pbf` (same downloads as above) | **Unfiltered** copy of that PBF |
+| File | Geofabrik `*-latest.osm.pbf` (or a hiking-only filter) | **One** prepare-script output (`*-roads.osm.pbf` or `*-highways.osm.pbf`) |
 | Directory | `data/osm/` | `data/valhalla/` |
 | How many `.pbf` files | One or many (ingest merges) | **Exactly one** |
 | Hiking-only `osmium tags-filter` output | OK | **No** — DriveTime needs roads |
 
-Do **not** copy the whole `data/osm/` tree into `data/valhalla/`. If Valhalla
-sees two or more extracts it warns
-([valhalla#3925](https://github.com/valhalla/valhalla/issues/3925)) and can
-build a bad graph.
+`data/valhalla/` is Valhalla's workshop: it reads that PBF and **writes**
+`valhalla_tiles/`, `valhalla.json`, hashes. Leave `compose.yaml`,
+`prepare-roads.sh`, `prepare-highways.sh`, and `mjolnir.drive-time.json`
+there.
 
-`data/valhalla/` is Valhalla's workshop: it reads the PBF and **writes**
-`valhalla_tiles/`, `valhalla.json`, hashes. Leave `compose.yaml` there.
+If you already built tiles from a full extract, delete `valhalla_tiles/`,
+`valhalla_tiles.tar`, and `file_hashes.txt` after switching to a roads PBF
+(or after changing the mjolnir flags). The image will not rebuild just
+because the JSON flags changed.
+
+### How to restore a fuller graph
+
+Need walk/bike costing, driveways, or the last metres of a path tagged only
+as foot/cycle? Put the **unfiltered** Geofabrik file in `data/valhalla/`
+(skip both prepare scripts), set all three flags in
+`mjolnir.drive-time.json` to `true`, wipe `valhalla_tiles/`,
+`valhalla_tiles.tar`, and `file_hashes.txt`, then `docker compose up` again.
+
+Buildings and POIs never become routing edges. Copying an unfiltered PBF
+without flipping those flags only slows the parse; it does not add walk/bike
+edges. Flipping the flags without an unfiltered PBF cannot restore ways a
+prepare script already dropped. To go from the highways extract back to
+Trailhead DriveTime, run `prepare-roads.sh` on the unfiltered file in
+`data/osm/` and wipe tiles.
 
 ### Walkthrough A — one country (start here)
 
-Croatia only. Use the same file you already ingested.
+Croatia only. Keep the unfiltered extract in `data/osm/`; filter a copy for
+Valhalla.
 
 **1. Confirm the unfiltered PBF exists**
 
@@ -510,18 +591,30 @@ ls -lh data/osm/croatia-latest.osm.pbf
 If you only kept a `croatia-hiking.osm.pbf` from `tags-filter`, download the
 full extract again into `data/osm/` (links in the table above).
 
-**2. Put exactly that one file in the Valhalla directory**
+**2. Install osmium-tool** (global; macOS Homebrew) if you do not have it
+
+```bash
+brew install osmium-tool
+osmium --version
+```
+
+Package: [osmium-tool](https://osmcode.org/osmium-tool/),
+[Homebrew formula](https://formulae.brew.sh/formula/osmium-tool). Linux:
+your distro package (often `osmium-tool`). `uv` cannot install it.
+
+**3. Write the car-only PBF into `data/valhalla/`**
 
 ```bash
 mkdir -p data/valhalla
-rm -f data/valhalla/*.osm.pbf
-cp data/osm/croatia-latest.osm.pbf data/valhalla/croatia-latest.osm.pbf
+docker compose -f data/valhalla/compose.yaml down
+./data/valhalla/prepare-roads.sh data/osm/croatia-latest.osm.pbf
 ls data/valhalla/*.osm.pbf
 ```
 
-You should see a **single** `.pbf`. Keep `compose.yaml`.
+You should see a **single** `.osm.pbf` (`croatia-latest-roads.osm.pbf`). Keep
+`compose.yaml`, the prepare scripts, and `mjolnir.drive-time.json`.
 
-**3. Start Valhalla** (from the repo root; first run builds tiles)
+**4. Start Valhalla** (from the repo root; first run builds tiles)
 
 ```bash
 docker compose -f data/valhalla/compose.yaml up
@@ -531,7 +624,7 @@ Wait until the image finishes building. Croatia is usually minutes; Alpine
 extracts can take much longer and several GB of RAM. Leave this terminal
 running. Later starts reuse `valhalla_tiles/` unless you change the PBF.
 
-**4. Confirm it is up** (another terminal)
+**5. Confirm it is up** (another terminal)
 
 ```bash
 curl -s http://127.0.0.1:8002/status
@@ -546,7 +639,7 @@ curl -s -H 'Content-Type: application/json' \
   http://127.0.0.1:8002/sources_to_targets
 ```
 
-**5. Rank with Origin and max hours**
+**6. Rank with Origin and max hours**
 
 `--origin` is `latitude,longitude` (WGS84). Use a Seed name from your Catalog
 (step 5 of ingest), not a fixture name unless you ingested the fixture.
@@ -573,22 +666,12 @@ Tiles stay on disk.
 
 Valhalla cannot build from `croatia-latest.osm.pbf` + `slovenia-latest.osm.pbf`
 + `austria-latest.osm.pbf` sitting side by side. Merge them into **one** file
-first.
+first, then run `prepare-roads.sh` on the merge.
 
 That merge is the **osmium-tool** CLI (C++), not the Python `osmium` package
-this repo already has (pyosmium, used only for ingest). `uv` cannot install
-osmium-tool.
+this repo already has (pyosmium, used only for ingest).
 
-**1. Install osmium-tool** (global; macOS Homebrew)
-
-```bash
-brew install osmium-tool
-osmium --version
-```
-
-Package: [osmium-tool](https://osmcode.org/osmium-tool/),
-[Homebrew formula](https://formulae.brew.sh/formula/osmium-tool). Linux:
-your distro package (often `osmium-tool`).
+**1. Install osmium-tool** as in walkthrough A step 2.
 
 **2. Merge the unfiltered extracts you already have in `data/osm/`**
 
@@ -603,25 +686,45 @@ osmium merge \
 Add or drop files to match the countries you drive. Output can be large (sum
 of the inputs).
 
-**3. Put only the merged file in `data/valhalla/` and rebuild tiles**
+**3. Filter the merge, wipe old tiles, rebuild**
 
 ```bash
 docker compose -f data/valhalla/compose.yaml down
-rm -f data/valhalla/*.osm.pbf
-cp data/osm/hr-si-at.osm.pbf data/valhalla/hr-si-at.osm.pbf
-rm -rf data/valhalla/valhalla_tiles data/valhalla/file_hashes.txt
+./data/valhalla/prepare-roads.sh data/osm/hr-si-at.osm.pbf
+rm -rf data/valhalla/valhalla_tiles data/valhalla/valhalla_tiles.tar \
+  data/valhalla/file_hashes.txt
 ls data/valhalla/*.osm.pbf
 docker compose -f data/valhalla/compose.yaml up
 ```
 
 If you skip deleting `valhalla_tiles/`, the image may keep an old graph.
 Then confirm with `curl -s http://127.0.0.1:8002/status` and rank as in
-walkthrough A step 5.
+walkthrough A step 6.
 
 If the container logs
 `Tile building using more than one osm.pbf extract is discouraged`, you still
 have extra `.pbf` files in `data/valhalla/`. `ls` that directory and remove
-them until one remains (plus `compose.yaml` and tile output).
+them until one remains (plus `compose.yaml`, the prepare scripts,
+`mjolnir.drive-time.json`, and tile output).
+
+### Walkthrough C — long-distance Europe (highways only)
+
+Same as A or B, but run `prepare-highways.sh` instead of `prepare-roads.sh`.
+The output is `*-highways.osm.pbf`: motorway, trunk, primary, ramps, and
+ferries. Secondary roads, towns, and Trailhead access tracks are gone, so
+the file stays small enough for a multi-country or Europe extract.
+
+```bash
+docker compose -f data/valhalla/compose.yaml down
+./data/valhalla/prepare-highways.sh data/osm/hr-si-at.osm.pbf
+rm -rf data/valhalla/valhalla_tiles data/valhalla/valhalla_tiles.tar \
+  data/valhalla/file_hashes.txt
+docker compose -f data/valhalla/compose.yaml up
+```
+
+Do not use this graph to filter DayHikes by DriveTime to a Trailhead. Switch
+back with `prepare-roads.sh` on the unfiltered `data/osm/` file and wipe
+tiles.
 
 ## Python API
 
@@ -665,7 +768,9 @@ Bulky local files stay out of git:
 
 - `data/catalog.sqlite` — Catalog built from ingest
 - `data/osm/` — Geofabrik / osmium extracts
-- `data/valhalla/` — routing tiles
+- `data/valhalla/` — road PBF and routing tiles (`compose.yaml`,
+  `prepare-roads.sh`, `prepare-highways.sh`, and `mjolnir.drive-time.json`
+  are tracked)
 - `data/*.pbf`, `data/*.tif`, `data/*.tiff`
 
 The committed fixture lives under `tests/fixtures/`, not `data/`.

@@ -12,6 +12,9 @@ __pycache__/
 data/osm/
 data/valhalla/*
 !data/valhalla/compose.yaml
+!data/valhalla/mjolnir.drive-time.json
+!data/valhalla/prepare-roads.sh
+!data/valhalla/prepare-highways.sh
 data/*.tif
 data/*.tiff
 data/*.pbf

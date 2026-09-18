@@ -26,6 +26,35 @@ do not commit them). Ranking without `--origin` never talks to Valhalla.
 If nothing is listening on `127.0.0.1:8002`, ranking with `--origin` fails with
 a URL error. Ranking without Origin still works.
 
+## Car-only tiles
+
+The graph is for **car DriveTime**, not walking, cycling, or public transit.
+
+**`prepare-roads.sh`** (osmium-tool, host) drops buildings, POIs, landuse,
+footways, paths, steps, pedestrian streets, cycleways, and driveways
+(`highway=service` + `service=driveway`) from the PBF Valhalla parses. It
+keeps motorway–residential, other `service` ways (parking aisles, alleys),
+`highway=track` (Trailhead access), ferries, and turn restrictions.
+
+**`prepare-highways.sh`** is the same idea, stricter: only `motorway`,
+`trunk`, `primary` (and `_link` ramps) plus ferries. Output is
+`*-highways.osm.pbf`. Use it for long-distance European travel, not for
+DriveTime to Trailheads. Turn restrictions are omitted so osmium does not
+pull small member ways into the extract.
+
+**`mjolnir.drive-time.json`** is merged into `valhalla.json` when the
+container starts. `include_pedestrian`, `include_bicycle`, and
+`include_driveways` are `false`, so leftover walk-only / bike-only / driveway
+ways do not become edges.
+
+To restore a fuller graph: skip both prepare scripts, copy an unfiltered
+Geofabrik PBF into `data/valhalla/`, set those three flags to `true`, delete
+`valhalla_tiles/`, `valhalla_tiles.tar`, and `file_hashes.txt`, then compose
+up. README section **How to restore a fuller graph** is the canonical
+checklist.
+
+Changing flags alone does not rebuild existing tiles.
+
 ## What you put on disk
 
 The compose file mounts **`data/valhalla`** (repo-relative) into the
@@ -37,26 +66,36 @@ HTTP.
 build a bad graph) if it sees more than one extract
 ([valhalla#3925](https://github.com/valhalla/valhalla/issues/3925)). Leave
 Croatia/Slovenia/Austria files in `data/osm/` for ingest; do not copy the
-whole folder.
+whole folder. Prefer a prepare script over copying the Geofabrik file
+verbatim.
 
 ```
-data/valhalla/          # gitignored except compose.yaml
-  croatia-latest.osm.pbf   # the only PBF (example)
+data/valhalla/          # gitignored except compose.yaml, prepare-*.sh,
+                        # mjolnir.drive-time.json
+  croatia-latest-roads.osm.pbf
   compose.yaml
+  prepare-roads.sh
+  prepare-highways.sh
+  mjolnir.drive-time.json
   valhalla_tiles/          # the image writes these
   valhalla.json
 ```
 
-Use a **road** extract for the region you actually drive from. Hiking-only
-filtered PBFs are a poor routing graph: DriveTime needs highways.
+Hiking-only filtered PBFs are a poor routing graph: DriveTime needs highways.
 
 Croatia only:
 
 ```bash
-cp data/osm/croatia-latest.osm.pbf data/valhalla/croatia-latest.osm.pbf
+./data/valhalla/prepare-roads.sh data/osm/croatia-latest.osm.pbf
 ```
 
-Several countries — merge first (`osmium-tool` CLI, not Python), then copy
+Long-distance (motorway/trunk/primary only):
+
+```bash
+./data/valhalla/prepare-highways.sh data/osm/croatia-latest.osm.pbf
+```
+
+Several countries — merge first (`osmium-tool` CLI, not Python), then filter
 **the merged file only**:
 
 ```bash
@@ -66,10 +105,10 @@ osmium merge \
   data/osm/austria-latest.osm.pbf \
   -o data/osm/hr-si-at.osm.pbf
 
-# remove extra PBFs from the Valhalla dir, keep compose.yaml and the merge
-rm -f data/valhalla/*.osm.pbf
-cp data/osm/hr-si-at.osm.pbf data/valhalla/hr-si-at.osm.pbf
-rm -rf data/valhalla/valhalla_tiles data/valhalla/file_hashes.txt
+docker compose -f data/valhalla/compose.yaml down
+./data/valhalla/prepare-roads.sh data/osm/hr-si-at.osm.pbf
+rm -rf data/valhalla/valhalla_tiles data/valhalla/valhalla_tiles.tar \
+  data/valhalla/file_hashes.txt
 ```
 
 Then start (or recreate) the container so tiles rebuild from that one file.
@@ -80,9 +119,7 @@ From the repo root:
 
 ```bash
 mkdir -p data/valhalla
-# Example: a small extract to prove the service. Replace with your region.
-curl -L -o data/valhalla/croatia-latest.osm.pbf \
-  https://download.geofabrik.de/europe/croatia-latest.osm.pbf
+./data/valhalla/prepare-roads.sh data/osm/croatia-latest.osm.pbf
 
 docker compose -f data/valhalla/compose.yaml up
 ```
@@ -137,8 +174,8 @@ separate graph built from a PBF. You can rank similarity with no tiles at all.
 
 ## Compose file
 
-[`data/valhalla/compose.yaml`](../data/valhalla/compose.yaml) only publishes port 8002
-and mounts the same directory as `/custom_files`. That is enough for the
-gis-ops image to find PBFs and write tiles. Extra image environment variables
-(`tile_urls`, `force_rebuild`, …) are documented upstream:
-<https://github.com/gis-ops/docker-valhalla>.
+[`data/valhalla/compose.yaml`](../data/valhalla/compose.yaml) publishes port 8002,
+mounts the same directory as `/custom_files`, and merges
+`mjolnir.drive-time.json` into `valhalla.json` before the image entrypoint.
+Extra image environment variables (`tile_urls`, `force_rebuild`, …) are
+documented upstream: <https://github.com/gis-ops/docker-valhalla>.

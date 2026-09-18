@@ -1,0 +1,7 @@
+{
+  "mjolnir": {
+    "include_bicycle": false,
+    "include_driveways": false,
+    "include_pedestrian": false
+  }
+}
