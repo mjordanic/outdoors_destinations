@@ -67,10 +67,16 @@ class OsmSnapshot:
     def merge(self, other: OsmSnapshot) -> None:
         self.nodes.update(other.nodes)
         self.ways.update(other.ways)
-        self.relations.extend(other.relations)
-        self.amenities.extend(other.amenities)
+        relations = {rel.id: rel for rel in self.relations}
+        relations.update({rel.id: rel for rel in other.relations})
+        self.relations = list(relations.values())
+        amenities = dict.fromkeys(self.amenities)
+        amenities.update(dict.fromkeys(other.amenities))
+        self.amenities = list(amenities)
         self.node_elevations.update(other.node_elevations)
-        self.access_points.extend(other.access_points)
+        access_points = dict.fromkeys(self.access_points)
+        access_points.update(dict.fromkeys(other.access_points))
+        self.access_points = list(access_points)
 
 
 def parse_osm(path: Path) -> OsmSnapshot:

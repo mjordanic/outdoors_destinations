@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Iterable, Mapping, Protocol, Sequence
 
 import numpy as np
+from sklearn.neighbors import BallTree
 from sklearn.preprocessing import StandardScaler
 
 from dayhike.osm import OsmRelation, OsmSnapshot, OsmWay, parse_osm
@@ -333,22 +334,42 @@ def build_catalog(
 
     Unnamed relations, out-of-band lengths, and iwn/nwn superroutes are
     counted in the ingest report and are not DayHikes. Attribution is stored
-    with the Catalog. DriveTime is not computed at ingest.
+    with the Catalog. DriveTime is not computed at ingest. Replaces the
+    SQLite file if it exists; overlapping snapshots keep one row per OSM id.
     """
     catalog_path = Path(catalog_path)
     snapshot = OsmSnapshot()
     for path in _osm_paths(osm_path):
         snapshot.merge(parse_osm(path))
+    access_tree = _access_tree(snapshot.access_points)
+    amenity_index = _amenity_index(snapshot.amenities)
     report_counts = {"unnamed": 0, "length": 0, "network": 0}
     kept: list[DayHike] = []
+    seen_ids: set[int] = set()
     for relation in snapshot.relations:
+        if relation.id in seen_ids:
+            continue
+        seen_ids.add(relation.id)
         if relation.tags.get("route") != "hiking":
             continue
-        drop_reason = _drop_reason(relation, snapshot.nodes, snapshot.ways)
+        vertices = _relation_vertices(relation, snapshot.nodes, snapshot.ways)
+        points = [point for _, point in vertices]
+        length_m = _linestring_length_m(points)
+        drop_reason = _drop_reason(relation, length_m)
         if drop_reason is not None:
             report_counts[drop_reason] += 1
             continue
-        kept.append(_dayhike_from_relation(relation, snapshot))
+        kept.append(
+            _dayhike_from_relation(
+                relation,
+                snapshot,
+                vertices,
+                points,
+                length_m,
+                access_tree,
+                amenity_index,
+            )
+        )
     kept.sort(key=lambda hike: hike.id)
     report = IngestReport(
         kept=len(kept),
@@ -378,13 +399,7 @@ def _osm_paths(osm_path: Path | str | Sequence[Path | str]) -> list[Path]:
     return [Path(path) for path in osm_path]
 
 
-def _drop_reason(
-    relation: OsmRelation,
-    nodes: Mapping[int, tuple[float, float]],
-    ways: Mapping[int, OsmWay],
-) -> str | None:
-    points = _relation_points(relation, nodes, ways)
-    length_m = _linestring_length_m(points)
+def _drop_reason(relation: OsmRelation, length_m: float) -> str | None:
     if _is_network_superroute(relation, length_m):
         return "network"
     name = (relation.tags.get("name") or "").strip()
@@ -406,13 +421,18 @@ def _is_network_superroute(relation: OsmRelation, length_m: float) -> bool:
     return has_child_relations or length_m > MAX_LENGTH_M
 
 
-def _dayhike_from_relation(relation: OsmRelation, snapshot: OsmSnapshot) -> DayHike:
-    vertices = _relation_vertices(relation, snapshot.nodes, snapshot.ways)
-    points = [point for _, point in vertices]
-    latitude, longitude = _pick_trailhead(points, snapshot.access_points)
-    length_m = _linestring_length_m(points)
+def _dayhike_from_relation(
+    relation: OsmRelation,
+    snapshot: OsmSnapshot,
+    vertices: Sequence[tuple[int, tuple[float, float]]],
+    points: Sequence[tuple[float, float]],
+    length_m: float,
+    access_tree: BallTree | None,
+    amenity_index: _AmenityIndex | None,
+) -> DayHike:
+    latitude, longitude = _pick_trailhead(points, access_tree)
     sac_scale = _max_sac_scale(relation, snapshot.ways)
-    amenity_facts = _amenity_facts_at(latitude, longitude, snapshot.amenities)
+    amenity_facts = _amenity_facts_at(latitude, longitude, amenity_index)
     elevation_min_m, elevation_max_m, elevation_gain_m = _elevation_stats(
         vertices, snapshot.node_elevations
     )
@@ -437,18 +457,56 @@ def _dayhike_from_relation(relation: OsmRelation, snapshot: OsmSnapshot) -> DayH
     )
 
 
+def _access_tree(
+    access_points: Sequence[tuple[float, float]],
+) -> BallTree | None:
+    if not access_points:
+        return None
+    return BallTree(np.radians(np.asarray(access_points, dtype=float)), metric="haversine")
+
+
+@dataclass(frozen=True)
+class _AmenityIndex:
+    tree: BallTree
+    ids: np.ndarray
+    kinds: np.ndarray
+
+
+def _amenity_index(
+    amenities: Sequence[tuple[str, tuple[tuple[float, float], ...]]],
+) -> _AmenityIndex | None:
+    lats: list[float] = []
+    lons: list[float] = []
+    ids: list[int] = []
+    kinds: list[str] = []
+    for amenity_id, (kind, points) in enumerate(amenities):
+        for lat, lon in points:
+            lats.append(lat)
+            lons.append(lon)
+            ids.append(amenity_id)
+            kinds.append(kind)
+    if not lats:
+        return None
+    tree = BallTree(
+        np.radians(np.column_stack([lats, lons])), metric="haversine"
+    )
+    return _AmenityIndex(tree, np.asarray(ids), np.asarray(kinds))
+
+
 def _pick_trailhead(
     points: Sequence[tuple[float, float]],
-    access_points: Sequence[tuple[float, float]],
+    access_tree: BallTree | None,
 ) -> tuple[float, float]:
     first = points[0]
     last = points[-1]
-    if first == last:
+    if first == last or access_tree is None:
         return first
-    first_m = _nearest_access_m(first, access_points)
-    last_m = _nearest_access_m(last, access_points)
-    first_ok = first_m is not None and first_m <= TRAILHEAD_ACCESS_RADIUS_M
-    last_ok = last_m is not None and last_m <= TRAILHEAD_ACCESS_RADIUS_M
+    query = np.radians([[first[0], first[1]], [last[0], last[1]]])
+    dist, _idx = access_tree.query(query, k=1)
+    first_m = float(dist[0, 0] * EARTH_RADIUS_M)
+    last_m = float(dist[1, 0] * EARTH_RADIUS_M)
+    first_ok = first_m <= TRAILHEAD_ACCESS_RADIUS_M
+    last_ok = last_m <= TRAILHEAD_ACCESS_RADIUS_M
     if first_ok and last_ok:
         return first if first_m <= last_m else last
     if last_ok:
@@ -456,32 +514,28 @@ def _pick_trailhead(
     return first
 
 
-def _nearest_access_m(
-    point: tuple[float, float],
-    access_points: Sequence[tuple[float, float]],
-) -> float | None:
-    if not access_points:
-        return None
-    return min(
-        _haversine_m(point[0], point[1], lat, lon) for lat, lon in access_points
-    )
-
-
 def _amenity_facts_at(
     latitude: float,
     longitude: float,
-    amenities: Sequence[tuple[str, tuple[tuple[float, float], ...]]],
+    amenity_index: _AmenityIndex | None,
 ) -> AmenityFacts:
     distances: dict[str, list[float]] = {kind: [] for kind in AMENITY_KINDS}
-    for kind, points in amenities:
-        if not points:
-            continue
-        distance_m = min(
-            _haversine_m(latitude, longitude, amenity_lat, amenity_lon)
-            for amenity_lat, amenity_lon in points
+    if amenity_index is not None:
+        indices, radii = amenity_index.tree.query_radius(
+            np.radians([[latitude, longitude]]),
+            r=AMENITY_RADIUS_M / EARTH_RADIUS_M,
+            return_distance=True,
         )
-        if distance_m <= AMENITY_RADIUS_M:
-            distances[kind].append(distance_m)
+        nearest: dict[str, dict[int, float]] = {kind: {} for kind in AMENITY_KINDS}
+        for idx, radius in zip(indices[0], radii[0]):
+            kind = str(amenity_index.kinds[idx])
+            amenity_id = int(amenity_index.ids[idx])
+            distance_m = float(radius * EARTH_RADIUS_M)
+            prev = nearest[kind].get(amenity_id)
+            if prev is None or distance_m < prev:
+                nearest[kind][amenity_id] = distance_m
+        for kind in AMENITY_KINDS:
+            distances[kind] = list(nearest[kind].values())
     return AmenityFacts(
         hut=_amenity_fact(distances["hut"]),
         parking=_amenity_fact(distances["parking"]),
@@ -567,14 +621,6 @@ def _relation_vertices(
             continue
         vertices.append((node_id, point))
     return vertices
-
-
-def _relation_points(
-    relation: OsmRelation,
-    nodes: Mapping[int, tuple[float, float]],
-    ways: Mapping[int, OsmWay],
-) -> list[tuple[float, float]]:
-    return [point for _, point in _relation_vertices(relation, nodes, ways)]
 
 
 def _max_sac_scale(relation: OsmRelation, ways: Mapping[int, OsmWay]) -> str | None:
@@ -677,6 +723,9 @@ def _cosine(left: Sequence[float], right: Sequence[float]) -> float:
 def _write_sqlite(
     path: Path, dayhikes: Iterable[DayHike], report: IngestReport, scaler: Scaler
 ) -> None:
+    dayhikes = tuple(dayhikes)
+    if len({hike.id for hike in dayhikes}) != len(dayhikes):
+        raise ValueError("duplicate DayHike ids in catalog ingest")
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         path.unlink()

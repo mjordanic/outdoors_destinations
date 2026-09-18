@@ -65,6 +65,31 @@ def test_second_build_catalog_yields_same_dayhike_identities(tmp_path: Path) -> 
     assert [hike.name for hike in first.dayhikes] == [hike.name for hike in second.dayhikes]
 
 
+def test_reingest_same_path_replaces_catalog_instead_of_appending(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "catalog.sqlite"
+    first = build_catalog(FIXTURE, path)
+    second = build_catalog(FIXTURE, path)
+
+    assert [hike.id for hike in second.dayhikes] == [hike.id for hike in first.dayhikes]
+    assert len(second.dayhikes) == len({hike.id for hike in second.dayhikes})
+    assert second.ingest_report == first.ingest_report
+
+
+def test_ingest_overlapping_snapshots_does_not_duplicate_dayhikes(
+    tmp_path: Path,
+) -> None:
+    once = build_catalog(FIXTURE, tmp_path / "once.sqlite")
+    twice = build_catalog([FIXTURE, FIXTURE], tmp_path / "twice.sqlite")
+
+    assert [hike.id for hike in twice.dayhikes] == [hike.id for hike in once.dayhikes]
+    assert twice.ingest_report == once.ingest_report
+    assert [hike.trailhead.amenity_facts for hike in twice.dayhikes] == [
+        hike.trailhead.amenity_facts for hike in once.dayhikes
+    ]
+
+
 def test_osm_attribution_is_stored_with_the_catalog(tmp_path: Path) -> None:
     path = tmp_path / "catalog.sqlite"
     build_catalog(FIXTURE, path)
