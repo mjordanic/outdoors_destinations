@@ -109,6 +109,10 @@ def parse_osm(path: Path) -> OsmSnapshot:
 def amenity_kind(tags: dict[str, str]) -> str | None:
     if tags.get("tourism") in HUT_TOURISM:
         return "hut"
+    if tags.get("tourism") == "viewpoint":
+        return "viewpoint"
+    if tags.get("natural") == "peak":
+        return "peak"
     amenity = tags.get("amenity")
     if amenity == "parking":
         return "parking"
@@ -116,6 +120,8 @@ def amenity_kind(tags: dict[str, str]) -> str | None:
         return "restaurant_cafe"
     if amenity == "drinking_water":
         return "drinking_water"
+    if amenity == "shelter":
+        return "shelter"
     return None
 
 

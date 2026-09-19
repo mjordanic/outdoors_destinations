@@ -96,8 +96,9 @@ the FeatureVector — it would make "hikes like Seed X" depend on today's foreca
 ### What would have to be true to start
 
 - Weather as a query-time filter ("typical June" or "this weekend"), never as a
-  similarity feature, plus an explicit DEM-aspect approximation if sun exposure
-  is in scope.
+  similarity feature. SolarAspect from a local DEM is prototyped in
+  `notebooks/rank-feature-lab.ipynb` and is not a Catalog FeatureVector column
+  until that sandbox promotes it.
 
 ---
 

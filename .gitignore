@@ -19,8 +19,10 @@ data/*.tif
 data/*.tiff
 data/*.pbf
 data/catalog.sqlite
+*.geometry.sqlite
 *.sqlite.work
 *.sqlite.tmp
+*.sqlite.access*
 
 # env / secrets
 .env

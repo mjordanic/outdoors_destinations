@@ -17,8 +17,12 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "contextily>=1.7.1",
+    "geopandas>=1.1.4",
     "ipykernel>=7.3.0",
     "jupyter>=1.1.1",
+    "matplotlib>=3.11.2",
+    "pandas>=3.0.6",
     "pytest>=9.1.1",
 ]
 

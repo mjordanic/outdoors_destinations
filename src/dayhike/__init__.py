@@ -15,9 +15,16 @@ from dayhike.catalog import (
     Trailhead,
     UnknownSeedName,
     build_catalog,
+    cosine_similarity,
+    dayhike_label,
+    feature_matrix,
     filter_by_drive_time,
+    fit_scaler_from_matrix,
+    geometry_store_path_for,
     rank_dayhikes,
+    rank_scaled_rows,
     resolve_seed,
+    scale_matrix,
 )
 from dayhike.valhalla import ValhallaMatrixClient
 
@@ -39,7 +46,14 @@ __all__ = [
     "UnknownSeedName",
     "ValhallaMatrixClient",
     "build_catalog",
+    "cosine_similarity",
+    "dayhike_label",
+    "feature_matrix",
     "filter_by_drive_time",
+    "fit_scaler_from_matrix",
+    "geometry_store_path_for",
     "rank_dayhikes",
+    "rank_scaled_rows",
     "resolve_seed",
+    "scale_matrix",
 ]

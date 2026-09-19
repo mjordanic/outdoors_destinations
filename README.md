@@ -26,9 +26,9 @@ OSM XML or PBF            SQLite Catalog              Ranking
                                                       via local Valhalla
 ```
 
-1. **Ingest** (`build_catalog` / `dayhike ingest`) reads OSM **XML or PBF**, keeps named
-   `route=hiking` relations whose geometry length is 2–25 km, and writes a
-   SQLite Catalog.
+1. **Ingest** (`build_catalog` / `dayhike ingest`) reads OSM **XML or PBF**, keeps
+   `route=hiking` relations whose geometry length is 1–40 km, and writes a
+   SQLite Catalog plus a GeometryStore sidecar (`data/catalog.geometry.sqlite`).
 2. **Rank** (`rank_dayhikes` / `dayhike rank`) compares other DayHikes to Seeds
    you name. Similarity is cosine distance of scaled FeatureVectors (length,
    elevation when OSM `ele` exists, Difficulty, amenities near the Trailhead).
@@ -46,6 +46,7 @@ call on your machine.
 | --- | --- | --- |
 | `tests/fixtures/catalog.osm` | Tiny OSM XML **oracle** for tests and demos | yes |
 | `data/catalog.sqlite` | The Catalog you work with (SQLite database) | **gitignored** |
+| `data/catalog.geometry.sqlite` | GeometryStore: DayHikeGeometry + raw amenities | **gitignored** |
 | `data/osm/` | Geofabrik / osmium extracts you download | gitignored |
 | `data/valhalla/` | Road PBF + Valhalla routing tiles Docker builds | gitignored |
 | `data/valhalla/compose.yaml` | How to run Valhalla | yes |
@@ -61,15 +62,17 @@ directory from the committed fixture.
 ## The fixture is slim on purpose
 
 `tests/fixtures/catalog.osm` is not a Croatia extract. It is a hand-built OSM
-XML file with five hiking relations so ingest and ranking have a known answer:
+XML file with hiking relations so ingest and ranking have a known answer:
 
 | OSM relation | Name | What happens |
 | --- | --- | --- |
 | 1001 | Ridge Walk | **Kept.** ~10 km, `sac_scale=mountain_hiking`, Hut/cafe/parking/water within 20 km of the Trailhead, elevation tags on nodes. |
 | 1002 | Valley Path | **Kept.** ~5 km, no `sac_scale`, no nearby amenities, no `ele`. |
-| 1003 | *(unnamed)* | Dropped (`dropped_unnamed`). |
-| 1004 | Long Traverse | Dropped: ~30 km, outside the 2–25 km band (`dropped_length`). |
+| 1003 | `relation:1003` | **Kept.** No OSM `name`. `name_origin=synthetic`. |
+| 1004 | Long Traverse | **Kept.** ~30 km, inside the 1–40 km band. |
 | 1005 | Via Dinarica Red | Dropped: `network=iwn` superroute (`dropped_network`). |
+| 1006 | Fifty Km Walk | Dropped: ~50 km (`dropped_length`). |
+| 1007 | PS-1 | **Kept.** OSM `ref` only (`name_origin=osm_ref`). |
 
 That is why `tests/fixtures/` looks small: the PRD uses it as the oracle, not as
 the hiking dataset. A real Catalog comes from Geofabrik extracts (see below).
@@ -87,7 +90,7 @@ a hair over 10 km / 5 km because it is computed on the sphere):
 
 ```
 data/catalog.sqlite
-IngestReport(kept=2, dropped_unnamed=1, dropped_length=1, dropped_network=1)
+IngestReport(kept=5, dropped_unnamed=0, dropped_length=1, dropped_network=1, named_osm_name=3, named_osm_ref=1, named_synthetic=1)
 ```
 
 Progress (`filter:`, `relations:`, `ways:`, `nodes:`, `access:`, `assemble:`,
@@ -139,7 +142,7 @@ print(resolve_seed(catalog, "ridge walk"))  # 1001; case-insensitive exact match
 
 | Table | Contents |
 | --- | --- |
-| `dayhikes` | OSM relation id, name, length_m, Difficulty (`sac_scale` or NULL) |
+| `dayhikes` | OSM relation id, Seed label, `name_origin`, length_m, Difficulty (`sac_scale` or NULL) |
 | `trailheads` | lat/lon used for amenities and DriveTime |
 | `amenity_facts` | per DayHike: hut, parking, restaurant_cafe, drinking_water (count + nearest_m) |
 | `feature_vectors` | length, elevation min/max/gain, Difficulty ordinal |
@@ -185,12 +188,10 @@ uv run dayhike rank --catalog data/catalog.sqlite "Ridge Walk"
 Prints DayHike id, name, and similarity score (tab-separated):
 
 ```
-1002	Valley Path	-1.0
+1002	Valley Path	<score>
 ```
 
-The fixture only has two DayHikes, so the only neighbor of Ridge Walk is Valley
-Path. With two very different FeatureVectors the cosine score can be about
-`-1`. That is expected on this toy Catalog, not a routing error.
+The fixture Catalog now has several DayHikes, so Ridge Walk has more than one neighbour. Scores are cosine similarity after scaling.
 
 Python:
 
@@ -357,8 +358,10 @@ uv run dayhike ingest data/osm/croatia-latest.osm.pbf \
 ```
 
 Stderr shows stage lines while it runs. Stdout is the path and an
-`IngestReport`. Unnamed relations, routes outside 2–25 km, and iwn/nwn
-superroutes are counted as dropped and are **not** DayHikes. If the process
+`IngestReport`. Routes outside 1–40 km and iwn/nwn superroutes are counted as
+dropped and are **not** DayHikes. A missing OSM `name` is kept: the Seed label
+is `name`, else `ref`, else `relation:{id}`, with `name_origin` recording which.
+If the process
 stops before `write:`, run the same command again; it resumes from
 `data/catalog.sqlite.work`. `--fresh` discards that work file.
 
@@ -460,9 +463,17 @@ Geofabrik `europe-latest.osm.pbf`) is a valid input.
    `data/catalog.sqlite.work` (same directory as the Catalog). Driveable
    highways are kept only when they fall inside the Trailhead access radius
    around a kept DayHike endpoint. That radius is `TRAILHEAD_ACCESS_RADIUS_M`
-   in the package (the same band used to pick a Trailhead).
+   in the package (the same band used to pick a Trailhead). If `osmium` is on
+   `PATH` and the source is PBF, ingest extracts those disks from the
+   unfiltered source (`osmium extract --strategy complete_ways`) and scans the
+   extract; the Catalog is the same as a full-source access scan. Sidecars
+   `*.sqlite.access*` are removed after a successful write. XML, or a missing
+   `osmium`, scans the source file.
 3. **Progress.** Each stage prints to stderr: `filter`, `relations`, `ways`,
-   `nodes`, `access`, `assemble`, `write`.
+   `nodes`, `access`, `assemble`, `write`. After nodes, `access:` first loads
+   the work file and chooses DayHike endpoints, then extracts. Counts print
+   every 100k objects during a load or scan. `osmium extract` prints its own
+   progress on stderr.
 4. **Resume.** The same `dayhike ingest` command on the same inputs continues
    the work file. `--fresh` (or `build_catalog(..., fresh=True)`) starts over.
    A `progress` callback on `build_catalog` receives the same stage lines.
@@ -482,21 +493,24 @@ Equivalent osmium filter if you want to run it yourself:
 ```bash
 osmium tags-filter data/osm/croatia-latest.osm.pbf \
   r/route=hiking \
-  nwr/tourism=alpine_hut,wilderness_hut \
-  nwr/amenity=parking,restaurant,cafe,drinking_water \
+  nwr/tourism=alpine_hut,wilderness_hut,viewpoint \
+  nwr/amenity=parking,restaurant,cafe,drinking_water,shelter \
+  nwr/natural=peak \
   -o data/osm/croatia-latest.catalog.osm.pbf
 ```
 
 ### What ingest keeps
 
-Same rules as the fixture: named `route=hiking` relations whose geometry is
-2–25 km. Amenities on nodes, ways, and tagged relations within 20 km of the
-Trailhead. The Trailhead is the LineString endpoint nearer a parking lot or
+Same rules as the fixture: `route=hiking` relations whose geometry is 1–40 km.
+Amenities on nodes, ways, and tagged relations: Catalog AmenityFacts still use
+hut/parking/restaurant_cafe/drinking_water within 20 km of the Trailhead.
+Viewpoint, Peak, and Shelter are stored on GeometryStore only. The Trailhead is the LineString endpoint nearer a parking lot or
 driveable highway within 5 km, otherwise the first vertex. Ways in a route
 relation are reversed as needed so the geometry is one continuous line.
 
-A hike that is not a named `route=hiking` relation in this Catalog cannot be
-a Seed. Unnamed forest paths never appear.
+A hike that is not a `route=hiking` relation in this Catalog cannot be a Seed.
+Unnamed forest paths (`highway=path` without a hiking relation) never appear.
+Filter `name_origin = 'synthetic'` if you want to drop ingest-assigned labels.
 
 ### Ingest replaces the Catalog
 
@@ -763,6 +777,8 @@ The same seams the CLI wraps:
 - `Catalog.open` — load an already-built SQLite Catalog
 - `resolve_seed` — Seed name → DayHike id (must exist in the Catalog)
 - `rank_dayhikes` — Catalog + Seeds → Ranking
+- `rank_scaled_rows` / `fit_scaler_from_matrix` / `scale_matrix` / `cosine_similarity` — same scoring on an experimental feature matrix
+- `geometry_store_path_for` — sidecar path for DayHikeGeometry
 - `filter_by_drive_time` — Ranking filtered by DriveTime from Origin
 - `ValhallaMatrixClient` — HTTP adapter for `/sources_to_targets`
 
@@ -780,8 +796,16 @@ Docstrings on those functions use the glossary in `CONTEXT.md`.
 - [`notebooks/ingest-a-snapshot.ipynb`](notebooks/ingest-a-snapshot.ipynb) —
   ingest stages, progress, resume after a kill, and unused OSM objects, all
   on the committed fixture.
+- [`notebooks/inspect-the-catalog.ipynb`](notebooks/inspect-the-catalog.ipynb) —
+  schema, pandas DataFrames, sanity-check `data/catalog.sqlite` (counts,
+  length band, Trailhead map). Falls back to the fixture if that file is missing.
+- [`notebooks/rank-feature-lab.ipynb`](notebooks/rank-feature-lab.ipynb) —
+  ranking sandbox: production `rank_dayhikes` vs experimental FeatureVectors
+  on GeometryStore, optional FABDEM sampling.
 
-Both run against the committed OSM fixture (no Geofabrik, no live Valhalla).
+The first three run against the committed OSM fixture (no Geofabrik, no live
+Valhalla). `inspect-the-catalog` and `rank-feature-lab` open your local Catalog
+when present (re-ingest so GeometryStore and `name_origin` exist).
 Open them with the project interpreter after `uv sync`.
 
 ```bash
@@ -799,6 +823,7 @@ DayHikes.
 Bulky local files stay out of git:
 
 - `data/catalog.sqlite` — Catalog built from ingest
+- `data/catalog.geometry.sqlite` — GeometryStore (DayHikeGeometry + raw amenities)
 - `data/catalog.sqlite.work` — in-progress ingest (resume handle)
 - `data/osm/` — Geofabrik / osmium extracts
 - `data/valhalla/` — road PBF and routing tiles (`compose.yaml`,

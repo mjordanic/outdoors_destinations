@@ -1,4 +1,7 @@
+import math
 from pathlib import Path
+import shutil
+import subprocess
 
 import pytest
 
@@ -17,8 +20,24 @@ def test_build_catalog_reports_ingest_stages(tmp_path: Path) -> None:
     stages = [message.split(":", 1)[0] for message in messages]
     for stage in STAGES:
         assert stage in stages, messages
-    assert catalog.ingest_report.kept == 2
-    assert catalog.ingest_report.dropped_unnamed == 1
+    assert catalog.ingest_report.kept == 5
+    assert catalog.ingest_report.dropped_unnamed == 0
+
+
+def test_build_catalog_reports_loading_the_work_file_before_access(
+    tmp_path: Path,
+) -> None:
+    messages: list[str] = []
+    build_catalog(FIXTURE, tmp_path / "catalog.sqlite", progress=messages.append)
+
+    nodes_done = next(
+        i for i, message in enumerate(messages) if message.startswith("nodes:")
+    )
+    access = [message for message in messages[nodes_done:] if message.startswith("access:")]
+    assert any("loading work file" in message for message in access), messages
+    assert any("endpoint" in message for message in access), messages
+    load_at = next(i for i, message in enumerate(access) if "loading work file" in message)
+    assert load_at == 0, access
 
 
 def test_ingest_resumes_after_progress_callback_raises(tmp_path: Path) -> None:
@@ -38,8 +57,8 @@ def test_ingest_resumes_after_progress_callback_raises(tmp_path: Path) -> None:
     messages: list[str] = []
     catalog = build_catalog(FIXTURE, catalog_path, progress=messages.append)
 
-    assert catalog.ingest_report.kept == 2
-    assert {hike.name for hike in catalog.dayhikes} == {"Ridge Walk", "Valley Path"}
+    assert catalog.ingest_report.kept == 5
+    assert {"Ridge Walk", "Valley Path"} <= {hike.name for hike in catalog.dayhikes}
     assert not work_path.exists()
     assert any("resumed, already complete" in message for message in messages)
 
@@ -95,5 +114,113 @@ def test_fresh_discards_an_existing_work_file(tmp_path: Path) -> None:
         FIXTURE, catalog_path, progress=messages.append, fresh=True
     )
 
-    assert catalog.ingest_report.kept == 2
+    assert catalog.ingest_report.kept == 5
     assert not any("resumed, already complete" in message for message in messages)
+
+
+@pytest.mark.skipif(shutil.which("osmium") is None, reason="osmium-tool")
+def test_access_uses_osmium_extract_and_keeps_fixture_dayhikes(tmp_path: Path) -> None:
+    messages: list[str] = []
+    catalog = build_catalog(
+        _sorted_pbf(FIXTURE, tmp_path / "catalog.osm.pbf"),
+        tmp_path / "catalog.sqlite",
+        progress=messages.append,
+    )
+
+    assert any(
+        message.startswith("access: extract ") and "->" in message
+        for message in messages
+    ), messages
+    assert catalog.ingest_report.kept == 5
+    assert {"Ridge Walk", "Valley Path"} <= {hike.name for hike in catalog.dayhikes}
+
+
+@pytest.mark.skipif(shutil.which("osmium") is None, reason="osmium-tool")
+def test_access_extract_sidecars_are_removed_after_write(tmp_path: Path) -> None:
+    catalog_path = tmp_path / "catalog.sqlite"
+    build_catalog(_sorted_pbf(FIXTURE, tmp_path / "catalog.osm.pbf"), catalog_path)
+    assert list(tmp_path.glob("catalog.sqlite.access*")) == []
+
+
+@pytest.mark.skipif(shutil.which("osmium") is None, reason="osmium-tool")
+@pytest.mark.parametrize(
+    "fixture",
+    [
+        FIXTURE,
+        Path(__file__).parent / "fixtures" / "trailhead_at_highway.osm",
+        Path(__file__).parent / "fixtures" / "trailhead_at_parking.osm",
+    ],
+)
+def test_access_extract_matches_full_source_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fixture: Path
+) -> None:
+    pbf = _sorted_pbf(fixture, tmp_path / "source.osm.pbf")
+    extracted = build_catalog(pbf, tmp_path / "extracted.sqlite")
+    monkeypatch.setattr("dayhike.ingest.shutil.which", lambda _name: None)
+    scanned = build_catalog(pbf, tmp_path / "scanned.sqlite")
+
+    assert _dayhike_signature(extracted) == _dayhike_signature(scanned)
+    assert extracted.ingest_report == scanned.ingest_report
+
+
+def test_access_extract_boxes_contain_the_trailhead_access_disk() -> None:
+    from dayhike.catalog import TRAILHEAD_ACCESS_RADIUS_M
+    from dayhike.ingest import _containing_bbox
+
+    radius = TRAILHEAD_ACCESS_RADIUS_M
+    for lat, lon in ((0.0, 0.0), (45.0, 15.0), (64.0, 10.0), (-33.0, 18.0)):
+        minlon, minlat, maxlon, maxlat = _containing_bbox(lat, lon, radius + radius)
+        for bearing in range(0, 360, 15):
+            point_lat, point_lon = _destination(lat, lon, radius, bearing)
+            assert minlat < point_lat < maxlat
+            assert minlon < point_lon < maxlon
+
+
+def _sorted_pbf(source: Path, dest: Path) -> Path:
+    subprocess.run(
+        [
+            "osmium",
+            "sort",
+            str(source),
+            "-o",
+            str(dest),
+            "--overwrite",
+            "--no-progress",
+        ],
+        check=True,
+    )
+    return dest
+
+
+def _dayhike_signature(catalog: Catalog) -> list[tuple[object, ...]]:
+    return [
+        (
+            hike.id,
+            hike.name,
+            round(hike.length_m, 3),
+            round(hike.trailhead.latitude, 7),
+            round(hike.trailhead.longitude, 7),
+            hike.trailhead.amenity_facts.parking.count,
+        )
+        for hike in catalog.dayhikes
+    ]
+
+
+def _destination(
+    lat: float, lon: float, distance_m: float, bearing_deg: float
+) -> tuple[float, float]:
+    from dayhike.catalog import EARTH_RADIUS_M
+
+    angular = distance_m / EARTH_RADIUS_M
+    bearing = math.radians(bearing_deg)
+    lat1 = math.radians(lat)
+    lon1 = math.radians(lon)
+    lat2 = math.asin(
+        math.sin(lat1) * math.cos(angular)
+        + math.cos(lat1) * math.sin(angular) * math.cos(bearing)
+    )
+    lon2 = lon1 + math.atan2(
+        math.sin(bearing) * math.sin(angular) * math.cos(lat1),
+        math.cos(angular) - math.sin(lat1) * math.sin(lat2),
+    )
+    return math.degrees(lat2), (math.degrees(lon2) + 180.0) % 360.0 - 180.0

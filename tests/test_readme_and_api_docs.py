@@ -47,6 +47,7 @@ def test_readme_documents_ingest_progress_resume_and_work_file() -> None:
     assert "catalog.sqlite.work" in text
     assert "stderr" in text.casefold()
     assert "europe-latest.osm.pbf" in text
+    assert "osmium extract" in text
 
 
 def test_readme_links_valhalla_compose_and_docs() -> None:

@@ -74,8 +74,8 @@ def test_notebooks_execute_against_committed_osm_fixture() -> None:
 def test_notebook_shows_ingest_keep_drop_counts_and_kept_names() -> None:
     output, _, _ = _run_notebooks()
 
-    assert "kept=2" in output
-    assert "dropped_unnamed=1" in output
+    assert "kept=5" in output
+    assert "dropped_unnamed=0" in output
     assert "dropped_length=1" in output
     assert "dropped_network=1" in output
     assert "Ridge Walk" in output
@@ -99,8 +99,10 @@ def test_notebook_shows_ranking_for_one_seed_and_two_dissimilar_seeds() -> None:
     one_valley = _tagged_names(output, "one_seed_valley")
     two_seeds = _tagged_names(output, "two_seeds")
 
-    assert one_ridge == ["Valley Path"]
-    assert one_valley == ["Ridge Walk"]
+    assert "Valley Path" in one_ridge
+    assert "Ridge Walk" not in one_ridge
+    assert "Ridge Walk" in one_valley
+    assert "Valley Path" not in one_valley
     assert two_seeds[0] == "Near Ridge"
     assert two_seeds.index("Near Ridge") < two_seeds.index("Mid Path")
 
@@ -126,7 +128,7 @@ def test_notebook_shows_stubbed_drive_time_and_local_valhalla_note() -> None:
     output, markdown, source = _run_notebooks()
 
     assert "filter_by_drive_time" in source
-    assert _tagged_names(output, "drive_keep") == ["Valley Path"]
+    assert "Valley Path" in _tagged_names(output, "drive_keep")
     assert "drive_drop_count\t0" in output
     assert "Valhalla" in markdown
     assert "tile" in markdown.casefold()
@@ -159,6 +161,34 @@ def test_readme_points_at_demonstration_notebooks() -> None:
     assert "notebooks/catalog-and-ranker.ipynb" in text
     assert "notebooks/working-with-the-catalog.ipynb" in text
     assert "notebooks/ingest-a-snapshot.ipynb" in text
+    assert "notebooks/inspect-the-catalog.ipynb" in text
+    assert "notebooks/rank-feature-lab.ipynb" in text
+
+
+def test_notebook_sanity_checks_catalog_counts_length_band_and_map() -> None:
+    output, markdown, source = _run_notebooks()
+
+    assert "Inspect the Catalog" in markdown
+    assert "data/catalog.sqlite" in source
+    assert "sanity kept_matches_rows\tok" in output
+    assert "sanity length_band\tok" in output
+    assert "sanity trailhead_per_dayhike\tok" in output
+    assert "geopandas" in source.casefold()
+    assert "contextily" in source.casefold()
+    assert "catalog_meta" in markdown
+    assert "feature_vectors" in markdown
+    assert "DriveTime" in markdown
+    assert "table\tdayhikes" in output
+    assert "table\ttrailheads" in output
+    assert "import pandas" in source
+    assert "pandas dayhikes\t" in output
+    assert "pandas play\t" in output
+    assert "rank_scaled_rows" in source
+    assert "geometry_store" in source
+    assert "name_origin" in source
+    assert "prod_rank\t" in output
+    assert "dem skipped" in output
+
 
 
 

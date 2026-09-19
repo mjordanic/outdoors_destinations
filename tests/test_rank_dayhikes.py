@@ -10,7 +10,10 @@ from dayhike import (
     Catalog,
     UnknownSeedName,
     build_catalog,
+    feature_matrix,
     rank_dayhikes,
+    rank_scaled_rows,
+    scale_matrix,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
@@ -25,9 +28,11 @@ def test_one_seed_returns_the_other_in_band_dayhike_and_omits_the_seed(
 
     ranking = rank_dayhikes(catalog, ["Ridge Walk"])
 
-    assert [item.dayhike.id for item in ranking.items] == [VALLEY_PATH_ID]
-    assert ranking.items[0].dayhike.name == "Valley Path"
+    names = [item.dayhike.name for item in ranking.items]
+    assert VALLEY_PATH_ID in {item.dayhike.id for item in ranking.items}
     assert RIDGE_WALK_ID not in {item.dayhike.id for item in ranking.items}
+    assert "Ridge Walk" not in names
+    assert ranking.items
     assert -1.0 <= ranking.items[0].score <= 1.0
 
 
@@ -46,7 +51,8 @@ def test_scaler_persists_and_ranking_matches_after_catalog_open(tmp_path: Path) 
 
 def test_two_seeds_score_is_max_not_mean(tmp_path: Path) -> None:
     catalog = build_catalog(FIXTURE, tmp_path / "catalog.sqlite")
-    ridge, valley = catalog.dayhikes
+    ridge = next(hike for hike in catalog.dayhikes if hike.id == RIDGE_WALK_ID)
+    valley = next(hike for hike in catalog.dayhikes if hike.id == VALLEY_PATH_ID)
     near_ridge = replace(ridge, id=9001, name="Near Ridge")
     midpoint = replace(
         valley,
@@ -87,6 +93,22 @@ def test_ranking_is_deterministic_across_two_build_and_rank_runs(tmp_path: Path)
     ]
 
 
+def test_rank_scaled_rows_matches_rank_dayhikes(tmp_path: Path) -> None:
+    catalog = build_catalog(FIXTURE, tmp_path / "catalog.sqlite")
+    ranking = rank_dayhikes(catalog, ["Ridge Walk"])
+    scaled = scale_matrix(feature_matrix(catalog.dayhikes), catalog.scaler)
+    rows = rank_scaled_rows(
+        [hike.id for hike in catalog.dayhikes],
+        [hike.name for hike in catalog.dayhikes],
+        scaled,
+        {RIDGE_WALK_ID},
+    )
+
+    assert [(item.dayhike.id, item.dayhike.name, item.score) for item in ranking.items] == [
+        row for row in rows
+    ]
+
+
 def test_unknown_seed_still_fails_via_name_resolution(tmp_path: Path) -> None:
     catalog = build_catalog(FIXTURE, tmp_path / "catalog.sqlite")
 
@@ -106,13 +128,13 @@ def test_cli_prints_id_name_and_score(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    line = result.stdout.strip().splitlines()
-    assert len(line) == 1
-    hike_id, name, score = line[0].split("\t")
-    assert hike_id == str(VALLEY_PATH_ID)
-    assert name == "Valley Path"
-    assert -1.0 <= float(score) <= 1.0
-    assert str(RIDGE_WALK_ID) not in result.stdout
+    lines = result.stdout.strip().splitlines()
+    ids = [line.split("\t")[0] for line in lines]
+    names = [line.split("\t")[1] for line in lines]
+    assert str(RIDGE_WALK_ID) not in ids
+    assert str(VALLEY_PATH_ID) in ids
+    assert "Valley Path" in names
+    assert all(-1.0 <= float(line.split("\t")[2]) <= 1.0 for line in lines)
 
 
 def test_ambiguous_seed_still_fails_via_name_resolution(tmp_path: Path) -> None:

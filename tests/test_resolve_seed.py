@@ -38,14 +38,15 @@ def test_ambiguous_seed_name_lists_candidates_instead_of_picking_one(
     with pytest.raises(AmbiguousSeedName, match="Shared Path") as raised:
         resolve_seed(catalog, "Shared Path")
 
-    assert raised.value.candidates == ("Shared Path", "Shared Path")
+    assert raised.value.candidates == tuple("Shared Path" for _ in catalog.dayhikes)
 
 
 def test_case_folded_duplicate_names_are_ambiguous_and_list_catalog_names(
     tmp_path: Path,
 ) -> None:
     catalog = build_catalog(FIXTURE, tmp_path / "catalog.sqlite")
-    first, second = catalog.dayhikes
+    first = next(hike for hike in catalog.dayhikes if hike.id == RIDGE_WALK_ID)
+    second = next(hike for hike in catalog.dayhikes if hike.id == VALLEY_PATH_ID)
     catalog = replace(
         catalog,
         dayhikes=(replace(first, name="Shared Path"), replace(second, name="shared path")),
@@ -66,6 +67,8 @@ def test_seed_name_match_is_case_insensitive_exact_after_strip(
 
     assert resolve_seed(catalog, "  ridge walk  ") == RIDGE_WALK_ID
     assert resolve_seed(catalog, "VALLEY PATH") == VALLEY_PATH_ID
+    assert resolve_seed(catalog, "relation:1003") == 1003
+    assert resolve_seed(catalog, "ps-1") == 1007
 
 
 def test_partial_seed_name_does_not_match(tmp_path: Path) -> None:

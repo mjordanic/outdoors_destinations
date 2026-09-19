@@ -49,7 +49,8 @@ def test_filter_keeps_finite_drive_time_under_max_hours_and_preserves_order(
 
 
 def _ranking_of(catalog):
-    ridge, valley = catalog.dayhikes
+    ridge = next(hike for hike in catalog.dayhikes if hike.id == 1001)
+    valley = next(hike for hike in catalog.dayhikes if hike.id == 1002)
     ranking = Ranking(
         items=(
             RankedDayHike(dayhike=ridge, score=0.9),
@@ -164,9 +165,9 @@ def test_cli_prints_drive_time_when_filtering(
     out = capsys.readouterr().out.strip().splitlines()
 
     assert code == 0
-    columns = out[0].split("\t")
+    valley_line = next(line for line in out if line.split("\t")[1] == "Valley Path")
+    columns = valley_line.split("\t")
     assert len(columns) == 4
-    assert columns[1] == "Valley Path"
     assert columns[3] == "0.5"
 
 
@@ -202,7 +203,11 @@ def test_valhalla_client_reads_seconds_and_null_from_sources_to_targets(
         client = ValhallaMatrixClient(f"http://127.0.0.1:{port}", batch_size=1)
         times = client.sources_to_targets(
             Origin(latitude=45.8, longitude=15.97),
-            [hike.trailhead for hike in catalog.dayhikes],
+            [
+                hike.trailhead
+                for hike in catalog.dayhikes
+                if hike.id in {1001, 1002}
+            ],
         )
     finally:
         server.shutdown()

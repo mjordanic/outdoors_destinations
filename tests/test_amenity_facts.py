@@ -7,7 +7,7 @@ from dayhike import Catalog, build_catalog
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
 RIDGE_WALK_ID = 1001
 VALLEY_PATH_ID = 1002
-KEPT_IDS = {RIDGE_WALK_ID, VALLEY_PATH_ID}
+KEPT_IDS = {RIDGE_WALK_ID, VALLEY_PATH_ID, 1003, 1004, 1007}
 
 
 def _by_id(catalog: Catalog, hike_id: int):
