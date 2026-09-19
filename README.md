@@ -27,7 +27,7 @@ OSM XML or PBF            SQLite Catalog              Ranking
 ```
 
 1. **Ingest** (`build_catalog` / `dayhike ingest`) reads OSM **XML or PBF**, keeps
-   `route=hiking` relations whose geometry length is 1–40 km, and writes a
+   `route=hiking` relations whose geometry length is 1–20 km, and writes a
    SQLite Catalog plus a GeometryStore sidecar (`data/catalog.geometry.sqlite`).
 2. **Rank** (`rank_dayhikes` / `dayhike rank`) compares other DayHikes to Seeds
    you name. Similarity is cosine distance of scaled FeatureVectors (length,
@@ -69,7 +69,7 @@ XML file with hiking relations so ingest and ranking have a known answer:
 | 1001 | Ridge Walk | **Kept.** ~10 km, `sac_scale=mountain_hiking`, Hut/cafe/parking/water within 20 km of the Trailhead, elevation tags on nodes. |
 | 1002 | Valley Path | **Kept.** ~5 km, no `sac_scale`, no nearby amenities, no `ele`. |
 | 1003 | `relation:1003` | **Kept.** No OSM `name`. `name_origin=synthetic`. |
-| 1004 | Long Traverse | **Kept.** ~30 km, inside the 1–40 km band. |
+| 1004 | Long Traverse | Dropped: ~30 km, outside the 1–20 km band (`dropped_length`). |
 | 1005 | Via Dinarica Red | Dropped: `network=iwn` superroute (`dropped_network`). |
 | 1006 | Fifty Km Walk | Dropped: ~50 km (`dropped_length`). |
 | 1007 | PS-1 | **Kept.** OSM `ref` only (`name_origin=osm_ref`). |
@@ -90,7 +90,7 @@ a hair over 10 km / 5 km because it is computed on the sphere):
 
 ```
 data/catalog.sqlite
-IngestReport(kept=5, dropped_unnamed=0, dropped_length=1, dropped_network=1, named_osm_name=3, named_osm_ref=1, named_synthetic=1)
+IngestReport(kept=4, dropped_unnamed=0, dropped_length=2, dropped_network=1, named_osm_name=2, named_osm_ref=1, named_synthetic=1)
 ```
 
 Progress (`filter:`, `relations:`, `ways:`, `nodes:`, `access:`, `assemble:`,
@@ -358,7 +358,7 @@ uv run dayhike ingest data/osm/croatia-latest.osm.pbf \
 ```
 
 Stderr shows stage lines while it runs. Stdout is the path and an
-`IngestReport`. Routes outside 1–40 km and iwn/nwn superroutes are counted as
+`IngestReport`. Routes outside 1–20 km and iwn/nwn superroutes are counted as
 dropped and are **not** DayHikes. A missing OSM `name` is kept: the Seed label
 is `name`, else `ref`, else `relation:{id}`, with `name_origin` recording which.
 If the process
@@ -501,7 +501,7 @@ osmium tags-filter data/osm/croatia-latest.osm.pbf \
 
 ### What ingest keeps
 
-Same rules as the fixture: `route=hiking` relations whose geometry is 1–40 km.
+Same rules as the fixture: `route=hiking` relations whose geometry is 1–20 km.
 Amenities on nodes, ways, and tagged relations: Catalog AmenityFacts still use
 hut/parking/restaurant_cafe/drinking_water within 20 km of the Trailhead.
 Viewpoint, Peak, and Shelter are stored on GeometryStore only. The Trailhead is the LineString endpoint nearer a parking lot or

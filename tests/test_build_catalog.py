@@ -18,9 +18,8 @@ FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
 RIDGE_WALK_ID = 1001
 VALLEY_PATH_ID = 1002
 UNNAMED_ID = 1003
-LONG_TRAVERSE_ID = 1004
 REF_SPINE_ID = 1007
-KEPT_IDS = {RIDGE_WALK_ID, VALLEY_PATH_ID, UNNAMED_ID, LONG_TRAVERSE_ID, REF_SPINE_ID}
+KEPT_IDS = {RIDGE_WALK_ID, VALLEY_PATH_ID, UNNAMED_ID, REF_SPINE_ID}
 
 
 def test_build_catalog_keeps_named_in_band_dayhikes(tmp_path: Path) -> None:
@@ -32,7 +31,6 @@ def test_build_catalog_keeps_named_in_band_dayhikes(tmp_path: Path) -> None:
     assert names[RIDGE_WALK_ID] == "Ridge Walk"
     assert names[VALLEY_PATH_ID] == "Valley Path"
     assert names[UNNAMED_ID] == "relation:1003"
-    assert names[LONG_TRAVERSE_ID] == "Long Traverse"
     assert names[REF_SPINE_ID] == "PS-1"
     origins = {hike.id: hike.name_origin for hike in kept}
     assert origins[RIDGE_WALK_ID] == NAME_ORIGIN_OSM_NAME
@@ -69,11 +67,11 @@ def test_ingest_report_counts_kept_versus_dropped_by_reason(tmp_path: Path) -> N
     catalog = build_catalog(FIXTURE, tmp_path / "catalog.sqlite")
     report = catalog.ingest_report
 
-    assert report.kept == 5
+    assert report.kept == 4
     assert report.dropped_unnamed == 0
-    assert report.dropped_length == 1
+    assert report.dropped_length == 2
     assert report.dropped_network == 1
-    assert report.named_osm_name == 3
+    assert report.named_osm_name == 2
     assert report.named_osm_ref == 1
     assert report.named_synthetic == 1
 
@@ -207,7 +205,7 @@ def test_cli_ingest_writes_catalog_and_prints_report(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert path.is_file()
-    assert "kept=5" in result.stdout
+    assert "kept=4" in result.stdout
     assert "Ridge Walk" not in result.stdout
     assert "Valley Path" not in result.stdout
     for stage in ("filter", "relations", "ways", "nodes", "access", "assemble", "write"):

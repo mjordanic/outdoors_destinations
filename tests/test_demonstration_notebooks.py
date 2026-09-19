@@ -74,9 +74,9 @@ def test_notebooks_execute_against_committed_osm_fixture() -> None:
 def test_notebook_shows_ingest_keep_drop_counts_and_kept_names() -> None:
     output, _, _ = _run_notebooks()
 
-    assert "kept=5" in output
+    assert "kept=4" in output
     assert "dropped_unnamed=0" in output
-    assert "dropped_length=1" in output
+    assert "dropped_length=2" in output
     assert "dropped_network=1" in output
     assert "Ridge Walk" in output
     assert "Valley Path" in output

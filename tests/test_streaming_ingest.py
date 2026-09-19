@@ -20,7 +20,7 @@ def test_build_catalog_reports_ingest_stages(tmp_path: Path) -> None:
     stages = [message.split(":", 1)[0] for message in messages]
     for stage in STAGES:
         assert stage in stages, messages
-    assert catalog.ingest_report.kept == 5
+    assert catalog.ingest_report.kept == 4
     assert catalog.ingest_report.dropped_unnamed == 0
 
 
@@ -57,7 +57,7 @@ def test_ingest_resumes_after_progress_callback_raises(tmp_path: Path) -> None:
     messages: list[str] = []
     catalog = build_catalog(FIXTURE, catalog_path, progress=messages.append)
 
-    assert catalog.ingest_report.kept == 5
+    assert catalog.ingest_report.kept == 4
     assert {"Ridge Walk", "Valley Path"} <= {hike.name for hike in catalog.dayhikes}
     assert not work_path.exists()
     assert any("resumed, already complete" in message for message in messages)
@@ -114,7 +114,7 @@ def test_fresh_discards_an_existing_work_file(tmp_path: Path) -> None:
         FIXTURE, catalog_path, progress=messages.append, fresh=True
     )
 
-    assert catalog.ingest_report.kept == 5
+    assert catalog.ingest_report.kept == 4
     assert not any("resumed, already complete" in message for message in messages)
 
 
@@ -131,7 +131,7 @@ def test_access_uses_osmium_extract_and_keeps_fixture_dayhikes(tmp_path: Path) -
         message.startswith("access: extract ") and "->" in message
         for message in messages
     ), messages
-    assert catalog.ingest_report.kept == 5
+    assert catalog.ingest_report.kept == 4
     assert {"Ridge Walk", "Valley Path"} <= {hike.name for hike in catalog.dayhikes}
 
 

@@ -68,7 +68,7 @@ def test_two_seeds_score_is_max_not_mean(tmp_path: Path) -> None:
             difficulty_ordinal=1,
         ),
     )
-    catalog = replace(catalog, dayhikes=(*catalog.dayhikes, near_ridge, midpoint))
+    catalog = replace(catalog, dayhikes=(ridge, valley, near_ridge, midpoint))
 
     only_ridge = _scores(rank_dayhikes(catalog, ["Ridge Walk"]))
     only_valley = _scores(rank_dayhikes(catalog, ["Valley Path"]))

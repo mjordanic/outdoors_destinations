@@ -16,7 +16,7 @@ from dayhike.osm import OsmRelation, OsmSnapshot, OsmWay
 
 EARTH_RADIUS_M = 6_371_000
 MIN_LENGTH_M = 1_000  # inclusive DayHike length band
-MAX_LENGTH_M = 40_000
+MAX_LENGTH_M = 20_000
 AMENITY_RADIUS_M = 20_000  # great-circle from Trailhead; zero counts are valid
 TRAILHEAD_ACCESS_RADIUS_M = 5_000  # parking / driveable highway near an endpoint
 OSM_ATTRIBUTION = "© OpenStreetMap contributors"

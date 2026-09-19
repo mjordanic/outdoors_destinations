@@ -68,7 +68,7 @@
     <tag k="route" v="hiking"/>
   </relation>
 
-  <!-- Long Traverse (~30 km, named, in the 1–40 km band). -->
+  <!-- Long Traverse (~30 km, named, out of the 1–20 km band). -->
   <node id="30" lat="45.4000000000" lon="15.3000000000" version="1"/>
   <node id="31" lat="45.6697964818" lon="15.3000000000" version="1"/>
   <way id="401" version="1">
