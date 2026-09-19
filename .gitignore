@@ -20,6 +20,8 @@ data/*.tiff
 data/*.pbf
 data/catalog.sqlite
 *.geometry.sqlite
+*.sqlite-wal
+*.sqlite-shm
 *.sqlite.work
 *.sqlite.tmp
 *.sqlite.access*

@@ -11,6 +11,7 @@ from dayhike.catalog import (
     filter_by_drive_time,
     rank_dayhikes,
 )
+from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS, fetch_fabdem, sample_dem
 from dayhike.extracts import fetch_geofabrik_extracts
 from dayhike.valhalla import DEFAULT_VALHALLA_URL, ValhallaMatrixClient
 
@@ -54,6 +55,38 @@ def main(argv: list[str] | None = None) -> int:
         default=Path("data/osm"),
         help="Directory for downloaded PBFs (default: data/osm)",
     )
+    fetch_dem = subparsers.add_parser(
+        "fetch-dem",
+        help="Download FABDEM GeoTIFFs covering Alps+Dinarides into data/",
+    )
+    fetch_dem.add_argument(
+        "--dest",
+        type=Path,
+        default=Path("data"),
+        help="Directory for GeoTIFFs (default: data)",
+    )
+    fetch_dem.add_argument(
+        "--bounds",
+        type=_parse_bounds,
+        default=DEFAULT_DEM_BOUNDS,
+        help="south,west,north,east in WGS84 (default: PRD extract bbox)",
+    )
+    sample = subparsers.add_parser(
+        "sample-dem",
+        help="Sample local FABDEM onto GeometryStore vertices and Catalog elevation",
+    )
+    sample.add_argument(
+        "--catalog",
+        type=Path,
+        default=Path("data/catalog.sqlite"),
+        help="SQLite Catalog path (default: data/catalog.sqlite)",
+    )
+    sample.add_argument(
+        "--dem",
+        type=Path,
+        default=Path("data"),
+        help="Directory of FABDEM GeoTIFFs (default: data)",
+    )
     rank = subparsers.add_parser("rank", help="Rank DayHikes by similarity to Seeds")
     rank.add_argument("--catalog", required=True, type=Path)
     rank.add_argument(
@@ -79,6 +112,10 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "fetch-extracts":
         return _fetch_extracts(args.dest)
+    if args.command == "fetch-dem":
+        return _fetch_dem(args.dest, args.bounds)
+    if args.command == "sample-dem":
+        return _sample_dem(args.catalog, args.dem)
     if (args.origin is None) != (args.max_hours is None):
         rank.error("--origin and --max-hours must be given together")
     return _rank(args.catalog, args.seeds, args.origin, args.max_hours, args.valhalla_url)
@@ -109,6 +146,37 @@ def _fetch_extracts(dest: Path) -> int:
     for path in fetch_geofabrik_extracts(dest):
         print(path)
     return 0
+
+
+def _fetch_dem(dest: Path, bounds: Bounds) -> int:
+    paths = fetch_fabdem(
+        dest,
+        bounds,
+        progress=lambda message: print(message, file=sys.stderr, flush=True),
+    )
+    for path in paths:
+        print(path)
+    return 0
+
+
+def _sample_dem(catalog_path: Path, raster_dir: Path) -> int:
+    sampled = sample_dem(
+        catalog_path,
+        raster_dir,
+        progress=lambda message: print(message, file=sys.stderr, flush=True),
+    )
+    print(sampled)
+    return 0
+
+
+def _parse_bounds(value: str) -> Bounds:
+    south_s, west_s, north_s, east_s = value.split(",", maxsplit=3)
+    return Bounds(
+        south=float(south_s.strip()),
+        west=float(west_s.strip()),
+        north=float(north_s.strip()),
+        east=float(east_s.strip()),
+    )
 
 
 def _parse_origin(value: str) -> Origin:

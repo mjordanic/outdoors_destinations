@@ -31,7 +31,9 @@ OSM XML or PBF            SQLite Catalog              Ranking
    SQLite Catalog plus a GeometryStore sidecar (`data/catalog.geometry.sqlite`).
 2. **Rank** (`rank_dayhikes` / `dayhike rank`) compares other DayHikes to Seeds
    you name. Similarity is cosine distance of scaled FeatureVectors (length,
-   elevation when OSM `ele` exists, Difficulty, amenities near the Trailhead).
+   elevation min/max/gain, Difficulty, amenities near the Trailhead).
+   Elevation comes from OSM `ele` at ingest, then from FABDEM after
+   `dayhike sample-dem`.
 3. **Filter** (`filter_by_drive_time`) is optional. It asks a **local Valhalla**
    HTTP service how long the drive is from today's Origin to each Trailhead and
    drops anything over the max (or unreachable). Ranking without Origin never
@@ -54,6 +56,7 @@ call on your machine.
 | `data/valhalla/prepare-highways.sh` | osmium filter: motorway/trunk/primary only | yes |
 | `data/valhalla/mjolnir.drive-time.json` | Valhalla flags: no walk/bike/driveways | yes |
 | `data/valhalla/*.osm.pbf` | Road extract for tiles | **gitignored** |
+| `data/*_FABDEM_V1-2.tif` | FABDEM 1° tiles for elevation | **gitignored** |
 
 `uv sync` does **not** download OSM and does **not** install Valhalla. Tests
 never read `data/` and never start Docker. They rebuild a Catalog in a temp
@@ -437,6 +440,22 @@ To add one extra country later, download its PBF into `data/osm/` and run
 `ingest` again on the **whole directory** (ingest replaces the SQLite file; it
 does not append).
 
+### Elevation from FABDEM
+
+OSM `ele` is sparse. After ingest, download FABDEM tiles for the PRD
+Alps+Dinarides bbox and sample them onto GeometryStore vertices (this also
+refreshes Catalog elevation min/max/gain and the scaler):
+
+```bash
+uv run dayhike fetch-dem --dest data
+uv run dayhike sample-dem --catalog data/catalog.sqlite --dem data
+```
+
+`fetch-dem` skips tiles already on disk. `--bounds south,west,north,east`
+overrides the default bbox. GeoTIFFs are gitignored. FABDEM V1-2 is
+University of Bristol data, CC BY-NC-SA 4.0 (non-commercial). SolarAspect
+stays in `notebooks/rank-feature-lab.ipynb` until it is promoted.
+
 ### Walkthrough C — browser only, then ingest
 
 1. Open [Geofabrik Europe](https://download.geofabrik.de/europe.html).
@@ -779,10 +798,12 @@ The same seams the CLI wraps:
 - `rank_dayhikes` — Catalog + Seeds → Ranking
 - `rank_scaled_rows` / `fit_scaler_from_matrix` / `scale_matrix` / `cosine_similarity` — same scoring on an experimental feature matrix
 - `geometry_store_path_for` — sidecar path for DayHikeGeometry
+- `fetch_fabdem` / `sample_dem` — local FABDEM tiles → GeometryStore vertices and Catalog elevation
 - `filter_by_drive_time` — Ranking filtered by DriveTime from Origin
 - `ValhallaMatrixClient` — HTTP adapter for `/sources_to_targets`
 
-CLI: `dayhike ingest`, `dayhike fetch-extracts`, `dayhike rank`.
+CLI: `dayhike ingest`, `dayhike fetch-extracts`, `dayhike fetch-dem`,
+`dayhike sample-dem`, `dayhike rank`.
 
 Docstrings on those functions use the glossary in `CONTEXT.md`.
 

@@ -187,7 +187,7 @@ def test_notebook_sanity_checks_catalog_counts_length_band_and_map() -> None:
     assert "geometry_store" in source
     assert "name_origin" in source
     assert "prod_rank\t" in output
-    assert "dem skipped" in output
+    assert "dem skipped" in output or "dem sampled" in output
 
 
 

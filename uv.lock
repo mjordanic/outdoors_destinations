@@ -514,6 +514,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "osmium" },
+    { name = "rasterio" },
     { name = "scikit-learn" },
 ]
 
@@ -531,6 +532,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "osmium", specifier = ">=4.3.1" },
+    { name = "rasterio", specifier = ">=1.5.1" },
     { name = "scikit-learn", specifier = ">=1.9.1" },
 ]
 

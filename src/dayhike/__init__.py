@@ -1,3 +1,4 @@
+from dayhike.dem import Bounds, fetch_fabdem, sample_dem
 from dayhike.catalog import (
     AmbiguousSeedName,
     AmenityFact,
@@ -32,6 +33,7 @@ __all__ = [
     "AmbiguousSeedName",
     "AmenityFact",
     "AmenityFacts",
+    "Bounds",
     "Catalog",
     "DayHike",
     "Difficulty",
@@ -49,11 +51,13 @@ __all__ = [
     "cosine_similarity",
     "dayhike_label",
     "feature_matrix",
+    "fetch_fabdem",
     "filter_by_drive_time",
     "fit_scaler_from_matrix",
     "geometry_store_path_for",
     "rank_dayhikes",
     "rank_scaled_rows",
     "resolve_seed",
+    "sample_dem",
     "scale_matrix",
 ]

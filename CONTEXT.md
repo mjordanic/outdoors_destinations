@@ -44,6 +44,10 @@ _Avoid_: hotel, shelter (unless tagged as such and counted separately)
 The technical grade of a DayHike, derived from OSM `sac_scale` on member ways (the strictest grade present).
 _Avoid_: hardness, danger, exposure (those are not this field; alpine fall hazard stays inside Difficulty)
 
+**DEM**:
+A local elevation raster sampled onto DayHikeGeometry after ingest. Until that sample runs, elevation stats come from OSM `ele` on member nodes.
+_Avoid_: live SRTM, elevation API, exposure
+
 **SolarAspect**:
 A terrain-derived description of which way DayHikeGeometry faces relative to the sun, sampled from a DEM. It is not Difficulty, not live weather, and not alpine fall hazard.
 _Avoid_: exposure, sunny, shady, weather

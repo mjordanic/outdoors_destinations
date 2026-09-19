@@ -603,7 +603,7 @@ def _elevation_stats(
         if node_id in node_elevations
     ]
     if not elevations:
-        # OSM ele absent: missing, not zero. A DEM is out of this milestone.
+        # OSM ele absent: missing, not zero. sample-dem fills this from FABDEM.
         return None, None, None
     gain_m = 0.0
     for start, end in zip(elevations, elevations[1:]):
