@@ -4,9 +4,10 @@ A local Catalog of DayHikes from OpenStreetMap, ranked by similarity to Seeds
 you already know. DriveTime is an optional query-time filter from today's
 Origin. DriveTime is not a FeatureVector column.
 
-This is a Python package plus a SQLite file on disk. There is no web app, no
+This is a Python package plus SQLite files on disk. There is no web app, no
 live Overpass query, and no database server to start. You ingest an OSM
-snapshot once, then rank from that file.
+snapshot once, optionally sample a DEM onto the geometries, then rank from
+those files.
 
 ## Install
 
@@ -16,28 +17,61 @@ uv sync
 
 The package is `dayhike`. Tests: `uv run pytest`.
 
-## How the pieces fit
+## How data is created (command order)
+
+Nothing useful exists after `uv sync` except the tiny committed fixture.
+Every real file under `data/` is built by a command. This is the order:
 
 ```
-OSM XML or PBF            SQLite Catalog              Ranking
-(fixture or Geofabrik     data/catalog.sqlite         CLI or Python
- under data/osm/)      -> DayHikes, Trailheads,  ->  scores vs Seeds
-                          AmenityFacts, scaler        optional DriveTime
-                                                      via local Valhalla
+1. OSM snapshot          data/osm/*.osm.pbf          fetch-extracts (or curl)
+2. Ingest                data/catalog.sqlite         dayhike ingest
+                         data/catalog.geometry.sqlite     (always, same ingest)
+3. DEM rasters           data/dem/*_FABDEM_V1-2.tif  dayhike fetch-dem
+4. Sample heights        updates both SQLite files   dayhike sample-dem
+5. Rank                  stdout scores               dayhike rank
+6. Optional DriveTime    local Valhalla Docker       rank --origin --max-hours
 ```
 
-1. **Ingest** (`build_catalog` / `dayhike ingest`) reads OSM **XML or PBF**, keeps
-   `route=hiking` relations whose geometry length is 1–20 km, and writes a
-   SQLite Catalog plus a GeometryStore sidecar (`data/catalog.geometry.sqlite`).
-2. **Rank** (`rank_dayhikes` / `dayhike rank`) compares other DayHikes to Seeds
-   you name. Similarity is cosine distance of scaled FeatureVectors (length,
-   elevation min/max/gain, Difficulty, amenities near the Trailhead).
-   Elevation comes from OSM `ele` at ingest, then from FABDEM after
-   `dayhike sample-dem`.
-3. **Filter** (`filter_by_drive_time`) is optional. It asks a **local Valhalla**
-   HTTP service how long the drive is from today's Origin to each Trailhead and
-   drops anything over the max (or unreachable). Ranking without Origin never
-   talks to Valhalla.
+```bash
+uv sync
+mkdir -p data/osm data/dem
+
+# 1. Snapshot (Geofabrik PBF). Ranking never talks to OpenStreetMap.
+uv run dayhike fetch-extracts --dest data/osm
+
+# 2. Catalog + GeometryStore. One command writes both SQLite files.
+uv run dayhike ingest data/osm --catalog data/catalog.sqlite
+
+# 3–4. Elevation. Skip these if OSM ele on nodes is enough (it usually is not).
+uv run dayhike fetch-dem          # default bbox: Alps + Dinarides
+uv run dayhike sample-dem         # writes heights into the two SQLite files
+
+# 5. Rank by Seed (no Valhalla).
+uv run dayhike rank --catalog data/catalog.sqlite "Exact Name From The Catalog"
+
+# 6. Optional: car DriveTime filter (needs Docker Valhalla, see below).
+uv run dayhike rank --catalog data/catalog.sqlite \
+  --origin 45.8,15.97 --max-hours 2 \
+  "Exact Name From The Catalog"
+```
+
+What each step **does not** do:
+
+| Step | Writes | Does not |
+| --- | --- | --- |
+| `fetch-extracts` | `data/osm/*.pbf` | Catalog, GeometryStore, DEM |
+| `ingest` | Catalog + GeometryStore from the PBF | download OSM; download DEM; talk to Valhalla |
+| `fetch-dem` | GeoTIFFs in `data/dem/` | touch SQLite; sample heights |
+| `sample-dem` | `vertices.ele` + Catalog elevation + scaler | download rasters; rewrite hike list |
+| `rank` | nothing on disk | fetch OSM or DEM |
+
+Ingest **replaces** the Catalog (it does not append). `sample-dem` does **not**
+replace the Catalog: it only overwrites elevation columns on hikes whose
+geometry sits on a downloaded tile.
+
+For a continent PBF (for example `europe-latest.osm.pbf`), ingest is the same
+command. After ingest, widen DEM coverage with
+`dayhike fetch-dem --bounds south,west,north,east` then `sample-dem` again.
 
 Nothing is fetched from the network at rank time except that optional Valhalla
 call on your machine.
@@ -97,7 +131,8 @@ IngestReport(kept=4, dropped_unnamed=0, dropped_length=2, dropped_network=1, nam
 ```
 
 Progress (`filter:`, `relations:`, `ways:`, `nodes:`, `access:`, `assemble:`,
-`write:`) goes to **stderr**. Add `--list` to print kept DayHikes as
+`write:`) goes to **stderr**. The same command also writes
+`data/catalog.geometry.sqlite`. Add `--list` to print kept DayHikes as
 `id`, name, `length_m`. `--fresh` ignores a leftover work file and starts
 again.
 
@@ -156,7 +191,46 @@ print(resolve_seed(catalog, "ridge walk"))  # 1001; case-insensitive exact match
 Zero amenity counts are stored (Valley Path has four rows with `count=0`).
 Missing elevation and missing `sac_scale` are SQL NULL, not zero.
 
-### SQL
+Ranking reads **only** this file. Polylines and raw amenity points live in
+the GeometryStore beside it.
+
+## GeometryStore (written at ingest, not downloaded)
+
+The GeometryStore is a sidecar SQLite file. It is **not** pulled from a
+server. `dayhike ingest` always writes it next to the Catalog:
+`data/catalog.sqlite` → `data/catalog.geometry.sqlite`
+(`geometry_store_path_for`). There is no fetch-geometry command. Rank does
+not read it. If you only have `catalog.sqlite`, re-run ingest; `sample-dem`
+cannot create the sidecar by itself.
+
+It holds **Catalog DayHikes only** (dropped length/network relations are
+absent):
+
+| Table | Contents |
+| --- | --- |
+| `dayhikes` | id, Seed label, `name_origin`, length, Difficulty, member list, relation tags |
+| `vertices` | ordered DayHikeGeometry: `seq`, OSM `node_id`, lat, lon, `ele` |
+| `ways` | member ways in order, node id lists, way tags |
+| `amenities` | raw points: OSM id, kind, lat, lon, tags |
+| `geometry_meta` | OSM attribution |
+
+At ingest, `vertices.ele` is OSM `ele` on that node, or NULL. After
+`sample-dem`, vertices that sit on a FABDEM tile get raster heights in
+metres. Amenities include hut, parking, restaurant/cafe, drinking water,
+Viewpoint, Peak, and Shelter. Catalog AmenityFacts still use only the first
+four kinds, counted from the Trailhead.
+
+```bash
+sqlite3 data/catalog.geometry.sqlite \
+  'SELECT dayhike_id, seq, latitude, longitude, ele FROM vertices LIMIT 5;'
+sqlite3 data/catalog.geometry.sqlite \
+  'SELECT kind, COUNT(*) FROM amenities GROUP BY 1;'
+```
+
+[`notebooks/rank-feature-lab.ipynb`](notebooks/rank-feature-lab.ipynb) uses
+this file to invent FeatureVector columns. `rank_dayhikes` does not.
+
+### Query the Catalog with SQL
 
 ```bash
 uv run python -c "
@@ -177,7 +251,9 @@ sqlite3 data/catalog.sqlite 'SELECT id, name, length_m FROM dayhikes;'
 ```
 
 Do not hand-edit FeatureVectors and expect Ranking to stay consistent unless
-you also change `scaler`. The supported write path is `build_catalog`.
+you also change `scaler`. The supported write paths are `build_catalog` /
+`dayhike ingest` (full Catalog) and `dayhike sample-dem` (elevation columns
+and scaler only).
 
 ## 3. Rank by Seed
 
@@ -401,6 +477,18 @@ uv run dayhike rank --catalog data/catalog.sqlite "Exact Name From The List"
 If the name is unknown or matches two DayHikes, ingest did not fail — Seed
 resolution failed. Use the SQL list; there is no fuzzy search.
 
+**7–8. Elevation (optional, after ingest)**
+
+OSM `ele` is sparse. `fetch-dem` downloads FABDEM GeoTIFFs into `data/dem/`
+(default bbox is the PRD Alps+Dinarides). `sample-dem` then copies heights
+onto GeometryStore vertices and Catalog elevation. See **Elevation from
+FABDEM** below.
+
+```bash
+uv run dayhike fetch-dem
+uv run dayhike sample-dem
+```
+
 ### Walkthrough B — every PRD region
 
 Downloads all eight PBFs into `data/osm/`, then merges them in one ingest.
@@ -442,19 +530,58 @@ does not append).
 
 ### Elevation from FABDEM
 
-OSM `ele` is sparse. After ingest, download FABDEM tiles for the PRD
-Alps+Dinarides bbox into `data/dem/` and sample them onto GeometryStore
-vertices (this also refreshes Catalog elevation min/max/gain and the scaler):
+Ingest does **not** download a DEM. It only copies OSM `ele` tags (often
+NULL) onto GeometryStore vertices and Catalog `feature_vectors`.
+
+**When:** after a successful ingest, when both `data/catalog.sqlite` and
+`data/catalog.geometry.sqlite` exist.
+
+**Pull (rasters only):** `dayhike fetch-dem` downloads FABDEM V1-2 1°
+GeoTIFFs into `data/dem/` (gitignored). Default `--bounds` is
+`41.8,5.9,50.6,20.4` (Alps + Dinarides, same countries as
+`fetch-extracts`). Tiles already on disk are skipped. 404s (ocean) are
+skipped. This command does not open SQLite.
 
 ```bash
 uv run dayhike fetch-dem
+# Wider than the default, e.g. a Europe Catalog:
+uv run dayhike fetch-dem --bounds 32.6,-31.3,71.2,46.4
+```
+
+`--dest` overrides `data/dem/`. FABDEM V1-2 is University of Bristol data,
+CC BY-NC-SA 4.0 (non-commercial).
+
+**Store and update SQLite:** `dayhike sample-dem` reads those GeoTIFFs and:
+
+1. Writes sampled metres onto GeometryStore `vertices.ele` for vertices that
+   fall on a downloaded tile. Vertices with no covering tile keep OSM `ele`
+   or NULL.
+2. Recomputes Catalog `feature_vectors.elevation_min_m` / `elevation_max_m` /
+   `elevation_gain_m` for DayHikes that got DEM samples (cumulative uphill,
+   not max−min).
+3. Refits the Catalog `scaler` so Ranking stays consistent.
+
+It does not add or drop DayHikes, does not change amenities, and does not
+download tiles. `--catalog` defaults to `data/catalog.sqlite`; `--dem`
+defaults to `data/dem/`.
+
+```bash
 uv run dayhike sample-dem
 ```
 
-Defaults write and read `data/dem/`. `--dest`, `--dem`, `--catalog`, and
-`--bounds south,west,north,east` override. GeoTIFFs are gitignored. FABDEM
-V1-2 is University of Bristol data, CC BY-NC-SA 4.0 (non-commercial).
-SolarAspect stays in `notebooks/rank-feature-lab.ipynb` until it is promoted.
+After this, `rank_dayhikes` uses DEM elevation. SolarAspect (which way the
+geometry faces the sun) is **not** a Catalog column; prototype it in
+[`notebooks/rank-feature-lab.ipynb`](notebooks/rank-feature-lab.ipynb).
+
+Python:
+
+```python
+from dayhike import fetch_fabdem, sample_dem
+from dayhike.dem import DEFAULT_DEM_BOUNDS, DEFAULT_DEM_DIR
+
+fetch_fabdem(DEFAULT_DEM_DIR, DEFAULT_DEM_BOUNDS)
+sample_dem("data/catalog.sqlite", DEFAULT_DEM_DIR)
+```
 
 ### Walkthrough C — browser only, then ingest
 
@@ -497,8 +624,9 @@ Geofabrik `europe-latest.osm.pbf`) is a valid input.
    the work file. `--fresh` (or `build_catalog(..., fresh=True)`) starts over.
    A `progress` callback on `build_catalog` receives the same stage lines.
 5. **Replace.** The new Catalog is written to a temp file and renamed onto
-   `catalog.sqlite` only when it is complete. A kill during ingest leaves the
-   previous Catalog in place.
+   `catalog.sqlite` only when it is complete. Then ingest writes the
+   GeometryStore sidecar and deletes the work file. A kill during ingest
+   leaves the previous Catalog in place.
 
 See [`docs/adr/0005-streaming-ingest.md`](docs/adr/0005-streaming-ingest.md).
 
@@ -809,30 +937,25 @@ Docstrings on those functions use the glossary in `CONTEXT.md`.
 
 ## Demonstration notebooks
 
-- [`notebooks/catalog-and-ranker.ipynb`](notebooks/catalog-and-ranker.ipynb) —
-  ingest the fixture, inspect FeatureVectors, rank by Seed (including
-  max-not-mean), unknown Seed failure, stubbed DriveTime.
-- [`notebooks/working-with-the-catalog.ipynb`](notebooks/working-with-the-catalog.ipynb) —
-  SQLite tables, `Catalog.open`, and how to work with DayHike objects.
-- [`notebooks/ingest-a-snapshot.ipynb`](notebooks/ingest-a-snapshot.ipynb) —
-  ingest stages, progress, resume after a kill, and unused OSM objects, all
-  on the committed fixture.
-- [`notebooks/inspect-the-catalog.ipynb`](notebooks/inspect-the-catalog.ipynb) —
-  schema, pandas DataFrames, sanity-check `data/catalog.sqlite` (counts,
-  length band, Trailhead map). Falls back to the fixture if that file is missing.
-- [`notebooks/rank-feature-lab.ipynb`](notebooks/rank-feature-lab.ipynb) —
-  ranking sandbox: production `rank_dayhikes` vs experimental FeatureVectors
-  on GeometryStore, optional FABDEM sampling.
-
-The first three run against the committed OSM fixture (no Geofabrik, no live
-Valhalla). `inspect-the-catalog` and `rank-feature-lab` open your local Catalog
-when present (re-ingest so GeometryStore and `name_origin` exist).
-Open them with the project interpreter after `uv sync`.
+Open with the project interpreter after `uv sync`.
 
 ```bash
 uv run jupyter notebook notebooks/catalog-and-ranker.ipynb
 ```
 
+| Notebook | What it is for |
+| --- | --- |
+| [`notebooks/catalog-and-ranker.ipynb`](notebooks/catalog-and-ranker.ipynb) | Ingest the fixture, inspect FeatureVectors, rank by Seed (including max-not-mean), unknown Seed failure, stubbed DriveTime. |
+| [`notebooks/working-with-the-catalog.ipynb`](notebooks/working-with-the-catalog.ipynb) | SQLite Catalog tables, `Catalog.open`, DayHike objects. |
+| [`notebooks/ingest-a-snapshot.ipynb`](notebooks/ingest-a-snapshot.ipynb) | Ingest stages, progress, resume after a kill, unused OSM objects, on the fixture. |
+| [`notebooks/inspect-the-catalog.ipynb`](notebooks/inspect-the-catalog.ipynb) | Sanity-check `data/catalog.sqlite` (counts, length band, Trailhead map, pandas). Falls back to the fixture if that file is missing. |
+| [`notebooks/rank-feature-lab.ipynb`](notebooks/rank-feature-lab.ipynb) | Ranking sandbox on GeometryStore: production `rank_dayhikes` vs experimental FeatureVectors, FABDEM sampling, SolarAspect. |
+
+The first three always rebuild the committed OSM fixture (no Geofabrik, no
+live Valhalla, no `data/dem/`). `inspect-the-catalog` and `rank-feature-lab`
+open your local Catalog and GeometryStore when those files exist (re-ingest
+so GeometryStore and `name_origin` exist). Tests force the fixture so they
+do not load a Europe Catalog.
 ## Attribution (ODbL)
 
 OpenStreetMap data is © OpenStreetMap contributors, licensed under the Open
