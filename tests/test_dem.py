@@ -1,9 +1,10 @@
+import sqlite3
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from dayhike import Catalog, build_catalog
+from dayhike import Catalog, build_catalog, geometry_store_path_for
 from dayhike.dem import (
     Bounds,
     DEFAULT_DEM_BOUNDS,
@@ -147,6 +148,15 @@ def test_sample_geometry_store_writes_dem_ele_and_catalog_feature_vectors(
     assert ridge.feature_vector.elevation_min_m == pytest.approx(1400.0)
     assert catalog.scaler.feature_names[1] == "elevation_min_m"
     assert catalog.scaler.mean[1] == pytest.approx(1400.0)
+
+    store_path = geometry_store_path_for(catalog_path)
+    assert not Path(str(store_path) + "-wal").exists()
+    assert not Path(str(store_path) + "-shm").exists()
+    connection = sqlite3.connect(store_path)
+    try:
+        assert connection.execute("PRAGMA journal_mode").fetchone() == ("delete",)
+    finally:
+        connection.close()
 
 
 def test_sample_dem_without_rasters_keeps_osm_ele(tmp_path: Path) -> None:

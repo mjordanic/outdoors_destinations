@@ -224,6 +224,10 @@ def sample_dem(
             write.commit()
         finally:
             read.close()
+            if write.in_transaction:
+                write.rollback()
+            write.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            write.execute("PRAGMA journal_mode=DELETE")
     finally:
         write.close()
     if not touched:
