@@ -11,7 +11,7 @@ from dayhike.catalog import (
     filter_by_drive_time,
     rank_dayhikes,
 )
-from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS, fetch_fabdem, sample_dem
+from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS, DEFAULT_DEM_DIR, fetch_fabdem, sample_dem
 from dayhike.extracts import fetch_geofabrik_extracts
 from dayhike.valhalla import DEFAULT_VALHALLA_URL, ValhallaMatrixClient
 
@@ -57,13 +57,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     fetch_dem = subparsers.add_parser(
         "fetch-dem",
-        help="Download FABDEM GeoTIFFs covering Alps+Dinarides into data/",
+        help="Download FABDEM GeoTIFFs covering Alps+Dinarides into data/dem",
     )
     fetch_dem.add_argument(
         "--dest",
         type=Path,
-        default=Path("data"),
-        help="Directory for GeoTIFFs (default: data)",
+        default=DEFAULT_DEM_DIR,
+        help="Directory for GeoTIFFs (default: data/dem)",
     )
     fetch_dem.add_argument(
         "--bounds",
@@ -84,8 +84,8 @@ def main(argv: list[str] | None = None) -> int:
     sample.add_argument(
         "--dem",
         type=Path,
-        default=Path("data"),
-        help="Directory of FABDEM GeoTIFFs (default: data)",
+        default=DEFAULT_DEM_DIR,
+        help="Directory of FABDEM GeoTIFFs (default: data/dem)",
     )
     rank = subparsers.add_parser("rank", help="Rank DayHikes by similarity to Seeds")
     rank.add_argument("--catalog", required=True, type=Path)

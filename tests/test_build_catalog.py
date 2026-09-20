@@ -172,6 +172,7 @@ def test_ingest_work_file_is_gitignored() -> None:
 
     assert ignore_code("data/catalog.sqlite.work") == 0
     assert ignore_code("data/catalog.geometry.sqlite") == 0
+    assert ignore_code("data/dem/N45E015_FABDEM_V1-2.tif") == 0
     assert ignore_code("data/catalog.sqlite.access.0.osm.pbf") == 0
     assert ignore_code("data/catalog.sqlite.access.geojson") == 0
 

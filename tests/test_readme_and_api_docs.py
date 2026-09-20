@@ -24,6 +24,7 @@ def test_readme_covers_install_ingest_rank_origin_odbl_and_gitignore() -> None:
     assert "data/catalog.sqlite" in text
     assert "gitignor" in text.lower()
     assert "data/osm/" in text
+    assert "data/dem/" in text
     assert "data/valhalla/" in text
 
 

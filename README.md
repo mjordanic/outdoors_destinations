@@ -56,7 +56,7 @@ call on your machine.
 | `data/valhalla/prepare-highways.sh` | osmium filter: motorway/trunk/primary only | yes |
 | `data/valhalla/mjolnir.drive-time.json` | Valhalla flags: no walk/bike/driveways | yes |
 | `data/valhalla/*.osm.pbf` | Road extract for tiles | **gitignored** |
-| `data/*_FABDEM_V1-2.tif` | FABDEM 1° tiles for elevation | **gitignored** |
+| `data/dem/` | FABDEM 1° GeoTIFFs for elevation | **gitignored** |
 
 `uv sync` does **not** download OSM and does **not** install Valhalla. Tests
 never read `data/` and never start Docker. They rebuild a Catalog in a temp
@@ -443,18 +443,18 @@ does not append).
 ### Elevation from FABDEM
 
 OSM `ele` is sparse. After ingest, download FABDEM tiles for the PRD
-Alps+Dinarides bbox and sample them onto GeometryStore vertices (this also
-refreshes Catalog elevation min/max/gain and the scaler):
+Alps+Dinarides bbox into `data/dem/` and sample them onto GeometryStore
+vertices (this also refreshes Catalog elevation min/max/gain and the scaler):
 
 ```bash
-uv run dayhike fetch-dem --dest data
-uv run dayhike sample-dem --catalog data/catalog.sqlite --dem data
+uv run dayhike fetch-dem
+uv run dayhike sample-dem
 ```
 
-`fetch-dem` skips tiles already on disk. `--bounds south,west,north,east`
-overrides the default bbox. GeoTIFFs are gitignored. FABDEM V1-2 is
-University of Bristol data, CC BY-NC-SA 4.0 (non-commercial). SolarAspect
-stays in `notebooks/rank-feature-lab.ipynb` until it is promoted.
+Defaults write and read `data/dem/`. `--dest`, `--dem`, `--catalog`, and
+`--bounds south,west,north,east` override. GeoTIFFs are gitignored. FABDEM
+V1-2 is University of Bristol data, CC BY-NC-SA 4.0 (non-commercial).
+SolarAspect stays in `notebooks/rank-feature-lab.ipynb` until it is promoted.
 
 ### Walkthrough C — browser only, then ingest
 
@@ -847,6 +847,7 @@ Bulky local files stay out of git:
 - `data/catalog.geometry.sqlite` — GeometryStore (DayHikeGeometry + raw amenities)
 - `data/catalog.sqlite.work` — in-progress ingest (resume handle)
 - `data/osm/` — Geofabrik / osmium extracts
+- `data/dem/` — FABDEM GeoTIFFs
 - `data/valhalla/` — road PBF and routing tiles (`compose.yaml`,
   `prepare-roads.sh`, `prepare-highways.sh`, and `mjolnir.drive-time.json`
   are tracked)

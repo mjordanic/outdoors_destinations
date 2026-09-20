@@ -10,6 +10,7 @@ __pycache__/
 
 # bulky local extracts and routing tiles (rebuild from scripts)
 data/osm/
+data/dem/
 data/valhalla/*
 !data/valhalla/compose.yaml
 !data/valhalla/mjolnir.drive-time.json

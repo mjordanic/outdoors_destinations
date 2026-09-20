@@ -3,11 +3,12 @@ from __future__ import annotations
 import math
 import shutil
 import sqlite3
+import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from dayhike.catalog import (
@@ -32,6 +33,7 @@ class Bounds:
     east: float
 
 
+DEFAULT_DEM_DIR = Path("data/dem")
 DEFAULT_DEM_BOUNDS = Bounds(south=41.8, west=5.9, north=50.6, east=20.4)
 # Same countries as fetch-extracts: Alps + Dinarides.
 _VERTEX_CHUNK = 50_000
@@ -80,7 +82,7 @@ def fetch_fabdem(
     *,
     retrieve: Retrieve | None = None,
     progress: Progress | None = None,
-    max_workers: int = 8,
+    max_workers: int = 4,
 ) -> list[Path]:
     """Download missing FABDEM 1° GeoTIFFs covering bounds into dest."""
     dest = Path(dest)
@@ -110,7 +112,12 @@ def fetch_fabdem(
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = [pool.submit(fetch_one, tile_id) for tile_id in tiles]
         for future in as_completed(futures):
-            path = future.result()
+            try:
+                path = future.result()
+            except Exception as exc:
+                if progress is not None:
+                    progress(f"dem fetch error: {exc}")
+                continue
             if path is not None:
                 paths.append(path)
     paths.sort()
@@ -313,15 +320,21 @@ def _download(url: str, filename: str) -> None:
     dest = Path(filename)
     tmp = dest.with_name(dest.name + ".part")
     request = Request(url, headers={"User-Agent": "dayhike"})
-    try:
-        with urlopen(request, timeout=120) as source, tmp.open("wb") as out:
-            shutil.copyfileobj(source, out)
-    except HTTPError as exc:
-        tmp.unlink(missing_ok=True)
-        if exc.code == 404:
-            raise FileNotFoundError(url) from exc
-        raise
-    except Exception:
-        tmp.unlink(missing_ok=True)
-        raise
-    tmp.replace(dest)
+    last_error: Exception | None = None
+    for attempt in range(5):
+        try:
+            with urlopen(request, timeout=120) as source, tmp.open("wb") as out:
+                shutil.copyfileobj(source, out)
+            tmp.replace(dest)
+            return
+        except HTTPError as exc:
+            tmp.unlink(missing_ok=True)
+            if exc.code == 404:
+                raise FileNotFoundError(url) from exc
+            last_error = exc
+        except (URLError, TimeoutError, OSError) as exc:
+            tmp.unlink(missing_ok=True)
+            last_error = exc
+        time.sleep(min(2**attempt, 16))
+    assert last_error is not None
+    raise last_error
