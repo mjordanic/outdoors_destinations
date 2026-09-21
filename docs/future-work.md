@@ -98,7 +98,7 @@ the FeatureVector — it would make "hikes like Seed X" depend on today's foreca
 - Weather as a query-time filter ("typical June" or "this weekend"), never as a
   similarity feature. Elevation min/max/gain can already be filled from a local
   FABDEM (`dayhike sample-dem`). SolarAspect is prototyped in
-  `notebooks/rank-feature-lab.ipynb` and is not a Catalog FeatureVector column
+  `notebooks/04_rank_feature_lab.ipynb` and is not a Catalog FeatureVector column
   until that sandbox promotes it.
 
 ---

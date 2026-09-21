@@ -612,21 +612,38 @@ def _elevation_stats(
     return min(elevations), max(elevations), gain_m
 
 
-def _assemble_node_ids(
+def _assemble_member_ways(
     relation: OsmRelation, ways: Mapping[int, OsmWay]
-) -> list[int]:
+) -> tuple[list[int], list[bool]]:
     chain: list[int] = []
+    in_chain: list[bool] = []
     for member_type, member_id in relation.members:
         if member_type != "way":
             continue
         way = ways.get(member_id)
-        if way is None or not way.node_ids:
+        if way is None:
             continue
-        chain = _extend_node_chain(chain, list(way.node_ids))
+        ids = list(way.node_ids)
+        if not ids:
+            in_chain.append(False)
+            continue
+        extended = _extend_node_chain(chain, ids)
+        if extended is None:
+            in_chain.append(False)
+            continue
+        chain = extended
+        in_chain.append(True)
+    return chain, in_chain
+
+
+def _assemble_node_ids(
+    relation: OsmRelation, ways: Mapping[int, OsmWay]
+) -> list[int]:
+    chain, _ = _assemble_member_ways(relation, ways)
     return chain
 
 
-def _extend_node_chain(chain: list[int], ids: list[int]) -> list[int]:
+def _extend_node_chain(chain: list[int], ids: list[int]) -> list[int] | None:
     if not chain:
         return ids
     start, end = chain[0], chain[-1]
@@ -638,7 +655,36 @@ def _extend_node_chain(chain: list[int], ids: list[int]) -> list[int]:
         return ids + chain[1:]
     if ids[0] == start:
         return list(reversed(ids)) + chain[1:]
-    return chain + ids
+    return None
+
+
+def _member_way_length_m(
+    node_ids: Sequence[int], nodes: Mapping[int, tuple[float, float]]
+) -> float:
+    points = [nodes[node_id] for node_id in node_ids if node_id in nodes]
+    if len(points) < 2:
+        return 0.0
+    return _linestring_length_m(points)
+
+
+def _unconnected_length_m(
+    relation: OsmRelation,
+    nodes: Mapping[int, tuple[float, float]],
+    ways: Mapping[int, OsmWay],
+    in_chain: Sequence[bool],
+) -> float:
+    total = 0.0
+    index = 0
+    for member_type, member_id in relation.members:
+        if member_type != "way":
+            continue
+        way = ways.get(member_id)
+        if way is None:
+            continue
+        if not in_chain[index]:
+            total += _member_way_length_m(way.node_ids, nodes)
+        index += 1
+    return total
 
 
 def _relation_vertices(

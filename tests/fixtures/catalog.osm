@@ -31,8 +31,19 @@
     <tag k="highway" v="path"/>
     <tag k="sac_scale" v="mountain_hiking"/>
   </way>
+  <!-- Disconnected extra (~1 km), listed between Ridge Walk's connected
+       members. Far from the Ridge so a jump edge would leave the length band.
+       Ingest must skip it and still glue way 102. -->
+  <node id="80" lat="47.0000000000" lon="18.0000000000" version="1"/>
+  <node id="81" lat="47.00899321606" lon="18.0000000000" version="1"/>
+  <way id="103" version="1">
+    <nd ref="80"/>
+    <nd ref="81"/>
+    <tag k="highway" v="path"/>
+  </way>
   <relation id="1001" version="1">
     <member type="way" ref="101" role=""/>
+    <member type="way" ref="103" role=""/>
     <member type="way" ref="102" role=""/>
     <tag k="type" v="route"/>
     <tag k="route" v="hiking"/>

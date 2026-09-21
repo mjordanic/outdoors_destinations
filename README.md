@@ -103,7 +103,7 @@ XML file with hiking relations so ingest and ranking have a known answer:
 
 | OSM relation | Name | What happens |
 | --- | --- | --- |
-| 1001 | Ridge Walk | **Kept.** ~10 km, `sac_scale=mountain_hiking`, Hut/cafe/parking/water within 20 km of the Trailhead, elevation tags on nodes. |
+| 1001 | Ridge Walk | **Kept.** ~10 km, `sac_scale=mountain_hiking`, Hut/cafe/parking/water within 20 km of the Trailhead, elevation tags on nodes. A disconnected extra member is skipped (`unconnected_m` ≈ 1 km). |
 | 1002 | Valley Path | **Kept.** ~5 km, no `sac_scale`, no nearby amenities, no `ele`. |
 | 1003 | `relation:1003` | **Kept.** No OSM `name`. `name_origin=synthetic`. |
 | 1004 | Long Traverse | Dropped: ~30 km, outside the 1–20 km band (`dropped_length`). |
@@ -152,6 +152,9 @@ append. The previous Catalog stays on disk until the new file is complete. XML
 and PBF are both accepted (pyosmium). Multiple files (or a directory) in
 **one** run become one Catalog. See **Ingest replaces the Catalog** below if
 you ingest more than one country.
+
+Walk through stages, keep/drop, and resume after a kill in
+[`notebooks/01_raw_data_and_ingestion.ipynb`](notebooks/01_raw_data_and_ingestion.ipynb).
 
 ## 2. Open the Catalog later (it is a SQLite database)
 
@@ -208,11 +211,16 @@ absent):
 
 | Table | Contents |
 | --- | --- |
-| `dayhikes` | id, Seed label, `name_origin`, length, Difficulty, member list, relation tags |
+| `dayhikes` | id, Seed label, `name_origin`, length, `unconnected_m`, Difficulty, member list, relation tags |
 | `vertices` | ordered DayHikeGeometry: `seq`, OSM `node_id`, lat, lon, `ele` |
-| `ways` | member ways in order, node id lists, way tags |
+| `ways` | member ways in order, node id lists, way tags, `in_chain` |
 | `amenities` | raw points: OSM id, kind, lat, lon, tags |
 | `geometry_meta` | OSM attribution |
+
+Member ways that do not share an endpoint with the assembled chain stay in
+`ways` with `in_chain = 0`. Their real length is `dayhikes.unconnected_m`.
+Catalog `length_m` and `vertices` follow the connected chain only (no jump
+edges). See [`docs/adr/0009-no-jump-edges.md`](docs/adr/0009-no-jump-edges.md).
 
 At ingest, `vertices.ele` is OSM `ele` on that node, or NULL. After
 `sample-dem`, vertices that sit on a FABDEM tile get raster heights in
@@ -227,8 +235,14 @@ sqlite3 data/catalog.geometry.sqlite \
   'SELECT kind, COUNT(*) FROM amenities GROUP BY 1;'
 ```
 
-[`notebooks/rank-feature-lab.ipynb`](notebooks/rank-feature-lab.ipynb) uses
-this file to invent FeatureVector columns. `rank_dayhikes` does not.
+Load the tables as GeoPandas in
+[`notebooks/04a_geometry.ipynb`](notebooks/04a_geometry.ipynb). Invent
+FeatureVector columns from this file in
+[`notebooks/04_rank_feature_lab.ipynb`](notebooks/04_rank_feature_lab.ipynb).
+`rank_dayhikes` does not read it.
+
+Pandas, maps, and DayHike objects:
+[`notebooks/02_catalog.ipynb`](notebooks/02_catalog.ipynb).
 
 ### Query the Catalog with SQL
 
@@ -259,6 +273,11 @@ and scaler only).
 
 Seed names must exist in the Catalog (unknown or ambiguous names fail; there
 is no fuzzy lookup). The Seed itself is omitted from the result list.
+
+Walk through one Seed, two Seeds (max-not-mean), unknown names, and a stubbed
+DriveTime filter in
+[`notebooks/03_ranking.ipynb`](notebooks/03_ranking.ipynb). Try new columns in
+[`notebooks/04_rank_feature_lab.ipynb`](notebooks/04_rank_feature_lab.ipynb).
 
 ```bash
 uv run dayhike rank --catalog data/catalog.sqlite "Ridge Walk"
@@ -571,7 +590,7 @@ uv run dayhike sample-dem
 
 After this, `rank_dayhikes` uses DEM elevation. SolarAspect (which way the
 geometry faces the sun) is **not** a Catalog column; prototype it in
-[`notebooks/rank-feature-lab.ipynb`](notebooks/rank-feature-lab.ipynb).
+[`notebooks/04_rank_feature_lab.ipynb`](notebooks/04_rank_feature_lab.ipynb).
 
 Python:
 
@@ -934,28 +953,31 @@ CLI: `dayhike ingest`, `dayhike fetch-extracts`, `dayhike fetch-dem`,
 `dayhike sample-dem`, `dayhike rank`.
 
 Docstrings on those functions use the glossary in `CONTEXT.md`.
+Examples: [`01`](notebooks/01_raw_data_and_ingestion.ipynb) ingest,
+[`02`](notebooks/02_catalog.ipynb) Catalog objects,
+[`03`](notebooks/03_ranking.ipynb) ranking,
+[`04`](notebooks/04_rank_feature_lab.ipynb) experimental columns,
+[`04a`](notebooks/04a_geometry.ipynb) GeometryStore as GeoPandas.
 
-## Demonstration notebooks
+## Notebook walkthrough
 
-Open with the project interpreter after `uv sync`.
+Open with the project interpreter after `uv sync`. Run them in order:
 
 ```bash
-uv run jupyter notebook notebooks/catalog-and-ranker.ipynb
+uv run jupyter notebook notebooks/01_raw_data_and_ingestion.ipynb
 ```
 
-| Notebook | What it is for |
+| Notebook | What you will find |
 | --- | --- |
-| [`notebooks/catalog-and-ranker.ipynb`](notebooks/catalog-and-ranker.ipynb) | Ingest the fixture, inspect FeatureVectors, rank by Seed (including max-not-mean), unknown Seed failure, stubbed DriveTime. |
-| [`notebooks/working-with-the-catalog.ipynb`](notebooks/working-with-the-catalog.ipynb) | SQLite Catalog tables, `Catalog.open`, DayHike objects. |
-| [`notebooks/ingest-a-snapshot.ipynb`](notebooks/ingest-a-snapshot.ipynb) | Ingest stages, progress, resume after a kill, unused OSM objects, on the fixture. |
-| [`notebooks/inspect-the-catalog.ipynb`](notebooks/inspect-the-catalog.ipynb) | Sanity-check `data/catalog.sqlite` (counts, length band, Trailhead map, pandas). Falls back to the fixture if that file is missing. |
-| [`notebooks/rank-feature-lab.ipynb`](notebooks/rank-feature-lab.ipynb) | Ranking sandbox on GeometryStore: production `rank_dayhikes` vs experimental FeatureVectors, FABDEM sampling, SolarAspect. |
+| [`notebooks/01_raw_data_and_ingestion.ipynb`](notebooks/01_raw_data_and_ingestion.ipynb) | OSM fixture vs a real snapshot, ingest stages, keep/drop, resume after a kill. |
+| [`notebooks/02_catalog.ipynb`](notebooks/02_catalog.ipynb) | SQLite Catalog + GeometryStore: schema, pandas, maps, DayHike objects. Uses `data/catalog.sqlite` when present. |
+| [`notebooks/03_ranking.ipynb`](notebooks/03_ranking.ipynb) | Production ranking: cosine after scaling, max-not-mean, unknown Seeds, stubbed DriveTime. |
+| [`notebooks/04_rank_feature_lab.ipynb`](notebooks/04_rank_feature_lab.ipynb) | Sandbox to add FeatureVector columns, ablate them, and compare order to production. SolarAspect lives here. |
+| [`notebooks/04a_geometry.ipynb`](notebooks/04a_geometry.ipynb) | GeometryStore tables as GeoPandas: vertices, amenities, DayHike lines, member ways, leftover `in_chain`. |
 
-The first three always rebuild the committed OSM fixture (no Geofabrik, no
-live Valhalla, no `data/dem/`). `inspect-the-catalog` and `rank-feature-lab`
-open your local Catalog and GeometryStore when those files exist (re-ingest
-so GeometryStore and `name_origin` exist). Tests force the fixture so they
-do not load a Europe Catalog.
+`01` and `03` always rebuild the committed OSM fixture (no Geofabrik, no live
+Valhalla). `02`, `04`, and `04a` open your local Catalog and GeometryStore when
+those files exist. Tests force the fixture so they do not load a Europe Catalog.
 ## Attribution (ODbL)
 
 OpenStreetMap data is © OpenStreetMap contributors, licensed under the Open

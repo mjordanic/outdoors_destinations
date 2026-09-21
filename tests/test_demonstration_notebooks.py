@@ -59,8 +59,21 @@ def _run_notebooks() -> tuple[str, str, str]:
     return "\n".join(outputs), "\n".join(markdown), "\n".join(sources)
 
 
+WALKTHROUGH = (
+    "01_raw_data_and_ingestion.ipynb",
+    "02_catalog.ipynb",
+    "03_ranking.ipynb",
+    "04_rank_feature_lab.ipynb",
+    "04a_geometry.ipynb",
+)
+
+
 def test_at_least_one_notebook_exists() -> None:
     assert _notebook_paths(), "expected at least one notebook under notebooks/"
+
+
+def test_notebooks_are_numbered_walkthrough() -> None:
+    assert [path.name for path in _notebook_paths()] == list(WALKTHROUGH)
 
 
 def test_notebooks_execute_against_committed_osm_fixture() -> None:
@@ -158,17 +171,15 @@ def test_notebook_shows_ingest_stages_and_resume() -> None:
 
 def test_readme_points_at_demonstration_notebooks() -> None:
     text = README.read_text()
-    assert "notebooks/catalog-and-ranker.ipynb" in text
-    assert "notebooks/working-with-the-catalog.ipynb" in text
-    assert "notebooks/ingest-a-snapshot.ipynb" in text
-    assert "notebooks/inspect-the-catalog.ipynb" in text
-    assert "notebooks/rank-feature-lab.ipynb" in text
+    for name in WALKTHROUGH:
+        assert f"notebooks/{name}" in text
+    assert "Notebook walkthrough" in text
 
 
 def test_notebook_sanity_checks_catalog_counts_length_band_and_map() -> None:
     output, markdown, source = _run_notebooks()
 
-    assert "Inspect the Catalog" in markdown
+    assert "The Catalog" in markdown
     assert "data/catalog.sqlite" in source
     assert "sanity kept_matches_rows\tok" in output
     assert "sanity length_band\tok" in output

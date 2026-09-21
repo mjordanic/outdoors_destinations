@@ -26,8 +26,10 @@ from dayhike.catalog import (
     _amenity_index,
     _dayhike_from_relation,
     _drop_reason,
+    _assemble_member_ways,
     _linestring_length_m,
     _relation_vertices,
+    _unconnected_length_m,
 )
 from dayhike.osm import (
     DRIVEABLE_HIGHWAY,
@@ -1054,6 +1056,7 @@ def write_geometry_store(
                 name TEXT NOT NULL,
                 name_origin TEXT NOT NULL,
                 length_m REAL NOT NULL,
+                unconnected_m REAL NOT NULL,
                 difficulty TEXT,
                 members TEXT NOT NULL,
                 relation_tags TEXT NOT NULL
@@ -1073,6 +1076,7 @@ def write_geometry_store(
                 way_id INTEGER NOT NULL,
                 node_ids TEXT NOT NULL,
                 tags TEXT NOT NULL,
+                in_chain INTEGER NOT NULL,
                 PRIMARY KEY (dayhike_id, seq)
             );
             CREATE TABLE amenities (
@@ -1090,14 +1094,19 @@ def write_geometry_store(
         )
         for hike in dayhikes:
             relation = relations[hike.id]
+            _, in_chain = _assemble_member_ways(relation, snapshot.ways)
+            unconnected_m = _unconnected_length_m(
+                relation, snapshot.nodes, snapshot.ways, in_chain
+            )
             out.execute(
-                "INSERT INTO dayhikes (id, name, name_origin, length_m, difficulty, "
-                "members, relation_tags) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO dayhikes (id, name, name_origin, length_m, unconnected_m, "
+                "difficulty, members, relation_tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     hike.id,
                     hike.name,
                     hike.name_origin,
                     hike.length_m,
+                    unconnected_m,
                     hike.difficulty.sac_scale,
                     json.dumps([list(member) for member in relation.members]),
                     json.dumps(relation.tags),
@@ -1134,12 +1143,13 @@ def write_geometry_store(
                         member_id,
                         json.dumps(list(way.node_ids)),
                         json.dumps(way.tags),
+                        int(in_chain[way_seq]),
                     )
                 )
                 way_seq += 1
             out.executemany(
-                "INSERT INTO ways (dayhike_id, seq, way_id, node_ids, tags) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO ways (dayhike_id, seq, way_id, node_ids, tags, in_chain) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
                 way_rows,
             )
         amenity_rows = list(

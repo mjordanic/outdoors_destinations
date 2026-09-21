@@ -21,7 +21,7 @@ The local database of DayHikes, Trailheads, AmenityFacts, and FeatureVectors. Bu
 _Avoid_: dataset, index, graph (the routing graph is Valhalla's, not the Catalog)
 
 **DayHikeGeometry**:
-The ordered lon/lat vertices of a DayHike, assembled from OSM member ways. Used to invent FeatureVector columns; Ranking does not read it.
+The ordered lon/lat vertices of a DayHike, assembled from OSM member ways that share endpoints (a member that does not touch the chain is omitted, not jumped). Used to invent FeatureVector columns; Ranking does not read it.
 _Avoid_: path, route, trace, LineString
 
 **GeometryStore**:
