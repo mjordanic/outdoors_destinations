@@ -12,6 +12,7 @@ from dayhike.catalog import (
     rank_dayhikes,
 )
 from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS, DEFAULT_DEM_DIR, fetch_fabdem, sample_dem
+from dayhike.landcover import DEFAULT_LANDCOVER_DIR, sample_landcover
 from dayhike.extracts import fetch_geofabrik_extracts
 from dayhike.valhalla import DEFAULT_VALHALLA_URL, ValhallaMatrixClient
 
@@ -87,6 +88,22 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_DEM_DIR,
         help="Directory of FABDEM GeoTIFFs (default: data/dem)",
     )
+    sample_lc = subparsers.add_parser(
+        "sample-landcover",
+        help="Sample local LandCover rasters onto GeometryStore vertices and Catalog fractions",
+    )
+    sample_lc.add_argument(
+        "--catalog",
+        type=Path,
+        default=Path("data/catalog.sqlite"),
+        help="SQLite Catalog path (default: data/catalog.sqlite)",
+    )
+    sample_lc.add_argument(
+        "--landcover",
+        type=Path,
+        default=DEFAULT_LANDCOVER_DIR,
+        help="Directory of LandCover GeoTIFFs (default: data/landcover)",
+    )
     rank = subparsers.add_parser("rank", help="Rank DayHikes by similarity to Seeds")
     rank.add_argument("--catalog", required=True, type=Path)
     rank.add_argument(
@@ -116,6 +133,8 @@ def main(argv: list[str] | None = None) -> int:
         return _fetch_dem(args.dest, args.bounds)
     if args.command == "sample-dem":
         return _sample_dem(args.catalog, args.dem)
+    if args.command == "sample-landcover":
+        return _sample_landcover(args.catalog, args.landcover)
     if (args.origin is None) != (args.max_hours is None):
         rank.error("--origin and --max-hours must be given together")
     return _rank(args.catalog, args.seeds, args.origin, args.max_hours, args.valhalla_url)
@@ -161,6 +180,16 @@ def _fetch_dem(dest: Path, bounds: Bounds) -> int:
 
 def _sample_dem(catalog_path: Path, raster_dir: Path) -> int:
     sampled = sample_dem(
+        catalog_path,
+        raster_dir,
+        progress=lambda message: print(message, file=sys.stderr, flush=True),
+    )
+    print(sampled)
+    return 0
+
+
+def _sample_landcover(catalog_path: Path, raster_dir: Path) -> int:
+    sampled = sample_landcover(
         catalog_path,
         raster_dir,
         progress=lambda message: print(message, file=sys.stderr, flush=True),

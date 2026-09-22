@@ -1068,6 +1068,7 @@ def write_geometry_store(
                 latitude REAL NOT NULL,
                 longitude REAL NOT NULL,
                 ele REAL,
+                landcover INTEGER,
                 PRIMARY KEY (dayhike_id, seq)
             );
             CREATE TABLE ways (
@@ -1114,8 +1115,8 @@ def write_geometry_store(
             )
             vertices = _relation_vertices(relation, snapshot.nodes, snapshot.ways)
             out.executemany(
-                "INSERT INTO vertices (dayhike_id, seq, node_id, latitude, longitude, ele) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO vertices (dayhike_id, seq, node_id, latitude, longitude, "
+                "ele, landcover) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [
                     (
                         hike.id,
@@ -1124,6 +1125,7 @@ def write_geometry_store(
                         lat,
                         lon,
                         snapshot.node_elevations.get(node_id),
+                        None,
                     )
                     for seq, (node_id, (lat, lon)) in enumerate(vertices)
                 ],

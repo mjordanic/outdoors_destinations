@@ -22,17 +22,17 @@ download tiles and does not add or drop DayHikes.
 ADR-0008, ADR-0010, PRD stories 1–12. `CONTEXT.md` LandCover, GeometryStore,
 FeatureVector, Ranking. WorldCover class codes 10, 20, 30, 60, and 70.
 
-- [ ] A fresh ingest creates an empty land-cover class on each vertex and empty
+- [x] A fresh ingest creates an empty land-cover class on each vertex and empty
       fraction columns; ingest does not download a raster
-- [ ] Sampling a tiny raster writes the class onto covered GeometryStore
+- [x] Sampling a tiny raster writes the class onto covered GeometryStore
       vertices and leaves uncovered vertices unset
-- [ ] Catalog fractions use only sampled vertices; other class codes count in
+- [x] Catalog fractions use only sampled vertices; other class codes count in
       the denominator only; a hike with no samples keeps NULL fractions and
       stays in the Catalog
-- [ ] Sampling an already-built Catalog adds the missing column in place and
+- [x] Sampling an already-built Catalog adds the missing column in place and
       refits the scaler
-- [ ] With a forested Seed, a more forested DayHike outranks a barer one that
+- [x] With a forested Seed, a more forested DayHike outranks a barer one that
       otherwise matches
-- [ ] Fractions do not change when a month is later selected
-- [ ] Tests use a synthetic raster on the committed OSM fixture and do not
+- [x] Fractions do not change when a month is later selected
+- [x] Tests use a synthetic raster on the committed OSM fixture and do not
       download WorldCover

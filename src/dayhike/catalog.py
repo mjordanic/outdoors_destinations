@@ -25,6 +25,13 @@ NAME_ORIGIN_OSM_NAME = "osm_name"
 NAME_ORIGIN_OSM_REF = "osm_ref"
 NAME_ORIGIN_SYNTHETIC = "synthetic"
 # Intrinsic FeatureVector columns only. DriveTime is query-time, not a feature.
+LANDCOVER_FEATURE_NAMES = (
+    "tree_fraction",
+    "shrub_fraction",
+    "grass_fraction",
+    "bare_fraction",
+    "snow_fraction",
+)
 FEATURE_NAMES = (
     "length_m",
     "elevation_min_m",
@@ -39,6 +46,7 @@ FEATURE_NAMES = (
     "restaurant_cafe_nearest_m",
     "drinking_water_count",
     "drinking_water_nearest_m",
+    *LANDCOVER_FEATURE_NAMES,
 )
 
 SAC_SCALE_RANK = {
@@ -85,6 +93,11 @@ class FeatureVector:
     elevation_gain_m: float | None
     difficulty_ordinal: int | None
     amenity_facts: AmenityFacts
+    tree_fraction: float | None = None
+    shrub_fraction: float | None = None
+    grass_fraction: float | None = None
+    bare_fraction: float | None = None
+    snow_fraction: float | None = None
 
 
 @dataclass(frozen=True)
@@ -178,27 +191,53 @@ class Catalog:
                     "SELECT dayhike_id, latitude, longitude FROM trailheads"
                 )
             }
-            vectors = {
-                dayhike_id: FeatureVector(
-                    length_m=length_m,
-                    elevation_min_m=elevation_min_m,
-                    elevation_max_m=elevation_max_m,
-                    elevation_gain_m=elevation_gain_m,
-                    difficulty_ordinal=difficulty_ordinal,
-                    amenity_facts=trailheads[dayhike_id].amenity_facts,
+            feature_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(feature_vectors)")
+            }
+            has_landcover = set(LANDCOVER_FEATURE_NAMES) <= feature_columns
+            vector_select = (
+                "SELECT dayhike_id, length_m, elevation_min_m, elevation_max_m, "
+                "elevation_gain_m, difficulty_ordinal"
+            )
+            if has_landcover:
+                vector_select += (
+                    ", tree_fraction, shrub_fraction, grass_fraction, "
+                    "bare_fraction, snow_fraction"
                 )
-                for (
+            vectors = {}
+            for row in connection.execute(vector_select + " FROM feature_vectors"):
+                (
                     dayhike_id,
                     length_m,
                     elevation_min_m,
                     elevation_max_m,
                     elevation_gain_m,
                     difficulty_ordinal,
-                ) in connection.execute(
-                    "SELECT dayhike_id, length_m, elevation_min_m, elevation_max_m, "
-                    "elevation_gain_m, difficulty_ordinal FROM feature_vectors"
+                ) = row[:6]
+                if has_landcover:
+                    (
+                        tree_fraction,
+                        shrub_fraction,
+                        grass_fraction,
+                        bare_fraction,
+                        snow_fraction,
+                    ) = row[6:]
+                else:
+                    tree_fraction = shrub_fraction = grass_fraction = None
+                    bare_fraction = snow_fraction = None
+                vectors[dayhike_id] = FeatureVector(
+                    length_m=length_m,
+                    elevation_min_m=elevation_min_m,
+                    elevation_max_m=elevation_max_m,
+                    elevation_gain_m=elevation_gain_m,
+                    difficulty_ordinal=difficulty_ordinal,
+                    amenity_facts=trailheads[dayhike_id].amenity_facts,
+                    tree_fraction=tree_fraction,
+                    shrub_fraction=shrub_fraction,
+                    grass_fraction=grass_fraction,
+                    bare_fraction=bare_fraction,
+                    snow_fraction=snow_fraction,
                 )
-            }
             dayhike_columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(dayhikes)")
             }
@@ -231,10 +270,18 @@ class Catalog:
                     "SELECT feature_name, mean, scale FROM scaler ORDER BY position"
                 )
             )
+            scaler_names = [name for name, _, _ in scaler_rows]
+            scaler_mean = [mean for _, mean, _ in scaler_rows]
+            scaler_scale = [scale for _, _, scale in scaler_rows]
+            for name in LANDCOVER_FEATURE_NAMES:
+                if name not in scaler_names:
+                    scaler_names.append(name)
+                    scaler_mean.append(0.0)
+                    scaler_scale.append(1.0)
             scaler = Scaler(
-                feature_names=tuple(name for name, _, _ in scaler_rows),
-                mean=tuple(mean for _, mean, _ in scaler_rows),
-                scale=tuple(scale for _, _, scale in scaler_rows),
+                feature_names=tuple(scaler_names),
+                mean=tuple(scaler_mean),
+                scale=tuple(scaler_scale),
             )
             return cls(
                 path=path,
@@ -756,6 +803,11 @@ def _feature_row(vector: FeatureVector) -> tuple[float, ...]:
         _missing_as_nan(facts.restaurant_cafe.nearest_m),
         float(facts.drinking_water.count),
         _missing_as_nan(facts.drinking_water.nearest_m),
+        _missing_as_nan(vector.tree_fraction),
+        _missing_as_nan(vector.shrub_fraction),
+        _missing_as_nan(vector.grass_fraction),
+        _missing_as_nan(vector.bare_fraction),
+        _missing_as_nan(vector.snow_fraction),
     )
 
 
@@ -888,7 +940,12 @@ def _write_sqlite(
                 elevation_min_m REAL,
                 elevation_max_m REAL,
                 elevation_gain_m REAL,
-                difficulty_ordinal INTEGER
+                difficulty_ordinal INTEGER,
+                tree_fraction REAL,
+                shrub_fraction REAL,
+                grass_fraction REAL,
+                bare_fraction REAL,
+                snow_fraction REAL
             );
             CREATE TABLE labels (
                 hiker_id TEXT NOT NULL,
@@ -956,8 +1013,9 @@ def _write_sqlite(
         )
         connection.executemany(
             "INSERT INTO feature_vectors (dayhike_id, length_m, elevation_min_m, "
-            "elevation_max_m, elevation_gain_m, difficulty_ordinal) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "elevation_max_m, elevation_gain_m, difficulty_ordinal, tree_fraction, "
+            "shrub_fraction, grass_fraction, bare_fraction, snow_fraction) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 (
                     hike.id,
@@ -966,6 +1024,11 @@ def _write_sqlite(
                     hike.feature_vector.elevation_max_m,
                     hike.feature_vector.elevation_gain_m,
                     hike.feature_vector.difficulty_ordinal,
+                    hike.feature_vector.tree_fraction,
+                    hike.feature_vector.shrub_fraction,
+                    hike.feature_vector.grass_fraction,
+                    hike.feature_vector.bare_fraction,
+                    hike.feature_vector.snow_fraction,
                 )
                 for hike in dayhikes
             ],
