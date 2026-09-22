@@ -18,11 +18,11 @@ gitignored. The files are the ones LandCover sampling reads.
 PRD stories 25 and 27–29. Public seam matches the DEM fetch (destination and
 bounds). WorldCover 2021 v200 map COGs on the public bucket, no credentials.
 
-- [ ] Fetch writes 3×3° map GeoTIFFs for the default Alps and Dinarides bbox
+- [x] Fetch writes 3×3° map GeoTIFFs for the default Alps and Dinarides bbox
       and accepts an override bbox
-- [ ] A file already present is not downloaded again
-- [ ] A tile the server does not have is skipped
-- [ ] The command does not require a Catalog
-- [ ] `data/landcover/` is gitignored
-- [ ] Tests lock the tile URL and the skip rule and do not download the real
+- [x] A file already present is not downloaded again
+- [x] A tile the server does not have is skipped
+- [x] The command does not require a Catalog
+- [x] `data/landcover/` is gitignored
+- [x] Tests lock the tile URL and the skip rule and do not download the real
       map

@@ -12,7 +12,7 @@ from dayhike.catalog import (
     rank_dayhikes,
 )
 from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS, DEFAULT_DEM_DIR, fetch_fabdem, sample_dem
-from dayhike.landcover import DEFAULT_LANDCOVER_DIR, sample_landcover
+from dayhike.landcover import DEFAULT_LANDCOVER_DIR, fetch_worldcover, sample_landcover
 from dayhike.extracts import fetch_geofabrik_extracts
 from dayhike.valhalla import DEFAULT_VALHALLA_URL, ValhallaMatrixClient
 
@@ -67,6 +67,22 @@ def main(argv: list[str] | None = None) -> int:
         help="Directory for GeoTIFFs (default: data/dem)",
     )
     fetch_dem.add_argument(
+        "--bounds",
+        type=_parse_bounds,
+        default=DEFAULT_DEM_BOUNDS,
+        help="south,west,north,east in WGS84 (default: PRD extract bbox)",
+    )
+    fetch_lc = subparsers.add_parser(
+        "fetch-landcover",
+        help="Download ESA WorldCover GeoTIFFs covering Alps+Dinarides into data/landcover",
+    )
+    fetch_lc.add_argument(
+        "--dest",
+        type=Path,
+        default=DEFAULT_LANDCOVER_DIR,
+        help="Directory for GeoTIFFs (default: data/landcover)",
+    )
+    fetch_lc.add_argument(
         "--bounds",
         type=_parse_bounds,
         default=DEFAULT_DEM_BOUNDS,
@@ -131,6 +147,8 @@ def main(argv: list[str] | None = None) -> int:
         return _fetch_extracts(args.dest)
     if args.command == "fetch-dem":
         return _fetch_dem(args.dest, args.bounds)
+    if args.command == "fetch-landcover":
+        return _fetch_landcover(args.dest, args.bounds)
     if args.command == "sample-dem":
         return _sample_dem(args.catalog, args.dem)
     if args.command == "sample-landcover":
@@ -169,6 +187,17 @@ def _fetch_extracts(dest: Path) -> int:
 
 def _fetch_dem(dest: Path, bounds: Bounds) -> int:
     paths = fetch_fabdem(
+        dest,
+        bounds,
+        progress=lambda message: print(message, file=sys.stderr, flush=True),
+    )
+    for path in paths:
+        print(path)
+    return 0
+
+
+def _fetch_landcover(dest: Path, bounds: Bounds) -> int:
+    paths = fetch_worldcover(
         dest,
         bounds,
         progress=lambda message: print(message, file=sys.stderr, flush=True),

@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import math
+import shutil
 import sqlite3
+import time
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from dayhike.catalog import (
     Catalog,
@@ -13,9 +18,14 @@ from dayhike.catalog import (
     fit_scaler_from_matrix,
     geometry_store_path_for,
 )
+from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS
 
 Progress = Callable[[str], None]
+Retrieve = Callable[[str, str], None]
 DEFAULT_LANDCOVER_DIR = Path("data/landcover")
+WORLDCOVER_MAP = (
+    "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map"
+)
 WORLDCOVER_ATTRIBUTION = (
     "© ESA WorldCover project 2021 / contains modified Copernicus Sentinel data "
     "(2021) processed by ESA WorldCover consortium"
@@ -28,6 +38,80 @@ _SHRUB = 20
 _GRASS = 30
 _BARE = 60
 _SNOW = 70
+
+
+def worldcover_tile_url(tile_id: str) -> str:
+    """HTTPS URL of one 3×3° WorldCover 2021 v200 Map COG (public bucket)."""
+    filename = f"ESA_WorldCover_10m_2021_v200_{tile_id}_Map.tif"
+    return f"{WORLDCOVER_MAP}/{filename}"
+
+
+def worldcover_tile_id(lat: float, lon: float) -> str:
+    """Return the WorldCover 3° tile id whose southwest corner contains this point."""
+    lat_sw = int(math.floor(lat / 3) * 3)
+    lon_sw = int(math.floor(lon / 3) * 3)
+    return _format_corner(lat_sw, lon_sw)
+
+
+def worldcover_tiles_covering(bounds: Bounds) -> list[str]:
+    """3° WorldCover tiles whose southwest-corner cells intersect the box."""
+    lat_start = int(math.floor(bounds.south / 3) * 3)
+    lat_end = int(math.floor(bounds.north / 3) * 3)
+    lon_start = int(math.floor(bounds.west / 3) * 3)
+    lon_end = int(math.floor(bounds.east / 3) * 3)
+    return [
+        _format_corner(lat, lon)
+        for lat in range(lat_start, lat_end + 1, 3)
+        for lon in range(lon_start, lon_end + 1, 3)
+    ]
+
+
+def fetch_worldcover(
+    dest: Path | str,
+    bounds: Bounds = DEFAULT_DEM_BOUNDS,
+    *,
+    retrieve: Retrieve | None = None,
+    progress: Progress | None = None,
+    max_workers: int = 4,
+) -> list[Path]:
+    """Download missing WorldCover 2021 v200 Map COGs covering bounds into dest."""
+    dest = Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    retrieve = retrieve or _download
+
+    def fetch_one(tile_id: str) -> Path | None:
+        path = dest / f"ESA_WorldCover_10m_2021_v200_{tile_id}_Map.tif"
+        if path.exists() and path.stat().st_size > 0:
+            return path
+        if progress is not None:
+            progress(f"landcover fetch: {tile_id}")
+        try:
+            retrieve(worldcover_tile_url(tile_id), str(path))
+        except FileNotFoundError:
+            if path.exists():
+                path.unlink()
+            return None
+        if path.exists() and path.stat().st_size > 0:
+            return path
+        return None
+
+    tiles = worldcover_tiles_covering(bounds)
+    if max_workers <= 1:
+        return [path for tile_id in tiles if (path := fetch_one(tile_id)) is not None]
+    paths: list[Path] = []
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = [pool.submit(fetch_one, tile_id) for tile_id in tiles]
+        for future in as_completed(futures):
+            try:
+                path = future.result()
+            except Exception as exc:
+                if progress is not None:
+                    progress(f"landcover fetch error: {exc}")
+                continue
+            if path is not None:
+                paths.append(path)
+    paths.sort()
+    return paths
 
 
 def sample_landcover_classes(
@@ -227,3 +311,33 @@ def _ensure_column(
     existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
     if column not in existing:
         connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
+def _format_corner(lat_sw: int, lon_sw: int) -> str:
+    ns = "N" if lat_sw >= 0 else "S"
+    ew = "E" if lon_sw >= 0 else "W"
+    return f"{ns}{abs(lat_sw):02d}{ew}{abs(lon_sw):03d}"
+
+
+def _download(url: str, filename: str) -> None:
+    dest = Path(filename)
+    tmp = dest.with_name(dest.name + ".part")
+    request = Request(url, headers={"User-Agent": "dayhike"})
+    last_error: Exception | None = None
+    for attempt in range(5):
+        try:
+            with urlopen(request, timeout=120) as source, tmp.open("wb") as out:
+                shutil.copyfileobj(source, out)
+            tmp.replace(dest)
+            return
+        except HTTPError as exc:
+            tmp.unlink(missing_ok=True)
+            if exc.code == 404:
+                raise FileNotFoundError(url) from exc
+            last_error = exc
+        except (URLError, TimeoutError, OSError) as exc:
+            tmp.unlink(missing_ok=True)
+            last_error = exc
+        time.sleep(min(2**attempt, 16))
+    assert last_error is not None
+    raise last_error

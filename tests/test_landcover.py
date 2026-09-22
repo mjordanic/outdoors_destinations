@@ -5,6 +5,13 @@ from pathlib import Path
 import numpy as np
 
 from dayhike import Catalog, build_catalog, geometry_store_path_for, rank_dayhikes, sample_landcover
+from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS
+from dayhike.landcover import (
+    fetch_worldcover,
+    worldcover_tile_id,
+    worldcover_tile_url,
+    worldcover_tiles_covering,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
 LANDCOVER_FRACTIONS = (
@@ -412,3 +419,111 @@ def test_cli_sample_landcover_prints_sampled_count(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert int(result.stdout.strip().splitlines()[-1]) > 0
+
+
+def test_worldcover_tile_url_points_at_public_v200_map_cog() -> None:
+    url = worldcover_tile_url("N45E015")
+    assert url.startswith(
+        "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/"
+    )
+    assert url.endswith("ESA_WorldCover_10m_2021_v200_N45E015_Map.tif")
+
+
+def test_worldcover_tile_id_uses_three_degree_southwest_corner() -> None:
+    assert worldcover_tile_id(45.0, 15.0) == "N45E015"
+    assert worldcover_tile_id(47.9, 17.9) == "N45E015"
+    assert worldcover_tile_id(48.0, 12.0) == "N48E012"
+    assert worldcover_tile_id(41.8, 5.9) == "N39E003"
+
+
+def test_worldcover_tiles_covering_default_prd_bounds_include_alps_and_dinarides() -> None:
+    tiles = worldcover_tiles_covering(DEFAULT_DEM_BOUNDS)
+    assert "N45E015" in tiles
+    assert "N48E012" in tiles
+    assert "N39E003" in tiles
+    assert tiles == sorted(set(tiles))
+
+
+def test_fetch_worldcover_downloads_missing_tiles_and_skips_existing(
+    tmp_path: Path,
+) -> None:
+    recorded: list[str] = []
+    dest = tmp_path / "landcover"
+    dest.mkdir()
+    existing = dest / "ESA_WorldCover_10m_2021_v200_N45E012_Map.tif"
+    existing.write_bytes(b"already-there")
+
+    def fake_retrieve(url: str, filename: str) -> None:
+        recorded.append(url)
+        Path(filename).write_bytes(b"tif-bytes")
+
+    paths = fetch_worldcover(
+        dest,
+        Bounds(south=45.1, west=14.0, north=45.2, east=16.0),
+        retrieve=fake_retrieve,
+    )
+
+    assert existing.read_bytes() == b"already-there"
+    assert existing in paths
+    fetched = [path for path in paths if path != existing]
+    assert fetched == [dest / "ESA_WorldCover_10m_2021_v200_N45E015_Map.tif"]
+    assert recorded == [worldcover_tile_url("N45E015")]
+    assert fetched[0].read_bytes() == b"tif-bytes"
+
+
+def test_fetch_worldcover_writes_map_tifs_sample_landcover_reads(
+    tmp_path: Path,
+) -> None:
+    catalog_path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, catalog_path)
+    dest = tmp_path / "landcover"
+
+    def fake_retrieve(_url: str, filename: str) -> None:
+        _write_class_tif(
+            Path(filename),
+            west=14.99,
+            south=44.99,
+            east=15.05,
+            north=45.12,
+            codes=np.full((8, 8), 10, dtype="uint8"),
+        )
+
+    paths = fetch_worldcover(
+        dest,
+        Bounds(south=45.0, west=15.0, north=45.1, east=15.1),
+        retrieve=fake_retrieve,
+    )
+
+    assert paths == [dest / "ESA_WorldCover_10m_2021_v200_N45E015_Map.tif"]
+    assert sample_landcover(catalog_path, dest) > 0
+
+
+def test_fetch_worldcover_skips_missing_remote_tiles(tmp_path: Path) -> None:
+    def missing(_url: str, _filename: str) -> None:
+        raise FileNotFoundError("404")
+
+    paths = fetch_worldcover(
+        tmp_path,
+        Bounds(south=45.0, west=15.0, north=45.1, east=15.1),
+        retrieve=missing,
+    )
+
+    assert paths == []
+    assert not (tmp_path / "ESA_WorldCover_10m_2021_v200_N45E015_Map.tif").exists()
+
+
+def test_cli_fetch_landcover_does_not_need_a_catalog() -> None:
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "-m", "dayhike", "fetch-landcover", "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--dest" in result.stdout
+    assert "--bounds" in result.stdout
+    assert "--catalog" not in result.stdout
