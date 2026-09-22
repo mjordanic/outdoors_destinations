@@ -25,7 +25,7 @@ The ordered lon/lat vertices of a DayHike, assembled from OSM member ways that s
 _Avoid_: path, route, trace, LineString
 
 **GeometryStore**:
-The sidecar SQLite written at ingest next to a Catalog. It holds DayHikeGeometry, member-way and relation tags, and raw amenity points. Ranking does not read it.
+The sidecar SQLite written at ingest next to a Catalog. It holds DayHikeGeometry, member-way and relation tags, raw amenity points, and the per-vertex LandCover and ClimateNormal samples. Ranking does not read it.
 _Avoid_: experimental database, work file, Catalog, lab
 
 **Origin**:
@@ -49,8 +49,20 @@ A local elevation raster sampled onto DayHikeGeometry after ingest. Until that s
 _Avoid_: live SRTM, elevation API, exposure
 
 **SolarAspect**:
-A terrain-derived description of which way DayHikeGeometry faces relative to the sun, sampled from a DEM. It is not Difficulty, not live weather, and not alpine fall hazard.
+A terrain-derived description of which way DayHikeGeometry faces relative to the sun, sampled from a DEM. It is not Difficulty, not ClimateNormal, and not alpine fall hazard. Shade from tree cover is LandCover.
 _Avoid_: exposure, sunny, shady, weather
+
+**LandCover**:
+The mix of surface along DayHikeGeometry, as fractions of tree, shrub, grass, bare, and permanent snow, used in the FeatureVector. Each GeometryStore vertex counts once. Fractions do not change with QueryMonth. Snow here is ice on the land-cover map, not the seasonal snowpack.
+_Avoid_: NDVI, vegetation image, satellite picture, greenness, snow depth
+
+**ClimateNormal**:
+The long-term monthly temperature, precipitation, and solar radiation of a DayHike, averaged along DayHikeGeometry. Ranking scores three numbers from it. It is not a forecast and not SolarAspect.
+_Avoid_: live weather, weekend forecast, aspect, sunny-day count
+
+**QueryMonth**:
+The optional month a Hiker sets on a Ranking. It selects which ClimateNormal month fills the three score slots: that month's temperature, precipitation, and solar radiation. When absent, the slots are June–August mean temperature, mean monthly precipitation, and June–August solar radiation.
+_Avoid_: season filter, forecast date, current month as a silent default
 
 **AmenityFact**:
 A count or distance from a Trailhead to an OSM amenity used as a Feature (restaurant/cafe, parking, drinking water, Hut). Viewpoint, Peak, and Shelter are not AmenityFacts.
@@ -73,12 +85,12 @@ A DayHike the hiker names as "like the outing I want." Ranking is similarity to 
 _Avoid_: label, like, rating, example (example is too vague)
 
 **FeatureVector**:
-The numeric intrinsic description of a DayHike used for similarity (length, elevation stats, Difficulty, AmenityFacts). It does not include DriveTime.
+The numeric description of a DayHike used for similarity (length, elevation stats, Difficulty, AmenityFacts, LandCover, and three ClimateNormal slots). Which climate slots are used follows the QueryMonth. It does not include DriveTime.
 _Avoid_: embedding, description, tags
 
 **Ranking**:
-An ordered list of Catalog DayHikes with a similarity score to the Seed set. Score is the maximum similarity to any Seed.
-_Avoid_: recommendation, unsupervised clustering, prediction
+An ordered list of Catalog DayHikes with a similarity score to the Seed set. Score is the maximum similarity to any Seed. An optional QueryMonth selects the ClimateNormal slice in that score. The Seed carries the climate being matched.
+_Avoid_: recommendation, unsupervised clustering, prediction, climate target
 
 **Hiker**:
 The person querying the Catalog. Phase 1 is a single local user; a future website may have many Hikers with ratings.

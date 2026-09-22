@@ -85,21 +85,23 @@ can ingest GTFS, but coverage will be patchy.
 
 ---
 
-## 6. Snow, sun, and live weather
+## 6. Live weather, SolarAspect, and seasonal snow
 
-### Why it's parked
+### Why the rest is parked
 
-These are computed, not stored OSM facts. Sun needs DEM aspect. Snow has no
-honest per-DayHike layer. Weather (Open-Meteo) belongs on a detail view, not in
-the FeatureVector — it would make "hikes like Seed X" depend on today's forecast.
+LandCover and ClimateNormal are FeatureVector material (ADR-0010). A weekend
+forecast is not: it would make "like Seed X" depend on the day of the query.
+SolarAspect is still the notebook prototype. Seasonal snow has no honest
+per-DayHike layer. LandCover snow is permanent ice on the land-cover map, not
+January snowpack.
 
 ### What would have to be true to start
 
-- Weather as a query-time filter ("typical June" or "this weekend"), never as a
-  similarity feature. Elevation min/max/gain can already be filled from a local
-  FABDEM (`dayhike sample-dem`). SolarAspect is prototyped in
-  `notebooks/04_rank_feature_lab.ipynb` and is not a Catalog FeatureVector column
-  until that sandbox promotes it.
+- A forecast shown on a detail view, or applied after Ranking the way DriveTime
+  is. Never a FeatureVector column.
+- SolarAspect promoted from `notebooks/04_rank_feature_lab.ipynb` the same way
+  elevation left the notebook.
+- A snow layer that describes the season the Hiker asked about.
 
 ---
 
