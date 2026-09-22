@@ -201,6 +201,47 @@ def test_notebook_sanity_checks_catalog_counts_length_band_and_map() -> None:
     assert "dem skipped" in output or "dem sampled" in output
 
 
+def test_notebook_catalog_schema_names_landcover_and_climate() -> None:
+    _, markdown, _ = _run_notebooks()
+    folded = markdown.casefold()
+
+    assert "tree_fraction" in markdown
+    assert "shrub_fraction" in markdown
+    assert "grass_fraction" in markdown
+    assert "bare_fraction" in markdown
+    assert "snow_fraction" in markdown
+    assert "temperature_c" in markdown
+    assert "precipitation_mm" in markdown
+    assert "solar_radiation" in markdown
+    assert "climate_months" in markdown
+    assert "regime" in folded or ("june" in folded and "august" in folded)
+    assert "monthly" in folded
+
+
+def test_notebook_geometry_samples_landcover_and_climate_without_download() -> None:
+    output, _, source = _run_notebooks()
+
+    assert "sample_landcover" in source
+    assert "sample_climate" in source
+    assert "fetch_worldcover" not in source
+    assert "fetch_worldclim" not in source
+    assert _tagged_int(output, "landcover_classes") > 0
+    assert _tagged_int(output, "vertex_climate_rows") > 0
+
+
+def test_notebook_ranking_shows_query_month_and_landcover() -> None:
+    output, _, source = _run_notebooks()
+
+    assert "rank_dayhikes" in source
+    assert "month=7" in source.replace(" ", "")
+    assert _tagged_names(output, "no_month")
+    assert _tagged_names(output, "july")
+    assert _tagged_float(output, "july_temperature") != _tagged_float(
+        output, "regime_temperature"
+    )
+    landcover = _tagged_names(output, "landcover_rank")
+    assert landcover[0] == "Forested Twin"
+    assert landcover.index("Forested Twin") < landcover.index("Bare Twin")
 
 
 def _tagged_names(output: str, tag: str) -> list[str]:
@@ -210,3 +251,15 @@ def _tagged_names(output: str, tag: str) -> list[str]:
         for line in output.splitlines()
         if line.startswith(prefix)
     ]
+
+
+def _tagged_int(output: str, tag: str) -> int:
+    values = _tagged_names(output, tag)
+    assert values, f"missing {tag} line"
+    return int(values[0])
+
+
+def _tagged_float(output: str, tag: str) -> float:
+    values = _tagged_names(output, tag)
+    assert values, f"missing {tag} line"
+    return float(values[0])

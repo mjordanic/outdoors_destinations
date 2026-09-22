@@ -24,12 +24,12 @@ not present these columns as experiments.
 against the committed fixture and checks README links. PRD stories 36–37.
 Notebooks `02_catalog`, `03_ranking`, and `04a_geometry`.
 
-- [ ] The geometry notebook prints a non-zero count of land-cover classes and
+- [x] The geometry notebook prints a non-zero count of land-cover classes and
       of per-vertex climate rows after sampling a tiny synthetic raster
-- [ ] The ranking notebook prints a no-month Ranking and a July Ranking, and
+- [x] The ranking notebook prints a no-month Ranking and a July Ranking, and
       the July temperature differs from the warm-season temperature
-- [ ] The ranking notebook shows a forested Seed ranking a more forested
+- [x] The ranking notebook shows a forested Seed ranking a more forested
       DayHike above a barer one
-- [ ] The catalog notebook mentions the new Catalog fields
-- [ ] The walkthrough file list is unchanged
-- [ ] The notebook test run stays offline
+- [x] The catalog notebook mentions the new Catalog fields
+- [x] The walkthrough file list is unchanged
+- [x] The notebook test run stays offline
