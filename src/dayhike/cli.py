@@ -13,6 +13,7 @@ from dayhike.catalog import (
 )
 from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS, DEFAULT_DEM_DIR, fetch_fabdem, sample_dem
 from dayhike.landcover import DEFAULT_LANDCOVER_DIR, fetch_worldcover, sample_landcover
+from dayhike.climate import DEFAULT_CLIMATE_DIR, sample_climate
 from dayhike.extracts import fetch_geofabrik_extracts
 from dayhike.valhalla import DEFAULT_VALHALLA_URL, ValhallaMatrixClient
 
@@ -120,6 +121,22 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_LANDCOVER_DIR,
         help="Directory of LandCover GeoTIFFs (default: data/landcover)",
     )
+    sample_cl = subparsers.add_parser(
+        "sample-climate",
+        help="Sample local climate rasters onto GeometryStore vertices and Catalog means",
+    )
+    sample_cl.add_argument(
+        "--catalog",
+        type=Path,
+        default=Path("data/catalog.sqlite"),
+        help="SQLite Catalog path (default: data/catalog.sqlite)",
+    )
+    sample_cl.add_argument(
+        "--climate",
+        type=Path,
+        default=DEFAULT_CLIMATE_DIR,
+        help="Directory of WorldClim GeoTIFFs (default: data/climate)",
+    )
     rank = subparsers.add_parser("rank", help="Rank DayHikes by similarity to Seeds")
     rank.add_argument("--catalog", required=True, type=Path)
     rank.add_argument(
@@ -137,6 +154,12 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_VALHALLA_URL,
         help="Valhalla base URL for /sources_to_targets",
     )
+    rank.add_argument(
+        "--month",
+        type=int,
+        default=None,
+        help="QueryMonth 1-12; omit to use the June-August climate regime",
+    )
     rank.add_argument("seeds", nargs="+", help="Seed DayHike names")
     args = parser.parse_args(argv)
     if args.command == "ingest":
@@ -153,9 +176,13 @@ def main(argv: list[str] | None = None) -> int:
         return _sample_dem(args.catalog, args.dem)
     if args.command == "sample-landcover":
         return _sample_landcover(args.catalog, args.landcover)
+    if args.command == "sample-climate":
+        return _sample_climate(args.catalog, args.climate)
     if (args.origin is None) != (args.max_hours is None):
         rank.error("--origin and --max-hours must be given together")
-    return _rank(args.catalog, args.seeds, args.origin, args.max_hours, args.valhalla_url)
+    return _rank(
+        args.catalog, args.seeds, args.origin, args.max_hours, args.valhalla_url, args.month
+    )
 
 
 def _ingest(
@@ -227,6 +254,16 @@ def _sample_landcover(catalog_path: Path, raster_dir: Path) -> int:
     return 0
 
 
+def _sample_climate(catalog_path: Path, raster_dir: Path) -> int:
+    sampled = sample_climate(
+        catalog_path,
+        raster_dir,
+        progress=lambda message: print(message, file=sys.stderr, flush=True),
+    )
+    print(sampled)
+    return 0
+
+
 def _parse_bounds(value: str) -> Bounds:
     south_s, west_s, north_s, east_s = value.split(",", maxsplit=3)
     return Bounds(
@@ -248,8 +285,9 @@ def _rank(
     origin: Origin | None,
     max_hours: float | None,
     valhalla_url: str,
+    month: int | None,
 ) -> int:
-    ranking = rank_dayhikes(Catalog.open(catalog_path), seeds)
+    ranking = rank_dayhikes(Catalog.open(catalog_path), seeds, month=month)
     if origin is not None and max_hours is not None:
         ranking = filter_by_drive_time(
             ranking,

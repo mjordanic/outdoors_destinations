@@ -1,5 +1,6 @@
 from dayhike.dem import Bounds, fetch_fabdem, sample_dem
 from dayhike.landcover import fetch_worldcover, sample_landcover
+from dayhike.climate import sample_climate
 from dayhike.catalog import (
     AmbiguousSeedName,
     AmenityFact,
@@ -60,6 +61,7 @@ __all__ = [
     "rank_dayhikes",
     "rank_scaled_rows",
     "resolve_seed",
+    "sample_climate",
     "sample_dem",
     "sample_landcover",
     "scale_matrix",

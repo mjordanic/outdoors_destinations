@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from collections.abc import Callable
 from typing import Iterable, Mapping, Protocol, Sequence
@@ -32,6 +32,11 @@ LANDCOVER_FEATURE_NAMES = (
     "bare_fraction",
     "snow_fraction",
 )
+CLIMATE_FEATURE_NAMES = (
+    "temperature_c",
+    "precipitation_mm",
+    "solar_radiation",
+)
 FEATURE_NAMES = (
     "length_m",
     "elevation_min_m",
@@ -47,6 +52,7 @@ FEATURE_NAMES = (
     "drinking_water_count",
     "drinking_water_nearest_m",
     *LANDCOVER_FEATURE_NAMES,
+    *CLIMATE_FEATURE_NAMES,
 )
 
 SAC_SCALE_RANK = {
@@ -98,6 +104,9 @@ class FeatureVector:
     grass_fraction: float | None = None
     bare_fraction: float | None = None
     snow_fraction: float | None = None
+    temperature_c: float | None = None
+    precipitation_mm: float | None = None
+    solar_radiation: float | None = None
 
 
 @dataclass(frozen=True)
@@ -109,6 +118,7 @@ class DayHike:
     difficulty: Difficulty
     feature_vector: FeatureVector
     name_origin: str = NAME_ORIGIN_OSM_NAME
+    climate_months: tuple[tuple[float, float, float] | None, ...] = (None,) * 12
 
 
 @dataclass(frozen=True)
@@ -166,6 +176,7 @@ class Catalog:
     ingest_report: IngestReport
     attribution: str
     scaler: Scaler
+    month_scalers: Mapping[int, Scaler] = field(default_factory=dict)
 
     @classmethod
     def open(cls, path: Path | str) -> Catalog:
@@ -195,6 +206,7 @@ class Catalog:
                 row[1] for row in connection.execute("PRAGMA table_info(feature_vectors)")
             }
             has_landcover = set(LANDCOVER_FEATURE_NAMES) <= feature_columns
+            has_climate = set(CLIMATE_FEATURE_NAMES) <= feature_columns
             vector_select = (
                 "SELECT dayhike_id, length_m, elevation_min_m, elevation_max_m, "
                 "elevation_gain_m, difficulty_ordinal"
@@ -204,6 +216,8 @@ class Catalog:
                     ", tree_fraction, shrub_fraction, grass_fraction, "
                     "bare_fraction, snow_fraction"
                 )
+            if has_climate:
+                vector_select += ", temperature_c, precipitation_mm, solar_radiation"
             vectors = {}
             for row in connection.execute(vector_select + " FROM feature_vectors"):
                 (
@@ -214,6 +228,7 @@ class Catalog:
                     elevation_gain_m,
                     difficulty_ordinal,
                 ) = row[:6]
+                offset = 6
                 if has_landcover:
                     (
                         tree_fraction,
@@ -221,10 +236,15 @@ class Catalog:
                         grass_fraction,
                         bare_fraction,
                         snow_fraction,
-                    ) = row[6:]
+                    ) = row[offset : offset + 5]
+                    offset += 5
                 else:
                     tree_fraction = shrub_fraction = grass_fraction = None
                     bare_fraction = snow_fraction = None
+                if has_climate:
+                    temperature_c, precipitation_mm, solar_radiation = row[offset:]
+                else:
+                    temperature_c = precipitation_mm = solar_radiation = None
                 vectors[dayhike_id] = FeatureVector(
                     length_m=length_m,
                     elevation_min_m=elevation_min_m,
@@ -237,7 +257,31 @@ class Catalog:
                     grass_fraction=grass_fraction,
                     bare_fraction=bare_fraction,
                     snow_fraction=snow_fraction,
+                    temperature_c=temperature_c,
+                    precipitation_mm=precipitation_mm,
+                    solar_radiation=solar_radiation,
                 )
+            climate_months_by_id: dict[int, list[tuple[float, float, float] | None]] = {}
+            catalog_tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            if "climate_months" in catalog_tables:
+                for dayhike_id, month, temperature_c, precipitation_mm, solar_radiation in (
+                    connection.execute(
+                        "SELECT dayhike_id, month, temperature_c, precipitation_mm, "
+                        "solar_radiation FROM climate_months"
+                    )
+                ):
+                    months = climate_months_by_id.setdefault(dayhike_id, [None] * 12)
+                    if 1 <= int(month) <= 12:
+                        months[int(month) - 1] = (
+                            temperature_c,
+                            precipitation_mm,
+                            solar_radiation,
+                        )
             dayhike_columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(dayhikes)")
             }
@@ -262,6 +306,9 @@ class Catalog:
                     difficulty=Difficulty(sac_scale=sac_scale),
                     feature_vector=vectors[dayhike_id],
                     name_origin=name_origin,
+                    climate_months=tuple(
+                        climate_months_by_id.get(dayhike_id, [None] * 12)
+                    ),
                 )
                 for dayhike_id, name, length_m, sac_scale, name_origin in dayhike_rows
             )
@@ -278,11 +325,35 @@ class Catalog:
                     scaler_names.append(name)
                     scaler_mean.append(0.0)
                     scaler_scale.append(1.0)
+            for name in CLIMATE_FEATURE_NAMES:
+                if name not in scaler_names:
+                    scaler_names.append(name)
+                    scaler_mean.append(0.0)
+                    scaler_scale.append(1.0)
             scaler = Scaler(
                 feature_names=tuple(scaler_names),
                 mean=tuple(scaler_mean),
                 scale=tuple(scaler_scale),
             )
+            month_scalers: dict[int, Scaler] = {}
+            if "scaler_month" in catalog_tables:
+                by_month: dict[int, list[tuple[str, float, float]]] = {}
+                for month, feature_name, mean, scale in connection.execute(
+                    "SELECT month, feature_name, mean, scale FROM scaler_month "
+                    "ORDER BY month, position"
+                ):
+                    by_month.setdefault(int(month), []).append(
+                        (feature_name, mean, scale)
+                    )
+                for month, rows in by_month.items():
+                    names = [name for name, _, _ in rows]
+                    means = [mean for _, mean, _ in rows]
+                    scales = [scale for _, _, scale in rows]
+                    month_scalers[month] = Scaler(
+                        feature_names=tuple(names),
+                        mean=tuple(means),
+                        scale=tuple(scales),
+                    )
             return cls(
                 path=path,
                 dayhikes=dayhikes,
@@ -297,6 +368,7 @@ class Catalog:
                 ),
                 attribution=meta["attribution"],
                 scaler=scaler,
+                month_scalers=month_scalers,
             )
         finally:
             connection.close()
@@ -359,16 +431,30 @@ def resolve_seed(catalog: Catalog, name: str) -> int:
     )
 
 
-def rank_dayhikes(catalog: Catalog, seeds: Sequence[str]) -> Ranking:
+def rank_dayhikes(
+    catalog: Catalog, seeds: Sequence[str], *, month: int | None = None
+) -> Ranking:
     """Rank Catalog DayHikes by maximum cosine similarity to named Seeds.
 
     Similarity is cosine of FeatureVectors after the Catalog StandardScaler.
     Seeds are resolved with ``resolve_seed`` and omitted from the Ranking.
+    Optional QueryMonth substitutes that month's climate into the three
+    climate slots and scales those slots on that month's slice.
     """
+    if month is not None:
+        _require_query_month(catalog, month)
     seed_ids = {resolve_seed(catalog, name) for name in seeds}
     ids = [hike.id for hike in catalog.dayhikes]
     names = [hike.name for hike in catalog.dayhikes]
-    scaled = scale_matrix(feature_matrix(catalog.dayhikes), catalog.scaler)
+    matrix = feature_matrix(catalog.dayhikes)
+    if month is None:
+        scaled = scale_matrix(matrix, catalog.scaler)
+    else:
+        matrix = _climate_matrix_for_month(catalog.dayhikes, matrix, month)
+        scaled = scale_matrix(matrix, catalog.scaler)
+        scaled = _rescale_climate_slice(
+            scaled, matrix, catalog.scaler, catalog.month_scalers[month]
+        )
     by_id = {hike.id: hike for hike in catalog.dayhikes}
     return Ranking(
         items=tuple(
@@ -378,6 +464,47 @@ def rank_dayhikes(catalog: Catalog, seeds: Sequence[str]) -> Ranking:
             )
         )
     )
+
+
+def _require_query_month(catalog: Catalog, month: int) -> None:
+    if isinstance(month, bool) or not isinstance(month, int) or month < 1 or month > 12:
+        raise ValueError(f"QueryMonth must be an integer from 1 to 12, got {month!r}")
+    sampled = any(
+        values is not None for hike in catalog.dayhikes for values in hike.climate_months
+    )
+    if not sampled or month not in catalog.month_scalers:
+        raise ValueError("climate has not been sampled")
+
+
+def _climate_matrix_for_month(
+    dayhikes: Sequence[DayHike], matrix: np.ndarray, month: int
+) -> np.ndarray:
+    start = FEATURE_NAMES.index("temperature_c")
+    out = np.array(matrix, dtype=float, copy=True)
+    for index, hike in enumerate(dayhikes):
+        values = hike.climate_months[month - 1]
+        if values is None:
+            out[index, start : start + 3] = np.nan
+        else:
+            out[index, start : start + 3] = values
+    return out
+
+
+def _rescale_climate_slice(
+    scaled: np.ndarray,
+    matrix: np.ndarray,
+    scaler: Scaler,
+    month_scaler: Scaler,
+) -> np.ndarray:
+    out = np.array(scaled, dtype=float, copy=True)
+    for name, mean, scale in zip(
+        month_scaler.feature_names, month_scaler.mean, month_scaler.scale, strict=True
+    ):
+        column = scaler.feature_names.index(name)
+        values = matrix[:, column]
+        missing = np.isnan(values)
+        out[:, column] = np.where(missing, 0.0, (values - mean) / scale)
+    return out
 
 
 _SECONDS_PER_HOUR = 3600.0
@@ -808,6 +935,9 @@ def _feature_row(vector: FeatureVector) -> tuple[float, ...]:
         _missing_as_nan(vector.grass_fraction),
         _missing_as_nan(vector.bare_fraction),
         _missing_as_nan(vector.snow_fraction),
+        _missing_as_nan(vector.temperature_c),
+        _missing_as_nan(vector.precipitation_mm),
+        _missing_as_nan(vector.solar_radiation),
     )
 
 
@@ -945,7 +1075,18 @@ def _write_sqlite(
                 shrub_fraction REAL,
                 grass_fraction REAL,
                 bare_fraction REAL,
-                snow_fraction REAL
+                snow_fraction REAL,
+                temperature_c REAL,
+                precipitation_mm REAL,
+                solar_radiation REAL
+            );
+            CREATE TABLE climate_months (
+                dayhike_id INTEGER NOT NULL REFERENCES dayhikes(id),
+                month INTEGER NOT NULL,
+                temperature_c REAL,
+                precipitation_mm REAL,
+                solar_radiation REAL,
+                PRIMARY KEY (dayhike_id, month)
             );
             CREATE TABLE labels (
                 hiker_id TEXT NOT NULL,
@@ -1014,8 +1155,9 @@ def _write_sqlite(
         connection.executemany(
             "INSERT INTO feature_vectors (dayhike_id, length_m, elevation_min_m, "
             "elevation_max_m, elevation_gain_m, difficulty_ordinal, tree_fraction, "
-            "shrub_fraction, grass_fraction, bare_fraction, snow_fraction) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "shrub_fraction, grass_fraction, bare_fraction, snow_fraction, "
+            "temperature_c, precipitation_mm, solar_radiation) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 (
                     hike.id,
@@ -1029,6 +1171,9 @@ def _write_sqlite(
                     hike.feature_vector.grass_fraction,
                     hike.feature_vector.bare_fraction,
                     hike.feature_vector.snow_fraction,
+                    hike.feature_vector.temperature_c,
+                    hike.feature_vector.precipitation_mm,
+                    hike.feature_vector.solar_radiation,
                 )
                 for hike in dayhikes
             ],

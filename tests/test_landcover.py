@@ -180,7 +180,8 @@ def test_catalog_fractions_use_sampled_vertices_and_keep_uncovered_hikes(
     assert valley.feature_vector.grass_fraction is None
     assert valley.feature_vector.bare_fraction is None
     assert valley.feature_vector.snow_fraction is None
-    assert catalog.scaler.feature_names[-5:] == LANDCOVER_FRACTIONS
+    start = catalog.scaler.feature_names.index("tree_fraction")
+    assert catalog.scaler.feature_names[start : start + 5] == LANDCOVER_FRACTIONS
 
 
 def test_other_class_codes_count_in_denominator_only(tmp_path: Path) -> None:
@@ -359,15 +360,11 @@ def test_landcover_fractions_stay_put_after_ranking(tmp_path: Path) -> None:
         feature_columns = {
             row[1] for row in catalog_db.execute("PRAGMA table_info(feature_vectors)")
         }
-        tables = {
-            row[0]
-            for row in catalog_db.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
-        }
         assert set(LANDCOVER_FRACTIONS) <= feature_columns
         assert "month" not in feature_columns
-        assert not any("month" in name for name in tables)
+        assert (
+            catalog_db.execute("SELECT COUNT(*) FROM climate_months").fetchone()[0] == 0
+        )
     finally:
         catalog_db.close()
 

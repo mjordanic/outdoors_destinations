@@ -24,20 +24,20 @@ ranks. DriveTime stays a filter after Ranking.
 stories 13–24. `CONTEXT.md` ClimateNormal, QueryMonth, FeatureVector, Ranking,
 Seed. WorldClim units: °C, mm, kJ m⁻² day⁻¹.
 
-- [ ] Covered vertices gain twelve GeometryStore climate rows; uncovered
+- [x] Covered vertices gain twelve GeometryStore climate rows; uncovered
       vertices gain none
-- [ ] The Catalog stores hike-level means for months 1–12 and the three regime
+- [x] The Catalog stores hike-level means for months 1–12 and the three regime
       columns; a hike with no samples stays, with those values NULL
-- [ ] Sampling adds missing tables and columns in place and refits the scaler,
+- [x] Sampling adds missing tables and columns in place and refits the scaler,
       including one climate scale slice per month
-- [ ] Ranking with no month uses the regime; ranking with month 7 uses July
+- [x] Ranking with no month uses the regime; ranking with month 7 uses July
       and does not use the June–August temperature
-- [ ] A month outside 1–12 fails; a month with no sampled climate rows fails
+- [x] A month outside 1–12 fails; a month with no sampled climate rows fails
       with a clear message; omitting the month does not fail for that reason
-- [ ] A warm sunny Seed in July ranks nearer a DayHike with similar July
+- [x] A warm sunny Seed in July ranks nearer a DayHike with similar July
       climate than one with a different July, and LandCover still separates a
       forested hike from a barer hotter one
-- [ ] DriveTime filtering still happens after Ranking and is not a
+- [x] DriveTime filtering still happens after Ranking and is not a
       FeatureVector column
-- [ ] Tests use a synthetic raster on the committed fixture and do not
+- [x] Tests use a synthetic raster on the committed fixture and do not
       download WorldClim
