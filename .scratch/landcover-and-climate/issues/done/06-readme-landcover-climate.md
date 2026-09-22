@@ -26,14 +26,14 @@ sample commands beside ingest and DEM sampling.
 notebook-link check in the notebook runner, PRD stories 30–35. ADR-0010.
 WorldCover attribution and Fick and Hijmans 2017.
 
-- [ ] Command order, file locations, and the gitignore list include both
+- [x] Command order, file locations, and the gitignore list include both
       raster directories and the four new commands
-- [ ] The GeometryStore section lists the land-cover class and monthly
+- [x] The GeometryStore section lists the land-cover class and monthly
       climate rows
-- [ ] A dedicated section matches the FABDEM section's shape, including shell
+- [x] A dedicated section matches the FABDEM section's shape, including shell
       and Python
-- [ ] Rank docs show `--month` and the no-month regime
-- [ ] The Python API list includes the new seams and the optional month
-- [ ] Attribution covers WorldCover and WorldClim
-- [ ] The notebook walkthrough table describes the LandCover and QueryMonth
+- [x] Rank docs show `--month` and the no-month regime
+- [x] The Python API list includes the new seams and the optional month
+- [x] Attribution covers WorldCover and WorldClim
+- [x] The notebook walkthrough table describes the LandCover and QueryMonth
       examples

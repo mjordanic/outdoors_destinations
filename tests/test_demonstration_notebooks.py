@@ -176,6 +176,34 @@ def test_readme_points_at_demonstration_notebooks() -> None:
     assert "Notebook walkthrough" in text
 
 
+def test_readme_documents_landcover_and_climate() -> None:
+    text = README.read_text()
+    for command in (
+        "fetch-landcover",
+        "sample-landcover",
+        "fetch-climate",
+        "sample-climate",
+    ):
+        assert command in text
+    assert text.index("sample-dem") < text.index("fetch-landcover")
+    assert "data/landcover/" in text
+    assert "data/climate/" in text
+    assert "vertex_climate" in text
+    assert "--month" in text
+    assert "month=7" in text.replace(" ", "")
+    assert "fetch_worldcover" in text
+    assert "sample_landcover" in text
+    assert "fetch_worldclim" in text
+    assert "sample_climate" in text
+    assert "month=" in text
+    assert "### LandCover and ClimateNormal" in text
+    assert "**When:**" in text.split("### LandCover and ClimateNormal", 1)[1]
+    assert "WorldCover" in text
+    assert "Fick" in text
+    assert "Hijmans" in text
+    assert "QueryMonth" in text
+
+
 def test_notebook_sanity_checks_catalog_counts_length_band_and_map() -> None:
     output, markdown, source = _run_notebooks()
 

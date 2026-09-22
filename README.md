@@ -6,8 +6,8 @@ Origin. DriveTime is not a FeatureVector column.
 
 This is a Python package plus SQLite files on disk. There is no web app, no
 live Overpass query, and no database server to start. You ingest an OSM
-snapshot once, optionally sample a DEM onto the geometries, then rank from
-those files.
+snapshot once, optionally sample a DEM, LandCover, and climate onto the
+geometries, then rank from those files.
 
 ## Install
 
@@ -28,13 +28,17 @@ Every real file under `data/` is built by a command. This is the order:
                          data/catalog.geometry.sqlite     (always, same ingest)
 3. DEM rasters           data/dem/*_FABDEM_V1-2.tif  dayhike fetch-dem
 4. Sample heights        updates both SQLite files   dayhike sample-dem
-5. Rank                  stdout scores               dayhike rank
-6. Optional DriveTime    local Valhalla Docker       rank --origin --max-hours
+5. LandCover rasters     data/landcover/*.tif        dayhike fetch-landcover
+6. Sample LandCover      updates both SQLite files   dayhike sample-landcover
+7. Climate rasters       data/climate/*.tif          dayhike fetch-climate
+8. Sample climate        updates both SQLite files   dayhike sample-climate
+9. Rank                  stdout scores               dayhike rank [--month]
+10. Optional DriveTime   local Valhalla Docker       rank --origin --max-hours
 ```
 
 ```bash
 uv sync
-mkdir -p data/osm data/dem
+mkdir -p data/osm data/dem data/landcover data/climate
 
 # 1. Snapshot (Geofabrik PBF). Ranking never talks to OpenStreetMap.
 uv run dayhike fetch-extracts --dest data/osm
@@ -46,10 +50,16 @@ uv run dayhike ingest data/osm --catalog data/catalog.sqlite
 uv run dayhike fetch-dem          # default bbox: Alps + Dinarides
 uv run dayhike sample-dem         # writes heights into the two SQLite files
 
-# 5. Rank by Seed (no Valhalla).
+# 5–8. LandCover and climate. Skip these if length, elevation, and amenities are enough.
+uv run dayhike fetch-landcover    # ESA WorldCover 2021 tiles
+uv run dayhike sample-landcover
+uv run dayhike fetch-climate      # WorldClim 2.1 monthly normals
+uv run dayhike sample-climate
+
+# 9. Rank by Seed (no Valhalla). Omit --month for the June–August climate regime.
 uv run dayhike rank --catalog data/catalog.sqlite "Exact Name From The Catalog"
 
-# 6. Optional: car DriveTime filter (needs Docker Valhalla, see below).
+# 10. Optional: car DriveTime filter (needs Docker Valhalla, see below).
 uv run dayhike rank --catalog data/catalog.sqlite \
   --origin 45.8,15.97 --max-hours 2 \
   "Exact Name From The Catalog"
@@ -60,18 +70,24 @@ What each step **does not** do:
 | Step | Writes | Does not |
 | --- | --- | --- |
 | `fetch-extracts` | `data/osm/*.pbf` | Catalog, GeometryStore, DEM |
-| `ingest` | Catalog + GeometryStore from the PBF | download OSM; download DEM; talk to Valhalla |
+| `ingest` | Catalog + GeometryStore from the PBF | download OSM; download rasters; talk to Valhalla |
 | `fetch-dem` | GeoTIFFs in `data/dem/` | touch SQLite; sample heights |
 | `sample-dem` | `vertices.ele` + Catalog elevation + scaler | download rasters; rewrite hike list |
-| `rank` | nothing on disk | fetch OSM or DEM |
+| `fetch-landcover` | GeoTIFFs in `data/landcover/` | touch SQLite; sample classes |
+| `sample-landcover` | `vertices.landcover` + Catalog fractions + scaler | download rasters; rewrite hike list |
+| `fetch-climate` | GeoTIFFs in `data/climate/` | touch SQLite; sample climate |
+| `sample-climate` | `vertex_climate` + Catalog monthly means + scaler | download rasters; rewrite hike list |
+| `rank` | nothing on disk | fetch OSM or rasters |
 
-Ingest **replaces** the Catalog (it does not append). `sample-dem` does **not**
-replace the Catalog: it only overwrites elevation columns on hikes whose
-geometry sits on a downloaded tile.
+Ingest **replaces** the Catalog (it does not append). `sample-dem`,
+`sample-landcover`, and `sample-climate` do **not** replace the Catalog: they
+only overwrite sampled columns on hikes whose geometry sits on a downloaded
+tile.
 
 For a continent PBF (for example `europe-latest.osm.pbf`), ingest is the same
-command. After ingest, widen DEM coverage with
-`dayhike fetch-dem --bounds south,west,north,east` then `sample-dem` again.
+command. After ingest, widen raster coverage with
+`dayhike fetch-dem --bounds south,west,north,east` (same `--bounds` on
+`fetch-landcover` and `fetch-climate`) then sample again.
 
 Nothing is fetched from the network at rank time except that optional Valhalla
 call on your machine.
@@ -91,6 +107,8 @@ call on your machine.
 | `data/valhalla/mjolnir.drive-time.json` | Valhalla flags: no walk/bike/driveways | yes |
 | `data/valhalla/*.osm.pbf` | Road extract for tiles | **gitignored** |
 | `data/dem/` | FABDEM 1° GeoTIFFs for elevation | **gitignored** |
+| `data/landcover/` | ESA WorldCover 2021 map GeoTIFFs | **gitignored** |
+| `data/climate/` | WorldClim 2.1 monthly GeoTIFFs | **gitignored** |
 
 `uv sync` does **not** download OSM and does **not** install Valhalla. Tests
 never read `data/` and never start Docker. They rebuild a Catalog in a temp
@@ -186,13 +204,15 @@ print(resolve_seed(catalog, "ridge walk"))  # 1001; case-insensitive exact match
 | `dayhikes` | OSM relation id, Seed label, `name_origin`, length_m, Difficulty (`sac_scale` or NULL) |
 | `trailheads` | lat/lon used for amenities and DriveTime |
 | `amenity_facts` | per DayHike: hut, parking, restaurant_cafe, drinking_water (count + nearest_m) |
-| `feature_vectors` | length, elevation min/max/gain, Difficulty ordinal |
+| `feature_vectors` | length, elevation min/max/gain, Difficulty ordinal, LandCover fractions, regime climate |
+| `climate_months` | hike-level monthly temperature (°C), precipitation (mm), solar radiation |
 | `scaler` | mean and scale for each FeatureVector column |
 | `labels` | vacant (`hiker_id`, `dayhike_id`, `score`, `created_at`) for a later website |
 | `catalog_meta` | OSM attribution and the ingest report JSON |
 
 Zero amenity counts are stored (Valley Path has four rows with `count=0`).
-Missing elevation and missing `sac_scale` are SQL NULL, not zero.
+Missing elevation, missing `sac_scale`, missing LandCover fractions, and
+missing climate are SQL NULL, not zero.
 
 Ranking reads **only** this file. Polylines and raw amenity points live in
 the GeometryStore beside it.
@@ -203,8 +223,8 @@ The GeometryStore is a sidecar SQLite file. It is **not** pulled from a
 server. `dayhike ingest` always writes it next to the Catalog:
 `data/catalog.sqlite` → `data/catalog.geometry.sqlite`
 (`geometry_store_path_for`). There is no fetch-geometry command. Rank does
-not read it. If you only have `catalog.sqlite`, re-run ingest; `sample-dem`
-cannot create the sidecar by itself.
+not read it. If you only have `catalog.sqlite`, re-run ingest; `sample-dem`,
+`sample-landcover`, and `sample-climate` cannot create the sidecar by themselves.
 
 It holds **Catalog DayHikes only** (dropped length/network relations are
 absent):
@@ -212,25 +232,33 @@ absent):
 | Table | Contents |
 | --- | --- |
 | `dayhikes` | id, Seed label, `name_origin`, length, `unconnected_m`, Difficulty, member list, relation tags |
-| `vertices` | ordered DayHikeGeometry: `seq`, OSM `node_id`, lat, lon, `ele` |
+| `vertices` | ordered DayHikeGeometry: `seq`, OSM `node_id`, lat, lon, `ele`, `landcover` |
+| `vertex_climate` | per sampled vertex per month 1–12: temperature, precipitation, solar radiation |
 | `ways` | member ways in order, node id lists, way tags, `in_chain` |
 | `amenities` | raw points: OSM id, kind, lat, lon, tags |
-| `geometry_meta` | OSM attribution |
+| `geometry_meta` | OSM attribution; WorldCover and WorldClim after those samples |
 
 Member ways that do not share an endpoint with the assembled chain stay in
 `ways` with `in_chain = 0`. Their real length is `dayhikes.unconnected_m`.
 Catalog `length_m` and `vertices` follow the connected chain only (no jump
 edges). See [`docs/adr/0009-no-jump-edges.md`](docs/adr/0009-no-jump-edges.md).
 
-At ingest, `vertices.ele` is OSM `ele` on that node, or NULL. After
+At ingest, `vertices.ele` is OSM `ele` on that node, or NULL, and
+`vertices.landcover` is NULL. `vertex_climate` is empty. After
 `sample-dem`, vertices that sit on a FABDEM tile get raster heights in
-metres. Amenities include hut, parking, restaurant/cafe, drinking water,
-Viewpoint, Peak, and Shelter. Catalog AmenityFacts still use only the first
-four kinds, counted from the Trailhead.
+metres. After `sample-landcover`, covered vertices get a WorldCover class
+code (10 tree, 20 shrub, 30 grass, 60 bare, 70 permanent snow; other codes
+stay in the leftover share). After `sample-climate`, each covered vertex
+gets twelve monthly rows (°C, mm, kJ m⁻² day⁻¹). Vertices with no covering
+tile stay unset. Amenities include hut, parking, restaurant/cafe, drinking
+water, Viewpoint, Peak, and Shelter. Catalog AmenityFacts still use only the
+first four kinds, counted from the Trailhead.
 
 ```bash
 sqlite3 data/catalog.geometry.sqlite \
-  'SELECT dayhike_id, seq, latitude, longitude, ele FROM vertices LIMIT 5;'
+  'SELECT dayhike_id, seq, latitude, longitude, ele, landcover FROM vertices LIMIT 5;'
+sqlite3 data/catalog.geometry.sqlite \
+  'SELECT dayhike_id, seq, month, temperature_c, precipitation_mm, solar_radiation FROM vertex_climate LIMIT 5;'
 sqlite3 data/catalog.geometry.sqlite \
   'SELECT kind, COUNT(*) FROM amenities GROUP BY 1;'
 ```
@@ -266,21 +294,24 @@ sqlite3 data/catalog.sqlite 'SELECT id, name, length_m FROM dayhikes;'
 
 Do not hand-edit FeatureVectors and expect Ranking to stay consistent unless
 you also change `scaler`. The supported write paths are `build_catalog` /
-`dayhike ingest` (full Catalog) and `dayhike sample-dem` (elevation columns
-and scaler only).
+`dayhike ingest` (full Catalog), `dayhike sample-dem` (elevation columns and
+scaler), `dayhike sample-landcover` (LandCover fractions and scaler), and
+`dayhike sample-climate` (climate columns, monthly table, and scaler).
 
 ## 3. Rank by Seed
 
 Seed names must exist in the Catalog (unknown or ambiguous names fail; there
 is no fuzzy lookup). The Seed itself is omitted from the result list.
 
-Walk through one Seed, two Seeds (max-not-mean), unknown names, and a stubbed
-DriveTime filter in
+Walk through one Seed, two Seeds (max-not-mean), unknown names, a stubbed
+DriveTime filter, Ranking with no month and with QueryMonth 7, and LandCover
+order in
 [`notebooks/03_ranking.ipynb`](notebooks/03_ranking.ipynb). Try new columns in
 [`notebooks/04_rank_feature_lab.ipynb`](notebooks/04_rank_feature_lab.ipynb).
 
 ```bash
 uv run dayhike rank --catalog data/catalog.sqlite "Ridge Walk"
+uv run dayhike rank --catalog data/catalog.sqlite --month 7 "Ridge Walk"
 ```
 
 Prints DayHike id, name, and similarity score (tab-separated):
@@ -291,6 +322,13 @@ Prints DayHike id, name, and similarity score (tab-separated):
 
 The fixture Catalog now has several DayHikes, so Ridge Walk has more than one neighbour. Scores are cosine similarity after scaling.
 
+Omit `--month` to score climate as the June–August regime (mean temperature,
+mean monthly precipitation, June–August solar radiation). Pass `--month 7`
+to fill those three slots from July. QueryMonth is an integer from 1 to 12.
+A month before `sample-climate` fails with a message that climate has not
+been sampled. Omitting the month never fails for that reason. LandCover
+fractions do not change with the month.
+
 Python:
 
 ```python
@@ -298,6 +336,7 @@ from dayhike import Catalog, rank_dayhikes
 
 catalog = Catalog.open("data/catalog.sqlite")
 ranking = rank_dayhikes(catalog, ["Ridge Walk"])
+july = rank_dayhikes(catalog, ["Ridge Walk"], month=7)
 for item in ranking.items:
     print(item.dayhike.id, item.dayhike.name, item.score)
 ```
@@ -508,6 +547,19 @@ uv run dayhike fetch-dem
 uv run dayhike sample-dem
 ```
 
+**9–12. LandCover and climate (optional, after ingest)**
+
+`fetch-landcover` / `sample-landcover` and `fetch-climate` / `sample-climate`
+fill LandCover fractions and monthly climate the same way elevation is
+filled. See **LandCover and ClimateNormal** below.
+
+```bash
+uv run dayhike fetch-landcover
+uv run dayhike sample-landcover
+uv run dayhike fetch-climate
+uv run dayhike sample-climate
+```
+
 ### Walkthrough B — every PRD region
 
 Downloads all eight PBFs into `data/osm/`, then merges them in one ingest.
@@ -600,6 +652,87 @@ from dayhike.dem import DEFAULT_DEM_BOUNDS, DEFAULT_DEM_DIR
 
 fetch_fabdem(DEFAULT_DEM_DIR, DEFAULT_DEM_BOUNDS)
 sample_dem("data/catalog.sqlite", DEFAULT_DEM_DIR)
+```
+
+### LandCover and ClimateNormal
+
+Ingest does **not** download WorldCover or WorldClim. A fresh Catalog has
+NULL LandCover fractions, NULL regime climate, and no `climate_months` rows.
+A fresh GeometryStore has NULL `vertices.landcover` and an empty
+`vertex_climate` table. Ranking without a month still works on that Catalog.
+
+**When:** after a successful ingest, when both `data/catalog.sqlite` and
+`data/catalog.geometry.sqlite` exist. Same moment as FABDEM sampling. You
+can sample DEM, LandCover, and climate in any order. Ranking with `--month`
+needs climate sampled.
+
+**Pull (rasters only):** `dayhike fetch-landcover` downloads ESA WorldCover
+2021 v200 3×3° Map Cloud-Optimized GeoTIFFs into `data/landcover/`
+(gitignored). `dayhike fetch-climate` downloads WorldClim 2.1 30 arc-second
+monthly GeoTIFFs for mean temperature (°C), precipitation (mm), and solar
+radiation (kJ m⁻² day⁻¹) into `data/climate/` (gitignored), from the three
+base zips `wc2.1_30s_tavg`, `wc2.1_30s_prec`, and `wc2.1_30s_srad`, then
+clips them to the bbox. Default `--bounds` is `41.8,5.9,50.6,20.4` (Alps +
+Dinarides, same as `fetch-dem`). Tiles already on disk are skipped.
+`fetch-landcover` skips a tile the server does not have. Neither command
+opens SQLite.
+
+```bash
+uv run dayhike fetch-landcover
+uv run dayhike fetch-climate
+# Wider than the default, e.g. a Europe Catalog:
+uv run dayhike fetch-landcover --bounds 32.6,-31.3,71.2,46.4
+uv run dayhike fetch-climate --bounds 32.6,-31.3,71.2,46.4
+```
+
+`--dest` overrides `data/landcover/` or `data/climate/`. WorldCover is ESA
+WorldCover 2021. WorldClim 2.1 normals are 1970–2000.
+
+**Store and update SQLite:** `dayhike sample-landcover` and
+`dayhike sample-climate` read those GeoTIFFs and:
+
+1. `sample-landcover` writes the map class onto GeometryStore
+   `vertices.landcover` for vertices that fall on a downloaded tile.
+   Uncovered vertices stay NULL. It then writes Catalog
+   `tree_fraction` / `shrub_fraction` / `grass_fraction` / `bare_fraction` /
+   `snow_fraction` (each GeometryStore vertex counted once; crop, built-up,
+   water, wetland, and moss stay in the leftover share) and refits the
+   Catalog `scaler`.
+2. `sample-climate` writes twelve months onto GeometryStore `vertex_climate`
+   for covered vertices. Uncovered vertices get no climate rows. It then
+   writes Catalog `climate_months` (hike-level means) and the three regime
+   columns: June–August mean temperature, mean of the twelve monthly
+   precipitations, June–August solar radiation. It refits the main scaler
+   (regime climate in those three slots) and twelve month slices for the
+   climate names only.
+
+They do not add or drop DayHikes, do not change amenities, and do not
+download tiles. `--catalog` defaults to `data/catalog.sqlite`.
+`--landcover` defaults to `data/landcover/`; `--climate` defaults to
+`data/climate/`. Re-ingest replaces both SQLite files and clears samples.
+
+```bash
+uv run dayhike sample-landcover
+uv run dayhike sample-climate
+```
+
+After this, `rank_dayhikes` uses LandCover fractions. With no QueryMonth it
+uses the regime climate columns. With `month=7` it substitutes July's
+hike-level means into the three climate slots and scales those three on
+July's slice. LandCover does not change with the month.
+
+Python:
+
+```python
+from dayhike import fetch_worldcover, sample_landcover, fetch_worldclim, sample_climate
+from dayhike.climate import DEFAULT_CLIMATE_DIR
+from dayhike.dem import DEFAULT_DEM_BOUNDS
+from dayhike.landcover import DEFAULT_LANDCOVER_DIR
+
+fetch_worldcover(DEFAULT_LANDCOVER_DIR, DEFAULT_DEM_BOUNDS)
+sample_landcover("data/catalog.sqlite", DEFAULT_LANDCOVER_DIR)
+fetch_worldclim(DEFAULT_CLIMATE_DIR, DEFAULT_DEM_BOUNDS)
+sample_climate("data/catalog.sqlite", DEFAULT_CLIMATE_DIR)
 ```
 
 ### Walkthrough C — browser only, then ingest
@@ -942,15 +1075,18 @@ The same seams the CLI wraps:
   (`progress=` for stage lines, `fresh=True` to ignore a work file)
 - `Catalog.open` — load an already-built SQLite Catalog
 - `resolve_seed` — Seed name → DayHike id (must exist in the Catalog)
-- `rank_dayhikes` — Catalog + Seeds → Ranking
+- `rank_dayhikes` — Catalog + Seeds → Ranking (`month=` QueryMonth 1–12; omit for the June–August climate regime)
 - `rank_scaled_rows` / `fit_scaler_from_matrix` / `scale_matrix` / `cosine_similarity` — same scoring on an experimental feature matrix
 - `geometry_store_path_for` — sidecar path for DayHikeGeometry
 - `fetch_fabdem` / `sample_dem` — local FABDEM tiles → GeometryStore vertices and Catalog elevation
+- `fetch_worldcover` / `sample_landcover` — local WorldCover tiles → GeometryStore classes and Catalog fractions
+- `fetch_worldclim` / `sample_climate` — local WorldClim tiles → GeometryStore monthly climate and Catalog means
 - `filter_by_drive_time` — Ranking filtered by DriveTime from Origin
 - `ValhallaMatrixClient` — HTTP adapter for `/sources_to_targets`
 
 CLI: `dayhike ingest`, `dayhike fetch-extracts`, `dayhike fetch-dem`,
-`dayhike sample-dem`, `dayhike rank`.
+`dayhike sample-dem`, `dayhike fetch-landcover`, `dayhike sample-landcover`,
+`dayhike fetch-climate`, `dayhike sample-climate`, `dayhike rank` (`--month`).
 
 Docstrings on those functions use the glossary in `CONTEXT.md`.
 Examples: [`01`](notebooks/01_raw_data_and_ingestion.ipynb) ingest,
@@ -970,19 +1106,29 @@ uv run jupyter notebook notebooks/01_raw_data_and_ingestion.ipynb
 | Notebook | What you will find |
 | --- | --- |
 | [`notebooks/01_raw_data_and_ingestion.ipynb`](notebooks/01_raw_data_and_ingestion.ipynb) | OSM fixture vs a real snapshot, ingest stages, keep/drop, resume after a kill. |
-| [`notebooks/02_catalog.ipynb`](notebooks/02_catalog.ipynb) | SQLite Catalog + GeometryStore: schema, pandas, maps, DayHike objects. Uses `data/catalog.sqlite` when present. |
-| [`notebooks/03_ranking.ipynb`](notebooks/03_ranking.ipynb) | Production ranking: cosine after scaling, max-not-mean, unknown Seeds, stubbed DriveTime. |
+| [`notebooks/02_catalog.ipynb`](notebooks/02_catalog.ipynb) | SQLite Catalog + GeometryStore: schema (including LandCover fractions, regime climate, and `climate_months`), pandas, maps, DayHike objects. Uses `data/catalog.sqlite` when present. |
+| [`notebooks/03_ranking.ipynb`](notebooks/03_ranking.ipynb) | Production ranking: cosine after scaling, max-not-mean, unknown Seeds, stubbed DriveTime, Ranking with no month and with QueryMonth 7, LandCover order. |
 | [`notebooks/04_rank_feature_lab.ipynb`](notebooks/04_rank_feature_lab.ipynb) | Sandbox to add FeatureVector columns, ablate them, and compare order to production. SolarAspect lives here. |
-| [`notebooks/04a_geometry.ipynb`](notebooks/04a_geometry.ipynb) | GeometryStore tables as GeoPandas: vertices, amenities, DayHike lines, member ways, leftover `in_chain`. |
+| [`notebooks/04a_geometry.ipynb`](notebooks/04a_geometry.ipynb) | GeometryStore tables as GeoPandas: vertices, amenities, DayHike lines, member ways, leftover `in_chain`, per-vertex land-cover classes and `vertex_climate` (synthetic rasters, no download). |
 
 `01` and `03` always rebuild the committed OSM fixture (no Geofabrik, no live
 Valhalla). `02`, `04`, and `04a` open your local Catalog and GeometryStore when
 those files exist. Tests force the fixture so they do not load a Europe Catalog.
-## Attribution (ODbL)
+
+## Attribution
 
 OpenStreetMap data is © OpenStreetMap contributors, licensed under the Open
 Database License (ODbL). The Catalog stores that attribution next to the
 DayHikes.
+
+ESA WorldCover 2021: © ESA WorldCover project 2021 / contains modified
+Copernicus Sentinel data (2021) processed by ESA WorldCover consortium.
+Written into GeometryStore `geometry_meta` when LandCover has been sampled.
+
+WorldClim 2.1: Fick, S.E. and R.J. Hijmans, 2017. WorldClim 2: new 1km
+spatial resolution climate surfaces for global land areas. International
+Journal of Climatology 37 (12): 4302-4315. Written into GeometryStore
+`geometry_meta` when climate has been sampled.
 
 ## What is gitignored under `data/`
 
@@ -993,6 +1139,8 @@ Bulky local files stay out of git:
 - `data/catalog.sqlite.work` — in-progress ingest (resume handle)
 - `data/osm/` — Geofabrik / osmium extracts
 - `data/dem/` — FABDEM GeoTIFFs
+- `data/landcover/` — ESA WorldCover GeoTIFFs
+- `data/climate/` — WorldClim monthly GeoTIFFs
 - `data/valhalla/` — road PBF and routing tiles (`compose.yaml`,
   `prepare-roads.sh`, `prepare-highways.sh`, and `mjolnir.drive-time.json`
   are tracked)
