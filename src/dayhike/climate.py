@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import math
 import re
+import shutil
 import sqlite3
+import tempfile
+import time
+import zipfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 import numpy as np
 
@@ -16,9 +22,13 @@ from dayhike.catalog import (
     fit_scaler_from_matrix,
     geometry_store_path_for,
 )
+from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS
 
 Progress = Callable[[str], None]
+Retrieve = Callable[[str, str], None]
 DEFAULT_CLIMATE_DIR = Path("data/climate")
+WORLDCLIM_BASE = "https://geodata.ucdavis.edu/climate/worldclim/2_1/base"
+WORLDCLIM_VARIABLES = ("tavg", "prec", "srad")
 WORLDCLIM_ATTRIBUTION = (
     "Fick, S.E. and R.J. Hijmans, 2017. WorldClim 2: new 1km spatial resolution "
     "climate surfaces for global land areas. International Journal of Climatology "
@@ -29,6 +39,48 @@ _HIKE_IN_CHUNK = 500
 _CLIMATE_FILE = re.compile(
     r"^wc2\.1_30s_(tavg|prec|srad)_(\d{1,2})\.tiff?$", re.IGNORECASE
 )
+
+
+def worldclim_zip_url(variable: str) -> str:
+    """HTTPS URL of one WorldClim 2.1 30 arc-second monthly zip (tavg, prec, or srad)."""
+    return f"{WORLDCLIM_BASE}/wc2.1_30s_{variable}.zip"
+
+
+def fetch_worldclim(
+    dest: Path | str,
+    bounds: Bounds = DEFAULT_DEM_BOUNDS,
+    *,
+    retrieve: Retrieve | None = None,
+    progress: Progress | None = None,
+) -> list[Path]:
+    """Download missing WorldClim 2.1 30s monthly GeoTIFFs into dest.
+
+    Extracts the three global monthly zips and clips each GeoTIFF to bounds
+    (default: the DEM Alps+Dinarides bbox).
+    """
+    dest = Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    retrieve = retrieve or _download
+    paths: list[Path] = []
+    for variable in WORLDCLIM_VARIABLES:
+        present = _present_month_tifs(dest, variable)
+        paths.extend(present)
+        if len(present) == 12:
+            continue
+        if progress is not None:
+            progress(f"climate fetch: {variable}")
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_path = Path(tmp) / f"wc2.1_30s_{variable}.zip"
+            try:
+                retrieve(worldclim_zip_url(variable), str(zip_path))
+            except FileNotFoundError:
+                continue
+            if not zip_path.exists() or zip_path.stat().st_size == 0:
+                continue
+            paths.extend(
+                _extract_worldclim_month_tifs(zip_path, dest, variable, bounds)
+            )
+    return sorted(set(paths))
 
 
 def sample_climate(
@@ -387,3 +439,99 @@ def _ensure_column(
     existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
     if column not in existing:
         connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
+def _month_tif(dest: Path, variable: str, month: int) -> Path:
+    return dest / f"wc2.1_30s_{variable}_{month:02d}.tif"
+
+
+def _present_month_tifs(dest: Path, variable: str) -> list[Path]:
+    paths: list[Path] = []
+    for month in range(1, 13):
+        path = _month_tif(dest, variable, month)
+        if path.exists() and path.stat().st_size > 0:
+            paths.append(path)
+    return paths
+
+
+def _extract_worldclim_month_tifs(
+    zip_path: Path, dest: Path, variable: str, bounds: Bounds
+) -> list[Path]:
+    extracted: list[Path] = []
+    with zipfile.ZipFile(zip_path) as archive:
+        for info in archive.infolist():
+            name = Path(info.filename).name
+            match = _CLIMATE_FILE.match(name)
+            if match is None or match.group(1).lower() != variable:
+                continue
+            month = int(match.group(2))
+            if not 1 <= month <= 12:
+                continue
+            out = _month_tif(dest, variable, month)
+            if out.exists() and out.stat().st_size > 0:
+                continue
+            with archive.open(info) as source, out.open("wb") as target:
+                shutil.copyfileobj(source, target)
+            _clip_to_bounds(out, bounds)
+            if out.exists() and out.stat().st_size > 0:
+                extracted.append(out)
+    return extracted
+
+
+def _clip_to_bounds(path: Path, bounds: Bounds) -> None:
+    import rasterio
+    from rasterio.windows import from_bounds
+
+    with rasterio.open(path) as dataset:
+        west = max(bounds.west, float(dataset.bounds.left))
+        south = max(bounds.south, float(dataset.bounds.bottom))
+        east = min(bounds.east, float(dataset.bounds.right))
+        north = min(bounds.north, float(dataset.bounds.top))
+        if west >= east or south >= north:
+            clipped = None
+        else:
+            window = from_bounds(west, south, east, north, dataset.transform)
+            window = window.round_offsets().round_lengths()
+            if window.width <= 0 or window.height <= 0:
+                clipped = None
+            else:
+                data = dataset.read(1, window=window)
+                profile = dataset.profile.copy()
+                profile.update(
+                    height=data.shape[0],
+                    width=data.shape[1],
+                    transform=dataset.window_transform(window),
+                )
+                clipped = (data, profile)
+    if clipped is None:
+        path.unlink()
+        return
+    data, profile = clipped
+    tmp = path.with_name(path.name + ".clip")
+    with rasterio.open(tmp, "w", **profile) as out:
+        out.write(data, 1)
+    tmp.replace(path)
+
+
+def _download(url: str, filename: str) -> None:
+    dest = Path(filename)
+    tmp = dest.with_name(dest.name + ".part")
+    request = Request(url, headers={"User-Agent": "dayhike"})
+    last_error: Exception | None = None
+    for attempt in range(5):
+        try:
+            with urlopen(request, timeout=120) as source, tmp.open("wb") as out:
+                shutil.copyfileobj(source, out)
+            tmp.replace(dest)
+            return
+        except HTTPError as exc:
+            tmp.unlink(missing_ok=True)
+            if exc.code == 404:
+                raise FileNotFoundError(url) from exc
+            last_error = exc
+        except (URLError, TimeoutError, OSError) as exc:
+            tmp.unlink(missing_ok=True)
+            last_error = exc
+        time.sleep(min(2**attempt, 16))
+    assert last_error is not None
+    raise last_error

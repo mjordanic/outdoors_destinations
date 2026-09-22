@@ -12,6 +12,7 @@ __pycache__/
 data/osm/
 data/dem/
 data/landcover/
+data/climate/
 data/valhalla/*
 !data/valhalla/compose.yaml
 !data/valhalla/mjolnir.drive-time.json

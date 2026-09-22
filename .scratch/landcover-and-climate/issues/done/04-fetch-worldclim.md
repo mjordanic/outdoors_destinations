@@ -18,10 +18,10 @@ reads. The default coverage matches the DEM bbox.
 stories 26–29. WorldClim 2.1 base zips `wc2.1_30s_tavg`, `wc2.1_30s_prec`,
 and `wc2.1_30s_srad`.
 
-- [ ] Fetch stores the twelve monthly GeoTIFFs for temperature, precipitation,
+- [x] Fetch stores the twelve monthly GeoTIFFs for temperature, precipitation,
       and solar radiation
-- [ ] A file already present is not downloaded again
-- [ ] The command does not require a Catalog
-- [ ] `data/climate/` is gitignored
-- [ ] Tests lock the download locations and the skip rule and do not download
+- [x] A file already present is not downloaded again
+- [x] The command does not require a Catalog
+- [x] `data/climate/` is gitignored
+- [x] Tests lock the download locations and the skip rule and do not download
       the real normals

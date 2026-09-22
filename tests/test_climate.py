@@ -6,6 +6,8 @@ import numpy as np
 import pytest
 
 from dayhike import Catalog, build_catalog, geometry_store_path_for, rank_dayhikes, sample_climate
+from dayhike.climate import fetch_worldclim, worldclim_zip_url
+from dayhike.dem import Bounds
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
 CLIMATE_FEATURES = ("temperature_c", "precipitation_mm", "solar_radiation")
@@ -56,6 +58,43 @@ def _write_climate_tifs(
                 nodata=-9999.0,
             ) as dataset:
                 dataset.write(data, 1)
+
+
+def _zip_worldclim_variable(zip_path: Path, src_dir: Path, variable: str) -> None:
+    import zipfile
+
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        for month in range(1, 13):
+            tif = src_dir / f"wc2.1_30s_{variable}_{month:02d}.tif"
+            zf.write(tif, tif.name)
+
+
+def _retrieve_worldclim_zip(
+    url: str,
+    filename: str,
+    *,
+    west: float,
+    south: float,
+    east: float,
+    north: float,
+    tavg: float | tuple[float, ...] = 10.0,
+    prec: float | tuple[float, ...] = 80.0,
+    srad: float | tuple[float, ...] = 15000.0,
+) -> None:
+    variable = Path(url).name.removeprefix("wc2.1_30s_").removesuffix(".zip")
+    staging = Path(filename).parent / variable
+    staging.mkdir(exist_ok=True)
+    _write_climate_tifs(
+        staging,
+        west=west,
+        south=south,
+        east=east,
+        north=north,
+        tavg=tavg,
+        prec=prec,
+        srad=srad,
+    )
+    _zip_worldclim_variable(Path(filename), staging, variable)
 
 
 def test_ingest_creates_empty_climate_and_does_not_need_a_raster(
@@ -578,3 +617,120 @@ def test_cli_rank_month_fails_before_climate_is_sampled(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "climate has not been sampled" in result.stderr
+
+
+def test_worldclim_zip_url_points_at_ucdavis_30s_base_zips() -> None:
+    assert worldclim_zip_url("tavg") == (
+        "https://geodata.ucdavis.edu/climate/worldclim/2_1/base/wc2.1_30s_tavg.zip"
+    )
+    assert worldclim_zip_url("prec") == (
+        "https://geodata.ucdavis.edu/climate/worldclim/2_1/base/wc2.1_30s_prec.zip"
+    )
+    assert worldclim_zip_url("srad") == (
+        "https://geodata.ucdavis.edu/climate/worldclim/2_1/base/wc2.1_30s_srad.zip"
+    )
+
+
+def test_fetch_worldclim_extracts_missing_months_and_skips_existing(
+    tmp_path: Path,
+) -> None:
+    recorded: list[str] = []
+    dest = tmp_path / "climate"
+    dest.mkdir()
+    for month in range(1, 13):
+        (dest / f"wc2.1_30s_tavg_{month:02d}.tif").write_bytes(b"already-tavg")
+    existing_prec = dest / "wc2.1_30s_prec_01.tif"
+    existing_prec.write_bytes(b"already-prec")
+
+    def fake_retrieve(url: str, filename: str) -> None:
+        recorded.append(url)
+        _retrieve_worldclim_zip(
+            url, filename, west=14.99, south=44.99, east=15.05, north=45.12
+        )
+
+    paths = fetch_worldclim(dest, retrieve=fake_retrieve)
+
+    assert recorded == [worldclim_zip_url("prec"), worldclim_zip_url("srad")]
+    assert (dest / "wc2.1_30s_tavg_01.tif").read_bytes() == b"already-tavg"
+    assert existing_prec.read_bytes() == b"already-prec"
+    assert (dest / "wc2.1_30s_prec_02.tif").stat().st_size > 0
+    assert (dest / "wc2.1_30s_srad_12.tif").stat().st_size > 0
+    assert dest / "wc2.1_30s_tavg_01.tif" in paths
+    assert existing_prec in paths
+    assert dest / "wc2.1_30s_srad_12.tif" in paths
+
+
+def test_fetch_worldclim_writes_month_tifs_sample_climate_reads(
+    tmp_path: Path,
+) -> None:
+    catalog_path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, catalog_path)
+    dest = tmp_path / "climate"
+
+    def fake_retrieve(url: str, filename: str) -> None:
+        _retrieve_worldclim_zip(
+            url,
+            filename,
+            west=14.99,
+            south=44.99,
+            east=15.05,
+            north=45.12,
+            tavg=12.5,
+            prec=90.0,
+            srad=18000.0,
+        )
+
+    paths = fetch_worldclim(dest, retrieve=fake_retrieve)
+
+    assert len(paths) == 36
+    assert dest / "wc2.1_30s_tavg_07.tif" in paths
+    assert dest / "wc2.1_30s_prec_01.tif" in paths
+    assert dest / "wc2.1_30s_srad_12.tif" in paths
+    assert sample_climate(catalog_path, dest) > 0
+
+
+def test_fetch_worldclim_clips_to_requested_bounds(tmp_path: Path) -> None:
+    import rasterio
+
+    dest = tmp_path / "climate"
+    requested = Bounds(south=45.0, west=15.0, north=45.2, east=15.2)
+
+    def fake_retrieve(url: str, filename: str) -> None:
+        _retrieve_worldclim_zip(
+            url, filename, west=14.9, south=44.9, east=15.3, north=45.3
+        )
+
+    fetch_worldclim(dest, requested, retrieve=fake_retrieve)
+
+    with rasterio.open(dest / "wc2.1_30s_tavg_01.tif") as dataset:
+        assert dataset.bounds.left == pytest.approx(15.0, abs=0.06)
+        assert dataset.bounds.bottom == pytest.approx(45.0, abs=0.06)
+        assert dataset.bounds.right == pytest.approx(15.2, abs=0.06)
+        assert dataset.bounds.top == pytest.approx(45.2, abs=0.06)
+
+
+def test_fetch_worldclim_skips_missing_remote_zips(tmp_path: Path) -> None:
+    def missing(_url: str, _filename: str) -> None:
+        raise FileNotFoundError("404")
+
+    paths = fetch_worldclim(tmp_path, retrieve=missing)
+
+    assert paths == []
+    assert not (tmp_path / "wc2.1_30s_tavg_01.tif").exists()
+
+
+def test_cli_fetch_climate_does_not_need_a_catalog() -> None:
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "-m", "dayhike", "fetch-climate", "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--dest" in result.stdout
+    assert "--bounds" in result.stdout
+    assert "--catalog" not in result.stdout

@@ -1,6 +1,6 @@
 from dayhike.dem import Bounds, fetch_fabdem, sample_dem
 from dayhike.landcover import fetch_worldcover, sample_landcover
-from dayhike.climate import sample_climate
+from dayhike.climate import fetch_worldclim, sample_climate
 from dayhike.catalog import (
     AmbiguousSeedName,
     AmenityFact,
@@ -54,6 +54,7 @@ __all__ = [
     "dayhike_label",
     "feature_matrix",
     "fetch_fabdem",
+    "fetch_worldclim",
     "fetch_worldcover",
     "filter_by_drive_time",
     "fit_scaler_from_matrix",
