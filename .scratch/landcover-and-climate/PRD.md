@@ -278,6 +278,15 @@ rasterio call sequences.
 - A website, ratings, or a supervised ranker.
 - Changing DriveTime, the length band, or which OSM relations are DayHikes.
 
+## Issues
+
+1. `01-sample-landcover` — stories 1–12
+2. `02-fetch-worldcover` — stories 25, 27–29 for the land-cover rasters
+3. `03-sample-climate-and-query-month` — stories 13–24
+4. `04-fetch-worldclim` — stories 26–29 for the climate rasters
+5. `05-notebook-examples` — stories 36–37
+6. `06-readme-landcover-climate` — stories 30–35
+
 ## Further Notes
 
 ADR-0010 is the decision this PRD implements. Future-work §6 still parks
