@@ -48,6 +48,10 @@ _Avoid_: hardness, danger, exposure (those are not this field; alpine fall hazar
 A local elevation raster sampled onto DayHikeGeometry after ingest. Until that sample runs, elevation stats come from OSM `ele` on member nodes.
 _Avoid_: live SRTM, elevation API, exposure
 
+**ElevationProfile**:
+Metres of elevation change along a DayHike from its first point, in the hike's stored direction. The metres stay in metres.
+_Avoid_: altitude, normalized profile, unit-scaled shape
+
 **SolarAspect**:
 A terrain-derived description of which way DayHikeGeometry faces relative to the sun, sampled from a DEM. It is not Difficulty, not ClimateNormal, and not alpine fall hazard. Shade from tree cover is LandCover.
 _Avoid_: exposure, sunny, shady, weather
