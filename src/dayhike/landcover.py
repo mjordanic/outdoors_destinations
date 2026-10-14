@@ -99,17 +99,23 @@ def fetch_worldcover(
     if max_workers <= 1:
         return [path for tile_id in tiles if (path := fetch_one(tile_id)) is not None]
     paths: list[Path] = []
+    failed: list[str] = []
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = [pool.submit(fetch_one, tile_id) for tile_id in tiles]
+        futures = {pool.submit(fetch_one, tile_id): tile_id for tile_id in tiles}
         for future in as_completed(futures):
             try:
                 path = future.result()
             except Exception as exc:
                 if progress is not None:
                     progress(f"landcover fetch error: {exc}")
+                failed.append(futures[future])
                 continue
             if path is not None:
                 paths.append(path)
+    if failed:
+        raise RuntimeError(
+            f"landcover fetch failed for tile(s): {', '.join(sorted(failed))}"
+        )
     paths.sort()
     return paths
 

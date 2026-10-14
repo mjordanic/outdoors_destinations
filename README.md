@@ -663,7 +663,9 @@ A fresh GeometryStore has NULL `vertices.landcover` and an empty
 
 **When:** after a successful ingest, when both `data/catalog.sqlite` and
 `data/catalog.geometry.sqlite` exist. Same moment as FABDEM sampling. You
-can sample DEM, LandCover, and climate in any order. Ranking with `--month`
+can sample DEM, LandCover, and climate in any order. `sample-climate` needs all
+36 monthly rasters (tavg, prec, srad × 12) and stops with the missing names if
+any are absent. A sample that covers no vertex prints a warning and `0`. Ranking with `--month`
 needs climate sampled.
 
 **Pull (rasters only):** `dayhike fetch-landcover` downloads ESA WorldCover
@@ -674,8 +676,11 @@ radiation (kJ m⁻² day⁻¹) into `data/climate/` (gitignored), from the three
 base zips `wc2.1_30s_tavg`, `wc2.1_30s_prec`, and `wc2.1_30s_srad`, then
 clips them to the bbox. Default `--bounds` is `41.8,5.9,50.6,20.4` (Alps +
 Dinarides, same as `fetch-dem`). Tiles already on disk are skipped.
-`fetch-landcover` skips a tile the server does not have. Neither command
-opens SQLite.
+`fetch-landcover` skips a tile the server does not have, but fails if a tile
+download errors. `fetch-climate` always downloads the three **global** base zips
+in full (very large downloads) into a temporary directory before clipping, even for a
+small bbox, and repeats that for any variable with a missing month. Neither
+command opens SQLite.
 
 ```bash
 uv run dayhike fetch-landcover

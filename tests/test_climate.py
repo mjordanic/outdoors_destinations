@@ -734,3 +734,74 @@ def test_cli_fetch_climate_does_not_need_a_catalog() -> None:
     assert "--dest" in result.stdout
     assert "--bounds" in result.stdout
     assert "--catalog" not in result.stdout
+
+
+def test_sample_climate_rejects_incomplete_raster_set(tmp_path: Path) -> None:
+    catalog_path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, catalog_path)
+    rasters = tmp_path / "rasters"
+    rasters.mkdir()
+    _write_climate_tifs(
+        rasters, west=14.9, south=44.9, east=15.2, north=45.2
+    )
+    (rasters / "wc2.1_30s_srad_12.tif").unlink()
+
+    with pytest.raises(ValueError, match="srad_12"):
+        sample_climate(catalog_path, rasters)
+
+
+def test_cli_rank_month_out_of_range_exits_with_message_not_traceback(
+    tmp_path: Path,
+) -> None:
+    import subprocess
+    import sys
+
+    path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, path)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "dayhike",
+            "rank",
+            "--catalog",
+            str(path),
+            "--month",
+            "13",
+            "Ridge Walk",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "1 to 12" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_cli_sample_climate_warns_when_nothing_is_sampled(tmp_path: Path) -> None:
+    import subprocess
+    import sys
+
+    catalog_path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, catalog_path)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "dayhike",
+            "sample-climate",
+            "--catalog",
+            str(catalog_path),
+            "--climate",
+            str(tmp_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "0"
+    assert "no vertices sampled" in result.stderr

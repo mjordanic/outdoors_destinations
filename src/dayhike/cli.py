@@ -198,9 +198,12 @@ def main(argv: list[str] | None = None) -> int:
         return _sample_climate(args.catalog, args.climate)
     if (args.origin is None) != (args.max_hours is None):
         rank.error("--origin and --max-hours must be given together")
-    return _rank(
-        args.catalog, args.seeds, args.origin, args.max_hours, args.valhalla_url, args.month
-    )
+    try:
+        return _rank(
+            args.catalog, args.seeds, args.origin, args.max_hours, args.valhalla_url, args.month
+        )
+    except ValueError as exc:
+        rank.error(str(exc))
 
 
 def _ingest(
@@ -279,6 +282,8 @@ def _sample_landcover(catalog_path: Path, raster_dir: Path) -> int:
         raster_dir,
         progress=lambda message: print(message, file=sys.stderr, flush=True),
     )
+    if sampled == 0:
+        print(f"no vertices sampled: no usable landcover rasters cover them in {raster_dir}", file=sys.stderr)
     print(sampled)
     return 0
 
@@ -289,6 +294,8 @@ def _sample_climate(catalog_path: Path, raster_dir: Path) -> int:
         raster_dir,
         progress=lambda message: print(message, file=sys.stderr, flush=True),
     )
+    if sampled == 0:
+        print(f"no vertices sampled: no usable climate rasters cover them in {raster_dir}", file=sys.stderr)
     print(sampled)
     return 0
 

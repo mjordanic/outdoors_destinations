@@ -98,6 +98,14 @@ def sample_climate(
     rasters = _climate_rasters(raster_dir)
     if not rasters:
         return 0
+    missing = [
+        f"{variable}_{month:02d}"
+        for variable in WORLDCLIM_VARIABLES
+        for month in range(1, 13)
+        if not any(var == variable and m == month for var, m, _path in rasters)
+    ]
+    if missing:
+        raise ValueError(f"incomplete climate rasters in {raster_dir}, missing: {', '.join(missing)}")
     if progress is not None:
         progress("climate sample: vertices")
     sampled = 0

@@ -3,6 +3,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from dayhike import Catalog, build_catalog, geometry_store_path_for, rank_dayhikes, sample_landcover
 from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS
@@ -524,3 +525,15 @@ def test_cli_fetch_landcover_does_not_need_a_catalog() -> None:
     assert "--dest" in result.stdout
     assert "--bounds" in result.stdout
     assert "--catalog" not in result.stdout
+
+
+def test_fetch_worldcover_fails_after_a_tile_download_error(tmp_path: Path) -> None:
+    def broken(_url: str, _filename: str) -> None:
+        raise OSError("connection reset")
+
+    with pytest.raises(RuntimeError, match="N45E015"):
+        fetch_worldcover(
+            tmp_path,
+            Bounds(south=45.0, west=15.0, north=45.1, east=15.1),
+            retrieve=broken,
+        )
