@@ -134,3 +134,44 @@ not part of this spec.
 - Keeping up to about 36 climate files plus a few dozen WorldCover tiles open
   at once is well inside normal file-handle limits. A Catalog bbox much wider
   than Europe may need the limit checked.
+
+## Comments
+
+### Timing on the local extract (issue 04)
+
+Measured 2026-10-15 on the local `data/` extract: 37,686,493 vertices in the
+GeometryStore, 24 WorldCover tiles, 36 climate rasters (12 months x tavg, prec,
+srad). "Before" is `316e27f` (baseline git worktree), "after" is `63ea739`
+(develop HEAD with 01 and 02). Each run used a fresh copy-on-write copy of
+`data/catalog.sqlite` and `data/catalog.geometry.sqlite`, and both sides read
+the same `data/landcover` and `data/climate` directories. `data/` was not
+modified. One run per cell, on an otherwise idle 8-core Mac.
+
+| Command | Before `316e27f` | After `63ea739` |
+| --- | --- | --- |
+| `sample-landcover` (full run, 25,736,595 vertices covered, 756 progress chunks) | 750.6 s wall | 650.0 s wall |
+| `sample-climate` (fixed 1,966 s window, not a full run) | 3,250,452 vertices sampled | 3,650,753 vertices sampled |
+
+- **LandCover:** about 13% faster (100 s of 750 s). The before figure also
+  includes a one-off `uv` environment build for the worktree (a minute or less,
+  not separated out), so the true gain is somewhat smaller than 13%. User CPU
+  time was 659.7 s before and 606.6 s after.
+- **Climate:** a full run did not finish in reasonable time on either side.
+  The after-run of the whole extract was still going after about 2 hours, and
+  the before run extrapolates to hours as well (about 1,650 vertices/s, so more
+  than 4 hours at 25.7M covered vertices). So both sides were cut at the same
+  1,966 s window (the before run was stopped at 1,966 s; the after run
+  was stopped at the same point). In that window the after side sampled about
+  12% more vertices (3.65M vs 3.25M). That is a modest gain, in line with the
+  expectation that clipped climate rasters are cheap to open. The run is
+  dominated by the per-vertex cost: 36 `dataset.sample` calls per point and a
+  Python bounds filter per raster per chunk.
+- **Is window reading needed?** Opening rasters once helped LandCover by
+  roughly a tenth and climate by roughly a tenth. Neither sampler is now
+  limited by file opens. LandCover still takes about 11 minutes and climate
+  would take hours on the full extract, so the remaining cost is per-point
+  reads. Window reading (read a block of pixels per raster per chunk instead
+  of one `sample` call per point) is the next lever and looks worth doing for
+  climate in particular. It is not needed for LandCover to be usable. This
+  should be a separate PRD. Caveat: single runs, no repeats, so differences of
+  around 10% are indicative only.

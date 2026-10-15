@@ -21,7 +21,7 @@ claim a speed-up.
 
 **Blocked by:** 01 (LandCover opens tiles once), 02 (Climate opens rasters once)
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Complexity:** low
 
