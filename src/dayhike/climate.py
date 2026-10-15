@@ -8,6 +8,7 @@ import tempfile
 import time
 import zipfile
 from collections.abc import Callable, Sequence
+from contextlib import ExitStack
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -110,10 +111,12 @@ def sample_climate(
         progress("climate sample: vertices")
     sampled = 0
     touched: set[int] = set()
+    stack = ExitStack()
     write = sqlite3.connect(store_path)
     try:
         write.execute("PRAGMA journal_mode=WAL")
         _ensure_vertex_climate(write)
+        datasets = _open_climate_rasters(stack, rasters)
         read = sqlite3.connect(store_path)
         try:
             cursor = read.execute(
@@ -128,7 +131,7 @@ def sample_climate(
                     for dayhike_id, seq, lat, lon in rows
                 ]
                 climates = _sample_points(
-                    rasters, [(lat, lon) for _id, _seq, lat, lon in coverable]
+                    datasets, [(lat, lon) for _id, _seq, lat, lon in coverable]
                 )
                 inserts: list[tuple[int, int, int, float, float, float]] = []
                 for (dayhike_id, seq, _lat, _lon), months in zip(
@@ -174,6 +177,7 @@ def sample_climate(
             write.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             write.execute("PRAGMA journal_mode=DELETE")
     finally:
+        stack.close()
         write.close()
     if not touched:
         return 0
@@ -195,38 +199,46 @@ def _climate_rasters(raster_dir: Path) -> list[tuple[str, int, Path]]:
     return found
 
 
-def _sample_points(
-    rasters: Sequence[tuple[str, int, Path]],
-    points: Sequence[tuple[float, float]],
-) -> list[tuple[tuple[float, float, float], ...] | None]:
+def _open_climate_rasters(
+    stack: ExitStack, rasters: Sequence[tuple[str, int, Path]]
+) -> list[tuple[str, int, object]]:
     import rasterio
 
+    return [
+        (var, month, stack.enter_context(rasterio.open(path)))
+        for var, month, path in rasters
+    ]
+
+
+def _sample_points(
+    datasets: Sequence[tuple[str, int, object]],
+    points: Sequence[tuple[float, float]],
+) -> list[tuple[tuple[float, float, float], ...] | None]:
     n = len(points)
     tavg: list[list[float | None]] = [[None] * 12 for _ in range(n)]
     prec: list[list[float | None]] = [[None] * 12 for _ in range(n)]
     srad: list[list[float | None]] = [[None] * 12 for _ in range(n)]
     buckets = {"tavg": tavg, "prec": prec, "srad": srad}
-    for var, month, path in rasters:
+    for var, month, dataset in datasets:
         target = buckets[var]
-        with rasterio.open(path) as dataset:
-            bounds = dataset.bounds
-            nodata = dataset.nodata
-            indices = [
-                index
-                for index in range(n)
-                if bounds.left <= points[index][1] <= bounds.right
-                and bounds.bottom <= points[index][0] <= bounds.top
-            ]
-            if not indices:
+        bounds = dataset.bounds
+        nodata = dataset.nodata
+        indices = [
+            index
+            for index in range(n)
+            if bounds.left <= points[index][1] <= bounds.right
+            and bounds.bottom <= points[index][0] <= bounds.top
+        ]
+        if not indices:
+            continue
+        coords = [(points[index][1], points[index][0]) for index in indices]
+        for index, sample in zip(indices, dataset.sample(coords), strict=True):
+            value = float(sample[0])
+            if not math.isfinite(value):
                 continue
-            coords = [(points[index][1], points[index][0]) for index in indices]
-            for index, sample in zip(indices, dataset.sample(coords), strict=True):
-                value = float(sample[0])
-                if not math.isfinite(value):
-                    continue
-                if nodata is not None and value == nodata:
-                    continue
-                target[index][month - 1] = value
+            if nodata is not None and value == nodata:
+                continue
+            target[index][month - 1] = value
     out: list[tuple[tuple[float, float, float], ...] | None] = []
     for index in range(n):
         if any(

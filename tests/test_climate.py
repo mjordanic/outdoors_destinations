@@ -805,3 +805,95 @@ def test_cli_sample_climate_warns_when_nothing_is_sampled(tmp_path: Path) -> Non
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "0"
     assert "no vertices sampled" in result.stderr
+
+
+def _climate_snapshot(catalog_path: Path) -> tuple[list, list, list]:
+    store = sqlite3.connect(geometry_store_path_for(catalog_path))
+    try:
+        rows = list(
+            store.execute(
+                "SELECT dayhike_id, seq, month, temperature_c, precipitation_mm, "
+                "solar_radiation FROM vertex_climate ORDER BY dayhike_id, seq, month"
+            )
+        )
+    finally:
+        store.close()
+    catalog = Catalog.open(catalog_path)
+    hikes = [
+        (hike.id, hike.feature_vector.temperature_c, hike.climate_months)
+        for hike in catalog.dayhikes
+    ]
+    scalers = [catalog.scaler.mean, catalog.scaler.scale]
+    return rows, hikes, scalers
+
+
+def test_sample_opens_each_climate_raster_once_across_chunks_and_matches_single_chunk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import rasterio
+
+    from dayhike import climate
+
+    rasters = tmp_path / "rasters"
+    rasters.mkdir()
+    _write_climate_tifs(
+        rasters,
+        west=14.99,
+        south=44.99,
+        east=15.05,
+        north=45.12,
+        tavg=tuple(float(m) for m in range(1, 13)),
+    )
+    single = tmp_path / "single.sqlite"
+    build_catalog(FIXTURE, single)
+    sampled_single = sample_climate(single, rasters)
+
+    chunked = tmp_path / "chunked.sqlite"
+    build_catalog(FIXTURE, chunked)
+    monkeypatch.setattr(climate, "_VERTEX_CHUNK", 2)
+    opened: list[str] = []
+    real_open = rasterio.open
+
+    def counting_open(path, *args, **kwargs):
+        opened.append(str(path))
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(rasterio, "open", counting_open)
+    sampled_chunked = sample_climate(chunked, rasters)
+
+    assert sampled_chunked == sampled_single > 2
+    assert len(opened) == len(set(opened)) == 36
+    snapshot = _climate_snapshot(chunked)
+    assert snapshot == _climate_snapshot(single)
+    assert snapshot[0]
+
+
+def test_failed_raster_open_still_closes_datasets_opened_so_far(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import rasterio
+
+    catalog_path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, catalog_path)
+    rasters = tmp_path / "rasters"
+    rasters.mkdir()
+    _write_climate_tifs(rasters, west=14.99, south=44.99, east=15.05, north=45.12)
+    opened = []
+    real_open = rasterio.open
+
+    def failing_open(path, *args, **kwargs):
+        if len(opened) == 5:
+            raise OSError("unreadable raster")
+        dataset = real_open(path, *args, **kwargs)
+        opened.append(dataset)
+        return dataset
+
+    monkeypatch.setattr(rasterio, "open", failing_open)
+
+    with pytest.raises(OSError, match="unreadable raster"):
+        sample_climate(catalog_path, rasters)
+
+    assert len(opened) == 5
+    assert all(dataset.closed for dataset in opened)
+    store_path = geometry_store_path_for(catalog_path)
+    assert not Path(str(store_path) + "-wal").exists()
