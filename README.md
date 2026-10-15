@@ -716,6 +716,13 @@ download tiles. `--catalog` defaults to `data/catalog.sqlite`.
 `--landcover` defaults to `data/landcover/`; `--climate` defaults to
 `data/climate/`. Re-ingest replaces both SQLite files and clears samples.
 
+Each sampling run opens each raster once and holds it open until the run
+ends, so run time grows with the number of vertices sampled, not with repeated
+file opens. That means about 36 climate files (`sample-climate`) or one file
+per WorldCover tile covering the Catalog bbox (`sample-landcover`) are open at
+once. A bbox much wider than Europe may need your open file-handle limit
+checked (`ulimit -n`).
+
 ```bash
 uv run dayhike sample-landcover
 uv run dayhike sample-climate
