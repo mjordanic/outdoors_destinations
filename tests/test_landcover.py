@@ -537,3 +537,97 @@ def test_fetch_worldcover_fails_after_a_tile_download_error(tmp_path: Path) -> N
             Bounds(south=45.0, west=15.0, north=45.1, east=15.1),
             retrieve=broken,
         )
+
+
+def _write_overlapping_tiles(raster_dir: Path) -> None:
+    raster_dir.mkdir()
+    for name, code in (("a_tree.tif", 10), ("b_grass.tif", 30)):
+        _write_class_tif(
+            raster_dir / name,
+            west=14.99,
+            south=44.99,
+            east=15.05,
+            north=45.12,
+            codes=np.full((8, 8), code, dtype="uint8"),
+        )
+
+
+def _sample_snapshot(catalog_path: Path) -> tuple[list, list]:
+    store = sqlite3.connect(geometry_store_path_for(catalog_path))
+    try:
+        codes = list(
+            store.execute(
+                "SELECT dayhike_id, seq, landcover FROM vertices ORDER BY dayhike_id, seq"
+            )
+        )
+    finally:
+        store.close()
+    catalog = Catalog.open(catalog_path)
+    fractions = [
+        (hike.id, hike.feature_vector.tree_fraction, hike.feature_vector.grass_fraction)
+        for hike in catalog.dayhikes
+    ]
+    return codes, fractions
+
+
+def test_sample_opens_each_tile_once_across_chunks_and_matches_single_chunk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import rasterio
+
+    from dayhike import landcover
+
+    single = tmp_path / "single.sqlite"
+    build_catalog(FIXTURE, single)
+    rasters = tmp_path / "rasters"
+    _write_overlapping_tiles(rasters)
+    sampled_single = sample_landcover(single, rasters)
+
+    chunked = tmp_path / "chunked.sqlite"
+    build_catalog(FIXTURE, chunked)
+    monkeypatch.setattr(landcover, "_VERTEX_CHUNK", 2)
+    opened: list[str] = []
+    real_open = rasterio.open
+
+    def counting_open(path, *args, **kwargs):
+        opened.append(str(path))
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(rasterio, "open", counting_open)
+    sampled_chunked = sample_landcover(chunked, rasters)
+
+    assert sampled_chunked == sampled_single > 2
+    assert len(opened) == len(set(opened)) == 2
+    codes, fractions = _sample_snapshot(chunked)
+    assert (codes, fractions) == _sample_snapshot(single)
+    assert {code for _id, _seq, code in codes} == {10, None}
+
+
+def test_failed_tile_open_still_closes_datasets_opened_so_far(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import rasterio
+
+    catalog_path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, catalog_path)
+    rasters = tmp_path / "rasters"
+    _write_overlapping_tiles(rasters)
+    opened = []
+    real_open = rasterio.open
+
+    def failing_open(path, *args, **kwargs):
+        if opened:
+            raise OSError("unreadable tile")
+        dataset = real_open(path, *args, **kwargs)
+        opened.append(dataset)
+        return dataset
+
+    monkeypatch.setattr(rasterio, "open", failing_open)
+
+    with pytest.raises(OSError, match="unreadable tile"):
+        sample_landcover(catalog_path, rasters)
+
+    assert len(opened) == 1
+    assert all(dataset.closed for dataset in opened)
+    store_path = geometry_store_path_for(catalog_path)
+    assert not Path(str(store_path) + "-wal").exists()

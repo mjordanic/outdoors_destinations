@@ -5,6 +5,7 @@ import shutil
 import sqlite3
 import time
 from collections.abc import Callable, Sequence
+from contextlib import ExitStack
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -125,39 +126,55 @@ def sample_landcover_classes(
     points: Sequence[tuple[float, float]],
 ) -> list[int | None]:
     """Sample land-cover GeoTIFFs at (lat, lon). Uncovered is None."""
+    rasters = _raster_paths(Path(raster_dir))
+    if not rasters:
+        return [None] * len(points)
+    with ExitStack() as stack:
+        datasets = _open_rasters(stack, rasters)
+        return _sample_open_datasets(datasets, points)
+
+
+def _raster_paths(raster_dir: Path) -> list[Path]:
+    return sorted(raster_dir.glob("*.tif")) + sorted(raster_dir.glob("*.tiff"))
+
+
+def _open_rasters(stack: ExitStack, rasters: Sequence[Path]) -> list:
     import rasterio
 
-    raster_dir = Path(raster_dir)
+    return [stack.enter_context(rasterio.open(path)) for path in rasters]
+
+
+def _sample_open_datasets(
+    datasets: Sequence,
+    points: Sequence[tuple[float, float]],
+) -> list[int | None]:
+    """First-tile-wins sampling over already-open datasets (sorted file order)."""
     out: list[int | None] = [None] * len(points)
-    rasters = sorted(raster_dir.glob("*.tif")) + sorted(raster_dir.glob("*.tiff"))
-    if not rasters:
-        return out
     remaining = set(range(len(points)))
-    for path in rasters:
+    for dataset in datasets:
         if not remaining:
             break
-        with rasterio.open(path) as dataset:
-            bounds = dataset.bounds
-            nodata = dataset.nodata
-            indices = [
-                index
-                for index in remaining
-                if bounds.left <= points[index][1] <= bounds.right
-                and bounds.bottom <= points[index][0] <= bounds.top
-            ]
-            if not indices:
+        bounds = dataset.bounds
+        nodata = dataset.nodata
+        indices = [
+            index
+            for index in remaining
+            if bounds.left <= points[index][1] <= bounds.right
+            and bounds.bottom <= points[index][0] <= bounds.top
+        ]
+        if not indices:
+            continue
+        coords = [(points[index][1], points[index][0]) for index in indices]
+        for index, sample in zip(indices, dataset.sample(coords), strict=True):
+            value = float(sample[0])
+            if not math.isfinite(value):
                 continue
-            coords = [(points[index][1], points[index][0]) for index in indices]
-            for index, sample in zip(indices, dataset.sample(coords), strict=True):
-                value = float(sample[0])
-                if not math.isfinite(value):
-                    continue
-                if nodata is not None and value == nodata:
-                    continue
-                if value == _WORLDCOVER_NODATA:
-                    continue
-                out[index] = int(value)
-                remaining.discard(index)
+            if nodata is not None and value == nodata:
+                continue
+            if value == _WORLDCOVER_NODATA:
+                continue
+            out[index] = int(value)
+            remaining.discard(index)
     return out
 
 
@@ -173,17 +190,19 @@ def sample_landcover(
     store_path = geometry_store_path_for(catalog_path)
     if not store_path.is_file():
         raise FileNotFoundError(store_path)
-    rasters = list(raster_dir.glob("*.tif")) + list(raster_dir.glob("*.tiff"))
+    rasters = _raster_paths(raster_dir)
     if not rasters:
         return 0
     if progress is not None:
         progress("landcover sample: vertices")
     sampled = 0
     touched: set[int] = set()
+    stack = ExitStack()
     write = sqlite3.connect(store_path)
     try:
         write.execute("PRAGMA journal_mode=WAL")
         _ensure_column(write, "vertices", "landcover", "INTEGER")
+        datasets = _open_rasters(stack, rasters)
         read = sqlite3.connect(store_path)
         try:
             cursor = read.execute(
@@ -197,8 +216,8 @@ def sample_landcover(
                     (int(dayhike_id), int(seq), float(lat), float(lon))
                     for dayhike_id, seq, lat, lon in rows
                 ]
-                classes = sample_landcover_classes(
-                    raster_dir,
+                classes = _sample_open_datasets(
+                    datasets,
                     [(lat, lon) for _id, _seq, lat, lon in coverable],
                 )
                 updates = [
@@ -231,6 +250,7 @@ def sample_landcover(
             write.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             write.execute("PRAGMA journal_mode=DELETE")
     finally:
+        stack.close()
         write.close()
     if not touched:
         return 0
