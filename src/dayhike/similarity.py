@@ -19,6 +19,7 @@ from shapely.geometry import LineString
 from sklearn.neighbors import BallTree
 
 from dayhike.catalog import EARTH_RADIUS_M, _extend_node_chain, geometry_store_path_for
+from dayhike.dem import sample_elevations
 
 AMENITY_PAD_M = 3_000  # vertex box pad for region amenities; covers Peaks around
 PROFILE_POINTS = 64
@@ -35,6 +36,13 @@ LANDCOVER_SHARE_COLUMNS = (
     "snow_share",
     "other_share",
 )
+CLIMATE_NAMES = ("temperature_c", "precipitation_mm", "solar_radiation")
+CLIMATE_MONTH_COLUMNS = tuple(
+    f"{name}_{month:02d}" for month in range(1, 13) for name in CLIMATE_NAMES
+)
+SOLAR_ASPECT_POINTS = 32  # about this many vertices sampled per DayHike
+SOLAR_ASPECT_OFFSET_ARCSEC = 2  # east and north offsets: two FABDEM cells
+SOLAR_ASPECT_MIN_SLOPE_DEG = 5.0  # flatter points face no way
 SURFACE_SHARE_COLUMNS = ("paved_share", "gravel_share", "natural_share", "rock_share")
 _SURFACE_TAG_CLASS = {
     **dict.fromkeys(
@@ -247,11 +255,13 @@ def load_region(
 
     Returns ``vertices, amenities, dayhikes, ways`` as GeoDataFrames in
     EPSG:4326, shaped as in notebook 04a. ``dayhikes`` carries the Catalog
-    ``feature_vectors`` (with ``difficulty_ordinal``) and the Trailhead as
-    ``trailhead_latitude`` / ``trailhead_longitude``. Rows are filtered in SQL.
-    Amenities are those inside the region's vertex box padded by
-    ``AMENITY_PAD_M``.
+    ``feature_vectors`` (with ``difficulty_ordinal``), the twelve
+    ``climate_months`` as ``CLIMATE_MONTH_COLUMNS`` (``temperature_c_01`` ...
+    ``solar_radiation_12``) and the Trailhead as ``trailhead_latitude`` /
+    ``trailhead_longitude``. Rows are filtered in SQL. Amenities are those
+    inside the region's vertex box padded by ``AMENITY_PAD_M``.
     """
+    in_region = "IN (SELECT value FROM json_each(?))"
     catalog = sqlite3.connect(catalog_path)
     try:
         summaries = pd.read_sql_query(
@@ -263,11 +273,21 @@ def load_region(
             catalog,
             params=(*lat_range, *lon_range),
         ).drop(columns="length_m")
+        ids = (json.dumps(summaries["dayhike_id"].tolist()),)
+        month_columns = ", ".join(
+            f"MAX(CASE WHEN month = {int(column[-2:])} THEN {column[:-3]} END) AS {column}"
+            for column in CLIMATE_MONTH_COLUMNS
+        )
+        months = pd.read_sql_query(
+            f"SELECT dayhike_id, {month_columns} FROM climate_months "
+            f"WHERE dayhike_id {in_region} GROUP BY dayhike_id",
+            catalog,
+            params=ids,
+        )
     finally:
         catalog.close()
+    summaries = summaries.merge(months, on="dayhike_id", how="left")
 
-    ids = (json.dumps(summaries["dayhike_id"].tolist()),)
-    in_region = "IN (SELECT value FROM json_each(?))"
     geo = sqlite3.connect(geometry_store_path_for(catalog_path))
     try:
         dayhikes_tbl = pd.read_sql_query(
@@ -627,6 +647,74 @@ def _paved_run(walked: Sequence[tuple[float, str | None]]) -> float:
             break
         run += length
     return run
+
+
+def weather_facts(
+    dayhikes: pd.DataFrame, vertices: pd.DataFrame, dem_dir: Path | str
+) -> pd.DataFrame:
+    """Weather facts per DayHike id, in stored order.
+
+    The ClimateNormal regime (``temperature_c``, ``precipitation_mm``,
+    ``solar_radiation``: June-August mean temperature, mean monthly
+    precipitation, June-August solar radiation) from the Catalog
+    ``feature_vectors``; the twelve months (``CLIMATE_MONTH_COLUMNS``) from
+    ``climate_months``; and SolarAspect ``southness`` from the FABDEM tiles
+    in ``dem_dir`` (``solar_aspect_southness``). A DayHike outside the
+    sampled rasters has the values missing, not 0.
+    """
+    hikes = dayhikes.set_index("id")
+    facts = hikes[[*CLIMATE_NAMES, *CLIMATE_MONTH_COLUMNS]].astype(float)
+    facts["southness"] = solar_aspect_southness(vertices, dem_dir).reindex(facts.index)
+    return facts
+
+
+def solar_aspect_southness(vertices: pd.DataFrame, dem_dir: Path | str) -> pd.Series:
+    """SolarAspect southness per DayHike id: 1 due south, 0 due north, 0.5
+    east or west, the mean over sloped sample points.
+
+    About ``SOLAR_ASPECT_POINTS`` vertices per DayHike are sampled: every k-th
+    counted from the nearer chain end, so the set is the same in either
+    walking direction. At each, FABDEM in ``dem_dir`` is read at the vertex and
+    ``SOLAR_ASPECT_OFFSET_ARCSEC`` east and north of it (whole 1 arc-second
+    cells, so the offset is the distance between the cells read). The
+    downslope direction gives southness (1 - its north component) / 2. Points
+    with slope under ``SOLAR_ASPECT_MIN_SLOPE_DEG`` or without a height (no
+    covering tile, nodata) are left out; a DayHike with none left is missing.
+    """
+    chain = vertices.sort_values(["dayhike_id", "seq"])
+    position = chain.groupby("dayhike_id").cumcount().to_numpy()
+    count = chain.groupby("dayhike_id")["seq"].transform("size").to_numpy()
+    step = np.maximum(1, np.ceil(count / SOLAR_ASPECT_POINTS))
+    chosen = chain[np.minimum(position, count - 1 - position) % step == 0]
+    lat = chosen["latitude"].to_numpy(float)
+    lon = chosen["longitude"].to_numpy(float)
+    offset = SOLAR_ASPECT_OFFSET_ARCSEC / 3600
+    probes = [
+        point
+        for y, x in zip(lat, lon)
+        for point in ((y, x), (y, x + offset), (y + offset, x))
+    ]
+    sampled = sample_elevations(dem_dir, probes)
+    # One row per chosen vertex: height at the vertex, east of it, north of it.
+    heights = np.array([math.nan if h is None else h for h in sampled]).reshape(-1, 3)
+    north_m = math.radians(offset) * EARTH_RADIUS_M
+    east_m = north_m * np.cos(np.radians(lat))
+    rise_east = (heights[:, 1] - heights[:, 0]) / east_m
+    rise_north = (heights[:, 2] - heights[:, 0]) / north_m
+    grade = np.hypot(rise_east, rise_north)
+    sloped = np.degrees(np.arctan(grade)) >= SOLAR_ASPECT_MIN_SLOPE_DEG
+    # Downslope points against the gradient; its north component is
+    # -rise_north / grade, so a slope rising northward faces south.
+    southness = np.where(
+        sloped, (1 + rise_north / np.where(sloped, grade, 1.0)) / 2, math.nan
+    )
+    ids = pd.Index(vertices["dayhike_id"].unique(), name="dayhike_id")
+    return (
+        pd.Series(southness, index=chosen["dayhike_id"].to_numpy())
+        .groupby(level=0)
+        .mean()
+        .reindex(ids)
+    )
 
 
 def _points(table: pd.DataFrame) -> gpd.GeoDataFrame:

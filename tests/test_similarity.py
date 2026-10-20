@@ -9,6 +9,7 @@ from shapely.geometry import LineString
 
 from dayhike import build_catalog
 from dayhike.similarity import (
+    CLIMATE_MONTH_COLUMNS,
     altitude_facts,
     LANDCOVER_SHARE_COLUMNS,
     SURFACE_SHARE_COLUMNS,
@@ -27,10 +28,12 @@ from dayhike.similarity import (
     profile_shape,
     ratio,
     similarity_facts_path_for,
+    solar_aspect_southness,
     surface_class,
     surface_class_from_tag,
     tolerance,
     trail_facts,
+    weather_facts,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
@@ -749,3 +752,150 @@ def test_trail_facts_on_the_fixture_are_all_natural_path_with_no_tarmac(
     assert facts.loc[1001, "natural_share"] == 1.0
     assert facts.loc[1001, "tarmac_approach_m"] == 0.0
     assert trail_facts(dayhikes, _reversed(vertices), ways).equals(facts)
+
+
+def _write_dem_tile(dem_dir, elevation, *, grade_east=0.0, grade_north=0.0):
+    """A small FABDEM-named tile around (45, 15) at FABDEM's 1 arc-second cells.
+
+    Height rises ``grade_north`` metres per metre northward and ``grade_east``
+    per metre eastward. ``elevation=None`` writes nodata everywhere.
+    """
+    import rasterio
+    from rasterio.transform import from_origin
+
+    cell = 1 / 3600
+    west, north, size = 14.99, 45.01, 72
+    rows, cols = np.mgrid[0:size, 0:size]
+    lat = north - (rows + 0.5) * cell
+    lon = west + (cols + 0.5) * cell
+    north_m = np.radians(lat - 45.0) * 6_371_000
+    east_m = np.radians(lon - 15.0) * 6_371_000 * math.cos(math.radians(45.0))
+    if elevation is None:
+        data = np.full((size, size), -9999.0)
+    else:
+        data = elevation + grade_north * north_m + grade_east * east_m
+    dem_dir.mkdir(parents=True, exist_ok=True)
+    with rasterio.open(
+        dem_dir / "N45E015_FABDEM_V1-2.tif",
+        "w",
+        driver="GTiff",
+        height=size,
+        width=size,
+        count=1,
+        dtype="float32",
+        crs="EPSG:4326",
+        transform=from_origin(west, north, cell, cell),
+        nodata=-9999.0,
+    ) as dataset:
+        dataset.write(data.astype("float32"), 1)
+
+
+# A 400 m walk due east of (45, 15), well inside the tile.
+EAST_WALK = _chain(*[(45.0, _metres_east(100 * i)) for i in range(5)])
+
+
+@pytest.mark.parametrize(
+    ("grade_east", "grade_north", "expected"),
+    [
+        (0.0, 0.3, 1.0),  # rises northward: the slope faces south
+        (0.0, -0.3, 0.0),  # faces north
+        (-0.3, 0.0, 0.5),  # falls eastward: faces east
+        (0.3, 0.0, 0.5),  # faces west
+        (0.3, 0.3, (1 + math.cos(math.radians(45))) / 2),  # faces south-west
+    ],
+)
+def test_southness_scores_south_1_north_0_east_and_west_half(
+    tmp_path: Path, grade_east, grade_north, expected
+) -> None:
+    _write_dem_tile(tmp_path, 1000.0, grade_east=grade_east, grade_north=grade_north)
+
+    southness = solar_aspect_southness(EAST_WALK, tmp_path)
+
+    assert southness.loc[1] == pytest.approx(expected, abs=0.01)
+
+
+@pytest.mark.parametrize("grade", [0.0, 0.03])  # flat, and under 2 degrees
+def test_southness_leaves_out_flat_points_and_is_missing_with_none_sloped(
+    tmp_path: Path, grade
+) -> None:
+    _write_dem_tile(tmp_path, 1000.0, grade_north=grade)
+
+    assert math.isnan(solar_aspect_southness(EAST_WALK, tmp_path).loc[1])
+
+
+def test_southness_is_missing_without_a_covering_tile_or_with_nodata(
+    tmp_path: Path,
+) -> None:
+    assert math.isnan(solar_aspect_southness(EAST_WALK, tmp_path / "none").loc[1])
+    _write_dem_tile(tmp_path, None)
+    assert math.isnan(solar_aspect_southness(EAST_WALK, tmp_path).loc[1])
+
+
+def test_southness_does_not_depend_on_the_walking_direction(tmp_path: Path) -> None:
+    _write_dem_tile(tmp_path, 1000.0, grade_east=0.2, grade_north=0.1)
+    long_walk = _chain(*[(45.0, _metres_east(10 * i - 300)) for i in range(61)])
+
+    forward = solar_aspect_southness(long_walk, tmp_path)
+
+    assert solar_aspect_southness(_reversed(long_walk), tmp_path).loc[1] == pytest.approx(
+        forward.loc[1], abs=1e-12
+    )
+
+
+def _sample_ridge_walk_climate(catalog_path: Path) -> None:
+    """Ridge Walk (1001) gets twelve months and its regime; Valley Path none."""
+    import sqlite3
+
+    connection = sqlite3.connect(catalog_path)
+    try:
+        connection.executemany(
+            "INSERT INTO climate_months VALUES (1001, ?, ?, ?, ?)",
+            [(m, m - 5.0, 10.0 * m, 1000.0 * m) for m in range(1, 13)],
+        )
+        connection.execute(
+            "UPDATE feature_vectors SET temperature_c = 2.0, "
+            "precipitation_mm = 65.0, solar_radiation = 7000.0 WHERE dayhike_id = 1001"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def test_load_region_carries_the_twelve_climate_months(fixture_catalog: Path) -> None:
+    _sample_ridge_walk_climate(fixture_catalog)
+
+    _, _, dayhikes, _ = _whole_fixture(fixture_catalog)
+
+    hikes = dayhikes.set_index("id")
+    assert hikes.at[1001, "temperature_c_01"] == -4.0
+    assert hikes.at[1001, "precipitation_mm_07"] == 70.0
+    assert hikes.at[1001, "solar_radiation_12"] == 12_000.0
+    assert hikes.loc[1002, list(CLIMATE_MONTH_COLUMNS)].isna().all()
+
+
+def test_weather_facts_are_the_regime_the_months_and_southness(
+    fixture_catalog: Path,
+) -> None:
+    _sample_ridge_walk_climate(fixture_catalog)
+    vertices, _, dayhikes, _ = _whole_fixture(fixture_catalog)
+
+    facts = weather_facts(dayhikes, vertices, fixture_catalog.parent / "dem")
+
+    assert list(facts.columns) == [
+        "temperature_c",
+        "precipitation_mm",
+        "solar_radiation",
+        *CLIMATE_MONTH_COLUMNS,
+        "southness",
+    ]
+    assert set(facts.index) == set(dayhikes["id"])
+    ridge = facts.loc[1001]
+    assert (ridge["temperature_c"], ridge["precipitation_mm"], ridge["solar_radiation"]) == (
+        2.0,
+        65.0,
+        7000.0,
+    )
+    assert ridge["temperature_c_07"] == 2.0
+    # The fixture has no DEM tile: southness is missing, never 0.
+    assert facts["southness"].isna().all()
+    assert facts.loc[1002].isna().all()

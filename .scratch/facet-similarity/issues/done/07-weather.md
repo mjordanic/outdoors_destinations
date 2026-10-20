@@ -6,7 +6,7 @@ June–August regime when no month is named), and SolarAspect, how south-facing
 the slopes along the hike are. Notebook 05a has one `QUERY_MONTH` setting.
 SolarAspect is sampled from the local FABDEM tiles with a corrected formula.
 
-**Status:** ready-for-agent
+**Status:** done
 
 ## Blocked by
 
