@@ -6,7 +6,7 @@ walk on paved surface from the Trailhead before the DayHike leaves it. Ways
 without a surface tag are classified from their highway kind, so the 40% of
 untagged ways still count.
 
-**Status:** ready-for-agent
+**Status:** done
 
 ## Blocked by
 

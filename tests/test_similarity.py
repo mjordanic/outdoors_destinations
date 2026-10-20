@@ -1,14 +1,17 @@
+import json
 import math
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
+from shapely.geometry import LineString
 
 from dayhike import build_catalog
 from dayhike.similarity import (
     altitude_facts,
     LANDCOVER_SHARE_COLUMNS,
+    SURFACE_SHARE_COLUMNS,
     combined_score,
     corridor_amenities,
     effort_facts,
@@ -24,7 +27,10 @@ from dayhike.similarity import (
     profile_shape,
     ratio,
     similarity_facts_path_for,
+    surface_class,
+    surface_class_from_tag,
     tolerance,
+    trail_facts,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
@@ -525,3 +531,221 @@ def test_landscape_facts_landcover_shares_include_the_clipped_leftover() -> None
     assert shares(0.5, 0.3, 0.3, 0.0, 0.0)["other_share"] == 0.0
     missing = shares(None, 0.1, 0.2, 0.1, 0.0)
     assert missing[list(LANDCOVER_SHARE_COLUMNS)].isna().all()
+
+
+@pytest.mark.parametrize(
+    "surface, expected",
+    [
+        *[(v, "paved") for v in (
+            "asphalt", "concrete", "concrete:plates", "concrete:lanes",
+            "paving_stones", "sett", "cobblestone", "paved",
+        )],
+        *[(v, "gravel") for v in (
+            "compacted", "gravel", "fine_gravel", "unpaved", "pebblestone",
+        )],
+        *[(v, "natural") for v in (
+            "ground", "dirt", "earth", "grass", "mud", "sand", "woodchips",
+        )],
+        *[(v, "rock") for v in ("rock", "bare_rock", "stone")],
+        ("Asphalt", "paved"),
+        ("gravel;dirt", "gravel"),
+    ],
+)
+def test_surface_tag_maps_to_a_class_and_beats_the_highway(surface, expected) -> None:
+    tags = {"surface": surface, "highway": "path"}
+
+    assert surface_class_from_tag(tags) == expected
+    assert surface_class(tags) == expected
+
+
+@pytest.mark.parametrize(
+    "tags, expected",
+    [
+        *[({"highway": h}, "paved") for h in (
+            "motorway", "trunk", "primary", "secondary", "tertiary", "residential",
+            "service", "living_street", "pedestrian", "cycleway", "unclassified",
+            "primary_link",
+        )],
+        ({"highway": "track", "tracktype": "grade1"}, "paved"),
+        ({"highway": "track", "tracktype": "grade2"}, "gravel"),
+        ({"highway": "track", "tracktype": "grade3"}, "gravel"),
+        ({"highway": "track", "tracktype": "grade4"}, "natural"),
+        ({"highway": "track", "tracktype": "grade5"}, "natural"),
+        ({"highway": "track"}, "gravel"),
+        ({"highway": "track", "tracktype": "grade9"}, "gravel"),
+        *[({"highway": h}, "natural") for h in ("path", "footway", "steps", "bridleway")],
+        ({"highway": "via_ferrata"}, "rock"),
+        ({"highway": "construction"}, None),
+        ({"highway": "ladder"}, None),
+        ({}, None),
+    ],
+)
+def test_untagged_way_is_classified_from_its_highway_kind(tags, expected) -> None:
+    assert surface_class_from_tag(tags) is None
+    assert surface_class(tags) == expected
+
+
+def test_unlisted_surface_falls_back_to_the_highway() -> None:
+    assert surface_class_from_tag({"surface": "metal", "highway": "path"}) is None
+    assert surface_class({"surface": "metal", "highway": "path"}) == "natural"
+    assert surface_class({"surface": "metal", "highway": "residential"}) == "paved"
+    assert surface_class({"surface": "metal", "highway": "construction"}) is None
+    assert surface_class({"surface": "metal"}) is None
+
+
+def _trail_inputs(*ways, trailhead="south", chain_nodes=None):
+    """One DayHike (id 1) on a straight line north, nodes every 100 m.
+
+    Each way is (tags, first_node, last_node) in node indexes; the way list is
+    the stored member order. ``trailhead`` is the end the Trailhead is at.
+    """
+    count = chain_nodes or max(last for _, _, last in ways) + 1
+    lats = [_metres_north(100 * i) for i in range(count)]
+    vertices = pd.DataFrame(
+        {
+            "dayhike_id": 1,
+            "seq": range(count),
+            "node_id": range(count),
+            "latitude": lats,
+            "longitude": 15.0,
+        }
+    )
+    ways_frame = pd.DataFrame(
+        {
+            "dayhike_id": 1,
+            "seq": range(len(ways)),
+            "way_id": range(len(ways)),
+            "node_ids": [json.dumps(list(range(f, l + 1))) for _, f, l in ways],
+            "tags": [json.dumps(tags) for tags, _, _ in ways],
+            "in_chain": [1 if tags.get("_in_chain", True) else 0 for tags, _, _ in ways],
+            "geometry": [
+                LineString([(15.0, lats[i]) for i in range(f, l + 1)])
+                for _, f, l in ways
+            ],
+        }
+    )
+    dayhikes = pd.DataFrame(
+        {
+            "id": [1],
+            "trailhead_latitude": [lats[0] if trailhead == "south" else lats[-1]],
+            "trailhead_longitude": [15.0],
+        }
+    )
+    return dayhikes, vertices, ways_frame
+
+
+ASPHALT = {"highway": "service", "surface": "asphalt"}
+TRACK = {"highway": "track", "tracktype": "grade3"}
+PATH = {"highway": "path"}
+ROCK = {"highway": "path", "surface": "rock"}
+
+
+def test_surface_mix_is_length_fractions_over_in_chain_classified_ways() -> None:
+    # 300 m asphalt, 100 m track, 400 m path, 200 m rock; a 500 m unclassified
+    # way and a 500 m way outside the chain do not count.
+    dayhikes, vertices, ways = _trail_inputs(
+        (ASPHALT, 0, 3),
+        (TRACK, 3, 4),
+        (PATH, 4, 8),
+        (ROCK, 8, 10),
+        ({"highway": "construction"}, 10, 15),
+        ({**PATH, "_in_chain": False}, 15, 20),
+    )
+
+    facts = trail_facts(dayhikes, vertices, ways)
+
+    assert list(facts.columns) == [*SURFACE_SHARE_COLUMNS, "tarmac_approach_m"]
+    mix_ = facts.loc[1, list(SURFACE_SHARE_COLUMNS)].to_numpy(float)
+    assert mix_ == pytest.approx([0.3, 0.1, 0.4, 0.2], abs=0.002)
+    assert mix_.sum() == pytest.approx(1.0)
+
+
+def test_surface_mix_is_missing_when_no_in_chain_way_is_classified() -> None:
+    dayhikes, vertices, ways = _trail_inputs(({"highway": "construction"}, 0, 3))
+
+    facts = trail_facts(dayhikes, vertices, ways)
+
+    assert facts.loc[1].isna().all()
+
+
+def test_tarmac_approach_is_the_paved_length_before_the_first_unpaved_way() -> None:
+    # 300 m asphalt, then a path, then asphalt again (not counted).
+    dayhikes, vertices, ways = _trail_inputs(
+        (ASPHALT, 0, 3), (PATH, 3, 6), (ASPHALT, 6, 8)
+    )
+
+    facts = trail_facts(dayhikes, vertices, ways)
+
+    assert facts.loc[1, "tarmac_approach_m"] == pytest.approx(300.0, abs=1.0)
+
+
+def test_tarmac_approach_starts_at_the_chain_end_nearest_the_trailhead() -> None:
+    inputs = ((ASPHALT, 0, 3), (PATH, 3, 6), (ASPHALT, 6, 8))
+    south = trail_facts(*_trail_inputs(*inputs, trailhead="south"))
+    north = trail_facts(*_trail_inputs(*inputs, trailhead="north"))
+
+    assert south.loc[1, "tarmac_approach_m"] == pytest.approx(300.0, abs=1.0)
+    assert north.loc[1, "tarmac_approach_m"] == pytest.approx(200.0, abs=1.0)
+
+
+def test_tarmac_approach_does_not_depend_on_the_stored_way_order() -> None:
+    # Stored out of walking order, as when ingest glues a way onto the start.
+    dayhikes, vertices, ways = _trail_inputs(
+        (PATH, 3, 6), (ASPHALT, 0, 3), (ASPHALT, 6, 8)
+    )
+
+    facts = trail_facts(dayhikes, vertices, ways)
+
+    assert facts.loc[1, "tarmac_approach_m"] == pytest.approx(300.0, abs=1.0)
+
+
+def test_tarmac_approach_is_zero_when_the_first_way_is_unpaved() -> None:
+    dayhikes, vertices, ways = _trail_inputs((PATH, 0, 3), (ASPHALT, 3, 6))
+
+    assert trail_facts(dayhikes, vertices, ways).loc[1, "tarmac_approach_m"] == 0.0
+
+
+def test_tarmac_approach_is_the_whole_length_when_everything_is_paved() -> None:
+    dayhikes, vertices, ways = _trail_inputs((ASPHALT, 0, 3), (ASPHALT, 3, 8))
+
+    facts = trail_facts(dayhikes, vertices, ways)
+
+    assert facts.loc[1, "tarmac_approach_m"] == pytest.approx(800.0, abs=1.0)
+    assert facts.loc[1, "paved_share"] == pytest.approx(1.0)
+
+
+def test_tarmac_approach_of_a_loop_is_the_shorter_way_out() -> None:
+    # The last way returns to node 0: both ends are at the Trailhead, and the
+    # approach is 300 m of asphalt one way round, 200 m the other.
+    dayhikes, vertices, ways = _trail_inputs(
+        (ASPHALT, 0, 3), (PATH, 3, 6), (ASPHALT, 6, 8)
+    )
+    ways.loc[2, "node_ids"] = json.dumps([6, 7, 0])
+
+    facts = trail_facts(dayhikes, vertices, ways)
+
+    assert facts.loc[1, "tarmac_approach_m"] == pytest.approx(200.0, abs=1.0)
+    assert trail_facts(dayhikes, _reversed(vertices), ways).equals(facts)
+
+
+def test_trail_facts_are_the_same_for_the_reversed_vertex_chain() -> None:
+    dayhikes, vertices, ways = _trail_inputs(
+        (ASPHALT, 0, 3), (PATH, 3, 6), (ASPHALT, 6, 8)
+    )
+
+    assert trail_facts(dayhikes, _reversed(vertices), ways).equals(
+        trail_facts(dayhikes, vertices, ways)
+    )
+
+
+def test_trail_facts_on_the_fixture_are_all_natural_path_with_no_tarmac(
+    fixture_catalog: Path,
+) -> None:
+    vertices, _, dayhikes, ways = _whole_fixture(fixture_catalog)
+
+    facts = trail_facts(dayhikes, vertices, ways)
+
+    assert set(facts.index) == set(dayhikes["id"])
+    assert facts.loc[1001, "natural_share"] == 1.0
+    assert facts.loc[1001, "tarmac_approach_m"] == 0.0
+    assert trail_facts(dayhikes, _reversed(vertices), ways).equals(facts)

@@ -18,7 +18,7 @@ import pandas as pd
 from shapely.geometry import LineString
 from sklearn.neighbors import BallTree
 
-from dayhike.catalog import EARTH_RADIUS_M, geometry_store_path_for
+from dayhike.catalog import EARTH_RADIUS_M, _extend_node_chain, geometry_store_path_for
 
 AMENITY_PAD_M = 3_000  # vertex box pad for region amenities; covers Peaks around
 PROFILE_POINTS = 64
@@ -35,6 +35,33 @@ LANDCOVER_SHARE_COLUMNS = (
     "snow_share",
     "other_share",
 )
+SURFACE_SHARE_COLUMNS = ("paved_share", "gravel_share", "natural_share", "rock_share")
+_SURFACE_TAG_CLASS = {
+    **dict.fromkeys(
+        ("asphalt", "concrete", "paving_stones", "sett", "cobblestone", "paved"),
+        "paved",
+    ),
+    **dict.fromkeys(
+        ("compacted", "gravel", "fine_gravel", "unpaved", "pebblestone"), "gravel"
+    ),
+    **dict.fromkeys(
+        ("ground", "dirt", "earth", "grass", "mud", "sand", "woodchips"), "natural"
+    ),
+    **dict.fromkeys(("rock", "bare_rock", "stone"), "rock"),
+}
+_ROAD_HIGHWAYS = frozenset(
+    (
+        "motorway", "trunk", "primary", "secondary", "tertiary", "residential",
+        "service", "living_street", "pedestrian", "cycleway", "unclassified",
+    )
+)  # fmt: skip
+_TRACKTYPE_CLASS = {
+    "grade1": "paved",
+    "grade2": "gravel",
+    "grade3": "gravel",
+    "grade4": "natural",
+    "grade5": "natural",
+}
 
 
 def similarity_facts_path_for(catalog_path: Path | str) -> Path:
@@ -465,6 +492,141 @@ def landscape_facts(
         viewpoint_along=hikes_with("viewpoint", CORRIDOR_M) > 0,
         peaks_around=hikes_with("peak", PEAKS_AROUND_M),
     )
+
+
+def surface_class_from_tag(tags: Mapping[str, str]) -> str | None:
+    """Surface class (paved, gravel, natural, rock) of a way's ``surface`` tag.
+
+    The first ``;`` token is used, lowercased; ``concrete:*`` counts as
+    concrete. A missing or unlisted surface gives None.
+    """
+    token = tags.get("surface", "").split(";")[0].strip().lower()
+    if token.startswith("concrete:"):
+        token = "concrete"
+    return _SURFACE_TAG_CLASS.get(token)
+
+
+def surface_class(tags: Mapping[str, str]) -> str | None:
+    """Surface class of a way: its surface tag, else its highway kind.
+
+    Roads are paved; a track follows its tracktype (grade1 paved, grade2-3
+    gravel, grade4-5 natural, none or other gravel); path, footway, steps and
+    bridleway are natural; via_ferrata is rock. Anything else is None (left
+    out of the SurfaceMix denominator).
+    """
+    from_tag = surface_class_from_tag(tags)
+    if from_tag is not None:
+        return from_tag
+    highway = tags.get("highway", "")
+    if highway.removesuffix("_link") in _ROAD_HIGHWAYS:
+        return "paved"
+    if highway == "track":
+        return _TRACKTYPE_CLASS.get(tags.get("tracktype", ""), "gravel")
+    if highway in ("path", "footway", "steps", "bridleway"):
+        return "natural"
+    if highway == "via_ferrata":
+        return "rock"
+    return None
+
+
+def _path_length_m(latitude: Sequence[float], longitude: Sequence[float]) -> float:
+    lat = np.radians(np.asarray(latitude, dtype=float))
+    lon = np.radians(np.asarray(longitude, dtype=float))
+    return float(
+        np.sum(
+            2
+            * EARTH_RADIUS_M
+            * np.arcsin(
+                np.sqrt(
+                    np.sin(np.diff(lat) / 2) ** 2
+                    + np.cos(lat[:-1]) * np.cos(lat[1:]) * np.sin(np.diff(lon) / 2) ** 2
+                )
+            )
+        )
+    )
+
+
+def trail_facts(
+    dayhikes: pd.DataFrame, vertices: pd.DataFrame, ways: pd.DataFrame
+) -> pd.DataFrame:
+    """Trail facts per DayHike id, in stored order.
+
+    SurfaceMix: four length fractions (``SURFACE_SHARE_COLUMNS``) over the
+    member ways in the chain (``in_chain = 1``) that ``surface_class`` can
+    classify; unclassified ways are left out of the denominator.
+    ``tarmac_approach_m``: from the chain end nearest the Catalog Trailhead,
+    the length of consecutive paved ways until the first way that is not paved
+    (an unclassified way ends it); an all-paved DayHike gives its length. When
+    both ends are equally near (a loop) the shorter approach counts, so the
+    walking direction never matters. Both are missing when no in-chain way is
+    classified.
+
+    The ways are put in walking order by gluing them the way ingest builds the
+    vertex chain (``vertices`` only gives the node coordinates), so neither the
+    stored member order nor the vertex order matters.
+    """
+    ids = dayhikes["id"]
+    trailheads = dayhikes.set_index("id")[["trailhead_latitude", "trailhead_longitude"]]
+    node_xy = dict(
+        zip(vertices["node_id"], zip(vertices["latitude"], vertices["longitude"]))
+    )
+    facts = {}
+    for dayhike_id, member_ways in (
+        ways[ways["in_chain"] == 1].sort_values(["dayhike_id", "seq"]).groupby("dayhike_id")
+    ):
+        glued: list[int] = []
+        order: list[tuple[float, str | None]] = []  # (length_m, class) in chain order
+        for node_ids, tags, line in zip(
+            member_ways["node_ids"], member_ways["tags"], member_ways["geometry"]
+        ):
+            nodes = json.loads(node_ids)
+            lon, lat = (np.asarray(line.coords) if line is not None else np.empty((0, 2))).T
+            way = (_path_length_m(lat, lon), surface_class(json.loads(tags)))
+            if not glued or glued[-1] in (nodes[0], nodes[-1]):
+                order.append(way)
+            else:
+                order.insert(0, way)
+            glued = _extend_node_chain(glued, nodes) or glued
+        classified = [(length, kind) for length, kind in order if kind is not None]
+        total = sum(length for length, _ in classified)
+        if total <= 0:
+            continue
+        trailhead = trailheads.loc[dayhike_id]
+
+        def to_trailhead(node: int) -> float:
+            if node not in node_xy:
+                return math.nan
+            lat, lon = node_xy[node]
+            return _path_length_m(
+                [trailhead["trailhead_latitude"], lat],
+                [trailhead["trailhead_longitude"], lon],
+            )
+
+        to_start, to_end = to_trailhead(glued[0]), to_trailhead(glued[-1])
+        approaches = []
+        if not to_end < to_start:
+            approaches.append(_paved_run(order))
+        if not to_start < to_end:
+            approaches.append(_paved_run(order[::-1]))
+        facts[dayhike_id] = [
+            sum(length for length, k in classified if k == kind) / total
+            for kind in ("paved", "gravel", "natural", "rock")
+        ] + [min(approaches)]
+    return pd.DataFrame.from_dict(
+        facts, orient="index", columns=[*SURFACE_SHARE_COLUMNS, "tarmac_approach_m"]
+    ).reindex(ids.rename("id"))
+
+
+def _paved_run(walked: Sequence[tuple[float, str | None]]) -> float:
+    """Length of the paved ways at the start of ``walked``, up to the first
+    way that is not paved (an unclassified way ends it).
+    """
+    run = 0.0
+    for length, kind in walked:
+        if kind != "paved":
+            break
+        run += length
+    return run
 
 
 def _points(table: pd.DataFrame) -> gpd.GeoDataFrame:
