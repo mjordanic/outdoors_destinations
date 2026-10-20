@@ -299,6 +299,37 @@ def test_similarity_notebooks_run_only_synthetic_checks_on_the_fixture() -> None
     assert all(result == "PASS" for *_, result in verify)
 
 
+SIMILARITY_FACETS = (
+    "effort",
+    "altitude",
+    "profile",
+    "landscape",
+    "weather",
+    "water",
+    "facilities",
+    "trail",
+)
+
+
+def test_similarity_notebook_combines_all_facets_on_the_fixture() -> None:
+    output, _, _ = _run_notebooks()
+    lines = [line.split("\t") for line in output.splitlines()]
+
+    ranked_sets = {fields[1] for fields in lines if fields[0] == "rank"}
+    assert ranked_sets == {"facilities_heavy", "altitude_heavy"}
+
+    multi_seed = [fields for fields in lines if fields[0] == "multi_seed"]
+    assert multi_seed
+    for _, _name, score, first, second in multi_seed:
+        assert float(score) == pytest.approx(max(float(first), float(second)))
+
+    missing = {fields[1] for fields in lines if fields[0] == "facet_missing"}
+    assert missing == set(SIMILARITY_FACETS)
+
+    verify_count = sum(1 for fields in lines if fields[0] == "verify")
+    assert f"verify_summary\tpass={verify_count}\tfail=0" in output
+
+
 def _tagged_names(output: str, tag: str) -> list[str]:
     prefix = f"{tag}\t"
     return [

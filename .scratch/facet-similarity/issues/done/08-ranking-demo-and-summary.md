@@ -10,7 +10,7 @@ summary table built from every `verify` line, plus a short list of the design
 choices the Hiker should review (constants changed from the PRD, the Profile
 method kept).
 
-**Status:** ready-for-agent
+**Status:** done
 
 ## Blocked by
 
