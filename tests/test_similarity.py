@@ -2,14 +2,18 @@ import math
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from dayhike import build_catalog
 from dayhike.similarity import (
     altitude_facts,
+    LANDCOVER_SHARE_COLUMNS,
     combined_score,
+    corridor_amenities,
     effort_facts,
     facet_score,
+    landscape_facts,
     load_region,
     mix,
     multi_seed_score,
@@ -349,3 +353,175 @@ def test_profile_dtw_lets_a_climb_shift_within_the_band() -> None:
     assert profile_dtw(ONE_CLIMB_EARLY, ONE_CLIMB_LATE, band=0.0) == pytest.approx(
         lockstep
     )
+
+
+def _metres_north(metres):
+    return 45.0 + math.degrees(metres / 6_371_000)
+
+
+def _metres_east(metres):
+    return 15.0 + math.degrees(metres / (6_371_000 * math.cos(math.radians(45.0))))
+
+
+def _chain(*points, dayhike_id=1):
+    """Vertices of one DayHike from (lat, lon) points in chain order."""
+    return pd.DataFrame(
+        {
+            "dayhike_id": dayhike_id,
+            "seq": range(len(points)),
+            "latitude": [lat for lat, _ in points],
+            "longitude": [lon for _, lon in points],
+        }
+    )
+
+
+def _amenity_points(kind, *points):
+    return pd.DataFrame(
+        {
+            "osm_key": [f"n{i}" for i in range(len(points))],
+            "kind": kind,
+            "latitude": [lat for lat, _ in points],
+            "longitude": [lon for _, lon in points],
+        }
+    )
+
+
+# A 300 m segment due north of (45, 15).
+SEGMENT = _chain((45.0, 15.0), (_metres_north(300), 15.0))
+
+
+def test_corridor_is_in_at_90_m_and_out_at_110_m() -> None:
+    water = _amenity_points(
+        "drinking_water",
+        (45.0, _metres_east(90)),
+        (_metres_north(300), _metres_east(110)),
+    )
+
+    found = corridor_amenities(SEGMENT, water, kind="drinking_water", radius_m=100.0)
+
+    assert list(found["osm_key"]) == ["n0"]
+    assert found["distance_m"].iloc[0] == pytest.approx(90.0, abs=0.5)
+
+
+def test_corridor_measures_to_the_line_not_only_to_vertices() -> None:
+    # 150 m along a 300 m segment and 90 m aside: 175 m from the nearest vertex.
+    beside_middle = _amenity_points("drinking_water", (_metres_north(150), _metres_east(90)))
+
+    found = corridor_amenities(
+        SEGMENT, beside_middle, kind="drinking_water", radius_m=100.0
+    )
+
+    assert list(found["osm_key"]) == ["n0"]
+    assert found["distance_m"].iloc[0] == pytest.approx(90.0, abs=0.5)
+
+
+def test_corridor_is_set_by_the_radius_and_the_kind() -> None:
+    mixed = pd.concat(
+        [
+            _amenity_points("peak", (_metres_north(150), _metres_east(300))),
+            _amenity_points("hut", (_metres_north(150), _metres_east(10))),
+        ],
+        ignore_index=True,
+    )
+
+    assert corridor_amenities(SEGMENT, mixed, kind="peak", radius_m=100.0).empty
+    near = corridor_amenities(SEGMENT, mixed, kind="peak", radius_m=2_000.0)
+    assert near["distance_m"].iloc[0] == pytest.approx(300.0, abs=2.0)
+    assert corridor_amenities(SEGMENT, mixed, kind="shelter", radius_m=100.0).empty
+
+
+def test_corridor_gives_each_dayhike_its_own_points_in_either_direction() -> None:
+    other = _chain((45.5, 15.0), (_metres_north(300) + 0.5, 15.0), dayhike_id=2)
+    both = pd.concat([SEGMENT, other], ignore_index=True)
+    water = _amenity_points(
+        "drinking_water", (_metres_north(150), _metres_east(50)), (45.5, _metres_east(20))
+    )
+
+    found = corridor_amenities(both, water, kind="drinking_water", radius_m=100.0)
+    turned = corridor_amenities(
+        both.assign(seq=both.groupby("dayhike_id")["seq"].transform("max") - both["seq"]),
+        water,
+        kind="drinking_water",
+        radius_m=100.0,
+    )
+
+    assert sorted(zip(found["dayhike_id"], found["osm_key"])) == [(1, "n0"), (2, "n1")]
+    assert turned.sort_values("dayhike_id").equals(found.sort_values("dayhike_id"))
+
+
+def test_corridor_with_no_point_of_the_kind_is_empty() -> None:
+    found = corridor_amenities(
+        SEGMENT, _amenity_points("hut"), kind="drinking_water", radius_m=100.0
+    )
+
+    assert found.empty
+    assert list(found.columns) == ["dayhike_id", "osm_key", "distance_m"]
+
+
+def test_landscape_facts_put_the_fixture_peak_and_viewpoint_on_ridge_walk(
+    fixture_catalog: Path,
+) -> None:
+    vertices, amenities, dayhikes, _ = _whole_fixture(fixture_catalog)
+
+    facts = landscape_facts(dayhikes, vertices, amenities)
+
+    assert list(facts.columns) == [
+        *LANDCOVER_SHARE_COLUMNS,
+        "peak_summited",
+        "viewpoint_along",
+        "peaks_around",
+    ]
+    assert set(facts.index) == set(dayhikes["id"])
+    # The fixture Peak and Viewpoint sit on Ridge Walk's line (lon 15.0).
+    assert facts.loc[1001, "peak_summited"]
+    assert facts.loc[1001, "viewpoint_along"]
+    assert facts.loc[1001, "peaks_around"] == 1
+    # Valley Path is ~21 km away from them.
+    assert not facts.loc[1002, "peak_summited"]
+    assert not facts.loc[1002, "viewpoint_along"]
+    assert facts.loc[1002, "peaks_around"] == 0
+    assert landscape_facts(dayhikes, _reversed(vertices), amenities).equals(facts)
+
+
+def test_landscape_facts_peak_summited_is_50_m_and_peaks_around_is_2_km() -> None:
+    dayhikes = pd.DataFrame(
+        {
+            "id": [1],
+            **{f"{n}_fraction": [None] for n in ("tree", "shrub", "grass", "bare", "snow")},
+        }
+    )
+    peaks = _amenity_points(
+        "peak",
+        (_metres_north(150), _metres_east(40)),
+        (_metres_north(150), _metres_east(1_900)),
+        (_metres_north(150), _metres_east(2_100)),
+    )
+
+    facts = landscape_facts(dayhikes, SEGMENT, peaks)
+    assert facts.loc[1, "peak_summited"]
+    assert facts.loc[1, "peaks_around"] == 2
+    far = landscape_facts(
+        dayhikes,
+        SEGMENT,
+        _amenity_points("peak", (_metres_north(150), _metres_east(60))),
+    )
+    assert not far.loc[1, "peak_summited"]
+    assert far.loc[1, "peaks_around"] == 1
+    assert not landscape_facts(dayhikes, SEGMENT, peaks.iloc[0:0]).loc[1, "viewpoint_along"]
+
+
+def test_landscape_facts_landcover_shares_include_the_clipped_leftover() -> None:
+    def shares(*fractions):
+        names = ("tree", "shrub", "grass", "bare", "snow")
+        frame = pd.DataFrame(
+            {"id": [1], **{f"{n}_fraction": [f] for n, f in zip(names, fractions)}}
+        )
+        return landscape_facts(frame, SEGMENT, _amenity_points("peak")).loc[1]
+
+    split = shares(0.5, 0.1, 0.2, 0.1, 0.0)
+    assert [split[c] for c in LANDCOVER_SHARE_COLUMNS] == pytest.approx(
+        [0.5, 0.1, 0.2, 0.1, 0.0, 0.1]
+    )
+    assert shares(0.5, 0.3, 0.3, 0.0, 0.0)["other_share"] == 0.0
+    missing = shares(None, 0.1, 0.2, 0.1, 0.0)
+    assert missing[list(LANDCOVER_SHARE_COLUMNS)].isna().all()

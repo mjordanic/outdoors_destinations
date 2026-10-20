@@ -284,7 +284,7 @@ def test_similarity_notebooks_run_only_synthetic_checks_on_the_fixture() -> None
     checks = {(facet, check) for _, facet, check, _, _ in verify}
     assert checks == {
         (facet, check)
-        for facet in ("effort", "altitude", "profile")
+        for facet in ("effort", "altitude", "profile", "landscape")
         for check in ("identity", "symmetry_max_gap", "reversed")
     }
     assert all(result == "PASS" for *_, result in verify)

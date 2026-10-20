@@ -16,6 +16,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 from shapely.geometry import LineString
+from sklearn.neighbors import BallTree
 
 from dayhike.catalog import EARTH_RADIUS_M, geometry_store_path_for
 
@@ -23,6 +24,17 @@ AMENITY_PAD_M = 3_000  # vertex box pad for region amenities; covers Peaks aroun
 PROFILE_POINTS = 64
 PROFILE_RANGE_FLOOR_M = 50.0
 PROFILE_DTW_BAND = 0.1  # Sakoe-Chiba band as a share of the points
+CORRIDOR_M = 100.0  # amenity along the DayHike (CONTEXT.md Corridor)
+PEAK_SUMMITED_M = 50.0
+PEAKS_AROUND_M = 2_000.0
+LANDCOVER_SHARE_COLUMNS = (
+    "tree_share",
+    "shrub_share",
+    "grass_share",
+    "bare_share",
+    "snow_share",
+    "other_share",
+)
 
 
 def similarity_facts_path_for(catalog_path: Path | str) -> Path:
@@ -339,6 +351,120 @@ def profile_facts(dayhikes: pd.DataFrame, vertices: pd.DataFrame) -> pd.DataFram
     ids = dayhikes["id"]
     shape_per_id = pd.Series([shapes.get(i) for i in ids], index=ids, dtype=object)
     return pd.DataFrame({"profile_shape": shape_per_id})
+
+
+def corridor_amenities(
+    vertices: pd.DataFrame,
+    amenities: pd.DataFrame,
+    *,
+    kind: str,
+    radius_m: float,
+) -> pd.DataFrame:
+    """Amenity points of one ``kind`` within ``radius_m`` of each DayHikeGeometry.
+
+    Distance is measured to the line, not only to its vertices: each segment of
+    the vertex chain is densified to at most ``radius_m / 10`` between points
+    before a haversine BallTree query, so a point beside the middle of a long
+    segment is found and the distance is over-stated by under 0.2% of
+    ``radius_m``. Returns one row per (DayHike, amenity point) with columns
+    ``dayhike_id``, ``osm_key`` and ``distance_m`` (to the line); a DayHike with
+    no point in range has no row. The result does not depend on the walking
+    direction.
+    """
+    points = amenities[amenities["kind"] == kind].reset_index(drop=True)
+    none_found = pd.DataFrame({"dayhike_id": [], "osm_key": [], "distance_m": []})
+    if points.empty:
+        return none_found
+    tree = BallTree(
+        np.radians(points[["latitude", "longitude"]].to_numpy(float)),
+        metric="haversine",
+    )
+    found = []
+    for dayhike_id, chain in vertices.sort_values(["dayhike_id", "seq"]).groupby(
+        "dayhike_id"
+    ):
+        line = _densify(chain["latitude"], chain["longitude"], radius_m / 10)
+        hits, distance = tree.query_radius(
+            line, r=radius_m / EARTH_RADIUS_M, return_distance=True
+        )
+        hit, distance = np.concatenate(hits), np.concatenate(distance)
+        if hit.size:
+            nearest = pd.Series(distance * EARTH_RADIUS_M).groupby(hit).min()
+            found.append(
+                pd.DataFrame(
+                    {
+                        "dayhike_id": dayhike_id,
+                        "osm_key": points["osm_key"].to_numpy()[nearest.index],
+                        "distance_m": nearest.to_numpy(),
+                    }
+                )
+            )
+    return pd.concat(found, ignore_index=True) if found else none_found
+
+
+def _densify(latitude: Sequence[float], longitude: Sequence[float], step_m: float):
+    """Vertex chain as radians (lat, lon) rows, with points inserted so that
+    consecutive points are at most ``step_m`` apart.
+    """
+    lat = np.radians(np.asarray(latitude, dtype=float))
+    lon = np.radians(np.asarray(longitude, dtype=float))
+    segment = 2 * EARTH_RADIUS_M * np.arcsin(
+        np.sqrt(
+            np.sin(np.diff(lat) / 2) ** 2
+            + np.cos(lat[:-1]) * np.cos(lat[1:]) * np.sin(np.diff(lon) / 2) ** 2
+        )
+    )
+    pieces = np.maximum(1, np.ceil(segment / step_m)).astype(int)
+    start = np.repeat(np.arange(len(segment)), pieces)
+    along = (np.arange(pieces.sum()) - np.repeat(np.cumsum(pieces) - pieces, pieces)) / (
+        pieces[start]
+    )
+    dense_lat = lat[start] + along * (lat[start + 1] - lat[start])
+    dense_lon = lon[start] + along * (lon[start + 1] - lon[start])
+    return np.column_stack(
+        [np.append(dense_lat, lat[-1]), np.append(dense_lon, lon[-1])]
+    )
+
+
+def landscape_facts(
+    dayhikes: pd.DataFrame, vertices: pd.DataFrame, amenities: pd.DataFrame
+) -> pd.DataFrame:
+    """Landscape facts per DayHike id, in stored order.
+
+    Six LandCover shares: the Catalog's five fractions plus ``other_share`` =
+    1 - their sum, clipped at 0; all six are missing when any Catalog fraction
+    is. ``peak_summited``: a Peak within ``PEAK_SUMMITED_M`` of the line.
+    ``viewpoint_along``: a Viewpoint in the ``CORRIDOR_M`` Corridor.
+    ``peaks_around``: Peaks within ``PEAKS_AROUND_M`` of the line.
+    """
+    ids = dayhikes["id"]
+    fractions = (
+        dayhikes[
+            [
+                "tree_fraction",
+                "shrub_fraction",
+                "grass_fraction",
+                "bare_fraction",
+                "snow_fraction",
+            ]
+        ]
+        .astype(float)
+        .set_axis(LANDCOVER_SHARE_COLUMNS[:5], axis=1)
+    )
+    fractions["other_share"] = (1.0 - fractions.sum(axis=1, skipna=False)).clip(lower=0)
+    fractions = fractions.mask(fractions.isna().any(axis=1))
+    fractions.index = ids
+
+    def hikes_with(kind: str, radius_m: float) -> pd.Series:
+        return corridor_amenities(
+            vertices, amenities, kind=kind, radius_m=radius_m
+        )["dayhike_id"].value_counts().reindex(ids, fill_value=0)
+
+    return fractions.assign(
+        peak_summited=hikes_with("peak", PEAK_SUMMITED_M) > 0,
+        viewpoint_along=hikes_with("viewpoint", CORRIDOR_M) > 0,
+        peaks_around=hikes_with("peak", PEAKS_AROUND_M),
+    )
 
 
 def _points(table: pd.DataFrame) -> gpd.GeoDataFrame:

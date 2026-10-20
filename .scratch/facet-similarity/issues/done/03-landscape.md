@@ -6,7 +6,7 @@ is along it, and how many Peaks are around it. This ticket introduces the
 Corridor rule (an amenity point within 100 m of DayHikeGeometry, measured to
 the line, not only to vertices) that the Water and Facilities Facets reuse.
 
-**Status:** ready-for-agent
+**Status:** done
 
 ## Blocked by
 
