@@ -2,7 +2,7 @@
 
 - PRD: [PRD.md](PRD.md)
 - Started: 2026-10-20 12:11
-- Last updated: 2026-10-20 16:50
+- Last updated: 2026-10-21
 - Parallelism cap: 1
 - Integration branch (`BASE_BRANCH`): facet-similarity
 - Harness: claude-code
@@ -66,6 +66,7 @@
 - 2026-10-20 15:16 — orchestrator verified 3f12898 (issue in done/, no trailer); wave 4 dispatched for 08-ranking-demo-and-summary
 - 2026-10-20 16:40 — wave 4: 08-ranking-demo-and-summary committed as 9d2d909 (inplace, agent a7c4a9becd78ed324, resumed after usage limit)
 - 2026-10-20 16:50 — orchestrator verified 9d2d909 (issue in done/, no trailer on any branch commit); fixed 05-facilities row status (was left in-progress); full suite 280 passed; no worktrees to clean (inplace). Run complete: 8 committed, 0 failed, 0 blocked
+- 2026-10-21 00:24 — after review, outside the wave run: WaterSources (springs, taps, water points) added to ingest and the Water Facet (5a88804), Europe re-ingested and re-sampled (ingest 105 min, sample-dem 15 min, sample-landcover 10 min, sample-climate 3.5 h), facts rebuilt; region no-WaterSource share 71% -> 60%; two Water verification pairs re-picked
 
 ## Outstanding follow-ups
 
@@ -84,8 +85,8 @@
 - 07: southness on mostly flat walks rests on few sloped points; consider a minimum sloped-point count if noisy in Ranking
 - 07: notebook 04 SolarAspect prototype still has the old west-as-south formula (out of scope per PRD)
 - 04: water_facts takes about 40 s for the region; no water on 71% of hikes, so capped count is 1.00 for most random pairs
-- 04: springs gap does not show strongly by altitude; notebooks say so
-- 04: natural springs are not in the GeometryStore (needs ingest filter change and re-ingest); Water understates water for backcountry hikes
+- 04: springs gap does not show strongly by altitude; notebooks say so (superseded 2026-10-21: with springs, hikes above 1,500 m with no WaterSource fell from 73% to 57%)
+- 04: natural springs are not in the GeometryStore (needs ingest filter change and re-ingest); Water understates water for backcountry hikes (resolved 2026-10-21: 5a88804 keeps springs, taps and water points as WaterSources, Europe re-ingested and re-sampled, 228cd8d adds opt-in real-data checks; see PRD Amendments)
 - 04: water_facts per-segment Python loop could be vectorized for the whole-of-Europe phase
 - 04: full suite not re-run after a markdown-only notebook edit (resolved: orchestrator ran it, 268 passed)
 - 05: Facilities presence is lenient (both-absent agrees), so a one-flag difference scores 0.8 and misses the 0.4 soft target; revisit only if FacetWeights demos need sharper separation

@@ -271,3 +271,7 @@ runs it for the whole of Europe.
 
 - After approval, the next phase promotes the facts to the Catalog (Ranking cannot read GeometryStore, ADR-0006), optimizes extraction and scoring for the whole of Europe, and accepts ADR-0011.
 - DTW cost is not the blocker: on 64 points with a 10% band it is about 800 cells per pair; a Seed against the region is milliseconds and against 155k DayHikes a few seconds when vectorized.
+
+## Amendments
+
+- 2026-10-21, WaterSources. After review the springs gap was closed, which supersedes user story 37, the Water extraction rule above and "natural springs" under Out of Scope. Ingest keeps `natural=spring`, `man_made=water_tap` and `amenity=water_point` (not when tagged `drinking_water=no`; `amenity=drinking_water` keeps priority, so the Catalog AmenityFacts did not change), Europe was re-ingested and re-sampled, and the Water Facet counts all four WaterSource kinds (`WATER_SOURCE_KINDS`). Region DayHikes with no WaterSource fell from 71% to 60%. Two 05a Water verification pairs were re-picked because their dry hikes now pass springs. `tests/test_real_data.py` (opt-in) checks the re-ingest against the files from before it. Glossary: WaterSource.

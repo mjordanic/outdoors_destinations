@@ -15,7 +15,9 @@ geometries, then rank from those files.
 uv sync
 ```
 
-The package is `dayhike`. Tests: `uv run pytest`.
+The package is `dayhike`. Tests: `uv run pytest`. Checks on the real data in
+`data/` are opt-in: `DAYHIKE_REAL_DATA=1 uv run pytest tests/test_real_data.py`
+(see [Re-ingest after an ingest change](#re-ingest-after-an-ingest-change)).
 
 ## How data is created (command order)
 
@@ -859,6 +861,34 @@ uv run dayhike ingest data/osm/croatia-latest.osm.pbf \
 To add a country later, put its PBF next to the others and ingest the **whole
 directory** (or list every file you want) again.
 
+### Re-ingest after an ingest change
+
+When ingest starts keeping more (as when springs, taps, and water points became
+WaterSources), an existing Catalog does not change by itself. Ingest the same
+snapshot again, then sample again, because ingest resets every vertex sample:
+
+```bash
+mkdir -p data/baseline   # optional: keep the old files to compare against
+cp -c data/catalog.sqlite data/catalog.geometry.sqlite \
+  data/catalog.similarity_facts.pkl data/baseline/   # macOS APFS clone, instant
+uv run dayhike ingest data/osm/europe-latest.osm.pbf --catalog data/catalog.sqlite --fresh
+uv run dayhike sample-dem
+uv run dayhike sample-landcover
+uv run dayhike sample-climate
+# run notebooks/05_similarity_facts.ipynb to rebuild the facts table, then:
+DAYHIKE_REAL_DATA=1 uv run pytest tests/test_real_data.py
+```
+
+Ingest filters the source again by itself when the filter list changed. The
+checks in `tests/test_real_data.py` look at the data as it is (every DayHike
+has a geometry, WaterSources are stored as the rules say, notebook 05a passes
+its verification lines) and, with `data/baseline/`, compare with the old
+files: nothing but the WaterSources may change. On the Europe snapshot
+(155,844 DayHikes) on an 8-core Mac this took: ingest 105 min, `sample-dem`
+15 min, `sample-landcover` 10 min, `sample-climate` 3.5 h, notebook 05 3 min.
+The clone costs no disk until ingest replaces the originals, then about 19 GB;
+delete `data/baseline/` once the checks pass.
+
 ## Valhalla (DriveTime only)
 
 Ranking by Seed does **not** need Valhalla. Valhalla is only for `--origin` /
@@ -1133,7 +1163,7 @@ uv run jupyter notebook notebooks/01_raw_data_and_ingestion.ipynb
 | [`notebooks/03_ranking.ipynb`](notebooks/03_ranking.ipynb) | Production ranking: cosine after scaling, max-not-mean, unknown Seeds, stubbed DriveTime, Ranking with no month and with QueryMonth 7, LandCover order. |
 | [`notebooks/04_rank_feature_lab.ipynb`](notebooks/04_rank_feature_lab.ipynb) | Sandbox to add FeatureVector columns, ablate them, and compare order to production. SolarAspect lives here. |
 | [`notebooks/04a_geometry.ipynb`](notebooks/04a_geometry.ipynb) | GeometryStore tables as GeoPandas: vertices, amenities, DayHike lines, member ways, leftover `in_chain`, per-vertex land-cover classes and `vertex_climate` (synthetic rasters, no download). |
-| [`notebooks/05_similarity_facts.ipynb`](notebooks/05_similarity_facts.ipynb) | Facet similarity design (ADR-0011, proposed): load the Slovenia + Croatia region of the GeometryStore with `dayhike.similarity.load_region`, then one section per Facet (Effort, Altitude, Profile, Landscape, Weather, Water, Facilities, Trail) that extracts its facts, plots their spread and an example map, and states the rule and its data gaps (natural springs missing for Water). Writes `data/catalog.similarity_facts.pkl` (gitignored). |
+| [`notebooks/05_similarity_facts.ipynb`](notebooks/05_similarity_facts.ipynb) | Facet similarity design (ADR-0011, proposed): load the Slovenia + Croatia region of the GeometryStore with `dayhike.similarity.load_region`, then one section per Facet (Effort, Altitude, Profile, Landscape, Weather, Water, Facilities, Trail) that extracts its facts, plots their spread and an example map, and states the rule and its data gaps (Water counts mapped drinking water, springs, taps and water points only). Writes `data/catalog.similarity_facts.pkl` (gitignored). |
 | [`notebooks/05a_similarity.ipynb`](notebooks/05a_similarity.ipynb) | All eight FacetScores from the similarity facts table: measure spreads and constants, named similar/dissimilar pairs with `verify` PASS/FAIL lines, identity/symmetry/reversed checks, and the Profile lock-step vs DTW choice. Then one Seed ranked under a Facilities-heavy and an Altitude-heavy FacetWeights set (top five with per-Facet scores, combined score, coverage and a map each), two Seeds under the maximum rule, how often each Facet is missing, one verification summary table, and the design choices for review. Production Ranking is unchanged. |
 
 `01` and `03` always rebuild the committed OSM fixture (no Geofabrik, no live
