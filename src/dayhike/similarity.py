@@ -514,6 +514,86 @@ def landscape_facts(
     )
 
 
+def water_facts(
+    dayhikes: pd.DataFrame, vertices: pd.DataFrame, amenities: pd.DataFrame
+) -> pd.DataFrame:
+    """Water facts per DayHike id, in stored order.
+
+    ``water_count``: drinking-water points (``drinking_water`` amenities) in the
+    ``CORRIDOR_M`` Corridor, uncapped. ``dry_stretch_m``: DryStretch, the longest
+    distance walked without passing one. Each Corridor water point is placed at
+    its position along the line (where the line passes it closest); the
+    stretches run from the first vertex to the first point, between points and
+    from the last point to the last vertex, and the longest wins. Two points at
+    one position split the walk once. With no water the DryStretch is the
+    length of the vertex chain (haversine over every vertex). Both facts are
+    the same whichever way the DayHike is walked. A DayHike without vertices
+    has both missing.
+    """
+    ids = dayhikes["id"]
+    found = corridor_amenities(vertices, amenities, kind="drinking_water", radius_m=CORRIDOR_M)
+    spots = amenities.drop_duplicates("osm_key").set_index("osm_key")[["latitude", "longitude"]]
+    found = found.join(spots, on="osm_key")
+    counts = found["dayhike_id"].value_counts()
+    facts = {}
+    for dayhike_id, chain in vertices.sort_values(["dayhike_id", "seq"]).groupby("dayhike_id"):
+        water = found[found["dayhike_id"] == dayhike_id]
+        positions, length = _positions_along(
+            chain["latitude"], chain["longitude"], water["latitude"], water["longitude"]
+        )
+        edges = np.concatenate([[0.0], np.sort(positions), [length]])
+        facts[dayhike_id] = (counts.get(dayhike_id, 0), float(np.diff(edges).max()))
+    return pd.DataFrame.from_dict(
+        facts, orient="index", columns=["water_count", "dry_stretch_m"]
+    ).reindex(ids.rename("id"))
+
+
+def _positions_along(
+    chain_lat: Sequence[float],
+    chain_lon: Sequence[float],
+    point_lat: Sequence[float],
+    point_lon: Sequence[float],
+) -> tuple[np.ndarray, float]:
+    """Position (metres from the first vertex) of the closest place on the
+    vertex chain to each point, and the chain length.
+
+    Closeness is measured on a flat plane around the chain; distances along
+    the chain are haversine, so positions add up to the chain length.
+    """
+    lat = np.asarray(chain_lat, dtype=float)
+    lon = np.asarray(chain_lon, dtype=float)
+    segment = np.array(
+        [_path_length_m(lat[i : i + 2], lon[i : i + 2]) for i in range(len(lat) - 1)]
+    )
+    start = np.concatenate([[0.0], np.cumsum(segment)])
+    lat0, lon0 = lat.mean(), lon.mean()
+
+    def plane(latitude, longitude):
+        y = np.radians(np.asarray(latitude, dtype=float) - lat0) * EARTH_RADIUS_M
+        x = np.radians(np.asarray(longitude, dtype=float) - lon0) * EARTH_RADIUS_M * math.cos(
+            math.radians(lat0)
+        )
+        return x, y
+
+    x, y = plane(lat, lon)
+    px, py = plane(point_lat, point_lon)
+    dx, dy = np.diff(x), np.diff(y)
+    flat = dx**2 + dy**2
+    # Share of each segment, per (point, segment), clipped to the segment.
+    along = np.clip(
+        ((px[:, None] - x[:-1]) * dx + (py[:, None] - y[:-1]) * dy)
+        / np.where(flat > 0, flat, 1.0),
+        0.0,
+        1.0,
+    )
+    miss = np.hypot(
+        x[:-1] + along * dx - px[:, None], y[:-1] + along * dy - py[:, None]
+    )
+    nearest = miss.argmin(axis=1)
+    rows = np.arange(len(px))
+    return start[nearest] + along[rows, nearest] * segment[nearest], float(start[-1])
+
+
 def surface_class_from_tag(tags: Mapping[str, str]) -> str | None:
     """Surface class (paved, gravel, natural, rock) of a way's ``surface`` tag.
 

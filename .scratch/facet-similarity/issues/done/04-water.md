@@ -6,7 +6,7 @@ the DryStretch, the longest distance walked without passing one. The notebook
 states that natural springs are mostly missing from the GeometryStore, so
 mountain hikes look drier than they are.
 
-**Status:** ready-for-agent
+**Status:** done
 
 ## Blocked by
 

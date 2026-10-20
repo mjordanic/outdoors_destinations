@@ -33,6 +33,7 @@ from dayhike.similarity import (
     surface_class_from_tag,
     tolerance,
     trail_facts,
+    water_facts,
     weather_facts,
 )
 
@@ -899,3 +900,121 @@ def test_weather_facts_are_the_regime_the_months_and_southness(
     # The fixture has no DEM tile: southness is missing, never 0.
     assert facts["southness"].isna().all()
     assert facts.loc[1002].isna().all()
+
+
+# A 1,000 m walk due north of (45, 15): vertices every 250 m.
+WALK = _chain(*[(_metres_north(250 * i), 15.0) for i in range(5)])
+WALK_HIKE = pd.DataFrame({"id": [1]})
+
+
+def _water_at(*metres_along, aside_m=10.0):
+    return _amenity_points(
+        "drinking_water",
+        *[(_metres_north(m), _metres_east(aside_m)) for m in metres_along],
+    )
+
+
+def _water(points, chain=WALK):
+    return water_facts(WALK_HIKE, chain, points).loc[1]
+
+
+def test_dry_stretch_with_no_water_is_the_length_of_the_dayhike() -> None:
+    facts = _water(_water_at())
+
+    assert facts["water_count"] == 0
+    assert facts["dry_stretch_m"] == pytest.approx(1_000.0, abs=1.0)
+
+
+def test_dry_stretch_with_water_at_the_start_is_still_the_whole_walk() -> None:
+    facts = _water(_water_at(0.0))
+
+    assert facts["water_count"] == 1
+    assert facts["dry_stretch_m"] == pytest.approx(1_000.0, abs=1.0)
+
+
+def test_dry_stretch_with_one_water_point_in_the_middle_is_the_longer_side() -> None:
+    assert _water(_water_at(400.0))["dry_stretch_m"] == pytest.approx(600.0, abs=1.0)
+    assert _water(_water_at(700.0))["dry_stretch_m"] == pytest.approx(700.0, abs=1.0)
+
+
+def test_dry_stretch_with_several_water_points_is_the_longest_stretch() -> None:
+    # Stretches: 0-200, 200-300, 300-750, 750-1000.
+    facts = _water(_water_at(750.0, 200.0, 300.0))
+
+    assert facts["water_count"] == 3
+    assert facts["dry_stretch_m"] == pytest.approx(450.0, abs=1.0)
+
+
+def test_two_water_points_at_the_same_position_count_twice_and_split_once() -> None:
+    facts = _water(_water_at(400.0, 400.0))
+
+    assert facts["water_count"] == 2
+    assert facts["dry_stretch_m"] == pytest.approx(600.0, abs=1.0)
+
+
+def test_water_count_includes_only_corridor_points() -> None:
+    inside = _water_at(500.0, aside_m=90.0)
+    outside = _water_at(100.0, aside_m=110.0)
+
+    facts = _water(pd.concat([inside, outside], ignore_index=True))
+
+    assert facts["water_count"] == 1
+    # The point 110 m aside does not split the walk at 100 m.
+    assert facts["dry_stretch_m"] == pytest.approx(500.0, abs=1.0)
+
+
+def test_water_position_is_along_the_line_not_the_nearest_vertex() -> None:
+    # Beside the middle of one 600 m segment, 90 m aside: 300 m from either vertex.
+    chain = _chain((45.0, 15.0), (_metres_north(600), 15.0), (_metres_north(700), 15.0))
+
+    facts = _water(_water_at(150.0, aside_m=90.0), chain=chain)
+
+    assert facts["dry_stretch_m"] == pytest.approx(550.0, abs=1.0)
+
+
+def test_water_points_are_only_drinking_water_of_this_dayhike() -> None:
+    mixed = pd.concat(
+        [
+            _water_at(500.0),
+            _amenity_points("hut", (_metres_north(100), _metres_east(10))),
+        ],
+        ignore_index=True,
+    )
+    other = _chain((45.5, 15.0), (45.6, 15.0), dayhike_id=2)
+    both = pd.concat([WALK, other], ignore_index=True)
+
+    facts = water_facts(pd.DataFrame({"id": [1, 2]}), both, mixed)
+
+    assert list(facts.columns) == ["water_count", "dry_stretch_m"]
+    assert list(facts["water_count"]) == [1, 0]
+    assert facts.loc[1, "dry_stretch_m"] == pytest.approx(500.0, abs=1.0)
+    assert facts.loc[2, "dry_stretch_m"] == pytest.approx(11_119.5, abs=5.0)
+
+
+def test_water_facts_are_the_same_for_the_reversed_chain() -> None:
+    points = _water_at(100.0, 150.0, 800.0)
+
+    facts = water_facts(WALK_HIKE, WALK, points)
+    turned = water_facts(WALK_HIKE, _reversed(WALK), points)
+
+    assert turned.loc[1, "water_count"] == facts.loc[1, "water_count"]
+    assert turned.loc[1, "dry_stretch_m"] == pytest.approx(facts.loc[1, "dry_stretch_m"])
+
+
+def test_water_facts_on_the_fixture_put_its_water_point_on_ridge_walk(
+    fixture_catalog: Path,
+) -> None:
+    vertices, amenities, dayhikes, _ = _whole_fixture(fixture_catalog)
+
+    facts = water_facts(dayhikes, vertices, amenities)
+
+    assert set(facts.index) == set(dayhikes["id"])
+    assert facts.loc[1001, "water_count"] == 1
+    assert 0 < facts.loc[1001, "dry_stretch_m"] < dayhikes.set_index("id").at[1001, "length_m"]
+    assert facts.loc[1002, "water_count"] == 0
+    assert facts.loc[1002, "dry_stretch_m"] == pytest.approx(
+        dayhikes.set_index("id").at[1002, "length_m"], rel=0.01
+    )
+    turned = water_facts(dayhikes, _reversed(vertices), amenities)
+    assert turned["water_count"].equals(facts["water_count"])
+    assert turned["dry_stretch_m"].to_numpy() == pytest.approx(facts["dry_stretch_m"].to_numpy())
