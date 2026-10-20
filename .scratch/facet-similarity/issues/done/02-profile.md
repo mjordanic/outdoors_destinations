@@ -8,7 +8,7 @@ comparison and with banded dynamic time warping side by side, both taking the
 better of the candidate walked forward or reversed, verifies the Facet on real
 pairs, and records which method the design keeps and why.
 
-**Status:** ready-for-agent
+**Status:** done
 
 ## Blocked by
 

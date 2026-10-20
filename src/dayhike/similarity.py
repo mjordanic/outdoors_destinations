@@ -13,12 +13,16 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 from shapely.geometry import LineString
 
 from dayhike.catalog import EARTH_RADIUS_M, geometry_store_path_for
 
 AMENITY_PAD_M = 3_000  # vertex box pad for region amenities; covers Peaks around
+PROFILE_POINTS = 64
+PROFILE_RANGE_FLOOR_M = 50.0
+PROFILE_DTW_BAND = 0.1  # Sakoe-Chiba band as a share of the points
 
 
 def similarity_facts_path_for(catalog_path: Path | str) -> Path:
@@ -108,6 +112,90 @@ def multi_seed_score(seed_scores: Sequence[float | None]) -> float | None:
     """Several Seeds: a candidate's score is its best combined score to any Seed."""
     present = [s for s in seed_scores if not _missing(s)]
     return max(present) if present else None
+
+
+def profile_shape(
+    latitude: Sequence[float],
+    longitude: Sequence[float],
+    elevation: Sequence[float],
+) -> np.ndarray | None:
+    """ProfileShape of one ElevationProfile given as vertices in chain order.
+
+    Elevation is resampled at ``PROFILE_POINTS`` equal steps of the
+    cumulative-distance fraction 0 to 1 (haversine along every vertex), then the
+    minimum is subtracted and the result divided by max(range,
+    ``PROFILE_RANGE_FLOOR_M``), so a nearly flat DayHike stays nearly flat.
+    Vertices without elevation are skipped; fewer than two with elevation gives
+    None.
+    """
+    lat = np.radians(np.asarray(latitude, dtype=float))
+    lon = np.radians(np.asarray(longitude, dtype=float))
+    ele = np.asarray(elevation, dtype=float)
+    step = 2 * EARTH_RADIUS_M * np.arcsin(
+        np.sqrt(
+            np.sin(np.diff(lat) / 2) ** 2
+            + np.cos(lat[:-1]) * np.cos(lat[1:]) * np.sin(np.diff(lon) / 2) ** 2
+        )
+    )
+    distance = np.concatenate([[0.0], np.cumsum(step)])
+    has_ele = np.isfinite(ele)
+    if has_ele.sum() < 2 or distance[-1] <= 0:
+        return None
+    at, ele = distance[has_ele], ele[has_ele]
+    keep = np.concatenate([[True], np.diff(at) > 0])
+    resampled = np.interp(
+        np.linspace(0.0, distance[-1], PROFILE_POINTS), at[keep], ele[keep]
+    )
+    low = resampled.min()
+    return (resampled - low) / max(resampled.max() - low, PROFILE_RANGE_FLOOR_M)
+
+
+def profile_lockstep(a: np.ndarray | None, b: np.ndarray | None) -> float | None:
+    """Profile measure, point by point: 1 - mean abs difference of two
+    ProfileShapes, the better of ``b`` walked forward or reversed.
+    """
+    if _missing(a) or _missing(b):
+        return None
+    a, b = np.asarray(a), np.asarray(b)
+    return 1.0 - min(
+        float(np.mean(np.abs(a - b))), float(np.mean(np.abs(a - b[::-1])))
+    )
+
+
+def profile_dtw(
+    a: np.ndarray | None, b: np.ndarray | None, *, band: float = PROFILE_DTW_BAND
+) -> float | None:
+    """Profile measure with banded dynamic time warping: 1 - cost, the better
+    of ``b`` walked forward or reversed.
+
+    The warping path may stray at most ``band`` of the points off the diagonal
+    (Sakoe-Chiba). Cost is the mean abs difference along the cheapest path, so
+    it is never above the lock-step mean and 1 - cost stays in [0, 1].
+    """
+    if _missing(a) or _missing(b):
+        return None
+    a, b = np.asarray(a), np.asarray(b)
+    radius = round(band * len(a))
+    return 1.0 - min(_dtw_mean_cost(a, b, radius), _dtw_mean_cost(a, b[::-1], radius))
+
+
+def _dtw_mean_cost(a: np.ndarray, b: np.ndarray, radius: int) -> float:
+    """Mean abs difference along the cheapest banded warping path.
+
+    Each cell keeps (summed cost, path length); ties on cost take the shorter
+    path, so swapping ``a`` and ``b`` gives the same result.
+    """
+    a, b = a.tolist(), b.tolist()
+    n = len(a)
+    previous = [(0.0, 0)] + [(math.inf, 0)] * n
+    for i in range(1, n + 1):
+        current = [(math.inf, 0)] * (n + 1)
+        for j in range(max(1, i - radius), min(n, i + radius) + 1):
+            cost, length = min(previous[j - 1], previous[j], current[j - 1])
+            current[j] = (cost + abs(a[i - 1] - b[j - 1]), length + 1)
+        previous = current
+    cost, length = previous[n]
+    return cost / length
 
 
 def load_region(
@@ -234,6 +322,23 @@ def altitude_facts(dayhikes: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(
         {"highest_m": hikes["elevation_max_m"], "lowest_m": hikes["elevation_min_m"]}
     )
+
+
+def profile_facts(dayhikes: pd.DataFrame, vertices: pd.DataFrame) -> pd.DataFrame:
+    """Profile fact per DayHike id: the ProfileShape, in stored vertex order.
+
+    A DayHike with fewer than two vertices with ``ele`` has a missing
+    (None) ProfileShape.
+    """
+    shapes = {
+        dayhike_id: profile_shape(grp["latitude"], grp["longitude"], grp["ele"])
+        for dayhike_id, grp in vertices.sort_values(["dayhike_id", "seq"]).groupby(
+            "dayhike_id"
+        )
+    }
+    ids = dayhikes["id"]
+    shape_per_id = pd.Series([shapes.get(i) for i in ids], index=ids, dtype=object)
+    return pd.DataFrame({"profile_shape": shape_per_id})
 
 
 def _points(table: pd.DataFrame) -> gpd.GeoDataFrame:

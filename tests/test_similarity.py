@@ -1,6 +1,7 @@
 import math
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from dayhike import build_catalog
@@ -13,6 +14,10 @@ from dayhike.similarity import (
     mix,
     multi_seed_score,
     presence,
+    profile_facts,
+    profile_dtw,
+    profile_lockstep,
+    profile_shape,
     ratio,
     similarity_facts_path_for,
     tolerance,
@@ -224,7 +229,123 @@ def test_altitude_facts_are_highest_and_lowest_point(fixture_catalog: Path) -> N
     assert facts.loc[1002].isna().all()
 
 
+def test_profile_facts_are_the_profile_shape_per_dayhike(
+    fixture_catalog: Path,
+) -> None:
+    vertices, _, dayhikes, _ = _whole_fixture(fixture_catalog)
+
+    facts = profile_facts(dayhikes, vertices)
+
+    assert list(facts.columns) == ["profile_shape"]
+    assert set(facts.index) == set(dayhikes["id"])
+    # Ridge Walk: 200 -> 500 -> 250 -> 400 m, so it starts at the bottom and
+    # ends about two thirds up (the resampled top falls just short of 500 m).
+    ridge = facts.at[1001, "profile_shape"]
+    assert len(ridge) == 64
+    assert (ridge[0], ridge.max()) == pytest.approx((0.0, 1.0))
+    assert ridge[-1] == pytest.approx(200 / 300, abs=0.02)
+    assert facts.at[1002, "profile_shape"] is None
+    turned = profile_facts(dayhikes, _reversed(vertices)).at[1001, "profile_shape"]
+    assert turned == pytest.approx(ridge[::-1])
+
+
 def test_similarity_facts_table_sits_next_to_the_catalog() -> None:
     assert similarity_facts_path_for(Path("data/catalog.sqlite")) == Path(
         "data/catalog.similarity_facts.pkl"
+    )
+
+
+def _north_line(elevations, step_m=100.0):
+    """Vertices due north of (45, 15), ``step_m`` apart, with these elevations."""
+    dlat = math.degrees(step_m / 6_371_000)
+    lats = [45.0 + i * dlat for i in range(len(elevations))]
+    return lats, [15.0] * len(elevations), list(elevations)
+
+
+def test_profile_shape_is_64_points_scaled_by_the_range() -> None:
+    shape = profile_shape(*_north_line([1000.0, 1200.0, 1500.0]))
+
+    assert len(shape) == 64
+    assert (shape[0], shape[-1]) == pytest.approx((0.0, 1.0))
+    # The middle vertex (200 m above the start) sits halfway along.
+    halfway = np.interp(0.5, np.linspace(0.0, 1.0, 64), shape)
+    assert halfway == pytest.approx(0.4, abs=0.01)
+    tent = profile_shape(*_north_line([0.0, 600.0, 0.0]))
+    assert tent == pytest.approx(tent[::-1])
+    assert (tent[0], tent[31], tent[32]) == pytest.approx((0.0, 1.0, 1.0))
+
+
+def test_profile_shape_follows_distance_not_vertex_count() -> None:
+    # Climb over the first 100 m, then 300 m flat: the climb ends at 1/4.
+    lats, lons, ele = _north_line([0.0, 400.0, 400.0, 400.0, 400.0])
+    shape = profile_shape(lats, lons, ele)
+    fraction = np.linspace(0.0, 1.0, 64)
+    assert shape[fraction >= 0.25] == pytest.approx(1.0)
+    assert shape[fraction < 0.25] == pytest.approx(fraction[fraction < 0.25] * 4)
+
+
+def test_profile_shape_does_not_stretch_a_nearly_flat_profile() -> None:
+    # 64 vertices, one per resampled point, with up to 5 m of noise.
+    noise = [300.0 + (i * 7) % 6 for i in range(64)]
+    shape = profile_shape(*_north_line(noise))
+
+    assert shape == pytest.approx((np.array(noise) - 300.0) / 50.0)
+    assert shape.max() == pytest.approx(0.1)
+
+
+def test_profile_shape_skips_vertices_without_elevation() -> None:
+    lats, lons, _ = _north_line([0.0] * 3)
+    shape = profile_shape(lats, lons, [0.0, math.nan, 400.0])
+    assert shape == pytest.approx(np.linspace(0.0, 1.0, 64))
+    assert profile_shape(lats, lons, [math.nan, 250.0, math.nan]) is None
+    assert profile_shape(lats[:1], lons[:1], [100.0]) is None
+
+
+_FRACTION = np.linspace(0.0, 1.0, 64)
+ONE_CLIMB_EARLY = np.interp(_FRACTION, [0.0, 0.3, 1.0], [0.0, 1.0, 0.0])
+ONE_CLIMB_LATE = np.interp(_FRACTION, [0.0, 0.5, 1.0], [0.0, 1.0, 0.0])
+MANY_CLIMBS = (1 - np.cos(_FRACTION * 8 * np.pi)) / 2
+FLAT = np.zeros(64)
+NEARLY_FLAT = np.array([(i * 7) % 6 for i in range(64)]) / 50.0
+SHAPES = [ONE_CLIMB_EARLY, ONE_CLIMB_LATE, MANY_CLIMBS, FLAT, NEARLY_FLAT, _FRACTION]
+
+
+@pytest.mark.parametrize("similarity", [profile_lockstep, profile_dtw])
+def test_profile_similarity_identity_reversed_symmetry_and_bounds(similarity) -> None:
+    for a in SHAPES:
+        assert similarity(a, a) == pytest.approx(1.0)
+        assert similarity(a, a[::-1]) == pytest.approx(1.0)
+        for b in SHAPES:
+            assert 0.0 <= similarity(a, b) <= 1.0
+            assert similarity(a, b) == pytest.approx(similarity(b, a))
+    assert similarity(_FRACTION, FLAT) == pytest.approx(0.5)
+
+
+@pytest.mark.parametrize("similarity", [profile_lockstep, profile_dtw])
+def test_profile_similarity_matches_form_flat_with_flat(similarity) -> None:
+    assert similarity(NEARLY_FLAT, FLAT) >= 0.9
+    assert similarity(NEARLY_FLAT, FLAT) > similarity(NEARLY_FLAT, ONE_CLIMB_LATE)
+    assert similarity(ONE_CLIMB_EARLY, ONE_CLIMB_LATE) > similarity(
+        ONE_CLIMB_EARLY, MANY_CLIMBS
+    )
+
+
+@pytest.mark.parametrize("similarity", [profile_lockstep, profile_dtw])
+def test_profile_similarity_missing_shape_gives_none(similarity) -> None:
+    assert similarity(None, FLAT) is None
+    assert similarity(FLAT, math.nan) is None
+
+
+def test_profile_dtw_never_scores_below_lockstep() -> None:
+    for a in SHAPES:
+        for b in SHAPES:
+            assert profile_dtw(a, b) >= profile_lockstep(a, b) - 1e-12
+
+
+def test_profile_dtw_lets_a_climb_shift_within_the_band() -> None:
+    lockstep = profile_lockstep(ONE_CLIMB_EARLY, ONE_CLIMB_LATE)
+    assert profile_dtw(ONE_CLIMB_EARLY, ONE_CLIMB_LATE) > lockstep + 0.02
+    # With no band the warping path is the diagonal: lock-step again.
+    assert profile_dtw(ONE_CLIMB_EARLY, ONE_CLIMB_LATE, band=0.0) == pytest.approx(
+        lockstep
     )
