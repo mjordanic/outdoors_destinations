@@ -50,7 +50,11 @@ _Avoid_: live SRTM, elevation API, exposure
 
 **ElevationProfile**:
 Metres of elevation change along a DayHike from its first point, in the hike's stored direction. The metres stay in metres.
-_Avoid_: altitude, normalized profile, unit-scaled shape
+_Avoid_: altitude, normalized profile (that is ProfileShape), unit-scaled shape
+
+**ProfileShape**:
+An ElevationProfile scaled to 0–1 in both distance and height, so two DayHikes of different length and gain compare by form alone. How high a DayHike goes and how much it climbs are not in it.
+_Avoid_: normalized ElevationProfile, elevation plot, profile
 
 **SolarAspect**:
 A terrain-derived description of which way DayHikeGeometry faces relative to the sun, sampled from a DEM. It is not Difficulty, not ClimateNormal, and not alpine fall hazard. Shade from tree cover is LandCover.
@@ -71,6 +75,22 @@ _Avoid_: season filter, forecast date, current month as a silent default
 **AmenityFact**:
 A count or distance from a Trailhead to an OSM amenity used as a Feature (restaurant/cafe, parking, drinking water, Hut). Viewpoint, Peak, and Shelter are not AmenityFacts.
 _Avoid_: POI, restaurant as a Catalog key
+
+**Corridor**:
+The 100 m band around DayHikeGeometry. An amenity point inside it is along the DayHike; an AmenityFact counts around the Trailhead instead.
+_Avoid_: buffer, along-route radius, nearby
+
+**DryStretch**:
+The longest distance walked along a DayHike without passing a drinking-water point in the Corridor, counting from the first and to the last vertex. A DayHike with no water has a DryStretch equal to its length.
+_Avoid_: water gap, thirst distance
+
+**SurfaceMix**:
+The mix of trail surface along DayHikeGeometry, as length fractions of paved, gravel, natural, and rock. It comes from member-way surface tags, else from the way's highway kind. It is not LandCover.
+_Avoid_: ground type, terrain, trail type
+
+**TarmacApproach**:
+The distance walked on paved surface from the Trailhead before the DayHike first leaves it.
+_Avoid_: distance from parking, road walk, access distance
 
 **Viewpoint**:
 An OSM `tourism=viewpoint` stored as a raw amenity point in GeometryStore.
@@ -95,6 +115,18 @@ _Avoid_: embedding, description, tags
 **Ranking**:
 An ordered list of Catalog DayHikes with a similarity score to the Seed set. Score is the maximum similarity to any Seed. An optional QueryMonth selects the ClimateNormal slice in that score. The Seed carries the climate being matched.
 _Avoid_: recommendation, unsupervised clustering, prediction, climate target
+
+**Facet**:
+One theme on which two DayHikes are compared and which the Hiker weights: Effort, Altitude, Profile, Landscape, Weather, Water, Facilities, or Trail. A Facet groups one or more measures.
+_Avoid_: category, dimension, feature group, feature
+
+**FacetScore**:
+The similarity of two DayHikes on one Facet, from 0 (unlike) to 1 (alike). It is the plain mean of that Facet's measures.
+_Avoid_: distance, sub-score, partial score
+
+**FacetWeights**:
+The Hiker's shares across Facets for one query, normalized to sum to 1. A Facet with weight 0 does not move the score.
+_Avoid_: preferences, priorities, importance
 
 **Hiker**:
 The person querying the Catalog. Phase 1 is a single local user; a future website may have many Hikers with ratings.
