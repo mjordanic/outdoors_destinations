@@ -41,14 +41,15 @@ from dayhike.osm import (
     amenity_kind,
 )
 
-INGEST_WORK_SCHEMA = 2
+INGEST_WORK_SCHEMA = 3
 INGEST_CHECKPOINT_OBJECTS = 50_000
 INGEST_PROGRESS_EVERY_OBJECTS = 100_000
 CATALOG_TAG_FILTERS = (
     "r/route=hiking",
     "nwr/tourism=alpine_hut,wilderness_hut,viewpoint",
-    "nwr/amenity=parking,restaurant,cafe,drinking_water,shelter",
-    "nwr/natural=peak",
+    "nwr/amenity=parking,restaurant,cafe,drinking_water,shelter,water_point",
+    "nwr/natural=peak,spring",
+    "nwr/man_made=water_tap",
 )
 
 Progress = Callable[[str], None]
@@ -279,7 +280,12 @@ def _scan_paths(source_paths: Sequence[Path], progress: Progress | None) -> list
             scan.append(path)
             continue
         cache = _catalog_extract_path(path)
-        if cache.is_file() and cache.stat().st_mtime_ns >= path.stat().st_mtime_ns:
+        if (
+            cache.is_file()
+            and cache.stat().st_mtime_ns >= path.stat().st_mtime_ns
+            and _catalog_filters_path(cache).is_file()
+            and _catalog_filters_path(cache).read_text() == _catalog_filters_text()
+        ):
             emit_progress(progress, "filter", f"cached {cache}")
             scan.append(cache)
             continue
@@ -311,6 +317,14 @@ def _catalog_extract_path(source: Path) -> Path:
     return source.with_name(source.name + ".catalog.osm.pbf")
 
 
+def _catalog_filters_path(cache: Path) -> Path:
+    return cache.with_name(cache.name + ".filters")
+
+
+def _catalog_filters_text() -> str:
+    return "\n".join(CATALOG_TAG_FILTERS) + "\n"
+
+
 def _run_osmium_tags_filter(osmium_bin: str, source: Path, dest: Path) -> None:
     if dest.name.endswith(".osm.pbf"):
         tmp = dest.with_name(dest.name[: -len(".osm.pbf")] + ".writing.osm.pbf")
@@ -329,6 +343,7 @@ def _run_osmium_tags_filter(osmium_bin: str, source: Path, dest: Path) -> None:
     try:
         subprocess.run(cmd, check=True)
         tmp.replace(dest)
+        _catalog_filters_path(dest).write_text(_catalog_filters_text())
     finally:
         if tmp.exists():
             tmp.unlink()

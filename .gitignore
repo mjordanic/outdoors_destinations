@@ -22,6 +22,7 @@ data/*.tif
 data/*.tiff
 data/*.pbf
 data/catalog.sqlite
+data/baseline/
 *.geometry.sqlite
 *.sqlite-wal
 *.sqlite-shm

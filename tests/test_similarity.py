@@ -974,7 +974,7 @@ def test_water_position_is_along_the_line_not_the_nearest_vertex() -> None:
     assert facts["dry_stretch_m"] == pytest.approx(550.0, abs=1.0)
 
 
-def test_water_points_are_only_drinking_water_of_this_dayhike() -> None:
+def test_water_points_are_only_water_sources_of_this_dayhike() -> None:
     mixed = pd.concat(
         [
             _water_at(500.0),
@@ -993,6 +993,23 @@ def test_water_points_are_only_drinking_water_of_this_dayhike() -> None:
     assert facts.loc[2, "dry_stretch_m"] == pytest.approx(11_119.5, abs=5.0)
 
 
+def test_springs_taps_and_water_points_are_water_sources_too() -> None:
+    sources = pd.concat(
+        [
+            _amenity_points("spring", (_metres_north(200), _metres_east(10))),
+            _amenity_points("water_tap", (_metres_north(500), _metres_east(10))),
+            _amenity_points("water_point", (_metres_north(700), _metres_east(10))),
+        ],
+        ignore_index=True,
+    ).assign(osm_key=["n1", "n2", "n3"])
+
+    facts = _water(sources)
+
+    # Stretches: 0-200, 200-500, 500-700, 700-1000.
+    assert facts["water_count"] == 3
+    assert facts["dry_stretch_m"] == pytest.approx(300.0, abs=1.0)
+
+
 def test_water_facts_are_the_same_for_the_reversed_chain() -> None:
     points = _water_at(100.0, 150.0, 800.0)
 
@@ -1003,7 +1020,7 @@ def test_water_facts_are_the_same_for_the_reversed_chain() -> None:
     assert turned.loc[1, "dry_stretch_m"] == pytest.approx(facts.loc[1, "dry_stretch_m"])
 
 
-def test_water_facts_on_the_fixture_put_its_water_point_on_ridge_walk(
+def test_water_facts_on_the_fixture_put_its_water_sources_on_ridge_walk(
     fixture_catalog: Path,
 ) -> None:
     vertices, amenities, dayhikes, _ = _whole_fixture(fixture_catalog)
@@ -1011,7 +1028,9 @@ def test_water_facts_on_the_fixture_put_its_water_point_on_ridge_walk(
     facts = water_facts(dayhikes, vertices, amenities)
 
     assert set(facts.index) == set(dayhikes["id"])
-    assert facts.loc[1001, "water_count"] == 1
+    # Drinking water, a spring, a tap and a water point; not the spring tagged
+    # drinking_water=no.
+    assert facts.loc[1001, "water_count"] == 4
     assert 0 < facts.loc[1001, "dry_stretch_m"] < dayhikes.set_index("id").at[1001, "length_m"]
     assert facts.loc[1002, "water_count"] == 0
     assert facts.loc[1002, "dry_stretch_m"] == pytest.approx(

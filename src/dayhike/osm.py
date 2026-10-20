@@ -122,6 +122,14 @@ def amenity_kind(tags: dict[str, str]) -> str | None:
         return "drinking_water"
     if amenity == "shelter":
         return "shelter"
+    if tags.get("drinking_water") == "no":
+        return None
+    if tags.get("natural") == "spring":
+        return "spring"
+    if tags.get("man_made") == "water_tap":
+        return "water_tap"
+    if amenity == "water_point":
+        return "water_point"
     return None
 
 

@@ -29,6 +29,7 @@ CORRIDOR_M = 100.0  # amenity along the DayHike (CONTEXT.md Corridor)
 PEAK_SUMMITED_M = 50.0
 PEAKS_AROUND_M = 2_000.0
 TRAILHEAD_M = 500.0  # amenity at the Trailhead (CONTEXT.md Trailhead)
+WATER_SOURCE_KINDS = ("drinking_water", "spring", "water_tap", "water_point")
 FACILITIES_FLAG_COLUMNS = (
     "hut_along",
     "restaurant_cafe_along",
@@ -527,10 +528,10 @@ def water_facts(
 ) -> pd.DataFrame:
     """Water facts per DayHike id, in stored order.
 
-    ``water_count``: drinking-water points (``drinking_water`` amenities) in the
-    ``CORRIDOR_M`` Corridor, uncapped. ``dry_stretch_m``: DryStretch, the longest
-    distance walked without passing one. Each Corridor water point is placed at
-    its position along the line (where the line passes it closest); the
+    ``water_count``: WaterSources (amenities of a ``WATER_SOURCE_KINDS`` kind) in
+    the ``CORRIDOR_M`` Corridor, uncapped. ``dry_stretch_m``: DryStretch, the
+    longest distance walked without passing one. Each Corridor water point is
+    placed at its position along the line (where the line passes it closest); the
     stretches run from the first vertex to the first point, between points and
     from the last point to the last vertex, and the longest wins. Two points at
     one position split the walk once. With no water the DryStretch is the
@@ -539,7 +540,8 @@ def water_facts(
     has both missing.
     """
     ids = dayhikes["id"]
-    found = corridor_amenities(vertices, amenities, kind="drinking_water", radius_m=CORRIDOR_M)
+    sources = amenities[amenities["kind"].isin(WATER_SOURCE_KINDS)].assign(kind="water")
+    found = corridor_amenities(vertices, sources, kind="water", radius_m=CORRIDOR_M)
     spots = amenities.drop_duplicates("osm_key").set_index("osm_key")[["latitude", "longitude"]]
     found = found.join(spots, on="osm_key")
     counts = found["dayhike_id"].value_counts()

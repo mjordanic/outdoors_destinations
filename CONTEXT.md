@@ -73,7 +73,7 @@ The optional month a Hiker sets on a Ranking. It selects which ClimateNormal mon
 _Avoid_: season filter, forecast date, current month as a silent default
 
 **AmenityFact**:
-A count or distance from a Trailhead to an OSM amenity used as a Feature (restaurant/cafe, parking, drinking water, Hut). Viewpoint, Peak, and Shelter are not AmenityFacts.
+A count or distance from a Trailhead to an OSM amenity used as a Feature (restaurant/cafe, parking, drinking water, Hut). Viewpoint, Peak, Shelter, and WaterSources other than drinking water are not AmenityFacts.
 _Avoid_: POI, restaurant as a Catalog key
 
 **Corridor**:
@@ -81,7 +81,7 @@ The 100 m band around DayHikeGeometry. An amenity point inside it is along the D
 _Avoid_: buffer, along-route radius, nearby
 
 **DryStretch**:
-The longest distance walked along a DayHike without passing a drinking-water point in the Corridor, counting from the first and to the last vertex. A DayHike with no water has a DryStretch equal to its length.
+The longest distance walked along a DayHike without passing a WaterSource in the Corridor, counting from the first and to the last vertex. A DayHike with no WaterSource has a DryStretch equal to its length.
 _Avoid_: water gap, thirst distance
 
 **SurfaceMix**:
@@ -103,6 +103,10 @@ _Avoid_: summit as an AmenityFact
 **Shelter**:
 An OSM `amenity=shelter` (lean-to / weather shelter) stored as a raw amenity point in GeometryStore. It is not a Hut.
 _Avoid_: hut, wilderness_hut
+
+**WaterSource**:
+A point where a Hiker can refill water: an OSM drinking-water point, spring, water tap, or water point, stored as a raw amenity point in GeometryStore. One tagged as not drinkable is not a WaterSource. A spring or tap also tagged as drinking water is a drinking-water point.
+_Avoid_: water point (one OSM kind), fountain, water amenity
 
 **Seed**:
 A DayHike the hiker names as "like the outing I want." Ranking is similarity to Seeds, not a trained taste model.

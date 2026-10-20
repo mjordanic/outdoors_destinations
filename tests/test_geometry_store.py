@@ -82,6 +82,58 @@ def test_build_catalog_writes_geometry_store_with_vertices_ways_and_amenities(
     assert resolve_seed(catalog, "PS-1") == 1007
 
 
+def test_geometry_store_keeps_springs_taps_and_water_points_unless_not_drinkable(
+    tmp_path: Path,
+) -> None:
+    catalog_path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, catalog_path)
+
+    connection = sqlite3.connect(geometry_store_path_for(catalog_path))
+    try:
+        kinds = dict(
+            connection.execute(
+                "SELECT osm_key, kind FROM amenities WHERE osm_key IN "
+                "('n53', 'n57', 'n58', 'n59', 'n60')"
+            )
+        )
+    finally:
+        connection.close()
+
+    assert kinds == {
+        "n53": "drinking_water",
+        "n57": "spring",
+        "n58": "water_tap",
+        "n59": "water_point",
+    }
+
+
+def test_a_spring_tagged_as_drinking_water_stays_drinking_water(tmp_path: Path) -> None:
+    osm = tmp_path / "catalog.osm"
+    osm.write_text(
+        FIXTURE.read_text().replace(
+            "</osm>",
+            """  <node id="70" lat="45.0" lon="15.001" version="1">
+    <tag k="natural" v="spring"/>
+    <tag k="amenity" v="drinking_water"/>
+  </node>
+</osm>""",
+        )
+    )
+    catalog_path = tmp_path / "catalog.sqlite"
+    catalog = build_catalog(osm, catalog_path)
+
+    ridge = next(hike for hike in catalog.dayhikes if hike.id == 1001)
+    assert ridge.trailhead.amenity_facts.drinking_water.count == 2
+    connection = sqlite3.connect(geometry_store_path_for(catalog_path))
+    try:
+        kind = connection.execute(
+            "SELECT kind FROM amenities WHERE osm_key = 'n70'"
+        ).fetchone()[0]
+    finally:
+        connection.close()
+    assert kind == "drinking_water"
+
+
 def test_geometry_store_skips_unconnected_member_ways(tmp_path: Path) -> None:
     catalog_path = tmp_path / "catalog.sqlite"
     catalog = build_catalog(FIXTURE, catalog_path)

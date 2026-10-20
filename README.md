@@ -251,8 +251,9 @@ code (10 tree, 20 shrub, 30 grass, 60 bare, 70 permanent snow; other codes
 stay in the leftover share). After `sample-climate`, each covered vertex
 gets twelve monthly rows (°C, mm, kJ m⁻² day⁻¹). Vertices with no covering
 tile stay unset. Amenities include hut, parking, restaurant/cafe, drinking
-water, Viewpoint, Peak, and Shelter. Catalog AmenityFacts still use only the
-first four kinds, counted from the Trailhead.
+water, Viewpoint, Peak, Shelter, and the other WaterSources (spring, water tap,
+water point). Catalog AmenityFacts still use only the first four kinds, counted
+from the Trailhead.
 
 ```bash
 sqlite3 data/catalog.geometry.sqlite \
@@ -769,7 +770,10 @@ Geofabrik `europe-latest.osm.pbf`) is a valid input.
    (`brew install osmium-tool` on macOS) and the input is PBF, ingest writes a
    hiking-and-amenity extract next to the source
    (`europe-latest.catalog.osm.pbf`). Referenced member ways and nodes are
-   kept. Buildings, shops, and the rest of the map are dropped. XML skips the
+   kept. Buildings, shops, and the rest of the map are dropped. The filter
+   list goes next to the extract (`europe-latest.catalog.osm.pbf.filters`).
+   The next ingest reuses the extract only when it is newer than the source and
+   was made with the same filter list; otherwise it filters again. XML skips the
    filter. A file already named `*.catalog.osm.pbf` is read as-is. If `osmium`
    is missing, ingest reads the source file in several passes instead.
 2. **Work file.** Relations, member ways, needed nodes, and amenities go to
@@ -808,8 +812,9 @@ Equivalent osmium filter if you want to run it yourself:
 osmium tags-filter data/osm/croatia-latest.osm.pbf \
   r/route=hiking \
   nwr/tourism=alpine_hut,wilderness_hut,viewpoint \
-  nwr/amenity=parking,restaurant,cafe,drinking_water,shelter \
-  nwr/natural=peak \
+  nwr/amenity=parking,restaurant,cafe,drinking_water,shelter,water_point \
+  nwr/natural=peak,spring \
+  nwr/man_made=water_tap \
   -o data/osm/croatia-latest.catalog.osm.pbf
 ```
 
@@ -818,7 +823,10 @@ osmium tags-filter data/osm/croatia-latest.osm.pbf \
 Same rules as the fixture: `route=hiking` relations whose geometry is 1–20 km.
 Amenities on nodes, ways, and tagged relations: Catalog AmenityFacts still use
 hut/parking/restaurant_cafe/drinking_water within 20 km of the Trailhead.
-Viewpoint, Peak, and Shelter are stored on GeometryStore only. The Trailhead is the LineString endpoint nearer a parking lot or
+Viewpoint, Peak, Shelter, and the other WaterSources (`natural=spring`,
+`man_made=water_tap`, `amenity=water_point`) are stored on GeometryStore only. A
+spring, tap, or water point tagged `drinking_water=no` is not kept. A spring or
+tap that is also `amenity=drinking_water` is a drinking-water point. The Trailhead is the LineString endpoint nearer a parking lot or
 driveable highway within 5 km, otherwise the first vertex. Ways in a route
 relation are reversed as needed so the geometry is one continuous line.
 

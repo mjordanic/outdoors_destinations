@@ -1,11 +1,12 @@
 import math
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
 
 import pytest
 
-from dayhike import Catalog, build_catalog
+from dayhike import Catalog, build_catalog, geometry_store_path_for
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
 STAGES = ("filter", "relations", "ways", "nodes", "access", "assemble", "write")
@@ -161,6 +162,41 @@ def test_access_extract_matches_full_source_scan(
 
     assert _dayhike_signature(extracted) == _dayhike_signature(scanned)
     assert extracted.ingest_report == scanned.ingest_report
+
+
+@pytest.mark.skipif(shutil.which("osmium") is None, reason="osmium-tool")
+def test_a_filtered_copy_made_with_other_tag_filters_is_rebuilt(tmp_path: Path) -> None:
+    source = _sorted_pbf(FIXTURE, tmp_path / "source.osm.pbf")
+    # A newer filtered copy from a filter list without springs.
+    subprocess.run(
+        [
+            "osmium",
+            "tags-filter",
+            str(source),
+            "r/route=hiking",
+            "-o",
+            str(tmp_path / "source.catalog.osm.pbf"),
+            "--no-progress",
+        ],
+        check=True,
+    )
+    catalog_path = tmp_path / "catalog.sqlite"
+
+    messages: list[str] = []
+    build_catalog(source, catalog_path, progress=messages.append)
+    again: list[str] = []
+    build_catalog(source, catalog_path, progress=again.append)
+
+    assert "filter: source.osm.pbf -> source.catalog.osm.pbf" in messages, messages
+    connection = sqlite3.connect(geometry_store_path_for(catalog_path))
+    try:
+        spring = connection.execute(
+            "SELECT kind FROM amenities WHERE osm_key = 'n57'"
+        ).fetchone()
+    finally:
+        connection.close()
+    assert spring == ("spring",)
+    assert any(message.startswith("filter: cached ") for message in again), again
 
 
 def test_access_extract_boxes_contain_the_trailhead_access_disk() -> None:

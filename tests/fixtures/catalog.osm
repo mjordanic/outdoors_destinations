@@ -168,4 +168,19 @@
   <node id="56" lat="45.0089932160" lon="15.0000000000" version="1">
     <tag k="amenity" v="shelter"/>
   </node>
+  <!-- WaterSources other than drinking water, further north on Ridge Walk.
+       The spring tagged drinking_water=no is not one. -->
+  <node id="57" lat="45.0103421985" lon="15.0000000000" version="1">
+    <tag k="natural" v="spring"/>
+  </node>
+  <node id="58" lat="45.0116911809" lon="15.0000000000" version="1">
+    <tag k="man_made" v="water_tap"/>
+  </node>
+  <node id="59" lat="45.0130401633" lon="15.0000000000" version="1">
+    <tag k="amenity" v="water_point"/>
+  </node>
+  <node id="60" lat="45.0143891457" lon="15.0000000000" version="1">
+    <tag k="natural" v="spring"/>
+    <tag k="drinking_water" v="no"/>
+  </node>
 </osm>
