@@ -12,7 +12,7 @@ similar and a dissimilar pair of real named DayHikes. This ticket also lays
 down the shared math every later Facet uses, and the notebook shape later
 tickets extend with one section per Facet.
 
-**Status:** ready-for-agent
+**Status:** done
 
 ## Blocked by
 

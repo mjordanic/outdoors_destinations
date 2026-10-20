@@ -1122,10 +1122,12 @@ uv run jupyter notebook notebooks/01_raw_data_and_ingestion.ipynb
 | [`notebooks/03_ranking.ipynb`](notebooks/03_ranking.ipynb) | Production ranking: cosine after scaling, max-not-mean, unknown Seeds, stubbed DriveTime, Ranking with no month and with QueryMonth 7, LandCover order. |
 | [`notebooks/04_rank_feature_lab.ipynb`](notebooks/04_rank_feature_lab.ipynb) | Sandbox to add FeatureVector columns, ablate them, and compare order to production. SolarAspect lives here. |
 | [`notebooks/04a_geometry.ipynb`](notebooks/04a_geometry.ipynb) | GeometryStore tables as GeoPandas: vertices, amenities, DayHike lines, member ways, leftover `in_chain`, per-vertex land-cover classes and `vertex_climate` (synthetic rasters, no download). |
+| [`notebooks/05_similarity_facts.ipynb`](notebooks/05_similarity_facts.ipynb) | Facet similarity design (ADR-0011, proposed): load the Slovenia + Croatia region of the GeometryStore with `dayhike.similarity.load_region`, extract per-Facet facts (Effort, Altitude), and write `data/catalog.similarity_facts.pkl` (gitignored). |
+| [`notebooks/05a_similarity.ipynb`](notebooks/05a_similarity.ipynb) | FacetScores from the similarity facts table: measure spreads and constants, named similar/dissimilar pairs with `verify` PASS/FAIL lines, identity/symmetry/reversed checks, and one Seed ranked with FacetWeights and coverage. Production Ranking is unchanged. |
 
 `01` and `03` always rebuild the committed OSM fixture (no Geofabrik, no live
-Valhalla). `02`, `04`, and `04a` open your local Catalog and GeometryStore when
-those files exist. Tests force the fixture so they do not load a Europe Catalog.
+Valhalla). `02`, `04`, `04a`, `05`, and `05a` open your local Catalog and
+GeometryStore when those files exist; `05a` reads the facts table `05` wrote. Tests force the fixture so they do not load a Europe Catalog.
 
 ## Attribution
 

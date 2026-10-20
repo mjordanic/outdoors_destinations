@@ -65,6 +65,8 @@ WALKTHROUGH = (
     "03_ranking.ipynb",
     "04_rank_feature_lab.ipynb",
     "04a_geometry.ipynb",
+    "05_similarity_facts.ipynb",
+    "05a_similarity.ipynb",
 )
 
 
@@ -270,6 +272,22 @@ def test_notebook_ranking_shows_query_month_and_landcover() -> None:
     landcover = _tagged_names(output, "landcover_rank")
     assert landcover[0] == "Forested Twin"
     assert landcover.index("Forested Twin") < landcover.index("Bare Twin")
+
+
+def test_similarity_notebooks_run_only_synthetic_checks_on_the_fixture() -> None:
+    output, _, source = _run_notebooks()
+
+    assert "similarity_facts_path_for" in source
+    verify = [
+        line.split("\t") for line in output.splitlines() if line.startswith("verify\t")
+    ]
+    checks = {(facet, check) for _, facet, check, _, _ in verify}
+    assert checks == {
+        (facet, check)
+        for facet in ("effort", "altitude")
+        for check in ("identity", "symmetry_max_gap", "reversed")
+    }
+    assert all(result == "PASS" for *_, result in verify)
 
 
 def _tagged_names(output: str, tag: str) -> list[str]:

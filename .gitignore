@@ -28,6 +28,7 @@ data/catalog.sqlite
 *.sqlite.work
 *.sqlite.tmp
 *.sqlite.access*
+*.similarity_facts.pkl
 
 # env / secrets
 .env
