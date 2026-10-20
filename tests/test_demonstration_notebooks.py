@@ -291,6 +291,7 @@ def test_similarity_notebooks_run_only_synthetic_checks_on_the_fixture() -> None
             "landscape",
             "weather",
             "water",
+            "facilities",
             "trail",
         )
         for check in ("identity", "symmetry_max_gap", "reversed")

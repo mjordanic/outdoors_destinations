@@ -10,6 +10,7 @@ from shapely.geometry import LineString
 from dayhike import build_catalog
 from dayhike.similarity import (
     CLIMATE_MONTH_COLUMNS,
+    FACILITIES_FLAG_COLUMNS,
     altitude_facts,
     LANDCOVER_SHARE_COLUMNS,
     SURFACE_SHARE_COLUMNS,
@@ -17,6 +18,7 @@ from dayhike.similarity import (
     corridor_amenities,
     effort_facts,
     facet_score,
+    facilities_facts,
     landscape_facts,
     load_region,
     mix,
@@ -1018,3 +1020,161 @@ def test_water_facts_on_the_fixture_put_its_water_point_on_ridge_walk(
     turned = water_facts(dayhikes, _reversed(vertices), amenities)
     assert turned["water_count"].equals(facts["water_count"])
     assert turned["dry_stretch_m"].to_numpy() == pytest.approx(facts["dry_stretch_m"].to_numpy())
+
+
+# Facilities: a DayHike whose Trailhead is (45, 15) and whose line runs 1,000 m
+# north of it.
+FACILITIES_HIKE = pd.DataFrame(
+    {"id": [1], "trailhead_latitude": [45.0], "trailhead_longitude": [15.0]}
+)
+
+
+def _facilities(*groups, chain=WALK):
+    points = pd.concat(
+        [_amenity_points(kind, *spots) for kind, spots in groups], ignore_index=True
+    )
+    points["osm_key"] = [f"n{i}" for i in range(len(points))]
+    return facilities_facts(FACILITIES_HIKE, chain, points).loc[1]
+
+
+def test_facilities_facts_are_five_flags_in_the_documented_order() -> None:
+    facts = facilities_facts(
+        FACILITIES_HIKE, WALK, _amenity_points("hut", (_metres_north(500), _metres_east(10)))
+    )
+
+    assert list(facts.columns) == list(FACILITIES_FLAG_COLUMNS)
+    assert FACILITIES_FLAG_COLUMNS == (
+        "hut_along",
+        "restaurant_cafe_along",
+        "shelter_along",
+        "restaurant_cafe_trailhead",
+        "parking_trailhead",
+    )
+
+
+def test_a_hut_in_the_corridor_sets_only_the_hut_flag() -> None:
+    flags = _facilities(("hut", [(_metres_north(700), _metres_east(50))]))
+
+    assert flags.to_dict() == {
+        "hut_along": True,
+        "restaurant_cafe_along": False,
+        "shelter_along": False,
+        "restaurant_cafe_trailhead": False,
+        "parking_trailhead": False,
+    }
+
+
+def test_a_shelter_does_not_set_the_hut_flag_and_a_hut_not_the_shelter_flag() -> None:
+    shelter = _facilities(("shelter", [(_metres_north(700), _metres_east(50))]))
+    hut = _facilities(("hut", [(_metres_north(700), _metres_east(50))]))
+
+    assert (shelter["shelter_along"], shelter["hut_along"]) == (True, False)
+    assert (hut["hut_along"], hut["shelter_along"]) == (True, False)
+
+
+def test_a_restaurant_or_cafe_in_the_corridor_is_along_not_at_the_trailhead() -> None:
+    flags = _facilities(("restaurant_cafe", [(_metres_north(800), _metres_east(30))]))
+
+    assert flags["restaurant_cafe_along"]
+    assert not flags["restaurant_cafe_trailhead"]
+
+
+def test_along_flags_stop_at_the_100_m_corridor() -> None:
+    inside = _facilities(("hut", [(_metres_north(700), _metres_east(90))]))
+    outside = _facilities(("hut", [(_metres_north(700), _metres_east(110))]))
+
+    assert inside["hut_along"]
+    assert not outside["hut_along"]
+
+
+def test_trailhead_flags_stop_at_500_m_from_the_trailhead() -> None:
+    # Due east of the Trailhead, away from the line (which runs north).
+    near = _facilities(
+        ("restaurant_cafe", [(45.0, _metres_east(450))]), ("parking", [(45.0, _metres_east(450))])
+    )
+    far = _facilities(
+        ("restaurant_cafe", [(45.0, _metres_east(550))]), ("parking", [(45.0, _metres_east(550))])
+    )
+
+    assert near["restaurant_cafe_trailhead"] and near["parking_trailhead"]
+    assert not far["restaurant_cafe_trailhead"] and not far["parking_trailhead"]
+    # Not along the line either way.
+    assert not near["restaurant_cafe_along"]
+
+
+def test_trailhead_distance_is_from_the_catalog_trailhead_not_the_line_start() -> None:
+    # The Trailhead is the far end of the line; the amenity sits 300 m from it
+    # and 700 m from the first vertex.
+    hike = FACILITIES_HIKE.assign(trailhead_latitude=_metres_north(1_000))
+    spots = _amenity_points("parking", (_metres_north(1_000), _metres_east(300)))
+
+    flags = facilities_facts(hike, WALK, spots).loc[1]
+
+    assert flags["parking_trailhead"]
+    assert not facilities_facts(FACILITIES_HIKE, WALK, spots).loc[1, "parking_trailhead"]
+
+
+def test_facilities_ignore_other_kinds_other_dayhikes_and_use_each_trailhead() -> None:
+    far_walk = _chain((45.5, 15.0), (45.6, 15.0), dayhike_id=2)
+    both = pd.concat([WALK, far_walk], ignore_index=True)
+    hikes = pd.DataFrame(
+        {"id": [1, 2], "trailhead_latitude": [45.0, 45.5], "trailhead_longitude": [15.0, 15.0]}
+    )
+    points = pd.concat(
+        [
+            _amenity_points("hut", (_metres_north(500), _metres_east(10))),
+            _amenity_points("drinking_water", (_metres_north(100), _metres_east(10))),
+            _amenity_points("viewpoint", (_metres_north(100), _metres_east(10))),
+        ],
+        ignore_index=True,
+    )
+    points["osm_key"] = [f"n{i}" for i in range(len(points))]
+
+    facts = facilities_facts(hikes, both, points)
+
+    assert list(facts.index) == [1, 2]
+    assert list(facts["hut_along"]) == [True, False]
+    assert not facts.drop(columns="hut_along").to_numpy().any()
+
+
+def test_facilities_with_no_amenities_at_all_are_all_false() -> None:
+    facts = facilities_facts(FACILITIES_HIKE, WALK, _amenity_points("hut"))
+
+    assert not facts.to_numpy().any()
+
+
+def test_facilities_flags_are_the_same_for_the_reversed_chain() -> None:
+    points = pd.concat(
+        [
+            _amenity_points("hut", (_metres_north(300), _metres_east(20))),
+            _amenity_points("parking", (45.0, _metres_east(200))),
+        ],
+        ignore_index=True,
+    )
+    points["osm_key"] = [f"n{i}" for i in range(len(points))]
+
+    facts = facilities_facts(FACILITIES_HIKE, WALK, points)
+    turned = facilities_facts(FACILITIES_HIKE, _reversed(WALK), points)
+
+    assert turned.equals(facts)
+
+
+def test_facilities_facts_on_the_fixture_find_each_amenity_on_ridge_walk(
+    fixture_catalog: Path,
+) -> None:
+    vertices, amenities, dayhikes, _ = _whole_fixture(fixture_catalog)
+
+    facts = facilities_facts(dayhikes, vertices, amenities)
+
+    assert set(facts.index) == set(dayhikes["id"])
+    # The fixture Hut, cafe and Shelter sit on Ridge Walk's line (lon 15.0); its
+    # cafe (100 m) and parking (400 m) are inside 500 m of the Trailhead.
+    assert facts.loc[1001].to_dict() == {
+        "hut_along": True,
+        "restaurant_cafe_along": True,
+        "shelter_along": True,
+        "restaurant_cafe_trailhead": True,
+        "parking_trailhead": True,
+    }
+    assert not facts.loc[1002].to_numpy().any()
+    assert facilities_facts(dayhikes, _reversed(vertices), amenities).equals(facts)

@@ -5,7 +5,7 @@ at the Trailhead: a Hut, a restaurant or cafe, or a Shelter in the Corridor,
 and a restaurant or cafe or parking within 500 m of the Trailhead. Two hikes
 that both lack a Hut agree on that point.
 
-**Status:** ready-for-agent
+**Status:** done
 
 ## Blocked by
 

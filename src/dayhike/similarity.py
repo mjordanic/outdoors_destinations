@@ -28,6 +28,14 @@ PROFILE_DTW_BAND = 0.1  # Sakoe-Chiba band as a share of the points
 CORRIDOR_M = 100.0  # amenity along the DayHike (CONTEXT.md Corridor)
 PEAK_SUMMITED_M = 50.0
 PEAKS_AROUND_M = 2_000.0
+TRAILHEAD_M = 500.0  # amenity at the Trailhead (CONTEXT.md Trailhead)
+FACILITIES_FLAG_COLUMNS = (
+    "hut_along",
+    "restaurant_cafe_along",
+    "shelter_along",
+    "restaurant_cafe_trailhead",
+    "parking_trailhead",
+)
 LANDCOVER_SHARE_COLUMNS = (
     "tree_share",
     "shrub_share",
@@ -546,6 +554,52 @@ def water_facts(
     return pd.DataFrame.from_dict(
         facts, orient="index", columns=["water_count", "dry_stretch_m"]
     ).reindex(ids.rename("id"))
+
+
+def facilities_facts(
+    dayhikes: pd.DataFrame, vertices: pd.DataFrame, amenities: pd.DataFrame
+) -> pd.DataFrame:
+    """Facilities facts per DayHike id, in stored order: five yes/no flags
+    (``FACILITIES_FLAG_COLUMNS``).
+
+    Along the DayHike, in the ``CORRIDOR_M`` Corridor (distance to the line):
+    ``hut_along``, ``restaurant_cafe_along``, ``shelter_along``. A Shelter is
+    never a Hut. At the Trailhead, within ``TRAILHEAD_M`` of the Catalog
+    Trailhead (``trailhead_latitude`` / ``trailhead_longitude`` on
+    ``dayhikes``, as ``load_region`` supplies; not the 20 km AmenityFact disk,
+    and not the first vertex): ``restaurant_cafe_trailhead``,
+    ``parking_trailhead``. A flag is False when the amenity is absent. The
+    along flags do not depend on the walking direction.
+    """
+    ids = dayhikes["id"]
+
+    def along(kind: str) -> pd.Series:
+        found = corridor_amenities(vertices, amenities, kind=kind, radius_m=CORRIDOR_M)
+        return ids.isin(found["dayhike_id"]).set_axis(ids)
+
+    def at_trailhead(kind: str) -> pd.Series:
+        points = amenities[amenities["kind"] == kind]
+        if points.empty:
+            return pd.Series(False, index=ids)
+        tree = BallTree(
+            np.radians(points[["latitude", "longitude"]].to_numpy(float)),
+            metric="haversine",
+        )
+        trailheads = np.radians(
+            dayhikes[["trailhead_latitude", "trailhead_longitude"]].to_numpy(float)
+        )
+        near = tree.query_radius(trailheads, r=TRAILHEAD_M / EARTH_RADIUS_M, count_only=True)
+        return pd.Series(near > 0, index=ids)
+
+    return pd.DataFrame(
+        {
+            "hut_along": along("hut"),
+            "restaurant_cafe_along": along("restaurant_cafe"),
+            "shelter_along": along("shelter"),
+            "restaurant_cafe_trailhead": at_trailhead("restaurant_cafe"),
+            "parking_trailhead": at_trailhead("parking"),
+        }
+    ).rename_axis("id")
 
 
 def _positions_along(
