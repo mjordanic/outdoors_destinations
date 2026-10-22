@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import heapq
 import json
 import math
 import sqlite3
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from collections.abc import Callable
@@ -19,6 +21,7 @@ MIN_LENGTH_M = 1_000  # inclusive DayHike length band
 MAX_LENGTH_M = 20_000
 AMENITY_RADIUS_M = 20_000  # great-circle from Trailhead; zero counts are valid
 TRAILHEAD_ACCESS_RADIUS_M = 5_000  # parking / driveable highway near an endpoint
+GAP_JOIN_M = 50  # member-way ends this close join two pieces with a straight gap
 OSM_ATTRIBUTION = "© OpenStreetMap contributors"
 AMENITY_KINDS = ("hut", "parking", "restaurant_cafe", "drinking_water")
 NAME_ORIGIN_OSM_NAME = "osm_name"
@@ -631,10 +634,10 @@ def _dayhike_from_relation(
     vertices: Sequence[tuple[int, tuple[float, float]]],
     points: Sequence[tuple[float, float]],
     length_m: float,
-    access_tree: BallTree | None,
     amenity_index: _AmenityIndex | None,
 ) -> DayHike:
-    latitude, longitude = _pick_trailhead(points, access_tree)
+    # The main walk starts at the Trailhead.
+    latitude, longitude = points[0]
     sac_scale = _max_sac_scale(relation, snapshot.ways)
     amenity_facts = _amenity_facts_at(latitude, longitude, amenity_index)
     elevation_min_m, elevation_max_m, elevation_gain_m = _elevation_stats(
@@ -795,38 +798,56 @@ LEFTOVER_ROLES = frozenset(
 class MainWalk:
     """DayHikeGeometry of one relation: what ingest needs from one assembly.
 
-    ``vertices`` are the ordered (node id, point) pairs, ``length_m`` their
-    line length, ``in_chain`` one flag per member-way listing (listed order,
-    ways missing from the snapshot skipped) and ``unconnected_m`` the metres
-    of listings that are not in the line (a repeated listing of a walked way
-    adds nothing: its length is already counted once) and ``leftovers`` the
-    reason each unwalked listing was left over.
+    ``vertices`` are the ordered (node id, point) pairs from the Trailhead and
+    ``length_m`` their line length, joined gaps included. The per-listing
+    lists follow member-way listed order (ways missing from the snapshot
+    skipped): ``in_chain`` whether any part of the way is walked,
+    ``leftovers`` None when walked else the Leftover reason, ``walked_m`` the
+    metres of the way on the walk and ``walk_order`` its position along the
+    walk (None for Leftovers). ``unconnected_m`` is the distinct member-way
+    length that is not walked; joined gaps are not counted.
     """
 
     vertices: list[tuple[int, tuple[float, float]]]
     length_m: float
     in_chain: list[bool]
     unconnected_m: float
-    # One per listing: None when walked, else the Leftover reason.
     leftovers: list[str | None]
+    walked_m: list[float]
+    walk_order: list[int | None]
+
+    @property
+    def trailhead(self) -> tuple[float, float]:
+        return self.vertices[0][1]
+
+
+@dataclass(frozen=True)
+class _Edge:
+    # A member way split at shared nodes, or a joined gap (way_id None).
+    way_id: int | None
+    rank: tuple[int, int]  # (listing, piece along the way): member order
+    node_ids: tuple[int, ...]
+    length_m: float
 
 
 def assemble_main_walk(
     relation: OsmRelation,
     ways: Mapping[int, OsmWay],
     nodes: Mapping[int, tuple[float, float]],
-    access_points: Sequence[tuple[float, float]],
+    access_tree: BallTree | None,
 ) -> MainWalk:
-    """The one place member ways become a DayHike's line.
+    """The one place member ways become a DayHike's line (ADR-0012).
 
-    Today this is the ADR-0009 one-pass chain; ``access_points`` is accepted
-    for the main-walk rules that will use it and is unused for now.
+    Distinct member ways form a graph split at every shared node. Way ends of
+    different pieces within ``GAP_JOIN_M`` are joined; the longest piece is
+    walked. A line sheds its shortest dead ends until two remain, then its
+    shortest odd-junction cycle paths until it can be walked once, from the
+    end ``_pick_trailhead`` chooses with ``access_tree``.
     """
-    chain: list[int] = []
-    in_chain: list[bool] = []
+    listed: list[int] = []  # way id per member-way listing in the snapshot
     leftovers: list[str | None] = []
-    unconnected_m = 0.0
-    walked: set[int] = set()
+    first_listing: dict[int, int] = {}
+    role_only: dict[int, OsmWay] = {}
     for index, (member_type, member_id) in enumerate(relation.members):
         if member_type != "way":
             continue
@@ -835,35 +856,349 @@ def assemble_main_walk(
             continue
         role = relation.roles[index] if index < len(relation.roles) else ""
         if role in LEFTOVER_ROLES:
-            in_chain.append(False)
             leftovers.append("role")
-            unconnected_m += _member_way_length_m(list(way.node_ids), nodes)
-            continue
-        if member_id in walked:
-            in_chain.append(False)
+            role_only[member_id] = way
+        elif member_id in first_listing:
             leftovers.append("repeat")
-            continue
-        ids = list(way.node_ids)
-        extended = _extend_node_chain(chain, ids) if ids else None
-        if extended is None:
-            in_chain.append(False)
-            leftovers.append("disconnected")
-            unconnected_m += _member_way_length_m(ids, nodes)
-            continue
-        chain = extended
-        in_chain.append(True)
-        leftovers.append(None)
-        walked.add(member_id)
+        else:
+            first_listing[member_id] = len(listed)
+            leftovers.append(None)
+        listed.append(member_id)
+    for way_id in first_listing:
+        role_only.pop(way_id, None)
+
+    way_nodes = {
+        way_id: [node_id for node_id in ways[way_id].node_ids if node_id in nodes]
+        for way_id in first_listing
+    }
+    edges = _split_ways(first_listing, way_nodes, nodes)
+    edges += _gap_edges(edges, way_nodes, nodes, len(listed))
+    removed = _main_piece_removals(edges)
+    alive = {index for index in range(len(edges)) if index not in removed}
+    _shed_dead_ends(edges, alive, removed)
+    _shed_shortcuts(edges, alive, removed)
+    trail = _walk(edges, alive, nodes, access_tree)
+    for index in alive - {index for index, _ in trail}:
+        removed[index] = "shortcut"
+
     vertices: list[tuple[int, tuple[float, float]]] = []
-    for node_id in chain:
-        point = nodes.get(node_id)
-        if point is None:
-            continue
-        if vertices and vertices[-1][1] == point:
-            continue
-        vertices.append((node_id, point))
+    walked_m: dict[int, float] = {}
+    for index, from_node in trail:
+        edge = edges[index]
+        node_ids = edge.node_ids if edge.node_ids[0] == from_node else edge.node_ids[::-1]
+        for node_id in node_ids[1:] if vertices else node_ids:
+            point = nodes[node_id]
+            if not vertices or vertices[-1][1] != point:
+                vertices.append((node_id, point))
+        if edge.way_id is not None:
+            walked_m[edge.way_id] = walked_m.get(edge.way_id, 0.0) + edge.length_m
+    order = {way_id: position for position, way_id in enumerate(walked_m)}
+    reasons: dict[int, str] = {}
+    for index, reason in removed.items():
+        way_id = edges[index].way_id
+        if way_id is not None and way_id not in walked_m:
+            reasons.setdefault(way_id, reason)
+
+    in_chain: list[bool] = []
+    walked: list[float] = []
+    walk_order: list[int | None] = []
+    for listing, way_id in enumerate(listed):
+        is_walked = leftovers[listing] is None and way_id in walked_m
+        if leftovers[listing] is None and not is_walked:
+            leftovers[listing] = reasons.get(way_id, "disconnected")
+        in_chain.append(is_walked)
+        walked.append(walked_m[way_id] if is_walked else 0.0)
+        walk_order.append(order[way_id] if is_walked else None)
+    unconnected_m = sum(
+        _member_way_length_m(list(way.node_ids), nodes) for way in role_only.values()
+    ) + sum(
+        edges[index].length_m for index in removed if edges[index].way_id is not None
+    )
     length_m = _linestring_length_m([point for _, point in vertices])
-    return MainWalk(vertices, length_m, in_chain, unconnected_m, leftovers)
+    return MainWalk(
+        vertices, length_m, in_chain, unconnected_m, leftovers, walked, walk_order
+    )
+
+
+def _split_ways(
+    first_listing: Mapping[int, int],
+    way_nodes: Mapping[int, list[int]],
+    nodes: Mapping[int, tuple[float, float]],
+) -> list[_Edge]:
+    # Split at every node two member ways share or one way repeats. A closed
+    # piece is split once more in its middle so no edge starts where it ends.
+    uses = Counter(node_id for ids in way_nodes.values() for node_id in ids)
+    edges: list[_Edge] = []
+    for way_id, listing in first_listing.items():
+        ids = way_nodes[way_id]
+        pieces: list[list[int]] = []
+        start = 0
+        for position in range(1, len(ids)):
+            if position == len(ids) - 1 or uses[ids[position]] > 1:
+                piece = ids[start : position + 1]
+                if piece[0] != piece[-1]:
+                    pieces.append(piece)
+                elif len(piece) > 2:
+                    middle = len(piece) // 2
+                    pieces += [piece[: middle + 1], piece[middle:]]
+                start = position
+        for number, piece in enumerate(pieces):
+            points = [nodes[node_id] for node_id in piece]
+            edges.append(
+                _Edge(way_id, (listing, number), tuple(piece), _linestring_length_m(points))
+            )
+    return edges
+
+
+def _gap_edges(
+    edges: Sequence[_Edge],
+    way_nodes: Mapping[int, list[int]],
+    nodes: Mapping[int, tuple[float, float]],
+    gap_rank: int,
+) -> list[_Edge]:
+    # Join pieces whose way ends are within GAP_JOIN_M, closest first, as long
+    # as they are still different pieces.
+    pieces = _UnionFind()
+    for edge in edges:
+        pieces.union(edge.node_ids[0], edge.node_ids[-1])
+    ends = sorted({node_id for ids in way_nodes.values() if ids for node_id in (ids[0], ids[-1])})
+    if len({pieces.find(node_id) for node_id in ends}) < 2:
+        return []
+    points = np.radians([nodes[node_id] for node_id in ends])
+    tree = BallTree(points, metric="haversine")
+    near, distances = tree.query_radius(
+        points, r=GAP_JOIN_M / EARTH_RADIUS_M, return_distance=True
+    )
+    pairs = sorted(
+        (float(distance * EARTH_RADIUS_M), ends[i], ends[int(j)])
+        for i, (hits, dists) in enumerate(zip(near, distances))
+        for j, distance in zip(hits, dists)
+        if i < j and pieces.find(ends[i]) != pieces.find(ends[int(j)])
+    )
+    gaps: list[_Edge] = []
+    for distance_m, first, second in pairs:
+        if pieces.find(first) == pieces.find(second):
+            continue
+        pieces.union(first, second)
+        gaps.append(_Edge(None, (gap_rank, len(gaps)), (first, second), distance_m))
+    return gaps
+
+
+class _UnionFind:
+    def __init__(self) -> None:
+        self.parent: dict[int, int] = {}
+
+    def find(self, item: int) -> int:
+        root = item
+        while (parent := self.parent.setdefault(root, root)) != root:
+            root = parent
+        while item != root:
+            self.parent[item], item = root, self.parent[item]
+        return root
+
+    def union(self, first: int, second: int) -> None:
+        self.parent[self.find(first)] = self.find(second)
+
+
+def _main_piece_removals(edges: Sequence[_Edge]) -> dict[int, str]:
+    # The longest piece by way length is walked; the rest is disconnected.
+    pieces = _UnionFind()
+    for edge in edges:
+        pieces.union(edge.node_ids[0], edge.node_ids[-1])
+    length_m: dict[int, float] = {}
+    earliest: dict[int, tuple[int, int]] = {}
+    for edge in edges:
+        root = pieces.find(edge.node_ids[0])
+        length_m[root] = length_m.get(root, 0.0) + (edge.way_id is not None) * edge.length_m
+        earliest[root] = min(earliest.get(root, edge.rank), edge.rank)
+    if not length_m:
+        return {}
+    main = min(length_m, key=lambda root: (-length_m[root], earliest[root]))
+    return {
+        index: "disconnected"
+        for index, edge in enumerate(edges)
+        if pieces.find(edge.node_ids[0]) != main
+    }
+
+
+def _incidence(edges: Sequence[_Edge], alive: set[int]) -> dict[int, list[int]]:
+    incident: dict[int, list[int]] = {}
+    for index in alive:
+        edge = edges[index]
+        incident.setdefault(edge.node_ids[0], []).append(index)
+        incident.setdefault(edge.node_ids[-1], []).append(index)
+    return incident
+
+
+def _other_end(edge: _Edge, node_id: int) -> int:
+    return edge.node_ids[-1] if edge.node_ids[0] == node_id else edge.node_ids[0]
+
+
+def _shed_dead_ends(edges: Sequence[_Edge], alive: set[int], removed: dict[int, str]) -> None:
+    # A dead end runs from a degree-1 node to the first junction of degree 3+.
+    # While more than two remain, the shortest is a Leftover.
+    while True:
+        incident = _incidence(edges, alive)
+        tips = [node_id for node_id, here in incident.items() if len(here) == 1]
+        if len(tips) <= 2:
+            return
+        dead_ends = []
+        for tip in tips:
+            path, node_id = [], tip
+            while True:
+                index = next(index for index in incident[node_id] if index not in path)
+                path.append(index)
+                node_id = _other_end(edges[index], node_id)
+                if len(incident[node_id]) != 2:
+                    break
+            length_m = sum(edges[index].length_m for index in path)
+            dead_ends.append((length_m, min(edges[index].rank for index in path), path))
+        _, _, shortest = min(dead_ends, key=lambda dead_end: dead_end[:2])
+        for index in shortest:
+            alive.discard(index)
+            removed[index] = "dead_end"
+
+
+def _shed_shortcuts(edges: Sequence[_Edge], alive: set[int], removed: dict[int, str]) -> None:
+    # While the piece cannot be walked once, the shortest path between two odd
+    # junctions whose removal keeps the piece connected is a Leftover.
+    while True:
+        incident = _incidence(edges, alive)
+        odd = [node_id for node_id, here in incident.items() if len(here) % 2 == 1]
+        if len(odd) <= 2:
+            return
+        path = _shortest_removable_path(
+            edges, alive, incident, [node_id for node_id in odd if len(incident[node_id]) >= 3]
+        )
+        if path is None:
+            return
+        for index in path:
+            alive.discard(index)
+            removed[index] = "shortcut"
+
+
+def _shortest_removable_path(
+    edges: Sequence[_Edge],
+    alive: set[int],
+    incident: Mapping[int, list[int]],
+    sources: Sequence[int],
+) -> list[int] | None:
+    # Grow shortest-path regions from every source at once; an edge between
+    # two regions closes a path between their sources. The global shortest such
+    # path is the first candidate.
+    distance: dict[int, float] = {}
+    owner: dict[int, int] = {}
+    via: dict[int, int] = {}
+    queue: list[tuple[float, int, int, int]] = [(0.0, node_id, node_id, -1) for node_id in sources]
+    heapq.heapify(queue)
+    while queue:
+        dist, node_id, source, index = heapq.heappop(queue)
+        if node_id in distance:
+            continue
+        distance[node_id], owner[node_id], via[node_id] = dist, source, index
+        for index in incident[node_id]:
+            other = _other_end(edges[index], node_id)
+            if other not in distance:
+                heapq.heappush(queue, (dist + edges[index].length_m, other, source, index))
+    candidates = []
+    for index in alive:
+        first, second = edges[index].node_ids[0], edges[index].node_ids[-1]
+        if owner[first] == owner[second]:
+            continue
+        length_m = distance[first] + edges[index].length_m + distance[second]
+        path = [index] + _path_back(edges, via, first) + _path_back(edges, via, second)
+        candidates.append((length_m, min(edges[i].rank for i in path), path))
+    for _, _, path in sorted(candidates, key=lambda candidate: candidate[:2]):
+        if _connected(edges, alive - set(path)):
+            return path
+    return None
+
+
+def _path_back(edges: Sequence[_Edge], via: Mapping[int, int], node_id: int) -> list[int]:
+    path = []
+    while via[node_id] != -1:
+        path.append(via[node_id])
+        node_id = _other_end(edges[via[node_id]], node_id)
+    return path
+
+
+def _connected(edges: Sequence[_Edge], alive: set[int]) -> bool:
+    incident = _incidence(edges, alive)
+    if not incident:
+        return True
+    start = next(iter(incident))
+    seen, stack = {start}, [start]
+    while stack:
+        node_id = stack.pop()
+        for index in incident[node_id]:
+            other = _other_end(edges[index], node_id)
+            if other not in seen:
+                seen.add(other)
+                stack.append(other)
+    return len(seen) == len(incident)
+
+
+def _walk(
+    edges: Sequence[_Edge],
+    alive: set[int],
+    nodes: Mapping[int, tuple[float, float]],
+    access_tree: BallTree | None,
+) -> list[tuple[int, int]]:
+    """(edge, node it is entered from) along the walk, from the Trailhead.
+
+    Each edge once (Hierholzer), taking the edge earliest in member order
+    wherever there is a choice. A line starts at the end ``_pick_trailhead``
+    chooses; a piece with no odd node starts where member order starts it.
+    """
+    incident = _incidence(edges, alive)
+    if not incident:
+        return []
+    for here in incident.values():
+        here.sort(key=lambda index: edges[index].rank)
+    odd = [node_id for node_id, here in incident.items() if len(here) % 2 == 1]
+
+    def member_order(node_id: int) -> tuple:
+        return min(
+            (edges[index].rank, edges[index].node_ids[0] != node_id)
+            for index in incident[node_id]
+        )
+
+    if odd:
+        first, last = sorted(odd, key=member_order)[:2]
+        if len(odd) == 2 and _pick_trailhead(
+            [nodes[first], nodes[last]], access_tree
+        ) != nodes[first]:
+            first = last
+    else:
+        first = min(incident, key=member_order)
+    if len(odd) > 2:
+        # Could not be made walkable once: keep the trail member order gives.
+        greedy: list[tuple[int, int]] = []
+        node_id, taken = first, set()
+        while (index := next((i for i in incident[node_id] if i not in taken), None)) is not None:
+            taken.add(index)
+            greedy.append((index, node_id))
+            node_id = _other_end(edges[index], node_id)
+        return greedy
+    position = {node_id: 0 for node_id in incident}
+    used: set[int] = set()
+    stack: list[tuple[int, tuple[int, int] | None]] = [(first, None)]
+    trail: list[tuple[int, int]] = []
+    while stack:
+        node_id, arrived = stack[-1]
+        here = incident[node_id]
+        while position[node_id] < len(here) and here[position[node_id]] in used:
+            position[node_id] += 1
+        if position[node_id] < len(here):
+            index = here[position[node_id]]
+            used.add(index)
+            stack.append((_other_end(edges[index], node_id), (index, node_id)))
+        else:
+            stack.pop()
+            if arrived is not None:
+                trail.append(arrived)
+    trail.reverse()
+    return trail
 
 
 def _extend_node_chain(chain: list[int], ids: list[int]) -> list[int] | None:

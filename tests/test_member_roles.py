@@ -123,6 +123,8 @@ def test_a_loop_then_a_side_trip_does_not_count_the_first_way_twice(tmp_path: Pa
     ab = way_ids["ab"]
     assert rows[0] == (ab, 1, None)
     assert rows[5] == (ab, 0, "repeat")
-    assert rows[6] == (way_ids["be"], 0, "disconnected")
+    # A piece without dead ends is walked whole until loops shed shortcuts
+    # (ticket 04): b-e is walked once, ab still once.
+    assert rows[6] == (way_ids["be"], 1, None)
     hike = next(hike for hike in catalog.dayhikes if hike.id == 1100)
-    assert hike.length_m == pytest.approx(8_092.0, abs=5.0)  # five sides, ab once
+    assert hike.length_m == pytest.approx(8_092.0 + 2_608.0, abs=5.0)

@@ -652,7 +652,7 @@ def _kept_endpoints(
         if relation.id in seen:
             continue
         seen.add(relation.id)
-        walk = assemble_main_walk(relation, snapshot.ways, snapshot.nodes, ())
+        walk = assemble_main_walk(relation, snapshot.ways, snapshot.nodes, None)
         points = [point for _, point in walk.vertices]
         if drop_reason(relation, walk.length_m) is not None or not points:
             continue
@@ -1017,9 +1017,7 @@ def _keep_dayhikes(
         seen.add(relation.id)
         if relation.tags.get("route") != "hiking":
             continue
-        walk = assemble_main_walk(
-            relation, snapshot.ways, snapshot.nodes, snapshot.access_points
-        )
+        walk = assemble_main_walk(relation, snapshot.ways, snapshot.nodes, access_tree)
         vertices = walk.vertices
         points = [point for _, point in vertices]
         length_m = walk.length_m
@@ -1034,7 +1032,6 @@ def _keep_dayhikes(
                 vertices,
                 points,
                 length_m,
-                access_tree,
                 amenity_index,
             )
         )
@@ -1050,6 +1047,12 @@ def write_geometry_store(
 
     snapshot = _load_hiking_snapshot(conn)
     relations = {relation.id: relation for relation in snapshot.relations}
+    # Same access points as _keep_dayhikes: parking further than the Trailhead
+    # radius from every kept endpoint cannot change which end is the Trailhead.
+    access_tree = _access_tree(
+        _load_access_points(conn)
+        + [points[0] for kind, points in snapshot.amenities if kind == "parking" and points]
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     if tmp.exists():
@@ -1090,6 +1093,8 @@ def write_geometry_store(
                 tags TEXT NOT NULL,
                 in_chain INTEGER NOT NULL,
                 leftover TEXT,
+                walked_m REAL NOT NULL,
+                walk_order INTEGER,
                 PRIMARY KEY (dayhike_id, seq)
             );
             CREATE TABLE amenities (
@@ -1116,9 +1121,7 @@ def write_geometry_store(
         )
         for hike in dayhikes:
             relation = relations[hike.id]
-            walk = assemble_main_walk(relation, snapshot.ways, snapshot.nodes, ())
-            in_chain = walk.in_chain
-            leftovers = walk.leftovers
+            walk = assemble_main_walk(relation, snapshot.ways, snapshot.nodes, access_tree)
             out.execute(
                 "INSERT INTO dayhikes (id, name, name_origin, length_m, unconnected_m, "
                 "difficulty, members, relation_tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1165,14 +1168,16 @@ def write_geometry_store(
                         member_id,
                         json.dumps(list(way.node_ids)),
                         json.dumps(way.tags),
-                        int(in_chain[way_seq]),
-                        leftovers[way_seq],
+                        int(walk.in_chain[way_seq]),
+                        walk.leftovers[way_seq],
+                        walk.walked_m[way_seq],
+                        walk.walk_order[way_seq],
                     )
                 )
                 way_seq += 1
             out.executemany(
-                "INSERT INTO ways (dayhike_id, seq, way_id, node_ids, tags, in_chain, leftover) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO ways (dayhike_id, seq, way_id, node_ids, tags, in_chain, "
+                "leftover, walked_m, walk_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 way_rows,
             )
         amenity_rows = list(
