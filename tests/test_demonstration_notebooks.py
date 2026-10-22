@@ -349,3 +349,17 @@ def _tagged_float(output: str, tag: str) -> float:
     values = _tagged_names(output, tag)
     assert values, f"missing {tag} line"
     return float(values[0])
+
+
+def test_geometry_notebook_shows_leftovers_by_reason() -> None:
+    output, markdown, _ = _run_notebooks()
+    lines = [line.split("\t") for line in output.splitlines()]
+
+    assert "ADR-0012" in markdown
+    reasons = [fields[0] for fields in lines if len(fields) == 4 and fields[0] in (
+        "role", "repeat", "disconnected", "dead_end", "shortcut"
+    )]
+    assert reasons == ["role", "repeat", "disconnected", "dead_end", "shortcut"]
+    assert any(f[:2] == ["example", "disconnected"] and len(f) == 5 for f in lines)
+    assert "leftover_reasons_missing" in output
+    assert any(f[0] == "main_pieces" for f in lines)
