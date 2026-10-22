@@ -51,6 +51,8 @@ class OsmRelation:
     id: int
     members: tuple[tuple[str, int], ...]
     tags: dict[str, str]
+    # OSM member roles, one per member, in member order ("" when unset).
+    roles: tuple[str, ...] = ()
 
 
 @dataclass
@@ -92,8 +94,9 @@ def parse_osm(path: Path) -> OsmSnapshot:
                 (_MEMBER_TYPE.get(str(member.type), str(member.type)), int(member.ref))
                 for member in obj.members
             )
+            roles = tuple(str(member.role) for member in obj.members)
             tags = dict(obj.tags)
-            snapshot.relations.append(OsmRelation(int(obj.id), members, tags))
+            snapshot.relations.append(OsmRelation(int(obj.id), members, tags, roles))
             kind = amenity_kind(tags)
             if kind is not None:
                 pending_relation_amenities.append((kind, members))

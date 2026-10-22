@@ -260,3 +260,22 @@ def _destination(
         math.cos(angular) - math.sin(lat1) * math.sin(lat2),
     )
     return math.degrees(lat2), (math.degrees(lon2) + 180.0) % 360.0 - 180.0
+
+
+def test_a_work_file_without_member_roles_is_not_resumed(tmp_path: Path) -> None:
+    catalog_path = tmp_path / "catalog.sqlite"
+    work_path = catalog_path.with_name(catalog_path.name + ".work")
+
+    def kill_on_access(message: str) -> None:
+        if message.startswith("access:"):
+            raise RuntimeError("killed")
+
+    with pytest.raises(RuntimeError, match="killed"):
+        build_catalog(FIXTURE, catalog_path, progress=kill_on_access)
+    with sqlite3.connect(work_path) as conn:
+        conn.execute("UPDATE meta SET value = '3' WHERE key = 'schema'")
+
+    messages: list[str] = []
+    build_catalog(FIXTURE, catalog_path, progress=messages.append)
+
+    assert not any("resumed, already complete" in message for message in messages)

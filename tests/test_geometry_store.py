@@ -157,10 +157,11 @@ def test_geometry_store_skips_unconnected_member_ways(tmp_path: Path) -> None:
 
         way_flags = list(
             connection.execute(
-                "SELECT way_id, in_chain FROM ways WHERE dayhike_id = 1001 ORDER BY seq"
+                "SELECT way_id, in_chain, leftover FROM ways "
+                "WHERE dayhike_id = 1001 ORDER BY seq"
             )
         )
-        assert way_flags == [(101, 1), (103, 0), (102, 1)]
+        assert way_flags == [(101, 1, None), (103, 0, "disconnected"), (102, 1, None)]
 
         valley_unconnected = connection.execute(
             "SELECT unconnected_m FROM dayhikes WHERE id = 1002"

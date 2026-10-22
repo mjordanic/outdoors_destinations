@@ -38,7 +38,7 @@ from dayhike.osm import (
     amenity_kind,
 )
 
-INGEST_WORK_SCHEMA = 3
+INGEST_WORK_SCHEMA = 4
 INGEST_CHECKPOINT_OBJECTS = 50_000
 INGEST_PROGRESS_EVERY_OBJECTS = 100_000
 CATALOG_TAG_FILTERS = (
@@ -200,6 +200,7 @@ def _init_work(
         CREATE TABLE IF NOT EXISTS relations (
             id INTEGER PRIMARY KEY,
             members TEXT NOT NULL,
+            roles TEXT NOT NULL,
             tags TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS needed_ways (
@@ -405,11 +406,13 @@ def _pass_relations(
                 [_MEMBER_TYPE.get(str(member.type), str(member.type)), int(member.ref)]
                 for member in obj.members
             ]
+            roles = [str(member.role) for member in obj.members]
             osm_id = int(obj.id)
             if tags.get("route") == "hiking":
                 conn.execute(
-                    "INSERT OR REPLACE INTO relations (id, members, tags) VALUES (?, ?, ?)",
-                    (osm_id, json.dumps(members), json.dumps(tags)),
+                    "INSERT OR REPLACE INTO relations (id, members, roles, tags) "
+                    "VALUES (?, ?, ?, ?)",
+                    (osm_id, json.dumps(members), json.dumps(roles), json.dumps(tags)),
                 )
                 conn.executemany(
                     "INSERT OR IGNORE INTO needed_ways (id) VALUES (?)",
@@ -620,13 +623,15 @@ def _load_hiking_snapshot(
         if loaded % INGEST_PROGRESS_EVERY_OBJECTS == 0:
             emit_progress(progress, "access", f"loading ways {loaded}")
     loaded = 0
-    for rel_id, members_json, tags_json in conn.execute(
-        "SELECT id, members, tags FROM relations"
+    for rel_id, members_json, roles_json, tags_json in conn.execute(
+        "SELECT id, members, roles, tags FROM relations"
     ):
         members = tuple(
             (member_type, member_id) for member_type, member_id in json.loads(members_json)
         )
-        snapshot.relations.append(OsmRelation(rel_id, members, json.loads(tags_json)))
+        snapshot.relations.append(
+            OsmRelation(rel_id, members, json.loads(tags_json), tuple(json.loads(roles_json)))
+        )
         loaded += 1
         if loaded % INGEST_PROGRESS_EVERY_OBJECTS == 0:
             emit_progress(progress, "access", f"loading relations {loaded}")
@@ -1084,6 +1089,7 @@ def write_geometry_store(
                 node_ids TEXT NOT NULL,
                 tags TEXT NOT NULL,
                 in_chain INTEGER NOT NULL,
+                leftover TEXT,
                 PRIMARY KEY (dayhike_id, seq)
             );
             CREATE TABLE amenities (
@@ -1112,6 +1118,7 @@ def write_geometry_store(
             relation = relations[hike.id]
             walk = assemble_main_walk(relation, snapshot.ways, snapshot.nodes, ())
             in_chain = walk.in_chain
+            leftovers = walk.leftovers
             out.execute(
                 "INSERT INTO dayhikes (id, name, name_origin, length_m, unconnected_m, "
                 "difficulty, members, relation_tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1159,12 +1166,13 @@ def write_geometry_store(
                         json.dumps(list(way.node_ids)),
                         json.dumps(way.tags),
                         int(in_chain[way_seq]),
+                        leftovers[way_seq],
                     )
                 )
                 way_seq += 1
             out.executemany(
-                "INSERT INTO ways (dayhike_id, seq, way_id, node_ids, tags, in_chain) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO ways (dayhike_id, seq, way_id, node_ids, tags, in_chain, leftover) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 way_rows,
             )
         amenity_rows = list(

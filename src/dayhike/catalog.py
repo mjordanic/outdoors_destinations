@@ -786,6 +786,11 @@ def _elevation_stats(
     return min(elevations), max(elevations), gain_m
 
 
+LEFTOVER_ROLES = frozenset(
+    {"alternative", "alternate", "variant", "variation", "detour", "excursion", "connection"}
+)
+
+
 @dataclass(frozen=True)
 class MainWalk:
     """DayHikeGeometry of one relation: what ingest needs from one assembly.
@@ -793,13 +798,17 @@ class MainWalk:
     ``vertices`` are the ordered (node id, point) pairs, ``length_m`` their
     line length, ``in_chain`` one flag per member-way listing (listed order,
     ways missing from the snapshot skipped) and ``unconnected_m`` the metres
-    of listings that are not in the line.
+    of listings that are not in the line (a repeated listing of a walked way
+    adds nothing: its length is already counted once) and ``leftovers`` the
+    reason each unwalked listing was left over.
     """
 
     vertices: list[tuple[int, tuple[float, float]]]
     length_m: float
     in_chain: list[bool]
     unconnected_m: float
+    # One per listing: None when walked, else the Leftover reason.
+    leftovers: list[str | None]
 
 
 def assemble_main_walk(
@@ -815,21 +824,36 @@ def assemble_main_walk(
     """
     chain: list[int] = []
     in_chain: list[bool] = []
+    leftovers: list[str | None] = []
     unconnected_m = 0.0
-    for member_type, member_id in relation.members:
+    walked: set[int] = set()
+    for index, (member_type, member_id) in enumerate(relation.members):
         if member_type != "way":
             continue
         way = ways.get(member_id)
         if way is None:
             continue
+        role = relation.roles[index] if index < len(relation.roles) else ""
+        if role in LEFTOVER_ROLES:
+            in_chain.append(False)
+            leftovers.append("role")
+            unconnected_m += _member_way_length_m(list(way.node_ids), nodes)
+            continue
+        if member_id in walked:
+            in_chain.append(False)
+            leftovers.append("repeat")
+            continue
         ids = list(way.node_ids)
         extended = _extend_node_chain(chain, ids) if ids else None
         if extended is None:
             in_chain.append(False)
+            leftovers.append("disconnected")
             unconnected_m += _member_way_length_m(ids, nodes)
             continue
         chain = extended
         in_chain.append(True)
+        leftovers.append(None)
+        walked.add(member_id)
     vertices: list[tuple[int, tuple[float, float]]] = []
     for node_id in chain:
         point = nodes.get(node_id)
@@ -839,7 +863,7 @@ def assemble_main_walk(
             continue
         vertices.append((node_id, point))
     length_m = _linestring_length_m([point for _, point in vertices])
-    return MainWalk(vertices, length_m, in_chain, unconnected_m)
+    return MainWalk(vertices, length_m, in_chain, unconnected_m, leftovers)
 
 
 def _extend_node_chain(chain: list[int], ids: list[int]) -> list[int] | None:
