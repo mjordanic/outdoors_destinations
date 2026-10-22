@@ -72,7 +72,7 @@ def run_ingest(
     catalog_path: Path,
     progress: Progress | None = None,
     fresh: bool = False,
-) -> tuple[list[DayHike], IngestReport, Path]:
+) -> tuple[list[DayHike], IngestReport, Path, list[tuple[float, float]]]:
     catalog_path = Path(catalog_path)
     catalog_path.parent.mkdir(parents=True, exist_ok=True)
     work_path = work_path_for(catalog_path)
@@ -135,7 +135,7 @@ def run_ingest(
             named_osm_ref=origin_counts[NAME_ORIGIN_OSM_REF],
             named_synthetic=origin_counts[NAME_ORIGIN_SYNTHETIC],
         )
-        return kept, report, work_path
+        return kept, report, work_path, snapshot.access_points
     finally:
         conn.close()
 
@@ -653,11 +653,11 @@ def _kept_endpoints(
             continue
         seen.add(relation.id)
         walk = assemble_main_walk(relation, snapshot.ways, snapshot.nodes, None)
-        points = [point for _, point in walk.vertices]
-        if drop_reason(relation, walk.length_m) is not None or not points:
+        if drop_reason(relation, walk.length_m) is not None or not walk.vertices:
             continue
-        endpoints.append(points[0])
-        endpoints.append(points[-1])
+        # Dead-end ends, line ends and points along loops: access never
+        # decides what is kept, so these do not depend on it.
+        endpoints.extend(walk.access_search_points)
         if index % INGEST_CHECKPOINT_OBJECTS == 0:
             emit_progress(progress, "access", f"choosing endpoints {index}/{total}")
     return endpoints
@@ -1040,19 +1040,21 @@ def _keep_dayhikes(
 
 
 def write_geometry_store(
-    path: Path, dayhikes: Sequence[DayHike], conn: sqlite3.Connection
+    path: Path,
+    dayhikes: Sequence[DayHike],
+    conn: sqlite3.Connection,
+    access_points: Sequence[tuple[float, float]],
 ) -> None:
-    """Write DayHikeGeometry, member ways, and raw amenity points beside the Catalog."""
+    """Write DayHikeGeometry, member ways, and raw amenity points beside the Catalog.
+
+    ``access_points`` are the ones ``run_ingest`` kept DayHikes with, so each
+    main walk starts at the same Trailhead as in the Catalog.
+    """
     from dayhike.catalog import OSM_ATTRIBUTION
 
     snapshot = _load_hiking_snapshot(conn)
     relations = {relation.id: relation for relation in snapshot.relations}
-    # Same access points as _keep_dayhikes: parking further than the Trailhead
-    # radius from every kept endpoint cannot change which end is the Trailhead.
-    access_tree = _access_tree(
-        _load_access_points(conn)
-        + [points[0] for kind, points in snapshot.amenities if kind == "parking" and points]
-    )
+    access_tree = _access_tree(access_points)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     if tmp.exists():

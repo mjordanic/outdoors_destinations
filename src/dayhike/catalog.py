@@ -22,6 +22,9 @@ MAX_LENGTH_M = 20_000
 AMENITY_RADIUS_M = 20_000  # great-circle from Trailhead; zero counts are valid
 TRAILHEAD_ACCESS_RADIUS_M = 5_000  # parking / driveable highway near an endpoint
 GAP_JOIN_M = 50  # member-way ends this close join two pieces with a straight gap
+LOOP_SHARE = 0.5  # a piece whose closed loop is at least this share of its length is a loop
+STEM_ACCESS_RADIUS_M = 200  # a loop's dead end ending this close to access is its stem
+STEM_MIN_LENGTH_M = 1_000  # else a loop's only dead end at least this long is its stem
 OSM_ATTRIBUTION = "© OpenStreetMap contributors"
 AMENITY_KINDS = ("hut", "parking", "restaurant_cafe", "drinking_water")
 NAME_ORIGIN_OSM_NAME = "osm_name"
@@ -575,7 +578,7 @@ def build_catalog(
     )
 
     catalog_path = Path(catalog_path)
-    kept, report, work_path = run_ingest(
+    kept, report, work_path, access_points = run_ingest(
         _osm_paths(osm_path), catalog_path, progress=progress, fresh=fresh
     )
     scaler = fit_scaler_from_matrix(feature_matrix(kept), FEATURE_NAMES)
@@ -584,7 +587,9 @@ def build_catalog(
     if work_path.exists():
         work_conn = sqlite3.connect(work_path)
         try:
-            write_geometry_store(geometry_store_path_for(catalog_path), kept, work_conn)
+            write_geometry_store(
+                geometry_store_path_for(catalog_path), kept, work_conn, access_points
+            )
         finally:
             work_conn.close()
         work_path.unlink()
@@ -806,6 +811,10 @@ class MainWalk:
     metres of the way on the walk and ``walk_order`` its position along the
     walk (None for Leftovers). ``unconnected_m`` is the distinct member-way
     length that is not walked; joined gaps are not counted.
+    ``access_search_points`` are where ingest looks for access points: both
+    ends of every dead end of the main piece, a line's two ends, and points
+    along a loop no further apart than ``TRAILHEAD_ACCESS_RADIUS_M``. They do
+    not depend on the access points.
     """
 
     vertices: list[tuple[int, tuple[float, float]]]
@@ -815,6 +824,7 @@ class MainWalk:
     leftovers: list[str | None]
     walked_m: list[float]
     walk_order: list[int | None]
+    access_search_points: list[tuple[float, float]]
 
     @property
     def trailhead(self) -> tuple[float, float]:
@@ -830,6 +840,9 @@ class _Edge:
     length_m: float
 
 
+_Segment = tuple[int, tuple[int, ...]]  # (edge, its node ids in walking direction)
+
+
 def assemble_main_walk(
     relation: OsmRelation,
     ways: Mapping[int, OsmWay],
@@ -840,9 +853,13 @@ def assemble_main_walk(
 
     Distinct member ways form a graph split at every shared node. Way ends of
     different pieces within ``GAP_JOIN_M`` are joined; the longest piece is
-    walked. A line sheds its shortest dead ends until two remain, then its
-    shortest odd-junction cycle paths until it can be walked once, from the
-    end ``_pick_trailhead`` chooses with ``access_tree``.
+    walked. A piece whose closed loop, after setting aside dead ends and then
+    shortcuts, is at least ``LOOP_SHARE`` of its length is a loop: it walks
+    that loop plus at most one stem (see ``_stem``), from the stem's far end or
+    else from its vertex nearest ``access_tree``, in member-order direction.
+    Otherwise it is a line: it sheds its shortest dead ends until two remain,
+    then its shortest odd-junction cycle paths until it can be walked once,
+    from the end ``_pick_trailhead`` chooses with ``access_tree``.
     """
     listed: list[int] = []  # way id per member-way listing in the snapshot
     leftovers: list[str | None] = []
@@ -875,23 +892,42 @@ def assemble_main_walk(
     edges += _gap_edges(edges, way_nodes, nodes, len(listed))
     removed = _main_piece_removals(edges)
     alive = {index for index in range(len(edges)) if index not in removed}
-    _shed_dead_ends(edges, alive, removed)
-    _shed_shortcuts(edges, alive, removed)
-    trail = _walk(edges, alive, nodes, access_tree)
-    for index in alive - {index for index, _ in trail}:
+    search_points = [
+        nodes[node_id] for _, tip, far in _dead_ends(edges, alive) for node_id in (tip, far)
+    ]
+    loop = _loop(edges, alive)
+    if loop is None:
+        _shed_dead_ends(edges, alive, removed)
+        _shed_shortcuts(edges, alive, removed, max_odd=2)
+        segments = _segments(edges, _walk(edges, alive, nodes, access_tree))
+        if segments:
+            search_points += [nodes[segments[0][1][0]], nodes[segments[-1][1][-1]]]
+    else:
+        core, shortcuts = loop
+        for index in shortcuts:
+            alive.discard(index)
+            removed[index] = "shortcut"
+        circuit = _segments(edges, _walk(edges, core, nodes, None))
+        search_points += _points_every(
+            [nodes[node_id] for _, node_ids in circuit for node_id in node_ids],
+            TRAILHEAD_ACCESS_RADIUS_M,
+        )
+        segments = _loop_walk(edges, alive, core, circuit, nodes, access_tree, removed)
+    for index in alive - {index for index, _ in segments}:
         removed[index] = "shortcut"
 
     vertices: list[tuple[int, tuple[float, float]]] = []
     walked_m: dict[int, float] = {}
-    for index, from_node in trail:
-        edge = edges[index]
-        node_ids = edge.node_ids if edge.node_ids[0] == from_node else edge.node_ids[::-1]
+    for index, node_ids in segments:
         for node_id in node_ids[1:] if vertices else node_ids:
             point = nodes[node_id]
             if not vertices or vertices[-1][1] != point:
                 vertices.append((node_id, point))
-        if edge.way_id is not None:
-            walked_m[edge.way_id] = walked_m.get(edge.way_id, 0.0) + edge.length_m
+        way_id = edges[index].way_id
+        if way_id is not None:
+            walked_m[way_id] = walked_m.get(way_id, 0.0) + _linestring_length_m(
+                [nodes[node_id] for node_id in node_ids]
+            )
     order = {way_id: position for position, way_id in enumerate(walked_m)}
     reasons: dict[int, str] = {}
     for index, reason in removed.items():
@@ -916,7 +952,14 @@ def assemble_main_walk(
     )
     length_m = _linestring_length_m([point for _, point in vertices])
     return MainWalk(
-        vertices, length_m, in_chain, unconnected_m, leftovers, walked, walk_order
+        vertices,
+        length_m,
+        in_chain,
+        unconnected_m,
+        leftovers,
+        walked,
+        walk_order,
+        search_points,
     )
 
 
@@ -1034,38 +1077,84 @@ def _other_end(edge: _Edge, node_id: int) -> int:
     return edge.node_ids[-1] if edge.node_ids[0] == node_id else edge.node_ids[0]
 
 
+def _dead_ends(edges: Sequence[_Edge], alive: set[int]) -> list[tuple[list[int], int, int]]:
+    # (path, tip, far node) of every dead end: from a degree-1 node to the
+    # first node whose degree is not 2.
+    incident = _incidence(edges, alive)
+    dead_ends = []
+    for tip, here in incident.items():
+        if len(here) != 1:
+            continue
+        path, node_id = [], tip
+        while True:
+            index = next(index for index in incident[node_id] if index not in path)
+            path.append(index)
+            node_id = _other_end(edges[index], node_id)
+            if len(incident[node_id]) != 2:
+                break
+        dead_ends.append((path, tip, node_id))
+    return dead_ends
+
+
 def _shed_dead_ends(edges: Sequence[_Edge], alive: set[int], removed: dict[int, str]) -> None:
     # A dead end runs from a degree-1 node to the first junction of degree 3+.
     # While more than two remain, the shortest is a Leftover.
     while True:
-        incident = _incidence(edges, alive)
-        tips = [node_id for node_id, here in incident.items() if len(here) == 1]
-        if len(tips) <= 2:
+        dead_ends = _dead_ends(edges, alive)
+        if len(dead_ends) <= 2:
             return
-        dead_ends = []
-        for tip in tips:
-            path, node_id = [], tip
-            while True:
-                index = next(index for index in incident[node_id] if index not in path)
-                path.append(index)
-                node_id = _other_end(edges[index], node_id)
-                if len(incident[node_id]) != 2:
-                    break
-            length_m = sum(edges[index].length_m for index in path)
-            dead_ends.append((length_m, min(edges[index].rank for index in path), path))
-        _, _, shortest = min(dead_ends, key=lambda dead_end: dead_end[:2])
+        shortest = min(
+            (path for path, _, _ in dead_ends),
+            key=lambda path: (
+                sum(edges[index].length_m for index in path),
+                min(edges[index].rank for index in path),
+            ),
+        )
         for index in shortest:
             alive.discard(index)
             removed[index] = "dead_end"
 
 
-def _shed_shortcuts(edges: Sequence[_Edge], alive: set[int], removed: dict[int, str]) -> None:
-    # While the piece cannot be walked once, the shortest path between two odd
-    # junctions whose removal keeps the piece connected is a Leftover.
+def _loop(edges: Sequence[_Edge], alive: set[int]) -> tuple[set[int], set[int]] | None:
+    """(closed loop, shortcuts) when the piece is a loop, else None.
+
+    Dead ends are set aside down to the piece's cycles, then shortcuts until
+    every node is even. The piece is a loop when what remains is at least
+    ``LOOP_SHARE`` of its length. A figure-eight (all junctions even) stays
+    whole.
+    """
+    incident = _incidence(edges, alive)
+    degree = {node_id: len(here) for node_id, here in incident.items()}
+    core = set(alive)
+    tips = [node_id for node_id, count in degree.items() if count == 1]
+    while tips:
+        index = next((index for index in incident[tips.pop()] if index in core), None)
+        if index is None:
+            continue
+        core.discard(index)
+        for node_id in (edges[index].node_ids[0], edges[index].node_ids[-1]):
+            degree[node_id] -= 1
+            if degree[node_id] == 1:
+                tips.append(node_id)
+    shortcuts: dict[int, str] = {}
+    _shed_shortcuts(edges, core, shortcuts, max_odd=0)
+    if not core or any(len(here) % 2 for here in _incidence(edges, core).values()):
+        return None
+    loop_m = sum(edges[index].length_m for index in core)
+    if loop_m < LOOP_SHARE * sum(edges[index].length_m for index in alive):
+        return None
+    return core, set(shortcuts)
+
+
+def _shed_shortcuts(
+    edges: Sequence[_Edge], alive: set[int], removed: dict[int, str], max_odd: int
+) -> None:
+    # While more than ``max_odd`` nodes are odd, the shortest path between two
+    # odd junctions whose removal keeps the piece connected is a Leftover.
     while True:
         incident = _incidence(edges, alive)
         odd = [node_id for node_id, here in incident.items() if len(here) % 2 == 1]
-        if len(odd) <= 2:
+        if len(odd) <= max_odd:
             return
         path = _shortest_removable_path(
             edges, alive, incident, [node_id for node_id in odd if len(incident[node_id]) >= 3]
@@ -1199,6 +1288,140 @@ def _walk(
                 trail.append(arrived)
     trail.reverse()
     return trail
+
+
+def _segments(
+    edges: Sequence[_Edge], trail: Sequence[tuple[int, int]]
+) -> list[_Segment]:
+    # A segment for each (edge, node it is entered from).
+    return [
+        (
+            index,
+            edges[index].node_ids
+            if edges[index].node_ids[0] == from_node
+            else edges[index].node_ids[::-1],
+        )
+        for index, from_node in trail
+    ]
+
+
+def _loop_walk(
+    edges: Sequence[_Edge],
+    alive: set[int],
+    core: set[int],
+    circuit: list[_Segment],
+    nodes: Mapping[int, tuple[float, float]],
+    access_tree: BallTree | None,
+    removed: dict[int, str],
+) -> list[_Segment]:
+    # The stem from its far end, then ``circuit`` (member-order direction)
+    # from where the stem meets it; without a stem, from the loop's vertex
+    # nearest an access point. Every other dead end is a Leftover.
+    stem = _stem(edges, alive, core, nodes, access_tree)
+    for index in alive - core - {index for index, _ in stem}:
+        alive.discard(index)
+        removed[index] = "dead_end"
+    if stem:
+        start = stem[-1][1][-1]
+    else:
+        start = _loop_start(circuit, nodes, access_tree)
+    for position, (index, node_ids) in enumerate(circuit):
+        if start in node_ids[:-1]:
+            cut = node_ids.index(start)
+            rest = circuit[position + 1 :] + circuit[:position]
+            head = [(index, node_ids[: cut + 1])] if cut else []
+            return stem + [(index, node_ids[cut:])] + rest + head
+    return stem + circuit
+
+
+def _stem(
+    edges: Sequence[_Edge],
+    alive: set[int],
+    core: set[int],
+    nodes: Mapping[int, tuple[float, float]],
+    access_tree: BallTree | None,
+) -> list[_Segment]:
+    """The one dead end a loop walks, from its far end to the loop, or [].
+
+    A dead end whose far end is within ``STEM_ACCESS_RADIUS_M`` of an access
+    point, nearest first; else the only dead end when it is at least
+    ``STEM_MIN_LENGTH_M`` long.
+    """
+    incident = _incidence(edges, alive)
+    toward_loop: dict[int, int] = {}
+    stack = [node_id for node_id, here in incident.items() if any(i in core for i in here)]
+    seen = set(stack)
+    while stack:
+        node_id = stack.pop()
+        for index in incident[node_id]:
+            other = _other_end(edges[index], node_id)
+            if index not in core and other not in seen:
+                seen.add(other)
+                toward_loop[other] = index
+                stack.append(other)
+    tips = [node_id for node_id, here in incident.items() if len(here) == 1]
+    stems: dict[int, list[_Segment]] = {}
+    for tip in tips:
+        trail, node_id = [], tip
+        while node_id in toward_loop:
+            trail.append((toward_loop[node_id], node_id))
+            node_id = _other_end(edges[toward_loop[node_id]], node_id)
+        if trail:
+            stems[tip] = _segments(edges, trail)
+    if access_tree is not None and stems:
+        dist, _ = access_tree.query(np.radians([nodes[tip] for tip in stems]), k=1)
+        near = [
+            (float(distance) * EARTH_RADIUS_M, min(edges[i].rank for i, _ in stems[tip]), tip)
+            for distance, tip in zip(dist[:, 0], stems)
+        ]
+        near = [candidate for candidate in near if candidate[0] <= STEM_ACCESS_RADIUS_M]
+        if near:
+            return stems[min(near)[2]]
+    if len(tips) == 1 and tips[0] in stems:
+        stem = stems[tips[0]]
+        if sum(edges[index].length_m for index, _ in stem) >= STEM_MIN_LENGTH_M:
+            return stem
+    return []
+
+
+def _loop_start(
+    circuit: Sequence[_Segment],
+    nodes: Mapping[int, tuple[float, float]],
+    access_tree: BallTree | None,
+) -> int:
+    # The loop vertex nearest an access point within the Trailhead radius,
+    # else where member order starts the loop.
+    node_ids = [node_id for _, ids in circuit for node_id in ids[:-1]]
+    if access_tree is None or not node_ids:
+        return circuit[0][1][0]
+    dist, _ = access_tree.query(np.radians([nodes[node_id] for node_id in node_ids]), k=1)
+    nearest = int(np.argmin(dist[:, 0]))
+    if float(dist[nearest, 0]) * EARTH_RADIUS_M > TRAILHEAD_ACCESS_RADIUS_M:
+        return circuit[0][1][0]
+    return node_ids[nearest]
+
+
+def _points_every(
+    points: Sequence[tuple[float, float]], spacing_m: float
+) -> list[tuple[float, float]]:
+    # Points along the line, the first one included, no more than spacing_m
+    # apart along it.
+    if not points:
+        return []
+    out = [points[0]]
+    since_m = 0.0
+    for start, end in zip(points, points[1:]):
+        step_m = _haversine_m(start[0], start[1], end[0], end[1])
+        done_m = 0.0
+        while since_m + step_m - done_m > spacing_m:
+            done_m += spacing_m - since_m
+            share = done_m / step_m
+            out.append(
+                (start[0] + share * (end[0] - start[0]), start[1] + share * (end[1] - start[1]))
+            )
+            since_m = 0.0
+        since_m += step_m - done_m
+    return out
 
 
 def _extend_node_chain(chain: list[int], ids: list[int]) -> list[int] | None:
