@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0012
+---
+
 # Member ways that do not touch the chain are skipped, not jumped
 
 DayHikeGeometry is a walk along OSM member ways. Ingest used to glue a member

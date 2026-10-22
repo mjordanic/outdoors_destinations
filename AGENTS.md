@@ -3,6 +3,12 @@ Behavioral guidelines to reduce common LLM coding mistakes.
 
 Tradeoff: These guidelines bias toward caution over speed. For trivial tasks, use judgment.
 
+## Communication
+
+Always follow the `/caveman` skill. Default intensity is **full**. Read the skill and apply it before answering. It stays active for the whole session, including later turns and subagents that talk to the user. Turn it off only when the user says "stop caveman" or "normal mode".
+
+Keep the skill's boundaries. Code, commit messages, and pull request text stay in normal English. Use normal English for security warnings, irreversible-action confirmations, and multi-step sequences where dropped words would make the order ambiguous. Return to caveman once that part is done.
+
 ### 1. Think Before Coding
 Don't assume. Don't hide confusion. Surface tradeoffs.
 

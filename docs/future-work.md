@@ -131,3 +131,58 @@ driving polygons are expensive. ADR-0004 keeps DriveTime on the matrix API.
 
 - The UI exists, and Valhalla `/isochrone` is an optional GeoJSON layer, never a
   substitute for Trailhead DriveTime.
+
+---
+
+## 9. LandCover along the line, not per vertex
+
+### Why it's parked
+
+LandCover fractions count each GeometryStore vertex once. OSM vertices are dense
+on bends (forest switchbacks, villages) and sparse on straight stretches
+(fields, roads), so bendy parts weigh more than their length, and the middle of
+a long segment is never read. Measured on the notebook 05 region (400 of its
+4,408 DayHikes; truth is WorldCover read every 10 m along each segment):
+
+| Method | Share of the walk misassigned: mean / p95 / worst | Points read |
+| --- | --- | --- |
+| Vertex count (today) | 2.7% / 8.0% / 14.4% | 1× vertices |
+| Vertex weighted by half its two segments | 1.3% / 3.9% / 11.7% | 1× (no new reads) |
+| Read every 25 m along segments | 1.2% / 4.0% / 7.9% | 1.3× |
+
+Only 6.4% of the walked length lies in segments over 100 m, so uneven vertex
+density, not long gaps, is most of the error. The Landscape Facet's LandCover
+mix inherits it one to one. That is small next to the gap between real similar
+and dissimilar pairs, so it waits.
+
+Same pattern, not yet measured: ClimateNormal is a per-vertex mean (1 km grid,
+small effect expected), and elevation gain is read only at vertices, so a climb
+inside a long segment is missed.
+
+### What would have to be true to start
+
+- Length-weighted shares first in notebook 05 (`landscape_facts` from the vertex
+  `landcover`), with notebook 05a still passing.
+- Then for production: the LandCover entry in `CONTEXT.md` says weighted by
+  length instead of "each GeometryStore vertex counts once", and `sample-landcover`
+  is rerun to refresh the Catalog fractions and scaler. Ranking changes with it.
+- Reading along segments only if review shows the worst cases matter; it needs
+  a new raster pass and somewhere to keep the extra points.
+- Elevation gain measured the same way before deciding whether it needs the
+  same treatment.
+
+---
+
+## 10. Ferry and bus ways in walked length
+
+### Why it's parked
+
+Some hiking relations include a `route=ferry` way or a bus transfer along a
+road, and DayHikeGeometry counts it as walked length. On the full Catalog only
+about 16 DayHikes have such a step over 2 km (ADR-0012 audit).
+
+### What would have to be true to start
+
+- A rule for which member ways are not walked (ferry, `highway` of a bus-only
+  road, tagged transfer), and whether they stay in the line but not in
+  `length_m`.

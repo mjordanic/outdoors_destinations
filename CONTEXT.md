@@ -5,7 +5,7 @@ A local Catalog of DayHikes built from OpenStreetMap, ranked by similarity to Se
 ## Language
 
 **DayHike**:
-A day-length hiking outing stored in the Catalog. It is an OSM `route=hiking` relation that survived the length band and superroute rules. Its label is OSM `name`, else `ref`, else `relation:{id}`.
+A day-length hiking outing stored in the Catalog. It is an OSM `route=hiking` relation that survived the length band and superroute rules. Its label is OSM `name`, else `ref`, else `relation:{id}`. Its length is the length of its DayHikeGeometry, each way once: a there-and-back trail counts one way.
 _Avoid_: destination, trail, route, path, recommendation
 
 **NameOrigin**:
@@ -13,7 +13,7 @@ Whether a DayHike label came from OSM `name`, OSM `ref`, or a synthetic `relatio
 _Avoid_: unnamed as a drop reason, title, display name
 
 **Trailhead**:
-The point used to start the DayHike, taken from the relation's geometry (first/last node or tagged access point). Drive time and nearby amenities are measured from here.
+The point used to start the DayHike, taken from the relation's geometry (first/last node or tagged access point). A loop starts at its vertex nearest an access point. Drive time and nearby amenities are measured from here.
 _Avoid_: start, parking (parking is an amenity near a Trailhead)
 
 **Catalog**:
@@ -21,8 +21,12 @@ The local database of DayHikes, Trailheads, AmenityFacts, and FeatureVectors. Bu
 _Avoid_: dataset, index, graph (the routing graph is Valhalla's, not the Catalog)
 
 **DayHikeGeometry**:
-The ordered lon/lat vertices of a DayHike, assembled from OSM member ways that share endpoints (a member that does not touch the chain is omitted, not jumped). Used to invent FeatureVector columns; Ranking does not read it.
-_Avoid_: path, route, trace, LineString
+The ordered lon/lat vertices of a DayHike's main walk, starting at the Trailhead: the longest connected piece of its OSM member ways (ways a few tens of metres apart count as connected), each way at most once, without Leftovers. Consecutive ways meet; there is no jump between them. Used to invent FeatureVector columns; Ranking does not read it.
+_Avoid_: path, route, trace, LineString, chain
+
+**Leftover**:
+A member way of a DayHike that is not on its main walk: a side trip, a variant, a stray piece that does not connect, or a repeat listing. It stays in GeometryStore but is not in DayHikeGeometry or the DayHike's length.
+_Avoid_: stray, unconnected way, excursion, side trip, optional part
 
 **GeometryStore**:
 The sidecar SQLite written at ingest next to a Catalog. It holds DayHikeGeometry, member-way and relation tags, raw amenity points, and the per-vertex LandCover and ClimateNormal samples. Ranking does not read it.
@@ -49,7 +53,7 @@ A local elevation raster sampled onto DayHikeGeometry after ingest. Until that s
 _Avoid_: live SRTM, elevation API, exposure
 
 **ElevationProfile**:
-Metres of elevation change along a DayHike from its first point, in the hike's stored direction. The metres stay in metres.
+Metres of elevation change along a DayHike from its Trailhead, in walking direction. The metres stay in metres.
 _Avoid_: altitude, normalized profile (that is ProfileShape), unit-scaled shape
 
 **ProfileShape**:
