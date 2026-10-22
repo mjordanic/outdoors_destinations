@@ -18,7 +18,7 @@ import pandas as pd
 from shapely.geometry import LineString
 from sklearn.neighbors import BallTree
 
-from dayhike.catalog import EARTH_RADIUS_M, _extend_node_chain, geometry_store_path_for
+from dayhike.catalog import EARTH_RADIUS_M, GAP_JOIN_M, geometry_store_path_for
 from dayhike.dem import sample_elevations
 
 AMENITY_PAD_M = 3_000  # vertex box pad for region amenities; covers Peaks around
@@ -707,63 +707,49 @@ def trail_facts(
 ) -> pd.DataFrame:
     """Trail facts per DayHike id, in stored order.
 
+    Both read the main walk stored in ``ways``: ``walk_order`` (the way's
+    position along the walk, which starts at the Trailhead; missing when the
+    way is a Leftover) and ``walked_m`` (the metres of the way on the walk).
     SurfaceMix: four length fractions (``SURFACE_SHARE_COLUMNS``) over the
-    member ways in the chain (``in_chain = 1``) that ``surface_class`` can
-    classify; unclassified ways are left out of the denominator.
-    ``tarmac_approach_m``: from the chain end nearest the Catalog Trailhead,
-    the length of consecutive paved ways until the first way that is not paved
-    (an unclassified way ends it); an all-paved DayHike gives its length. When
-    both ends are equally near (a loop) the shorter approach counts, so the
-    walking direction never matters. Both are missing when no in-chain way is
-    classified.
-
-    The ways are put in walking order by gluing them the way ingest builds the
-    vertex chain (``vertices`` only gives the node coordinates), so neither the
-    stored member order nor the vertex order matters.
+    walked ways that ``surface_class`` can classify, each weighted by its
+    walked metres; unclassified ways are left out of the denominator.
+    ``tarmac_approach_m``: the walked metres of consecutive paved ways from
+    the start of the walk until the first way that is not paved (an
+    unclassified way ends it); an all-paved DayHike gives its walked length.
+    For a loop (the walk ends within ``GAP_JOIN_M`` of where it starts) the
+    shorter of the two directions counts, so the walking direction never
+    matters. Both are missing when no walked way is classified.
     """
     ids = dayhikes["id"]
-    trailheads = dayhikes.set_index("id")[["trailhead_latitude", "trailhead_longitude"]]
-    node_xy = dict(
-        zip(vertices["node_id"], zip(vertices["latitude"], vertices["longitude"]))
+    chain = vertices.sort_values(["dayhike_id", "seq"]).groupby("dayhike_id")
+    ends = pd.concat(
+        [chain[["latitude", "longitude"]].first(), chain[["latitude", "longitude"]].last()],
+        axis=1,
+        keys=["first", "last"],
     )
     facts = {}
     for dayhike_id, member_ways in (
-        ways[ways["in_chain"] == 1].sort_values(["dayhike_id", "seq"]).groupby("dayhike_id")
+        ways[ways["walk_order"].notna()].sort_values(["dayhike_id", "walk_order"]).groupby("dayhike_id")
     ):
-        glued: list[int] = []
-        order: list[tuple[float, str | None]] = []  # (length_m, class) in chain order
-        for node_ids, tags, line in zip(
-            member_ways["node_ids"], member_ways["tags"], member_ways["geometry"]
-        ):
-            nodes = json.loads(node_ids)
-            lon, lat = (np.asarray(line.coords) if line is not None else np.empty((0, 2))).T
-            way = (_path_length_m(lat, lon), surface_class(json.loads(tags)))
-            if not glued or glued[-1] in (nodes[0], nodes[-1]):
-                order.append(way)
-            else:
-                order.insert(0, way)
-            glued = _extend_node_chain(glued, nodes) or glued
+        order = [
+            (float(length), surface_class(json.loads(tags)))
+            for length, tags in zip(member_ways["walked_m"], member_ways["tags"])
+        ]
         classified = [(length, kind) for length, kind in order if kind is not None]
         total = sum(length for length, _ in classified)
         if total <= 0:
             continue
-        trailhead = trailheads.loc[dayhike_id]
-
-        def to_trailhead(node: int) -> float:
-            if node not in node_xy:
-                return math.nan
-            lat, lon = node_xy[node]
-            return _path_length_m(
-                [trailhead["trailhead_latitude"], lat],
-                [trailhead["trailhead_longitude"], lon],
-            )
-
-        to_start, to_end = to_trailhead(glued[0]), to_trailhead(glued[-1])
-        approaches = []
-        if not to_end < to_start:
-            approaches.append(_paved_run(order))
-        if not to_start < to_end:
-            approaches.append(_paved_run(order[::-1]))
+        approaches = [_paved_run(order)]
+        if dayhike_id in ends.index:
+            first, last = ends.loc[dayhike_id, "first"], ends.loc[dayhike_id, "last"]
+            if (
+                _path_length_m(
+                    [first["latitude"], last["latitude"]],
+                    [first["longitude"], last["longitude"]],
+                )
+                <= GAP_JOIN_M
+            ):
+                approaches.append(_paved_run(order[::-1]))
         facts[dayhike_id] = [
             sum(length for length, k in classified if k == kind) / total
             for kind in ("paved", "gravel", "natural", "rock")

@@ -1424,21 +1424,6 @@ def _points_every(
     return out
 
 
-def _extend_node_chain(chain: list[int], ids: list[int]) -> list[int] | None:
-    if not chain:
-        return ids
-    start, end = chain[0], chain[-1]
-    if ids[0] == end:
-        return chain + ids[1:]
-    if ids[-1] == end:
-        return chain + list(reversed(ids[:-1]))
-    if ids[-1] == start:
-        return ids + chain[1:]
-    if ids[0] == start:
-        return list(reversed(ids)) + chain[1:]
-    return None
-
-
 def _member_way_length_m(
     node_ids: Sequence[int], nodes: Mapping[int, tuple[float, float]]
 ) -> float:

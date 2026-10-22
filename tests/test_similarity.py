@@ -599,11 +599,13 @@ def test_unlisted_surface_falls_back_to_the_highway() -> None:
     assert surface_class({"surface": "metal"}) is None
 
 
-def _trail_inputs(*ways, trailhead="south", chain_nodes=None):
+def _trail_inputs(*ways, walk=None, chain_nodes=None):
     """One DayHike (id 1) on a straight line north, nodes every 100 m.
 
     Each way is (tags, first_node, last_node) in node indexes; the way list is
-    the stored member order. ``trailhead`` is the end the Trailhead is at.
+    the stored member order. ``walk`` lists the way indexes in walk order
+    (default: stored order). A way with ``_in_chain`` False is a Leftover and a
+    way with ``_walked`` is walked only for that share of its length.
     """
     count = chain_nodes or max(last for _, _, last in ways) + 1
     lats = [_metres_north(100 * i) for i in range(count)]
@@ -616,6 +618,7 @@ def _trail_inputs(*ways, trailhead="south", chain_nodes=None):
             "longitude": 15.0,
         }
     )
+    walk = list(range(len(ways))) if walk is None else walk
     ways_frame = pd.DataFrame(
         {
             "dayhike_id": 1,
@@ -624,19 +627,21 @@ def _trail_inputs(*ways, trailhead="south", chain_nodes=None):
             "node_ids": [json.dumps(list(range(f, l + 1))) for _, f, l in ways],
             "tags": [json.dumps(tags) for tags, _, _ in ways],
             "in_chain": [1 if tags.get("_in_chain", True) else 0 for tags, _, _ in ways],
+            "walk_order": [
+                walk.index(i) if tags.get("_in_chain", True) else None
+                for i, (tags, _, _) in enumerate(ways)
+            ],
+            "walked_m": [
+                100.0 * (l - f) * tags.get("_walked", 1.0) if tags.get("_in_chain", True) else 0.0
+                for tags, f, l in ways
+            ],
             "geometry": [
                 LineString([(15.0, lats[i]) for i in range(f, l + 1)])
                 for _, f, l in ways
             ],
         }
     )
-    dayhikes = pd.DataFrame(
-        {
-            "id": [1],
-            "trailhead_latitude": [lats[0] if trailhead == "south" else lats[-1]],
-            "trailhead_longitude": [15.0],
-        }
-    )
+    dayhikes = pd.DataFrame({"id": [1]})
     return dayhikes, vertices, ways_frame
 
 
@@ -685,24 +690,53 @@ def test_tarmac_approach_is_the_paved_length_before_the_first_unpaved_way() -> N
     assert facts.loc[1, "tarmac_approach_m"] == pytest.approx(300.0, abs=1.0)
 
 
-def test_tarmac_approach_starts_at_the_chain_end_nearest_the_trailhead() -> None:
+def test_tarmac_approach_counts_from_the_start_of_the_walk() -> None:
     inputs = ((ASPHALT, 0, 3), (PATH, 3, 6), (ASPHALT, 6, 8))
-    south = trail_facts(*_trail_inputs(*inputs, trailhead="south"))
-    north = trail_facts(*_trail_inputs(*inputs, trailhead="north"))
+    forward = trail_facts(*_trail_inputs(*inputs))
+    backward = trail_facts(*_trail_inputs(*inputs, walk=[2, 1, 0]))
 
-    assert south.loc[1, "tarmac_approach_m"] == pytest.approx(300.0, abs=1.0)
-    assert north.loc[1, "tarmac_approach_m"] == pytest.approx(200.0, abs=1.0)
+    assert forward.loc[1, "tarmac_approach_m"] == pytest.approx(300.0, abs=1.0)
+    assert backward.loc[1, "tarmac_approach_m"] == pytest.approx(200.0, abs=1.0)
 
 
-def test_tarmac_approach_does_not_depend_on_the_stored_way_order() -> None:
-    # Stored out of walking order, as when ingest glues a way onto the start.
+def test_tarmac_approach_follows_walk_order_not_the_stored_way_order() -> None:
     dayhikes, vertices, ways = _trail_inputs(
-        (PATH, 3, 6), (ASPHALT, 0, 3), (ASPHALT, 6, 8)
+        (PATH, 3, 6), (ASPHALT, 0, 3), (ASPHALT, 6, 8), walk=[1, 0, 2]
     )
 
     facts = trail_facts(dayhikes, vertices, ways)
 
     assert facts.loc[1, "tarmac_approach_m"] == pytest.approx(300.0, abs=1.0)
+
+
+def test_surface_mix_counts_only_the_walked_part_of_a_way() -> None:
+    # 400 m of path, of which only half is walked, after 200 m of asphalt.
+    dayhikes, vertices, ways = _trail_inputs(
+        (ASPHALT, 0, 2), ({**PATH, "_walked": 0.5}, 2, 6)
+    )
+
+    facts = trail_facts(dayhikes, vertices, ways)
+
+    assert facts.loc[1, "paved_share"] == pytest.approx(0.5, abs=0.001)
+    assert facts.loc[1, "natural_share"] == pytest.approx(0.5, abs=0.001)
+
+
+def test_paved_leftovers_change_neither_surface_mix_nor_tarmac_approach() -> None:
+    inputs = ((PATH, 0, 4), (ASPHALT, 4, 6))
+    plain = trail_facts(*_trail_inputs(*inputs))
+    with_leftover = trail_facts(
+        *_trail_inputs(
+            *inputs, ({**ASPHALT, "_in_chain": False}, 6, 12), chain_nodes=13
+        )
+    )
+
+    assert with_leftover.equals(plain)
+    assert trail_facts(
+        *_trail_inputs(
+            ({**ASPHALT, "_in_chain": False}, 6, 12), (ASPHALT, 0, 3), (PATH, 3, 6),
+            walk=[1, 2, 0],
+        )
+    ).loc[1, "tarmac_approach_m"] == pytest.approx(300.0, abs=1.0)
 
 
 def test_tarmac_approach_is_zero_when_the_first_way_is_unpaved() -> None:
@@ -727,6 +761,9 @@ def test_tarmac_approach_of_a_loop_is_the_shorter_way_out() -> None:
         (ASPHALT, 0, 3), (PATH, 3, 6), (ASPHALT, 6, 8)
     )
     ways.loc[2, "node_ids"] = json.dumps([6, 7, 0])
+    vertices = pd.concat(
+        [vertices, vertices.iloc[[0]].assign(seq=len(vertices))], ignore_index=True
+    )
 
     facts = trail_facts(dayhikes, vertices, ways)
 
