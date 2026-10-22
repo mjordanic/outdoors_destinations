@@ -786,11 +786,36 @@ def _elevation_stats(
     return min(elevations), max(elevations), gain_m
 
 
-def _assemble_member_ways(
-    relation: OsmRelation, ways: Mapping[int, OsmWay]
-) -> tuple[list[int], list[bool]]:
+@dataclass(frozen=True)
+class MainWalk:
+    """DayHikeGeometry of one relation: what ingest needs from one assembly.
+
+    ``vertices`` are the ordered (node id, point) pairs, ``length_m`` their
+    line length, ``in_chain`` one flag per member-way listing (listed order,
+    ways missing from the snapshot skipped) and ``unconnected_m`` the metres
+    of listings that are not in the line.
+    """
+
+    vertices: list[tuple[int, tuple[float, float]]]
+    length_m: float
+    in_chain: list[bool]
+    unconnected_m: float
+
+
+def assemble_main_walk(
+    relation: OsmRelation,
+    ways: Mapping[int, OsmWay],
+    nodes: Mapping[int, tuple[float, float]],
+    access_points: Sequence[tuple[float, float]],
+) -> MainWalk:
+    """The one place member ways become a DayHike's line.
+
+    Today this is the ADR-0009 one-pass chain; ``access_points`` is accepted
+    for the main-walk rules that will use it and is unused for now.
+    """
     chain: list[int] = []
     in_chain: list[bool] = []
+    unconnected_m = 0.0
     for member_type, member_id in relation.members:
         if member_type != "way":
             continue
@@ -798,23 +823,23 @@ def _assemble_member_ways(
         if way is None:
             continue
         ids = list(way.node_ids)
-        if not ids:
-            in_chain.append(False)
-            continue
-        extended = _extend_node_chain(chain, ids)
+        extended = _extend_node_chain(chain, ids) if ids else None
         if extended is None:
             in_chain.append(False)
+            unconnected_m += _member_way_length_m(ids, nodes)
             continue
         chain = extended
         in_chain.append(True)
-    return chain, in_chain
-
-
-def _assemble_node_ids(
-    relation: OsmRelation, ways: Mapping[int, OsmWay]
-) -> list[int]:
-    chain, _ = _assemble_member_ways(relation, ways)
-    return chain
+    vertices: list[tuple[int, tuple[float, float]]] = []
+    for node_id in chain:
+        point = nodes.get(node_id)
+        if point is None:
+            continue
+        if vertices and vertices[-1][1] == point:
+            continue
+        vertices.append((node_id, point))
+    length_m = _linestring_length_m([point for _, point in vertices])
+    return MainWalk(vertices, length_m, in_chain, unconnected_m)
 
 
 def _extend_node_chain(chain: list[int], ids: list[int]) -> list[int] | None:
@@ -839,42 +864,6 @@ def _member_way_length_m(
     if len(points) < 2:
         return 0.0
     return _linestring_length_m(points)
-
-
-def _unconnected_length_m(
-    relation: OsmRelation,
-    nodes: Mapping[int, tuple[float, float]],
-    ways: Mapping[int, OsmWay],
-    in_chain: Sequence[bool],
-) -> float:
-    total = 0.0
-    index = 0
-    for member_type, member_id in relation.members:
-        if member_type != "way":
-            continue
-        way = ways.get(member_id)
-        if way is None:
-            continue
-        if not in_chain[index]:
-            total += _member_way_length_m(way.node_ids, nodes)
-        index += 1
-    return total
-
-
-def _relation_vertices(
-    relation: OsmRelation,
-    nodes: Mapping[int, tuple[float, float]],
-    ways: Mapping[int, OsmWay],
-) -> list[tuple[int, tuple[float, float]]]:
-    vertices: list[tuple[int, tuple[float, float]]] = []
-    for node_id in _assemble_node_ids(relation, ways):
-        point = nodes.get(node_id)
-        if point is None:
-            continue
-        if vertices and vertices[-1][1] == point:
-            continue
-        vertices.append((node_id, point))
-    return vertices
 
 
 def _max_sac_scale(relation: OsmRelation, ways: Mapping[int, OsmWay]) -> str | None:

@@ -26,10 +26,7 @@ from dayhike.catalog import (
     _amenity_index,
     _dayhike_from_relation,
     _drop_reason,
-    _assemble_member_ways,
-    _linestring_length_m,
-    _relation_vertices,
-    _unconnected_length_m,
+    assemble_main_walk,
 )
 from dayhike.osm import (
     DRIVEABLE_HIGHWAY,
@@ -111,8 +108,6 @@ def run_ingest(
         emit_progress(progress, "access", "choosing endpoints")
         endpoints = _kept_endpoints(
             snapshot,
-            _relation_vertices,
-            _linestring_length_m,
             _drop_reason,
             progress,
         )
@@ -127,8 +122,6 @@ def run_ingest(
             snapshot,
             access_tree,
             amenity_index,
-            _relation_vertices,
-            _linestring_length_m,
             _drop_reason,
             _dayhike_from_relation,
         )
@@ -644,8 +637,6 @@ def _load_hiking_snapshot(
 
 def _kept_endpoints(
     snapshot: OsmSnapshot,
-    relation_vertices,
-    linestring_length_m,
     drop_reason,
     progress: Progress | None = None,
 ) -> list[tuple[float, float]]:
@@ -656,10 +647,9 @@ def _kept_endpoints(
         if relation.id in seen:
             continue
         seen.add(relation.id)
-        vertices = relation_vertices(relation, snapshot.nodes, snapshot.ways)
-        points = [point for _, point in vertices]
-        length_m = linestring_length_m(points)
-        if drop_reason(relation, length_m) is not None or not points:
+        walk = assemble_main_walk(relation, snapshot.ways, snapshot.nodes, ())
+        points = [point for _, point in walk.vertices]
+        if drop_reason(relation, walk.length_m) is not None or not points:
             continue
         endpoints.append(points[0])
         endpoints.append(points[-1])
@@ -1010,8 +1000,6 @@ def _keep_dayhikes(
     snapshot: OsmSnapshot,
     access_tree,
     amenity_index,
-    relation_vertices,
-    linestring_length_m,
     drop_reason,
     dayhike_from_relation,
 ):
@@ -1024,9 +1012,12 @@ def _keep_dayhikes(
         seen.add(relation.id)
         if relation.tags.get("route") != "hiking":
             continue
-        vertices = relation_vertices(relation, snapshot.nodes, snapshot.ways)
+        walk = assemble_main_walk(
+            relation, snapshot.ways, snapshot.nodes, snapshot.access_points
+        )
+        vertices = walk.vertices
         points = [point for _, point in vertices]
-        length_m = linestring_length_m(points)
+        length_m = walk.length_m
         reason = drop_reason(relation, length_m)
         if reason is not None:
             report_counts[reason] += 1
@@ -1119,10 +1110,8 @@ def write_geometry_store(
         )
         for hike in dayhikes:
             relation = relations[hike.id]
-            _, in_chain = _assemble_member_ways(relation, snapshot.ways)
-            unconnected_m = _unconnected_length_m(
-                relation, snapshot.nodes, snapshot.ways, in_chain
-            )
+            walk = assemble_main_walk(relation, snapshot.ways, snapshot.nodes, ())
+            in_chain = walk.in_chain
             out.execute(
                 "INSERT INTO dayhikes (id, name, name_origin, length_m, unconnected_m, "
                 "difficulty, members, relation_tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1131,13 +1120,13 @@ def write_geometry_store(
                     hike.name,
                     hike.name_origin,
                     hike.length_m,
-                    unconnected_m,
+                    walk.unconnected_m,
                     hike.difficulty.sac_scale,
                     json.dumps([list(member) for member in relation.members]),
                     json.dumps(relation.tags),
                 ),
             )
-            vertices = _relation_vertices(relation, snapshot.nodes, snapshot.ways)
+            vertices = walk.vertices
             out.executemany(
                 "INSERT INTO vertices (dayhike_id, seq, node_id, latitude, longitude, "
                 "ele, landcover) VALUES (?, ?, ?, ?, ?, ?, ?)",
