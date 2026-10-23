@@ -5,24 +5,30 @@ Run after an ingest, the three sample commands and notebook 05:
     DAYHIKE_REAL_DATA=1 uv run pytest tests/test_real_data.py
 
 Skipped without DAYHIKE_REAL_DATA=1. The baseline checks compare with
-data/baseline/ (catalog.sqlite and catalog.similarity_facts.pkl copied before
-the main-walk re-ingest, ADR-0012; not the 19 GB GeometryStore) and are
-skipped without it. The old WaterSource "unchanged against the baseline"
-checks were removed: the main walk changes lengths, geometry and facts.
+data/baseline/ and are skipped without it. That is the 2026-10-21 Catalog
+(catalog.sqlite and catalog.similarity_facts.pkl, 155,844 DayHikes), copied
+before the main-walk re-ingest (ADR-0012); not the 19 GB GeometryStore. Round 2
+compares against that baseline, not against the round-1 Catalog (161,599). The
+old WaterSource "unchanged against the baseline" checks were removed: the main
+walk changes lengths, geometry and facts.
 
 The main-walk checks (steps, ways walked once, length band, Leftover reasons,
 loop starts) need the new GeometryStore columns ``leftover``, ``walked_m`` and
 ``walk_order``, so they fail on a store from before the main walk. The
 baseline comparison prints the DayHike ids that left and joined the Catalog,
-with the main-walk reason for each that left, even without ``-s``; ticket 08
-copies that into the report. Reasons for ids that left come from re-assembling
-their relations from the Europe extract with ``osmium getid``, so that check
-also needs the extract.
+with the main-walk reason for each that left, even without ``-s``; the
+round-2 rollout (ticket 06) copies that into the report. Reasons for ids that
+left come from re-assembling their relations from the Europe extract with
+``osmium getid``, with all parking in the GeometryStore as access points as
+ingest has them (the extract of the relations holds none), so that check also
+needs the extract.
 
 DAYHIKE_REAL_CATALOG points the checks at another Catalog; the notebook check
 always reads data/catalog.sqlite, as the notebook does. The main-walk checks
 pass on a Catalog built from tests/fixtures/catalog.osm; the water, extract
 and notebook checks are about the real data and are not expected to pass there.
+tests/test_real_data_checks.py runs the step measure and the "why did this
+DayHike leave" helper on tiny fixtures in the normal suite.
 """
 
 from __future__ import annotations
@@ -41,7 +47,7 @@ import pytest
 from sklearn.neighbors import BallTree
 
 from dayhike import geometry_store_path_for
-from dayhike.catalog import MAX_LENGTH_M, _drop_reason, assemble_main_walk
+from dayhike.catalog import MAX_LENGTH_M, _access_tree, _drop_reason, assemble_main_walk
 from dayhike.osm import amenity_kind
 from dayhike.similarity import similarity_facts_path_for
 
@@ -223,16 +229,35 @@ def _haversine_m(lat1, lon1, lat2, lon2):
     return 2 * EARTH_RADIUS_M * np.arcsin(np.sqrt(h))
 
 
-@pytest.fixture(scope="module")
-def walk_measures() -> dict:
-    """One pass over the GeometryStore: long steps and loop starts."""
-    parking = _read(GEOMETRY, "SELECT latitude, longitude FROM amenities WHERE kind = 'parking'")
+def _joins_ends_at_one_point(
+    first: int, second: int, walked_ways: list[list[int]], stored: set[int]
+) -> bool:
+    """Is ``first`` to ``second`` the join of two way ends that share a point?
+
+    The assembly joins the ends of two ways within ``GAP_JOIN_M`` with a gap,
+    and the vertex builder drops the second end when it repeats the point
+    before it. So the stored step runs from the first way's end to the next
+    node of the second way. The GeometryStore holds no coordinates for the
+    dropped end, but it is a node of a walked way with no vertex of its own.
+    """
+    ends = {nodes[end] for nodes in walked_ways for end in (0, -1)}
+    return first in ends and any(
+        nodes[neighbour] == second and nodes[end] not in stored
+        for nodes in walked_ways
+        if len(nodes) >= 2
+        for end, neighbour in ((0, 1), (-1, -2))
+    )
+
+
+def _measure_walks(geometry: Path) -> dict:
+    """One pass over a GeometryStore: long steps and loop starts."""
+    parking = _read(geometry, "SELECT latitude, longitude FROM amenities WHERE kind = 'parking'")
     tree = (
         BallTree(np.radians(parking[["latitude", "longitude"]].to_numpy()), metric="haversine")
         if len(parking)
         else None
     )
-    ids = _read(GEOMETRY, "SELECT id FROM dayhikes ORDER BY id")["id"].tolist()
+    ids = _read(geometry, "SELECT id FROM dayhikes ORDER BY id")["id"].tolist()
     long_steps: dict[int, float] = {}
     loops_near_parking: list[int] = []
     loops_failing: list[int] = []
@@ -240,20 +265,22 @@ def walk_measures() -> dict:
     for start in range(0, len(ids), CHUNK):
         low, high = ids[start], ids[min(start + CHUNK, len(ids)) - 1]
         vertices = _read(
-            GEOMETRY,
+            geometry,
             "SELECT dayhike_id, node_id, latitude, longitude FROM vertices "
             "WHERE dayhike_id BETWEEN ? AND ? ORDER BY dayhike_id, seq",
             (low, high),
         )
         ways = _read(
-            GEOMETRY,
+            geometry,
             "SELECT dayhike_id, node_ids FROM ways "
             "WHERE dayhike_id BETWEEN ? AND ? AND walk_order IS NOT NULL",
             (low, high),
         )
         edges: dict[int, set[tuple[int, int]]] = {}
+        walked_ways: dict[int, list[list[int]]] = {}
         for dayhike_id, node_ids in zip(ways["dayhike_id"], ways["node_ids"]):
             nodes = json.loads(node_ids)
+            walked_ways.setdefault(dayhike_id, []).append(nodes)
             pairs = edges.setdefault(dayhike_id, set())
             for a, b in zip(nodes, nodes[1:]):
                 pairs.add((a, b))
@@ -269,7 +296,10 @@ def walk_measures() -> dict:
             steps = _haversine_m(lat[:-1], lon[:-1], lat[1:], lon[1:])
             pairs = edges.get(dayhike_id, set())
             for index in np.flatnonzero(steps > STEP_MAX_M):
-                if (int(node[index]), int(node[index + 1])) not in pairs:
+                first, second = int(node[index]), int(node[index + 1])
+                if (first, second) not in pairs and not _joins_ends_at_one_point(
+                    first, second, walked_ways.get(dayhike_id, []), set(node.tolist())
+                ):
                     long_steps[dayhike_id] = max(long_steps.get(dayhike_id, 0.0), steps[index])
             if _haversine_m(lat[0], lon[0], lat[-1], lon[-1]) <= LOOP_CLOSES_M:
                 loops += 1
@@ -284,6 +314,11 @@ def walk_measures() -> dict:
         "loops_near_parking": loops_near_parking,
         "loops_failing": loops_failing,
     }
+
+
+@pytest.fixture(scope="module")
+def walk_measures() -> dict:
+    return _measure_walks(GEOMETRY)
 
 
 def test_no_step_between_consecutive_ways_is_over_50_m(walk_measures: dict) -> None:
@@ -342,9 +377,9 @@ def test_every_leftover_has_a_reason_and_every_walked_way_a_walk_order() -> None
 def test_a_loop_by_a_parking_point_starts_within_300_m_of_one(
     walk_measures: dict, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # The PRD's 22.5% "before" measure. Parking only: the GeometryStore holds no
-    # drivable-road access nodes, so road access points nearer than the parking
-    # explain a few failures (hence the 2% allowance).
+    # The PRD's 22.5% "before" measure. Access is parking only, so a loop by a
+    # parking point starts near parking; the 2% allowance is for the few loops
+    # that start at a stem's far end instead.
     near, failing = walk_measures["loops_near_parking"], walk_measures["loops_failing"]
     share = len(failing) / len(near) if near else 0.0
     with capsys.disabled():
@@ -370,16 +405,25 @@ def _ids_of(path: Path) -> set[int]:
     return set(_read(path, "SELECT id FROM dayhikes")["id"])
 
 
-def _main_walk_reasons(ids: set[int]) -> dict[int, str]:
-    """Why each relation in ``ids`` is not a DayHike: its main-walk drop reason."""
+def _main_walk_reasons(
+    ids: set[int], extract: Path = EXTRACT, geometry: Path = GEOMETRY
+) -> dict[int, str]:
+    """Why each relation in ``ids`` is not a DayHike: its main-walk drop reason.
+
+    Assembled as ingest does, with all parking as access points. The ``osmium
+    getid`` extract of the relations holds no parking, so it comes from the
+    ``amenities`` of ``geometry``. A stem near parking counts toward the band.
+    """
     from dayhike.ingest import _load_hiking_snapshot, run_ingest
 
+    parking = _read(geometry, "SELECT latitude, longitude FROM amenities WHERE kind = 'parking'")
+    access_tree = _access_tree(list(zip(parking["latitude"], parking["longitude"])))
     reasons: dict[int, str] = {}
     with tempfile.TemporaryDirectory() as folder:
         folder_path = Path(folder)
         wanted = folder_path / "wanted.osm.pbf"
         subprocess.run(
-            ["osmium", "getid", "-r", "-t", str(EXTRACT), *(f"r{i}" for i in sorted(ids)),
+            ["osmium", "getid", "-r", "-t", str(extract), *(f"r{i}" for i in sorted(ids)),
              "-o", str(wanted), "--no-progress", "--overwrite"],
             check=True,
         )
@@ -392,7 +436,7 @@ def _main_walk_reasons(ids: set[int]) -> dict[int, str]:
         for relation in snapshot.relations:
             if relation.id not in ids:
                 continue
-            walk = assemble_main_walk(relation, snapshot.ways, snapshot.nodes, None)
+            walk = assemble_main_walk(relation, snapshot.ways, snapshot.nodes, access_tree)
             drop = _drop_reason(relation, walk.length_m)
             if drop == "network":
                 reasons[relation.id] = "superroute"
