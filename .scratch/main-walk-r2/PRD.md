@@ -157,7 +157,8 @@ ADR cross-references, future-work items now done or moot, CONTEXT.md terms,
 notebooks 04a/05/05a text, tests and fixtures, constants and helpers with no
 caller left. It removes or rewrites what is stale and writes a short list of
 what it checked and changed (possibly "nothing") in its commit body. It does
-not refactor working code.
+not refactor working code. Pre-existing dead code that these changes did not
+make stale (such as the old in-memory OSM parser) is listed, not deleted.
 
 **Rollout.**
 - Keep `data/baseline/` (the 2026-10-21 Catalog, 155,844 DayHikes).
