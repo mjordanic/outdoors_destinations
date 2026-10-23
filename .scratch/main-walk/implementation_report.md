@@ -2,7 +2,7 @@
 
 - PRD: [PRD.md](PRD.md)
 - Started: 2026-10-22T16:54Z
-- Last updated: 2026-10-22T16:54Z
+- Last updated: 2026-10-23T04:04Z
 - Parallelism cap: 1
 - Integration branch (BASE_BRANCH): main-walk (base commit a2cf43d)
 - Harness: claude-code
@@ -26,7 +26,7 @@
 | 05-surface-mix-and-tarmac-follow-the-walk | SurfaceMix and TarmacApproach follow the walk | 5 | committed | a9b5a12bf57ccfa1c | 5624a3d | 5624a3d | 2026-10-22T17:46Z | 2026-10-22T17:50Z | inplace; suite 320 passed/22 skipped; no code-review |
 | 06-opt-in-real-data-checks | Opt-in real-data checks | 6 | committed | a3beb9bac73187a16 | 846ab20 | 846ab20 | 2026-10-22T17:51Z | 2026-10-22T18:30Z | inplace; implementer report fence not parsed, committed per git |
 | 07-notebook-04a-leftovers-by-reason | Notebook 04a: Leftovers by reason | 7 | committed | afffd067b7b2e8d3f | 605c727 | 605c727 | 2026-10-22T17:58Z | 2026-10-22T18:40Z | inplace; suite 321 passed/14 skipped |
-| 08-rollout-and-report | Rollout and report | 8 | in-progress | ad81fca311b9ab466 | | | 2026-10-22T18:07Z | | inplace |
+| 08-rollout-and-report | Rollout and report | 8 | committed | ad81fca311b9ab466 | 67f0339 | 67f0339 | 2026-10-22T18:07Z | 2026-10-23 | inplace; 10 of 14 real-data checks pass; see Rollout results |
 
 ## Dependency graph
 
@@ -65,6 +65,7 @@
 - wave 6: 06 committed 846ab20 on main-walk (inplace).
 - 2026-10-22T17:58Z wave 6 summary merged (06 committed 846ab20); orchestrator full suite 320 passed, 14 skipped (8 WaterSource baseline checks removed). Wave 7 dispatched (07, sonnet).
 - 2026-10-22T18:07Z wave 7 summary merged (07 committed 605c727); orchestrator full suite 321 passed, 14 skipped. Disk free 68 GiB. Wave 8 dispatched (08, opus).
+- 2026-10-23T04:04Z wave 8 summary merged (08 committed 67f0339). Final: 8 committed, 0 failed, 0 blocked; no owned worktrees or issue branches remain.
 
 ## Outstanding follow-ups
 
