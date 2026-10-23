@@ -208,6 +208,106 @@ def test_a_small_variant_loop_on_a_line_is_a_shortcut_and_both_real_ends_stay(
     assert walk.jumps == []
 
 
+# Way 3 runs from b, mid-way along the line, to x on the small cycle x-y-z
+# (about 22% of the piece): the piece is a line. Listed as walked a-b-x-y-z-x
+# and on to c.
+HANGING = {"a": (0, 0), "b": (0, 3), "c": (0, 6), "x": (0.3, 3), "y": (0.8, 3.3), "z": (0.8, 2.7)}
+HANGING_WAYS = {1: "ab", 2: "bc", 3: "bx", 4: "xy", 5: "yz", 6: "zx"}
+HANGING_MEMBERS = [1, 3, 4, 5, 6, 2]
+CYCLE_M = (2 * math.hypot(0.5, 0.3) + 0.6) * 1_000.0
+
+
+def test_a_small_cycle_hanging_off_a_line_by_one_way_is_a_dead_end(tmp_path: Path) -> None:
+    walk = Walk(tmp_path, HANGING, HANGING_WAYS, HANGING_MEMBERS)
+
+    assert walk.hike.length_m == pytest.approx(6_000.0, abs=1.0)
+    assert walk.trailhead == pytest.approx(_lat_lon(*HANGING["a"]))
+    assert walk.vertices == "abc"
+    assert walk.way(1) == _walked(0, 3_000.0)
+    assert walk.way(2) == _walked(1, 3_000.0)
+    for way_id in (3, 4, 5, 6):
+        assert walk.way(way_id) == _left("dead_end")
+    assert walk.unconnected_m == pytest.approx(300.0 + CYCLE_M, abs=1.0)
+    assert walk.jumps == []
+
+
+def test_the_length_band_reads_the_whole_line_past_a_hanging_cycle(tmp_path: Path) -> None:
+    # 11 km each side of b: a walk stalled at the cycle kept a-b-x-y-z-x (13 km).
+    nodes = {**HANGING, "a": (0, -8), "c": (0, 14)}
+    too_long = Walk(tmp_path, nodes, HANGING_WAYS, HANGING_MEMBERS)
+
+    assert too_long.hike is None
+
+
+def test_two_small_cycles_hanging_off_a_line_are_both_dead_ends(tmp_path: Path) -> None:
+    # The closed way 5 hangs east of b by way 4; the closed way 7 west of c by
+    # way 6. Each is shorter than every end of the line.
+    nodes = {
+        "a": (0, 0), "b": (0, 3), "c": (0, 6), "d": (0, 9),
+        "x": (0.3, 3), "y": (0.8, 3.3), "z": (0.8, 2.7),
+        "p": (-0.3, 6), "q": (-0.8, 6.3), "r": (-0.8, 5.7),
+    }
+    ways = {1: "ab", 2: "bc", 3: "cd", 4: "bx", 5: "xyzx", 6: "cp", 7: "pqrp"}
+    walk = Walk(tmp_path, nodes, ways, [1, 4, 5, 2, 6, 7, 3])
+
+    assert walk.hike.length_m == pytest.approx(9_000.0, abs=1.0)
+    assert walk.trailhead == pytest.approx(_lat_lon(*nodes["a"]))
+    assert walk.vertices == "abcd"
+    assert walk.way(1) == _walked(0, 3_000.0)
+    assert walk.way(2) == _walked(1, 3_000.0)
+    assert walk.way(3) == _walked(2, 3_000.0)
+    for way_id in (4, 5, 6, 7):
+        assert walk.way(way_id) == _left("dead_end")
+    assert walk.unconnected_m == pytest.approx(2 * (300.0 + CYCLE_M), abs=1.0)
+    assert walk.jumps == []
+
+
+def test_two_small_cycles_hanging_off_one_junction_are_both_dead_ends(tmp_path: Path) -> None:
+    # The closed ways 4 and 6 hang east and west of b by ways 3 and 5.
+    nodes = {
+        **HANGING,
+        "p": (-0.3, 3), "q": (-0.8, 3.3), "r": (-0.8, 2.7),
+    }
+    ways = {1: "ab", 2: "bc", 3: "bx", 4: "xyzx", 5: "bp", 6: "pqrp"}
+    walk = Walk(tmp_path, nodes, ways, [1, 3, 4, 5, 6, 2])
+
+    assert walk.hike.length_m == pytest.approx(6_000.0, abs=1.0)
+    assert walk.trailhead == pytest.approx(_lat_lon(*nodes["a"]))
+    assert walk.vertices == "abc"
+    assert walk.way(1) == _walked(0, 3_000.0)
+    assert walk.way(2) == _walked(1, 3_000.0)
+    for way_id in (3, 4, 5, 6):
+        assert walk.way(way_id) == _left("dead_end")
+    assert walk.unconnected_m == pytest.approx(2 * (300.0 + CYCLE_M), abs=1.0)
+    assert walk.jumps == []
+
+
+def test_a_line_end_shorter_than_the_ways_to_a_hanging_cycle_is_the_dead_end(
+    tmp_path: Path,
+) -> None:
+    # Listed from c: c-b, then ways 3 (1.5 km) and 4 (100 m) to the 800 m
+    # closed way 5, then the 1 km end b-a. Setting aside a-b (1 km) loses less
+    # than ways 3, 4 and 5 (2.4 km). Way 4 and the cycle alone (900 m) would
+    # leave way 3 a dead end, and a-b would go too.
+    nodes = {
+        "a": (0, 0), "b": (0, 1), "c": (0, 6),
+        "m": (1.5, 1), "x": (1.6, 1), "y": (1.8, 1.15), "z": (1.8, 0.85),
+    }
+    ways = {1: "ab", 2: "bc", 3: "bm", 4: "mx", 5: "xyzx"}
+    walk = Walk(tmp_path, nodes, ways, [2, 3, 4, 5, 1])
+
+    assert walk.hike.length_m == pytest.approx(7_400.0, abs=1.0)
+    assert walk.trailhead == pytest.approx(_lat_lon(*nodes["c"]))
+    assert walk.vertices == "cbmxyzx"
+    assert walk.way(2) == _walked(0, 5_000.0)
+    assert walk.way(3) == _walked(1, 1_500.0)
+    assert walk.way(4) == _walked(2, 100.0)
+    assert walk.way(5) == _walked(3, 800.0)
+    assert walk.way(1) == _left("dead_end")
+    assert walk.unconnected_m == pytest.approx(1_000.0, abs=1.0)
+    assert walk.jumps == []
+
+
 def test_a_stray_piece_listed_first_is_disconnected(tmp_path: Path) -> None:
     nodes = {**LINE, "x": (10, 0), "y": (10, 1)}
     walk = Walk(tmp_path, nodes, {**LINE_WAYS, 5: "xy"}, [5, 1, 2, 3])

@@ -8,7 +8,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from collections.abc import Callable
-from typing import Iterable, Mapping, Protocol, Sequence
+from typing import Iterable, Iterator, Mapping, Protocol, Sequence
 
 import numpy as np
 from sklearn.neighbors import BallTree
@@ -847,8 +847,10 @@ def assemble_main_walk(
     stem's far end or else from its vertex nearest ``access_tree``, in
     member-order direction.
     Otherwise it is a line: it sheds its shortest dead ends until two remain,
-    then its shortest odd-junction cycle paths until it can be walked once,
-    from the end ``_pick_trailhead`` chooses with ``access_tree``.
+    then its shortest odd-junction cycle paths until it can be walked once.
+    When neither can be shed, it sheds the smaller side of a bridge (see
+    ``_shed_bridge_side``) and both steps run again. It is walked from the end
+    ``_pick_trailhead`` chooses with ``access_tree``.
     """
     listed: list[int] = []  # way id per member-way listing in the snapshot
     leftovers: list[str | None] = []
@@ -886,8 +888,11 @@ def assemble_main_walk(
     edges += tip_gaps
     loop = _loop(edges, alive)
     if loop is None:
-        _shed_dead_ends(edges, alive, removed)
-        _shed_shortcuts(edges, alive, removed, max_odd=2)
+        while True:
+            _shed_dead_ends(edges, alive, removed)
+            _shed_shortcuts(edges, alive, removed, max_odd=2)
+            if not _shed_bridge_side(edges, alive, removed):
+                break
         segments = _segments(edges, _walk(edges, alive, nodes, access_tree))
     else:
         core, shortcuts = loop
@@ -1211,6 +1216,76 @@ def _shortest_removable_path(
         if _connected(edges, alive - set(path)):
             return path
     return None
+
+
+def _shed_bridge_side(edges: Sequence[_Edge], alive: set[int], removed: dict[int, str]) -> bool:
+    """Set aside the smaller side of one bridge as dead ends; False when none is.
+
+    Only while more than two nodes are odd, as when a cycle hangs off a line
+    by one way. A bridge (an edge whose removal splits the piece) qualifies
+    when its end on the kept side meets at least two other edges, so no new
+    dead end is left. The one that sets aside the least length (its smaller
+    side by length, and the bridge) goes first, ties in member order.
+    """
+    incident = _incidence(edges, alive)
+    if sum(len(here) % 2 for here in incident.values()) <= 2:
+        return False
+    # Depth-first search (Tarjan): the edge into a subtree that reaches no
+    # earlier node is a bridge. Each subtree sums its edge-end metres (an
+    # edge inside it twice, the bridge once).
+    ends_m = {node_id: sum(edges[i].length_m for i in here) for node_id, here in incident.items()}
+    total_m = sum(ends_m.values()) / 2
+    start = min(incident)
+    entry, low = {start: 0}, {start: 0}
+    stack: list[tuple[int, int | None, Iterator[int]]] = [(start, None, iter(incident[start]))]
+    candidates = []
+    while stack:
+        node_id, via, rest = stack[-1]
+        for index in rest:
+            if index == via:
+                continue
+            other = _other_end(edges[index], node_id)
+            if other in entry:
+                low[node_id] = min(low[node_id], entry[other])
+                continue
+            entry[other] = low[other] = len(entry)
+            stack.append((other, index, iter(incident[other])))
+            break
+        else:
+            stack.pop()
+            if via is None:
+                continue
+            parent = stack[-1][0]
+            low[parent] = min(low[parent], low[node_id])
+            ends_m[parent] += ends_m[node_id]
+            if low[node_id] <= entry[parent]:
+                continue
+            bridge_m = edges[via].length_m
+            child_m = (ends_m[node_id] - bridge_m) / 2
+            parent_m = total_m - bridge_m - child_m
+            if child_m < parent_m:
+                side_m, root, near = child_m, node_id, parent
+            else:
+                side_m, root, near = parent_m, parent, node_id
+            if len(incident[near]) >= 3:
+                candidates.append((side_m + bridge_m, edges[via].rank, via, root))
+    if not candidates:
+        return False
+    _, _, bridge, root = min(candidates)
+    side, reached, nodes_left = {bridge}, {root}, [root]
+    while nodes_left:
+        node_id = nodes_left.pop()
+        for index in incident[node_id]:
+            if index not in side:
+                side.add(index)
+                other = _other_end(edges[index], node_id)
+                if other not in reached:
+                    reached.add(other)
+                    nodes_left.append(other)
+    for index in side:
+        alive.discard(index)
+        removed[index] = "dead_end"
+    return True
 
 
 def _path_back(edges: Sequence[_Edge], via: Mapping[int, int], node_id: int) -> list[int]:
