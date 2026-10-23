@@ -32,8 +32,8 @@
     <tag k="sac_scale" v="mountain_hiking"/>
   </way>
   <!-- Disconnected extra (~1 km), listed between Ridge Walk's connected
-       members. Far from the Ridge so a jump edge would leave the length band.
-       Ingest must skip it and still glue way 102. -->
+       members. Far from the Ridge, so joining it would leave the length band.
+       It is a `disconnected` Leftover and way 102 is still walked. -->
   <node id="80" lat="47.0000000000" lon="18.0000000000" version="1"/>
   <node id="81" lat="47.00899321606" lon="18.0000000000" version="1"/>
   <way id="103" version="1">

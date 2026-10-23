@@ -150,8 +150,8 @@ data/catalog.sqlite
 IngestReport(kept=4, dropped_unnamed=0, dropped_length=2, dropped_network=1, named_osm_name=2, named_osm_ref=1, named_synthetic=1)
 ```
 
-Progress (`filter:`, `relations:`, `ways:`, `nodes:`, `access:`, `assemble:`,
-`write:`) goes to **stderr**. The same command also writes
+Progress (`filter:`, `relations:`, `ways:`, `nodes:`, `assemble:`, `write:`)
+goes to **stderr**. The same command also writes
 `data/catalog.geometry.sqlite`. Add `--list` to print kept DayHikes as
 `id`, name, `length_m`. `--fresh` ignores a leftover work file and starts
 again.
@@ -236,14 +236,18 @@ absent):
 | `dayhikes` | id, Seed label, `name_origin`, length, `unconnected_m`, Difficulty, member list, relation tags |
 | `vertices` | ordered DayHikeGeometry: `seq`, OSM `node_id`, lat, lon, `ele`, `landcover` |
 | `vertex_climate` | per sampled vertex per month 1–12: temperature, precipitation, solar radiation |
-| `ways` | member ways in order, node id lists, way tags, `in_chain` |
+| `ways` | member ways in listed order: node id lists, way tags, `in_chain` (1 when any part of the way is walked), `leftover` (the reason when not), `walked_m`, `walk_order` |
 | `amenities` | raw points: OSM id, kind, lat, lon, tags |
 | `geometry_meta` | OSM attribution; WorldCover and WorldClim after those samples |
 
-Member ways that do not share an endpoint with the assembled chain stay in
-`ways` with `in_chain = 0`. Their real length is `dayhikes.unconnected_m`.
-Catalog `length_m` and `vertices` follow the connected chain only (no jump
-edges). See [`docs/adr/0009-no-jump-edges.md`](docs/adr/0009-no-jump-edges.md).
+DayHikeGeometry is the main walk of the member-way graph: each distinct member
+way once, from the Trailhead, with no jump between consecutive ways except a
+joined gap of 50 m or less. Member ways not on the walk are Leftovers. They
+stay in `ways` with `in_chain = 0` and a `leftover` reason (`role`, `repeat`,
+`disconnected`, `dead_end`, `shortcut`), and `dayhikes.unconnected_m` is their
+distinct length. Catalog `length_m` and `vertices` follow the walk only. See
+[`docs/adr/0012-main-walk-of-member-way-graph.md`](docs/adr/0012-main-walk-of-member-way-graph.md),
+which supersedes ADR-0009.
 
 At ingest, `vertices.ele` is OSM `ele` on that node, or NULL, and
 `vertices.landcover` is NULL. `vertex_climate` is empty. After
@@ -779,20 +783,15 @@ Geofabrik `europe-latest.osm.pbf`) is a valid input.
    filter. A file already named `*.catalog.osm.pbf` is read as-is. If `osmium`
    is missing, ingest reads the source file in several passes instead.
 2. **Work file.** Relations, member ways, needed nodes, and amenities go to
-   `data/catalog.sqlite.work` (same directory as the Catalog). Driveable
-   highways are kept only when they fall inside the Trailhead access radius
-   around a kept DayHike endpoint. That radius is `TRAILHEAD_ACCESS_RADIUS_M`
-   in the package (the same band used to pick a Trailhead). If `osmium` is on
-   `PATH` and the source is PBF, ingest extracts those disks from the
-   unfiltered source (`osmium extract --strategy complete_ways`) and scans the
-   extract; the Catalog is the same as a full-source access scan. Sidecars
-   `*.sqlite.access*` are removed after a successful write. XML, or a missing
-   `osmium`, scans the source file.
+   `data/catalog.sqlite.work` (same directory as the Catalog). Ingest reads only
+   the hiking extract from step 1, or the source file itself when there is no
+   extract. Access points are parking only (ADR-0012 "Round 2"), so there is
+   no scan of drivable roads and no second extract.
 3. **Progress.** Each stage prints to stderr: `filter`, `relations`, `ways`,
-   `nodes`, `access`, `assemble`, `write`. After nodes, `access:` first loads
-   the work file and chooses DayHike endpoints, then extracts. Counts print
-   every 100k objects during a load or scan. `osmium extract` prints its own
-   progress on stderr.
+   `nodes`, `assemble`, `write`. After nodes, `assemble:` first loads the work
+   file, then assembles each relation's main walk. Counts print every 100k
+   objects during a load or scan. `osmium tags-filter` prints its own progress
+   on stderr.
 4. **Resume.** The same `dayhike ingest` command on the same inputs continues
    the work file. `--fresh` (or `build_catalog(..., fresh=True)`) starts over.
    A `progress` callback on `build_catalog` receives the same stage lines.
@@ -828,9 +827,14 @@ hut/parking/restaurant_cafe/drinking_water within 20 km of the Trailhead.
 Viewpoint, Peak, Shelter, and the other WaterSources (`natural=spring`,
 `man_made=water_tap`, `amenity=water_point`) are stored on GeometryStore only. A
 spring, tap, or water point tagged `drinking_water=no` is not kept. A spring or
-tap that is also `amenity=drinking_water` is a drinking-water point. The Trailhead is the LineString endpoint nearer a parking lot or
-driveable highway within 5 km, otherwise the first vertex. Ways in a route
-relation are reversed as needed so the geometry is one continuous line.
+tap that is also `amenity=drinking_water` is a drinking-water point.
+
+The geometry is the main walk of the relation's member ways (ADR-0012): each
+distinct way once, side trips and shortcuts left out as Leftovers, and the
+length band uses its length. The Trailhead is where the walk starts, chosen
+from parking only. A line starts at the end nearer a parking point within 5 km,
+or else at the end where member order starts it. A loop starts at its stem's
+far end, or else at its vertex nearest parking within 5 km.
 
 A hike that is not a `route=hiking` relation in this Catalog cannot be a Seed.
 Unnamed forest paths (`highway=path` without a hiking relation) never appear.

@@ -175,7 +175,7 @@ def profile_shape(
     longitude: Sequence[float],
     elevation: Sequence[float],
 ) -> np.ndarray | None:
-    """ProfileShape of one ElevationProfile given as vertices in chain order.
+    """ProfileShape of one ElevationProfile given as vertices in walk order.
 
     Elevation is resampled at ``PROFILE_POINTS`` equal steps of the
     cumulative-distance fraction 0 to 1 (haversine along every vertex), then the
@@ -366,8 +366,8 @@ def load_region(
 def effort_facts(dayhikes: pd.DataFrame, vertices: pd.DataFrame) -> pd.DataFrame:
     """Effort facts per DayHike id: length, elevation gain, Difficulty rank.
 
-    Elevation gain is the larger of the climb and the descent along the vertex
-    chain, so it does not depend on OSM's arbitrary way order. Vertices without
+    Elevation gain is the larger of the climb and the descent along the walk,
+    so it does not depend on OSM's arbitrary way order. Vertices without
     ``ele`` are skipped; a DayHike with none has a missing gain, not 0.
     """
     ele = vertices.dropna(subset=["ele"]).sort_values(["dayhike_id", "seq"])
@@ -419,7 +419,7 @@ def corridor_amenities(
     """Amenity points of one ``kind`` within ``radius_m`` of each DayHikeGeometry.
 
     Distance is measured to the line, not only to its vertices: each segment of
-    the vertex chain is densified to at most ``radius_m / 10`` between points
+    the walk is densified to at most ``radius_m / 10`` between points
     before a haversine BallTree query, so a point beside the middle of a long
     segment is found and the distance is over-stated by under 0.2% of
     ``radius_m``. Returns one row per (DayHike, amenity point) with columns
@@ -459,7 +459,7 @@ def corridor_amenities(
 
 
 def _densify(latitude: Sequence[float], longitude: Sequence[float], step_m: float):
-    """Vertex chain as radians (lat, lon) rows, with points inserted so that
+    """Vertices as radians (lat, lon) rows, with points inserted so that
     consecutive points are at most ``step_m`` apart.
     """
     lat = np.radians(np.asarray(latitude, dtype=float))
@@ -535,7 +535,7 @@ def water_facts(
     stretches run from the first vertex to the first point, between points and
     from the last point to the last vertex, and the longest wins. Two points at
     one position split the walk once. With no water the DryStretch is the
-    length of the vertex chain (haversine over every vertex). Both facts are
+    length of the walk (haversine over every vertex). Both facts are
     the same whichever way the DayHike is walked. A DayHike without vertices
     has both missing.
     """
@@ -568,10 +568,10 @@ def facilities_facts(
     ``hut_along``, ``restaurant_cafe_along``, ``shelter_along``. A Shelter is
     never a Hut. At the Trailhead, within ``TRAILHEAD_M`` of the Catalog
     Trailhead (``trailhead_latitude`` / ``trailhead_longitude`` on
-    ``dayhikes``, as ``load_region`` supplies; not the 20 km AmenityFact disk,
-    and not the first vertex): ``restaurant_cafe_trailhead``,
-    ``parking_trailhead``. A flag is False when the amenity is absent. The
-    along flags do not depend on the walking direction.
+    ``dayhikes``, as ``load_region`` supplies; not the 20 km AmenityFact disk):
+    ``restaurant_cafe_trailhead``, ``parking_trailhead``. A flag is False when
+    the amenity is absent. The along flags do not depend on the walking
+    direction.
     """
     ids = dayhikes["id"]
 
@@ -795,7 +795,7 @@ def solar_aspect_southness(vertices: pd.DataFrame, dem_dir: Path | str) -> pd.Se
     east or west, the mean over sloped sample points.
 
     About ``SOLAR_ASPECT_POINTS`` vertices per DayHike are sampled: every k-th
-    counted from the nearer chain end, so the set is the same in either
+    counted from the nearer end of the walk, so the set is the same in either
     walking direction. At each, FABDEM in ``dem_dir`` is read at the vertex and
     ``SOLAR_ASPECT_OFFSET_ARCSEC`` east and north of it (whole 1 arc-second
     cells, so the offset is the distance between the cells read). The
