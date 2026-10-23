@@ -27,6 +27,7 @@ data/baseline/
 *.sqlite-wal
 *.sqlite-shm
 *.sqlite.work
+*.sqlite.work-journal
 *.sqlite.tmp
 *.similarity_facts.pkl
 

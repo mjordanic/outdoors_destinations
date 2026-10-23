@@ -867,15 +867,15 @@ directory** (or list every file you want) again.
 
 ### Re-ingest after an ingest change
 
-When ingest starts keeping more (as when springs, taps, and water points became
-WaterSources), an existing Catalog does not change by itself. Ingest the same
-snapshot again, then sample again, because ingest resets every vertex sample:
+When ingest changes what it keeps or how it walks a route (as when the main
+walk replaced the one-pass chain, ADR-0012), an existing Catalog does not
+change by itself. Ingest the same snapshot again, then sample again, because
+ingest resets every vertex sample:
 
 ```bash
-mkdir -p data/baseline   # optional: keep the old files to compare against
-cp -c data/catalog.sqlite data/catalog.geometry.sqlite \
-  data/catalog.similarity_facts.pkl data/baseline/   # macOS APFS clone, instant
-uv run dayhike ingest data/osm/europe-latest.osm.pbf --catalog data/catalog.sqlite --fresh
+mkdir -p data/baseline   # optional: keep the old Catalog to compare against
+cp -c data/catalog.sqlite data/catalog.similarity_facts.pkl data/baseline/
+uv run dayhike ingest data/osm/europe-latest.catalog.osm.pbf --catalog data/catalog.sqlite --fresh
 uv run dayhike sample-dem
 uv run dayhike sample-landcover
 uv run dayhike sample-climate
@@ -883,15 +883,17 @@ uv run dayhike sample-climate
 DAYHIKE_REAL_DATA=1 uv run pytest tests/test_real_data.py
 ```
 
-Ingest filters the source again by itself when the filter list changed. The
-checks in `tests/test_real_data.py` look at the data as it is (every DayHike
-has a geometry, WaterSources are stored as the rules say, notebook 05a passes
-its verification lines) and, with `data/baseline/`, compare with the old
-files: nothing but the WaterSources may change. On the Europe snapshot
-(155,844 DayHikes) on an 8-core Mac this took: ingest 105 min, `sample-dem`
-15 min, `sample-landcover` 10 min, `sample-climate` 3.5 h, notebook 05 3 min.
-The clone costs no disk until ingest replaces the originals, then about 19 GB;
-delete `data/baseline/` once the checks pass.
+Ingest reads the hiking extract (`*.catalog.osm.pbf`) as is. Given the full
+Europe file instead, it filters it first and caches the extract, again when the
+filter list changed. The checks in `tests/test_real_data.py` look at the data
+as it is (geometry, WaterSources, the main walk: steps, ways walked once,
+length band, Leftover reasons, loop starts, notebook 05a's verification lines)
+and, with `data/baseline/`, list the DayHikes that left and joined the Catalog;
+each that left must have left by the main walk. On the Europe snapshot
+(161,614 DayHikes) on an 8-core Mac this took: ingest 2 h 7 min, `sample-dem`
+24 min, `sample-landcover` 12 min, `sample-climate` 3 h 54 min, notebook 05
+2 min, the checks 1 h 42 min. The baseline is about 150 MB; delete
+`data/baseline/` once the checks pass.
 
 ## Valhalla (DriveTime only)
 

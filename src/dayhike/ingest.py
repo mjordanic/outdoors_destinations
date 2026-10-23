@@ -258,7 +258,10 @@ def _scan_paths(source_paths: Sequence[Path], progress: Progress | None) -> list
     if osmium_bin is None:
         emit_progress(progress, "filter", "osmium-tool not on PATH, reading source files")
     elif not any(_needs_catalog_filter(path) for path in source_paths):
-        emit_progress(progress, "filter", "skipped (not PBF)")
+        if any(_is_pbf(path) for path in source_paths):
+            emit_progress(progress, "filter", "skipped (catalog extract, read as is)")
+        else:
+            emit_progress(progress, "filter", "skipped (not PBF)")
     return scan
 
 
