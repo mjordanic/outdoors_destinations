@@ -60,6 +60,14 @@ _Avoid_: altitude, normalized profile (that is ProfileShape), unit-scaled shape
 An ElevationProfile scaled to 0–1 in both distance and height, so two DayHikes of different length and gain compare by form alone. How high a DayHike goes and how much it climbs are not in it.
 _Avoid_: normalized ElevationProfile, elevation plot, profile
 
+**ClimbGrade**:
+How steep a DayHike climbs: its elevation gain over the length of the stretches that climb, in the walking direction with the larger climb, on elevation resampled every 50 m. Flat and falling stretches do not dilute it, so a RoundTrip and a line up the same slope have the same ClimbGrade.
+_Avoid_: slope (that is the DEM slope in SolarAspect), gradient, incline, mean grade (gain over the whole length)
+
+**SteepestKm**:
+The largest height change, up or down, between two points 1 km apart along a DayHike, in metres: the hardest sustained stretch of the day. A DayHike shorter than 1 km uses its two ends.
+_Avoid_: max grade, steepest section
+
 **SolarAspect**:
 A terrain-derived description of which way DayHikeGeometry faces relative to the sun, sampled from a DEM. It is not Difficulty, not ClimateNormal, and not alpine fall hazard. Shade from tree cover is LandCover.
 _Avoid_: exposure, sunny, shady, weather
@@ -129,7 +137,7 @@ An ordered list of Catalog DayHikes with a similarity score to the Seed set. Sco
 _Avoid_: recommendation, unsupervised clustering, prediction, climate target
 
 **Facet**:
-One theme on which two DayHikes are compared and which the Hiker weights: Effort, Altitude, Profile, Landscape, Weather, Water, Facilities, Trail, or RoundTrip. A Facet groups one or more measures.
+One theme on which two DayHikes are compared and which the Hiker weights: Effort, Altitude, Profile, Landscape, Weather, Water, Facilities, Trail, RoundTrip, or Steepness. A Facet groups one or more measures.
 _Avoid_: category, dimension, feature group, feature
 
 **FacetScore**:

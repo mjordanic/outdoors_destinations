@@ -32,6 +32,7 @@ from dayhike.similarity import (
     round_trip_facts,
     similarity_facts_path_for,
     solar_aspect_southness,
+    steepness_facts,
     surface_class,
     surface_class_from_tag,
     tolerance,
@@ -1292,3 +1293,101 @@ def test_round_trip_facts_on_the_fixture_are_all_lines(fixture_catalog: Path) ->
 
     assert set(facts.index) == set(dayhikes["id"])
     assert not facts["round_trip"].any()
+
+
+
+def _climb(*elevations, step_m=100.0, dayhike_id=1):
+    """Vertices due north of (45, 15), ``step_m`` apart, with these elevations."""
+    lats, lons, ele = _north_line(elevations, step_m)
+    return pd.DataFrame(
+        {
+            "dayhike_id": dayhike_id,
+            "seq": range(len(ele)),
+            "latitude": lats,
+            "longitude": lons,
+            "ele": ele,
+        }
+    )
+
+
+def test_climb_grade_is_the_gain_over_the_climbing_length() -> None:
+    # 1 km up 200 m, then 1 km flat: the flat km does not dilute the grade.
+    up_then_flat = _climb(*np.linspace(0, 200, 11), *[200.0] * 10)
+
+    facts = steepness_facts(pd.DataFrame({"id": [1]}), up_then_flat)
+
+    assert facts.loc[1, "climb_grade"] == pytest.approx(0.2)
+
+
+def test_climb_grade_of_a_round_trip_matches_the_way_up() -> None:
+    # Up 1 km at 20 %, back down the same way: half the length descends.
+    there_and_back = _climb(*np.linspace(0, 200, 11), *np.linspace(200, 0, 11)[1:])
+
+    facts = steepness_facts(pd.DataFrame({"id": [1]}), there_and_back)
+
+    assert facts.loc[1, "climb_grade"] == pytest.approx(0.2)
+
+
+def test_climb_grade_takes_the_direction_with_the_larger_climb() -> None:
+    # Down 300 m over 1 km, then up 100 m over 1 km: walked either way the
+    # 300 m stretch is the climb, at 30 %.
+    down_then_up = _climb(*np.linspace(300, 0, 11), *np.linspace(0, 100, 11)[1:])
+    dayhikes = pd.DataFrame({"id": [1]})
+
+    facts = steepness_facts(dayhikes, down_then_up)
+
+    assert facts.loc[1, "climb_grade"] == pytest.approx(0.3)
+    pd.testing.assert_frame_equal(steepness_facts(dayhikes, _reversed(down_then_up)), facts)
+
+
+def test_steepest_km_is_the_largest_height_change_over_1_km() -> None:
+    # 3 km: 50 m gentle km, then 400 m over one km, then 100 m down.
+    walk = _climb(0.0, 50.0, 450.0, 350.0, step_m=1_000.0)
+
+    facts = steepness_facts(pd.DataFrame({"id": [1]}), walk)
+
+    assert facts.loc[1, "steepest_km_m"] == pytest.approx(400.0)
+
+
+def test_steepness_follows_distance_not_vertex_spacing() -> None:
+    sparse = _climb(0.0, 100.0, 300.0, step_m=1_000.0, dayhike_id=1)
+    dense = _climb(*np.linspace(0, 100, 11), *np.linspace(100, 300, 11)[1:], dayhike_id=2)
+    facts = steepness_facts(
+        pd.DataFrame({"id": [1, 2]}), pd.concat([sparse, dense], ignore_index=True)
+    )
+
+    assert facts.loc[1].to_numpy() == pytest.approx(facts.loc[2].to_numpy())
+
+
+def test_steepness_of_a_walk_shorter_than_1_km_uses_its_ends() -> None:
+    walk = _climb(0.0, 30.0, 60.0, step_m=400.0)
+
+    facts = steepness_facts(pd.DataFrame({"id": [1]}), walk)
+
+    assert facts.loc[1, "steepest_km_m"] == pytest.approx(60.0)
+
+
+def test_a_flat_walk_has_zero_steepness_and_no_ele_is_missing() -> None:
+    flat = _climb(500.0, 500.0, 500.0, dayhike_id=1)
+    no_ele = _climb(500.0, 600.0, dayhike_id=2).assign(ele=math.nan)
+
+    facts = steepness_facts(
+        pd.DataFrame({"id": [1, 2, 3]}), pd.concat([flat, no_ele], ignore_index=True)
+    )
+
+    assert list(facts.columns) == ["climb_grade", "steepest_km_m"]
+    assert facts.loc[1].tolist() == [0.0, 0.0]
+    assert facts.loc[[2, 3]].isna().all().all()
+
+
+def test_steepness_facts_on_the_fixture_ridge_walk(fixture_catalog: Path) -> None:
+    vertices, _, dayhikes, _ = _whole_fixture(fixture_catalog)
+
+    facts = steepness_facts(dayhikes, vertices)
+
+    assert set(facts.index) == set(dayhikes["id"])
+    # Ridge Walk 200 -> 500 -> 250 -> 400 m over 10 km.
+    assert 0 < facts.loc[1001, "climb_grade"] < 0.5
+    assert 0 < facts.loc[1001, "steepest_km_m"] <= 300
+    assert facts.loc[1002].isna().all()
+    pd.testing.assert_frame_equal(steepness_facts(dayhikes, _reversed(vertices)), facts)

@@ -25,6 +25,8 @@ AMENITY_PAD_M = 3_000  # vertex box pad for region amenities; covers Peaks aroun
 PROFILE_POINTS = 64
 PROFILE_RANGE_FLOOR_M = 50.0
 PROFILE_DTW_BAND = 0.1  # Sakoe-Chiba band as a share of the points
+STEEPNESS_STEP_M = 50.0  # elevation resampled this often along the walk
+STEEPEST_KM_WINDOW_M = 1_000.0
 CORRIDOR_M = 100.0  # amenity along the DayHike (CONTEXT.md Corridor)
 PEAK_SUMMITED_M = 50.0
 PEAKS_AROUND_M = 2_000.0
@@ -407,6 +409,55 @@ def profile_facts(dayhikes: pd.DataFrame, vertices: pd.DataFrame) -> pd.DataFram
     ids = dayhikes["id"]
     shape_per_id = pd.Series([shapes.get(i) for i in ids], index=ids, dtype=object)
     return pd.DataFrame({"profile_shape": shape_per_id})
+
+
+def steepness_facts(dayhikes: pd.DataFrame, vertices: pd.DataFrame) -> pd.DataFrame:
+    """Steepness facts per DayHike id, in stored order.
+
+    Elevation is resampled about every ``STEEPNESS_STEP_M`` along the walk
+    (haversine over every vertex), so vertex spacing does not move the facts.
+    ``climb_grade`` (ClimbGrade): the gain over the length of the steps that
+    climb, in the walking direction with the larger climb, so neither the
+    direction nor the way back down changes it. ``steepest_km_m``
+    (SteepestKm): the largest height change, up or down, between two points
+    ``STEEPEST_KM_WINDOW_M`` apart; a shorter walk uses its two ends. Vertices
+    without ``ele`` are skipped; fewer than two with it gives missing facts.
+    """
+    facts = {}
+    for dayhike_id, grp in vertices.sort_values(["dayhike_id", "seq"]).groupby(
+        "dayhike_id"
+    ):
+        lat = np.radians(grp["latitude"].to_numpy(dtype=float))
+        lon = np.radians(grp["longitude"].to_numpy(dtype=float))
+        ele = grp["ele"].to_numpy(dtype=float)
+        step = 2 * EARTH_RADIUS_M * np.arcsin(
+            np.sqrt(
+                np.sin(np.diff(lat) / 2) ** 2
+                + np.cos(lat[:-1]) * np.cos(lat[1:]) * np.sin(np.diff(lon) / 2) ** 2
+            )
+        )
+        distance = np.concatenate([[0.0], np.cumsum(step)])
+        has_ele = np.isfinite(ele)
+        if has_ele.sum() < 2 or distance[-1] <= 0:
+            continue
+        at, ele = distance[has_ele], ele[has_ele]
+        keep = np.concatenate([[True], np.diff(at) > 0])
+        points = max(2, round(distance[-1] / STEEPNESS_STEP_M) + 1)
+        spacing = distance[-1] / (points - 1)
+        resampled = np.interp(
+            np.linspace(0.0, distance[-1], points), at[keep], ele[keep]
+        )
+        rise = np.diff(resampled)
+        up, down = rise[rise > 0], -rise[rise < 0]
+        climb = up if up.sum() >= down.sum() else down
+        window = min(round(STEEPEST_KM_WINDOW_M / spacing), points - 1)
+        facts[dayhike_id] = [
+            float(climb.sum() / (climb.size * spacing)) if climb.size else 0.0,
+            float(np.abs(resampled[window:] - resampled[:-window]).max()),
+        ]
+    return pd.DataFrame.from_dict(
+        facts, orient="index", columns=["climb_grade", "steepest_km_m"]
+    ).reindex(dayhikes["id"].rename("id"))
 
 
 def corridor_amenities(

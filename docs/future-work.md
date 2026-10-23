@@ -209,3 +209,25 @@ second listing is a `repeat` Leftover). Effort compares one-way lengths, so a
   parking.
 - Whether the Catalog length band (1–20 km) and Effort read that walked length
   or keep the one-way length.
+
+---
+
+## 12. Smoothed elevation gain
+
+### Why it's parked
+
+Effort's `elevation_gain_m` sums the climb between consecutive vertices, which
+mappers place 5–50 m apart (median about 16 m in the Slovenia + Croatia
+region). FABDEM's metre-scale jitter between close vertices adds climb that is
+not there: on elevation resampled every 50 m, as Steepness reads it, the
+region's gain is a median 83% of the raw-vertex gain, and walks along a cliff
+edge can show several times their height range. Steepness (ClimbGrade,
+SteepestKm) already reads the 50 m resample; Effort and the Catalog do not, so
+changing them moves existing rankings.
+
+### What would have to be true to start
+
+- One smoothing rule (resample step, or a filter over the ElevationProfile)
+  checked against a few DayHikes with a known published gain.
+- A decision on which gain the Catalog stores once similarity is promoted
+  (ADR-0011), so Effort and the Catalog agree.

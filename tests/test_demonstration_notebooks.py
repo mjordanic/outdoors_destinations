@@ -294,6 +294,7 @@ def test_similarity_notebooks_run_only_synthetic_checks_on_the_fixture() -> None
             "facilities",
             "trail",
             "round_trip",
+            "steepness",
         )
         for check in ("identity", "symmetry_max_gap", "reversed")
     }
@@ -310,6 +311,7 @@ SIMILARITY_FACETS = (
     "facilities",
     "trail",
     "round_trip",
+    "steepness",
 )
 
 
