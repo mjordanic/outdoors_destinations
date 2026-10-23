@@ -13,7 +13,7 @@ Whether a DayHike label came from OSM `name`, OSM `ref`, or a synthetic `relatio
 _Avoid_: unnamed as a drop reason, title, display name
 
 **Trailhead**:
-The point used to start the DayHike, taken from the relation's geometry (first/last node or tagged access point). A loop starts at its vertex nearest an access point. Drive time and nearby amenities are measured from here.
+The point used to start the DayHike, taken from the relation's geometry (first/last node or tagged access point). A loop starts at its vertex nearest an access point. An access point is parking. Drive time and nearby amenities are measured from here.
 _Avoid_: start, parking (parking is an amenity near a Trailhead)
 
 **Catalog**:

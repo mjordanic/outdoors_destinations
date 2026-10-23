@@ -23,19 +23,22 @@ started wherever its first listed way began.
   `forward`/`backward` and all other roles are walked.
 - Pieces whose endpoints are 50 m or less apart are joined, repeatedly. The
   straight gap is drawn and counted. The longest piece by length is the main
-  piece; the rest are Leftovers.
+  piece; the rest are Leftovers. Two dead-end tips of the main piece 50 m or
+  less apart are joined the same way, so a route closed by a small gap can be
+  a loop.
 - Loop or line: after shortcuts are dropped, a piece whose biggest cycle is at
   least 50% of its length is a loop.
   - Loop: shortcuts (the shortest path between two odd junctions on a cycle)
     are dropped until it closes. Dead ends are Leftovers, except at most one
-    stem: one whose far end is within 200 m of an access point (parking or a
-    road you can drive on), or else the only dead end when it is 1 km or
+    stem: one whose far end is within 200 m of an access point (parking), or else the only dead end when it is 1 km or
     longer. The 5 km Trailhead radius is far too wide for this test: almost
     every spur would pass. The stem's far end is
     the Trailhead. Without a stem, the loop starts at its vertex nearest an
     access point.
   - Line: extra dead ends are dropped shortest first until two remain, and
-    variants (the shortest path on a cycle) until it can be walked once.
+    variants (the shortest path on a cycle) until it can be walked once. If
+    neither can be dropped (a small cycle hanging off the line by one way),
+    the smaller side of a way whose removal splits the piece is a dead end.
   - A path is dropped only if the piece stays connected.
 - The walk visits every remaining way once, starts at the Trailhead and
   follows member order where it has a choice (loop direction).
@@ -55,3 +58,11 @@ back); always the longest cycle (drops walk-ins and linear routes); a fixed
 metre cutoff for spurs (no single value fits 1–20 km hikes); never join gaps
 (42% of extra pieces are 50 m or less from the main piece, about 17,500 km of
 trail). Ferry and bus ways stay counted as length, and that is left for later.
+
+**Round 2 (after the first Europe rollout):** access points are parking only.
+Drivable-road nodes were meant to count too, but the road extract read only
+the first of its boxes, so in practice almost every Trailhead already came
+from parking, and 99.95% of loops closed on a shared node started near it.
+Fixing the extract would mean a polygon union and a much slower ingest for
+little gain in a demo. A line with no parking within 5 km of either end starts
+at its member-order end. A stem counts toward the length band.
