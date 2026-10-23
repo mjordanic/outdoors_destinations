@@ -2,7 +2,7 @@
 
 - PRD: [PRD.md](PRD.md)
 - Started: 2026-10-23T07:03Z
-- Last updated: 2026-10-23T07:03Z
+- Last updated: 2026-10-23T19:16Z
 - Parallelism cap: 1
 - Integration branch (BASE_BRANCH): main-walk (base commit a6a2049)
 - Harness: claude-code
@@ -25,7 +25,7 @@
 | 03-bridge-and-cycle-on-a-line | A cycle hanging off a line is a dead end (no stalled walks) | 3 | committed | aa2b8cbfd17ceb98e | e0b023c | e0b023c | 2026-10-23T07:34Z | 2026-10-23T08:00Z | inplace; 327 passed, 14 skipped; 5 new fixtures in tests/test_main_walk.py; real-data re-assembly of the 1,395 round-1 stalled relations: 0 stall (1,187 before) |
 | 04-real-data-checks-agree-with-ingest | Real-data checks agree with ingest | 4 | committed | aafecdef72debf525 | 3b4a673 | 3b4a673 | 2026-10-23T08:03Z | 2026-10-23T08:11Z | inplace; 331 passed, 14 skipped; new tests/test_real_data_checks.py (3 fixture tests); full 80-min walk_measures pass not run (ticket 06) |
 | 05-stale-sweep | Stale sweep after the main walk and parking-only access | 5 | committed | a9cdbfb978b91ede0 | 9ced8f7 | 9ced8f7 | 2026-10-23T08:14Z | 2026-10-23T08:26Z | inplace; 331 passed, 14 skipped; text-only sweep (code comments, docstrings, README, CONTEXT.md, ADR-0005, notebook markdown, one fixture comment); no behaviour change |
-| 06-round-2-rollout-and-report | Round 2 rollout and report | 6 | in-progress | a711ca5b8414355e9 | | | 2026-10-23T08:30Z | | inplace |
+| 06-round-2-rollout-and-report | Round 2 rollout and report | 6 | committed | a711ca5b8414355e9 | 08a9f0d | 08a9f0d | 2026-10-23T08:30Z | 2026-10-23T19:09Z | inplace; 331 passed, 14 skipped; 14 of 14 real-data checks pass; 0 member-order fallbacks (round 1: 1,395); loop-start failures 0.42%; data/baseline/ deleted; "Round 2" section added; stopped by the usage limit 3 times, resumed each time |
 
 ## Dependency graph
 
@@ -71,6 +71,8 @@ Graph waves are {01}, {02, 03, 04}, {05}, {06}; cap 1 splits the second into thr
 - 2026-10-23T17:05Z orchestrator reconcile: no 06 commit, no live process, GeometryStore 20.7 GB sampled, data/baseline/ intact. Wave 6 runner resumed by message again; asked to resume implementer a711ca5b8414355e9 from the notebook 05 facts rebuild onward.
 - 2026-10-23T18:47Z wave 6 runner and implementer stopped a third time on the usage limit. Done before the stop: notebook 05 facts rebuilt (17:08Z), 05a pairs re-picked (notebooks 05/05a and .scratch/main-walk-r2/rollout_ids.md modified, uncommitted). The detached final real-data run kept going: 14 passed in 1:41:52, exit 0 at 19:02Z (scratchpad logs/checks_final.log).
 - 2026-10-23T19:06Z orchestrator reconcile after the user re-logged in: no 06 commit, no live process, data/baseline/ intact. Wave 6 runner resumed by message; implementer to finish the Round 2 section, commit 06 and decide on data/baseline/.
+- 2026-10-23T19:09Z wave 6: 06-round-2-rollout-and-report committed as 08a9f0d on main-walk (inplace, no cherry-pick needed; subject and tree verified, no Co-Authored-By or agent trailer, issue file in done/, notebooks 05 and 05a carry no saved outputs, data/baseline/ deleted, working tree clean before this report edit).
+- 2026-10-23T19:16Z wave 6 summary merged (06 committed 08a9f0d); orchestrator full suite 331 passed, 14 skipped. Final cleanup: no owned issue-* worktrees or branches. Run complete: 6 committed, 0 failed, 0 blocked.
 
 ## Outstanding follow-ups
 
@@ -97,6 +99,13 @@ Graph waves are {01}, {02, 03, 04}, {05}, {06}; cap 1 splits the second into thr
 - From 05 (pre-existing dead code, listed in the commit body, not deleted): `parse_osm`, `_take_node`, `_take_way`, `_member_points` and `OsmSnapshot.merge` in `osm.py` (only `.scratch/ingest-perf/profile_croatia.py` calls `parse_osm`); `_scale_vector` in `catalog.py`; `sample_landcover_classes` in `landcover.py`; `IngestReport.dropped_unnamed` always 0 with an unused "unnamed" count key in `_keep_dayhikes`, and the `build_catalog` docstring still mentions unnamed `highway=path` ways in the report.
 - From 05 (decisions in commit body): `in_chain` column and `MainWalk.in_chain` field keep their names because renaming changes stored data; `_positions_along` in `similarity.py` keeps `chain_lat`/`chain_lon` parameter names to match its docstring; two comments in `tests/test_main_walk.py` about "a one-pass chain" explain the regression and stay.
 - From 05 (process): implementer did the code review inline instead of spawning the two code-review sub-agents (docs and comments only). No type checker configured.
+
+- From 06 (misleading message): given a `*.catalog.osm.pbf`, ingest prints "filter: skipped (not PBF)" although the file is PBF and is read as is.
+- From 06 (stale README): the section "Re-ingest after an ingest change" still gives the WaterSource-era command, its timings and "nothing but the WaterSources may change".
+- From 06 (.gitignore): `data/catalog.sqlite.work-journal`, which exists while an ingest runs, is not covered.
+- From 06 (loop-start check): 381 lines whose junction ends are within 50 m count as loops in the check. They pass today; checking only true loops would need the assembly's loop decision stored.
+- From 06 (ingest time): ingest is only 3 min faster than round 1. Dropping the road scan saved 16 min, but the bridge step makes the two assembly passes about 11 min slower.
+- From 06 (process): implementer did the code review inline (notebook text and report files only). Stalls and the loop/line share were counted by an uncommitted scratch wrapper around `build_catalog`; output unchanged.
 
 ## Round 2
 
