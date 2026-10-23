@@ -5,7 +5,7 @@ Each fixture is a tiny OSM file laid out on a kilometre grid around 45N 15E.
 
 import math
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
@@ -36,11 +36,13 @@ def _osm(
     members: list[int],
     parking: Sequence[tuple[float, float]] = (),
     road: tuple[tuple[float, float], tuple[float, float]] | None = None,
+    roles: Mapping[int, str] = {},
 ) -> str:
     """Nodes by one-letter name at (x_km, y_km); ways as strings of node names.
 
     ``parking`` are parking nodes at (x_km, y_km). ``road`` is a drivable road
-    from one (x_km, y_km) to another, not a member.
+    from one (x_km, y_km) to another, not a member. ``roles`` maps a member
+    way to its role; every other member has role "".
     """
     node_ids = {name: 100 + index for index, name in enumerate(nodes)}
     xml = '<?xml version="1.0" encoding="UTF-8"?>\n<osm version="0.6">\n'
@@ -64,7 +66,10 @@ def _osm(
     for way_id, names in ways.items():
         refs = "".join(f'<nd ref="{node_ids[name]}"/>' for name in names)
         xml += f'<way id="{way_id}" version="1">{refs}<tag k="highway" v="path"/></way>\n'
-    listed = "".join(f'<member type="way" ref="{way_id}" role=""/>' for way_id in members)
+    listed = "".join(
+        f'<member type="way" ref="{way_id}" role="{roles.get(way_id, "")}"/>'
+        for way_id in members
+    )
     xml += (
         f'<relation id="{RELATION_ID}" version="1">{listed}<tag k="type" v="route"/>'
         '<tag k="route" v="hiking"/><tag k="name" v="Shape"/></relation>\n</osm>\n'
@@ -73,9 +78,11 @@ def _osm(
 
 
 class Walk:
-    def __init__(self, tmp_path: Path, nodes, ways, members, parking=(), road=None) -> None:
+    def __init__(
+        self, tmp_path: Path, nodes, ways, members, parking=(), road=None, roles={}
+    ) -> None:
         osm = tmp_path / "shape.osm"
-        osm.write_text(_osm(nodes, ways, members, parking, road))
+        osm.write_text(_osm(nodes, ways, members, parking, road, roles))
         catalog_path = tmp_path / "catalog.sqlite"
         catalog = build_catalog(osm, catalog_path)
         self.hike = next((hike for hike in catalog.dayhikes if hike.id == RELATION_ID), None)
@@ -357,6 +364,77 @@ def _assert_pentagon_loop(walk: Walk) -> None:
     assert walk.way(4) == _walked(3, 2_000.0)
     assert walk.way(5) == _walked(4, 2_000.0)
     assert walk.unconnected_m == pytest.approx(CHORD_M, abs=1.0)
+    assert walk.jumps == []
+
+
+GAPPED_SQUARE = {**SQUARE, "e": (0.03, 0)}  # e is 30 m from a
+GAPPED_SQUARE_WAYS = {1: "ab", 2: "bmc", 3: "cd", 4: "de"}
+
+
+def test_a_route_closed_by_a_30_m_gap_is_a_loop_from_its_vertex_nearest_parking(
+    tmp_path: Path,
+) -> None:
+    # The route ends at e, 30 m from where it starts at a. Parking is 50 m
+    # north of m, mid-way along the second member.
+    walk = Walk(
+        tmp_path, GAPPED_SQUARE, GAPPED_SQUARE_WAYS, [1, 2, 3, 4], parking=[(1.5, 3.05)]
+    )
+
+    assert walk.hike.length_m == pytest.approx(12_000.0, abs=1.0)
+    assert walk.trailhead == pytest.approx(_lat_lon(*GAPPED_SQUARE["m"]))
+    assert walk.vertices == "mcdeabm"
+    assert walk.points[0] == walk.points[-1]
+    assert walk.way(2) == _walked(0, 3_000.0)
+    assert walk.way(3) == _walked(1, 3_000.0)
+    assert walk.way(4) == _walked(2, 2_970.0)
+    assert walk.way(1) == _walked(3, 3_000.0)
+    assert walk.unconnected_m == pytest.approx(0.0, abs=0.01)
+    assert walk.jumps == []
+
+
+def test_a_tip_30_m_from_the_middle_of_a_way_is_not_joined(tmp_path: Path) -> None:
+    # The route hooks back and ends at e, 30 m from m in the middle of way 1.
+    nodes = {"a": (0, 0), "m": (0, 2), "b": (0, 4), "c": (2, 4), "d": (2, 2), "e": (0.03, 2)}
+    ways = {1: "amb", 2: "bcd", 3: "de"}
+    walk = Walk(tmp_path, nodes, ways, [1, 2, 3])
+
+    assert walk.hike.length_m == pytest.approx(9_970.0, abs=1.0)
+    assert walk.trailhead == pytest.approx(_lat_lon(*nodes["a"]))
+    assert walk.vertices == "ambcde"
+    assert walk.way(1) == _walked(0, 4_000.0)
+    assert walk.way(2) == _walked(1, 4_000.0)
+    assert walk.way(3) == _walked(2, 1_970.0)
+    assert walk.unconnected_m == pytest.approx(0.0, abs=0.01)
+    assert walk.jumps == []
+
+
+def test_a_tip_30_m_from_the_tip_of_a_role_leftover_is_not_joined(tmp_path: Path) -> None:
+    # Way 4 is an alternative from c that ends at e, 30 m from the line's end d.
+    nodes = {**LINE, "e": (0.03, 6)}
+    walk = Walk(
+        tmp_path, nodes, {**LINE_WAYS, 4: "ce"}, [1, 2, 3, 4], roles={4: "alternative"}
+    )
+
+    _assert_line_abcd(walk)
+    assert walk.way(4) == _left("role")
+    assert walk.unconnected_m == pytest.approx(math.hypot(0.03, 2) * 1_000.0, abs=1.0)
+
+
+def test_of_three_tips_within_50_m_the_closest_pair_is_joined(tmp_path: Path) -> None:
+    # Tips a and e are 30 m apart; the spur from k ends at f, 38 m from both.
+    nodes = {**GAPPED_SQUARE, "k": (0, 0.5), "f": (0.015, -0.035)}
+    ways = {**GAPPED_SQUARE_WAYS, 1: "akb", 5: "kf"}
+    walk = Walk(tmp_path, nodes, ways, [1, 2, 3, 4, 5])
+
+    assert walk.hike.length_m == pytest.approx(12_000.0, abs=1.0)
+    assert walk.trailhead == pytest.approx(_lat_lon(*nodes["a"]))
+    assert walk.vertices == "akbmcdea"
+    assert walk.way(1) == _walked(0, 3_000.0)
+    assert walk.way(2) == _walked(1, 3_000.0)
+    assert walk.way(3) == _walked(2, 3_000.0)
+    assert walk.way(4) == _walked(3, 2_970.0)
+    assert walk.way(5) == _left("dead_end")
+    assert walk.unconnected_m == pytest.approx(math.hypot(0.015, 0.535) * 1_000.0, abs=1.0)
     assert walk.jumps == []
 
 

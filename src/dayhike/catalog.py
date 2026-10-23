@@ -840,10 +840,12 @@ def assemble_main_walk(
 
     Distinct member ways form a graph split at every shared node. Way ends of
     different pieces within ``GAP_JOIN_M`` are joined; the longest piece is
-    walked. A piece whose closed loop, after setting aside dead ends and then
-    shortcuts, is at least ``LOOP_SHARE`` of its length is a loop: it walks
-    that loop plus at most one stem (see ``_stem``), from the stem's far end or
-    else from its vertex nearest ``access_tree``, in member-order direction.
+    walked, its dead-end tips within ``GAP_JOIN_M`` first joined in pairs
+    (see ``_tip_gap_edges``). A piece whose closed loop, after setting aside
+    dead ends and then shortcuts, is at least ``LOOP_SHARE`` of its length is
+    a loop: it walks that loop plus at most one stem (see ``_stem``), from the
+    stem's far end or else from its vertex nearest ``access_tree``, in
+    member-order direction.
     Otherwise it is a line: it sheds its shortest dead ends until two remain,
     then its shortest odd-junction cycle paths until it can be walked once,
     from the end ``_pick_trailhead`` chooses with ``access_tree``.
@@ -879,6 +881,9 @@ def assemble_main_walk(
     edges += _gap_edges(edges, way_nodes, nodes, len(listed))
     removed = _main_piece_removals(edges)
     alive = {index for index in range(len(edges)) if index not in removed}
+    tip_gaps = _tip_gap_edges(edges, alive, nodes, len(listed) + 1)
+    alive |= set(range(len(edges), len(edges) + len(tip_gaps)))
+    edges += tip_gaps
     loop = _loop(edges, alive)
     if loop is None:
         _shed_dead_ends(edges, alive, removed)
@@ -984,24 +989,52 @@ def _gap_edges(
     ends = sorted({node_id for ids in way_nodes.values() if ids for node_id in (ids[0], ids[-1])})
     if len({pieces.find(node_id) for node_id in ends}) < 2:
         return []
-    points = np.radians([nodes[node_id] for node_id in ends])
-    tree = BallTree(points, metric="haversine")
-    near, distances = tree.query_radius(
-        points, r=GAP_JOIN_M / EARTH_RADIUS_M, return_distance=True
-    )
-    pairs = sorted(
-        (float(distance * EARTH_RADIUS_M), ends[i], ends[int(j)])
-        for i, (hits, dists) in enumerate(zip(near, distances))
-        for j, distance in zip(hits, dists)
-        if i < j and pieces.find(ends[i]) != pieces.find(ends[int(j)])
-    )
     gaps: list[_Edge] = []
-    for distance_m, first, second in pairs:
+    for distance_m, first, second in _pairs_within_gap(ends, nodes):
         if pieces.find(first) == pieces.find(second):
             continue
         pieces.union(first, second)
         gaps.append(_Edge(None, (gap_rank, len(gaps)), (first, second), distance_m))
     return gaps
+
+
+def _tip_gap_edges(
+    edges: Sequence[_Edge],
+    alive: set[int],
+    nodes: Mapping[int, tuple[float, float]],
+    gap_rank: int,
+) -> list[_Edge]:
+    # Join two dead-end tips (degree-1 nodes) of the main piece within
+    # GAP_JOIN_M, closest first, each tip at most once, so a route closed by
+    # a small gap can be a loop.
+    tips = sorted(node_id for node_id, here in _incidence(edges, alive).items() if len(here) == 1)
+    joined: set[int] = set()
+    gaps: list[_Edge] = []
+    for distance_m, first, second in _pairs_within_gap(tips, nodes):
+        if first in joined or second in joined:
+            continue
+        joined |= {first, second}
+        gaps.append(_Edge(None, (gap_rank, len(gaps)), (first, second), distance_m))
+    return gaps
+
+
+def _pairs_within_gap(
+    node_ids: Sequence[int], nodes: Mapping[int, tuple[float, float]]
+) -> list[tuple[float, int, int]]:
+    # (metres, node, node) of every two nodes within GAP_JOIN_M, closest first.
+    if len(node_ids) < 2:
+        return []
+    points = np.radians([nodes[node_id] for node_id in node_ids])
+    tree = BallTree(points, metric="haversine")
+    near, distances = tree.query_radius(
+        points, r=GAP_JOIN_M / EARTH_RADIUS_M, return_distance=True
+    )
+    return sorted(
+        (float(distance * EARTH_RADIUS_M), node_ids[i], node_ids[int(j)])
+        for i, (hits, dists) in enumerate(zip(near, distances))
+        for j, distance in zip(hits, dists)
+        if i < j
+    )
 
 
 class _UnionFind:
