@@ -28,7 +28,6 @@ data/baseline/
 *.sqlite-shm
 *.sqlite.work
 *.sqlite.tmp
-*.sqlite.access*
 *.similarity_facts.pkl
 
 # env / secrets

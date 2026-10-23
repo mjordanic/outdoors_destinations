@@ -8,26 +8,6 @@ import osmium
 
 HUT_TOURISM = frozenset({"alpine_hut", "wilderness_hut"})
 RESTAURANT_CAFE_AMENITY = frozenset({"restaurant", "cafe"})
-DRIVEABLE_HIGHWAY = frozenset(
-    {
-        "motorway",
-        "motorway_link",
-        "trunk",
-        "trunk_link",
-        "primary",
-        "primary_link",
-        "secondary",
-        "secondary_link",
-        "tertiary",
-        "tertiary_link",
-        "unclassified",
-        "residential",
-        "living_street",
-        "service",
-        "road",
-        "track",
-    }
-)
 _MEMBER_TYPE = {
     "n": "node",
     "w": "way",
@@ -158,8 +138,6 @@ def _take_node(snapshot: OsmSnapshot, obj: object) -> None:
         snapshot.amenities.append((kind, (point,)))
         if kind == "parking":
             snapshot.access_points.append(point)
-    if tags.get("highway") in DRIVEABLE_HIGHWAY:
-        snapshot.access_points.append(point)
     elevation_m = _parse_ele_m(tags.get("ele"))
     if elevation_m is not None:
         snapshot.node_elevations[node_id] = elevation_m
@@ -180,8 +158,6 @@ def _take_way(snapshot: OsmSnapshot, obj: object) -> None:
         snapshot.amenities.append((kind, tuple(points)))
         if kind == "parking":
             snapshot.access_points.extend(points)
-    if tags.get("highway") in DRIVEABLE_HIGHWAY:
-        snapshot.access_points.extend(points)
 
 
 def _member_points(

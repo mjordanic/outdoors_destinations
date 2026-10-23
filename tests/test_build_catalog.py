@@ -173,8 +173,6 @@ def test_ingest_work_file_is_gitignored() -> None:
     assert ignore_code("data/catalog.sqlite.work") == 0
     assert ignore_code("data/catalog.geometry.sqlite") == 0
     assert ignore_code("data/dem/N45E015_FABDEM_V1-2.tif") == 0
-    assert ignore_code("data/catalog.sqlite.access.0.osm.pbf") == 0
-    assert ignore_code("data/catalog.sqlite.access.geojson") == 0
 
 
 def test_build_catalog_writes_only_to_the_given_path(tmp_path: Path) -> None:
@@ -209,7 +207,7 @@ def test_cli_ingest_writes_catalog_and_prints_report(tmp_path: Path) -> None:
     assert "kept=4" in result.stdout
     assert "Ridge Walk" not in result.stdout
     assert "Valley Path" not in result.stdout
-    for stage in ("filter", "relations", "ways", "nodes", "access", "assemble", "write"):
+    for stage in ("filter", "relations", "ways", "nodes", "assemble", "write"):
         assert f"{stage}:" in result.stderr
     catalog = Catalog.open(path)
     assert {hike.id for hike in catalog.dayhikes} == KEPT_IDS

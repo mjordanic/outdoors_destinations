@@ -5,6 +5,7 @@ Each fixture is a tiny OSM file laid out on a kilometre grid around 45N 15E.
 
 import math
 import sqlite3
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -33,22 +34,23 @@ def _osm(
     nodes: dict[str, tuple[float, float]],
     ways: dict[int, str],
     members: list[int],
-    parking: tuple[float, float] | None = None,
+    parking: Sequence[tuple[float, float]] = (),
     road: tuple[tuple[float, float], tuple[float, float]] | None = None,
 ) -> str:
     """Nodes by one-letter name at (x_km, y_km); ways as strings of node names.
 
-    ``road`` is a drivable road from one (x_km, y_km) to another, not a member.
+    ``parking`` are parking nodes at (x_km, y_km). ``road`` is a drivable road
+    from one (x_km, y_km) to another, not a member.
     """
     node_ids = {name: 100 + index for index, name in enumerate(nodes)}
     xml = '<?xml version="1.0" encoding="UTF-8"?>\n<osm version="0.6">\n'
     for name, (x_km, y_km) in nodes.items():
         lat, lon = _lat_lon(x_km, y_km)
         xml += f'<node id="{node_ids[name]}" lat="{lat:.10f}" lon="{lon:.10f}" version="1"/>\n'
-    if parking is not None:
-        lat, lon = _lat_lon(*parking)
+    for node_id, point in enumerate(parking, start=90):
+        lat, lon = _lat_lon(*point)
         xml += (
-            f'<node id="99" lat="{lat:.10f}" lon="{lon:.10f}" version="1">'
+            f'<node id="{node_id}" lat="{lat:.10f}" lon="{lon:.10f}" version="1">'
             '<tag k="amenity" v="parking"/></node>\n'
         )
     if road is not None:
@@ -71,7 +73,7 @@ def _osm(
 
 
 class Walk:
-    def __init__(self, tmp_path: Path, nodes, ways, members, parking=None, road=None) -> None:
+    def __init__(self, tmp_path: Path, nodes, ways, members, parking=(), road=None) -> None:
         osm = tmp_path / "shape.osm"
         osm.write_text(_osm(nodes, ways, members, parking, road))
         catalog_path = tmp_path / "catalog.sqlite"
@@ -249,7 +251,7 @@ def test_a_way_left_mid_way_by_the_route_is_walked_in_part(tmp_path: Path) -> No
 
 
 def test_a_line_whose_trailhead_is_the_last_members_end_starts_there(tmp_path: Path) -> None:
-    walk = Walk(tmp_path, LINE, LINE_WAYS, [1, 2, 3], parking=(0, 6.1))
+    walk = Walk(tmp_path, LINE, LINE_WAYS, [1, 2, 3], parking=[(0, 6.1)])
 
     assert walk.trailhead == pytest.approx(_lat_lon(*LINE["d"]))
     assert walk.vertices == "dcba"
@@ -260,10 +262,28 @@ def test_a_line_whose_trailhead_is_the_last_members_end_starts_there(tmp_path: P
     assert walk.jumps == []
 
 
+def test_a_line_without_parking_within_5_km_starts_at_its_member_order_end(
+    tmp_path: Path,
+) -> None:
+    # Parking 5.5 km past d: too far for a Trailhead.
+    walk = Walk(tmp_path, LINE, LINE_WAYS, [1, 2, 3], parking=[(0, 11.5)])
+
+    _assert_line_abcd(walk)
+
+
+def test_a_drivable_road_by_a_lines_last_end_does_not_make_it_the_trailhead(
+    tmp_path: Path,
+) -> None:
+    # A road 100 m past d and no parking: access points are parking only.
+    walk = Walk(tmp_path, LINE, LINE_WAYS, [1, 2, 3], road=((0, 6.1), (0.5, 6.5)))
+
+    _assert_line_abcd(walk)
+
+
 def test_access_is_looked_for_at_the_main_walks_ends(tmp_path: Path) -> None:
     # The stray piece is listed first; parking near d is over 5 km from it.
     nodes = {**LINE, "x": (20, 0), "y": (20, 1.5)}
-    walk = Walk(tmp_path, nodes, {**LINE_WAYS, 5: "xy"}, [5, 1, 2, 3], parking=(0, 6.1))
+    walk = Walk(tmp_path, nodes, {**LINE_WAYS, 5: "xy"}, [5, 1, 2, 3], parking=[(0, 6.1)])
 
     assert walk.trailhead == pytest.approx(_lat_lon(*LINE["d"]))
     assert walk.vertices == "dcba"
@@ -296,7 +316,7 @@ def test_a_loop_starts_at_its_vertex_nearest_parking_in_member_direction(
     tmp_path: Path,
 ) -> None:
     # Parking is 50 m north of m, mid-way along the second member.
-    walk = Walk(tmp_path, SQUARE, SQUARE_WAYS, [1, 2, 3, 4], parking=(1.5, 3.05))
+    walk = Walk(tmp_path, SQUARE, SQUARE_WAYS, [1, 2, 3, 4], parking=[(1.5, 3.05)])
 
     assert walk.hike.length_m == pytest.approx(12_000.0, abs=1.0)
     assert walk.trailhead == pytest.approx(_lat_lon(*SQUARE["m"]))
@@ -311,7 +331,7 @@ def test_a_loop_starts_at_its_vertex_nearest_parking_in_member_direction(
 
 def test_a_loop_without_access_starts_where_member_order_starts_it(tmp_path: Path) -> None:
     # The only parking is over 5 km from every vertex: the loop is still kept.
-    walk = Walk(tmp_path, SQUARE, SQUARE_WAYS, [1, 2, 3, 4], parking=(-6, 1.5))
+    walk = Walk(tmp_path, SQUARE, SQUARE_WAYS, [1, 2, 3, 4], parking=[(-6, 1.5)])
 
     assert walk.hike is not None
     assert walk.hike.length_m == pytest.approx(12_000.0, abs=1.0)
@@ -394,7 +414,7 @@ def test_a_lollipop_stem_ending_at_parking_is_walked_from_the_parking(
     tmp_path: Path,
 ) -> None:
     nodes = {**SQUARE, "t": (0, -2)}
-    walk = Walk(tmp_path, nodes, {**SQUARE_WAYS, 5: "at"}, [1, 2, 3, 4, 5], parking=(0, -2.05))
+    walk = Walk(tmp_path, nodes, {**SQUARE_WAYS, 5: "at"}, [1, 2, 3, 4, 5], parking=[(0, -2.05)])
 
     _assert_lollipop(walk, nodes, 2_000.0)
 
@@ -412,7 +432,7 @@ def test_two_long_dead_ends_off_a_loop_away_from_access_are_dead_ends(
     # Parking is 1 km past t: too far for a stem, near enough to start at a.
     nodes = {**SQUARE, "t": (0, -1.5), "u": (4.5, 3)}
     ways = {**SQUARE_WAYS, 5: "at", 6: "cu"}
-    walk = Walk(tmp_path, nodes, ways, [1, 2, 3, 4, 5, 6], parking=(0, -2.5))
+    walk = Walk(tmp_path, nodes, ways, [1, 2, 3, 4, 5, 6], parking=[(0, -2.5)])
 
     assert walk.hike.length_m == pytest.approx(12_000.0, abs=1.0)
     assert walk.trailhead == pytest.approx(_lat_lon(*SQUARE["a"]))
@@ -441,11 +461,11 @@ def test_a_figure_eight_is_walked_whole(tmp_path: Path) -> None:
 
 
 def test_access_is_looked_for_along_a_loop(tmp_path: Path) -> None:
-    # A road 50 m from c, over 5 km from a where member order starts the loop.
+    # Parking 50 m from c, over 5 km from a where member order starts the loop.
     nodes = {"a": (0, 0), "b": (0, 4), "c": (4, 4), "d": (4, 0)}
     ways = {1: "ab", 2: "bc", 3: "cd", 4: "da"}
-    road = ((4 + 0.05 / math.sqrt(2), 4 + 0.05 / math.sqrt(2)), (4.5, 4.5))
-    walk = Walk(tmp_path, nodes, ways, [1, 2, 3, 4], road=road)
+    parking = (4 + 0.05 / math.sqrt(2), 4 + 0.05 / math.sqrt(2))
+    walk = Walk(tmp_path, nodes, ways, [1, 2, 3, 4], parking=[parking])
 
     assert walk.trailhead == pytest.approx(_lat_lon(*nodes["c"]))
     assert walk.vertices == "cdabc"
@@ -453,12 +473,11 @@ def test_access_is_looked_for_along_a_loop(tmp_path: Path) -> None:
 
 
 def test_of_two_dead_ends_near_access_the_nearest_is_the_stem(tmp_path: Path) -> None:
-    # A road ends 150 m past u, parking 50 m past t: t's dead end is the stem.
+    # Parking 150 m past u and 50 m past t: t's dead end is the stem.
     nodes = {**SQUARE, "t": (0, -2), "u": (5, 3)}
     ways = {**SQUARE_WAYS, 5: "cu", 6: "at"}
     walk = Walk(
-        tmp_path, nodes, ways, [1, 2, 3, 4, 5, 6],
-        parking=(0, -2.05), road=((5.15, 3), (6, 3)),
+        tmp_path, nodes, ways, [1, 2, 3, 4, 5, 6], parking=[(0, -2.05), (5.15, 3)]
     )
 
     assert walk.hike.length_m == pytest.approx(14_000.0, abs=1.0)

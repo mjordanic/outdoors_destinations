@@ -383,7 +383,7 @@ def _main_walk_reasons(ids: set[int]) -> dict[int, str]:
              "-o", str(wanted), "--no-progress", "--overwrite"],
             check=True,
         )
-        _, _, work_path, _ = run_ingest([wanted], folder_path / "catalog.sqlite")
+        _, _, work_path = run_ingest([wanted], folder_path / "catalog.sqlite")
         connection = sqlite3.connect(work_path)
         try:
             snapshot = _load_hiking_snapshot(connection)

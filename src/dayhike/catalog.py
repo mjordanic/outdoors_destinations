@@ -20,7 +20,7 @@ EARTH_RADIUS_M = 6_371_000
 MIN_LENGTH_M = 1_000  # inclusive DayHike length band
 MAX_LENGTH_M = 20_000
 AMENITY_RADIUS_M = 20_000  # great-circle from Trailhead; zero counts are valid
-TRAILHEAD_ACCESS_RADIUS_M = 5_000  # parking / driveable highway near an endpoint
+TRAILHEAD_ACCESS_RADIUS_M = 5_000  # parking near a line end or loop vertex
 GAP_JOIN_M = 50  # member-way ends this close join two pieces with a straight gap
 LOOP_SHARE = 0.5  # a piece whose closed loop is at least this share of its length is a loop
 STEM_ACCESS_RADIUS_M = 200  # a loop's dead end ending this close to access is its stem
@@ -561,7 +561,7 @@ def build_catalog(
     amenities in a work file next to the Catalog, so the source does not need
     to fit in RAM. Re-running the same inputs resumes that work file.
     ``fresh=True`` discards it and starts again. ``progress`` receives one
-    line per stage (filter, relations, ways, nodes, access, assemble, write).
+    line per stage (filter, relations, ways, nodes, assemble, write).
 
     Unnamed `highway=path` ways, out-of-band lengths, and iwn/nwn superroutes are
     counted in the ingest report and are not DayHikes. A missing OSM `name` is
@@ -570,15 +570,10 @@ def build_catalog(
     SQLite file if it exists, only after the new file is complete; overlapping
     snapshots keep one row per OSM id.
     """
-    from dayhike.ingest import (
-        cleanup_access_sidecars,
-        emit_progress,
-        run_ingest,
-        write_geometry_store,
-    )
+    from dayhike.ingest import emit_progress, run_ingest, write_geometry_store
 
     catalog_path = Path(catalog_path)
-    kept, report, work_path, access_points = run_ingest(
+    kept, report, work_path = run_ingest(
         _osm_paths(osm_path), catalog_path, progress=progress, fresh=fresh
     )
     scaler = fit_scaler_from_matrix(feature_matrix(kept), FEATURE_NAMES)
@@ -587,13 +582,10 @@ def build_catalog(
     if work_path.exists():
         work_conn = sqlite3.connect(work_path)
         try:
-            write_geometry_store(
-                geometry_store_path_for(catalog_path), kept, work_conn, access_points
-            )
+            write_geometry_store(geometry_store_path_for(catalog_path), kept, work_conn)
         finally:
             work_conn.close()
         work_path.unlink()
-    cleanup_access_sidecars(catalog_path)
     return Catalog.open(catalog_path)
 
 
@@ -811,10 +803,6 @@ class MainWalk:
     metres of the way on the walk and ``walk_order`` its position along the
     walk (None for Leftovers). ``unconnected_m`` is the distinct member-way
     length that is not walked; joined gaps are not counted.
-    ``access_search_points`` are where ingest looks for access points: both
-    ends of every dead end of the main piece, a line's two ends, and points
-    along a loop no further apart than ``TRAILHEAD_ACCESS_RADIUS_M``. They do
-    not depend on the access points.
     """
 
     vertices: list[tuple[int, tuple[float, float]]]
@@ -824,7 +812,6 @@ class MainWalk:
     leftovers: list[str | None]
     walked_m: list[float]
     walk_order: list[int | None]
-    access_search_points: list[tuple[float, float]]
 
     @property
     def trailhead(self) -> tuple[float, float]:
@@ -892,26 +879,17 @@ def assemble_main_walk(
     edges += _gap_edges(edges, way_nodes, nodes, len(listed))
     removed = _main_piece_removals(edges)
     alive = {index for index in range(len(edges)) if index not in removed}
-    search_points = [
-        nodes[node_id] for _, tip, far in _dead_ends(edges, alive) for node_id in (tip, far)
-    ]
     loop = _loop(edges, alive)
     if loop is None:
         _shed_dead_ends(edges, alive, removed)
         _shed_shortcuts(edges, alive, removed, max_odd=2)
         segments = _segments(edges, _walk(edges, alive, nodes, access_tree))
-        if segments:
-            search_points += [nodes[segments[0][1][0]], nodes[segments[-1][1][-1]]]
     else:
         core, shortcuts = loop
         for index in shortcuts:
             alive.discard(index)
             removed[index] = "shortcut"
         circuit = _segments(edges, _walk(edges, core, nodes, None))
-        search_points += _points_every(
-            [nodes[node_id] for _, node_ids in circuit for node_id in node_ids],
-            TRAILHEAD_ACCESS_RADIUS_M,
-        )
         segments = _loop_walk(edges, alive, core, circuit, nodes, access_tree, removed)
     for index in alive - {index for index, _ in segments}:
         removed[index] = "shortcut"
@@ -959,7 +937,6 @@ def assemble_main_walk(
         leftovers,
         walked,
         walk_order,
-        search_points,
     )
 
 
@@ -1399,29 +1376,6 @@ def _loop_start(
     if float(dist[nearest, 0]) * EARTH_RADIUS_M > TRAILHEAD_ACCESS_RADIUS_M:
         return circuit[0][1][0]
     return node_ids[nearest]
-
-
-def _points_every(
-    points: Sequence[tuple[float, float]], spacing_m: float
-) -> list[tuple[float, float]]:
-    # Points along the line, the first one included, no more than spacing_m
-    # apart along it.
-    if not points:
-        return []
-    out = [points[0]]
-    since_m = 0.0
-    for start, end in zip(points, points[1:]):
-        step_m = _haversine_m(start[0], start[1], end[0], end[1])
-        done_m = 0.0
-        while since_m + step_m - done_m > spacing_m:
-            done_m += spacing_m - since_m
-            share = done_m / step_m
-            out.append(
-                (start[0] + share * (end[0] - start[0]), start[1] + share * (end[1] - start[1]))
-            )
-            since_m = 0.0
-        since_m += step_m - done_m
-    return out
 
 
 def _member_way_length_m(

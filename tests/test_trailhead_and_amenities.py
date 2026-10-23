@@ -28,17 +28,6 @@ def test_trailhead_is_the_endpoint_nearer_parking(tmp_path: Path) -> None:
     assert hike.trailhead.amenity_facts.parking.count == 1
 
 
-def test_trailhead_is_the_endpoint_nearer_driveable_highway(tmp_path: Path) -> None:
-    catalog = build_catalog(
-        FIXTURES / "trailhead_at_highway.osm", tmp_path / "catalog.sqlite"
-    )
-    hike = catalog.dayhikes[0]
-
-    assert hike.name == "Highway End Path"
-    assert hike.trailhead.latitude == pytest.approx(45.0449660803)
-    assert hike.trailhead.longitude == pytest.approx(15.0)
-
-
 def test_way_and_relation_amenities_count_once_each(tmp_path: Path) -> None:
     catalog = build_catalog(
         FIXTURES / "way_and_relation_amenities.osm", tmp_path / "catalog.sqlite"
