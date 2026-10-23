@@ -186,3 +186,26 @@ about 16 DayHikes have such a step over 2 km (ADR-0012 audit).
 - A rule for which member ways are not walked (ferry, `highway` of a bus-only
   road, tagged transfer), and whether they stay in the line but not in
   `length_m`.
+
+---
+
+## 11. Walking back on a line
+
+### Why it's parked
+
+A DayHike's length is its main walk, each way once. For a RoundTrip that is the
+whole outing. For a line (87.5% of the Slovenia + Croatia region) and a lollipop
+(4.1%) it is not: the Hiker walks back (about twice the length on an
+out-and-back, the stem again on a lollipop) or takes a shuttle. OSM does not
+say which, and relations that list their ways twice are counted once (the
+second listing is a `repeat` Leftover). Effort compares one-way lengths, so a
+5 km line and a 5 km RoundTrip look equally long. The RoundTrip Facet
+(notebooks 05 and 05a) tells them apart but does not change Effort.
+
+### What would have to be true to start
+
+- A rule for the length a Hiker walks: twice a line, the loop plus twice the
+  stem for a lollipop, or a line left as is when it ends near a bus stop or
+  parking.
+- Whether the Catalog length band (1–20 km) and Effort read that walked length
+  or keep the one-way length.

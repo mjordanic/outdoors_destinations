@@ -771,6 +771,37 @@ def _paved_run(walked: Sequence[tuple[float, str | None]]) -> float:
     return run
 
 
+def round_trip_facts(dayhikes: pd.DataFrame, vertices: pd.DataFrame) -> pd.DataFrame:
+    """RoundTrip fact per DayHike id, in stored order.
+
+    ``round_trip`` is True when the last vertex of the main walk lies within
+    ``GAP_JOIN_M`` of the first (the Trailhead), so its length is the whole
+    walk back to the car. A lollipop (stem plus loop) ends where the stem
+    meets the loop and is not a RoundTrip. The fact is never missing: a
+    DayHike without vertices is False.
+    """
+    chain = vertices.sort_values(["dayhike_id", "seq"]).groupby("dayhike_id")
+    first = chain[["latitude", "longitude"]].first()
+    last = chain[["latitude", "longitude"]].last()
+    round_trip = pd.Series(
+        [
+            _path_length_m(
+                [first.at[i, "latitude"], last.at[i, "latitude"]],
+                [first.at[i, "longitude"], last.at[i, "longitude"]],
+            )
+            <= GAP_JOIN_M
+            for i in first.index
+        ],
+        index=first.index,
+        dtype=bool,
+    )
+    ids = dayhikes["id"]
+    return pd.DataFrame(
+        {"round_trip": round_trip.reindex(ids, fill_value=False).to_numpy()},
+        index=ids.rename("id"),
+    )
+
+
 def weather_facts(
     dayhikes: pd.DataFrame, vertices: pd.DataFrame, dem_dir: Path | str
 ) -> pd.DataFrame:

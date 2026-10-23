@@ -92,6 +92,10 @@ _Avoid_: water gap, thirst distance
 The mix of trail surface along DayHikeGeometry, as length fractions of paved, gravel, natural, and rock. It comes from member-way surface tags, else from the way's highway kind. It is not LandCover.
 _Avoid_: ground type, terrain, trail type
 
+**RoundTrip**:
+A DayHike whose main walk ends within 50 m of its Trailhead, so its length is the whole walk back to the car. A lollipop (a loop with a stem) ends where the stem meets the loop and is not a RoundTrip; nor is a line, whose length is one way whether it is walked point-to-point or out-and-back.
+_Avoid_: loop (the main walk's loop includes lollipops), circular, closed route
+
 **TarmacApproach**:
 The distance walked on paved surface from the Trailhead before the DayHike first leaves it.
 _Avoid_: distance from parking, road walk, access distance
@@ -125,7 +129,7 @@ An ordered list of Catalog DayHikes with a similarity score to the Seed set. Sco
 _Avoid_: recommendation, unsupervised clustering, prediction, climate target
 
 **Facet**:
-One theme on which two DayHikes are compared and which the Hiker weights: Effort, Altitude, Profile, Landscape, Weather, Water, Facilities, or Trail. A Facet groups one or more measures.
+One theme on which two DayHikes are compared and which the Hiker weights: Effort, Altitude, Profile, Landscape, Weather, Water, Facilities, Trail, or RoundTrip. A Facet groups one or more measures.
 _Avoid_: category, dimension, feature group, feature
 
 **FacetScore**:

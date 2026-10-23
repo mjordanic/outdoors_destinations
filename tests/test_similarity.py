@@ -29,6 +29,7 @@ from dayhike.similarity import (
     profile_lockstep,
     profile_shape,
     ratio,
+    round_trip_facts,
     similarity_facts_path_for,
     solar_aspect_southness,
     surface_class,
@@ -1234,3 +1235,60 @@ def test_facilities_facts_on_the_fixture_find_each_amenity_on_ridge_walk(
     }
     assert not facts.loc[1002].to_numpy().any()
     assert facilities_facts(dayhikes, _reversed(vertices), amenities).equals(facts)
+
+
+def _ring(end_gap_m, *, dayhike_id=1):
+    """A 1 km out-north, east, back-south walk that ends ``end_gap_m`` east of its start."""
+    return _chain(
+        (45.0, 15.0),
+        (_metres_north(500), 15.0),
+        (_metres_north(500), _metres_east(500)),
+        (45.0, _metres_east(end_gap_m)),
+        dayhike_id=dayhike_id,
+    )
+
+
+def test_round_trip_ends_within_50_m_of_its_trailhead() -> None:
+    both = pd.concat([_ring(40, dayhike_id=1), _ring(60, dayhike_id=2)], ignore_index=True)
+
+    facts = round_trip_facts(pd.DataFrame({"id": [1, 2]}), both)
+
+    assert facts["round_trip"].to_dict() == {1: True, 2: False}
+
+
+def test_a_lollipop_is_not_a_round_trip() -> None:
+    # Stem 300 m north, then a loop that closes back on the stem's top end:
+    # the walk ends on itself but 300 m from the Trailhead.
+    top = _metres_north(300)
+    lollipop = _chain(
+        (45.0, 15.0),
+        (top, 15.0),
+        (_metres_north(600), 15.0),
+        (_metres_north(600), _metres_east(300)),
+        (top, _metres_east(300)),
+        (top, 15.0),
+    )
+
+    facts = round_trip_facts(pd.DataFrame({"id": [1]}), lollipop)
+
+    assert not facts.loc[1, "round_trip"]
+
+
+def test_round_trip_facts_are_never_missing_and_ignore_direction() -> None:
+    both = pd.concat([_ring(0, dayhike_id=1), _ring(500, dayhike_id=2)], ignore_index=True)
+    dayhikes = pd.DataFrame({"id": [1, 2, 3]})  # 3 has no vertices
+
+    facts = round_trip_facts(dayhikes, both)
+
+    assert facts["round_trip"].to_dict() == {1: True, 2: False, 3: False}
+    assert facts["round_trip"].dtype == bool
+    assert round_trip_facts(dayhikes, _reversed(both)).equals(facts)
+
+
+def test_round_trip_facts_on_the_fixture_are_all_lines(fixture_catalog: Path) -> None:
+    vertices, _, dayhikes, _ = _whole_fixture(fixture_catalog)
+
+    facts = round_trip_facts(dayhikes, vertices)
+
+    assert set(facts.index) == set(dayhikes["id"])
+    assert not facts["round_trip"].any()
