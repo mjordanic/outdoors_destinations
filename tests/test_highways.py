@@ -175,6 +175,47 @@ def test_client_refuses_an_origin_with_no_highway_in_reach() -> None:
         _stop(server)
 
 
+def test_client_matches_contours_that_valhalla_echoes_rounded() -> None:
+    def rounded_isochrone(body):
+        status, payload = _square_isochrone(body)
+        for feature in payload["features"]:
+            feature["properties"]["contour"] = round(feature["properties"]["contour"])
+        payload["features"].reverse()
+        return status, payload
+
+    server, url = _serve(
+        {
+            "/locate": _locate(lambda lat, lon, cutoff: (lat, lon)),
+            "/isochrone": rounded_isochrone,
+        }
+    )
+    try:
+        client = HighwayDriveTimeClient(1.1, HighwaySnaps(url))  # last contour 66.00000000000001
+        (seconds,) = client.sources_to_targets(
+            Origin(latitude=0.0, longitude=0.0), [_trailhead(0.05, 0.0)]
+        )
+    finally:
+        _stop(server)
+
+    assert seconds == 600.0
+
+
+def test_client_refuses_more_hours_than_the_isochrone_limit() -> None:
+    with pytest.raises(ValueError, match="up to 10 hours"):
+        HighwayDriveTimeClient(10.5, HighwaySnaps("http://127.0.0.1:1"))
+
+
+def test_cli_highways_refuses_more_than_ten_hours(tmp_path: Path, capsys) -> None:
+    path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, path)
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(["nearby", "--catalog", str(path), "--origin", "45.8,15.97", "--max-hours", "11", "--highways"])
+
+    assert exit_info.value.code == 2
+    assert "up to 10 hours" in capsys.readouterr().err
+
+
 def test_cli_highways_estimates_and_names_dayhikes_with_no_highway(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:

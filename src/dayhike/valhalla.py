@@ -13,6 +13,7 @@ MATRIX_BATCH_SIZE = 2_500  # Valhalla's default matrix limit: one source, 2500 t
 # Valhalla's own snap radius; a second try with the wide one finds remote Trailheads.
 SEARCH_CUTOFF_M = 35_000
 WIDE_SEARCH_CUTOFF_M = 100_000
+NO_SUITABLE_EDGES = 171  # Valhalla error_code: a location has no road in reach
 
 Place = tuple[float, float]  # (latitude, longitude)
 
@@ -85,29 +86,54 @@ class ValhallaMatrixClient:
             times.update(zip(batch, self._request(origin, batch)))
         return times
 
-    def _request(self, origin: Origin, places: Sequence[Place]) -> list[float | None]:
+    def _request(
+        self, origin: Origin, places: Sequence[Place], origin_snaps: bool = False
+    ) -> list[float | None]:
+        try:
+            body = self._post(origin, places)
+        except urllib.error.HTTPError as error:
+            # Valhalla fails the whole request when one location has no road within
+            # its search cutoff. If the Origin snaps, split to find the target; a
+            # lone target that fails is unreachable.
+            if error.code != 400 or _error_code(error) != NO_SUITABLE_EDGES:
+                raise
+            if not origin_snaps:
+                self._check_origin_snaps(origin)
+            if len(places) == 1:
+                return [None]
+            half = len(places) // 2
+            return self._request(origin, places[:half], True) + self._request(
+                origin, places[half:], True
+            )
+        row = body["sources_to_targets"][0]  # type: ignore[index]
+        return [_matrix_seconds(cell) for cell in row]
+
+    def _post(self, origin: Origin, places: Sequence[Place]) -> object:
         payload = {
             "sources": [{"lat": origin.latitude, "lon": origin.longitude}],
             "targets": [{"lat": lat, "lon": lon} for lat, lon in places],
             # Car DriveTime from Origin to Trailhead; not an isochrone polygon.
             "costing": "auto",
         }
+        return post_json(self.base_url, "/sources_to_targets", payload)
+
+    def _check_origin_snaps(self, origin: Origin) -> None:
         try:
-            body = post_json(self.base_url, "/sources_to_targets", payload)
+            self._post(origin, [(origin.latitude, origin.longitude)])
         except urllib.error.HTTPError as error:
-            # Valhalla fails the whole request when one target has no road within
-            # its search cutoff. Split to find it; a lone target that fails is
-            # unreachable.
-            if error.code != 400:
+            if error.code != 400 or _error_code(error) != NO_SUITABLE_EDGES:
                 raise
-            if len(places) == 1:
-                return [None]
-            half = len(places) // 2
-            return self._request(origin, places[:half]) + self._request(
-                origin, places[half:]
-            )
-        row = body["sources_to_targets"][0]  # type: ignore[index]
-        return [_matrix_seconds(cell) for cell in row]
+            raise ValueError(
+                f"no road within {SEARCH_CUTOFF_M // 1000} km of Origin "
+                f"{origin.latitude},{origin.longitude}"
+            ) from error
+
+
+def _error_code(error: urllib.error.HTTPError) -> object:
+    try:
+        return json.load(error).get("error_code")
+    except (ValueError, AttributeError):
+        return None
 
 
 def _matrix_seconds(cell: object) -> float | None:
