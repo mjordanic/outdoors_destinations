@@ -6,6 +6,7 @@ import pytest
 
 from dayhike import (
     Catalog,
+    StaleSimilarity,
     build_catalog,
     build_similarity,
     geometry_store_path_for,
@@ -858,3 +859,22 @@ def test_failed_raster_open_still_closes_datasets_opened_so_far(
     assert all(dataset.closed for dataset in opened)
     store_path = geometry_store_path_for(catalog_path)
     assert not Path(str(store_path) + "-wal").exists()
+
+
+def test_sample_climate_removes_similarity_facts(tmp_path: Path) -> None:
+    catalog_path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, catalog_path)
+    directory = build_similarity(catalog_path, tmp_path / "dem")
+    raster_dir = tmp_path / "sample_climate"
+    raster_dir.mkdir()
+    _write_climate_tifs(raster_dir, west=14.99, south=44.99, east=15.2, north=45.12)
+    messages: list[str] = []
+
+    assert sample_climate(catalog_path, raster_dir, progress=messages.append) > 0
+
+    assert not directory.exists()
+    assert messages[-1] == (
+        f"removed stale similarity facts {directory}; run `dayhike build-similarity`"
+    )
+    with pytest.raises(StaleSimilarity, match="build-similarity"):
+        rank_dayhikes(Catalog.open(catalog_path), ["Ridge Walk"])

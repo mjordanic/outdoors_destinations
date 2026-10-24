@@ -35,6 +35,7 @@ from dayhike.catalog import (
     Ranking,
     geometry_store_path_for,
     resolve_seed,
+    similarity_dir_for,
 )
 from dayhike.dem import DEFAULT_DEM_DIR, FABDEM_VERSION, fabdem_tile_id
 
@@ -208,13 +209,6 @@ _CALIBRATION_VERSION = hashlib.sha256(
         ]
     ).encode()
 ).hexdigest()[:16]  # fmt: skip
-
-
-def similarity_dir_for(catalog_path: Path | str) -> Path:
-    """Return the similarity directory written next to a Catalog."""
-    path = Path(catalog_path)
-    stem = path.stem if path.suffix == ".sqlite" else path.name
-    return path.with_name(f"{stem}.similarity")
 
 
 class StaleSimilarity(ValueError):

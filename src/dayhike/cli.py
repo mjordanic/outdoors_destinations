@@ -4,7 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from dayhike.catalog import Catalog, Origin, build_catalog, filter_by_drive_time
+from dayhike.catalog import Catalog, Origin, Ranking, build_catalog, filter_by_drive_time
 from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS, DEFAULT_DEM_DIR, fetch_fabdem, sample_dem
 from dayhike.landcover import DEFAULT_LANDCOVER_DIR, fetch_worldcover, sample_landcover
 from dayhike.climate import DEFAULT_CLIMATE_DIR, fetch_worldclim, sample_climate
@@ -394,14 +394,17 @@ def _rank(
     weights: dict[str, float] | None,
     limit: int | None,
 ) -> int:
-    ranking = rank_dayhikes(Catalog.open(catalog_path), seeds, weights, month=month, limit=limit)
+    catalog = Catalog.open(catalog_path)
     if origin is not None and max_hours is not None:
         ranking = filter_by_drive_time(
-            ranking,
+            rank_dayhikes(catalog, seeds, weights, month=month),
             origin,
             max_hours,
             ValhallaMatrixClient(valhalla_url),
         )
+        ranking = Ranking(items=ranking.items[:limit])
+    else:
+        ranking = rank_dayhikes(catalog, seeds, weights, month=month, limit=limit)
     for item in ranking.items:
         line = f"{item.dayhike.id}\t{item.dayhike.name}\t{item.score}"
         if item.drive_time is not None:

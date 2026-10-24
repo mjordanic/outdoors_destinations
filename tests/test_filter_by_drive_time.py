@@ -6,6 +6,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 from dayhike import (
+    Catalog,
     Origin,
     RankedDayHike,
     Ranking,
@@ -173,6 +174,42 @@ def test_cli_prints_drive_time_when_filtering(
     columns = valley_line.split("\t")
     assert len(columns) == 4
     assert columns[3] == "0.5"
+
+
+def test_cli_limit_applies_after_drive_time_filter(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, path)
+    build_similarity(path, tmp_path / "dem")
+    best, second = rank_dayhikes(Catalog.open(path), ["Ridge Walk"]).items[:2]
+
+    def fake_sources(self, origin, trailheads):
+        return [None if trailhead == best.dayhike.trailhead else 1_800.0 for trailhead in trailheads]
+
+    monkeypatch.setattr(
+        "dayhike.cli.ValhallaMatrixClient.sources_to_targets",
+        fake_sources,
+    )
+
+    code = main(
+        [
+            "rank",
+            "--catalog",
+            str(path),
+            "--origin",
+            "45.8,15.97",
+            "--max-hours",
+            "2",
+            "--limit",
+            "1",
+            "Ridge Walk",
+        ]
+    )
+    out = capsys.readouterr().out.strip().splitlines()
+
+    assert code == 0
+    assert [line.split("\t")[0] for line in out] == [str(second.dayhike.id)]
 
 
 def test_valhalla_client_reads_seconds_and_null_from_sources_to_targets(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import heapq
 import json
 import math
+import shutil
 import sqlite3
 from collections import Counter
 from dataclasses import dataclass
@@ -349,6 +350,25 @@ def geometry_store_path_for(catalog_path: Path | str) -> Path:
     return path.with_name(f"{path.name}.geometry.sqlite")
 
 
+def similarity_dir_for(catalog_path: Path | str) -> Path:
+    """Return the similarity directory written next to a Catalog."""
+    path = Path(catalog_path)
+    stem = path.stem if path.suffix == ".sqlite" else path.name
+    return path.with_name(f"{stem}.similarity")
+
+
+def remove_similarity(
+    catalog_path: Path | str, progress: Callable[[str], None] | None = None
+) -> None:
+    """Delete the similarity directory after a step changed the Catalog facts."""
+    directory = similarity_dir_for(catalog_path)
+    if not directory.is_dir():
+        return
+    shutil.rmtree(directory)
+    if progress is not None:
+        progress(f"removed stale similarity facts {directory}; run `dayhike build-similarity`")
+
+
 def dayhike_label(relation_id: int, tags: Mapping[str, str]) -> tuple[str, str]:
     """Return the Seed label and NameOrigin for a hiking relation."""
     name = (tags.get("name") or "").strip()
@@ -454,6 +474,7 @@ def build_catalog(
         finally:
             work_conn.close()
         work_path.unlink()
+    remove_similarity(catalog_path, progress)
     return Catalog.open(catalog_path)
 
 

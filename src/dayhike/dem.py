@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from dayhike.catalog import geometry_store_path_for
+from dayhike.catalog import geometry_store_path_for, remove_similarity
 
 FABDEM_VERSION = "V1-2"
 FABDEM_DATASET = "https://huggingface.co/datasets/pavelzaitsau/fabdem-v12/resolve/main/tiles"
@@ -229,6 +229,7 @@ def sample_dem(
     if progress is not None:
         progress("dem sample: feature_vectors")
     _refresh_catalog_elevations(catalog_path, store_path, touched)
+    remove_similarity(catalog_path, progress)
     return sampled
 
 

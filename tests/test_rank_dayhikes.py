@@ -190,6 +190,22 @@ def test_ranking_needs_the_similarity_facts(tmp_path: Path) -> None:
         rank_dayhikes(catalog, ["Ridge Walk"])
 
 
+def test_ingest_removes_similarity_facts_built_for_the_old_catalog(
+    tmp_path: Path,
+) -> None:
+    catalog_path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, catalog_path)
+    directory = build_similarity(catalog_path, tmp_path / "dem")
+    messages: list[str] = []
+
+    catalog = build_catalog(FIXTURE, catalog_path, progress=messages.append)
+
+    assert not directory.exists()
+    assert f"removed stale similarity facts {directory}; run `dayhike build-similarity`" in messages
+    with pytest.raises(StaleSimilarity, match="build-similarity"):
+        rank_dayhikes(catalog, ["Ridge Walk"])
+
+
 def test_unknown_seed_fails_via_name_resolution(tmp_path: Path) -> None:
     catalog = build_catalog(FIXTURE, tmp_path / "catalog.sqlite")
 

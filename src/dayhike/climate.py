@@ -14,7 +14,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
-from dayhike.catalog import CLIMATE_FEATURE_NAMES, geometry_store_path_for
+from dayhike.catalog import CLIMATE_FEATURE_NAMES, geometry_store_path_for, remove_similarity
 from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS
 
 Progress = Callable[[str], None]
@@ -176,6 +176,7 @@ def sample_climate(
     if progress is not None:
         progress("climate sample: feature_vectors")
     _refresh_catalog_climate(catalog_path, store_path, touched)
+    remove_similarity(catalog_path, progress)
     return sampled
 
 

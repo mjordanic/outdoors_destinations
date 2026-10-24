@@ -90,8 +90,9 @@ Ingest **replaces** the Catalog (it does not append). `sample-dem`,
 `sample-landcover`, and `sample-climate` do **not** replace the Catalog: they
 only overwrite sampled columns on hikes whose geometry sits on a downloaded
 tile. `build-similarity` reads both SQLite files and FABDEM and replaces
-`data/catalog.similarity/`; rerun it after ingest and after every sample step
-(Ranking refuses facts built for other DayHikes or by other code).
+`data/catalog.similarity/`; ingest and every sample step that changes the
+Catalog delete that directory, so rerun `build-similarity` after them (Ranking
+refuses missing facts and facts built for other DayHikes or by other code).
 
 For a continent PBF (for example `europe-latest.osm.pbf`), ingest is the same
 command. After ingest, widen raster coverage with
@@ -410,9 +411,9 @@ LandCover fractions do not change with the month.
 ### Rebuilding the facts
 
 `build-similarity` rebuilds the facts and the Calibration; run it after ingest
-and after every sample step. `build-similarity --calibrate-only` keeps the
-facts and recomputes the Calibration only, which is enough after a Measure's
-constant changes. The directory records a version of the constants: Ranking
+and after every sample step, which delete the old directory.
+`build-similarity --calibrate-only` keeps the facts and recomputes the
+Calibration only, which is enough after a Measure's constant changes. The directory records a version of the constants: Ranking
 fails with a message naming the command to run when the facts or the
 Calibration were built by other code, or when the Catalog's DayHikes changed.
 

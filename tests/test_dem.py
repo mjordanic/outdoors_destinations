@@ -4,7 +4,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from dayhike import Catalog, build_catalog, geometry_store_path_for
+from dayhike import (
+    Catalog,
+    StaleSimilarity,
+    build_catalog,
+    build_similarity,
+    geometry_store_path_for,
+    rank_dayhikes,
+)
 from dayhike.dem import (
     Bounds,
     DEFAULT_DEM_BOUNDS,
@@ -169,3 +176,25 @@ def test_sample_dem_without_rasters_keeps_osm_ele(tmp_path: Path) -> None:
     assert ridge.feature_vector.elevation_min_m == 200.0
     assert ridge.feature_vector.elevation_gain_m == 450.0
     assert valley.feature_vector.elevation_min_m is None
+
+
+def test_sample_dem_removes_similarity_facts(tmp_path: Path) -> None:
+    catalog_path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, catalog_path)
+    directory = build_similarity(catalog_path, tmp_path / "dem")
+    raster_dir = tmp_path / "sample_dem"
+    raster_dir.mkdir()
+    _write_constant_tif(
+        raster_dir / "N45E015_FABDEM_V1-2.tif",
+        west=14.99, south=44.99, east=16.01, north=46.01, z=1400.0,
+    )
+    messages: list[str] = []
+
+    assert sample_dem(catalog_path, raster_dir, progress=messages.append) > 0
+
+    assert not directory.exists()
+    assert messages[-1] == (
+        f"removed stale similarity facts {directory}; run `dayhike build-similarity`"
+    )
+    with pytest.raises(StaleSimilarity, match="build-similarity"):
+        rank_dayhikes(Catalog.open(catalog_path), ["Ridge Walk"])

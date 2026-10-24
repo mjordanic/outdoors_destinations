@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from dayhike.catalog import LANDCOVER_FEATURE_NAMES, geometry_store_path_for
+from dayhike.catalog import LANDCOVER_FEATURE_NAMES, geometry_store_path_for, remove_similarity
 from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS
 
 Progress = Callable[[str], None]
@@ -250,6 +250,7 @@ def sample_landcover(
     if progress is not None:
         progress("landcover sample: feature_vectors")
     _refresh_catalog_fractions(catalog_path, store_path, touched)
+    remove_similarity(catalog_path, progress)
     return sampled
 
 
