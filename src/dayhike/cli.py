@@ -4,17 +4,18 @@ import argparse
 import sys
 from pathlib import Path
 
-from dayhike.catalog import (
-    Catalog,
-    Origin,
-    build_catalog,
-    filter_by_drive_time,
-    rank_dayhikes,
-)
+from dayhike.catalog import Catalog, Origin, build_catalog, filter_by_drive_time
 from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS, DEFAULT_DEM_DIR, fetch_fabdem, sample_dem
 from dayhike.landcover import DEFAULT_LANDCOVER_DIR, fetch_worldcover, sample_landcover
 from dayhike.climate import DEFAULT_CLIMATE_DIR, fetch_worldclim, sample_climate
 from dayhike.extracts import fetch_geofabrik_extracts
+from dayhike.similarity import (
+    MEASURE_NAMES,
+    StaleSimilarity,
+    build_similarity,
+    calibrate_similarity,
+    rank_dayhikes,
+)
 from dayhike.valhalla import DEFAULT_VALHALLA_URL, ValhallaMatrixClient
 
 
@@ -153,6 +154,27 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_CLIMATE_DIR,
         help="Directory of WorldClim GeoTIFFs (default: data/climate)",
     )
+    similarity = subparsers.add_parser(
+        "build-similarity",
+        help="Build the similarity facts and Calibration next to a Catalog",
+    )
+    similarity.add_argument(
+        "--catalog",
+        type=Path,
+        default=Path("data/catalog.sqlite"),
+        help="SQLite Catalog path (default: data/catalog.sqlite)",
+    )
+    similarity.add_argument(
+        "--dem",
+        type=Path,
+        default=DEFAULT_DEM_DIR,
+        help="Directory of FABDEM GeoTIFFs for SolarAspect (default: data/dem)",
+    )
+    similarity.add_argument(
+        "--calibrate-only",
+        action="store_true",
+        help="Keep the stored facts and only recompute the Calibration",
+    )
     rank = subparsers.add_parser("rank", help="Rank DayHikes by similarity to Seeds")
     rank.add_argument("--catalog", required=True, type=Path)
     rank.add_argument(
@@ -176,6 +198,21 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="QueryMonth 1-12; omit to use the June-August climate regime",
     )
+    rank.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Print only the best this many DayHikes (all are still scored)",
+    )
+    rank.add_argument(
+        "--weight",
+        action="append",
+        type=_parse_weight,
+        metavar="MEASURE=WEIGHT",
+        help="Weight 0-100 of one Measure, repeatable; Measures not named are "
+        "excluded. Omit to weigh every Measure equally. Measures: "
+        + ", ".join(MEASURE_NAMES),
+    )
     rank.add_argument("seeds", nargs="+", help="Seed DayHike names")
     args = parser.parse_args(argv)
     if args.command == "ingest":
@@ -196,11 +233,20 @@ def main(argv: list[str] | None = None) -> int:
         return _sample_landcover(args.catalog, args.landcover)
     if args.command == "sample-climate":
         return _sample_climate(args.catalog, args.climate)
+    if args.command == "build-similarity":
+        return _build_similarity(args.catalog, args.dem, calibrate_only=args.calibrate_only)
     if (args.origin is None) != (args.max_hours is None):
         rank.error("--origin and --max-hours must be given together")
     try:
         return _rank(
-            args.catalog, args.seeds, args.origin, args.max_hours, args.valhalla_url, args.month
+            args.catalog,
+            args.seeds,
+            args.origin,
+            args.max_hours,
+            args.valhalla_url,
+            args.month,
+            dict(args.weight) if args.weight else None,
+            args.limit,
         )
     except ValueError as exc:
         rank.error(str(exc))
@@ -300,6 +346,29 @@ def _sample_climate(catalog_path: Path, raster_dir: Path) -> int:
     return 0
 
 
+def _build_similarity(catalog_path: Path, dem_dir: Path, *, calibrate_only: bool) -> int:
+    def progress(message: str) -> None:
+        print(message, file=sys.stderr, flush=True)
+
+    try:
+        if calibrate_only:
+            print(calibrate_similarity(catalog_path, progress=progress))
+        else:
+            print(build_similarity(catalog_path, dem_dir, progress=progress))
+    except StaleSimilarity as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    return 0
+
+
+def _parse_weight(value: str) -> tuple[str, float]:
+    name, _, weight = value.partition("=")
+    try:
+        return name.strip(), float(weight)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected MEASURE=WEIGHT, got {value!r}") from None
+
+
 def _parse_bounds(value: str) -> Bounds:
     south_s, west_s, north_s, east_s = value.split(",", maxsplit=3)
     return Bounds(
@@ -322,8 +391,10 @@ def _rank(
     max_hours: float | None,
     valhalla_url: str,
     month: int | None,
+    weights: dict[str, float] | None,
+    limit: int | None,
 ) -> int:
-    ranking = rank_dayhikes(Catalog.open(catalog_path), seeds, month=month)
+    ranking = rank_dayhikes(Catalog.open(catalog_path), seeds, weights, month=month, limit=limit)
     if origin is not None and max_hours is not None:
         ranking = filter_by_drive_time(
             ranking,

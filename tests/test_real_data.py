@@ -1,6 +1,6 @@
 """Checks on the real local data under data/, not on the OSM fixture.
 
-Run after an ingest, the three sample commands and notebook 05:
+Run after an ingest, the three sample commands and build-similarity:
 
     DAYHIKE_REAL_DATA=1 uv run pytest tests/test_real_data.py
 
@@ -46,19 +46,16 @@ import pandas as pd
 import pytest
 from sklearn.neighbors import BallTree
 
-from dayhike import geometry_store_path_for
+from dayhike import SimilarityStore, geometry_store_path_for
 from dayhike.catalog import MAX_LENGTH_M, _access_tree, _drop_reason, assemble_main_walk
 from dayhike.osm import amenity_kind
-from dayhike.similarity import similarity_facts_path_for
+from dayhike.similarity import MEASURE_NAMES
 
 REPO = Path(__file__).resolve().parents[1]
 CATALOG = Path(os.environ.get("DAYHIKE_REAL_CATALOG", REPO / "data" / "catalog.sqlite"))
 GEOMETRY = geometry_store_path_for(CATALOG)
-FACTS = similarity_facts_path_for(CATALOG)
 BASELINE = REPO / "data" / "baseline" / "catalog.sqlite"
 EXTRACT = REPO / "data" / "osm" / "europe-latest.catalog.osm.pbf"
-REGION_LAT = (42.3, 46.9)  # notebook 05 region
-REGION_LON = (13.3, 19.5)
 OLD_KINDS = ("hut", "parking", "restaurant_cafe", "drinking_water", "viewpoint", "peak", "shelter")
 NEW_WATER_KINDS = ("spring", "water_tap", "water_point")
 WATER_COLUMNS = ("water_count", "dry_stretch_m")
@@ -167,21 +164,20 @@ def test_every_water_source_node_in_the_extract_is_in_the_geometry_store(
     assert dict(zip(stored["osm_key"], stored["kind"])) == expected
 
 
-def test_facts_table_has_water_facts_for_each_region_dayhike() -> None:
-    facts = pd.read_pickle(FACTS)
-    region = _read(
-        CATALOG,
-        "SELECT dayhike_id FROM trailheads WHERE latitude BETWEEN ? AND ? "
-        "AND longitude BETWEEN ? AND ? ORDER BY dayhike_id",
-        (*REGION_LAT, *REGION_LON),
-    )
+def test_similarity_facts_have_water_facts_for_every_dayhike() -> None:
+    store = SimilarityStore.open(CATALOG)
+    ids = _read(CATALOG, "SELECT id FROM dayhikes ORDER BY id")["id"].tolist()
+    lengths = _read(CATALOG, "SELECT length_m FROM dayhikes ORDER BY id")["length_m"].to_numpy()
 
-    assert sorted(facts.index) == region["dayhike_id"].tolist()
-    assert facts[list(WATER_COLUMNS)].notna().all().all()
+    assert store.ids.tolist() == ids
+    water_count = store.column("water_count")
+    dry_stretch = store.column("dry_stretch_m")
+    assert not np.isnan(water_count).any()
+    assert not np.isnan(dry_stretch).any()
     # DryStretch is part of the walk; with no WaterSource it is the whole walk.
-    assert (facts["dry_stretch_m"] <= facts["length_m"] * (1 + 1e-6)).all()
-    dry = facts[facts["water_count"] == 0]
-    assert np.allclose(dry["dry_stretch_m"], dry["length_m"], rtol=1e-3)
+    assert (dry_stretch <= lengths * (1 + 1e-3)).all()
+    dry = water_count == 0
+    assert np.allclose(dry_stretch[dry], lengths[dry], rtol=1e-3)
 
 
 def test_notebook_05_passes_every_verification_on_the_real_facts(
@@ -197,19 +193,21 @@ def test_notebook_05_passes_every_verification_on_the_real_facts(
     assert verify
     assert [fields for fields in verify if fields[-1] != "PASS"] == []
     assert f"verify_summary\tpass={len(verify)}\tfail=0" in output
-    assert {(fields[1], fields[2]) for fields in verify} >= {
-        (facet, check) for facet in SIMILARITY_FACETS for check in ("identity", "symmetry_max_gap", "reversed")
-    }
+    checks = {(fields[1], fields[2]) for fields in verify}
+    assert checks >= {(name, check) for name in MEASURE_NAMES for check in ("identity", "symmetry_max_gap")}
+    assert ("geometry_facts", "reversed_max_relative_gap") in checks
+    assert ("profile", "reversed") in checks
+    assert {fields[1] for fields in verify if fields[2] == "pairs_margin"} == set(PAIR_GROUPS)
 
     assert {fields[1] for fields in lines if fields[0] == "rank"} == {"facilities_heavy", "altitude_heavy"}
     multi_seed = [fields for fields in lines if fields[0] == "multi_seed"]
     assert multi_seed
     for _, _name, score, first, second in multi_seed:
         assert float(score) == pytest.approx(max(float(first), float(second)))
-    assert {fields[1] for fields in lines if fields[0] == "facet_missing"} == set(SIMILARITY_FACETS)
+    assert {fields[1] for fields in lines if fields[0] == "measure_missing"} == set(MEASURE_NAMES)
 
 
-SIMILARITY_FACETS = (
+PAIR_GROUPS = (
     "effort",
     "altitude",
     "profile",
@@ -221,8 +219,6 @@ SIMILARITY_FACETS = (
     "round_trip",
     "steepness",
 )
-
-
 
 
 # The main walk (ADR-0012): rules a full ingest must have followed.

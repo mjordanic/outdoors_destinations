@@ -10,6 +10,7 @@ from dayhike import (
     RankedDayHike,
     Ranking,
     build_catalog,
+    build_similarity,
     filter_by_drive_time,
     rank_dayhikes,
 )
@@ -113,6 +114,7 @@ def test_filter_drops_null_matrix_entries_without_a_fake_time(tmp_path: Path) ->
 
 def test_rank_without_origin_does_not_require_valhalla(tmp_path: Path) -> None:
     catalog = build_catalog(FIXTURE, tmp_path / "catalog.sqlite")
+    build_similarity(catalog.path, tmp_path / "dem")
 
     ranking = rank_dayhikes(catalog, ["Ridge Walk"])
 
@@ -123,6 +125,7 @@ def test_rank_without_origin_does_not_require_valhalla(tmp_path: Path) -> None:
 def test_cli_without_origin_prints_id_name_score_only(tmp_path: Path) -> None:
     path = tmp_path / "catalog.sqlite"
     build_catalog(FIXTURE, path)
+    build_similarity(path, tmp_path / "dem")
 
     result = subprocess.run(
         [sys.executable, "-m", "dayhike", "rank", "--catalog", str(path), "Ridge Walk"],
@@ -141,6 +144,7 @@ def test_cli_prints_drive_time_when_filtering(
 ) -> None:
     path = tmp_path / "catalog.sqlite"
     build_catalog(FIXTURE, path)
+    build_similarity(path, tmp_path / "dem")
 
     def fake_sources(self, origin, trailheads):
         return [1_800.0] * len(trailheads)

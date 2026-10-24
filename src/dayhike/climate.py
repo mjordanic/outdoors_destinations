@@ -13,16 +13,8 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-import numpy as np
 
-from dayhike.catalog import (
-    CLIMATE_FEATURE_NAMES,
-    Catalog,
-    Scaler,
-    feature_matrix,
-    fit_scaler_from_matrix,
-    geometry_store_path_for,
-)
+from dayhike.catalog import CLIMATE_FEATURE_NAMES, geometry_store_path_for
 from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS
 
 Progress = Callable[[str], None]
@@ -337,9 +329,6 @@ def _refresh_catalog_climate(
     finally:
         store.close()
         catalog.close()
-    loaded = Catalog.open(catalog_path)
-    _rewrite_scaler(catalog_path, fit_scaler_from_matrix(feature_matrix(loaded.dayhikes)))
-    _rewrite_month_scalers(catalog_path, loaded)
 
 
 def _regime(
@@ -350,61 +339,6 @@ def _regime(
         sum(month[1] for month in months) / 12.0,
         (months[5][2] + months[6][2] + months[7][2]) / 3.0,
     )
-
-
-def _rewrite_scaler(catalog_path: Path, scaler: Scaler) -> None:
-    connection = sqlite3.connect(catalog_path)
-    try:
-        connection.execute("DELETE FROM scaler")
-        connection.executemany(
-            "INSERT INTO scaler (position, feature_name, mean, scale) VALUES (?, ?, ?, ?)",
-            [
-                (position, name, mean, scale)
-                for position, (name, mean, scale) in enumerate(
-                    zip(scaler.feature_names, scaler.mean, scaler.scale, strict=True)
-                )
-            ],
-        )
-        connection.commit()
-    finally:
-        connection.close()
-
-
-def _rewrite_month_scalers(catalog_path: Path, catalog: Catalog) -> None:
-    connection = sqlite3.connect(catalog_path)
-    try:
-        _ensure_scaler_month(connection)
-        connection.execute("DELETE FROM scaler_month")
-        rows: list[tuple[int, int, str, float, float]] = []
-        for month in range(1, 13):
-            observed = [
-                hike.climate_months[month - 1]
-                for hike in catalog.dayhikes
-                if hike.climate_months[month - 1] is not None
-            ]
-            if observed:
-                matrix = [
-                    [temperature_c, precipitation_mm, solar_radiation]
-                    for temperature_c, precipitation_mm, solar_radiation in observed
-                ]
-                scaler = fit_scaler_from_matrix(
-                    np.array(matrix, dtype=float),
-                    CLIMATE_FEATURE_NAMES,
-                )
-            else:
-                scaler = Scaler(CLIMATE_FEATURE_NAMES, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0))
-            for position, (name, mean, scale) in enumerate(
-                zip(scaler.feature_names, scaler.mean, scaler.scale, strict=True)
-            ):
-                rows.append((month, position, name, mean, scale))
-        connection.executemany(
-            "INSERT INTO scaler_month (month, position, feature_name, mean, scale) "
-            "VALUES (?, ?, ?, ?, ?)",
-            rows,
-        )
-        connection.commit()
-    finally:
-        connection.close()
 
 
 def _ensure_vertex_climate(connection: sqlite3.Connection) -> None:
@@ -433,21 +367,6 @@ def _ensure_climate_months(connection: sqlite3.Connection) -> None:
             precipitation_mm REAL,
             solar_radiation REAL,
             PRIMARY KEY (dayhike_id, month)
-        )
-        """
-    )
-
-
-def _ensure_scaler_month(connection: sqlite3.Connection) -> None:
-    connection.execute(
-        """
-        CREATE TABLE IF NOT EXISTS scaler_month (
-            month INTEGER NOT NULL,
-            position INTEGER NOT NULL,
-            feature_name TEXT NOT NULL,
-            mean REAL NOT NULL,
-            scale REAL NOT NULL,
-            PRIMARY KEY (month, position)
         )
         """
     )

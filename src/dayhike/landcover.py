@@ -11,14 +11,7 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from dayhike.catalog import (
-    Catalog,
-    LANDCOVER_FEATURE_NAMES,
-    Scaler,
-    feature_matrix,
-    fit_scaler_from_matrix,
-    geometry_store_path_for,
-)
+from dayhike.catalog import LANDCOVER_FEATURE_NAMES, geometry_store_path_for
 from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS
 
 Progress = Callable[[str], None]
@@ -296,8 +289,6 @@ def _refresh_catalog_fractions(
     finally:
         store.close()
         catalog.close()
-    loaded = Catalog.open(catalog_path)
-    _rewrite_scaler(catalog_path, fit_scaler_from_matrix(feature_matrix(loaded.dayhikes)))
 
 
 def _landcover_fractions(
@@ -311,24 +302,6 @@ def _landcover_fractions(
         codes.count(_BARE) / n,
         codes.count(_SNOW) / n,
     )
-
-
-def _rewrite_scaler(catalog_path: Path, scaler: Scaler) -> None:
-    connection = sqlite3.connect(catalog_path)
-    try:
-        connection.execute("DELETE FROM scaler")
-        connection.executemany(
-            "INSERT INTO scaler (position, feature_name, mean, scale) VALUES (?, ?, ?, ?)",
-            [
-                (position, name, mean, scale)
-                for position, (name, mean, scale) in enumerate(
-                    zip(scaler.feature_names, scaler.mean, scaler.scale, strict=True)
-                )
-            ],
-        )
-        connection.commit()
-    finally:
-        connection.close()
 
 
 def _ensure_column(

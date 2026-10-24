@@ -21,7 +21,7 @@ The local database of DayHikes, Trailheads, AmenityFacts, and FeatureVectors. Bu
 _Avoid_: dataset, index, graph (the routing graph is Valhalla's, not the Catalog)
 
 **DayHikeGeometry**:
-The ordered lon/lat vertices of a DayHike's main walk, starting at the Trailhead: the longest connected piece of its OSM member ways (ways a few tens of metres apart count as connected), each way at most once, without Leftovers. Consecutive ways meet; there is no jump between them. Used to invent FeatureVector columns; Ranking does not read it.
+The ordered lon/lat vertices of a DayHike's main walk, starting at the Trailhead: the longest connected piece of its OSM member ways (ways a few tens of metres apart count as connected), each way at most once, without Leftovers. Consecutive ways meet; there is no jump between them. The similarity facts are built from it; Ranking does not read it.
 _Avoid_: path, route, trace, LineString, chain
 
 **Leftover**:
@@ -81,7 +81,7 @@ The long-term monthly temperature, precipitation, and solar radiation of a DayHi
 _Avoid_: live weather, weekend forecast, aspect, sunny-day count
 
 **QueryMonth**:
-The optional month a Hiker sets on a Ranking. It selects which ClimateNormal month fills the three score slots: that month's temperature, precipitation, and solar radiation. When absent, the slots are June–August mean temperature, mean monthly precipitation, and June–August solar radiation.
+The optional month a Hiker sets on a Ranking. It selects which ClimateNormal month the three climate Measures compare: that month's temperature, precipitation, and solar radiation, calibrated against that month's random pairs. When absent, they compare June–August mean temperature, mean monthly precipitation, and June–August solar radiation.
 _Avoid_: season filter, forecast date, current month as a silent default
 
 **AmenityFact**:
@@ -129,24 +129,24 @@ A DayHike the hiker names as "like the outing I want." Ranking is similarity to 
 _Avoid_: label, like, rating, example (example is too vague)
 
 **FeatureVector**:
-The numeric description of a DayHike used for similarity (length, elevation stats, Difficulty, AmenityFacts, LandCover, and three ClimateNormal slots). Which climate slots are used follows the QueryMonth. It does not include DriveTime.
+The numeric Catalog description of a DayHike (length, elevation stats, Difficulty, AmenityFacts, LandCover, and three ClimateNormal slots). Together with DayHikeGeometry it gives the facts the Measures compare. It does not include DriveTime.
 _Avoid_: embedding, description, tags
 
 **Ranking**:
-An ordered list of Catalog DayHikes with a similarity score to the Seed set. Score is the maximum similarity to any Seed. An optional QueryMonth selects the ClimateNormal slice in that score. The Seed carries the climate being matched.
+An ordered list of Catalog DayHikes by similarity to the Seed set. A DayHike's similarity to one Seed is the MeasureWeights-weighted mean of its calibrated Measure scores; with several Seeds the best Seed counts. Its score is the share of random DayHike pairs that are less alike under the same weights (raised to the number of Seeds). An optional QueryMonth selects the ClimateNormal slice. The Seed carries the climate being matched.
 _Avoid_: recommendation, unsupervised clustering, prediction, climate target
 
-**Facet**:
-One theme on which two DayHikes are compared and which the Hiker weights: Effort, Altitude, Profile, Landscape, Weather, Water, Facilities, Trail, RoundTrip, or Steepness. A Facet groups one or more measures.
-_Avoid_: category, dimension, feature group, feature
+**Measure**:
+One fact compared between two DayHikes, giving 1 (alike) to 0 (unlike), or nothing when either DayHike lacks the fact: length, the Hut along the way, the ProfileShape, and 23 more. Each has a kind (ratio, tolerance, mix, agree, profile) and is the unit the Hiker weights. There is no grouping of Measures into themes.
+_Avoid_: Facet, feature, dimension, criterion
 
-**FacetScore**:
-The similarity of two DayHikes on one Facet, from 0 (unlike) to 1 (alike). It is the plain mean of that Facet's measures.
-_Avoid_: distance, sub-score, partial score
+**MeasureWeights**:
+The Hiker's weight for each Measure in one query, from 0 to 100. A Measure at 0 or left out is excluded; the weights of the Measures scored for a pair renormalize, so only their ratios matter.
+_Avoid_: FacetWeights, preferences, priorities, importance
 
-**FacetWeights**:
-The Hiker's shares across Facets for one query, normalized to sum to 1. A Facet with weight 0 does not move the score.
-_Avoid_: preferences, priorities, importance
+**Calibration**:
+The map from a Measure's raw score to the share of random DayHike pairs that score lower on that Measure, ties counting half. It puts every Measure on the same scale, so a raw 0.6 on the ProfileShape (typical of a random pair) and a raw 0.6 on length (a close pair) stop meaning the same. It is computed once from random pairs of the whole Catalog and stored beside it; it changes only when the facts, a Measure's constant, or the Catalog's DayHikes change.
+_Avoid_: normalization, scaling, z-score, percentile rank among candidates
 
 **Hiker**:
 The person querying the Catalog. Phase 1 is a single local user; a future website may have many Hikers with ratings.

@@ -1,11 +1,17 @@
 import sqlite3
-from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from dayhike import Catalog, build_catalog, geometry_store_path_for, rank_dayhikes, sample_climate
+from dayhike import (
+    Catalog,
+    build_catalog,
+    build_similarity,
+    geometry_store_path_for,
+    rank_dayhikes,
+    sample_climate,
+)
 from dayhike.climate import fetch_worldclim, worldclim_zip_url
 from dayhike.dem import Bounds
 
@@ -149,8 +155,6 @@ def test_ingest_creates_empty_climate_and_does_not_need_a_raster(
         assert vector.precipitation_mm is None
         assert vector.solar_radiation is None
         assert hike.climate_months == (None,) * 12
-    for name in CLIMATE_FEATURES:
-        assert name in catalog.scaler.feature_names
 
 
 def test_sample_writes_twelve_rows_on_covered_vertices_and_leaves_uncovered_unset(
@@ -277,7 +281,7 @@ def test_catalog_stores_monthly_means_and_regime_and_keeps_uncovered_hikes(
         catalog_db.close()
 
 
-def test_sample_adds_missing_climate_tables_in_place_and_refits_scaler(
+def test_sample_adds_missing_climate_tables_in_place(
     tmp_path: Path,
 ) -> None:
     catalog_path = tmp_path / "catalog.sqlite"
@@ -292,12 +296,6 @@ def test_sample_adds_missing_climate_tables_in_place_and_refits_scaler(
         catalog_db.execute("DROP TABLE climate_months")
         for name in CLIMATE_FEATURES:
             catalog_db.execute(f"ALTER TABLE feature_vectors DROP COLUMN {name}")
-        catalog_db.execute(
-            "DELETE FROM scaler WHERE feature_name IN ({})".format(
-                ",".join("?" * len(CLIMATE_FEATURES))
-            ),
-            CLIMATE_FEATURES,
-        )
         catalog_db.commit()
     finally:
         store.close()
@@ -324,29 +322,6 @@ def test_sample_adds_missing_climate_tables_in_place_and_refits_scaler(
     catalog_db = sqlite3.connect(catalog_path)
     store = sqlite3.connect(store_path)
     try:
-        scaler_rows = {
-            name: (mean, scale)
-            for name, mean, scale in catalog_db.execute(
-                "SELECT feature_name, mean, scale FROM scaler"
-            )
-        }
-        assert set(CLIMATE_FEATURES) <= set(scaler_rows)
-        assert scaler_rows["temperature_c"][0] == pytest.approx(7.0)
-        july = {
-            name: (mean, scale)
-            for name, mean, scale in catalog_db.execute(
-                "SELECT feature_name, mean, scale FROM scaler_month WHERE month = 7 "
-                "ORDER BY position"
-            )
-        }
-        assert tuple(july) == CLIMATE_FEATURES
-        assert july["temperature_c"][0] == pytest.approx(21.0)
-        assert july["temperature_c"][0] != scaler_rows["temperature_c"][0]
-        months = {
-            row[0]
-            for row in catalog_db.execute("SELECT DISTINCT month FROM scaler_month")
-        }
-        assert months == set(range(1, 13))
         store_tables = {
             row[0]
             for row in store.execute(
@@ -388,29 +363,48 @@ def _sample_ridge_july_spike(tmp_path: Path) -> Path:
     return catalog_path
 
 
+def _copy_ridge_climate(catalog_path: Path, dayhike_id: int, **july) -> None:
+    """Give another fixture DayHike Ridge Walk's climate, July changed by ``july``."""
+    catalog_db = sqlite3.connect(catalog_path)
+    try:
+        catalog_db.execute(
+            "INSERT INTO climate_months SELECT ?, month, temperature_c, "
+            "precipitation_mm, solar_radiation FROM climate_months WHERE dayhike_id = 1001",
+            (dayhike_id,),
+        )
+        for column, value in july.items():
+            catalog_db.execute(
+                f"UPDATE climate_months SET {column} = ? WHERE dayhike_id = ? AND month = 7",
+                (value, dayhike_id),
+            )
+        catalog_db.execute(
+            "UPDATE feature_vectors SET (temperature_c, precipitation_mm, solar_radiation) = "
+            "(SELECT temperature_c, precipitation_mm, solar_radiation FROM feature_vectors "
+            "WHERE dayhike_id = 1001) WHERE dayhike_id = ?",
+            (dayhike_id,),
+        )
+        catalog_db.commit()
+    finally:
+        catalog_db.close()
+
+
 def test_ranking_with_month_uses_july_not_june_august_regime(tmp_path: Path) -> None:
-    catalog = Catalog.open(_sample_ridge_july_spike(tmp_path))
-    seed = next(hike for hike in catalog.dayhikes if hike.name == "Ridge Walk")
-    july_twin = replace(seed, id=9001, name="July Twin")
-    july = seed.climate_months[6]
-    assert july is not None
-    months = list(seed.climate_months)
-    months[6] = (
-        seed.feature_vector.temperature_c,
-        july[1],
-        july[2],
-    )
-    regime_twin = replace(seed, id=9002, name="Regime Twin", climate_months=tuple(months))
-    catalog = replace(catalog, dayhikes=(seed, july_twin, regime_twin))
+    catalog_path = _sample_ridge_july_spike(tmp_path)
+    # Valley Path (1002) has Ridge Walk's July; PS-1 (1007) its regime in July.
+    _copy_ridge_climate(catalog_path, 1002)
+    _copy_ridge_climate(catalog_path, 1007, temperature_c=7.0)
+    build_similarity(catalog_path, tmp_path / "dem")
+    catalog = Catalog.open(catalog_path)
+    weights = {"temperature": 100}
 
-    without_month = rank_dayhikes(catalog, ["Ridge Walk"])
-    with_july = rank_dayhikes(catalog, ["Ridge Walk"], month=7)
+    without_month = rank_dayhikes(catalog, ["Ridge Walk"], weights)
+    with_july = rank_dayhikes(catalog, ["Ridge Walk"], weights, month=7)
 
-    without_scores = {item.dayhike.name: item.score for item in without_month.items}
-    july_scores = {item.dayhike.name: item.score for item in with_july.items}
-    assert without_scores["July Twin"] == pytest.approx(without_scores["Regime Twin"])
-    assert july_scores["July Twin"] > july_scores["Regime Twin"]
-    assert [item.dayhike.name for item in with_july.items][0] == "July Twin"
+    without_scores = {item.dayhike.id: item.score for item in without_month.items}
+    july_scores = {item.dayhike.id: item.score for item in with_july.items}
+    assert without_scores[1002] == pytest.approx(without_scores[1007])
+    assert july_scores[1002] > july_scores[1007]
+    assert [item.dayhike.id for item in with_july.items] == [1002, 1007]
 
 
 def test_query_month_outside_1_to_12_fails(tmp_path: Path) -> None:
@@ -424,6 +418,7 @@ def test_query_month_outside_1_to_12_fails(tmp_path: Path) -> None:
 
 def test_query_month_fails_when_climate_has_not_been_sampled(tmp_path: Path) -> None:
     catalog = build_catalog(FIXTURE, tmp_path / "catalog.sqlite")
+    build_similarity(catalog.path, tmp_path / "dem")
 
     with pytest.raises(ValueError, match="climate has not been sampled"):
         rank_dayhikes(catalog, ["Ridge Walk"], month=7)
@@ -431,6 +426,7 @@ def test_query_month_fails_when_climate_has_not_been_sampled(tmp_path: Path) -> 
 
 def test_omitting_query_month_ranks_unsampled_catalog(tmp_path: Path) -> None:
     catalog = build_catalog(FIXTURE, tmp_path / "catalog.sqlite")
+    build_similarity(catalog.path, tmp_path / "dem")
 
     ranking = rank_dayhikes(catalog, ["Ridge Walk"])
 
@@ -438,71 +434,36 @@ def test_omitting_query_month_ranks_unsampled_catalog(tmp_path: Path) -> None:
     assert all(item.drive_time is None for item in ranking.items)
 
 
-def test_warm_sunny_july_seed_ranks_similar_july_ahead_of_different_july(
-    tmp_path: Path,
-) -> None:
-    catalog = Catalog.open(_sample_ridge_july_spike(tmp_path))
-    seed = next(hike for hike in catalog.dayhikes if hike.name == "Ridge Walk")
-    similar = replace(seed, id=9001, name="Warm Twin")
-    july = seed.climate_months[6]
-    assert july is not None
-    months = list(seed.climate_months)
-    months[6] = (0.0, july[1], 0.0)
-    different = replace(seed, id=9002, name="Cold Twin", climate_months=tuple(months))
-    catalog = replace(catalog, dayhikes=(seed, similar, different))
-
-    ranking = rank_dayhikes(catalog, ["Ridge Walk"], month=7)
-    names = [item.dayhike.name for item in ranking.items]
-    scores = {item.dayhike.name: item.score for item in ranking.items}
-
-    assert names[0] == "Warm Twin"
-    assert scores["Warm Twin"] > scores["Cold Twin"]
-
-
 def test_forested_seed_in_july_ranks_forested_neighbour_ahead_of_barer_hotter(
     tmp_path: Path,
 ) -> None:
-    catalog = Catalog.open(_sample_ridge_july_spike(tmp_path))
-    seed = next(hike for hike in catalog.dayhikes if hike.name == "Ridge Walk")
-    forested_vector = replace(
-        seed.feature_vector,
-        tree_fraction=1.0,
-        shrub_fraction=0.0,
-        grass_fraction=0.0,
-        bare_fraction=0.0,
-        snow_fraction=0.0,
+    catalog_path = _sample_ridge_july_spike(tmp_path)
+    _copy_ridge_climate(catalog_path, 1002)
+    _copy_ridge_climate(catalog_path, 1007, temperature_c=36.0, solar_radiation=16_000.0)
+    catalog_db = sqlite3.connect(catalog_path)
+    catalog_db.executemany(
+        "UPDATE feature_vectors SET tree_fraction = ?, shrub_fraction = 0, "
+        "grass_fraction = 0, bare_fraction = ?, snow_fraction = 0 WHERE dayhike_id = ?",
+        [(1.0, 0.0, 1001), (1.0, 0.0, 1002), (0.0, 1.0, 1007)],
     )
-    seed = replace(seed, feature_vector=forested_vector)
-    forested = replace(seed, id=9001, name="Forested Twin")
-    july = seed.climate_months[6]
-    assert july is not None
-    months = list(seed.climate_months)
-    months[6] = (july[0] + 15.0, july[1], july[2] + 4000.0)
-    barer = replace(
-        seed,
-        id=9002,
-        name="Bare Hot Twin",
-        feature_vector=replace(
-            forested_vector,
-            tree_fraction=0.0,
-            bare_fraction=1.0,
-        ),
-        climate_months=tuple(months),
-    )
-    catalog = replace(catalog, dayhikes=(seed, forested, barer))
+    catalog_db.commit()
+    catalog_db.close()
+    build_similarity(catalog_path, tmp_path / "dem")
+    weights = {"landcover": 100, "temperature": 100, "solar_radiation": 100}
 
-    ranking = rank_dayhikes(catalog, ["Ridge Walk"], month=7)
-    names = [item.dayhike.name for item in ranking.items]
-    scores = {item.dayhike.name: item.score for item in ranking.items}
+    ranking = rank_dayhikes(Catalog.open(catalog_path), ["Ridge Walk"], weights, month=7)
+    scores = {item.dayhike.id: item.score for item in ranking.items}
 
-    assert names[0] == "Forested Twin"
-    assert scores["Forested Twin"] > scores["Bare Hot Twin"]
+    assert [item.dayhike.id for item in ranking.items][0] == 1002
+    assert scores[1002] > scores[1007]
 
 
 def test_drive_time_filter_still_runs_after_ranking_with_month(tmp_path: Path) -> None:
     from dayhike import Origin, filter_by_drive_time
 
-    catalog = Catalog.open(_sample_ridge_july_spike(tmp_path))
+    catalog_path = _sample_ridge_july_spike(tmp_path)
+    build_similarity(catalog_path, tmp_path / "dem")
+    catalog = Catalog.open(catalog_path)
     ranking = rank_dayhikes(catalog, ["Ridge Walk"], month=7)
     times = tuple(1_800.0 for _ in ranking.items)
 
@@ -523,7 +484,6 @@ def test_drive_time_filter_still_runs_after_ranking_with_month(tmp_path: Path) -
         item.dayhike.id for item in ranking.items
     ]
     assert all(item.drive_time is not None for item in filtered.items)
-    assert "drive_time" not in catalog.scaler.feature_names
 
 
 def test_cli_sample_climate_prints_sampled_count(tmp_path: Path) -> None:
@@ -568,6 +528,7 @@ def test_cli_rank_month_uses_july_not_regime(tmp_path: Path) -> None:
     import sys
 
     path = _sample_ridge_july_spike(tmp_path)
+    build_similarity(path, tmp_path / "dem")
     result = subprocess.run(
         [
             sys.executable,
@@ -598,6 +559,7 @@ def test_cli_rank_month_fails_before_climate_is_sampled(tmp_path: Path) -> None:
 
     path = tmp_path / "catalog.sqlite"
     build_catalog(FIXTURE, path)
+    build_similarity(path, tmp_path / "dem")
     result = subprocess.run(
         [
             sys.executable,
@@ -807,7 +769,7 @@ def test_cli_sample_climate_warns_when_nothing_is_sampled(tmp_path: Path) -> Non
     assert "no vertices sampled" in result.stderr
 
 
-def _climate_snapshot(catalog_path: Path) -> tuple[list, list, list]:
+def _climate_snapshot(catalog_path: Path) -> tuple[list, list]:
     store = sqlite3.connect(geometry_store_path_for(catalog_path))
     try:
         rows = list(
@@ -823,8 +785,7 @@ def _climate_snapshot(catalog_path: Path) -> tuple[list, list, list]:
         (hike.id, hike.feature_vector.temperature_c, hike.climate_months)
         for hike in catalog.dayhikes
     ]
-    scalers = [catalog.scaler.mean, catalog.scaler.scale]
-    return rows, hikes, scalers
+    return rows, hikes
 
 
 def test_sample_opens_each_climate_raster_once_across_chunks_and_matches_single_chunk(

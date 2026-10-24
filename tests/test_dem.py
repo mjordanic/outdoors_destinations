@@ -146,8 +146,6 @@ def test_sample_geometry_store_writes_dem_ele_and_catalog_feature_vectors(
     assert valley.feature_vector.elevation_max_m == pytest.approx(1400.0)
     assert valley.feature_vector.elevation_gain_m == pytest.approx(0.0)
     assert ridge.feature_vector.elevation_min_m == pytest.approx(1400.0)
-    assert catalog.scaler.feature_names[1] == "elevation_min_m"
-    assert catalog.scaler.mean[1] == pytest.approx(1400.0)
 
     store_path = geometry_store_path_for(catalog_path)
     assert not Path(str(store_path) + "-wal").exists()

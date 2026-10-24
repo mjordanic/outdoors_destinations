@@ -7,7 +7,7 @@ Origin. DriveTime is not a FeatureVector column.
 This is a Python package plus SQLite files on disk. There is no web app, no
 live Overpass query, and no database server to start. You ingest an OSM
 snapshot once, optionally sample a DEM, LandCover, and climate onto the
-geometries, then rank from those files.
+geometries, build the similarity facts once, then rank from those files.
 
 ## Install
 
@@ -34,8 +34,9 @@ Every real file under `data/` is built by a command. This is the order:
 6. Sample LandCover      updates both SQLite files   dayhike sample-landcover
 7. Climate rasters       data/climate/*.tif          dayhike fetch-climate
 8. Sample climate        updates both SQLite files   dayhike sample-climate
-9. Rank                  stdout scores               dayhike rank [--month]
-10. Optional DriveTime   local Valhalla Docker       rank --origin --max-hours
+9. Similarity facts      data/catalog.similarity/    dayhike build-similarity
+10. Rank                 stdout scores               dayhike rank [--weight] [--month]
+11. Optional DriveTime   local Valhalla Docker       rank --origin --max-hours
 ```
 
 ```bash
@@ -58,10 +59,13 @@ uv run dayhike sample-landcover
 uv run dayhike fetch-climate      # WorldClim 2.1 monthly normals
 uv run dayhike sample-climate
 
-# 9. Rank by Seed (no Valhalla). Omit --month for the June–August climate regime.
+# 9. Similarity facts and Calibration of every DayHike, once (rerun after 2–8).
+uv run dayhike build-similarity
+
+# 10. Rank by Seed (no Valhalla). Omit --month for the June–August climate regime.
 uv run dayhike rank --catalog data/catalog.sqlite "Exact Name From The Catalog"
 
-# 10. Optional: car DriveTime filter (needs Docker Valhalla, see below).
+# 11. Optional: car DriveTime filter (needs Docker Valhalla, see below).
 uv run dayhike rank --catalog data/catalog.sqlite \
   --origin 45.8,15.97 --max-hours 2 \
   "Exact Name From The Catalog"
@@ -74,17 +78,20 @@ What each step **does not** do:
 | `fetch-extracts` | `data/osm/*.pbf` | Catalog, GeometryStore, DEM |
 | `ingest` | Catalog + GeometryStore from the PBF | download OSM; download rasters; talk to Valhalla |
 | `fetch-dem` | GeoTIFFs in `data/dem/` | touch SQLite; sample heights |
-| `sample-dem` | `vertices.ele` + Catalog elevation + scaler | download rasters; rewrite hike list |
+| `sample-dem` | `vertices.ele` + Catalog elevation | download rasters; rewrite hike list |
 | `fetch-landcover` | GeoTIFFs in `data/landcover/` | touch SQLite; sample classes |
-| `sample-landcover` | `vertices.landcover` + Catalog fractions + scaler | download rasters; rewrite hike list |
+| `sample-landcover` | `vertices.landcover` + Catalog fractions | download rasters; rewrite hike list |
 | `fetch-climate` | GeoTIFFs in `data/climate/` | touch SQLite; sample climate |
-| `sample-climate` | `vertex_climate` + Catalog monthly means + scaler | download rasters; rewrite hike list |
-| `rank` | nothing on disk | fetch OSM or rasters |
+| `sample-climate` | `vertex_climate` + Catalog monthly means | download rasters; rewrite hike list |
+| `build-similarity` | `data/catalog.similarity/` (facts + Calibration) | touch either SQLite file; download anything |
+| `rank` | nothing on disk | fetch OSM or rasters; rebuild facts |
 
 Ingest **replaces** the Catalog (it does not append). `sample-dem`,
 `sample-landcover`, and `sample-climate` do **not** replace the Catalog: they
 only overwrite sampled columns on hikes whose geometry sits on a downloaded
-tile.
+tile. `build-similarity` reads both SQLite files and FABDEM and replaces
+`data/catalog.similarity/`; rerun it after ingest and after every sample step
+(Ranking refuses facts built for other DayHikes or by other code).
 
 For a continent PBF (for example `europe-latest.osm.pbf`), ingest is the same
 command. After ingest, widen raster coverage with
@@ -101,6 +108,7 @@ call on your machine.
 | `tests/fixtures/catalog.osm` | Tiny OSM XML **oracle** for tests and demos | yes |
 | `data/catalog.sqlite` | The Catalog you work with (SQLite database) | **gitignored** |
 | `data/catalog.geometry.sqlite` | GeometryStore: DayHikeGeometry + raw amenities | **gitignored** |
+| `data/catalog.similarity/` | Similarity facts + Calibration (numpy arrays) | **gitignored** |
 | `data/osm/` | Geofabrik / osmium extracts you download | gitignored |
 | `data/valhalla/` | Road PBF + Valhalla routing tiles Docker builds | gitignored |
 | `data/valhalla/compose.yaml` | How to run Valhalla | yes |
@@ -189,7 +197,6 @@ from dayhike import Catalog, resolve_seed
 catalog = Catalog.open("data/catalog.sqlite")
 print(catalog.attribution)
 print(catalog.ingest_report)
-print(catalog.scaler.feature_names)
 
 ridge = next(hike for hike in catalog.dayhikes if hike.name == "Ridge Walk")
 print(ridge.id, ridge.trailhead.latitude, ridge.trailhead.longitude)
@@ -208,7 +215,6 @@ print(resolve_seed(catalog, "ridge walk"))  # 1001; case-insensitive exact match
 | `amenity_facts` | per DayHike: hut, parking, restaurant_cafe, drinking_water (count + nearest_m) |
 | `feature_vectors` | length, elevation min/max/gain, Difficulty ordinal, LandCover fractions, regime climate |
 | `climate_months` | hike-level monthly temperature (°C), precipitation (mm), solar radiation |
-| `scaler` | mean and scale for each FeatureVector column |
 | `labels` | vacant (`hiker_id`, `dayhike_id`, `score`, `created_at`) for a later website |
 | `catalog_meta` | OSM attribution and the ingest report JSON |
 
@@ -216,8 +222,9 @@ Zero amenity counts are stored (Valley Path has four rows with `count=0`).
 Missing elevation, missing `sac_scale`, missing LandCover fractions, and
 missing climate are SQL NULL, not zero.
 
-Ranking reads **only** this file. Polylines and raw amenity points live in
-the GeometryStore beside it.
+Ranking reads this file and the similarity facts beside it
+(`data/catalog.similarity/`, see [3. Rank by Seed](#3-rank-by-seed)).
+Polylines and raw amenity points live in the GeometryStore beside it.
 
 ## GeometryStore (written at ingest, not downloaded)
 
@@ -271,9 +278,9 @@ sqlite3 data/catalog.geometry.sqlite \
 ```
 
 Load the tables as GeoPandas in
-[`notebooks/04a_geometry.ipynb`](notebooks/04a_geometry.ipynb). Invent
-FeatureVector columns from this file in
-[`notebooks/04_rank_feature_lab.ipynb`](notebooks/04_rank_feature_lab.ipynb).
+[`notebooks/04a_geometry.ipynb`](notebooks/04a_geometry.ipynb).
+`build-similarity` turns it into similarity facts; try a new fact as a Measure
+in [`notebooks/04_rank_feature_lab.ipynb`](notebooks/04_rank_feature_lab.ipynb).
 `rank_dayhikes` does not read it.
 
 Pandas, maps, and DayHike objects:
@@ -299,57 +306,133 @@ Or with the `sqlite3` CLI if you have it:
 sqlite3 data/catalog.sqlite 'SELECT id, name, length_m FROM dayhikes;'
 ```
 
-Do not hand-edit FeatureVectors and expect Ranking to stay consistent unless
-you also change `scaler`. The supported write paths are `build_catalog` /
-`dayhike ingest` (full Catalog), `dayhike sample-dem` (elevation columns and
-scaler), `dayhike sample-landcover` (LandCover fractions and scaler), and
-`dayhike sample-climate` (climate columns, monthly table, and scaler).
+Do not hand-edit FeatureVectors and expect Ranking to follow unless you rerun
+`dayhike build-similarity`. The supported write paths are `build_catalog` /
+`dayhike ingest` (full Catalog), `dayhike sample-dem` (elevation columns),
+`dayhike sample-landcover` (LandCover fractions), and `dayhike sample-climate`
+(climate columns and monthly table), each followed by `build-similarity`.
 
 ## 3. Rank by Seed
 
 Seed names must exist in the Catalog (unknown or ambiguous names fail; there
 is no fuzzy lookup). The Seed itself is omitted from the result list.
 
-Walk through one Seed, two Seeds (max-not-mean), unknown names, a stubbed
-DriveTime filter, Ranking with no month and with QueryMonth 7, and LandCover
-order in
-[`notebooks/03_ranking.ipynb`](notebooks/03_ranking.ipynb). Try new columns in
-[`notebooks/04_rank_feature_lab.ipynb`](notebooks/04_rank_feature_lab.ipynb).
+Ranking compares the Seed with every DayHike on **Measures**: one fact each,
+scored 1 (alike) to 0 (unlike). The Hiker weighs each Measure 0–100; a Measure
+left out or at 0 is excluded. Each Measure score is **calibrated** first (the
+share of random DayHike pairs that score lower on it), then the weighted mean
+over the Measures both DayHikes have is the similarity (ADR-0013). Several
+Seeds: a candidate's similarity is its **best** Seed's, not the mean.
+
+The facts come from `dayhike build-similarity`, which writes them once with the
+Calibration into `data/catalog.similarity/`. Ranking reads that directory and
+the Catalog, never the GeometryStore, and rebuilds nothing per query.
+
+Walk through one Seed, Measure weights, two Seeds (max-not-mean), unknown
+names, a stubbed DriveTime filter, Ranking with no month and with QueryMonth
+7, and LandCover order in
+[`notebooks/03_ranking.ipynb`](notebooks/03_ranking.ipynb). Try a new fact as a
+Measure in [`notebooks/04_rank_feature_lab.ipynb`](notebooks/04_rank_feature_lab.ipynb).
+See every Measure and its Calibration on the real Catalog in
+[`notebooks/05_similarity.ipynb`](notebooks/05_similarity.ipynb).
 
 ```bash
+uv run dayhike build-similarity --catalog data/catalog.sqlite   # once; --dem defaults to data/dem/
 uv run dayhike rank --catalog data/catalog.sqlite "Ridge Walk"
+uv run dayhike rank --catalog data/catalog.sqlite \
+  --weight highest=100 --weight profile=50 --weight hut_along=30 "Ridge Walk"
 uv run dayhike rank --catalog data/catalog.sqlite --month 7 "Ridge Walk"
 ```
 
-Prints DayHike id, name, and similarity score (tab-separated):
+Prints DayHike id, name, and score (tab-separated), best first:
 
 ```
 1002	Valley Path	<score>
 ```
 
-The fixture Catalog now has several DayHikes, so Ridge Walk has more than one neighbour. Scores are cosine similarity after scaling.
+With no `--weight` every Measure weighs 100. Each `--weight MEASURE=WEIGHT`
+names one Measure; the ones not named are excluded. `--limit N` prints only the
+best N (every DayHike is still scored).
 
-Omit `--month` to score climate as the June–August regime (mean temperature,
-mean monthly precipitation, June–August solar radiation). Pass `--month 7`
-to fill those three slots from July. QueryMonth is an integer from 1 to 12.
-A month before `sample-climate` fails with a message that climate has not
-been sampled. Omitting the month never fails for that reason. LandCover
-fractions do not change with the month.
+### Measures
+
+| Measure | Fact | Kind | Constant |
+| --- | --- | --- | --- |
+| `length` | Catalog length | ratio | floor 1 km |
+| `elevation_gain` | metres climbed, larger of climb and descent (direction-free) | ratio | floor 100 m |
+| `difficulty` | Difficulty as SAC rank 1–6 | tolerance | D = 3 |
+| `highest`, `lowest` | highest and lowest point | tolerance | D = 1,000 m |
+| `profile` | ProfileShape (64 points) | profile | — |
+| `landcover` | six LandCover shares (five plus the leftover) | mix | — |
+| `peak_summited` | a Peak within 50 m of the line | agree | — |
+| `viewpoint_along` | a Viewpoint in the Corridor | agree | — |
+| `peaks_around` | Peaks within 2 km of the line | ratio | floor 1 |
+| `temperature` | ClimateNormal temperature (regime or QueryMonth) | tolerance | D = 10 °C |
+| `precipitation` | ClimateNormal precipitation (regime or QueryMonth) | ratio | floor 10 mm |
+| `solar_radiation` | ClimateNormal solar radiation (regime or QueryMonth) | tolerance | D = 5,000 kJ m⁻² day⁻¹ |
+| `southness` | SolarAspect from FABDEM (1 south, 0 north) | tolerance | D = 1 |
+| `water_count` | WaterSources in the Corridor, capped at 3 | tolerance | D = 3 |
+| `dry_stretch` | DryStretch | ratio | floor 1 km |
+| `hut_along`, `restaurant_cafe_along`, `shelter_along` | that amenity in the Corridor | agree | — |
+| `restaurant_cafe_trailhead`, `parking_trailhead` | that amenity within 500 m of the Trailhead | agree | — |
+| `surface` | SurfaceMix (paved, gravel, natural, rock) | mix | — |
+| `tarmac_approach` | TarmacApproach | tolerance | D = 2 km |
+| `round_trip` | RoundTrip | agree | — |
+| `climb_grade` | ClimbGrade | ratio | floor 0.03 |
+| `steepest_km` | SteepestKm | ratio | floor 50 m |
+
+`ratio` is smaller over larger (each raised to the floor first), `tolerance`
+is max(0, 1 − |a − b| / D), `mix` is the shared share of fractions, `agree` is
+1 when two yes/no facts agree (both absent agrees), `profile` is 1 − the mean
+absolute difference of two ProfileShapes, walked either way. A Measure whose
+fact is missing on either DayHike drops out of that pair and the other weights
+renormalize; a candidate with no weighted Measure scored is left out.
+
+### What the score means
+
+Raw Measure scores sit on very different scales: a random pair of DayHikes
+scores 0.6 or more on `profile` nine times in ten, but rarely on `length`.
+Calibration maps each raw score to the share of random pairs (100,000, drawn
+once from the whole Catalog) that score lower on that Measure, ties counting
+half, so every Measure pulls with the weight it is given. The printed score is
+the similarity's share among 20,000 stored random pairs under the same
+weights, raised to the number of Seeds: 0.5 is a typical random pair and 1.0
+beats every stored pair. Ties in order break on the uncalibrated weighted mean,
+then on DayHike id.
+
+Omit `--month` to compare climate as the June–August regime (mean temperature,
+mean monthly precipitation, June–August solar radiation). Pass `--month 7` to
+compare July instead, calibrated against July's random pairs. QueryMonth is an
+integer from 1 to 12. A month before `sample-climate` fails with a message that
+climate has not been sampled. Omitting the month never fails for that reason.
+LandCover fractions do not change with the month.
+
+### Rebuilding the facts
+
+`build-similarity` rebuilds the facts and the Calibration; run it after ingest
+and after every sample step. `build-similarity --calibrate-only` keeps the
+facts and recomputes the Calibration only, which is enough after a Measure's
+constant changes. The directory records a version of the constants: Ranking
+fails with a message naming the command to run when the facts or the
+Calibration were built by other code, or when the Catalog's DayHikes changed.
 
 Python:
 
 ```python
 from dayhike import Catalog, rank_dayhikes
 
-catalog = Catalog.open("data/catalog.sqlite")
+catalog = Catalog.open("data/catalog.sqlite")   # opens data/catalog.similarity/ on first rank
 ranking = rank_dayhikes(catalog, ["Ridge Walk"])
+huts = rank_dayhikes(catalog, ["Ridge Walk"], {"hut_along": 100, "highest": 50})
 july = rank_dayhikes(catalog, ["Ridge Walk"], month=7)
+nearby = rank_dayhikes(catalog, ["Ridge Walk"], allowed_ids={1002, 1003})
+top = rank_dayhikes(catalog, ["Ridge Walk"], limit=50)
 for item in ranking.items:
     print(item.dayhike.id, item.dayhike.name, item.score)
 ```
 
-Several Seeds: each candidate's score is the **maximum** similarity to any
-Seed, not the mean. Ranking without Origin does not talk to Valhalla.
+`allowed_ids` restricts the candidates before scoring (a hook for a DriveTime
+pre-filter). Ranking without Origin does not talk to Valhalla.
 
 Unknown name:
 
@@ -357,6 +440,28 @@ Unknown name:
 from dayhike import UnknownSeedName, rank_dayhikes
 rank_dayhikes(catalog, ["Unknown Ridge"])  # raises UnknownSeedName
 ```
+
+### Similarity at Europe scale
+
+Measured on the Europe Catalog (161,614 DayHikes) on an 8-core Mac:
+
+| What | Measured |
+| --- | --- |
+| `build-similarity` | 28 min on one core: 24 min facts, 4 min SolarAspect, under 1 s Calibration; peak memory 1.7 GB |
+| `build-similarity --calibrate-only` | under 1 s |
+| `data/catalog.similarity/` | 88 MB: facts 45 MB, ProfileShapes 41 MB, random pairs 5 MB, quantiles 0.25 MB |
+| `Catalog.open` (once per process) | 4 s, 0.77 GB |
+| One Seed, 4–6 weighted Measures, `limit=50` | 0.09–0.12 s |
+| One Seed, all 26 Measures, `limit=50` | 0.42 s (0.56 s returning all 161,613) |
+| Five Seeds, 4–6 / 26 Measures, `limit=50` | 0.36–0.44 s / 1.8 s |
+| One Seed, `allowed_ids` of 5,000 DayHikes | 0.03–0.06 s |
+| Peak memory of a ranking process | 1.0 GB (0.48 GB without `Catalog.open`) |
+
+So a ranking server fits in 2 GB and is comfortable in 4 GB. Most of its memory
+is the Python DayHike objects `Catalog.open` builds; scoring itself needs the
+88 MB of memory-mapped arrays plus a few hundred MB per query. Building the
+facts needs 1.7 GB and is best run where the GeometryStore (21 GB) lives, with
+only `data/catalog.similarity/` and the Catalog copied to the server.
 
 ## 4. Optional Origin and max hours
 
@@ -637,7 +742,6 @@ CC BY-NC-SA 4.0 (non-commercial).
 2. Recomputes Catalog `feature_vectors.elevation_min_m` / `elevation_max_m` /
    `elevation_gain_m` for DayHikes that got DEM samples (cumulative uphill,
    not max−min).
-3. Refits the Catalog `scaler` so Ranking stays consistent.
 
 It does not add or drop DayHikes, does not change amenities, and does not
 download tiles. `--catalog` defaults to `data/catalog.sqlite`; `--dem`
@@ -647,12 +751,10 @@ defaults to `data/dem/`.
 uv run dayhike sample-dem
 ```
 
-After this, `rank_dayhikes` uses DEM elevation. SolarAspect (which way the
-geometry faces the sun) is **not** a Catalog column; prototype it in
-[`notebooks/04_rank_feature_lab.ipynb`](notebooks/04_rank_feature_lab.ipynb).
-The Weather Facet in
-[`notebooks/05_similarity.ipynb`](notebooks/05_similarity.ipynb)
-samples it as `southness` with a corrected formula (1 south, 0 north).
+After this, rerun `dayhike build-similarity`: elevation gain, ProfileShape,
+ClimbGrade and SteepestKm come from these heights. SolarAspect (which way the
+geometry faces the sun) is **not** a Catalog column; `build-similarity` reads
+it from the same FABDEM tiles as the `southness` fact (1 south, 0 north).
 
 Python:
 
@@ -711,15 +813,12 @@ WorldCover 2021. WorldClim 2.1 normals are 1970–2000.
    Uncovered vertices stay NULL. It then writes Catalog
    `tree_fraction` / `shrub_fraction` / `grass_fraction` / `bare_fraction` /
    `snow_fraction` (each GeometryStore vertex counted once; crop, built-up,
-   water, wetland, and moss stay in the leftover share) and refits the
-   Catalog `scaler`.
+   water, wetland, and moss stay in the leftover share).
 2. `sample-climate` writes twelve months onto GeometryStore `vertex_climate`
    for covered vertices. Uncovered vertices get no climate rows. It then
    writes Catalog `climate_months` (hike-level means) and the three regime
    columns: June–August mean temperature, mean of the twelve monthly
-   precipitations, June–August solar radiation. It refits the main scaler
-   (regime climate in those three slots) and twelve month slices for the
-   climate names only.
+   precipitations, June–August solar radiation.
 
 They do not add or drop DayHikes, do not change amenities, and do not
 download tiles. `--catalog` defaults to `data/catalog.sqlite`.
@@ -738,10 +837,11 @@ uv run dayhike sample-landcover
 uv run dayhike sample-climate
 ```
 
-After this, `rank_dayhikes` uses LandCover fractions. With no QueryMonth it
-uses the regime climate columns. With `month=7` it substitutes July's
-hike-level means into the three climate slots and scales those three on
-July's slice. LandCover does not change with the month.
+After this, rerun `dayhike build-similarity` so Ranking sees the LandCover
+fractions and the climate. With no QueryMonth the three climate Measures
+compare the regime columns. With `month=7` they compare July's hike-level
+means, calibrated against July's random pairs. LandCover does not change with
+the month.
 
 Python:
 
@@ -874,12 +974,12 @@ ingest resets every vertex sample:
 
 ```bash
 mkdir -p data/baseline   # optional: keep the old Catalog to compare against
-cp -c data/catalog.sqlite data/catalog.similarity_facts.pkl data/baseline/
+cp -c data/catalog.sqlite data/baseline/
 uv run dayhike ingest data/osm/europe-latest.catalog.osm.pbf --catalog data/catalog.sqlite --fresh
 uv run dayhike sample-dem
 uv run dayhike sample-landcover
 uv run dayhike sample-climate
-# run notebooks/05_similarity.ipynb to rebuild the facts table, then:
+uv run dayhike build-similarity
 DAYHIKE_REAL_DATA=1 uv run pytest tests/test_real_data.py
 ```
 
@@ -887,12 +987,13 @@ Ingest reads the hiking extract (`*.catalog.osm.pbf`) as is. Given the full
 Europe file instead, it filters it first and caches the extract, again when the
 filter list changed. The checks in `tests/test_real_data.py` look at the data
 as it is (geometry, WaterSources, the main walk: steps, ways walked once,
-length band, Leftover reasons, loop starts, notebook 05's verification lines)
+length band, Leftover reasons, loop starts, the similarity facts, notebook
+05's verification lines)
 and, with `data/baseline/`, list the DayHikes that left and joined the Catalog;
 each that left must have left by the main walk. On the Europe snapshot
 (161,614 DayHikes) on an 8-core Mac this took: ingest 2 h 7 min, `sample-dem`
-24 min, `sample-landcover` 12 min, `sample-climate` 3 h 54 min, notebook 05
-9 min (facts and comparison), the checks 1 h 42 min. The baseline is about 150 MB; delete
+24 min, `sample-landcover` 12 min, `sample-climate` 3 h 54 min,
+`build-similarity` 28 min, the checks 1 h 42 min. The baseline is about 150 MB; delete
 `data/baseline/` once the checks pass.
 
 ## Valhalla (DriveTime only)
@@ -1134,8 +1235,9 @@ The same seams the CLI wraps:
   (`progress=` for stage lines, `fresh=True` to ignore a work file)
 - `Catalog.open` — load an already-built SQLite Catalog
 - `resolve_seed` — Seed name → DayHike id (must exist in the Catalog)
-- `rank_dayhikes` — Catalog + Seeds → Ranking (`month=` QueryMonth 1–12; omit for the June–August climate regime)
-- `rank_scaled_rows` / `fit_scaler_from_matrix` / `scale_matrix` / `cosine_similarity` — same scoring on an experimental feature matrix
+- `build_similarity` / `calibrate_similarity` — Catalog + GeometryStore + FABDEM → similarity facts and Calibration in `{catalog}.similarity/`
+- `rank_dayhikes` — Catalog + Seeds → Ranking (MeasureWeights by `MEASURE_NAMES`; `month=` QueryMonth 1–12, omit for the June–August climate regime; `allowed_ids=` to restrict the candidates; `limit=` for the best N)
+- `Catalog.similarity` / `SimilarityStore` — the memory-mapped facts and Calibration; `dayhike.similarity.score_rows` scores rows against Seeds without building a Ranking
 - `geometry_store_path_for` — sidecar path for DayHikeGeometry
 - `fetch_fabdem` / `sample_dem` — local FABDEM tiles → GeometryStore vertices and Catalog elevation
 - `fetch_worldcover` / `sample_landcover` — local WorldCover tiles → GeometryStore classes and Catalog fractions
@@ -1145,13 +1247,14 @@ The same seams the CLI wraps:
 
 CLI: `dayhike ingest`, `dayhike fetch-extracts`, `dayhike fetch-dem`,
 `dayhike sample-dem`, `dayhike fetch-landcover`, `dayhike sample-landcover`,
-`dayhike fetch-climate`, `dayhike sample-climate`, `dayhike rank` (`--month`).
+`dayhike fetch-climate`, `dayhike sample-climate`, `dayhike build-similarity`
+(`--calibrate-only`), `dayhike rank` (`--weight`, `--month`, `--limit`).
 
 Docstrings on those functions use the glossary in `CONTEXT.md`.
 Examples: [`01`](notebooks/01_raw_data_and_ingestion.ipynb) ingest,
 [`02`](notebooks/02_catalog.ipynb) Catalog objects,
 [`03`](notebooks/03_ranking.ipynb) ranking,
-[`04`](notebooks/04_rank_feature_lab.ipynb) experimental columns,
+[`04`](notebooks/04_rank_feature_lab.ipynb) trying a new Measure,
 [`04a`](notebooks/04a_geometry.ipynb) GeometryStore as GeoPandas.
 
 ## Notebook walkthrough
@@ -1166,10 +1269,10 @@ uv run jupyter notebook notebooks/01_raw_data_and_ingestion.ipynb
 | --- | --- |
 | [`notebooks/01_raw_data_and_ingestion.ipynb`](notebooks/01_raw_data_and_ingestion.ipynb) | OSM fixture vs a real snapshot, ingest stages, keep/drop, resume after a kill. |
 | [`notebooks/02_catalog.ipynb`](notebooks/02_catalog.ipynb) | SQLite Catalog + GeometryStore: schema (including LandCover fractions, regime climate, and `climate_months`), pandas, maps, DayHike objects. Uses `data/catalog.sqlite` when present. |
-| [`notebooks/03_ranking.ipynb`](notebooks/03_ranking.ipynb) | Production ranking: cosine after scaling, max-not-mean, unknown Seeds, stubbed DriveTime, Ranking with no month and with QueryMonth 7, LandCover order. |
-| [`notebooks/04_rank_feature_lab.ipynb`](notebooks/04_rank_feature_lab.ipynb) | Sandbox to add FeatureVector columns, ablate them, and compare order to production. SolarAspect lives here. |
+| [`notebooks/03_ranking.ipynb`](notebooks/03_ranking.ipynb) | Production ranking on the fixture: the facts and Measures, one Seed, Measure weights, max-not-mean, unknown Seeds, stubbed DriveTime, Ranking with no month and with QueryMonth 7, LandCover order. |
+| [`notebooks/04_rank_feature_lab.ipynb`](notebooks/04_rank_feature_lab.ipynb) | Sandbox to try a new fact as a calibrated Measure, ablate Measures with weight 0, and compare order to production. |
 | [`notebooks/04a_geometry.ipynb`](notebooks/04a_geometry.ipynb) | GeometryStore tables as GeoPandas: vertices, amenities, DayHike lines, member ways, leftover `in_chain`, per-vertex land-cover classes and `vertex_climate` (synthetic rasters, no download). |
-| [`notebooks/05_similarity.ipynb`](notebooks/05_similarity.ipynb) | Facet similarity design (ADR-0011, proposed): load the Slovenia + Croatia region of the GeometryStore with `dayhike.similarity.load_region`, then one section per Facet (Effort, Altitude, Profile, Landscape, Weather, Water, Facilities, Trail, RoundTrip, Steepness) that extracts its facts, plots their spread and an example map, and states the rule and its data gaps (Water counts mapped drinking water, springs, taps and water points only). Writes `data/catalog.similarity_facts.pkl` (gitignored). Then all ten FacetScores from those facts: measure spreads and constants, named similar/dissimilar pairs with `verify` PASS/FAIL lines, identity/symmetry/reversed checks, and the Profile lock-step vs DTW choice. Then one Seed ranked under a Facilities-heavy and an Altitude-heavy FacetWeights set (top five with per-Facet scores, combined score, coverage and a map each), a RoundTrip Seed with and without RoundTrip weight, a steep Seed with and without Steepness weight, two Seeds under the maximum rule, how often each Facet is missing, one verification summary table, and the design choices for review. Production Ranking is unchanged. Needs the local Catalog, ClimateNormal and FABDEM; stops with an error without them. |
+| [`notebooks/05_similarity.ipynb`](notebooks/05_similarity.ipynb) | Measures and Calibration on the real Catalog (ADR-0013), from `data/catalog.similarity/`: every fact's spread over Europe, each Measure's raw random-pair scale against its calibrated one, named similar/dissimilar pairs per group of Measures with `verify` PASS/FAIL lines, identity/symmetry checks for every Measure and a reversed-direction rebuild of the geometry facts, one Seed ranked against all of Europe under a facilities-heavy and an altitude-heavy weight set, a RoundTrip and a steep Seed with and without weight on those Measures, two Seeds under the maximum rule, how often each Measure is missing, and one verification summary. Needs the local Catalog after `build-similarity`; stops with an error without it. |
 
 `01` and `03` always rebuild the committed OSM fixture (no Geofabrik, no live
 Valhalla). `02`, `04` and `04a` open your local Catalog and GeometryStore
@@ -1198,6 +1301,7 @@ Bulky local files stay out of git:
 
 - `data/catalog.sqlite` — Catalog built from ingest
 - `data/catalog.geometry.sqlite` — GeometryStore (DayHikeGeometry + raw amenities)
+- `data/catalog.similarity/` — similarity facts and Calibration (`build-similarity`)
 - `data/catalog.sqlite.work` — in-progress ingest (resume handle)
 - `data/osm/` — Geofabrik / osmium extracts
 - `data/dem/` — FABDEM GeoTIFFs
