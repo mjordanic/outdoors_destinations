@@ -3,5 +3,17 @@
     "include_bicycle": false,
     "include_driveways": false,
     "include_pedestrian": false
+  },
+  "service_limits": {
+    "auto": {
+      "max_matrix_distance": 1000000
+    },
+    "isochrone": {
+      "max_contours": 40,
+      "max_time_contour": 600
+    }
+  },
+  "thor": {
+    "source_to_target_algorithm": "timedistancematrix"
   }
 }

@@ -516,6 +516,7 @@ dependencies = [
     { name = "osmium" },
     { name = "rasterio" },
     { name = "scikit-learn" },
+    { name = "shapely" },
 ]
 
 [package.dev-dependencies]
@@ -534,6 +535,7 @@ requires-dist = [
     { name = "osmium", specifier = ">=4.3.1" },
     { name = "rasterio", specifier = ">=1.5.1" },
     { name = "scikit-learn", specifier = ">=1.9.1" },
+    { name = "shapely", specifier = ">=2.1.2" },
 ]
 
 [package.metadata.requires-dev]

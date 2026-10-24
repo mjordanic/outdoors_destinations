@@ -1,14 +1,55 @@
 from __future__ import annotations
 
 import json
+import urllib.error
 import urllib.request
 from typing import Sequence
 
-from dayhike.catalog import Origin, Trailhead
+from dayhike.catalog import Origin, Trailhead, straight_line_distances_m
 
 DEFAULT_VALHALLA_URL = "http://127.0.0.1:8002"
 # Matrix, not /isochrone. Chunk Trailheads so each POST stays a small batch.
-MATRIX_BATCH_SIZE = 50
+MATRIX_BATCH_SIZE = 2_500  # Valhalla's default matrix limit: one source, 2500 targets
+# Valhalla's own snap radius; a second try with the wide one finds remote Trailheads.
+SEARCH_CUTOFF_M = 35_000
+WIDE_SEARCH_CUTOFF_M = 100_000
+
+Place = tuple[float, float]  # (latitude, longitude)
+
+
+def post_json(base_url: str, path: str, payload: dict) -> object:
+    request = urllib.request.Request(
+        f"{base_url.rstrip('/')}{path}",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request) as response:
+        return json.load(response)
+
+
+def locate(
+    base_url: str, places: Sequence[Place], search_cutoff_m: int = SEARCH_CUTOFF_M
+) -> list[Place | None]:
+    """Where Valhalla snaps each place onto a car road; None if no road is in reach."""
+    body = post_json(
+        base_url,
+        "/locate",
+        {
+            "locations": [
+                {"lat": lat, "lon": lon, "search_cutoff": search_cutoff_m}
+                for lat, lon in places
+            ],
+            "costing": "auto",
+        },
+    )
+    snapped: list[Place | None] = []
+    for found in body:  # type: ignore[attr-defined]
+        edges = found.get("edges")
+        snapped.append(
+            (edges[0]["correlated_lat"], edges[0]["correlated_lon"]) if edges else None
+        )
+    return snapped
 
 
 class ValhallaMatrixClient:
@@ -25,33 +66,47 @@ class ValhallaMatrixClient:
     def sources_to_targets(
         self, origin: Origin, trailheads: Sequence[Trailhead]
     ) -> list[float | None]:
-        times: list[float | None] = []
-        for start in range(0, len(trailheads), self.batch_size):
-            batch = trailheads[start : start + self.batch_size]
-            times.extend(self._request(origin, batch))
+        times = self.seconds_to_places(
+            origin, [(t.latitude, t.longitude) for t in trailheads]
+        )
+        return [times[(t.latitude, t.longitude)] for t in trailheads]
+
+    def seconds_to_places(
+        self, origin: Origin, places: Sequence[Place]
+    ) -> dict[Place, float | None]:
+        # Places sharing a spot (one car park, several DayHikes) are one target.
+        # Nearest first, so each batch's search from Origin stays as small as it can.
+        unique = list(dict.fromkeys(places))
+        distances_m = straight_line_distances_m(origin, unique)
+        nearest_first = [unique[i] for i in distances_m.argsort()]
+        times: dict[Place, float | None] = {}
+        for start in range(0, len(nearest_first), self.batch_size):
+            batch = nearest_first[start : start + self.batch_size]
+            times.update(zip(batch, self._request(origin, batch)))
         return times
 
-    def _request(
-        self, origin: Origin, trailheads: Sequence[Trailhead]
-    ) -> list[float | None]:
+    def _request(self, origin: Origin, places: Sequence[Place]) -> list[float | None]:
         payload = {
             "sources": [{"lat": origin.latitude, "lon": origin.longitude}],
-            "targets": [
-                {"lat": trailhead.latitude, "lon": trailhead.longitude}
-                for trailhead in trailheads
-            ],
+            "targets": [{"lat": lat, "lon": lon} for lat, lon in places],
             # Car DriveTime from Origin to Trailhead; not an isochrone polygon.
             "costing": "auto",
         }
-        request = urllib.request.Request(
-            f"{self.base_url}/sources_to_targets",
-            data=json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(request) as response:
-            body = json.load(response)
-        row = body["sources_to_targets"][0]
+        try:
+            body = post_json(self.base_url, "/sources_to_targets", payload)
+        except urllib.error.HTTPError as error:
+            # Valhalla fails the whole request when one target has no road within
+            # its search cutoff. Split to find it; a lone target that fails is
+            # unreachable.
+            if error.code != 400:
+                raise
+            if len(places) == 1:
+                return [None]
+            half = len(places) // 2
+            return self._request(origin, places[:half]) + self._request(
+                origin, places[half:]
+            )
+        row = body["sources_to_targets"][0]  # type: ignore[index]
         return [_matrix_seconds(cell) for cell in row]
 
 

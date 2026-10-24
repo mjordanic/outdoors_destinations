@@ -7,6 +7,7 @@ dependencies = [
     "osmium>=4.3.1",
     "rasterio>=1.5.1",
     "scikit-learn>=1.9.1",
+    "shapely>=2.1.2",
 ]
 
 [project.scripts]
