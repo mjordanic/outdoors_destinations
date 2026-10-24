@@ -413,9 +413,9 @@ LandCover fractions do not change with the month.
 `build-similarity` rebuilds the facts and the Calibration; run it after ingest
 and after every sample step, which delete the old directory.
 `build-similarity --calibrate-only` keeps the facts and recomputes the
-Calibration only, which is enough after a Measure's constant changes. The directory records a version of the constants: Ranking
-fails with a message naming the command to run when the facts or the
-Calibration were built by other code, or when the Catalog's DayHikes changed.
+Calibration only, which is enough after a Measure's constant changes. The
+directory records a version of the constants: Ranking fails with a message
+naming the command to run when the facts or the Calibration were built by other code, or when the Catalog's DayHikes changed.
 
 Python:
 
@@ -467,7 +467,8 @@ only `data/catalog.similarity/` and the Catalog copied to the server.
 ## 4. Optional Origin and max hours
 
 Pass `--origin` (latitude,longitude) and `--max-hours` together to drop
-DayHikes whose DriveTime from Origin exceeds the max:
+DayHikes whose DriveTime from Origin exceeds the max (`--limit N` then keeps the
+best N reachable DayHikes):
 
 ```bash
 uv run dayhike rank --catalog data/catalog.sqlite \
