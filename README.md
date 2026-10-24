@@ -1284,7 +1284,13 @@ Catalog. `05` needs the local Catalog and does not run on the fixture;
 
 OpenStreetMap data is © OpenStreetMap contributors, licensed under the Open
 Database License (ODbL). The Catalog stores that attribution next to the
-DayHikes.
+DayHikes. The OSM extracts are downloaded from Geofabrik GmbH
+(https://download.geofabrik.de/); they carry the same ODbL licence.
+
+FABDEM V1-2: Hawker, L., Uhe, P., Paulo, L., Sosa, J., Savage, J., Sampson, C.
+and Neal, J., 2022. A 30 m global map of elevation with forests and buildings
+removed. Environmental Research Letters 17 (2): 024016. University of Bristol,
+CC BY-NC-SA 4.0 (non-commercial).
 
 ESA WorldCover 2021: © ESA WorldCover project 2021 / contains modified
 Copernicus Sentinel data (2021) processed by ESA WorldCover consortium.
