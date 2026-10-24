@@ -7,6 +7,8 @@ from pathlib import Path
 from dayhike.catalog import (
     Catalog,
     Origin,
+    RankedDayHike,
+    Ranking,
     build_catalog,
     filter_by_drive_time,
     rank_dayhikes,
@@ -15,6 +17,7 @@ from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS, DEFAULT_DEM_DIR, fetch_fabde
 from dayhike.landcover import DEFAULT_LANDCOVER_DIR, fetch_worldcover, sample_landcover
 from dayhike.climate import DEFAULT_CLIMATE_DIR, fetch_worldclim, sample_climate
 from dayhike.extracts import fetch_geofabrik_extracts
+from dayhike.highways import HighwayDriveTimeClient, HighwaySnaps
 from dayhike.valhalla import DEFAULT_VALHALLA_URL, ValhallaMatrixClient
 
 
@@ -171,12 +174,37 @@ def main(argv: list[str] | None = None) -> int:
         help="Valhalla base URL for /sources_to_targets",
     )
     rank.add_argument(
+        "--highways",
+        action="store_true",
+        help="Valhalla serves highways-only tiles: estimate DriveTime (see README)",
+    )
+    rank.add_argument(
         "--month",
         type=int,
         default=None,
         help="QueryMonth 1-12; omit to use the June-August climate regime",
     )
     rank.add_argument("seeds", nargs="+", help="Seed DayHike names")
+    nearby = subparsers.add_parser(
+        "nearby", help="List DayHikes within a max DriveTime of an Origin, nearest first"
+    )
+    nearby.add_argument("--catalog", required=True, type=Path)
+    nearby.add_argument(
+        "--origin", required=True, type=_parse_origin, help="Origin as latitude,longitude"
+    )
+    nearby.add_argument(
+        "--max-hours", required=True, type=float, help="Maximum DriveTime from Origin in hours"
+    )
+    nearby.add_argument(
+        "--valhalla-url",
+        default=DEFAULT_VALHALLA_URL,
+        help="Valhalla base URL for /sources_to_targets",
+    )
+    nearby.add_argument(
+        "--highways",
+        action="store_true",
+        help="Valhalla serves highways-only tiles: estimate DriveTime (see README)",
+    )
     args = parser.parse_args(argv)
     if args.command == "ingest":
         return _ingest(
@@ -196,11 +224,24 @@ def main(argv: list[str] | None = None) -> int:
         return _sample_landcover(args.catalog, args.landcover)
     if args.command == "sample-climate":
         return _sample_climate(args.catalog, args.climate)
+    if args.command == "nearby":
+        try:
+            return _nearby(
+                args.catalog, args.origin, args.max_hours, args.valhalla_url, args.highways
+            )
+        except ValueError as exc:
+            nearby.error(str(exc))
     if (args.origin is None) != (args.max_hours is None):
         rank.error("--origin and --max-hours must be given together")
     try:
         return _rank(
-            args.catalog, args.seeds, args.origin, args.max_hours, args.valhalla_url, args.month
+            args.catalog,
+            args.seeds,
+            args.origin,
+            args.max_hours,
+            args.valhalla_url,
+            args.month,
+            args.highways,
         )
     except ValueError as exc:
         rank.error(str(exc))
@@ -315,6 +356,45 @@ def _parse_origin(value: str) -> Origin:
     return Origin(latitude=float(latitude_s.strip()), longitude=float(longitude_s.strip()))
 
 
+def _filter_by_drive_time(
+    ranking: Ranking,
+    catalog_path: Path,
+    origin: Origin,
+    max_hours: float,
+    valhalla_url: str,
+    highways: bool,
+) -> Ranking:
+    if not highways:
+        return filter_by_drive_time(ranking, origin, max_hours, ValhallaMatrixClient(valhalla_url))
+    snaps = HighwaySnaps(valhalla_url, catalog_path.with_suffix(".snaps.npz"))
+    client = HighwayDriveTimeClient(max_hours, snaps)
+    filtered = filter_by_drive_time(ranking, origin, max_hours, client)
+    # Name what has no highway in reach rather than dropping it without a word.
+    unreachable = set(client.unreachable)
+    for item in ranking.items:
+        place = (item.dayhike.trailhead.latitude, item.dayhike.trailhead.longitude)
+        if place in unreachable:
+            print(f"no highway in reach\t{item.dayhike.id}\t{item.dayhike.name}", file=sys.stderr)
+    return filtered
+
+
+def _nearby(
+    catalog_path: Path,
+    origin: Origin,
+    max_hours: float,
+    valhalla_url: str,
+    highways: bool,
+) -> int:
+    catalog = Catalog.open(catalog_path)
+    everything = Ranking(items=tuple(RankedDayHike(hike, 0.0) for hike in catalog.dayhikes))
+    reachable = _filter_by_drive_time(
+        everything, catalog_path, origin, max_hours, valhalla_url, highways
+    )
+    for item in sorted(reachable.items, key=lambda item: item.drive_time.hours):
+        print(f"{item.dayhike.id}\t{item.dayhike.name}\t{item.drive_time.hours}")
+    return 0
+
+
 def _rank(
     catalog_path: Path,
     seeds: list[str],
@@ -322,14 +402,12 @@ def _rank(
     max_hours: float | None,
     valhalla_url: str,
     month: int | None,
+    highways: bool = False,
 ) -> int:
     ranking = rank_dayhikes(Catalog.open(catalog_path), seeds, month=month)
     if origin is not None and max_hours is not None:
-        ranking = filter_by_drive_time(
-            ranking,
-            origin,
-            max_hours,
-            ValhallaMatrixClient(valhalla_url),
+        ranking = _filter_by_drive_time(
+            ranking, catalog_path, origin, max_hours, valhalla_url, highways
         )
     for item in ranking.items:
         line = f"{item.dayhike.id}\t{item.dayhike.name}\t{item.score}"

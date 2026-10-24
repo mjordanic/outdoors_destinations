@@ -514,6 +514,7 @@ def _rescale_climate_slice(
 
 
 _SECONDS_PER_HOUR = 3600.0
+MAX_CAR_SPEED_MS = 140 / 3.6  # Valhalla auto top speed, 140 km/h
 
 
 def filter_by_drive_time(
@@ -530,10 +531,23 @@ def filter_by_drive_time(
     """
     if not ranking.items:
         return Ranking(items=())
-    trailheads = [item.dayhike.trailhead for item in ranking.items]
-    times_s = matrix_client.sources_to_targets(origin, trailheads)
+    # No car beats MAX_CAR_SPEED_MS, so a Trailhead farther than this in a straight
+    # line cannot be within max hours: skip the routing engine for it.
+    max_distance_m = max_hours * _SECONDS_PER_HOUR * MAX_CAR_SPEED_MS
+    distances_m = straight_line_distances_m(
+        origin,
+        [(item.dayhike.trailhead.latitude, item.dayhike.trailhead.longitude) for item in ranking.items],
+    )
+    candidates = [
+        item for item, distance_m in zip(ranking.items, distances_m) if distance_m <= max_distance_m
+    ]
+    if not candidates:
+        return Ranking(items=())
+    times_s = matrix_client.sources_to_targets(
+        origin, [item.dayhike.trailhead for item in candidates]
+    )
     kept: list[RankedDayHike] = []
-    for item, time_s in zip(ranking.items, times_s):
+    for item, time_s in zip(candidates, times_s):
         if time_s is None or not math.isfinite(time_s) or time_s < 0:
             continue
         hours = time_s / _SECONDS_PER_HOUR
@@ -546,6 +560,17 @@ def filter_by_drive_time(
                 )
             )
     return Ranking(items=tuple(kept))
+
+
+def straight_line_distances_m(
+    origin: Origin, places: Sequence[tuple[float, float]]
+) -> np.ndarray:
+    """Great-circle metres from Origin to each (latitude, longitude)."""
+    points = np.radians(places)
+    phi, lam = points[:, 0], points[:, 1]
+    phi0, lam0 = math.radians(origin.latitude), math.radians(origin.longitude)
+    a = np.sin((phi - phi0) / 2) ** 2 + math.cos(phi0) * np.cos(phi) * np.sin((lam - lam0) / 2) ** 2
+    return 2 * EARTH_RADIUS_M * np.arcsin(np.sqrt(a))
 
 
 def build_catalog(

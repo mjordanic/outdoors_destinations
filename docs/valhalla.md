@@ -20,7 +20,7 @@ do not commit them). Ranking without `--origin` never talks to Valhalla.
 | Is Valhalla a Python library in this repo? | **No.** `ValhallaMatrixClient` is an HTTP client (`urllib`) that POSTs JSON. |
 | How do you get the engine? | Docker image `ghcr.io/gis-ops/docker-valhalla/valhalla:latest`. |
 | Where does it run? | Container, port **8002** on localhost. Compose file: `data/valhalla/compose.yaml`. |
-| When does `dayhike` use it? | Only `rank` with `--origin` and `--max-hours`, or `filter_by_drive_time` with `ValhallaMatrixClient`. |
+| When does `dayhike` use it? | Only `rank` with `--origin` and `--max-hours`, `nearby`, or `filter_by_drive_time` with `ValhallaMatrixClient`. |
 | Do tests start it? | **No.** Tests stub the matrix client or stand up a tiny fake HTTP server. |
 
 If nothing is listening on `127.0.0.1:8002`, ranking with `--origin` fails with
@@ -39,8 +39,9 @@ keeps motorway–residential, other `service` ways (parking aisles, alleys),
 **`prepare-highways.sh`** is the same idea, stricter: only `motorway`,
 `trunk`, `primary` (and `_link` ramps) plus ferries. Output is
 `*-highways.osm.pbf`. Use it for long-distance European travel, not for
-DriveTime to Trailheads. Turn restrictions are omitted so osmium does not
-pull small member ways into the extract.
+DriveTime to Trailheads on its own; with `--highways` it gives an estimate for all
+of Europe (README, **Highway tiles**). Turn restrictions
+are omitted so osmium does not pull small member ways into the extract.
 
 **`mjolnir.drive-time.json`** is merged into `valhalla.json` when the
 container starts. `include_pedestrian`, `include_bicycle`, and
