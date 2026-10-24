@@ -1,9 +1,12 @@
 import json
 import subprocess
+import urllib.error
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+
+import pytest
 
 from dayhike import (
     Origin,
@@ -358,3 +361,43 @@ def test_valhalla_client_marks_only_the_unsnappable_trailhead_unreachable() -> N
         server.server_close()
 
     assert times == [60.0, None, 60.0]
+
+
+def test_valhalla_client_refuses_an_origin_with_no_road_without_splitting() -> None:
+    origin = Origin(latitude=45.0, longitude=15.0)
+
+    def respond(body):
+        return 400, {"error_code": 171, "error": "No suitable edges near location"}
+
+    server, bodies = _serve_matrix(respond)
+    try:
+        client = ValhallaMatrixClient(f"http://127.0.0.1:{server.server_address[1]}")
+        with pytest.raises(ValueError, match="no road within 35 km of Origin"):
+            client.sources_to_targets(
+                origin, [_trailhead(45.0 + i / 100, 15.0) for i in range(1, 9)]
+            )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert len(bodies) == 2
+    assert bodies[1]["targets"] == [{"lat": 45.0, "lon": 15.0}]
+
+
+def test_valhalla_client_raises_other_bad_requests_without_splitting() -> None:
+    def respond(body):
+        return 400, {"error_code": 154, "error": "Path distance exceeds the max distance limit"}
+
+    server, bodies = _serve_matrix(respond)
+    try:
+        client = ValhallaMatrixClient(f"http://127.0.0.1:{server.server_address[1]}")
+        with pytest.raises(urllib.error.HTTPError):
+            client.sources_to_targets(
+                Origin(latitude=45.0, longitude=15.0),
+                [_trailhead(45.1, 15.0), _trailhead(45.2, 15.0)],
+            )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert len(bodies) == 1

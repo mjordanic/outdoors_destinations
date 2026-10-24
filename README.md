@@ -500,6 +500,8 @@ up to 10 hours.
    100 km. The snaps are kept in `catalog.snaps.npz` beside the Catalog (3 MB
    for the Munich 4 h set, about 5 MB for all of Europe), so only the first
    query that sees a Trailhead pays for it (about 30 s for the Munich 4 h set).
+   Delete `catalog.snaps.npz` after rebuilding the highway tiles or pointing
+   `--valhalla-url` at different tiles, since it is not keyed by tile set.
 2. The Trailhead's straight-line distance to its highway point, and the
    Origin's to the point it snaps to, are driven at **35 km/h** and added. These
    approaches are estimates, not routes.

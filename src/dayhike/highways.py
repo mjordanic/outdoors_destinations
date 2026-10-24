@@ -35,6 +35,7 @@ from dayhike.valhalla import (
 
 APPROACH_SPEED_KMH = 35.0  # driven over the straight line to the highway point
 CONTOUR_STEP_MIN = 20
+MAX_CONTOUR_MIN = 600  # isochrone max_time_contour in mjolnir.drive-time.json
 # Isochrone polygons are simplified to this many metres; a Valhalla default is finer.
 CONTOUR_GENERALIZE_M = 300
 # Polygon edges are approximate: a point this close to its band's edge may belong to the next.
@@ -128,6 +129,8 @@ class HighwayDriveTimeClient:
         snaps: HighwaySnaps,
         batch_size: int = MATRIX_BATCH_SIZE,
     ) -> None:
+        if max_hours * 60 > MAX_CONTOUR_MIN:
+            raise ValueError(f"--highways answers up to {MAX_CONTOUR_MIN // 60} hours")
         self.max_hours = max_hours
         self.snaps = snaps
         self.base_url = snaps.base_url
@@ -205,11 +208,9 @@ class HighwayDriveTimeClient:
                 "generalize": CONTOUR_GENERALIZE_M,
             },
         )
-        by_minutes = {
-            float(f["properties"]["contour"]): shape(f["geometry"])
-            for f in body["features"]  # type: ignore[index]
-        }
-        polygons = [by_minutes[float(m)] for m in minutes]
+        # Valhalla echoes each contour rounded, so match them by order, not value.
+        features = sorted(body["features"], key=lambda f: f["properties"]["contour"])  # type: ignore[index]
+        polygons = [shape(f["geometry"]) for f in features]
         shapely.prepare(polygons)
         return polygons
 
