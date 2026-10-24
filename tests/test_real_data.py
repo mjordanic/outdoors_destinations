@@ -184,21 +184,43 @@ def test_facts_table_has_water_facts_for_each_region_dayhike() -> None:
     assert np.allclose(dry["dry_stretch_m"], dry["length_m"], rtol=1e-3)
 
 
-def test_notebook_05a_passes_every_verification_on_the_real_facts(
+def test_notebook_05_passes_every_verification_on_the_real_facts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from test_demonstration_notebooks import NOTEBOOKS, _notebook_text
 
-    # The notebook falls back to the fixture under pytest; let it read data/.
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     monkeypatch.setenv("MPLBACKEND", "Agg")
-    output, _, _ = _notebook_text(NOTEBOOKS / "05a_similarity.ipynb")
+    output, _, _ = _notebook_text(NOTEBOOKS / "05_similarity.ipynb")
+    lines = [line.split("\t") for line in output.splitlines()]
 
-    assert "facts read from" in output
-    verify = [line.split("\t") for line in output.splitlines() if line.startswith("verify\t")]
+    verify = [fields for fields in lines if fields[0] == "verify"]
     assert verify
     assert [fields for fields in verify if fields[-1] != "PASS"] == []
     assert f"verify_summary\tpass={len(verify)}\tfail=0" in output
+    assert {(fields[1], fields[2]) for fields in verify} >= {
+        (facet, check) for facet in SIMILARITY_FACETS for check in ("identity", "symmetry_max_gap", "reversed")
+    }
+
+    assert {fields[1] for fields in lines if fields[0] == "rank"} == {"facilities_heavy", "altitude_heavy"}
+    multi_seed = [fields for fields in lines if fields[0] == "multi_seed"]
+    assert multi_seed
+    for _, _name, score, first, second in multi_seed:
+        assert float(score) == pytest.approx(max(float(first), float(second)))
+    assert {fields[1] for fields in lines if fields[0] == "facet_missing"} == set(SIMILARITY_FACETS)
+
+
+SIMILARITY_FACETS = (
+    "effort",
+    "altitude",
+    "profile",
+    "landscape",
+    "weather",
+    "water",
+    "facilities",
+    "trail",
+    "round_trip",
+    "steepness",
+)
 
 
 

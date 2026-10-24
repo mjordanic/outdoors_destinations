@@ -651,7 +651,7 @@ After this, `rank_dayhikes` uses DEM elevation. SolarAspect (which way the
 geometry faces the sun) is **not** a Catalog column; prototype it in
 [`notebooks/04_rank_feature_lab.ipynb`](notebooks/04_rank_feature_lab.ipynb).
 The Weather Facet in
-[`notebooks/05_similarity_facts.ipynb`](notebooks/05_similarity_facts.ipynb)
+[`notebooks/05_similarity.ipynb`](notebooks/05_similarity.ipynb)
 samples it as `southness` with a corrected formula (1 south, 0 north).
 
 Python:
@@ -879,7 +879,7 @@ uv run dayhike ingest data/osm/europe-latest.catalog.osm.pbf --catalog data/cata
 uv run dayhike sample-dem
 uv run dayhike sample-landcover
 uv run dayhike sample-climate
-# run notebooks/05_similarity_facts.ipynb to rebuild the facts table, then:
+# run notebooks/05_similarity.ipynb to rebuild the facts table, then:
 DAYHIKE_REAL_DATA=1 uv run pytest tests/test_real_data.py
 ```
 
@@ -887,12 +887,12 @@ Ingest reads the hiking extract (`*.catalog.osm.pbf`) as is. Given the full
 Europe file instead, it filters it first and caches the extract, again when the
 filter list changed. The checks in `tests/test_real_data.py` look at the data
 as it is (geometry, WaterSources, the main walk: steps, ways walked once,
-length band, Leftover reasons, loop starts, notebook 05a's verification lines)
+length band, Leftover reasons, loop starts, notebook 05's verification lines)
 and, with `data/baseline/`, list the DayHikes that left and joined the Catalog;
 each that left must have left by the main walk. On the Europe snapshot
 (161,614 DayHikes) on an 8-core Mac this took: ingest 2 h 7 min, `sample-dem`
 24 min, `sample-landcover` 12 min, `sample-climate` 3 h 54 min, notebook 05
-2 min, the checks 1 h 42 min. The baseline is about 150 MB; delete
+9 min (facts and comparison), the checks 1 h 42 min. The baseline is about 150 MB; delete
 `data/baseline/` once the checks pass.
 
 ## Valhalla (DriveTime only)
@@ -1169,12 +1169,13 @@ uv run jupyter notebook notebooks/01_raw_data_and_ingestion.ipynb
 | [`notebooks/03_ranking.ipynb`](notebooks/03_ranking.ipynb) | Production ranking: cosine after scaling, max-not-mean, unknown Seeds, stubbed DriveTime, Ranking with no month and with QueryMonth 7, LandCover order. |
 | [`notebooks/04_rank_feature_lab.ipynb`](notebooks/04_rank_feature_lab.ipynb) | Sandbox to add FeatureVector columns, ablate them, and compare order to production. SolarAspect lives here. |
 | [`notebooks/04a_geometry.ipynb`](notebooks/04a_geometry.ipynb) | GeometryStore tables as GeoPandas: vertices, amenities, DayHike lines, member ways, leftover `in_chain`, per-vertex land-cover classes and `vertex_climate` (synthetic rasters, no download). |
-| [`notebooks/05_similarity_facts.ipynb`](notebooks/05_similarity_facts.ipynb) | Facet similarity design (ADR-0011, proposed): load the Slovenia + Croatia region of the GeometryStore with `dayhike.similarity.load_region`, then one section per Facet (Effort, Altitude, Profile, Landscape, Weather, Water, Facilities, Trail, RoundTrip, Steepness) that extracts its facts, plots their spread and an example map, and states the rule and its data gaps (Water counts mapped drinking water, springs, taps and water points only). Writes `data/catalog.similarity_facts.pkl` (gitignored). |
-| [`notebooks/05a_similarity.ipynb`](notebooks/05a_similarity.ipynb) | All ten FacetScores from the similarity facts table: measure spreads and constants, named similar/dissimilar pairs with `verify` PASS/FAIL lines, identity/symmetry/reversed checks, and the Profile lock-step vs DTW choice. Then one Seed ranked under a Facilities-heavy and an Altitude-heavy FacetWeights set (top five with per-Facet scores, combined score, coverage and a map each), a RoundTrip Seed with and without RoundTrip weight, a steep Seed with and without Steepness weight, two Seeds under the maximum rule, how often each Facet is missing, one verification summary table, and the design choices for review. Production Ranking is unchanged. |
+| [`notebooks/05_similarity.ipynb`](notebooks/05_similarity.ipynb) | Facet similarity design (ADR-0011, proposed): load the Slovenia + Croatia region of the GeometryStore with `dayhike.similarity.load_region`, then one section per Facet (Effort, Altitude, Profile, Landscape, Weather, Water, Facilities, Trail, RoundTrip, Steepness) that extracts its facts, plots their spread and an example map, and states the rule and its data gaps (Water counts mapped drinking water, springs, taps and water points only). Writes `data/catalog.similarity_facts.pkl` (gitignored). Then all ten FacetScores from those facts: measure spreads and constants, named similar/dissimilar pairs with `verify` PASS/FAIL lines, identity/symmetry/reversed checks, and the Profile lock-step vs DTW choice. Then one Seed ranked under a Facilities-heavy and an Altitude-heavy FacetWeights set (top five with per-Facet scores, combined score, coverage and a map each), a RoundTrip Seed with and without RoundTrip weight, a steep Seed with and without Steepness weight, two Seeds under the maximum rule, how often each Facet is missing, one verification summary table, and the design choices for review. Production Ranking is unchanged. Needs the local Catalog, ClimateNormal and FABDEM; stops with an error without them. |
 
 `01` and `03` always rebuild the committed OSM fixture (no Geofabrik, no live
-Valhalla). `02`, `04`, `04a`, `05`, and `05a` open your local Catalog and
-GeometryStore when those files exist; `05a` reads the facts table `05` wrote. Tests force the fixture so they do not load a Europe Catalog.
+Valhalla). `02`, `04` and `04a` open your local Catalog and GeometryStore
+when those files exist; tests force the fixture so they do not load a Europe
+Catalog. `05` needs the local Catalog and does not run on the fixture;
+`tests/test_real_data.py` runs it.
 
 ## Attribution
 

@@ -162,7 +162,7 @@ inside a long segment is missed.
 ### What would have to be true to start
 
 - Length-weighted shares first in notebook 05 (`landscape_facts` from the vertex
-  `landcover`), with notebook 05a still passing.
+  `landcover`), with its verification still passing.
 - Then for production: the LandCover entry in `CONTEXT.md` says weighted by
   length instead of "each GeometryStore vertex counts once", and `sample-landcover`
   is rerun to refresh the Catalog fractions and scaler. Ranking changes with it.
@@ -200,7 +200,7 @@ out-and-back, the stem again on a lollipop) or takes a shuttle. OSM does not
 say which, and relations that list their ways twice are counted once (the
 second listing is a `repeat` Leftover). Effort compares one-way lengths, so a
 5 km line and a 5 km RoundTrip look equally long. The RoundTrip Facet
-(notebooks 05 and 05a) tells them apart but does not change Effort.
+(notebook 05) tells them apart but does not change Effort.
 
 ### What would have to be true to start
 
