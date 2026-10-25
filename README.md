@@ -570,9 +570,8 @@ Germany: [europe/germany.html](https://download.geofabrik.de/europe/germany.html
 ### Highway tiles (all of Europe, small server)
 
 Detailed car tiles for all of Europe do not build in a 7.6 GB Docker VM: the
-build of the existing `europe-latest-roads.osm.pbf` never finished (its
-`valhalla_tiles` hold only the local tile level and find no road anywhere), and
-a 1.1 GB regional chunk was killed for lack of memory. Highways-only tiles
+first attempt on `europe-latest-roads.osm.pbf` never finished (see **Known
+problems** below), and a 1.1 GB regional chunk was killed for lack of memory. Highways-only tiles
 (motorway, trunk, primary, ferries) do build. `prepare-highways.sh` cuts the
 Europe roads PBF down to 344 MB in 44 s, and the image turns that into a
 754 MB tile extract in 11 minutes. They cover Europe (Lisbon to Warsaw 28.3 h,
@@ -664,6 +663,54 @@ resident (the 754 MB tile extract is memory-mapped), client process at most
 
 The same 4 h query from Munich took 32 s with the matrix alone, one batch of
 2,500 targets after another.
+
+### Known problems and limitations of Valhalla drive time
+
+- **Highways-only is an estimate.** `--highways` routes on motorway, trunk and
+  primary roads only and adds a straight line to and from them at 35 km/h
+  (measured error table above). Half of the estimates are within 6 to 8
+  minutes, but 10 % are 22 to 31 minutes off and 5 % are 32 to 47 minutes off,
+  mostly on mountain and fjord roads where a straight line understates the
+  drive. A 4 h limit means 4 h plus or minus half an hour, and 5 to 8 % of the
+  hikes returned are over it. Detailed tiles (`prepare-roads.sh`) are exact but
+  only for regions that fit in memory.
+- **110 Trailheads have no highway within 35 km** (100 places: mostly the
+  Caucasus, then the Azores, Bulgarian mountains, Helgoland, Lapland and
+  Iceland). 104 of them snap within 100 km and are
+  estimated like the rest, with a long approach; 6 never snap and are left out.
+  `--highways` names every DayHike it leaves out on stderr
+  (`no highway in reach<TAB>id<TAB>name`).
+- **The first full-Europe tile set was an unfinished build.** The 19 GB
+  `valhalla_tiles.tar` and 89 GiB `valhalla_tiles/` made from
+  `europe-latest-roads.osm.pbf` held only the local tile level (20,668 tiles)
+  and 71 GiB of intermediate files; they had no hierarchy levels, no spatial
+  index and an empty `file_hashes.txt`, so Valhalla found no road anywhere
+  (`/locate` empty, `/route` "No suitable edges"). The build stops at the same
+  stage where a 1.1 GB chunk was killed for lack of memory, so the likely cause
+  is the Docker VM's 7.65 GB. They were deleted; nothing in the code read them.
+- **Tile build memory.** In a 7.65 GB Docker VM a 101 MB roads PBF builds in
+  2 min 42 s (peak 2.4 GiB), a 590 MB one in 16 min 40 s, and a 1.1 GB one is
+  killed at "Adding complex turn restrictions". Detailed tiles for all of
+  Europe (6.6 GB of roads) were never built; more Docker memory is the lever.
+  Highways-only tiles (344 MB) build in 11 minutes.
+- **Dense origins are slower.** A 4 h query from Munich (106,000 candidates)
+  takes about 10 s warm and 2.6 s at 2 h; Oslo and Lisbon take about 2 to 3 s.
+  The first query that sees a Trailhead also snaps it (about 30 s for the
+  Munich 4 h set), cached afterwards in `catalog.snaps.npz`.
+- **Memory.** The Valhalla container sits at about 2.3 GiB resident with the
+  754 MB highways tile extract; the client process peaks near 0.9 GiB with the
+  whole Catalog loaded.
+- **Valhalla limits.** Defaults are too small for "within four hours" and are
+  raised in `mjolnir.drive-time.json`: `max_matrix_distance` from 400 km to
+  1,000 km (a farther pair fails the whole request), isochrone contours from 4
+  to 40 and `max_time_contour` from 120 to 600 minutes. `--highways` therefore
+  takes at most 10 hours. A request holds at most 2,500 matrix pairs, which is
+  the batch size.
+- **No ready-made tiles.** Valhalla tiles are built locally from a Geofabrik
+  PBF (`prepare-*.sh`, then the Docker image); there is no download of
+  finished tiles for Europe.
+- **Free-flow car times.** No traffic, closures, seasonal mountain passes or
+  ferry timetables.
 
 ### Walkthrough A — one country (start here)
 
