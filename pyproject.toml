@@ -39,3 +39,4 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["real_data: needs local Europe data (DAYHIKE_REAL_DATA=1)"]

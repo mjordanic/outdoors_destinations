@@ -32,6 +32,13 @@ KNOWN_DEM_GAPS = frozenset({"N41E043", "N41E044", "N41E046"})
 # Geofabrik "europe" children that group other children.
 COMPOSITE_REGIONS = frozenset({"alps", "dach", "britain-and-ireland", "great-britain"})
 CHUNK = 2_000
+# The Geofabrik Europe snapshot of 2026-09-18 that the recorded numbers below come from.
+RECORDED_SNAPSHOT_BYTES = 34_999_693_913
+RECORDED_SNAPSHOT_SHA256 = "77aaa00727e343a9d44f118f04cd5165c4240c03c11c408f92e12a71ff4beba0"
+RECORDED_INGEST_REPORT = {
+    "kept": 161_614, "dropped_unnamed": 0, "dropped_length": 77_561, "dropped_network": 6_234,
+    "named_osm_name": 106_333, "named_osm_ref": 30_927, "named_synthetic": 24_354,
+}  # fmt: skip
 # Tables and columns of a Catalog and its GeometryStore after ingest, the three
 # sample steps and build-similarity (tests/test_pipeline_rebuild.py checks it).
 CATALOG_SCHEMA = {
@@ -71,6 +78,16 @@ real_data = [
 needs_reference = pytest.mark.skipif(
     REFERENCE_DIR is None, reason="no reference: set DAYHIKE_REFERENCE_DIR"
 )
+
+
+def catalog_path() -> Path:
+    return DATA_DIR / "catalog.sqlite"
+
+
+def same_snapshot() -> bool:
+    """Whether DATA_DIR holds the recorded Europe snapshot (by size; tests/test_raw_inputs.py hashes it)."""
+    pbf = DATA_DIR / "osm" / "europe-latest.osm.pbf"
+    return pbf.is_file() and pbf.stat().st_size == RECORDED_SNAPSHOT_BYTES
 
 
 def connect_ro(path: Path, *, immutable: bool = False) -> sqlite3.Connection:
@@ -365,6 +382,13 @@ def route(url: str, start: tuple[float, float], end: tuple[float, float]) -> tup
     return summary["time"] / 3600, summary["length"]
 
 
+def valhalla_version(url: str) -> str:
+    from urllib.request import urlopen
+
+    with urlopen(url.rstrip("/") + "/status", timeout=30) as response:
+        return json.load(response)["version"]
+
+
 def locates(url: str, place: tuple[float, float]) -> bool:
     """Whether Valhalla snaps the place onto an auto edge."""
     from dayhike.valhalla import post_json
@@ -381,7 +405,7 @@ def nearby_hours(catalog, url: str, origin: tuple[float, float], hours: float, s
     everything = Ranking(items=tuple(RankedDayHike(hike, 0.0) for hike in catalog.dayhikes))
     client = HighwayDriveTimeClient(hours, HighwaySnaps(url, snaps_path))
     reachable = filter_by_drive_time(everything, Origin(*origin), hours, client)
-    return {item.dayhike.id: item.drive_time.hours for item in reachable.items}
+    return {item.dayhike.id: float(item.drive_time.hours) for item in reachable.items}
 
 
 def unreachable_ids(catalog, url: str, snaps_path: Path) -> list[int]:
@@ -416,3 +440,19 @@ def read_tsv(path: Path) -> list[dict[str, str]]:
     header, *lines = path.read_text().splitlines()
     names = header.split("\t")
     return [dict(zip(names, line.split("\t"), strict=True)) for line in lines]
+
+
+def vertex_tiles(geometry: sqlite3.Connection) -> dict[tuple[int, int], tuple[int, float, float, float, float]]:
+    """1° cell (south, west) -> (vertices, min lat, max lat, min lon, max lon), one scan."""
+    rows = geometry.execute(
+        "SELECT CAST(latitude + 1000 AS INTEGER) - 1000 AS south, "
+        "CAST(longitude + 1000 AS INTEGER) - 1000 AS west, COUNT(*), "
+        "MIN(latitude), MAX(latitude), MIN(longitude), MAX(longitude) "
+        "FROM vertices GROUP BY south, west"
+    ).fetchall()
+    return {(south, west): tuple(rest) for south, west, *rest in rows}
+
+
+def corner_id(south: int, west: int) -> str:
+    """FABDEM / WorldCover tile id of a southwest corner, e.g. N45E015."""
+    return f"{'N' if south >= 0 else 'S'}{abs(south):02d}{'E' if west >= 0 else 'W'}{abs(west):03d}"
