@@ -260,12 +260,15 @@ def _refresh_catalog_climate(
         for name in CLIMATE_FEATURE_NAMES:
             _ensure_column(catalog, "feature_vectors", name, "REAL")
         _ensure_climate_months(catalog)
-        by_hike: dict[int, dict[int, list[tuple[float, float, float]]]] = {
-            dayhike_id: {month: [] for month in range(1, 13)} for dayhike_id in hike_ids
-        }
+        month_rows: list[tuple[int, int, float, float, float]] = []
+        regime_rows: list[tuple[float, float, float, int]] = []
         ids = list(hike_ids)
         for start in range(0, len(ids), _HIKE_IN_CHUNK):
             chunk = ids[start : start + _HIKE_IN_CHUNK]
+            # One chunk of samples at a time: all of Europe is ~500 M vertex-months.
+            by_hike: dict[int, dict[int, list[tuple[float, float, float]]]] = {
+                dayhike_id: {month: [] for month in range(1, 13)} for dayhike_id in chunk
+            }
             placeholders = ",".join("?" * len(chunk))
             for dayhike_id, month, temperature_c, precipitation_mm, solar_radiation in (
                 store.execute(
@@ -278,41 +281,39 @@ def _refresh_catalog_climate(
                 by_hike[int(dayhike_id)][int(month)].append(
                     (float(temperature_c), float(precipitation_mm), float(solar_radiation))
                 )
-        month_rows: list[tuple[int, int, float, float, float]] = []
-        regime_rows: list[tuple[float, float, float, int]] = []
-        for dayhike_id, months in by_hike.items():
-            if not any(months[month] for month in range(1, 13)):
-                continue
-            hike_means: list[tuple[float, float, float]] = []
-            complete = True
-            for month in range(1, 13):
-                samples = months[month]
-                if not samples:
-                    complete = False
-                    break
-                n = len(samples)
-                hike_means.append(
-                    (
-                        sum(sample[0] for sample in samples) / n,
-                        sum(sample[1] for sample in samples) / n,
-                        sum(sample[2] for sample in samples) / n,
+            for dayhike_id, months in by_hike.items():
+                if not any(months[month] for month in range(1, 13)):
+                    continue
+                hike_means: list[tuple[float, float, float]] = []
+                complete = True
+                for month in range(1, 13):
+                    samples = months[month]
+                    if not samples:
+                        complete = False
+                        break
+                    n = len(samples)
+                    hike_means.append(
+                        (
+                            sum(sample[0] for sample in samples) / n,
+                            sum(sample[1] for sample in samples) / n,
+                            sum(sample[2] for sample in samples) / n,
+                        )
                     )
-                )
-            if not complete:
-                continue
-            for month, (temperature_c, precipitation_mm, solar_radiation) in enumerate(
-                hike_means, start=1
-            ):
-                month_rows.append(
-                    (
-                        dayhike_id,
-                        month,
-                        temperature_c,
-                        precipitation_mm,
-                        solar_radiation,
+                if not complete:
+                    continue
+                for month, (temperature_c, precipitation_mm, solar_radiation) in enumerate(
+                    hike_means, start=1
+                ):
+                    month_rows.append(
+                        (
+                            dayhike_id,
+                            month,
+                            temperature_c,
+                            precipitation_mm,
+                            solar_radiation,
+                        )
                     )
-                )
-            regime_rows.append((*_regime(hike_means), dayhike_id))
+                regime_rows.append((*_regime(hike_means), dayhike_id))
         catalog.executemany(
             "DELETE FROM climate_months WHERE dayhike_id = ?",
             [(dayhike_id,) for dayhike_id in hike_ids],

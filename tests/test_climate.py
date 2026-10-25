@@ -887,6 +887,31 @@ def test_sample_opens_each_climate_raster_once_across_chunks_and_matches_single_
     assert snapshot[0]
 
 
+def test_catalog_climate_is_the_same_one_hike_at_a_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dayhike import climate
+
+    rasters = tmp_path / "rasters"
+    rasters.mkdir()
+    _write_climate_tifs(
+        rasters, west=14.9, south=44.9, east=15.7, north=46.2,
+        tavg=tuple(float(m) for m in range(1, 13)),
+    )  # fmt: skip
+    whole = tmp_path / "whole.sqlite"
+    build_catalog(FIXTURE, whole)
+    sample_climate(whole, rasters)
+
+    one_by_one = tmp_path / "one_by_one.sqlite"
+    build_catalog(FIXTURE, one_by_one)
+    monkeypatch.setattr(climate, "_HIKE_IN_CHUNK", 1)
+    sample_climate(one_by_one, rasters)
+
+    snapshot = _climate_snapshot(one_by_one)
+    assert snapshot == _climate_snapshot(whole)
+    assert sum(temperature is not None for _id, temperature, _months in snapshot[1]) > 1
+
+
 def test_failed_raster_open_still_closes_datasets_opened_so_far(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
