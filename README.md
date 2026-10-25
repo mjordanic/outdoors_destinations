@@ -704,8 +704,9 @@ The same 4 h query from Munich took 32 s with the matrix alone, one batch of
   raised in `mjolnir.drive-time.json`: `max_matrix_distance` from 400 km to
   1,000 km (a farther pair fails the whole request), isochrone contours from 4
   to 40 and `max_time_contour` from 120 to 600 minutes. `--highways` therefore
-  takes at most 10 hours. A request holds at most 2,500 matrix pairs, which is
-  the batch size.
+  takes at most 10 hours; without it, the 140 km/h straight-line pre-filter
+  stays inside 1,000 km only up to 7.1 hours, so `--max-hours` is capped
+  there. A request holds at most 2,500 matrix pairs, which is the batch size.
 - **No ready-made tiles.** Valhalla tiles are built locally from a Geofabrik
   PBF (`prepare-*.sh`, then the Docker image); there is no download of
   finished tiles for Europe.
