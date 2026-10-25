@@ -84,7 +84,8 @@ What the flags do:
 
 The app limits each client to **20 Rankings and 300 other API calls per
 minute** (`HTTP 429` past that), runs one Ranking at a time per instance (others
-wait up to 30 s, then get `503`), and caps the drive filter at 4 hours. With
+wait up to 30 s, then get `503`; a Valhalla call stalled past 50 s also ends
+in `503` and frees the slot), and caps the drive filter at 4 hours. With
 `--max-instances 2` the most the service can ever bill is two instances busy
 around the clock: about 5.3 million vCPU-seconds and 10.5 million GiB-seconds a
 month, roughly **$150 per month at list price** after the free tier (verify the
