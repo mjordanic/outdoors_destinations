@@ -1,13 +1,22 @@
 # DayHike catalog
 
+<p>
+  <img src="src/dayhike/web/static/mark.svg" alt="DayHike mark: two mountains and a trail" width="72">
+  <img src="src/dayhike/web/static/coverage.svg" alt="Map of Europe; the shaded land has DayHikes in the Catalog" width="360">
+</p>
+
 A local Catalog of DayHikes from OpenStreetMap, ranked by similarity to Seeds
 you already know. DriveTime is an optional query-time filter from today's
 Origin. DriveTime is not a FeatureVector column.
 
-This is a Python package plus SQLite files on disk. There is no web app, no
-live Overpass query, and no database server to start. You ingest an OSM
-snapshot once, optionally sample a DEM, LandCover, and climate onto the
-geometries, build the similarity facts once, then rank from those files.
+This is a Python package plus SQLite files on disk. There is no live Overpass
+query and no database server to start. You ingest an OSM snapshot once,
+optionally sample a DEM, LandCover, and climate onto the geometries, build the
+similarity facts once, then rank from those files. A small read-only web demo
+serves a trimmed export of them ([Web demo](#web-demo)).
+
+The map shows the coverage of the current Catalog: land with at least 10
+Trailheads and 0.2 per 1,000 km² is shaded (`dayhike coverage-map`, below).
 
 ## Install
 
@@ -37,6 +46,7 @@ Every real file under `data/` is built by a command. This is the order:
 9. Similarity facts      data/catalog.similarity/    dayhike build-similarity
 10. Rank                 stdout scores               dayhike rank [--weight] [--month]
 11. Optional DriveTime   local Valhalla Docker       rank --origin --max-hours, nearby
+12. Web demo export      data/web-serving/           dayhike export-serving (see Web demo)
 ```
 
 ```bash
@@ -112,6 +122,9 @@ call on your machine.
 | `data/catalog.similarity/` | Similarity facts + Calibration (numpy arrays) | **gitignored** |
 | `data/osm/` | Geofabrik / osmium extracts you download | gitignored |
 | `data/valhalla/` | Road PBF + Valhalla routing tiles Docker builds | gitignored |
+| `data/web-serving/` | Serving export for the web demo (`export-serving`) | **gitignored** |
+| `src/dayhike/web/static/` | The demo page, its script, the logo and the coverage map | yes |
+| `web/` | Dockerfile, local compose file and smoke script of the demo | yes |
 | `data/valhalla/compose.yaml` | How to run Valhalla | yes |
 | `data/valhalla/prepare-roads.sh` | osmium filter: car roads only, no buildings | yes |
 | `data/valhalla/prepare-highways.sh` | osmium filter: motorway/trunk/primary only | yes |
@@ -1393,6 +1406,95 @@ Do not use this graph to filter DayHikes by DriveTime to a Trailhead. Switch
 back with `prepare-roads.sh` on the unfiltered `data/osm/` file and wipe
 tiles.
 
+## Web demo
+
+A public, read-only page over the Catalog: search a hike you liked, see what
+the similarity looks at (route and amenity points on an OpenStreetMap map,
+elevation profile in metres above sea level, land cover, trail surface,
+climate by month, and the fact behind every Measure), set a 0–100 weight or
+an "off" tick per Measure, and list the 10 most similar hikes with their score
+and per-Measure scores. Clicking a result shows it the same way, next to the
+liked hike. An optional starting place and maximum drive (up to 4 h) keeps only
+hikes within that DriveTime, estimated on highways-only tiles as in
+**Highway tiles** above. Measures with no data for a hike (climate and land
+cover do not cover all of Europe yet) show "no data" and drop out of that
+pair's score.
+
+It answers from a serving export, not from the Catalog: `dayhike
+export-serving` writes it once where the data lives, and `dayhike serve` (a
+FastAPI app, extra `web`) memory-maps it. No `Catalog.open` runs in the server.
+
+```bash
+# needs the similarity facts (step 9) and, for drive time, the highway tiles
+# served by Valhalla on 8002 (docs/deploy.md, step 1)
+uv run dayhike export-serving --catalog data/catalog.sqlite --out data/web-serving \
+  --valhalla-tiles data/valhalla/highways-eu --valhalla-url http://127.0.0.1:8002
+
+uv sync --extra web
+uv run dayhike serve --data data/web-serving --valhalla-url http://127.0.0.1:8002
+# http://127.0.0.1:8000 ; checks on real hikes, timings and memory:
+uv run python web/smoke.py --data data/web-serving --valhalla-url http://127.0.0.1:8002
+
+# the same container Cloud Run runs (app + Valhalla + data):
+DAYHIKE_SERVING="$PWD/data/web-serving" docker compose -f web/compose.yaml up --build
+```
+
+What the export holds (`src/dayhike/serving.py`): a copy of
+`catalog.similarity/`, Trailheads as a numpy array, and `hikes.sqlite` with per
+DayHike its name, DayHikeGeometry simplified at 10 m (encoded polyline), its
+ElevationProfile at 128 equal steps in metres, and the amenity points the
+Measures count (WaterSources, Huts, restaurants, Shelters and Viewpoints in the
+Corridor, Peaks within 2 km, parking and restaurants within 500 m of the
+Trailhead) with their OSM names. With `--valhalla-tiles` it also links the
+tile extract and writes a `valhalla.json` that serves it inside the container;
+with `--valhalla-url` it snaps every Trailhead once (`snaps.npz`). Rerun it
+after any rebuild; `meta.json` is written last, so a half-written export never
+opens.
+
+API (JSON): `GET /api/search?q=` (name prefix first, then contains; case and
+accents ignored; a number finds that id), `GET /api/hikes/{id}`,
+`GET /api/measures`, `GET /api/info`, `POST /api/rank` with `{"seed": id,
+"weights": {measure: 0-100}, "excluded": [measure], "month": 1-12,
+"origin": {"lat", "lon"}, "max_hours": 0-4}`. Each client gets 20 Rankings and
+300 other calls a minute; one Ranking runs at a time per process.
+
+Measured on the Europe Catalog (161,614 DayHikes), 8-core Mac, the container
+limited to 2 GiB and 1 CPU like Cloud Run (`web/smoke.py`):
+
+| What | Measured |
+| --- | --- |
+| `export-serving` | 23 min, peak memory 1.4 GB (reads the 21 GB GeometryStore) |
+| Export size | 1.04 GB: tiles 790 MB (hard-linked), `hikes.sqlite` 154 MB, similarity 88 MB, snaps 4.5 MB, Trailheads 2.6 MB |
+| Image | 3.2 GB uncompressed (Valhalla base 0.9 GB, Python and packages 0.5 GB, data 1.04 GB) |
+| Container start to first answer | 3 s (both processes); 215 MiB |
+| Search / hike detail | 6–10 ms / 3–5 ms |
+| Ranking, one Seed, 3 / 26 Measures | 0.3 s / 1.3 s (0.07 s / 0.5 s on the Mac without the 1-CPU cap) |
+| Ranking within 2 h / 4 h drive (Ljubljana, Munich) | 2.7 s / 12 s; 4 h from Paris 14 s, Berlin 8 s, Prague 8 s, Rome 3 s, Oslo 3 s |
+| Container memory peak (cgroup, after those queries) | 1.5 GB of the 2 GiB: Valhalla 1.0–1.3 GB resident (0.46 GB its own, the rest the mapped tiles), the app 0.96 GB resident (0.82 GB its own) |
+
+The app starts at about 260 MB; the 4 h drive queries take it to about
+0.7–0.9 GB resident, which it keeps for the next query. Python's own
+allocations peak at only 100–130 MB per query (tracemalloc), so the rest is
+native memory (numpy, GEOS) the allocator does not hand back; where exactly is
+not pinned down. `MALLOC_ARENA_MAX=2` did not change it.
+
+Deployment to Google Cloud Run (EU region, instance cap, budget alert, rate
+limit) is in [docs/deploy.md](docs/deploy.md); nothing is deployed by this
+repository.
+
+The coverage map is drawn from the Catalog by `dayhike coverage-map` with
+Natural Earth country shapes (public domain): every Trailhead is placed in a
+country polygon part, and parts with enough Trailheads are shaded. Rerun it
+after the Catalog changes:
+
+```bash
+curl -L -o /tmp/countries.geojson \
+  https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_admin_0_countries.geojson
+uv run dayhike coverage-map --catalog data/catalog.sqlite --countries /tmp/countries.geojson
+```
+
+The mark (two mountains and a trail) is drawn by hand for this project.
+
 ## Python API
 
 The same seams the CLI wraps:
@@ -1410,11 +1512,15 @@ The same seams the CLI wraps:
 - `fetch_worldclim` / `sample_climate` — local WorldClim tiles → GeometryStore monthly climate and Catalog means
 - `filter_by_drive_time` — Ranking filtered by DriveTime from Origin
 - `ValhallaMatrixClient` — HTTP adapter for `/sources_to_targets`
+- `dayhike.similarity.rank_rows` — `rank_dayhikes` on store rows, for callers that know the Seed's row and have no Catalog
+- `dayhike.serving.export_serving` / `ServingData` — write and open the web demo's serving export
+- `dayhike.web.create_app` — the web demo's FastAPI app over a `ServingData`
 
 CLI: `dayhike ingest`, `dayhike fetch-extracts`, `dayhike fetch-dem`,
 `dayhike sample-dem`, `dayhike fetch-landcover`, `dayhike sample-landcover`,
 `dayhike fetch-climate`, `dayhike sample-climate`, `dayhike build-similarity`
-(`--calibrate-only`), `dayhike rank` (`--weight`, `--month`, `--limit`).
+(`--calibrate-only`), `dayhike rank` (`--weight`, `--month`, `--limit`),
+`dayhike nearby`, `dayhike export-serving`, `dayhike serve`, `dayhike coverage-map`.
 
 Docstrings on those functions use the glossary in `CONTEXT.md`.
 Examples: [`01`](notebooks/01_raw_data_and_ingestion.ipynb) ingest,
@@ -1448,24 +1554,51 @@ Catalog. `05` needs the local Catalog and does not run on the fixture;
 
 ## Attribution
 
+The web demo's footer carries the same credits.
+
 OpenStreetMap data is © OpenStreetMap contributors, licensed under the Open
-Database License (ODbL). The Catalog stores that attribution next to the
-DayHikes. The OSM extracts are downloaded from Geofabrik GmbH
-(https://download.geofabrik.de/); they carry the same ODbL licence.
+Database License (ODbL, https://opendatacommons.org/licenses/odbl/; see
+https://www.openstreetmap.org/copyright). The Catalog stores that attribution
+next to the DayHikes. The OSM extracts are downloaded from Geofabrik GmbH
+(https://download.geofabrik.de/); they carry the same ODbL licence. The
+Catalog, the GeometryStore and the web demo's serving export are derivative
+databases of OpenStreetMap: when one is used publicly (the web demo does), it
+is offered under the ODbL, together with this code as the method that makes
+it. The demo's base map is OpenStreetMap's own tiles
+(https://operations.osmfoundation.org/policies/tiles/) and its place search is
+Nominatim (https://operations.osmfoundation.org/policies/nominatim/), both
+used under the OSM Foundation's usage policies.
 
 FABDEM V1-2: Hawker, L., Uhe, P., Paulo, L., Sosa, J., Savage, J., Sampson, C.
 and Neal, J., 2022. A 30 m global map of elevation with forests and buildings
-removed. Environmental Research Letters 17 (2): 024016. University of Bristol,
-CC BY-NC-SA 4.0 (non-commercial).
+removed. Environmental Research Letters 17 (2): 024016,
+https://doi.org/10.1088/1748-9326/ac4d4f. University of Bristol,
+CC BY-NC-SA 4.0 (non-commercial, share-alike). FABDEM is produced using
+Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space
+GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all
+rights reserved. The organizations in charge of the Copernicus program by law
+or by delegation do not incur any liability for any use of the Copernicus
+WorldDEM-30. The elevation values derived from it (heights, gain, profiles,
+ProfileShape, ClimbGrade, SteepestKm, SolarAspect) are adapted material: the
+web demo shares them under CC BY-NC-SA 4.0 and only non-commercially.
 
-ESA WorldCover 2021: © ESA WorldCover project 2021 / contains modified
+ESA WorldCover 2021: © ESA WorldCover project 2021 / Contains modified
 Copernicus Sentinel data (2021) processed by ESA WorldCover consortium.
-Written into GeometryStore `geometry_meta` when LandCover has been sampled.
+Zanaga, D. et al., 2022. ESA WorldCover 10 m 2021 v200.
+https://doi.org/10.5281/zenodo.7254221. CC BY 4.0. Written into GeometryStore
+`geometry_meta` when LandCover has been sampled.
 
 WorldClim 2.1: Fick, S.E. and R.J. Hijmans, 2017. WorldClim 2: new 1km
 spatial resolution climate surfaces for global land areas. International
 Journal of Climatology 37 (12): 4302-4315. Written into GeometryStore
-`geometry_meta` when climate has been sampled.
+`geometry_meta` when climate has been sampled. WorldClim allows academic and
+other non-commercial use and no redistribution without permission: the web
+demo shows only per-DayHike averages derived from it, never the rasters.
+
+Natural Earth (https://www.naturalearthdata.com/, public domain): country
+shapes of the coverage map. Valhalla (MIT, https://github.com/valhalla/valhalla)
+computes DriveTime. The demo page uses Leaflet (BSD-2-Clause) and the server
+FastAPI (MIT) and Uvicorn (BSD-3-Clause).
 
 ## What is gitignored under `data/`
 

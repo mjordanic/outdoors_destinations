@@ -235,7 +235,12 @@ class SimilarityStore:
 
     @classmethod
     def open(cls, catalog_path: Path | str) -> SimilarityStore:
-        directory = similarity_dir_for(catalog_path)
+        return cls.open_dir(similarity_dir_for(catalog_path))
+
+    @classmethod
+    def open_dir(cls, directory: Path | str) -> SimilarityStore:
+        """Open a similarity directory wherever it is (a serving export holds a copy)."""
+        directory = Path(directory)
         meta_path = directory / "meta.json"
         if not meta_path.is_file():
             raise StaleSimilarity(
@@ -294,15 +299,44 @@ def rank_dayhikes(
     month's climate in the monthly Measures.
     """
     chosen = _measure_weights(weights)
-    if month is not None and (
-        isinstance(month, bool) or not isinstance(month, int) or not 1 <= month <= 12
-    ):
-        raise ValueError(f"QueryMonth must be an integer from 1 to 12, got {month!r}")
+    _check_month(month)
     seed_ids = sorted({resolve_seed(catalog, name) for name in seeds})
     store = catalog.similarity
+    rows, scores = rank_rows(
+        store,
+        np.searchsorted(store.ids, seed_ids),
+        chosen,
+        month=month,
+        allowed_ids=allowed_ids,
+        limit=limit,
+    )
+    return Ranking(
+        items=tuple(
+            RankedDayHike(dayhike=catalog.dayhikes[row], score=float(score))
+            for row, score in zip(rows, scores)
+        )
+    )
+
+
+def rank_rows(
+    store: SimilarityStore,
+    seed_rows: Sequence[int] | np.ndarray,
+    weights: Mapping[str, float] | None = None,
+    *,
+    month: int | None = None,
+    allowed_ids: Collection[int] | None = None,
+    limit: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """``rank_dayhikes`` on store rows: the ranked rows and their shown scores.
+
+    Seeds are store rows, not names, so a caller that already knows the
+    DayHike (a web page that picked it from a list) needs no Catalog.
+    """
+    chosen = _measure_weights(weights)
+    _check_month(month)
     if month is not None and np.isnan(store.column(f"temperature_c_{month:02d}")).all():
         raise ValueError("climate has not been sampled")
-    seed_rows = np.searchsorted(store.ids, seed_ids)
+    seed_rows = np.asarray(seed_rows, dtype=np.int64)
     rows = np.arange(len(store.ids))
     if allowed_ids is not None:
         rows = rows[np.isin(store.ids, np.fromiter(allowed_ids, dtype=np.int64))]
@@ -312,13 +346,14 @@ def rank_dayhikes(
     rows, similarity, raw = rows[scored], similarity[scored], raw[scored]
     order = np.lexsort((store.ids[rows], -raw, -similarity))[:limit]
     percentile = random_pair_percentile(store, similarity[order], chosen, month=month)
-    percentile = percentile ** len(seed_rows)
-    return Ranking(
-        items=tuple(
-            RankedDayHike(dayhike=catalog.dayhikes[row], score=float(score))
-            for row, score in zip(rows[order], percentile)
-        )
-    )
+    return rows[order], percentile ** len(seed_rows)
+
+
+def _check_month(month: int | None) -> None:
+    if month is not None and (
+        isinstance(month, bool) or not isinstance(month, int) or not 1 <= month <= 12
+    ):
+        raise ValueError(f"QueryMonth must be an integer from 1 to 12, got {month!r}")
 
 
 def score_rows(
