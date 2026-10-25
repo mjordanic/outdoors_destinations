@@ -615,3 +615,46 @@ def test_catalog_refuses_similarity_facts_for_other_dayhikes(tmp_path: Path) -> 
 
     with pytest.raises(StaleSimilarity, match="other DayHikes"):
         Catalog.open(catalog_path).similarity
+
+
+def test_store_refuses_facts_built_before_a_resample_with_the_same_ids(tmp_path: Path) -> None:
+    import shutil
+
+    from dayhike import sample_dem
+
+    catalog_path = _fixture_catalog(tmp_path)
+    _write_dem_tile(tmp_path / "dem_a", 1000.0)
+    _write_dem_tile(tmp_path / "dem_b", 2000.0)
+    assert sample_dem(catalog_path, tmp_path / "dem_a") > 0
+    directory = build_similarity(catalog_path, tmp_path / "dem_a")
+    shutil.copytree(directory, tmp_path / "kept.similarity")
+    assert Catalog.open(catalog_path).similarity.ids.size > 0
+
+    assert sample_dem(catalog_path, tmp_path / "dem_b") > 0
+    shutil.copytree(tmp_path / "kept.similarity", directory)
+
+    with pytest.raises(StaleSimilarity, match="build-similarity"):
+        Catalog.open(catalog_path).similarity
+
+
+def test_calibration_is_identical_when_rerun(tmp_path: Path) -> None:
+    catalog_path = _fixture_catalog(tmp_path)
+    directory = build_similarity(catalog_path, tmp_path / "dem")
+    first = {name: (directory / name).read_bytes() for name in ("quantiles.npy", "pairs.npy")}
+
+    calibrate_similarity(catalog_path)
+
+    assert {name: (directory / name).read_bytes() for name in first} == first
+
+
+def test_quantiles_are_monotone_and_in_unit_interval(tmp_path: Path) -> None:
+    directory = build_similarity(_fixture_catalog(tmp_path), tmp_path / "dem")
+
+    quantiles = np.load(directory / "quantiles.npy")
+    pairs = np.load(directory / "pairs.npy")
+    scored = quantiles[~np.isnan(quantiles).all(axis=1)]
+    assert scored.size
+    assert not np.isnan(scored).any()
+    assert (np.diff(scored, axis=1) >= 0).all()
+    assert ((scored >= 0) & (scored <= 1)).all()
+    assert ((pairs[~np.isnan(pairs)] >= 0) & (pairs[~np.isnan(pairs)] <= 1)).all()

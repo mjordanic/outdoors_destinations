@@ -232,6 +232,7 @@ class SimilarityStore:
     profile: np.ndarray
     quantiles: np.ndarray
     pairs: np.ndarray
+    catalog_digest: str | None = None
 
     @classmethod
     def open(cls, catalog_path: Path | str) -> SimilarityStore:
@@ -267,6 +268,7 @@ class SimilarityStore:
             profile=load("profile"),
             quantiles=load("quantiles"),
             pairs=load("pairs"),
+            catalog_digest=meta.get("catalog_digest"),
         )
 
     def column(self, name: str) -> np.ndarray:
@@ -518,6 +520,7 @@ def build_similarity(
     started = time.monotonic()
     catalog_path = Path(catalog_path)
     directory = similarity_dir_for(catalog_path)
+    digest = catalog_digest(catalog_path)
     ids, facts, profile = _build_facts(catalog_path, Path(dem_dir), progress)
     directory.mkdir(exist_ok=True)
     for path in directory.glob("*"):
@@ -530,6 +533,7 @@ def build_similarity(
             {
                 "facts_version": _FACTS_VERSION,
                 "calibration_version": None,
+                "catalog_digest": digest,
                 "fact_columns": FACT_COLUMNS,
                 "dayhikes": len(ids),
                 "facts_seconds": round(time.monotonic() - started, 1),
@@ -538,6 +542,23 @@ def build_similarity(
         )
     )
     return calibrate_similarity(catalog_path, progress=progress)
+
+
+def catalog_digest(catalog_path: Path | str) -> str:
+    """Digest of the Catalog values the facts are built from.
+
+    Covers every ``feature_vectors`` and ``climate_months`` row, so a sample
+    step that changes them (same DayHikes, new values) changes the digest.
+    """
+    digest = hashlib.sha256()
+    catalog = sqlite3.connect(f"file:{catalog_path}?mode=ro", uri=True)
+    try:
+        for table, key in (("feature_vectors", "dayhike_id"), ("climate_months", "dayhike_id, month")):
+            for row in catalog.execute(f"SELECT * FROM {table} ORDER BY {key}"):
+                digest.update(repr(row).encode())
+    finally:
+        catalog.close()
+    return digest.hexdigest()[:16]
 
 
 def calibrate_similarity(

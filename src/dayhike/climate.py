@@ -46,17 +46,18 @@ def fetch_worldclim(
     retrieve: Retrieve | None = None,
     progress: Progress | None = None,
 ) -> list[Path]:
-    """Download missing WorldClim 2.1 30s monthly GeoTIFFs into dest.
+    """Download WorldClim 2.1 30s monthly GeoTIFFs missing from dest into dest.
 
     Extracts the three global monthly zips and clips each GeoTIFF to bounds
-    (default: the DEM Alps+Dinarides bbox).
+    (default: the DEM Alps+Dinarides bbox). A present GeoTIFF that does not
+    cover bounds counts as missing and is replaced.
     """
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
     retrieve = retrieve or _download
     paths: list[Path] = []
     for variable in WORLDCLIM_VARIABLES:
-        present = _present_month_tifs(dest, variable)
+        present = _present_month_tifs(dest, variable, bounds)
         paths.extend(present)
         if len(present) == 12:
             continue
@@ -385,13 +386,34 @@ def _month_tif(dest: Path, variable: str, month: int) -> Path:
     return dest / f"wc2.1_30s_{variable}_{month:02d}.tif"
 
 
-def _present_month_tifs(dest: Path, variable: str) -> list[Path]:
+def _present_month_tifs(dest: Path, variable: str, bounds: Bounds) -> list[Path]:
     paths: list[Path] = []
     for month in range(1, 13):
         path = _month_tif(dest, variable, month)
-        if path.exists() and path.stat().st_size > 0:
+        if _covers(path, bounds):
             paths.append(path)
     return paths
+
+
+def _covers(path: Path, bounds: Bounds) -> bool:
+    """Whether path is a readable raster whose extent holds bounds, to one cell."""
+    import rasterio
+    from rasterio.errors import RasterioIOError
+
+    if not path.is_file() or path.stat().st_size == 0:
+        return False
+    try:
+        with rasterio.open(path) as dataset:
+            extent = dataset.bounds
+            cell_x, cell_y = dataset.res
+    except RasterioIOError:
+        return False
+    return (
+        extent.left <= bounds.west + cell_x
+        and extent.bottom <= bounds.south + cell_y
+        and extent.right >= bounds.east - cell_x
+        and extent.top >= bounds.north - cell_y
+    )
 
 
 def _extract_worldclim_month_tifs(
@@ -408,8 +430,10 @@ def _extract_worldclim_month_tifs(
             if not 1 <= month <= 12:
                 continue
             out = _month_tif(dest, variable, month)
-            if out.exists() and out.stat().st_size > 0:
+            if _covers(out, bounds):
                 continue
+            # Unlink first: out may be a symlink to another data directory.
+            out.unlink(missing_ok=True)
             with archive.open(info) as source, out.open("wb") as target:
                 shutil.copyfileobj(source, target)
             _clip_to_bounds(out, bounds)

@@ -598,24 +598,31 @@ def test_fetch_worldclim_extracts_missing_months_and_skips_existing(
     tmp_path: Path,
 ) -> None:
     recorded: list[str] = []
+    requested = Bounds(south=45.0, west=15.0, north=45.2, east=15.2)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    _write_climate_tifs(staging, west=14.9, south=44.9, east=15.3, north=45.3)
     dest = tmp_path / "climate"
     dest.mkdir()
     for month in range(1, 13):
-        (dest / f"wc2.1_30s_tavg_{month:02d}.tif").write_bytes(b"already-tavg")
+        name = f"wc2.1_30s_tavg_{month:02d}.tif"
+        (dest / name).write_bytes((staging / name).read_bytes())
     existing_prec = dest / "wc2.1_30s_prec_01.tif"
-    existing_prec.write_bytes(b"already-prec")
+    existing_prec.write_bytes((staging / existing_prec.name).read_bytes())
+    already_tavg = (dest / "wc2.1_30s_tavg_01.tif").read_bytes()
+    already_prec = existing_prec.read_bytes()
 
     def fake_retrieve(url: str, filename: str) -> None:
         recorded.append(url)
         _retrieve_worldclim_zip(
-            url, filename, west=14.99, south=44.99, east=15.05, north=45.12
+            url, filename, west=14.9, south=44.9, east=15.3, north=45.3, tavg=99.0
         )
 
-    paths = fetch_worldclim(dest, retrieve=fake_retrieve)
+    paths = fetch_worldclim(dest, requested, retrieve=fake_retrieve)
 
     assert recorded == [worldclim_zip_url("prec"), worldclim_zip_url("srad")]
-    assert (dest / "wc2.1_30s_tavg_01.tif").read_bytes() == b"already-tavg"
-    assert existing_prec.read_bytes() == b"already-prec"
+    assert (dest / "wc2.1_30s_tavg_01.tif").read_bytes() == already_tavg
+    assert existing_prec.read_bytes() == already_prec
     assert (dest / "wc2.1_30s_prec_02.tif").stat().st_size > 0
     assert (dest / "wc2.1_30s_srad_12.tif").stat().st_size > 0
     assert dest / "wc2.1_30s_tavg_01.tif" in paths
@@ -670,6 +677,56 @@ def test_fetch_worldclim_clips_to_requested_bounds(tmp_path: Path) -> None:
         assert dataset.bounds.bottom == pytest.approx(45.0, abs=0.06)
         assert dataset.bounds.right == pytest.approx(15.2, abs=0.06)
         assert dataset.bounds.top == pytest.approx(45.2, abs=0.06)
+
+
+def test_fetch_worldclim_refetches_when_present_rasters_do_not_cover_bounds(
+    tmp_path: Path,
+) -> None:
+    import rasterio
+
+    dest = tmp_path / "climate"
+    dest.mkdir()
+    _write_climate_tifs(dest, west=15.0, south=45.0, east=15.1, north=45.1)
+    wider = Bounds(south=44.5, west=14.5, north=45.5, east=15.5)
+    recorded: list[str] = []
+
+    def fake_retrieve(url: str, filename: str) -> None:
+        recorded.append(url)
+        _retrieve_worldclim_zip(url, filename, west=14.0, south=44.0, east=16.0, north=46.0)
+
+    paths = fetch_worldclim(dest, wider, retrieve=fake_retrieve)
+
+    assert recorded == [worldclim_zip_url(variable) for variable in ("tavg", "prec", "srad")]
+    assert len(paths) == 36
+    for path in paths:
+        with rasterio.open(path) as dataset:
+            assert dataset.bounds.left == pytest.approx(14.5, abs=0.13)
+            assert dataset.bounds.bottom == pytest.approx(44.5, abs=0.13)
+            assert dataset.bounds.right == pytest.approx(15.5, abs=0.13)
+            assert dataset.bounds.top == pytest.approx(45.5, abs=0.13)
+
+
+def test_fetch_worldclim_replaces_a_symlinked_raster_without_writing_through_it(
+    tmp_path: Path,
+) -> None:
+    elsewhere = tmp_path / "reference"
+    elsewhere.mkdir()
+    _write_climate_tifs(elsewhere, west=15.0, south=45.0, east=15.1, north=45.1)
+    dest = tmp_path / "climate"
+    dest.mkdir()
+    linked = dest / "wc2.1_30s_tavg_01.tif"
+    linked.symlink_to(elsewhere / linked.name)
+    before = (elsewhere / linked.name).read_bytes()
+
+    def fake_retrieve(url: str, filename: str) -> None:
+        _retrieve_worldclim_zip(url, filename, west=14.0, south=44.0, east=16.0, north=46.0)
+
+    fetch_worldclim(
+        dest, Bounds(south=44.5, west=14.5, north=45.5, east=15.5), retrieve=fake_retrieve
+    )
+
+    assert not linked.is_symlink()
+    assert (elsewhere / linked.name).read_bytes() == before
 
 
 def test_fetch_worldclim_skips_missing_remote_zips(tmp_path: Path) -> None:
