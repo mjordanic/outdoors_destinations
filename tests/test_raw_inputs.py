@@ -57,10 +57,10 @@ def test_every_vertex_tile_has_a_worldcover_tile(tiles: dict) -> None:
 def test_climate_rasters_are_complete_and_cover_the_vertex_extent(tiles: dict) -> None:
     import rasterio
 
-    paths = sorted((rc.DATA_DIR / "climate").glob("wc2.1_30s_*.tif"))
+    paths = sorted((rc.DATA_DIR / "climate").glob("chelsa_*.tif"))
     names = {path.name for path in paths}
     assert names == {
-        f"wc2.1_30s_{variable}_{month:02d}.tif" for variable in ("tavg", "prec", "srad") for month in range(1, 13)
+        f"chelsa_{variable}_{month:02d}.tif" for variable in ("tas", "pr", "rsds") for month in range(1, 13)
     }
     south = min(extent[1] for extent in tiles.values())
     north = max(extent[2] for extent in tiles.values())

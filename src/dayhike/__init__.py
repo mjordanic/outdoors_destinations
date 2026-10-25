@@ -1,6 +1,6 @@
 from dayhike.dem import Bounds, fetch_fabdem, sample_dem
 from dayhike.landcover import fetch_worldcover, sample_landcover
-from dayhike.climate import fetch_worldclim, sample_climate
+from dayhike.climate import fetch_chelsa, sample_climate
 from dayhike.catalog import (
     AmbiguousSeedName,
     AmenityFact,
@@ -60,7 +60,7 @@ __all__ = [
     "calibrate_similarity",
     "dayhike_label",
     "fetch_fabdem",
-    "fetch_worldclim",
+    "fetch_chelsa",
     "fetch_worldcover",
     "filter_by_drive_time",
     "geometry_store_path_for",

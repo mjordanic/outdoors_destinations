@@ -118,8 +118,8 @@ If an alert fires and the traffic is abuse, close the public access at once:
   the origin search uses Nominatim, both run by the OSM Foundation for
   low-volume use under their usage policies. If traffic grows, switch to a
   paid tile and geocoding provider.
-- **FABDEM is non-commercial (CC BY-NC-SA 4.0)** and WorldClim is
-  non-commercial too: the demo must stay non-commercial (no ads, no paid tier).
+- **FABDEM is non-commercial (CC BY-NC-SA 4.0):** the demo must stay
+  non-commercial (no ads, no paid tier).
 
 ## 7. Update or roll back
 

@@ -2,6 +2,10 @@
 status: accepted; scoring amended by ADR-0013 (Measures and Calibration replace cosine and the per-month scalers)
 ---
 
+---
+status: accepted; climate source and per-vertex storage superseded by ADR-0015
+---
+
 # Query month selects the climate slice in similarity
 
 LandCover and ClimateNormal enter the FeatureVector so a warm, sunny, forested Seed ranks near other DayHikes that are warm, sunny, and forested. Similarity stays maximum cosine similarity to any Seed (ADR-0003). The Hiker does not name a climate target. An optional QueryMonth chooses which month fills three score slots: temperature, precipitation, and solar radiation. With no QueryMonth those slots are the June–August regime (mean temperature, mean monthly precipitation, June–August solar radiation). The other months are stored on the DayHike and are not extra score columns. DriveTime stays a filter after Ranking.

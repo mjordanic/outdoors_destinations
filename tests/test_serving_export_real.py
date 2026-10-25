@@ -100,7 +100,7 @@ def test_simplified_lines_stay_within_10_m_of_the_geometry(data: ServingData) ->
     assert far == {}
 
 
-def test_export_has_no_raster_no_vertex_climate_no_per_vertex_worldclim(data: ServingData) -> None:
+def test_export_has_no_raster_and_no_per_vertex_climate(data: ServingData) -> None:
     files = [path for path in rc.SERVING_DIR.rglob("*") if path.is_file()]
     with sqlite3.connect(f"file:{rc.SERVING_DIR / 'hikes.sqlite'}?mode=ro&immutable=1", uri=True) as db:
         tables = rc.schema(db)
@@ -113,14 +113,14 @@ def test_export_has_no_raster_no_vertex_climate_no_per_vertex_worldclim(data: Se
     assert data.store.facts.shape[1] == len(data.store.ids)
 
 
-def test_export_attribution_lists_osm_worldcover_worldclim_fabdem_valhalla(data: ServingData) -> None:
-    from dayhike.climate import WORLDCLIM_ATTRIBUTION
+def test_export_attribution_lists_osm_worldcover_chelsa_fabdem_valhalla(data: ServingData) -> None:
+    from dayhike.climate import CHELSA_ATTRIBUTION
     from dayhike.landcover import WORLDCOVER_ATTRIBUTION
 
     assert data.meta["attribution"] == {
         "osm": "© OpenStreetMap contributors",
         "worldcover": WORLDCOVER_ATTRIBUTION,
-        "worldclim": WORLDCLIM_ATTRIBUTION,
+        "chelsa": CHELSA_ATTRIBUTION,
     }
 
 

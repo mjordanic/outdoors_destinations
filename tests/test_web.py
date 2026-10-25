@@ -172,5 +172,5 @@ def test_the_page_and_its_assets_are_served(client: TestClient) -> None:
     assert "Find similar" in page.text
     for asset in ("app.js", "style.css", "coverage.svg", "mark.svg"):
         assert client.get(f"/{asset}").status_code == 200
-    for credit in ("OpenStreetMap", "ESA WorldCover", "WorldClim", "FABDEM", "Copernicus", "Natural Earth", "Valhalla", "Leaflet"):
+    for credit in ("OpenStreetMap", "ESA WorldCover", "CHELSA", "FABDEM", "Copernicus", "Natural Earth", "Valhalla", "Leaflet"):
         assert credit in page.text

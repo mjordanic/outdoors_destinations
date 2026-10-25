@@ -16,7 +16,7 @@ from dayhike.catalog import (
 )
 from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS, DEFAULT_DEM_DIR, fetch_fabdem, sample_dem
 from dayhike.landcover import DEFAULT_LANDCOVER_DIR, fetch_worldcover, sample_landcover
-from dayhike.climate import DEFAULT_CLIMATE_DIR, fetch_worldclim, sample_climate
+from dayhike.climate import DEFAULT_CLIMATE_DIR, fetch_chelsa, sample_climate
 from dayhike.extracts import fetch_geofabrik_extracts
 from dayhike.highways import HighwayDriveTimeClient, HighwaySnaps
 from dayhike.similarity import (
@@ -102,7 +102,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     fetch_cl = subparsers.add_parser(
         "fetch-climate",
-        help="Download WorldClim monthly GeoTIFFs covering Alps+Dinarides into data/climate",
+        help="Download CHELSA monthly GeoTIFFs covering Alps+Dinarides into data/climate",
     )
     fetch_cl.add_argument(
         "--dest",
@@ -150,7 +150,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     sample_cl = subparsers.add_parser(
         "sample-climate",
-        help="Sample local climate rasters onto GeometryStore vertices and Catalog means",
+        help="Sample local climate rasters into Catalog hike-level monthly means",
     )
     sample_cl.add_argument(
         "--catalog",
@@ -162,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
         "--climate",
         type=Path,
         default=DEFAULT_CLIMATE_DIR,
-        help="Directory of WorldClim GeoTIFFs (default: data/climate)",
+        help="Directory of CHELSA GeoTIFFs (default: data/climate)",
     )
     similarity = subparsers.add_parser(
         "build-similarity",
@@ -393,7 +393,7 @@ def _fetch_landcover(dest: Path, bounds: Bounds) -> int:
 
 
 def _fetch_climate(dest: Path, bounds: Bounds) -> int:
-    paths = fetch_worldclim(
+    paths = fetch_chelsa(
         dest,
         bounds,
         progress=lambda message: print(message, file=sys.stderr, flush=True),

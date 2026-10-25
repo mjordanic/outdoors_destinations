@@ -71,9 +71,9 @@ def _run_pipeline(root: Path) -> Path:
     _write_climate_tifs(
         climate,
         west=14.9, south=44.9, east=15.7, north=46.2,
-        tavg=tuple(month - 2.5 for month in range(12)),
-        prec=tuple(40.0 + 9.0 * month for month in range(12)),
-        srad=tuple(5_000.0 + 1_000.0 * month for month in range(12)),
+        tas=tuple(month - 2.5 for month in range(12)),
+        pr=tuple(40.0 + 9.0 * month for month in range(12)),
+        rsds=tuple(5_000.0 + 1_000.0 * month for month in range(12)),
     )  # fmt: skip
     catalog_path = root / "catalog.sqlite"
     build_catalog(FIXTURE, catalog_path)
