@@ -36,7 +36,7 @@ Every real file under `data/` is built by a command. This is the order:
 8. Sample climate        updates both SQLite files   dayhike sample-climate
 9. Similarity facts      data/catalog.similarity/    dayhike build-similarity
 10. Rank                 stdout scores               dayhike rank [--weight] [--month]
-11. Optional DriveTime   local Valhalla Docker       rank --origin --max-hours
+11. Optional DriveTime   local Valhalla Docker       rank --origin --max-hours, nearby
 ```
 
 ```bash
@@ -115,6 +115,7 @@ call on your machine.
 | `data/valhalla/compose.yaml` | How to run Valhalla | yes |
 | `data/valhalla/prepare-roads.sh` | osmium filter: car roads only, no buildings | yes |
 | `data/valhalla/prepare-highways.sh` | osmium filter: motorway/trunk/primary only | yes |
+| `data/catalog.snaps.npz` | Where Trailheads snap onto the highway tiles (`--highways` cache, a few MB) | **gitignored** |
 | `data/valhalla/mjolnir.drive-time.json` | Valhalla flags: no walk/bike/driveways | yes |
 | `data/valhalla/*.osm.pbf` | Road extract for tiles | **gitignored** |
 | `data/dem/` | FABDEM 1° GeoTIFFs for elevation | **gitignored** |
@@ -507,6 +508,22 @@ for item in filtered.items:
 Unreachable Trailheads are dropped (no fake DriveTime). Tests stub this HTTP
 API; they never build tiles.
 
+No Seeds? `nearby` lists every DayHike within the max DriveTime, nearest
+first (id, name, hours):
+
+```bash
+uv run dayhike nearby --catalog data/catalog.sqlite --origin 45.8,15.97 --max-hours 4
+```
+
+Both commands take `--highways` when Valhalla serves highways-only tiles (all
+of Europe, small); the time is then an estimate, see **Highway tiles** below.
+
+The query is cheap for the whole Catalog: Trailheads farther than the max
+hours at 140 km/h in a straight line never reach Valhalla, shared Trailhead
+spots are one target, and the rest go out nearest first in batches of 2,500
+(one source, many targets, `timedistancematrix`). On highways-only tiles
+`--highways` does far less: see below.
+
 ## Pulling a real extract
 
 Ranking never talks to OpenStreetMap. You download a **frozen snapshot**
@@ -549,6 +566,152 @@ Checksums (same name + `.md5`), e.g.
 Sub-region index for Italy:
 [europe/italy.html](https://download.geofabrik.de/europe/italy.html). For
 Germany: [europe/germany.html](https://download.geofabrik.de/europe/germany.html).
+
+### Highway tiles (all of Europe, small server)
+
+Detailed car tiles for all of Europe do not build in a 7.6 GB Docker VM: the
+first attempt on `europe-latest-roads.osm.pbf` never finished (see **Known
+problems** below), and a 1.1 GB regional chunk was killed for lack of memory. Highways-only tiles
+(motorway, trunk, primary, ferries) do build. `prepare-highways.sh` cuts the
+Europe roads PBF down to 344 MB in 44 s, and the image turns that into a
+754 MB tile extract in 11 minutes. They cover Europe (Lisbon to Warsaw 28.3 h,
+Athens to Oslo 34.3 h) but most Trailheads are not on them, so DriveTime from
+them is an **estimate**.
+
+```bash
+./data/valhalla/prepare-highways.sh data/valhalla/europe-latest-roads.osm.pbf data/valhalla/highways-eu
+cp data/valhalla/mjolnir.drive-time.json data/valhalla/highways-eu/
+docker run --rm -v "$PWD/data/valhalla/highways-eu:/custom_files" -e serve_tiles=False \
+  --entrypoint /bin/bash ghcr.io/gis-ops/docker-valhalla/valhalla:latest -c \
+  'cp /custom_files/mjolnir.drive-time.json /custom_files/valhalla.json && exec /valhalla/scripts/run.sh build_tiles'
+
+# serve on 8002; the merge applies the limits and the matrix algorithm below
+docker run -d -p 8002:8002 -v "$PWD/data/valhalla/highways-eu:/custom_files:ro" \
+  --entrypoint /bin/bash ghcr.io/gis-ops/docker-valhalla/valhalla:latest -c \
+  'jq -s ".[0] * .[1]" /custom_files/valhalla.json /custom_files/mjolnir.drive-time.json > /tmp/valhalla.json && exec valhalla_service /tmp/valhalla.json 2'
+
+uv run dayhike nearby --catalog data/catalog.sqlite --origin 48.137,11.575 --max-hours 4 --highways
+```
+
+`mjolnir.drive-time.json` also raises the matrix distance limit to 1,000 km,
+sets Valhalla's matrix to `timedistancematrix` (an exact one-to-many search; it
+never gave a longer time than the default and takes seconds per 2,500 targets
+where the default took tens), and raises the isochrone limits to 40 contours of
+up to 10 hours.
+
+**How `--highways` estimates DriveTime** (`src/dayhike/highways.py`):
+
+1. Each candidate Trailhead (inside the 140 km/h straight-line reach) is
+   snapped onto the highway tiles with `/locate`: within 35 km, else within
+   100 km. The snaps are kept in `catalog.snaps.npz` beside the Catalog (3 MB
+   for the Munich 4 h set, about 5 MB for all of Europe), so only the first
+   query that sees a Trailhead pays for it (about 30 s for the Munich 4 h set).
+   Delete `catalog.snaps.npz` after rebuilding the highway tiles or pointing
+   `--valhalla-url` at different tiles, since it is not keyed by tile set.
+2. The Trailhead's straight-line distance to its highway point, and the
+   Origin's to the point it snaps to, are driven at **35 km/h** and added. These
+   approaches are estimates, not routes.
+3. One `/isochrone` call from the Origin gives 20-minute bands up to the limit.
+   A point-in-polygon test puts each snapped point in a band, and the band's
+   middle is its highway time. Only points whose band straddles the limit (or
+   lie in a 17 km ring around the outermost contour, where isochrones skip
+   roads the matrix reaches, such as the far side of a ferry) go to the matrix
+   for an exact time. A time past the limit comes back as unreachable.
+4. A Trailhead with no highway within 100 km (6 of 161,614: they are named on
+   stderr as `no highway in reach<TAB>id<TAB>name`) is left out. An Origin with
+   no highway within 100 km is refused.
+
+**Measured against detailed car tiles** (Alps: 7 origins, 2,800 pairs; Norway: 4
+origins, 1,600 pairs; each Trailhead within 320 km of its origin). Error is
+estimate minus detailed time, in minutes. "Kept" is the share of the true hikes
+within the limit that the estimate still returns; "wrong" the share of what it
+returns that is not within the limit.
+
+| Alps | mean | abs p50 | abs p90 | abs p95 | kept | wrong |
+| --- | --- | --- | --- | --- | --- | --- |
+| raw highways, 4 h | -8.4 | 7.3 | 37.2 | 55.3 | 98.5 % | 7.7 % |
+| + 35 km/h approach (exact matrix), 4 h | -2.6 | 6.0 | 32.8 | 49.2 | 97.6 % | 6.1 % |
+| `--highways`, 2 h | -2.1 | 6.5 | 22.8 | 31.8 | 92.3 % | 7.8 % |
+| `--highways`, 3 h | -3.0 | 7.3 | 27.0 | 40.3 | 91.7 % | 7.8 % |
+| `--highways`, 4 h | -2.2 | 8.1 | 31.1 | 47.1 | 96.1 % | 5.7 % |
+
+| Norway | mean | abs p50 | abs p90 | abs p95 | kept | wrong |
+| --- | --- | --- | --- | --- | --- | --- |
+| raw highways, 4 h | -0.6 | 9.8 | 43.3 | 56.6 | 94.6 % | 7.3 % |
+| + 35 km/h approach (exact matrix), 4 h | +5.9 | 7.5 | 38.7 | 52.2 | 93.7 % | 3.9 % |
+| `--highways`, 2 h | -3.1 | 6.2 | 24.5 | 30.3 | 91.9 % | 6.7 % |
+| `--highways`, 3 h | -1.7 | 6.7 | 26.6 | 37.2 | 88.8 % | 3.8 % |
+| `--highways`, 4 h | +0.4 | 7.8 | 30.2 | 44.6 | 92.3 % | 4.8 % |
+
+The approach cuts the bias from minutes short to about zero. The spread stays:
+10 % of estimates are 25 to 40 minutes off, mostly mountain and fjord roads
+that a straight line understates, and about 5 to 8 % of the hikes returned are
+outside the limit. Fjords and ferries make the long tail. The bands and the ring
+cost about one point of "kept" against asking the matrix for every candidate.
+Treat a time as good to roughly 10 minutes and a 4 h limit as 4 h plus or minus
+half an hour.
+
+**Cost.** Warm snap cache, Valhalla container with 2 threads and 2.3 GiB
+resident (the 754 MB tile extract is memory-mapped), client process at most
+0.9 GiB resident when holding all 161,614 Trailheads:
+
+| Origin | 2 h limit | 4 h limit | 4 h straight-line candidates |
+| --- | --- | --- | --- |
+| Munich (densest) | 2.6 s | 10.5 s | 106,037 |
+| Oslo | 0.8 s | 2.5 s | 5,516 |
+| Lisbon | 0.7 s | 2.2 s | 2,576 |
+
+The same 4 h query from Munich took 32 s with the matrix alone, one batch of
+2,500 targets after another.
+
+### Known problems and limitations of Valhalla drive time
+
+- **Highways-only is an estimate.** `--highways` routes on motorway, trunk and
+  primary roads only and adds a straight line to and from them at 35 km/h
+  (measured error table above). Half of the estimates are within 6 to 8
+  minutes, but 10 % are 22 to 31 minutes off and 5 % are 32 to 47 minutes off,
+  mostly on mountain and fjord roads where a straight line understates the
+  drive. A 4 h limit means 4 h plus or minus half an hour, and 5 to 8 % of the
+  hikes returned are over it. Detailed tiles (`prepare-roads.sh`) are exact but
+  only for regions that fit in memory.
+- **110 Trailheads have no highway within 35 km** (100 places: mostly the
+  Caucasus, then the Azores, Bulgarian mountains, Helgoland, Lapland and
+  Iceland). 104 of them snap within 100 km and are
+  estimated like the rest, with a long approach; 6 never snap and are left out.
+  `--highways` names every DayHike it leaves out on stderr
+  (`no highway in reach<TAB>id<TAB>name`).
+- **The first full-Europe tile set was an unfinished build.** The 19 GB
+  `valhalla_tiles.tar` and 89 GiB `valhalla_tiles/` made from
+  `europe-latest-roads.osm.pbf` held only the local tile level (20,668 tiles)
+  and 71 GiB of intermediate files; they had no hierarchy levels, no spatial
+  index and an empty `file_hashes.txt`, so Valhalla found no road anywhere
+  (`/locate` empty, `/route` "No suitable edges"). The build stops at the same
+  stage where a 1.1 GB chunk was killed for lack of memory, so the likely cause
+  is the Docker VM's 7.65 GB. They were deleted; nothing in the code read them.
+- **Tile build memory.** In a 7.65 GB Docker VM a 101 MB roads PBF builds in
+  2 min 42 s (peak 2.4 GiB), a 590 MB one in 16 min 40 s, and a 1.1 GB one is
+  killed at "Adding complex turn restrictions". Detailed tiles for all of
+  Europe (6.6 GB of roads) were never built; more Docker memory is the lever.
+  Highways-only tiles (344 MB) build in 11 minutes.
+- **Dense origins are slower.** A 4 h query from Munich (106,000 candidates)
+  takes about 10 s warm and 2.6 s at 2 h; Oslo and Lisbon take about 2 to 3 s.
+  The first query that sees a Trailhead also snaps it (about 30 s for the
+  Munich 4 h set), cached afterwards in `catalog.snaps.npz`.
+- **Memory.** The Valhalla container sits at about 2.3 GiB resident with the
+  754 MB highways tile extract; the client process peaks near 0.9 GiB with the
+  whole Catalog loaded.
+- **Valhalla limits.** Defaults are too small for "within four hours" and are
+  raised in `mjolnir.drive-time.json`: `max_matrix_distance` from 400 km to
+  1,000 km (a farther pair fails the whole request), isochrone contours from 4
+  to 40 and `max_time_contour` from 120 to 600 minutes. `--highways` therefore
+  takes at most 10 hours; without it, the 140 km/h straight-line pre-filter
+  stays inside 1,000 km only up to 7.1 hours, so `--max-hours` is capped
+  there. A request holds at most 2,500 matrix pairs, which is the batch size.
+- **No ready-made tiles.** Valhalla tiles are built locally from a Geofabrik
+  PBF (`prepare-*.sh`, then the Docker image); there is no download of
+  finished tiles for Europe.
+- **Free-flow car times.** No traffic, closures, seasonal mountain passes or
+  ferry timetables.
 
 ### Walkthrough A — one country (start here)
 
@@ -1032,7 +1195,8 @@ build walk/bike edges we never query. Two layers strip that:
    `prepare-highways.sh` omits turn restrictions on purpose: osmium would
    otherwise pull the small `from`/`via`/`to` member ways into the extract.
    It will **not** reach most Trailheads. Use `prepare-roads.sh` for ranking
-   with `--origin`.
+   with `--origin` on detailed tiles, or `--highways` for an estimate
+   (**Highway tiles** below).
 
 2. **`data/valhalla/mjolnir.drive-time.json`** is merged into `valhalla.json`
    on every `docker compose up`. It sets `include_pedestrian`,
