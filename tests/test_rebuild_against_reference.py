@@ -187,7 +187,9 @@ def test_similarity_facts_equal_reference(inside_old) -> None:
         if changed:
             differing[name] = changed[:20]
     assert differing == {}
-    assert _differing(np.asarray(old.profile), np.asarray(new.profile), np.repeat(ids, old.profile.shape[1])) == []
+    before, after = np.asarray(old.profile), np.asarray(new.profile)
+    same = ((before == after) | (np.isnan(before) & np.isnan(after))).all(axis=1)
+    assert ids[~same].tolist()[:20] == []
 
 
 def test_calibration_equals_reference_for_measures_not_touched_by_coverage() -> None:
