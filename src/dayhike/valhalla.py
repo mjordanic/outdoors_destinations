@@ -13,6 +13,7 @@ MATRIX_BATCH_SIZE = 2_500  # Valhalla's default matrix limit: one source, 2500 t
 # Valhalla's own snap radius; a second try with the wide one finds remote Trailheads.
 SEARCH_CUTOFF_M = 35_000
 WIDE_SEARCH_CUTOFF_M = 100_000
+MAX_MATRIX_DISTANCE_M = 1_000_000  # max_matrix_distance in mjolnir.drive-time.json
 NO_SUITABLE_EDGES = 171  # Valhalla error_code: a location has no road in reach
 
 Place = tuple[float, float]  # (latitude, longitude)

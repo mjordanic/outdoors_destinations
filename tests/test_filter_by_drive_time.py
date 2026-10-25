@@ -237,6 +237,26 @@ def test_cli_nearby_lists_dayhikes_within_max_hours_nearest_first(
     assert [float(columns[2]) for columns in lines] == [0.5, 1.0, 1.5]
 
 
+def test_cli_nearby_refuses_more_hours_than_the_matrix_distance_limit(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, path)
+
+    def fake_sources(self, origin, trailheads):
+        raise AssertionError("Valhalla should not be asked")
+
+    monkeypatch.setattr(
+        "dayhike.cli.ValhallaMatrixClient.sources_to_targets", fake_sources
+    )
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(["nearby", "--catalog", str(path), "--origin", "45.25,15.15", "--max-hours", "8"])
+
+    assert exit_info.value.code == 2
+    assert "up to 7.1 hours without --highways" in capsys.readouterr().err
+
+
 def test_valhalla_client_reads_seconds_and_null_from_sources_to_targets(
     tmp_path: Path,
 ) -> None:

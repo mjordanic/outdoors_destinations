@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from dayhike.catalog import (
+    MAX_CAR_SPEED_MS,
     Catalog,
     Origin,
     RankedDayHike,
@@ -24,7 +25,7 @@ from dayhike.similarity import (
     calibrate_similarity,
     rank_dayhikes,
 )
-from dayhike.valhalla import DEFAULT_VALHALLA_URL, ValhallaMatrixClient
+from dayhike.valhalla import DEFAULT_VALHALLA_URL, MAX_MATRIX_DISTANCE_M, ValhallaMatrixClient
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -434,6 +435,9 @@ def _filter_by_drive_time(
     highways: bool,
 ) -> Ranking:
     if not highways:
+        max_matrix_hours = MAX_MATRIX_DISTANCE_M / MAX_CAR_SPEED_MS / 3600
+        if max_hours > max_matrix_hours:
+            raise ValueError(f"--max-hours answers up to {max_matrix_hours:.1f} hours without --highways")
         return filter_by_drive_time(ranking, origin, max_hours, ValhallaMatrixClient(valhalla_url))
     snaps = HighwaySnaps(valhalla_url, catalog_path.with_suffix(".snaps.npz"))
     client = HighwayDriveTimeClient(max_hours, snaps)
