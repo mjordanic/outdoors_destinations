@@ -227,7 +227,8 @@ def test_notebook_sanity_checks_catalog_counts_length_band_and_map() -> None:
     assert "import pandas" in source
     assert "pandas dayhikes\t" in output
     assert "pandas play\t" in output
-    assert "rank_scaled_rows" in source
+    assert "exp_rank\t" in output
+    assert "order_changed" in output
     assert "geometry_store" in source
     assert "name_origin" in source
     assert "prod_rank\t" in output

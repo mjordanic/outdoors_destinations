@@ -1,11 +1,18 @@
 import sqlite3
-from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from dayhike import Catalog, build_catalog, geometry_store_path_for, rank_dayhikes, sample_landcover
+from dayhike import (
+    Catalog,
+    StaleSimilarity,
+    build_catalog,
+    build_similarity,
+    geometry_store_path_for,
+    rank_dayhikes,
+    sample_landcover,
+)
 from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS
 from dayhike.landcover import (
     fetch_worldcover,
@@ -64,8 +71,6 @@ def test_ingest_creates_empty_landcover_and_does_not_need_a_raster(
         assert vector.grass_fraction is None
         assert vector.bare_fraction is None
         assert vector.snow_fraction is None
-    for name in LANDCOVER_FRACTIONS:
-        assert name in catalog.scaler.feature_names
 
 
 def _write_class_tif(
@@ -181,8 +186,6 @@ def test_catalog_fractions_use_sampled_vertices_and_keep_uncovered_hikes(
     assert valley.feature_vector.grass_fraction is None
     assert valley.feature_vector.bare_fraction is None
     assert valley.feature_vector.snow_fraction is None
-    start = catalog.scaler.feature_names.index("tree_fraction")
-    assert catalog.scaler.feature_names[start : start + 5] == LANDCOVER_FRACTIONS
 
 
 def test_other_class_codes_count_in_denominator_only(tmp_path: Path) -> None:
@@ -236,7 +239,7 @@ def test_permanent_snow_code_fills_snow_fraction_not_tree(tmp_path: Path) -> Non
     assert ridge.feature_vector.bare_fraction == 0.0
 
 
-def test_sample_adds_missing_landcover_columns_in_place_and_refits_scaler(
+def test_sample_adds_missing_landcover_columns_in_place(
     tmp_path: Path,
 ) -> None:
     catalog_path = tmp_path / "catalog.sqlite"
@@ -250,12 +253,6 @@ def test_sample_adds_missing_landcover_columns_in_place_and_refits_scaler(
         store.commit()
         for name in LANDCOVER_FRACTIONS:
             catalog_db.execute(f"ALTER TABLE feature_vectors DROP COLUMN {name}")
-        catalog_db.execute(
-            "DELETE FROM scaler WHERE feature_name IN ({})".format(
-                ",".join("?" * len(LANDCOVER_FRACTIONS))
-            ),
-            LANDCOVER_FRACTIONS,
-        )
         catalog_db.commit()
     finally:
         store.close()
@@ -278,15 +275,6 @@ def test_sample_adds_missing_landcover_columns_in_place_and_refits_scaler(
     catalog_db = sqlite3.connect(catalog_path)
     store = sqlite3.connect(store_path)
     try:
-        scaler_rows = {
-            name: (mean, scale)
-            for name, mean, scale in catalog_db.execute(
-                "SELECT feature_name, mean, scale FROM scaler"
-            )
-        }
-        assert set(LANDCOVER_FRACTIONS) <= set(scaler_rows)
-        # Only Ridge Walk has an observed tree fraction (1.0); others stay NULL.
-        assert scaler_rows["tree_fraction"][0] == 1.0
         vertex_columns = {row[1] for row in store.execute("PRAGMA table_info(vertices)")}
         feature_columns = {
             row[1] for row in catalog_db.execute("PRAGMA table_info(feature_vectors)")
@@ -317,30 +305,24 @@ def _sample_ridge_as_forest(tmp_path: Path) -> Path:
 def test_forested_seed_ranks_forested_neighbour_ahead_of_barer_match(
     tmp_path: Path,
 ) -> None:
-    catalog = Catalog.open(_sample_ridge_as_forest(tmp_path))
-    seed = next(hike for hike in catalog.dayhikes if hike.name == "Ridge Walk")
-    forested = replace(seed, id=9001, name="Forested Twin")
-    barer = replace(
-        seed,
-        id=9002,
-        name="Bare Twin",
-        feature_vector=replace(
-            seed.feature_vector,
-            tree_fraction=0.0,
-            shrub_fraction=0.0,
-            grass_fraction=0.0,
-            bare_fraction=1.0,
-            snow_fraction=0.0,
-        ),
+    catalog_path = _sample_ridge_as_forest(tmp_path)
+    catalog_db = sqlite3.connect(catalog_path)
+    catalog_db.executemany(
+        "UPDATE feature_vectors SET tree_fraction = ?, shrub_fraction = 0, "
+        "grass_fraction = 0, bare_fraction = ?, snow_fraction = 0 WHERE dayhike_id = ?",
+        [(1.0, 0.0, 1007), (0.0, 1.0, 1002)],
     )
-    catalog = replace(catalog, dayhikes=(seed, forested, barer))
+    catalog_db.commit()
+    catalog_db.close()
+    build_similarity(catalog_path, tmp_path / "dem")
 
-    ranking = rank_dayhikes(catalog, ["Ridge Walk"])
-    names = [item.dayhike.name for item in ranking.items]
-    scores = {item.dayhike.name: item.score for item in ranking.items}
+    ranking = rank_dayhikes(Catalog.open(catalog_path), ["Ridge Walk"], {"landcover": 100})
+    scores = {item.dayhike.id: item.score for item in ranking.items}
 
-    assert names[0] == "Forested Twin"
-    assert scores["Forested Twin"] > scores["Bare Twin"]
+    # PS-1 (1007) is forested like the Seed, Valley Path (1002) bare; the
+    # unsampled relation:1003 has no LandCover and is not ranked on it.
+    assert [item.dayhike.id for item in ranking.items] == [1007, 1002]
+    assert scores[1007] > scores[1002]
 
 
 def test_landcover_fractions_stay_put_after_ranking(tmp_path: Path) -> None:
@@ -369,6 +351,7 @@ def test_landcover_fractions_stay_put_after_ranking(tmp_path: Path) -> None:
     finally:
         catalog_db.close()
 
+    build_similarity(catalog_path, tmp_path / "dem")
     rank_dayhikes(before, ["Ridge Walk"])
 
     after = Catalog.open(catalog_path)
@@ -631,3 +614,26 @@ def test_failed_tile_open_still_closes_datasets_opened_so_far(
     assert all(dataset.closed for dataset in opened)
     store_path = geometry_store_path_for(catalog_path)
     assert not Path(str(store_path) + "-wal").exists()
+
+
+def test_sample_landcover_removes_similarity_facts(tmp_path: Path) -> None:
+    catalog_path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, catalog_path)
+    directory = build_similarity(catalog_path, tmp_path / "dem")
+    raster_dir = tmp_path / "sample_landcover"
+    raster_dir.mkdir()
+    _write_class_tif(
+        raster_dir / "cover.tif",
+        west=14.99, south=44.99, east=15.2, north=45.12,
+        codes=np.full((8, 8), 10, dtype="uint8"),
+    )
+    messages: list[str] = []
+
+    assert sample_landcover(catalog_path, raster_dir, progress=messages.append) > 0
+
+    assert not directory.exists()
+    assert messages[-1] == (
+        f"removed stale similarity facts {directory}; run `dayhike build-similarity`"
+    )
+    with pytest.raises(StaleSimilarity, match="build-similarity"):
+        rank_dayhikes(Catalog.open(catalog_path), ["Ridge Walk"])

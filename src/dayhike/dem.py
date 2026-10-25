@@ -11,13 +11,7 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from dayhike.catalog import (
-    Catalog,
-    Scaler,
-    feature_matrix,
-    fit_scaler_from_matrix,
-    geometry_store_path_for,
-)
+from dayhike.catalog import geometry_store_path_for, remove_similarity
 
 FABDEM_VERSION = "V1-2"
 FABDEM_DATASET = "https://huggingface.co/datasets/pavelzaitsau/fabdem-v12/resolve/main/tiles"
@@ -235,6 +229,7 @@ def sample_dem(
     if progress is not None:
         progress("dem sample: feature_vectors")
     _refresh_catalog_elevations(catalog_path, store_path, touched)
+    remove_similarity(catalog_path, progress)
     return sampled
 
 
@@ -271,26 +266,6 @@ def _refresh_catalog_elevations(
     finally:
         store.close()
         catalog.close()
-    loaded = Catalog.open(catalog_path)
-    _rewrite_scaler(catalog_path, fit_scaler_from_matrix(feature_matrix(loaded.dayhikes)))
-
-
-def _rewrite_scaler(catalog_path: Path, scaler: Scaler) -> None:
-    connection = sqlite3.connect(catalog_path)
-    try:
-        connection.execute("DELETE FROM scaler")
-        connection.executemany(
-            "INSERT INTO scaler (position, feature_name, mean, scale) VALUES (?, ?, ?, ?)",
-            [
-                (position, name, mean, scale)
-                for position, (name, mean, scale) in enumerate(
-                    zip(scaler.feature_names, scaler.mean, scaler.scale, strict=True)
-                )
-            ],
-        )
-        connection.commit()
-    finally:
-        connection.close()
 
 
 def _elevation_stats(elevations: Sequence[float]) -> tuple[float, float, float]:

@@ -151,8 +151,8 @@ a long segment is never read. Measured on the notebook 05 region (400 of its
 | Read every 25 m along segments | 1.2% / 4.0% / 7.9% | 1.3× |
 
 Only 6.4% of the walked length lies in segments over 100 m, so uneven vertex
-density, not long gaps, is most of the error. The Landscape Facet's LandCover
-mix inherits it one to one. That is small next to the gap between real similar
+density, not long gaps, is most of the error. The `landcover` Measure inherits
+it one to one. That is small next to the gap between real similar
 and dissimilar pairs, so it waits.
 
 Same pattern, not yet measured: ClimateNormal is a per-vertex mean (1 km grid,
@@ -161,11 +161,12 @@ inside a long segment is missed.
 
 ### What would have to be true to start
 
-- Length-weighted shares first in notebook 05 (`landscape_facts` from the vertex
-  `landcover`), with its verification still passing.
+- Length-weighted shares from the vertex `landcover`, with notebook 05's
+  verification still passing.
 - Then for production: the LandCover entry in `CONTEXT.md` says weighted by
   length instead of "each GeometryStore vertex counts once", and `sample-landcover`
-  is rerun to refresh the Catalog fractions and scaler. Ranking changes with it.
+  and `build-similarity` are rerun to refresh the Catalog fractions and the
+  similarity facts. Ranking changes with it.
 - Reading along segments only if review shows the worst cases matter; it needs
   a new raster pass and somewhere to keep the extra points.
 - Elevation gain measured the same way before deciding whether it needs the
@@ -198,16 +199,16 @@ whole outing. For a line (87.5% of the Slovenia + Croatia region) and a lollipop
 (4.1%) it is not: the Hiker walks back (about twice the length on an
 out-and-back, the stem again on a lollipop) or takes a shuttle. OSM does not
 say which, and relations that list their ways twice are counted once (the
-second listing is a `repeat` Leftover). Effort compares one-way lengths, so a
-5 km line and a 5 km RoundTrip look equally long. The RoundTrip Facet
-(notebook 05) tells them apart but does not change Effort.
+second listing is a `repeat` Leftover). The `length` Measure compares one-way
+lengths, so a 5 km line and a 5 km RoundTrip look equally long. The
+`round_trip` Measure tells them apart but does not change `length`.
 
 ### What would have to be true to start
 
 - A rule for the length a Hiker walks: twice a line, the loop plus twice the
   stem for a lollipop, or a line left as is when it ends near a bus stop or
   parking.
-- Whether the Catalog length band (1–20 km) and Effort read that walked length
+- Whether the Catalog length band (1–20 km) and the `length` Measure read that walked length
   or keep the one-way length.
 
 ---
@@ -216,18 +217,18 @@ second listing is a `repeat` Leftover). Effort compares one-way lengths, so a
 
 ### Why it's parked
 
-Effort's `elevation_gain_m` sums the climb between consecutive vertices, which
+The `elevation_gain_m` fact sums the climb between consecutive vertices, which
 mappers place 5–50 m apart (median about 16 m in the Slovenia + Croatia
 region). FABDEM's metre-scale jitter between close vertices adds climb that is
 not there: on elevation resampled every 50 m, as Steepness reads it, the
 region's gain is a median 83% of the raw-vertex gain, and walks along a cliff
 edge can show several times their height range. Steepness (ClimbGrade,
-SteepestKm) already reads the 50 m resample; Effort and the Catalog do not, so
-changing them moves existing rankings.
+SteepestKm) already reads the 50 m resample; the `elevation_gain` fact and the
+Catalog do not, so changing them moves existing rankings.
 
 ### What would have to be true to start
 
 - One smoothing rule (resample step, or a filter over the ElevationProfile)
   checked against a few DayHikes with a known published gain.
-- A decision on which gain the Catalog stores once similarity is promoted
-  (ADR-0011), so Effort and the Catalog agree.
+- A decision on which gain the Catalog stores, so the direction-free
+  `elevation_gain_m` fact (ADR-0013) and the Catalog agree.

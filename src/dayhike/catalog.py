@@ -3,18 +3,22 @@ from __future__ import annotations
 import heapq
 import json
 import math
+import shutil
 import sqlite3
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 from collections.abc import Callable
-from typing import Iterable, Iterator, Mapping, Protocol, Sequence
+from typing import TYPE_CHECKING, Iterable, Iterator, Mapping, Protocol, Sequence
 
 import numpy as np
 from sklearn.neighbors import BallTree
-from sklearn.preprocessing import StandardScaler
 
 from dayhike.osm import OsmRelation, OsmSnapshot, OsmWay
+
+if TYPE_CHECKING:
+    from dayhike.similarity import SimilarityStore
 
 EARTH_RADIUS_M = 6_371_000
 MIN_LENGTH_M = 1_000  # inclusive DayHike length band
@@ -30,7 +34,6 @@ AMENITY_KINDS = ("hut", "parking", "restaurant_cafe", "drinking_water")
 NAME_ORIGIN_OSM_NAME = "osm_name"
 NAME_ORIGIN_OSM_REF = "osm_ref"
 NAME_ORIGIN_SYNTHETIC = "synthetic"
-# Intrinsic FeatureVector columns only. DriveTime is query-time, not a feature.
 LANDCOVER_FEATURE_NAMES = (
     "tree_fraction",
     "shrub_fraction",
@@ -42,23 +45,6 @@ CLIMATE_FEATURE_NAMES = (
     "temperature_c",
     "precipitation_mm",
     "solar_radiation",
-)
-FEATURE_NAMES = (
-    "length_m",
-    "elevation_min_m",
-    "elevation_max_m",
-    "elevation_gain_m",
-    "difficulty_ordinal",
-    "hut_count",
-    "hut_nearest_m",
-    "parking_count",
-    "parking_nearest_m",
-    "restaurant_cafe_count",
-    "restaurant_cafe_nearest_m",
-    "drinking_water_count",
-    "drinking_water_nearest_m",
-    *LANDCOVER_FEATURE_NAMES,
-    *CLIMATE_FEATURE_NAMES,
 )
 
 SAC_SCALE_RANK = {
@@ -128,13 +114,6 @@ class DayHike:
 
 
 @dataclass(frozen=True)
-class Scaler:
-    feature_names: tuple[str, ...]
-    mean: tuple[float, ...]
-    scale: tuple[float, ...]
-
-
-@dataclass(frozen=True)
 class Origin:
     latitude: float
     longitude: float
@@ -181,8 +160,19 @@ class Catalog:
     dayhikes: tuple[DayHike, ...]
     ingest_report: IngestReport
     attribution: str
-    scaler: Scaler
-    month_scalers: Mapping[int, Scaler] = field(default_factory=dict)
+
+    @cached_property
+    def similarity(self) -> SimilarityStore:
+        """The facts and Calibration beside this Catalog, opened on first use."""
+        from dayhike.similarity import SimilarityStore, StaleSimilarity  # imports Catalog
+
+        store = SimilarityStore.open(self.path)
+        if not np.array_equal(store.ids, [hike.id for hike in self.dayhikes]):
+            raise StaleSimilarity(
+                f"{self.path}: similarity facts are for other DayHikes; "
+                "run `dayhike build-similarity`"
+            )
+        return store
 
     @classmethod
     def open(cls, path: Path | str) -> Catalog:
@@ -318,48 +308,6 @@ class Catalog:
                 )
                 for dayhike_id, name, length_m, sac_scale, name_origin in dayhike_rows
             )
-            scaler_rows = list(
-                connection.execute(
-                    "SELECT feature_name, mean, scale FROM scaler ORDER BY position"
-                )
-            )
-            scaler_names = [name for name, _, _ in scaler_rows]
-            scaler_mean = [mean for _, mean, _ in scaler_rows]
-            scaler_scale = [scale for _, _, scale in scaler_rows]
-            for name in LANDCOVER_FEATURE_NAMES:
-                if name not in scaler_names:
-                    scaler_names.append(name)
-                    scaler_mean.append(0.0)
-                    scaler_scale.append(1.0)
-            for name in CLIMATE_FEATURE_NAMES:
-                if name not in scaler_names:
-                    scaler_names.append(name)
-                    scaler_mean.append(0.0)
-                    scaler_scale.append(1.0)
-            scaler = Scaler(
-                feature_names=tuple(scaler_names),
-                mean=tuple(scaler_mean),
-                scale=tuple(scaler_scale),
-            )
-            month_scalers: dict[int, Scaler] = {}
-            if "scaler_month" in catalog_tables:
-                by_month: dict[int, list[tuple[str, float, float]]] = {}
-                for month, feature_name, mean, scale in connection.execute(
-                    "SELECT month, feature_name, mean, scale FROM scaler_month "
-                    "ORDER BY month, position"
-                ):
-                    by_month.setdefault(int(month), []).append(
-                        (feature_name, mean, scale)
-                    )
-                for month, rows in by_month.items():
-                    names = [name for name, _, _ in rows]
-                    means = [mean for _, mean, _ in rows]
-                    scales = [scale for _, _, scale in rows]
-                    month_scalers[month] = Scaler(
-                        feature_names=tuple(names),
-                        mean=tuple(means),
-                        scale=tuple(scales),
-                    )
             return cls(
                 path=path,
                 dayhikes=dayhikes,
@@ -373,8 +321,6 @@ class Catalog:
                     named_synthetic=report_data.get("named_synthetic", 0),
                 ),
                 attribution=meta["attribution"],
-                scaler=scaler,
-                month_scalers=month_scalers,
             )
         finally:
             connection.close()
@@ -402,6 +348,25 @@ def geometry_store_path_for(catalog_path: Path | str) -> Path:
     if path.suffix == ".sqlite":
         return path.with_name(f"{path.stem}.geometry.sqlite")
     return path.with_name(f"{path.name}.geometry.sqlite")
+
+
+def similarity_dir_for(catalog_path: Path | str) -> Path:
+    """Return the similarity directory written next to a Catalog."""
+    path = Path(catalog_path)
+    stem = path.stem if path.suffix == ".sqlite" else path.name
+    return path.with_name(f"{stem}.similarity")
+
+
+def remove_similarity(
+    catalog_path: Path | str, progress: Callable[[str], None] | None = None
+) -> None:
+    """Delete the similarity directory after a step changed the Catalog facts."""
+    directory = similarity_dir_for(catalog_path)
+    if not directory.is_dir():
+        return
+    shutil.rmtree(directory)
+    if progress is not None:
+        progress(f"removed stale similarity facts {directory}; run `dayhike build-similarity`")
 
 
 def dayhike_label(relation_id: int, tags: Mapping[str, str]) -> tuple[str, str]:
@@ -435,82 +400,6 @@ def resolve_seed(catalog: Catalog, name: str) -> int:
         f"Seed name {name!r} matches more than one DayHike: {', '.join(candidates)}",
         candidates,
     )
-
-
-def rank_dayhikes(
-    catalog: Catalog, seeds: Sequence[str], *, month: int | None = None
-) -> Ranking:
-    """Rank Catalog DayHikes by maximum cosine similarity to named Seeds.
-
-    Similarity is cosine of FeatureVectors after the Catalog StandardScaler.
-    Seeds are resolved with ``resolve_seed`` and omitted from the Ranking.
-    Optional QueryMonth substitutes that month's climate into the three
-    climate slots and scales those slots on that month's slice.
-    """
-    if month is not None:
-        _require_query_month(catalog, month)
-    seed_ids = {resolve_seed(catalog, name) for name in seeds}
-    ids = [hike.id for hike in catalog.dayhikes]
-    names = [hike.name for hike in catalog.dayhikes]
-    matrix = feature_matrix(catalog.dayhikes)
-    if month is None:
-        scaled = scale_matrix(matrix, catalog.scaler)
-    else:
-        matrix = _climate_matrix_for_month(catalog.dayhikes, matrix, month)
-        scaled = scale_matrix(matrix, catalog.scaler)
-        scaled = _rescale_climate_slice(
-            scaled, matrix, catalog.scaler, catalog.month_scalers[month]
-        )
-    by_id = {hike.id: hike for hike in catalog.dayhikes}
-    return Ranking(
-        items=tuple(
-            RankedDayHike(dayhike=by_id[dayhike_id], score=score)
-            for dayhike_id, _name, score in rank_scaled_rows(
-                ids, names, scaled, seed_ids
-            )
-        )
-    )
-
-
-def _require_query_month(catalog: Catalog, month: int) -> None:
-    if isinstance(month, bool) or not isinstance(month, int) or month < 1 or month > 12:
-        raise ValueError(f"QueryMonth must be an integer from 1 to 12, got {month!r}")
-    sampled = any(
-        values is not None for hike in catalog.dayhikes for values in hike.climate_months
-    )
-    if not sampled or month not in catalog.month_scalers:
-        raise ValueError("climate has not been sampled")
-
-
-def _climate_matrix_for_month(
-    dayhikes: Sequence[DayHike], matrix: np.ndarray, month: int
-) -> np.ndarray:
-    start = FEATURE_NAMES.index("temperature_c")
-    out = np.array(matrix, dtype=float, copy=True)
-    for index, hike in enumerate(dayhikes):
-        values = hike.climate_months[month - 1]
-        if values is None:
-            out[index, start : start + 3] = np.nan
-        else:
-            out[index, start : start + 3] = values
-    return out
-
-
-def _rescale_climate_slice(
-    scaled: np.ndarray,
-    matrix: np.ndarray,
-    scaler: Scaler,
-    month_scaler: Scaler,
-) -> np.ndarray:
-    out = np.array(scaled, dtype=float, copy=True)
-    for name, mean, scale in zip(
-        month_scaler.feature_names, month_scaler.mean, month_scaler.scale, strict=True
-    ):
-        column = scaler.feature_names.index(name)
-        values = matrix[:, column]
-        missing = np.isnan(values)
-        out[:, column] = np.where(missing, 0.0, (values - mean) / scale)
-    return out
 
 
 _SECONDS_PER_HOUR = 3600.0
@@ -576,9 +465,8 @@ def build_catalog(
     kept, report, work_path = run_ingest(
         _osm_paths(osm_path), catalog_path, progress=progress, fresh=fresh
     )
-    scaler = fit_scaler_from_matrix(feature_matrix(kept), FEATURE_NAMES)
     emit_progress(progress, "write", str(catalog_path))
-    _write_sqlite(catalog_path, kept, report, scaler)
+    _write_sqlite(catalog_path, kept, report)
     if work_path.exists():
         work_conn = sqlite3.connect(work_path)
         try:
@@ -586,6 +474,7 @@ def build_catalog(
         finally:
             work_conn.close()
         work_path.unlink()
+    remove_similarity(catalog_path, progress)
     return Catalog.open(catalog_path)
 
 
@@ -1528,126 +1417,7 @@ def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * EARTH_RADIUS_M * math.asin(math.sqrt(a))
 
 
-def _missing_as_nan(value: float | None) -> float:
-    return math.nan if value is None else value
-
-
-def _feature_row(vector: FeatureVector) -> tuple[float, ...]:
-    facts = vector.amenity_facts
-    return (
-        vector.length_m,
-        _missing_as_nan(vector.elevation_min_m),
-        _missing_as_nan(vector.elevation_max_m),
-        _missing_as_nan(vector.elevation_gain_m),
-        math.nan if vector.difficulty_ordinal is None else float(vector.difficulty_ordinal),
-        float(facts.hut.count),
-        _missing_as_nan(facts.hut.nearest_m),
-        float(facts.parking.count),
-        _missing_as_nan(facts.parking.nearest_m),
-        float(facts.restaurant_cafe.count),
-        _missing_as_nan(facts.restaurant_cafe.nearest_m),
-        float(facts.drinking_water.count),
-        _missing_as_nan(facts.drinking_water.nearest_m),
-        _missing_as_nan(vector.tree_fraction),
-        _missing_as_nan(vector.shrub_fraction),
-        _missing_as_nan(vector.grass_fraction),
-        _missing_as_nan(vector.bare_fraction),
-        _missing_as_nan(vector.snow_fraction),
-        _missing_as_nan(vector.temperature_c),
-        _missing_as_nan(vector.precipitation_mm),
-        _missing_as_nan(vector.solar_radiation),
-    )
-
-
-def feature_matrix(dayhikes: Sequence[DayHike]) -> np.ndarray:
-    """Stack Catalog FeatureVector rows, with missing values as NaN."""
-    if not dayhikes:
-        return np.empty((0, len(FEATURE_NAMES)), dtype=float)
-    return np.array(
-        [_feature_row(hike.feature_vector) for hike in dayhikes], dtype=float
-    )
-
-
-def fit_scaler_from_matrix(
-    matrix: np.ndarray, feature_names: Sequence[str] = FEATURE_NAMES
-) -> Scaler:
-    """Fit a per-column StandardScaler, ignoring NaN. All-NaN columns stay mean 0 scale 1."""
-    names = tuple(feature_names)
-    n_features = len(names)
-    if matrix.size == 0:
-        return Scaler(names, (0.0,) * n_features, (1.0,) * n_features)
-    if matrix.ndim != 2 or matrix.shape[1] != n_features:
-        raise ValueError(
-            f"matrix has shape {matrix.shape}, expected (_, {n_features})"
-        )
-    mean: list[float] = []
-    scale: list[float] = []
-    for column in range(n_features):
-        observed = matrix[:, column]
-        observed = observed[~np.isnan(observed)].reshape(-1, 1)
-        if observed.size == 0:
-            mean.append(0.0)
-            scale.append(1.0)
-            continue
-        fitted = StandardScaler().fit(observed)
-        column_scale = float(fitted.scale_[0])
-        mean.append(float(fitted.mean_[0]))
-        scale.append(1.0 if column_scale == 0.0 else column_scale)
-    return Scaler(names, tuple(mean), tuple(scale))
-
-
-def scale_matrix(matrix: np.ndarray, scaler: Scaler) -> np.ndarray:
-    """Scale rows with Catalog scaler params. NaN becomes 0 after scaling."""
-    if matrix.size == 0:
-        return np.empty((0, len(scaler.feature_names)), dtype=float)
-    scaled = np.empty(matrix.shape, dtype=float)
-    for column, (mean, scale) in enumerate(zip(scaler.mean, scaler.scale, strict=True)):
-        values = matrix[:, column]
-        missing = np.isnan(values)
-        scaled[:, column] = np.where(missing, 0.0, (values - mean) / scale)
-    return scaled
-
-
-def cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
-    """Cosine similarity of two scaled FeatureVector rows."""
-    dot = sum(a * b for a, b in zip(left, right, strict=True))
-    left_norm = math.sqrt(sum(a * a for a in left))
-    right_norm = math.sqrt(sum(b * b for b in right))
-    if left_norm == 0.0 or right_norm == 0.0:
-        return 0.0
-    return dot / (left_norm * right_norm)
-
-
-def rank_scaled_rows(
-    ids: Sequence[int],
-    names: Sequence[str],
-    scaled: np.ndarray,
-    seed_ids: Sequence[int] | set[int],
-) -> tuple[tuple[int, str, float], ...]:
-    """Max cosine to any Seed row. Seeds are omitted. Sort by (-score, id)."""
-    seed_set = set(seed_ids)
-    seed_positions = [index for index, dayhike_id in enumerate(ids) if dayhike_id in seed_set]
-    if not seed_positions:
-        return ()
-    seed_vectors = scaled[seed_positions]
-    ranked: list[tuple[int, str, float]] = []
-    for index, (dayhike_id, name) in enumerate(zip(ids, names, strict=True)):
-        if dayhike_id in seed_set:
-            continue
-        row = scaled[index]
-        score = max(cosine_similarity(row, seed_vector) for seed_vector in seed_vectors)
-        ranked.append((dayhike_id, name, score))
-    ranked.sort(key=lambda item: (-item[2], item[0]))
-    return tuple(ranked)
-
-
-def _scale_vector(vector: FeatureVector, scaler: Scaler) -> tuple[float, ...]:
-    return tuple(scale_matrix(np.array([_feature_row(vector)], dtype=float), scaler)[0])
-
-
-def _write_sqlite(
-    path: Path, dayhikes: Iterable[DayHike], report: IngestReport, scaler: Scaler
-) -> None:
+def _write_sqlite(path: Path, dayhikes: Iterable[DayHike], report: IngestReport) -> None:
     dayhikes = tuple(dayhikes)
     if len({hike.id for hike in dayhikes}) != len(dayhikes):
         raise ValueError("duplicate DayHike ids in catalog ingest")
@@ -1711,12 +1481,6 @@ def _write_sqlite(
                 dayhike_id INTEGER NOT NULL,
                 score REAL NOT NULL,
                 created_at TEXT NOT NULL
-            );
-            CREATE TABLE scaler (
-                position INTEGER PRIMARY KEY,
-                feature_name TEXT NOT NULL,
-                mean REAL NOT NULL,
-                scale REAL NOT NULL
             );
             """
         )
@@ -1794,15 +1558,6 @@ def _write_sqlite(
                     hike.feature_vector.solar_radiation,
                 )
                 for hike in dayhikes
-            ],
-        )
-        connection.executemany(
-            "INSERT INTO scaler (position, feature_name, mean, scale) VALUES (?, ?, ?, ?)",
-            [
-                (position, name, mean, scale)
-                for position, (name, mean, scale) in enumerate(
-                    zip(scaler.feature_names, scaler.mean, scaler.scale, strict=True)
-                )
             ],
         )
         connection.commit()

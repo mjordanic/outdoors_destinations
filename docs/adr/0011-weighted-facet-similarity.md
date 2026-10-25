@@ -1,6 +1,8 @@
-# Similarity is a Hiker-weighted mean of FacetScores
+---
+status: superseded by ADR-0013 (proposed; never promoted out of the notebooks)
+---
 
-**Status:** proposed — supersedes ADR-0003 when promoted out of the notebooks
+# Similarity is a Hiker-weighted mean of FacetScores
 
 The Hiker wants to say what "similar" means for one query (huts matter, vegetation does not). A single cosine over a scaled FeatureVector cannot take that. Similarity of two DayHikes is therefore Σ wᶠ·FacetScoreᶠ / Σ wᶠ over the Facets both DayHikes can be scored on, with wᶠ the FacetWeights. Each FacetScore is in [0, 1] and is the plain mean of its measures. A Facet that cannot be scored on either DayHike (no LandCover outside the sampled bbox, no tags) is dropped for that pair and the remaining weights renormalize; the share of weight that was scored is reported as coverage. With several Seeds the score is the maximum combined score to any Seed, as in ADR-0003. DriveTime stays a filter after Ranking.
 

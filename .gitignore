@@ -29,7 +29,7 @@ data/baseline/
 *.sqlite.work
 *.sqlite.work-journal
 *.sqlite.tmp
-*.similarity_facts.pkl
+*.similarity/
 
 # env / secrets
 .env

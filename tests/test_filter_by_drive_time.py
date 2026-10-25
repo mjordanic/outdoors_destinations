@@ -6,10 +6,12 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 from dayhike import (
+    Catalog,
     Origin,
     RankedDayHike,
     Ranking,
     build_catalog,
+    build_similarity,
     filter_by_drive_time,
     rank_dayhikes,
 )
@@ -113,6 +115,7 @@ def test_filter_drops_null_matrix_entries_without_a_fake_time(tmp_path: Path) ->
 
 def test_rank_without_origin_does_not_require_valhalla(tmp_path: Path) -> None:
     catalog = build_catalog(FIXTURE, tmp_path / "catalog.sqlite")
+    build_similarity(catalog.path, tmp_path / "dem")
 
     ranking = rank_dayhikes(catalog, ["Ridge Walk"])
 
@@ -123,6 +126,7 @@ def test_rank_without_origin_does_not_require_valhalla(tmp_path: Path) -> None:
 def test_cli_without_origin_prints_id_name_score_only(tmp_path: Path) -> None:
     path = tmp_path / "catalog.sqlite"
     build_catalog(FIXTURE, path)
+    build_similarity(path, tmp_path / "dem")
 
     result = subprocess.run(
         [sys.executable, "-m", "dayhike", "rank", "--catalog", str(path), "Ridge Walk"],
@@ -141,6 +145,7 @@ def test_cli_prints_drive_time_when_filtering(
 ) -> None:
     path = tmp_path / "catalog.sqlite"
     build_catalog(FIXTURE, path)
+    build_similarity(path, tmp_path / "dem")
 
     def fake_sources(self, origin, trailheads):
         return [1_800.0] * len(trailheads)
@@ -169,6 +174,42 @@ def test_cli_prints_drive_time_when_filtering(
     columns = valley_line.split("\t")
     assert len(columns) == 4
     assert columns[3] == "0.5"
+
+
+def test_cli_limit_applies_after_drive_time_filter(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, path)
+    build_similarity(path, tmp_path / "dem")
+    best, second = rank_dayhikes(Catalog.open(path), ["Ridge Walk"]).items[:2]
+
+    def fake_sources(self, origin, trailheads):
+        return [None if trailhead == best.dayhike.trailhead else 1_800.0 for trailhead in trailheads]
+
+    monkeypatch.setattr(
+        "dayhike.cli.ValhallaMatrixClient.sources_to_targets",
+        fake_sources,
+    )
+
+    code = main(
+        [
+            "rank",
+            "--catalog",
+            str(path),
+            "--origin",
+            "45.8,15.97",
+            "--max-hours",
+            "2",
+            "--limit",
+            "1",
+            "Ridge Walk",
+        ]
+    )
+    out = capsys.readouterr().out.strip().splitlines()
+
+    assert code == 0
+    assert [line.split("\t")[0] for line in out] == [str(second.dayhike.id)]
 
 
 def test_valhalla_client_reads_seconds_and_null_from_sources_to_targets(
