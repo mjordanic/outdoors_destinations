@@ -24,6 +24,7 @@ data/*.pbf
 data/catalog.sqlite
 data/*.snaps.npz
 data/baseline/
+data/web-serving/
 *.geometry.sqlite
 *.sqlite-wal
 *.sqlite-shm

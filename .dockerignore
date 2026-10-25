@@ -1,0 +1,8 @@
+# Only pyproject.toml, uv.lock, .python-version, src/ and web/start.sh go into the web image.
+*
+!pyproject.toml
+!uv.lock
+!.python-version
+!src/
+!web/start.sh
+**/__pycache__

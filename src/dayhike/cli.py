@@ -248,7 +248,55 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Valhalla serves highways-only tiles: estimate DriveTime (see README)",
     )
+    export = subparsers.add_parser(
+        "export-serving", help="Write the small read-only dataset the web demo serves"
+    )
+    export.add_argument("--catalog", type=Path, default=Path("data/catalog.sqlite"))
+    export.add_argument("--out", type=Path, default=Path("data/web-serving"))
+    export.add_argument(
+        "--valhalla-tiles",
+        type=Path,
+        help="Directory with the highways-only valhalla_tiles.tar and its valhalla.json",
+    )
+    export.add_argument("--snaps", type=Path, help="Existing highway snap cache to start from")
+    export.add_argument(
+        "--valhalla-url", help="Running highways-only Valhalla: snap every Trailhead now"
+    )
+    serve = subparsers.add_parser("serve", help="Serve the web demo from a serving export")
+    serve.add_argument("--data", type=Path, default=Path("data/web-serving"))
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument(
+        "--valhalla-url",
+        help="Highways-only Valhalla for the drive-time filter; omit to turn the filter off",
+    )
+    serve.add_argument(
+        "--forwarded-hops",
+        type=int,
+        default=0,
+        help="Proxies that append to X-Forwarded-For in front of the app (1 on Cloud Run)",
+    )
+    coverage = subparsers.add_parser(
+        "coverage-map", help="Draw the SVG map of Europe with the covered countries shaded"
+    )
+    coverage.add_argument("--catalog", type=Path, default=Path("data/catalog.sqlite"))
+    coverage.add_argument(
+        "--countries", type=Path, required=True, help="Natural Earth admin-0 countries GeoJSON"
+    )
+    coverage.add_argument(
+        "--out", type=Path, default=Path("src/dayhike/web/static/coverage.svg")
+    )
     args = parser.parse_args(argv)
+    if args.command == "export-serving":
+        return _export_serving(args.catalog, args.out, args.valhalla_tiles, args.snaps, args.valhalla_url)
+    if args.command == "serve":
+        return _serve(args.data, args.host, args.port, args.valhalla_url, args.forwarded_hops)
+    if args.command == "coverage-map":
+        from dayhike.coverage import coverage_map
+
+        for country, count in coverage_map(args.catalog, args.countries, args.out):
+            print(f"{country}\t{count}")
+        return 0
     if args.command == "ingest":
         return _ingest(
             args.osm, args.catalog, fresh=args.fresh, list_dayhikes=args.list_dayhikes
@@ -400,6 +448,62 @@ def _build_similarity(catalog_path: Path, dem_dir: Path, *, calibrate_only: bool
     except StaleSimilarity as exc:
         print(exc, file=sys.stderr)
         return 1
+    return 0
+
+
+def _export_serving(
+    catalog_path: Path,
+    out: Path,
+    valhalla_tiles: Path | None,
+    snaps: Path | None,
+    valhalla_url: str | None,
+) -> int:
+    from dayhike.serving import ServingExportError, export_serving
+
+    def progress(message: str) -> None:
+        print(message, file=sys.stderr, flush=True)
+
+    try:
+        print(
+            export_serving(
+                catalog_path,
+                out,
+                valhalla_dir=valhalla_tiles,
+                snaps_path=snaps,
+                valhalla_url=valhalla_url,
+                progress=progress,
+            )
+        )
+    except (StaleSimilarity, ServingExportError) as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    return 0
+
+
+def _serve(data: Path, host: str, port: int, valhalla_url: str | None, forwarded_hops: int) -> int:
+    try:
+        import uvicorn
+
+        from dayhike.web import create_app
+    except ImportError:
+        print("the web demo needs its extra: uv sync --extra web", file=sys.stderr)
+        return 1
+    from dayhike.serving import ServingData
+
+    serving = ServingData(data)
+    drive_client = None
+    if valhalla_url is not None:
+        if not (data / "snaps.npz").is_file():
+            print(f"{data}: no snaps.npz; export with --valhalla-url first", file=sys.stderr)
+            return 1
+        snaps = HighwaySnaps(valhalla_url, data / "snaps.npz")
+        snaps.path = None  # the export is read-only: keep new snaps in memory
+
+        def drive_client(max_hours: float) -> HighwayDriveTimeClient:
+            return HighwayDriveTimeClient(max_hours, snaps)
+
+    app = create_app(serving, drive_client, forwarded_hops=forwarded_hops)
+    uvicorn.run(app, host=host, port=port, log_level="info", proxy_headers=False)
     return 0
 
 
