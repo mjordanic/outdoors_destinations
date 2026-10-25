@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import socket
 import sys
 from pathlib import Path
 
@@ -484,7 +485,7 @@ def _serve(data: Path, host: str, port: int, valhalla_url: str | None, forwarded
     try:
         import uvicorn
 
-        from dayhike.web import create_app
+        from dayhike.web import VALHALLA_TIMEOUT_S, create_app
     except ImportError:
         print("the web demo needs its extra: uv sync --extra web", file=sys.stderr)
         return 1
@@ -503,6 +504,9 @@ def _serve(data: Path, host: str, port: int, valhalla_url: str | None, forwarded
             return HighwayDriveTimeClient(max_hours, snaps)
 
     app = create_app(serving, drive_client, forwarded_hops=forwarded_hops)
+    # A stalled Valhalla call would hold the one-Ranking lock past the request; time it
+    # out instead so /api/rank answers 503 and frees the lock.
+    socket.setdefaulttimeout(VALHALLA_TIMEOUT_S)
     uvicorn.run(app, host=host, port=port, log_level="info", proxy_headers=False)
     return 0
 

@@ -121,6 +121,23 @@ def test_drive_filter_keeps_only_reachable_hikes_with_their_hours(
     assert all(r["drive_hours"] == 1.0 for r in body["results"])
 
 
+def test_a_stalled_drive_service_gives_503_and_frees_the_ranking(
+    data: ServingData, matrix: Matrix
+) -> None:
+    class Stalled:
+        def sources_to_targets(self, origin, trailheads):
+            raise TimeoutError("timed out")
+
+    clients = iter([Stalled(), matrix])
+    client = TestClient(create_app(data, lambda max_hours: next(clients)))
+    query = {"seed": RIDGE_WALK_ID, "origin": {"lat": 45.1, "lon": 15.1}, "max_hours": 2}
+
+    assert client.post("/api/rank", json=query).status_code == 503
+    response = client.post("/api/rank", json=query)
+    assert response.status_code == 200
+    assert matrix.calls == 1
+
+
 def test_drive_filter_off_without_a_drive_client(data: ServingData) -> None:
     client = TestClient(create_app(data))
 
