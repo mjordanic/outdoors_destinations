@@ -1523,6 +1523,7 @@ DAYHIKE_REAL_DATA=1 uv run pytest -m real_data
 | `DAYHIKE_DATA_DIR` | `data/` | the data directory under test |
 | `DAYHIKE_REFERENCE_DIR` | unset | frozen copies of an older build plus `golden/` (see [Clean rebuild](#clean-rebuild)); comparisons skip without it |
 | `DAYHIKE_VALHALLA_URL` | `http://127.0.0.1:8002` | Valhalla serving `DAYHIKE_DATA_DIR/valhalla/highways-eu` |
+| `DAYHIKE_SERVING_DIR` | `DAYHIKE_DATA_DIR/web-serving` | the serving export of that Catalog (`dayhike export-serving`) |
 | `DAYHIKE_REAL_CATALOG` | `DAYHIKE_DATA_DIR/catalog.sqlite` | another Catalog for `tests/test_real_data.py` |
 
 | File | Checks |
@@ -1535,6 +1536,7 @@ DAYHIKE_REAL_DATA=1 uv run pytest -m real_data
 | `test_rebuild_against_reference.py` | against `DAYHIKE_REFERENCE_DIR`: every Catalog and GeometryStore table, the facts, the Calibration of the 22 Measures that do not read LandCover or climate, and the golden top-50 rankings are exact; LandCover and climate are exact where the reference had full coverage and never lost; the raw downloads are unchanged |
 | `test_golden.py` | famous summits within 80 m below their published height; a Kungsleden stage's reverse is its best match; Ben Nevis Path is closer to Ben Nevis Trail than to a Dutch walk; the golden pairs reproduce |
 | `test_drive_time_real.py` | rebuilt highway tiles: tile counts, Valhalla 3.5.1, city routes within 2–5% of the reference, `nearby --highways` sets from Munich, Oslo and Lisbon (Jaccard ≥ 0.999, times within a minute), the same six Trailheads with no highway |
+| `test_serving_export_real.py` | the serving export: same ids and Trailheads as the store, a byte copy of it; data ≤ 300 MB and tiles ≤ 900 MB; simplified lines within 10 m (+1.5 m polyline rounding) on 2,000 DayHikes; no rasters or per-vertex climate; every attribution; golden rankings from the export; the tile tar is the built one |
 | `test_real_data.py` | the main walk, WaterSources, the similarity facts, notebook 05 (which reads `data/` of its checkout and must see the Catalog under test) |
 
 ## Clean rebuild
@@ -1597,6 +1599,7 @@ at the rebuild.
    uv run dayhike sample-landcover              # ~20 min
    uv run dayhike sample-climate                # ~7 h
    uv run dayhike build-similarity              # ~30 min
+   uv run dayhike export-serving --valhalla-tiles data/valhalla/highways-eu --valhalla-url http://127.0.0.1:8003  # ~25 min
    ```
 
    Beside the sample steps, rebuild the highway tiles ([Highway tiles](#highway-tiles-all-of-europe-small-server):

@@ -26,6 +26,7 @@ REFERENCE_DIR = (
     Path(os.environ["DAYHIKE_REFERENCE_DIR"]) if os.environ.get("DAYHIKE_REFERENCE_DIR") else None
 )
 VALHALLA_URL = os.environ.get("DAYHIKE_VALHALLA_URL", "http://127.0.0.1:8002")
+SERVING_DIR = Path(os.environ.get("DAYHIKE_SERVING_DIR", DATA_DIR / "web-serving"))
 EUROPE_BOUNDS = (32.6, -31.3, 71.2, 46.4)  # south, west, north, east (README Europe walkthrough)
 # FABDEM tiles that carry vertices but are 404 on the mirror (checked 2026-10-25).
 KNOWN_DEM_GAPS = frozenset({"N41E043", "N41E044", "N41E046"})
