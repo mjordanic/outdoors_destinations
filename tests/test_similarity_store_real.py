@@ -143,7 +143,11 @@ def test_stale_store_is_refused(tmp_path: Path) -> None:
     meta = json.loads(meta_path.read_text())
 
     connection = sqlite3.connect(catalog_path)
-    connection.execute("UPDATE feature_vectors SET elevation_gain_m = elevation_gain_m + 1 WHERE rowid = 1")
+    connection.execute(
+        "UPDATE feature_vectors SET elevation_gain_m = elevation_gain_m + 1 WHERE dayhike_id = "
+        "(SELECT MIN(dayhike_id) FROM feature_vectors WHERE elevation_gain_m IS NOT NULL)"
+    )
+    assert connection.total_changes == 1
     connection.commit()
     connection.close()
     with pytest.raises(StaleSimilarity, match="build-similarity"):
