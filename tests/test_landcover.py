@@ -586,6 +586,53 @@ def test_sample_opens_each_tile_once_across_chunks_and_matches_single_chunk(
     assert {code for _id, _seq, code in codes} == {10, None}
 
 
+def test_sample_keeps_at_most_the_open_tile_limit_open_and_matches_unlimited(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import rasterio
+
+    from dayhike import landcover
+
+    unlimited = tmp_path / "unlimited.sqlite"
+    build_catalog(FIXTURE, unlimited)
+    rasters = tmp_path / "rasters"
+    rasters.mkdir()
+    for name, south, north, code in (("a_south.tif", 44.99, 45.05, 10), ("b_north.tif", 45.05, 45.12, 30)):
+        _write_class_tif(
+            rasters / name,
+            west=14.99,
+            south=south,
+            east=15.05,
+            north=north,
+            codes=np.full((8, 8), code, dtype="uint8"),
+        )
+    sample_landcover(unlimited, rasters)
+
+    limited = tmp_path / "limited.sqlite"
+    build_catalog(FIXTURE, limited)
+    monkeypatch.setattr(landcover, "_VERTEX_CHUNK", 2)
+    monkeypatch.setattr(landcover, "_MAX_OPEN_TILES", 1)
+    opened = []
+    most_open = 0
+    real_open = rasterio.open
+
+    def counting_open(path, *args, **kwargs):
+        nonlocal most_open
+        dataset = real_open(path, *args, **kwargs)
+        opened.append(dataset)
+        most_open = max(most_open, sum(not each.closed for each in opened))
+        return dataset
+
+    monkeypatch.setattr(rasterio, "open", counting_open)
+    sample_landcover(limited, rasters)
+
+    assert most_open == 1
+    assert all(dataset.closed for dataset in opened)
+    codes, fractions = _sample_snapshot(limited)
+    assert (codes, fractions) == _sample_snapshot(unlimited)
+    assert {code for _id, _seq, code in codes} >= {10, 30}
+
+
 def test_failed_tile_open_still_closes_datasets_opened_so_far(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -4,6 +4,7 @@ import math
 import shutil
 import sqlite3
 import time
+from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from contextlib import ExitStack
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -26,6 +27,8 @@ WORLDCOVER_ATTRIBUTION = (
 )
 _VERTEX_CHUNK = 50_000
 _HIKE_IN_CHUNK = 500
+# Europe has 267 tiles; the macOS default soft limit is 256 open files.
+_MAX_OPEN_TILES = 128
 _WORLDCOVER_NODATA = 0
 _TREE = 10
 _SHRUB = 20
@@ -123,32 +126,62 @@ def sample_landcover_classes(
     if not rasters:
         return [None] * len(points)
     with ExitStack() as stack:
-        datasets = _open_rasters(stack, rasters)
-        return _sample_open_datasets(datasets, points)
+        tiles = _Tiles(rasters)
+        stack.callback(tiles.close)
+        return _sample_open_datasets(tiles, points)
 
 
 def _raster_paths(raster_dir: Path) -> list[Path]:
     return sorted(raster_dir.glob("*.tif")) + sorted(raster_dir.glob("*.tiff"))
 
 
-def _open_rasters(stack: ExitStack, rasters: Sequence[Path]) -> list:
-    import rasterio
+class _Tiles:
+    """Rasters opened on first use, at most ``_MAX_OPEN_TILES`` at a time.
 
-    return [stack.enter_context(rasterio.open(path)) for path in rasters]
+    Each raster is opened once while it stays among the most recently used;
+    its bounds and nodata stay known after it is closed, so a chunk with no
+    point on it never reopens it.
+    """
+
+    def __init__(self, paths: Sequence[Path]) -> None:
+        self.paths = list(paths)
+        self._extents: dict[int, tuple[object, float | None]] = {}
+        self._open: OrderedDict[int, object] = OrderedDict()
+
+    def extent(self, index: int) -> tuple[object, float | None]:
+        if index not in self._extents:
+            self.dataset(index)
+        return self._extents[index]
+
+    def dataset(self, index: int):
+        import rasterio
+
+        if index in self._open:
+            self._open.move_to_end(index)
+            return self._open[index]
+        if len(self._open) >= _MAX_OPEN_TILES:
+            self._open.popitem(last=False)[1].close()
+        dataset = rasterio.open(self.paths[index])
+        self._open[index] = dataset
+        self._extents[index] = (dataset.bounds, dataset.nodata)
+        return dataset
+
+    def close(self) -> None:
+        while self._open:
+            self._open.popitem()[1].close()
 
 
 def _sample_open_datasets(
-    datasets: Sequence,
+    tiles: _Tiles,
     points: Sequence[tuple[float, float]],
 ) -> list[int | None]:
-    """First-tile-wins sampling over already-open datasets (sorted file order)."""
+    """First-tile-wins sampling over the tiles in sorted file order."""
     out: list[int | None] = [None] * len(points)
     remaining = set(range(len(points)))
-    for dataset in datasets:
+    for tile in range(len(tiles.paths)):
         if not remaining:
             break
-        bounds = dataset.bounds
-        nodata = dataset.nodata
+        bounds, nodata = tiles.extent(tile)
         indices = [
             index
             for index in remaining
@@ -158,7 +191,7 @@ def _sample_open_datasets(
         if not indices:
             continue
         coords = [(points[index][1], points[index][0]) for index in indices]
-        for index, sample in zip(indices, dataset.sample(coords), strict=True):
+        for index, sample in zip(indices, tiles.dataset(tile).sample(coords), strict=True):
             value = float(sample[0])
             if not math.isfinite(value):
                 continue
@@ -195,7 +228,8 @@ def sample_landcover(
     try:
         write.execute("PRAGMA journal_mode=WAL")
         _ensure_column(write, "vertices", "landcover", "INTEGER")
-        datasets = _open_rasters(stack, rasters)
+        tiles = _Tiles(rasters)
+        stack.callback(tiles.close)
         read = sqlite3.connect(store_path)
         try:
             cursor = read.execute(
@@ -210,7 +244,7 @@ def sample_landcover(
                     for dayhike_id, seq, lat, lon in rows
                 ]
                 classes = _sample_open_datasets(
-                    datasets,
+                    tiles,
                     [(lat, lon) for _id, _seq, lat, lon in coverable],
                 )
                 updates = [

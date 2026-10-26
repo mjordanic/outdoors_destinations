@@ -93,6 +93,24 @@ def test_fetch_fabdem_skips_missing_remote_tiles(tmp_path: Path) -> None:
     assert not (tmp_path / "N45E015_FABDEM_V1-2.tif").exists()
 
 
+def test_fetch_fabdem_raises_on_a_non_404_download_error(tmp_path: Path) -> None:
+    from urllib.error import URLError
+
+    def broken_for_one(url: str, filename: str) -> None:
+        if url == fabdem_tile_url("N45E016"):
+            raise URLError("connection reset")
+        Path(filename).write_bytes(b"tif-bytes")
+
+    with pytest.raises(RuntimeError, match="N45E016"):
+        fetch_fabdem(
+            tmp_path,
+            Bounds(south=45.1, west=15.5, north=45.2, east=16.1),
+            retrieve=broken_for_one,
+        )
+
+    assert (tmp_path / "N45E015_FABDEM_V1-2.tif").read_bytes() == b"tif-bytes"
+
+
 def _write_constant_tif(
     path: Path, *, west: float, south: float, east: float, north: float, z: float
 ) -> None:

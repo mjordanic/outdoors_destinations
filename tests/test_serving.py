@@ -102,6 +102,27 @@ def test_export_refuses_a_similarity_store_for_other_dayhikes(
     assert not (tmp_path / "out" / "meta.json").exists()
 
 
+def test_export_refuses_a_similarity_store_for_earlier_catalog_values(
+    catalog_path: Path, tmp_path: Path
+) -> None:
+    copy = tmp_path / "catalog.sqlite"
+    copy.write_bytes(catalog_path.read_bytes())
+    (tmp_path / "catalog.geometry.sqlite").write_bytes(
+        (catalog_path.parent / "catalog.geometry.sqlite").read_bytes()
+    )
+    build_similarity(copy, tmp_path / "dem")
+    connection = sqlite3.connect(copy)
+    connection.execute(
+        "UPDATE feature_vectors SET length_m = length_m + 1 WHERE dayhike_id = ?", (RIDGE_WALK_ID,)
+    )
+    connection.commit()
+    connection.close()
+
+    with pytest.raises(ServingExportError, match="build-similarity"):
+        export_serving(copy, tmp_path / "out")
+    assert not (tmp_path / "out" / "meta.json").exists()
+
+
 def test_an_incomplete_export_does_not_open(tmp_path: Path) -> None:
     with pytest.raises(ServingExportError, match="no complete serving export"):
         ServingData(tmp_path)

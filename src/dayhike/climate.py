@@ -46,17 +46,18 @@ def fetch_worldclim(
     retrieve: Retrieve | None = None,
     progress: Progress | None = None,
 ) -> list[Path]:
-    """Download missing WorldClim 2.1 30s monthly GeoTIFFs into dest.
+    """Download WorldClim 2.1 30s monthly GeoTIFFs missing from dest into dest.
 
     Extracts the three global monthly zips and clips each GeoTIFF to bounds
-    (default: the DEM Alps+Dinarides bbox).
+    (default: the DEM Alps+Dinarides bbox). A present GeoTIFF that does not
+    cover bounds counts as missing and is replaced.
     """
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
     retrieve = retrieve or _download
     paths: list[Path] = []
     for variable in WORLDCLIM_VARIABLES:
-        present = _present_month_tifs(dest, variable)
+        present = _present_month_tifs(dest, variable, bounds)
         paths.extend(present)
         if len(present) == 12:
             continue
@@ -259,12 +260,15 @@ def _refresh_catalog_climate(
         for name in CLIMATE_FEATURE_NAMES:
             _ensure_column(catalog, "feature_vectors", name, "REAL")
         _ensure_climate_months(catalog)
-        by_hike: dict[int, dict[int, list[tuple[float, float, float]]]] = {
-            dayhike_id: {month: [] for month in range(1, 13)} for dayhike_id in hike_ids
-        }
+        month_rows: list[tuple[int, int, float, float, float]] = []
+        regime_rows: list[tuple[float, float, float, int]] = []
         ids = list(hike_ids)
         for start in range(0, len(ids), _HIKE_IN_CHUNK):
             chunk = ids[start : start + _HIKE_IN_CHUNK]
+            # One chunk of samples at a time: all of Europe is ~500 M vertex-months.
+            by_hike: dict[int, dict[int, list[tuple[float, float, float]]]] = {
+                dayhike_id: {month: [] for month in range(1, 13)} for dayhike_id in chunk
+            }
             placeholders = ",".join("?" * len(chunk))
             for dayhike_id, month, temperature_c, precipitation_mm, solar_radiation in (
                 store.execute(
@@ -277,41 +281,39 @@ def _refresh_catalog_climate(
                 by_hike[int(dayhike_id)][int(month)].append(
                     (float(temperature_c), float(precipitation_mm), float(solar_radiation))
                 )
-        month_rows: list[tuple[int, int, float, float, float]] = []
-        regime_rows: list[tuple[float, float, float, int]] = []
-        for dayhike_id, months in by_hike.items():
-            if not any(months[month] for month in range(1, 13)):
-                continue
-            hike_means: list[tuple[float, float, float]] = []
-            complete = True
-            for month in range(1, 13):
-                samples = months[month]
-                if not samples:
-                    complete = False
-                    break
-                n = len(samples)
-                hike_means.append(
-                    (
-                        sum(sample[0] for sample in samples) / n,
-                        sum(sample[1] for sample in samples) / n,
-                        sum(sample[2] for sample in samples) / n,
+            for dayhike_id, months in by_hike.items():
+                if not any(months[month] for month in range(1, 13)):
+                    continue
+                hike_means: list[tuple[float, float, float]] = []
+                complete = True
+                for month in range(1, 13):
+                    samples = months[month]
+                    if not samples:
+                        complete = False
+                        break
+                    n = len(samples)
+                    hike_means.append(
+                        (
+                            sum(sample[0] for sample in samples) / n,
+                            sum(sample[1] for sample in samples) / n,
+                            sum(sample[2] for sample in samples) / n,
+                        )
                     )
-                )
-            if not complete:
-                continue
-            for month, (temperature_c, precipitation_mm, solar_radiation) in enumerate(
-                hike_means, start=1
-            ):
-                month_rows.append(
-                    (
-                        dayhike_id,
-                        month,
-                        temperature_c,
-                        precipitation_mm,
-                        solar_radiation,
+                if not complete:
+                    continue
+                for month, (temperature_c, precipitation_mm, solar_radiation) in enumerate(
+                    hike_means, start=1
+                ):
+                    month_rows.append(
+                        (
+                            dayhike_id,
+                            month,
+                            temperature_c,
+                            precipitation_mm,
+                            solar_radiation,
+                        )
                     )
-                )
-            regime_rows.append((*_regime(hike_means), dayhike_id))
+                regime_rows.append((*_regime(hike_means), dayhike_id))
         catalog.executemany(
             "DELETE FROM climate_months WHERE dayhike_id = ?",
             [(dayhike_id,) for dayhike_id in hike_ids],
@@ -385,13 +387,34 @@ def _month_tif(dest: Path, variable: str, month: int) -> Path:
     return dest / f"wc2.1_30s_{variable}_{month:02d}.tif"
 
 
-def _present_month_tifs(dest: Path, variable: str) -> list[Path]:
+def _present_month_tifs(dest: Path, variable: str, bounds: Bounds) -> list[Path]:
     paths: list[Path] = []
     for month in range(1, 13):
         path = _month_tif(dest, variable, month)
-        if path.exists() and path.stat().st_size > 0:
+        if _covers(path, bounds):
             paths.append(path)
     return paths
+
+
+def _covers(path: Path, bounds: Bounds) -> bool:
+    """Whether path is a readable raster whose extent holds bounds, to one cell."""
+    import rasterio
+    from rasterio.errors import RasterioIOError
+
+    if not path.is_file() or path.stat().st_size == 0:
+        return False
+    try:
+        with rasterio.open(path) as dataset:
+            extent = dataset.bounds
+            cell_x, cell_y = dataset.res
+    except RasterioIOError:
+        return False
+    return (
+        extent.left <= bounds.west + cell_x
+        and extent.bottom <= bounds.south + cell_y
+        and extent.right >= bounds.east - cell_x
+        and extent.top >= bounds.north - cell_y
+    )
 
 
 def _extract_worldclim_month_tifs(
@@ -408,8 +431,10 @@ def _extract_worldclim_month_tifs(
             if not 1 <= month <= 12:
                 continue
             out = _month_tif(dest, variable, month)
-            if out.exists() and out.stat().st_size > 0:
+            if _covers(out, bounds):
                 continue
+            # Unlink first: out may be a symlink to another data directory.
+            out.unlink(missing_ok=True)
             with archive.open(info) as source, out.open("wb") as target:
                 shutil.copyfileobj(source, target)
             _clip_to_bounds(out, bounds)

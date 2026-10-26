@@ -4,8 +4,9 @@ Run after an ingest, the three sample commands and build-similarity:
 
     DAYHIKE_REAL_DATA=1 uv run pytest tests/test_real_data.py
 
-Skipped without DAYHIKE_REAL_DATA=1. The baseline checks compare with
-data/baseline/ and are skipped without it. That is the 2026-10-21 Catalog
+Skipped without DAYHIKE_REAL_DATA=1. DAYHIKE_DATA_DIR replaces data/ (README
+"Clean rebuild"). The baseline checks compare with data/baseline/ and are
+skipped without it. That is the 2026-10-21 Catalog
 (catalog.sqlite and catalog.similarity_facts.pkl, 155,844 DayHikes), copied
 before the main-walk re-ingest (ADR-0012); not the 19 GB GeometryStore. Round 2
 compares against that baseline, not against the round-1 Catalog (161,599). The
@@ -23,8 +24,9 @@ left come from re-assembling their relations from the Europe extract with
 ingest has them (the extract of the relations holds none), so that check also
 needs the extract.
 
-DAYHIKE_REAL_CATALOG points the checks at another Catalog; the notebook check
-always reads data/catalog.sqlite, as the notebook does. The main-walk checks
+DAYHIKE_REAL_CATALOG points the checks at another Catalog; the notebook reads
+data/catalog.sqlite of its checkout, and its check fails unless that is the
+Catalog under test. The main-walk checks
 pass on a Catalog built from tests/fixtures/catalog.osm; the water, extract
 and notebook checks are about the real data and are not expected to pass there.
 tests/test_real_data_checks.py runs the step measure and the "why did this
@@ -46,23 +48,22 @@ import pandas as pd
 import pytest
 from sklearn.neighbors import BallTree
 
+from rebuild_checks import DATA_DIR, real_data
+
 from dayhike import SimilarityStore, geometry_store_path_for
 from dayhike.catalog import MAX_LENGTH_M, _access_tree, _drop_reason, assemble_main_walk
 from dayhike.osm import amenity_kind
 from dayhike.similarity import MEASURE_NAMES
 
-REPO = Path(__file__).resolve().parents[1]
-CATALOG = Path(os.environ.get("DAYHIKE_REAL_CATALOG", REPO / "data" / "catalog.sqlite"))
+CATALOG = Path(os.environ.get("DAYHIKE_REAL_CATALOG", DATA_DIR / "catalog.sqlite"))
 GEOMETRY = geometry_store_path_for(CATALOG)
-BASELINE = REPO / "data" / "baseline" / "catalog.sqlite"
-EXTRACT = REPO / "data" / "osm" / "europe-latest.catalog.osm.pbf"
+BASELINE = DATA_DIR / "baseline" / "catalog.sqlite"
+EXTRACT = DATA_DIR / "osm" / "europe-latest.catalog.osm.pbf"
 OLD_KINDS = ("hut", "parking", "restaurant_cafe", "drinking_water", "viewpoint", "peak", "shelter")
 NEW_WATER_KINDS = ("spring", "water_tap", "water_point")
 WATER_COLUMNS = ("water_count", "dry_stretch_m")
 
-pytestmark = pytest.mark.skipif(
-    os.environ.get("DAYHIKE_REAL_DATA") != "1", reason="real data: set DAYHIKE_REAL_DATA=1"
-)
+pytestmark = real_data
 needs_baseline = pytest.mark.skipif(not BASELINE.is_file(), reason="no data/baseline/")
 
 
@@ -189,6 +190,8 @@ def test_notebook_05_passes_every_verification_on_the_real_facts(
     output, _, _ = _notebook_text(NOTEBOOKS / "05_similarity.ipynb")
     lines = [line.split("\t") for line in output.splitlines()]
 
+    # The notebook reads data/ of its checkout: it must be the Catalog under test.
+    assert f"dayhikes\t{len(SimilarityStore.open(CATALOG).ids)}" in output
     verify = [fields for fields in lines if fields[0] == "verify"]
     assert verify
     assert [fields for fields in verify if fields[-1] != "PASS"] == []

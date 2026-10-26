@@ -25,8 +25,8 @@ uv sync
 ```
 
 The package is `dayhike`. Tests: `uv run pytest`. Checks on the real data in
-`data/` are opt-in: `DAYHIKE_REAL_DATA=1 uv run pytest tests/test_real_data.py`
-(see [Re-ingest after an ingest change](#re-ingest-after-an-ingest-change)).
+`data/` are opt-in: `DAYHIKE_REAL_DATA=1 uv run pytest -m real_data`
+(see [Tests](#tests) and [Clean rebuild](#clean-rebuild)).
 
 ## How data is created (command order)
 
@@ -102,7 +102,8 @@ only overwrite sampled columns on hikes whose geometry sits on a downloaded
 tile. `build-similarity` reads both SQLite files and FABDEM and replaces
 `data/catalog.similarity/`; ingest and every sample step that changes the
 Catalog delete that directory, so rerun `build-similarity` after them (Ranking
-refuses missing facts and facts built for other DayHikes or by other code).
+refuses missing facts and facts built for other DayHikes, other Catalog
+values or by other code).
 
 For a continent PBF (for example `europe-latest.osm.pbf`), ingest is the same
 command. After ingest, widen raster coverage with
@@ -428,8 +429,9 @@ LandCover fractions do not change with the month.
 and after every sample step, which delete the old directory.
 `build-similarity --calibrate-only` keeps the facts and recomputes the
 Calibration only, which is enough after a Measure's constant changes. The
-directory records a version of the constants: Ranking fails with a message
-naming the command to run when the facts or the Calibration were built by other code, or when the Catalog's DayHikes changed.
+directory records a version of the constants and a digest of the Catalog's
+`feature_vectors` and `climate_months`: Ranking fails with a message
+naming the command to run when the facts or the Calibration were built by other code, when the Catalog's DayHikes changed, or when a sample step changed their values (a store copied next to a re-sampled Catalog).
 
 Python:
 
@@ -901,7 +903,8 @@ NULL) onto GeometryStore vertices and Catalog `feature_vectors`.
 GeoTIFFs into `data/dem/` (gitignored). Default `--bounds` is
 `41.8,5.9,50.6,20.4` (Alps + Dinarides, same countries as
 `fetch-extracts`). Tiles already on disk are skipped. 404s (ocean) are
-skipped. This command does not open SQLite.
+skipped; any other download error fails the command, naming the tiles. This
+command does not open SQLite.
 
 ```bash
 uv run dayhike fetch-dem
@@ -969,7 +972,8 @@ Dinarides, same as `fetch-dem`). Tiles already on disk are skipped.
 `fetch-landcover` skips a tile the server does not have, but fails if a tile
 download errors. `fetch-climate` always downloads the three **global** base zips
 in full (very large downloads) into a temporary directory before clipping, even for a
-small bbox, and repeats that for any variable with a missing month. Neither
+small bbox, and repeats that for any variable with a missing month or with a
+present month that does not cover `--bounds` (that file is replaced). Neither
 command opens SQLite.
 
 ```bash
@@ -1005,10 +1009,10 @@ download tiles. `--catalog` defaults to `data/catalog.sqlite`.
 
 Each sampling run opens each raster once and holds it open until the run
 ends, so run time grows with the number of vertices sampled, not with repeated
-file opens. That means about 36 climate files (`sample-climate`) or one file
-per WorldCover tile covering the Catalog bbox (`sample-landcover`) are open at
-once. A bbox much wider than Europe may need your open file-handle limit
-checked (`ulimit -n`).
+file opens. `sample-climate` keeps its 36 files open. `sample-landcover` opens
+a WorldCover tile when a vertex first needs it and keeps at most 128 open,
+closing the least recently used (Europe has 267 tiles; the macOS default limit
+is 256 open files).
 
 ```bash
 uv run dayhike sample-landcover
@@ -1494,6 +1498,132 @@ uv run dayhike coverage-map --catalog data/catalog.sqlite --countries /tmp/count
 ```
 
 The mark (two mountains and a trail) is drawn by hand for this project.
+
+## Tests
+
+Two tiers.
+
+**Fast** (`uv run pytest`, about a minute): everything runs on the committed
+OSM fixture and small synthetic rasters. Among them,
+`tests/test_pipeline_rebuild.py` runs ingest, the three sample steps and
+`build-similarity` twice in two directories and requires identical tables and
+`.npy` bytes, no work files left behind, and the schema in
+`tests/rebuild_checks.py`. `tests/test_rebuild_checks.py` shows the comparison
+helpers catch what they must.
+
+**Slow** (marker `real_data`, skipped unless `DAYHIKE_REAL_DATA=1`): checks
+on a real Europe data directory.
+
+```bash
+DAYHIKE_REAL_DATA=1 uv run pytest -m real_data
+```
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `DAYHIKE_REAL_DATA` | unset | `1` runs the slow tier |
+| `DAYHIKE_DATA_DIR` | `data/` | the data directory under test |
+| `DAYHIKE_REFERENCE_DIR` | unset | frozen copies of an older build plus `golden/` (see [Clean rebuild](#clean-rebuild)); comparisons skip without it |
+| `DAYHIKE_VALHALLA_URL` | `http://127.0.0.1:8002` | Valhalla serving `DAYHIKE_DATA_DIR/valhalla/highways-eu` |
+| `DAYHIKE_SERVING_DIR` | `DAYHIKE_DATA_DIR/web-serving` | the serving export of that Catalog (`dayhike export-serving`) |
+| `DAYHIKE_REAL_CATALOG` | `DAYHIKE_DATA_DIR/catalog.sqlite` | another Catalog for `tests/test_real_data.py` |
+
+| File | Checks |
+| --- | --- |
+| `test_raw_inputs.py` | the Europe PBF is the recorded snapshot (size, sha256); every 1° vertex cell has a FABDEM tile except the three known 404 tiles in Georgia; every 3° vertex cell has a WorldCover tile; 36 climate rasters on one 30″ grid cover the vertex extent; the hiking extract was cut with today's filter list |
+| `test_catalog_invariants.py` | exact schema and no work files; the ingest report adds up (and equals the recorded one on the same snapshot); one row per DayHike in every table; values in range; NULL budgets; every Trailhead is vertex 0 |
+| `test_geometry_invariants.py` | GeometryStore DayHikes equal the Catalog's; dense `seq`; twelve climate months per sampled vertex; the attributions |
+| `test_coverage_by_country.py` | DayHikes per Geofabrik country within ±0.5% of the recorded counts (±15% on another snapshot); LandCover, climate and elevation on ≥ 99% of the DayHikes of every country with ≥ 50 (Georgia's elevation 79%). Needs `data/osm/geofabrik-index-v1.json` from https://download.geofabrik.de/index-v1.json |
+| `test_similarity_store_real.py` | store ids, shapes, versions and digest match the Catalog; Calibration monotone, in [0, 1] and reproducible from the stored facts; NaN budgets; stale stores refused |
+| `test_rebuild_against_reference.py` | against `DAYHIKE_REFERENCE_DIR`: every Catalog and GeometryStore table, the facts, the Calibration of the 22 Measures that do not read LandCover or climate, and the golden top-50 rankings are exact; LandCover and climate are exact where the reference had full coverage and never lost; the raw downloads are unchanged |
+| `test_golden.py` | famous summits within 80 m below their published height; a Kungsleden stage's reverse is its best match; Ben Nevis Path is closer to Ben Nevis Trail than to a Dutch walk; the golden pairs reproduce |
+| `test_drive_time_real.py` | rebuilt highway tiles: tile counts, Valhalla 3.5.1, city routes within 2–5% of the reference, `nearby --highways` sets from Munich, Oslo and Lisbon (Jaccard ≥ 0.999, times within a minute), the same six Trailheads with no highway |
+| `test_serving_export_real.py` | the serving export: same ids and Trailheads as the store, a byte copy of it; data ≤ 300 MB and tiles ≤ 900 MB; simplified lines within 10 m (+1.5 m polyline rounding) on 2,000 DayHikes; no rasters or per-vertex climate; every attribution; golden rankings from the export; the tile tar is the built one |
+| `test_real_data.py` | the main walk, WaterSources, the similarity facts, notebook 05 (which reads `data/` of its checkout and must see the Catalog under test) |
+
+## Clean rebuild
+
+Rebuild every derived file from the raw downloads into a fresh data directory,
+compare it with the old one, then replace the old one. Raw downloads are the
+Europe PBF, the FABDEM tiles and the WorldCover tiles (WorldClim is clipped
+from three large zips and is rebuilt like derived data). Nothing is written
+into the old directory until the end. `REF` is the old `data/`, `SNAP` a
+directory for frozen copies, `NEW` the `data/` of a second checkout of the
+repo (`git worktree add` or a `git archive` export with its own `uv sync`), so
+every default `data/...` path, notebook 05 and `tests/test_real_data.py` point
+at the rebuild.
+
+1. **Freeze the reference** (seconds; APFS clones cost no space until a copy diverges):
+
+   ```bash
+   mkdir -p $SNAP/valhalla $SNAP/golden
+   cp -c $REF/catalog.sqlite $REF/catalog.geometry.sqlite $SNAP/
+   cp -cR $REF/catalog.similarity $SNAP/
+   cp -c $REF/valhalla/highways-eu/{valhalla_tiles.tar,file_hashes.txt} $SNAP/valhalla/
+   uv run python -c "
+   import sys; sys.path.insert(0, 'tests'); from pathlib import Path
+   from rebuild_checks import raw_manifest, write_manifest
+   ref = Path('$REF'); rels = ['osm/europe-latest.osm.pbf']
+   rels += [f'{d}/{p.name}' for d in ('dem', 'landcover') for p in (ref / d).glob('*.tif')]
+   write_manifest(Path('$SNAP/raw-manifest.tsv'), raw_manifest(ref, rels, hashed=rels[:1]))"
+   ```
+
+2. **Capture golden outputs** from the reference, with the old highway tiles
+   served read-only on 8002 (`docker run -d -p 8002:8002 -v "$REF/valhalla/highways-eu:/custom_files:ro" …`,
+   the serve command of [Highway tiles](#highway-tiles-all-of-europe-small-server)), about 3 minutes:
+
+   ```bash
+   uv run python tests/rebuild/capture_golden.py $SNAP --index $NEW/osm/geofabrik-index-v1.json
+   ```
+
+3. **Lay out `NEW`**: link the raw downloads file by file, so a download
+   never lands in `REF`. Link nothing into `climate/`: the old rasters may be
+   clipped to a smaller bbox. Do not link the old `*.catalog.osm.pbf`: ingest
+   must cut the extract again.
+
+   ```bash
+   mkdir -p $NEW/osm $NEW/dem $NEW/landcover $NEW/climate
+   ln -s $REF/osm/europe-latest.osm.pbf $NEW/osm/
+   ln -s $REF/dem/*_FABDEM_V1-2.tif $NEW/dem/
+   ln -s $REF/landcover/*_Map.tif $NEW/landcover/
+   curl -L --fail -o $NEW/osm/geofabrik-index-v1.json https://download.geofabrik.de/index-v1.json
+   ```
+
+4. **Build**, in the new checkout, under `caffeinate -dimsu` (times measured on an 8-core Mac, 2026-10-25):
+
+   ```bash
+   B=32.6,-31.3,71.2,46.4
+   uv run dayhike fetch-landcover --bounds $B   # beside ingest: 243 new tiles, 11 GB, 11 min
+   uv run dayhike fetch-climate --bounds $B     # beside ingest: 8 GB of zips, clipped to 0.7 GB, 9 min
+   uv run dayhike fetch-dem --bounds $B         # every tile is a link: proves none is missing
+   uv run dayhike ingest data/osm/europe-latest.osm.pbf --catalog data/catalog.sqlite --fresh  # 2 h 42 min, 5.6 GB
+   uv run dayhike sample-dem                    # 20 min
+   uv run dayhike sample-landcover              # 21 min
+   uv run dayhike sample-climate                # 7 h, GeometryStore grows to 32 GB
+   uv run dayhike build-similarity              # 19 min
+   uv run dayhike export-serving --valhalla-tiles data/valhalla/highways-eu --valhalla-url http://127.0.0.1:8003  # 22 min
+   ```
+
+   Beside the sample steps, rebuild the highway tiles ([Highway tiles](#highway-tiles-all-of-europe-small-server):
+   `prepare-roads.sh`, `prepare-highways.sh`, the `build_tiles` run) and serve
+   them on another port, e.g. 8003. Pass the ingest the PBF, not `data/osm`:
+   a directory is read whole, country PBFs included.
+
+5. **Check**, from the new checkout:
+
+   ```bash
+   uv run pytest                                # 1 min
+   DAYHIKE_REAL_DATA=1 DAYHIKE_REFERENCE_DIR=$SNAP DAYHIKE_VALHALLA_URL=http://127.0.0.1:8003 \
+     uv run pytest -m real_data                 # 1 h 36 min, most of it tests/test_real_data.py
+   ```
+
+6. **Replace** only after every check passes. Delete from `REF` the derived
+   files (`catalog.sqlite`, `catalog.geometry.sqlite`, `catalog.similarity/`,
+   `osm/europe-latest.catalog.osm.pbf` and its `.filters`, `climate/`,
+   `valhalla/highways-eu/`, `valhalla/europe-latest-roads.osm.pbf`), then move
+   the same paths, the real (non-link) files of `NEW/landcover/` and
+   `osm/geofabrik-index-v1.json` from `NEW` into `REF` (same volume: instant).
+   Compare every path and size against this list first; never glob over `REF`.
+   Delete `catalog.snaps.npz` after a tile rebuild. Keep `SNAP` a week.
 
 ## Python API
 
