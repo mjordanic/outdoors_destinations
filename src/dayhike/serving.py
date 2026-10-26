@@ -11,7 +11,8 @@ similarity directory live. It writes a directory a server memory-maps:
   metres at ``ELEVATION_POINTS`` equal steps, the metres it climbs and
   descends in the walking direction, and the amenity points the
   Measures count (along the line, Peaks around it, at the Trailhead) as
-  zlib-compressed JSON (``POINT_COLUMNS`` per point).
+  zlib-compressed JSON (``POINT_COLUMNS`` per point); and ``hike_boxes``, an
+  R*Tree of each simplified line's bounding box, for the hikes in a map view.
 - ``snaps.npz``: highway snaps of every Trailhead (``HighwaySnaps``), when a
   snap file or a Valhalla URL is given.
 - ``valhalla/``: the highways-only tile extract and a ``valhalla.json`` that
@@ -19,7 +20,7 @@ similarity directory live. It writes a directory a server memory-maps:
 - ``meta.json``: written last, so a directory without it is incomplete.
 
 ``ServingData`` opens such a directory without ``Catalog.open``: name search,
-hike detail and Ranking all read the memory-mapped arrays and the SQLite file.
+the hikes in a map view, hike detail and Ranking all read the memory-mapped arrays and the SQLite file.
 """
 
 from __future__ import annotations
@@ -80,7 +81,7 @@ from dayhike.similarity import (
 
 Progress = Callable[[str], None]
 
-SERVING_FORMAT = 2
+SERVING_FORMAT = 3
 SERVING_ROOT = "/data"  # where the container finds the export (web/Dockerfile)
 LINE_TOLERANCE_M = 10.0
 ELEVATION_POINTS = 128
@@ -220,12 +221,13 @@ def _write_hikes(
             "CREATE TABLE hikes ("
             " id INTEGER PRIMARY KEY, name TEXT NOT NULL, name_origin TEXT NOT NULL,"
             " sac_scale TEXT, walk_m REAL, line TEXT, elevation BLOB, climb_m REAL, descent_m REAL,"
-            " points BLOB NOT NULL)"
+            " points BLOB NOT NULL);"
+            "CREATE VIRTUAL TABLE hike_boxes USING rtree(id, south, north, west, east)"
         )
         for start in range(0, len(hikes), _HIKE_CHUNK):
             chunk = hikes[start : start + _HIKE_CHUNK]
             walks = _vertices(geo, chunk[0][0], chunk[-1][0])
-            rows = []
+            rows, boxes = [], []
             for dayhike_id, name, name_origin, sac_scale, th_lat, th_lon in chunk:
                 points = _trailhead_points(trailhead_kinds, th_lat, th_lon)
                 line = elevation = walk_m = climb_m = descent_m = None
@@ -233,7 +235,9 @@ def _write_hikes(
                 if walk is not None and len(walk[0]) >= 2:
                     lat, lon, ele = walk
                     walk_m = float(_step_m(lat, lon).sum())
-                    line = encode_polyline(*simplify_line(lat, lon, LINE_TOLERANCE_M))
+                    kept_lat, kept_lon = simplify_line(lat, lon, LINE_TOLERANCE_M)
+                    line = encode_polyline(kept_lat, kept_lon)
+                    boxes.append((dayhike_id, kept_lat.min(), kept_lat.max(), kept_lon.min(), kept_lon.max()))
                     profile = _resample(lat, lon, ele, points=ELEVATION_POINTS)
                     if profile is not None:
                         elevation = np.round(profile).astype("<i2").tobytes()
@@ -248,6 +252,7 @@ def _write_hikes(
                 "INSERT INTO hikes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [(*row[:9], zlib.compress(json.dumps(row[9], ensure_ascii=False).encode())) for row in rows],
             )
+            db.executemany("INSERT INTO hike_boxes VALUES (?, ?, ?, ?, ?)", boxes)
             if progress is not None:
                 progress(f"serving export: {min(start + _HIKE_CHUNK, len(hikes))}/{len(hikes)} DayHikes")
         db.commit()
@@ -483,7 +488,10 @@ class ServingData:
             raise ServingExportError(f"{self.directory}: no complete serving export; run `dayhike export-serving`")
         self.meta = json.loads(meta_path.read_text())
         if self.meta["format"] != SERVING_FORMAT:
-            raise ServingExportError(f"{self.directory}: export format {self.meta['format']}, expected {SERVING_FORMAT}")
+            raise ServingExportError(
+                f"{self.directory}: export format {self.meta['format']}, expected {SERVING_FORMAT}; "
+                "rerun `dayhike export-serving`"
+            )
         self.store = SimilarityStore.open_dir(self.directory / "similarity")
         self.trailheads = np.load(self.directory / "trailheads.npy", mmap_mode="r")
         self._db_uri = f"file:{self.directory / 'hikes.sqlite'}?mode=ro&immutable=1"
@@ -553,6 +561,21 @@ class ServingData:
             }
             for row in rows
         ]
+
+    def in_box(self, south: float, west: float, north: float, east: float, limit: int) -> tuple[list[dict], bool]:
+        """The DayHikes whose line's bounding box meets the box, each with its id,
+        name, walk length and line, and whether there are more than ``limit``;
+        then none are listed.
+        """
+        with self._db() as db:
+            found = db.execute(
+                "SELECT h.id, h.name, h.walk_m, h.line FROM hike_boxes b JOIN hikes h ON h.id = b.id "
+                "WHERE b.north >= ? AND b.south <= ? AND b.east >= ? AND b.west <= ? LIMIT ?",
+                (south, north, west, east, limit + 1),
+            ).fetchall()
+        if len(found) > limit:
+            return [], True
+        return [{"id": i, "name": name, "walk_m": walk_m, "line": line} for i, name, walk_m, line in found], False
 
     def _names(self, ids: list[int]) -> dict[int, tuple[str, float | None, float | None]]:
         """Name, climb and descent (metres, walking direction) per DayHike id."""

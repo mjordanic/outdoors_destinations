@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from dayhike import build_catalog, build_similarity
+from dayhike import build_catalog, build_similarity, web
 from dayhike.serving import ServingData, export_serving
 from dayhike.similarity import CORE_MEASURES, MEASURE_NAMES
 from dayhike.web import RESULTS, create_app
@@ -62,6 +62,37 @@ def test_search_and_detail(client: TestClient) -> None:
     assert hike["name"] == "Ridge Walk"
     assert hike["line"] and hike["elevation"]["metres"] and hike["points"]
     assert client.get("/api/hikes/999").status_code == 404
+
+
+def test_hikes_in_a_map_box(client: TestClient) -> None:
+    box = {"south": 45.05, "west": 14.99, "north": 45.06, "east": 15.01}
+
+    body = client.get("/api/hikes", params=box).json()
+
+    assert [hike["id"] for hike in body["results"]] == [RIDGE_WALK_ID]
+    assert body["too_many"] is False
+    assert set(body["results"][0]) == {"id", "name", "walk_m", "line"}
+
+
+def test_hikes_in_a_map_box_holding_too_many_lists_none(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(web, "MAP_HIKES", 3)
+
+    body = client.get("/api/hikes", params={"south": 44, "west": 14, "north": 46, "east": 16}).json()
+
+    assert body == {"results": [], "too_many": True}
+
+
+@pytest.mark.parametrize(
+    ("params", "status"),
+    [
+        ({"south": 45.1, "west": 15, "north": 45.0, "east": 15.1}, 400),
+        ({"south": 45.0, "west": 15.1, "north": 45.1, "east": 15.0}, 400),
+        ({"south": 45.0, "west": 15, "north": 95, "east": 15.1}, 422),
+        ({"south": 45.0, "west": 15, "north": 45.1}, 422),
+    ],
+)
+def test_hikes_in_a_map_box_refuse_bad_boxes(client: TestClient, params: dict, status: int) -> None:
+    assert client.get("/api/hikes", params=params).status_code == status
 
 
 def test_rank_returns_scored_results_with_every_measure(client: TestClient) -> None:
@@ -203,7 +234,14 @@ def test_rate_limit_is_per_client_and_spares_health(data: ServingData) -> None:
 
 
 def test_api_reads_answer_head_like_get(client: TestClient) -> None:
-    for path in ("/api/health", "/api/info", "/api/measures", "/api/search?q=ridge", f"/api/hikes/{RIDGE_WALK_ID}"):
+    for path in (
+        "/api/health",
+        "/api/info",
+        "/api/measures",
+        "/api/search?q=ridge",
+        f"/api/hikes/{RIDGE_WALK_ID}",
+        "/api/hikes?south=45&west=15&north=45.1&east=15.1",
+    ):
         response = client.head(path)
         assert response.status_code == 200, path
         assert response.content == b""

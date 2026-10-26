@@ -47,7 +47,7 @@ def data(export: Path) -> ServingData:
 def test_export_writes_a_complete_directory(export: Path) -> None:
     meta = json.loads((export / "meta.json").read_text())
 
-    assert meta["format"] == 2
+    assert meta["format"] == 3
     assert meta["dayhikes"] == 4
     assert meta["attribution"]["osm"] == "© OpenStreetMap contributors"
     assert meta["drive_time"] is False
@@ -87,6 +87,24 @@ def test_a_dayhike_without_elevation_has_no_profile(data: ServingData) -> None:
     assert valley["elevation"] is None
     assert valley["facts"]["elevation_gain_m"] is None
     assert (valley["climb_m"], valley["descent_m"]) == (None, None)
+
+
+def test_in_box_finds_a_line_crossing_the_box_away_from_its_trailhead(data: ServingData) -> None:
+    # Ridge Walk runs north from its Trailhead at 45.0, 15.0 to 45.09.
+    hikes, too_many = data.in_box(45.05, 14.99, 45.06, 15.01, 10)
+
+    assert [hike["id"] for hike in hikes] == [RIDGE_WALK_ID]
+    assert too_many is False
+    assert hikes[0]["name"] == "Ridge Walk"
+    assert decode_polyline(hikes[0]["line"])[0] == pytest.approx((45.0, 15.0), abs=1e-5)
+    assert hikes[0]["walk_m"] == pytest.approx(data.detail(RIDGE_WALK_ID)["walk_m"])
+    assert data.in_box(46.0, 16.0, 46.1, 16.1, 10) == ([], False)
+
+
+def test_in_box_lists_none_when_the_box_holds_more_than_the_limit(data: ServingData) -> None:
+    assert data.in_box(44.0, 14.0, 46.0, 16.0, 3) == ([], True)
+    every, too_many = data.in_box(44.0, 14.0, 46.0, 16.0, 4)
+    assert len(every) == 4 and too_many is False
 
 
 def test_export_refuses_a_similarity_store_for_other_dayhikes(
