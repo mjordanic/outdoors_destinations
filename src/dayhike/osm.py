@@ -7,6 +7,7 @@ from pathlib import Path
 import osmium
 
 HUT_TOURISM = frozenset({"alpine_hut", "wilderness_hut"})
+PLACE_KINDS = frozenset({"city", "town", "village", "hamlet"})
 RESTAURANT_CAFE_AMENITY = frozenset({"restaurant", "cafe"})
 _MEMBER_TYPE = {
     "n": "node",
@@ -45,6 +46,9 @@ class OsmSnapshot:
     )
     node_elevations: dict[int, float] = field(default_factory=dict)
     access_points: list[tuple[float, float]] = field(default_factory=list)
+    # (lat, lon, name) of named settlements, and of every named point (places and amenities).
+    places: list[tuple[float, float, str]] = field(default_factory=list)
+    named_points: list[tuple[float, float, str]] = field(default_factory=list)
 
     def merge(self, other: OsmSnapshot) -> None:
         self.nodes.update(other.nodes)
@@ -59,6 +63,8 @@ class OsmSnapshot:
         access_points = dict.fromkeys(self.access_points)
         access_points.update(dict.fromkeys(other.access_points))
         self.access_points = list(access_points)
+        self.places = list(dict.fromkeys(self.places + other.places))
+        self.named_points = list(dict.fromkeys(self.named_points + other.named_points))
 
 
 def parse_osm(path: Path) -> OsmSnapshot:
@@ -113,6 +119,8 @@ def amenity_kind(tags: dict[str, str]) -> str | None:
         return "water_tap"
     if amenity == "water_point":
         return "water_point"
+    if tags.get("place") in PLACE_KINDS and tags.get("name"):
+        return "place"
     return None
 
 
