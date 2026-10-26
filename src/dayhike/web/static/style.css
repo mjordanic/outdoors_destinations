@@ -107,8 +107,11 @@ svg text { font-size: 11px; fill: var(--muted); }
 #results-table thead th.name { background: #f3f6f2; }
 #results-table tbody tr { cursor: pointer; }
 #results-table tbody tr:hover td, #results-table tbody tr.active td { background: #e8f1ea; }
-#results-table td.cell { text-align: center; min-width: 30px; color: #fff; font-variant-numeric: tabular-nums; }
+#results-table td.cell { text-align: center; min-width: 30px; color: #1f2a24; font-variant-numeric: tabular-nums; }
 #results-table td.cell.none { color: var(--muted); background: #fafafa; }
+#results-table td.cell.left-out { color: var(--muted); background: #fafafa; text-decoration: line-through; }
+#results.stale .table-wrap { opacity: 0.55; }
+.stale-note { font-size: 0.82rem; margin: 6px 0; color: #8a4b08; }
 #results-table td.score { font-weight: 600; }
 
 .credits { max-width: 1600px; margin: 0 auto; padding: 8px 16px 32px; font-size: 0.85rem; color: var(--muted); }
