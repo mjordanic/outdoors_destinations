@@ -5,6 +5,10 @@
   <img src="src/dayhike/web/static/coverage.svg" alt="Map of Europe; the shaded land has DayHikes in the Catalog" width="360">
 </p>
 
+**[Live demo](https://dayhike-445079235401.europe-west1.run.app)**: the
+read-only web demo, running on Google Cloud Run. After it has been idle, the
+first visit takes about 10-12 s to start.
+
 A local Catalog of DayHikes from OpenStreetMap, ranked by similarity to Seeds
 you already know. DriveTime is an optional query-time filter from today's
 Origin. DriveTime is not a FeatureVector column.
