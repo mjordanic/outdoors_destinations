@@ -1,9 +1,5 @@
 ---
-status: accepted; scoring amended by ADR-0013 (Measures and Calibration replace cosine and the per-month scalers)
----
-
----
-status: accepted; climate source and per-vertex storage superseded by ADR-0015
+status: accepted; scoring amended by ADR-0013 (Measures and Calibration replace cosine and the per-month scalers); climate source and per-vertex storage superseded by ADR-0015
 ---
 
 # Query month selects the climate slice in similarity

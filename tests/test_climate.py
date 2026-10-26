@@ -665,6 +665,26 @@ def test_fetch_chelsa_converts_scaled_kelvin_mm_and_watts_to_measure_units(
             assert dataset.read(1) == pytest.approx(np.full((8, 8), value), abs=1e-3)
 
 
+def test_fetch_chelsa_rejects_a_file_without_a_scale_tag(tmp_path: Path) -> None:
+    dest = tmp_path / "climate"
+
+    def fake_retrieve(url: str, filename: str) -> None:
+        _write_tif(
+            Path(filename),
+            np.full((8, 8), 2831, dtype="uint16"),
+            west=14.99,
+            south=44.99,
+            east=15.05,
+            north=45.12,
+            nodata=65535,
+        )
+
+    with pytest.raises(ValueError, match="chelsa_tas_01.tif: converted tas outside plausible range"):
+        fetch_chelsa(dest, retrieve=fake_retrieve)
+
+    assert not (dest / "chelsa_tas_01.tif").exists()
+
+
 def test_fetch_chelsa_turns_nodata_into_nan_that_sampling_skips(tmp_path: Path) -> None:
     import rasterio
 

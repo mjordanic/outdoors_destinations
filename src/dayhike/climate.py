@@ -31,6 +31,7 @@ CHELSA_ATTRIBUTION = (
 # After that, value * factor + offset gives °C, mm/month and kJ m-2 day-1
 # (W m-2 * 86 400 s / 1000), the units the climate Measures have always used.
 _UNITS = {"tas": (1.0, -273.15), "pr": (1.0, 0.0), "rsds": (86.4, 0.0)}
+_PLAUSIBLE = {"tas": (-70.0, 50.0), "pr": (0.0, 3000.0), "rsds": (0.0, 45000.0)}
 _VERTEX_CHUNK = 1_000_000
 _CLIMATE_FILE = re.compile(r"^chelsa_(tas|pr|rsds)_(\d{2})\.tif$", re.IGNORECASE)
 
@@ -328,6 +329,13 @@ def _clip_and_convert(source: Path, out: Path, variable: str, bounds: Bounds) ->
         factor, offset = _UNITS[variable]
         physical = raw.astype(np.float64) * dataset.scales[0] + dataset.offsets[0]
         data = (physical * factor + offset).astype(np.float32).filled(np.nan)
+        low, high = _PLAUSIBLE[variable]
+        if np.any((data < low) | (data > high)):
+            raise ValueError(
+                f"{out.name}: converted {variable} outside plausible range "
+                f"{low:g}..{high:g} (min {np.nanmin(data):g}, max {np.nanmax(data):g}); "
+                "check the file's scale and offset"
+            )
         profile = {
             "driver": "GTiff",
             "height": data.shape[0],

@@ -971,7 +971,17 @@ units. CHELSA ships uint16 with a per-file scale and offset (`tas` 0.1 K,
 applies the file's scale and offset, then converts K to °C (− 273.15),
 kg m⁻² month⁻¹ to mm per month (the same number), and W m⁻² to kJ m⁻² day⁻¹
 (× 86.4, the unit WorldClim used before, so the Measure constants did not
-change). Nodata becomes NaN. Default `--bounds` is `41.8,5.9,50.6,20.4` (Alps +
+change). Nodata becomes NaN. These tags were checked on the real CHELSA V2.1
+July 1981–2010 files (read over HTTP with rasterio): `tas` uint16, nodata
+65535, scale 0.1, offset 0, `variable_unit` K; `pr` uint16, nodata 65535,
+scale 0.1, offset 0, kg m-2 month-1; `rsds` uint16, nodata 65535, scale 1.0,
+offset 0, W m-2. A before/after check on the Europe Catalog compared the
+converted values with WorldClim for 24 hikes across regions: June–August
+temperature median +0.5 °C against WorldClim (e.g. Crete 18.9 °C, Chamonix
+Lac Cornu 8.7 °C; January near Zagreb 0.49 vs 0.36 °C), all plausible.
+`fetch-climate` stops with an error naming the file if a converted value falls
+outside −70..50 °C, 0..3000 mm/month, or 0..45000 kJ m⁻² day⁻¹ (for example
+a file without a scale tag). Default `--bounds` is `41.8,5.9,50.6,20.4` (Alps +
 Dinarides, same as `fetch-dem`). Tiles already on disk are skipped.
 `fetch-landcover` and `fetch-climate` skip a file the server does not have,
 but fail if a download errors. `fetch-climate` always downloads each
