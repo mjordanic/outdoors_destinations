@@ -11,6 +11,7 @@ from dayhike.serving import (
     ELEVATION_POINTS,
     ServingData,
     ServingExportError,
+    _fold,
     decode_polyline,
     encode_polyline,
     export_serving,
@@ -117,6 +118,13 @@ def test_search_finds_prefix_then_contains_ignoring_case_and_accents(data: Servi
     hit = data.search("ridge")[0]
     assert hit["trailhead"] == [45.0, 15.0]
     assert hit["length_m"] == pytest.approx(10_000, abs=1)
+
+
+def test_search_folds_letters_without_a_decomposition_to_plain_letters() -> None:
+    assert _fold("Høllesliheia") == _fold("Hollesliheia")
+    assert _fold("Łódź Przełęcz") == _fold("Lodz Przelecz")
+    assert _fold("Đakovo Gjøvik") == _fold("Dakovo Gjovik")
+    assert _fold("Ærø Œuvre Iğdır") == _fold("aero oeuvre igdir")
 
 
 def test_search_prefix_matches_come_first(data: ServingData) -> None:
