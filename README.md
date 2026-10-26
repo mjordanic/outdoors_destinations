@@ -1454,8 +1454,8 @@ tiles.
 ## Web demo
 
 A public, read-only page over the Catalog: search a hike you liked by name, or
-tick "Select hike on map", zoom in (hikes show from zoom 12, once the view holds at most 100, as lines
-with both ends marked) and click one; see what
+tick "Select hike on map", zoom in (hikes show from zoom 12, once the view
+holds at most 100, as lines with both ends marked) and click one; see what
 the similarity looks at (route and amenity points on an OpenStreetMap map,
 elevation profile in metres above sea level, land cover, trail surface,
 climate by month, and the fact behind every Measure), set a 0–100 weight or
