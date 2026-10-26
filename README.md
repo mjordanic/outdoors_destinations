@@ -102,7 +102,8 @@ only overwrite sampled columns on hikes whose geometry sits on a downloaded
 tile. `build-similarity` reads both SQLite files and FABDEM and replaces
 `data/catalog.similarity/`; ingest and every sample step that changes the
 Catalog delete that directory, so rerun `build-similarity` after them (Ranking
-refuses missing facts and facts built for other DayHikes or by other code).
+refuses missing facts and facts built for other DayHikes, other Catalog
+values or by other code).
 
 For a continent PBF (for example `europe-latest.osm.pbf`), ingest is the same
 command. After ingest, widen raster coverage with
