@@ -107,7 +107,9 @@ def test_export_has_no_raster_and_no_per_vertex_climate(data: ServingData) -> No
         (points,) = db.execute("SELECT points FROM hikes LIMIT 1").fetchone()
 
     assert {path.suffix for path in files} <= EXPORTED_SUFFIXES
-    assert tables == {"hikes": ["id", "name", "name_origin", "sac_scale", "walk_m", "line", "elevation", "points"]}
+    assert tables == {
+        "hikes": ["id", "name", "name_origin", "sac_scale", "walk_m", "line", "elevation", "climb_m", "descent_m", "points"]
+    }
     assert all(len(point) == len(POINT_COLUMNS) for point in json.loads(zlib.decompress(points)))
     # Climate leaves the export only as the per-DayHike facts of the similarity copy.
     assert data.store.facts.shape[1] == len(data.store.ids)
