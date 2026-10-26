@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from dayhike import build_catalog, build_similarity
 from dayhike.serving import ServingData, export_serving
 from dayhike.similarity import CORE_MEASURES, MEASURE_NAMES
-from dayhike.web import MAP_HIKES, RESULTS, create_app
+from dayhike.web import RESULTS, create_app
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
 RIDGE_WALK_ID = 1001
@@ -68,12 +68,10 @@ def test_hikes_in_a_map_box(client: TestClient) -> None:
     box = {"south": 45.05, "west": 14.99, "north": 45.06, "east": 15.01}
 
     body = client.get("/api/hikes", params=box).json()
-    everything = client.get("/api/hikes", params={"south": 44, "west": 14, "north": 46, "east": 16, "limit": 3}).json()
 
     assert [hike["id"] for hike in body["results"]] == [RIDGE_WALK_ID]
     assert body["more"] is False
     assert set(body["results"][0]) == {"id", "name", "walk_m", "line"}
-    assert len(everything["results"]) == 3 and everything["more"] is True
 
 
 @pytest.mark.parametrize(
@@ -83,7 +81,6 @@ def test_hikes_in_a_map_box(client: TestClient) -> None:
         ({"south": 45.0, "west": 15.1, "north": 45.1, "east": 15.0}, 400),
         ({"south": 45.0, "west": 15, "north": 95, "east": 15.1}, 422),
         ({"south": 45.0, "west": 15, "north": 45.1}, 422),
-        ({"south": 45.0, "west": 15, "north": 45.1, "east": 15.1, "limit": MAP_HIKES + 1}, 422),
     ],
 )
 def test_hikes_in_a_map_box_refuse_bad_boxes(client: TestClient, params: dict, status: int) -> None:

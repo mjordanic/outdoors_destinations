@@ -182,11 +182,10 @@ def create_app(
         west: float = Query(ge=-180, le=180),
         north: float = Query(ge=-90, le=90),
         east: float = Query(ge=-180, le=180),
-        limit: int = Query(MAP_HIKES, ge=1, le=MAP_HIKES),
     ) -> dict:
         if south > north or west > east:
             raise HTTPException(400, "the box needs south <= north and west <= east")
-        results, more = data.in_box(south, west, north, east, limit)
+        results, more = data.in_box(south, west, north, east, MAP_HIKES)
         return {"results": results, "more": more}
 
     @app.api_route("/api/hikes/{dayhike_id}", methods=["GET", "HEAD"])
