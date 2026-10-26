@@ -34,6 +34,7 @@
                role="combobox" aria-autocomplete="list">
         <ul id="suggestions" class="suggestions" role="listbox" hidden></ul>
       </div>
+      <label class="check"><input type="checkbox" id="map-pick-on" autocomplete="off"> Select hike on map</label>
       <p id="liked-name" class="hint">No hike chosen yet.</p>
     </section>
 
@@ -89,8 +90,14 @@
   </aside>
 
   <section class="content">
+    <section id="map-pick" class="card" hidden>
+      <h2>Select a hike on the map</h2>
+      <p class="hint" id="map-pick-hint" role="status" aria-live="polite"></p>
+      <div class="map pick-map"></div>
+    </section>
+
     <article id="liked" class="card empty">
-      <p>Search for a hike on the left. Its route, elevation, water, huts, landscape and weather appear here — everything the similarity looks at.</p>
+      <p>Search for a hike on the left, or select one on the map. Its route, elevation, water, huts, landscape and weather appear here — everything the similarity looks at.</p>
     </article>
 
     <section id="results" class="card" hidden>

@@ -1453,7 +1453,9 @@ tiles.
 
 ## Web demo
 
-A public, read-only page over the Catalog: search a hike you liked, see what
+A public, read-only page over the Catalog: search a hike you liked by name, or
+tick "Select hike on map", zoom in (hikes show from zoom 12 as lines with both
+ends marked) and click one; see what
 the similarity looks at (route and amenity points on an OpenStreetMap map,
 elevation profile in metres above sea level, land cover, trail surface,
 climate by month, and the fact behind every Measure), set a 0–100 weight or
@@ -1491,7 +1493,9 @@ ElevationProfile at 128 equal steps in metres, the metres it climbs and
 descends in the walking direction (export format 2), and the amenity points the
 Measures count (WaterSources, Huts, restaurants, Shelters and Viewpoints in the
 Corridor, Peaks within 2 km, parking and restaurants within 500 m of the
-Trailhead) with their OSM names. With `--valhalla-tiles` it also links the
+Trailhead) with their OSM names, plus an R*Tree of each simplified line's
+bounding box for the map picker (export format 3; `dayhike serve` refuses an
+older export, so rerun `export-serving` once). With `--valhalla-tiles` it also links the
 tile extract and writes a `valhalla.json` that serves it inside the container;
 with `--valhalla-url` it snaps every Trailhead once (`snaps.npz`). Rerun it
 after any rebuild; `meta.json` is written last, so a half-written export never
@@ -1501,7 +1505,11 @@ API (JSON): `GET /api/search?q=` (every word in any order, at least one of
 two letters or more; case, accents
 and ue/oe/ae spellings ignored; the exact name first, then names starting with
 the query, then names where every word starts a word, shorter first; a number
-finds that id), `GET /api/hikes/{id}`, `GET /api/measures`, `GET /api/info`
+finds that id), `GET /api/hikes/{id}`, `GET
+/api/hikes?south=&west=&north=&east=` (the hikes whose line's bounding box
+meets that box, for "Select hike on map": up to 500, each with its id, name,
+walk length and encoded line, and `more` when the box holds more),
+`GET /api/measures`, `GET /api/info`
 (with the Trailheads' box, `coverage`, for the page's swapped "lat, lon"
 warning), `POST /api/rank` with `{"seed": id, "weights": {measure: 0-100},
 "excluded": [measure], "month": 1-12, "origin": {"lat", "lon"}, "max_hours":

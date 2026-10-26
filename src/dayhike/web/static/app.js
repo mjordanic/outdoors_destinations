@@ -29,6 +29,10 @@ const LANDCOVER = [["tree_share", "Trees", "#2f6b3a"], ["shrub_share", "Shrub", 
 const SURFACE = [["paved_share", "Paved", "#6b7280"], ["gravel_share", "Gravel", "#c8a96a"],
   ["natural_share", "Natural", "#7f9d4f"], ["rock_share", "Rock", "#8d8d8d"]];
 
+const PICK_ZOOM = 12; // the map shows hikes from this zoom on
+const PICK_LINE = { color: "#6b2fa3", weight: 3, opacity: 0.85 };
+const PICK_HOVER = { color: "#c2410c", weight: 5, opacity: 1 };
+
 const state = {
   info: null,
   groups: [],
@@ -569,7 +573,7 @@ function nameSearch(input, list, onPick) {
   return { pick };
 }
 
-let chosen = 0, shown = 0, ranked = 0, paired = 0; // the latest of each request; an older response that lands later is dropped
+let chosen = 0, shown = 0, ranked = 0, paired = 0, boxed = 0; // the latest of each request; an older response that lands later is dropped
 
 async function choose(id) {
   const request = ++chosen;
@@ -586,11 +590,117 @@ async function choose(id) {
     renderDetail($("#liked"), hike, { role: "Liked hike" });
     $("#results").hidden = true;
     $("#selected").hidden = true;
+    pick.restyle();
     setStatus("");
   } catch (error) {
     if (request === chosen) setStatus(error.message, true);
   }
 }
+
+// ---------- select on map ----------
+
+// A map of the hikes in view (from PICK_ZOOM on); clicking a line or an end chooses that hike.
+const pick = {
+  map: null,
+  layer: null,
+  lines: new Map(), // hike id -> its polyline
+  timer: null,
+  abort: null,
+
+  open() {
+    const card = $("#map-pick");
+    card.hidden = false;
+    if (!this.map) {
+      // Canvas with a tolerance: a tap a few pixels off a thin line still hits it.
+      this.map = L.map(card.querySelector(".pick-map"), { renderer: L.canvas({ tolerance: 10 }) });
+      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      }).addTo(this.map);
+      this.layer = L.layerGroup().addTo(this.map);
+      if (state.liked) this.map.setView(state.liked.trailhead, 13);
+      else {
+        const [south, west, north, east] = state.info.coverage;
+        this.map.fitBounds([[south, west], [north, east]]);
+      }
+      this.map.on("moveend", () => this.load());
+    }
+    this.map.invalidateSize();
+    this.load();
+    card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  },
+
+  close() {
+    $("#map-pick").hidden = true;
+    clearTimeout(this.timer);
+    this.abort?.abort();
+  },
+
+  hint(text) {
+    $("#map-pick-hint").textContent = text;
+  },
+
+  load() {
+    clearTimeout(this.timer);
+    this.abort?.abort();
+    const request = ++boxed;
+    if (this.map.getZoom() < PICK_ZOOM) {
+      this.layer.clearLayers();
+      this.lines.clear();
+      this.hint("Zoom in on the map to see the hikes there as lines.");
+      return;
+    }
+    this.timer = setTimeout(async () => {
+      const box = this.map.getBounds();
+      const params = new URLSearchParams({
+        south: Math.max(-90, box.getSouth()), west: Math.max(-180, box.getWest()),
+        north: Math.min(90, box.getNorth()), east: Math.min(180, box.getEast()),
+      });
+      this.abort = new AbortController();
+      this.hint("Loading the hikes in view…");
+      try {
+        const body = await api(`/api/hikes?${params}`, { signal: this.abort.signal });
+        if (request !== boxed) return;
+        this.draw(body.results);
+        const count = body.results.length;
+        if (!count) this.hint("No hikes in view; move the map.");
+        else if (body.more) this.hint(`Showing ${count} of the hikes in view; zoom in to see them all. Click a line to choose it.`);
+        else this.hint(`${count} hike${count === 1 ? "" : "s"} in view. Click a line to choose it.`);
+      } catch (error) {
+        if (error.name !== "AbortError" && request === boxed) this.hint(error.message);
+      }
+    }, 250);
+  },
+
+  draw(hikes) {
+    this.layer.clearLayers();
+    this.lines.clear();
+    for (const hike of hikes) {
+      const latlngs = decodePolyline(hike.line);
+      const line = L.polyline(latlngs, PICK_LINE);
+      const ends = [latlngs[0], latlngs.at(-1)].map((at, i) => L.circleMarker(at, {
+        radius: 5, color: "#fff", weight: 1.5, fillColor: i === 0 ? "#2f7d4f" : "#1f2a24", fillOpacity: 1,
+      }));
+      const group = L.featureGroup([line, ...ends]).addTo(this.layer);
+      group.bindTooltip(`<strong>${escapeHtml(hike.name)}</strong><br>${fmt.km(hike.walk_m)}`, { sticky: true });
+      group.on("mouseover", () => { line.setStyle(PICK_HOVER); line.bringToFront(); });
+      group.on("mouseout", () => line.setStyle(this.style(hike.id)));
+      group.on("click", () => choose(hike.id));
+      this.lines.set(hike.id, line);
+    }
+    this.restyle();
+  },
+
+  // The chosen hike stands out.
+  style(id) {
+    return id === state.liked?.id ? PICK_HOVER : PICK_LINE;
+  },
+
+  restyle() {
+    for (const [id, line] of this.lines) line.setStyle(this.style(id));
+    this.lines.get(state.liked?.id)?.bringToFront();
+  },
+};
 
 // ---------- pair score ----------
 
@@ -821,6 +931,7 @@ async function start() {
     $("#drive-off").hidden = false;
   }
   const likedSearch = nameSearch($("#search"), $("#suggestions"), choose);
+  $("#map-pick-on").addEventListener("change", (event) => (event.target.checked ? pick.open() : pick.close()));
   nameSearch($("#pair-search"), $("#pair-suggestions"), comparePair);
   $("#reset-weights").addEventListener("click", () => { buildWeights(); markStale(); });
   $("#weights").addEventListener("input", markStale);
