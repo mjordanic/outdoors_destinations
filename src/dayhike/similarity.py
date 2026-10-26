@@ -239,6 +239,22 @@ class SimilarityStore:
         return cls.open_dir(similarity_dir_for(catalog_path))
 
     @classmethod
+    def open_for(cls, catalog_path: Path | str, ids: Sequence[int]) -> SimilarityStore:
+        """Open the store beside a Catalog, refusing one built from other Catalog data."""
+        store = cls.open(catalog_path)
+        if not np.array_equal(store.ids, ids):
+            raise StaleSimilarity(
+                f"{catalog_path}: similarity facts are for other DayHikes; "
+                "run `dayhike build-similarity`"
+            )
+        if store.catalog_digest != catalog_digest(catalog_path):
+            raise StaleSimilarity(
+                f"{catalog_path}: similarity facts are for earlier Catalog values; "
+                "run `dayhike build-similarity`"
+            )
+        return store
+
+    @classmethod
     def open_dir(cls, directory: Path | str) -> SimilarityStore:
         """Open a similarity directory wherever it is (a serving export holds a copy)."""
         directory = Path(directory)

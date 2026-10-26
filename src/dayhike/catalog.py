@@ -164,24 +164,9 @@ class Catalog:
     @cached_property
     def similarity(self) -> SimilarityStore:
         """The facts and Calibration beside this Catalog, opened on first use."""
-        from dayhike.similarity import (  # imports Catalog
-            SimilarityStore,
-            StaleSimilarity,
-            catalog_digest,
-        )
+        from dayhike.similarity import SimilarityStore  # imports Catalog
 
-        store = SimilarityStore.open(self.path)
-        if not np.array_equal(store.ids, [hike.id for hike in self.dayhikes]):
-            raise StaleSimilarity(
-                f"{self.path}: similarity facts are for other DayHikes; "
-                "run `dayhike build-similarity`"
-            )
-        if store.catalog_digest != catalog_digest(self.path):
-            raise StaleSimilarity(
-                f"{self.path}: similarity facts are for earlier Catalog values; "
-                "run `dayhike build-similarity`"
-            )
-        return store
+        return SimilarityStore.open_for(self.path, [hike.id for hike in self.dayhikes])
 
     @classmethod
     def open(cls, path: Path | str) -> Catalog:

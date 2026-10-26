@@ -60,6 +60,7 @@ from dayhike.similarity import (
     TRAILHEAD_M,
     AmenityPoints,
     SimilarityStore,
+    StaleSimilarity,
     _calibration_key,
     _densify,
     _resample,
@@ -138,7 +139,6 @@ def export_serving(
     """
     started = time.monotonic()
     catalog_path, out = Path(catalog_path), Path(out_dir)
-    store = SimilarityStore.open(catalog_path)
     out.mkdir(parents=True, exist_ok=True)
     (out / "meta.json").unlink(missing_ok=True)
     catalog = sqlite3.connect(f"file:{catalog_path}?mode=ro", uri=True)
@@ -151,10 +151,10 @@ def export_serving(
     finally:
         catalog.close()
     ids = np.array([row[0] for row in hikes], dtype=np.int64)
-    if not np.array_equal(ids, store.ids):
-        raise ServingExportError(
-            f"{similarity_dir_for(catalog_path)} is for other DayHikes; run `dayhike build-similarity`"
-        )
+    try:
+        SimilarityStore.open_for(catalog_path, ids)
+    except StaleSimilarity as exc:
+        raise ServingExportError(str(exc)) from exc
     similarity = out / "similarity"
     similarity.mkdir(exist_ok=True)
     for name in _SIMILARITY_FILES:
