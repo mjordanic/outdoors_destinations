@@ -550,7 +550,7 @@ function onSearchInput() {
   }, 200);
 }
 
-let chosen = 0, shown = 0; // the latest hike load each; an older response that lands later is dropped
+let chosen = 0, shown = 0, ranked = 0; // the latest hike load or ranking each; an older response that lands later is dropped
 
 async function choose(id) {
   clearTimeout(searchTimer);
@@ -643,6 +643,7 @@ async function findSimilar() {
     setStatus(error.message, true);
     return;
   }
+  const request = ++ranked;
   $("#find").disabled = true;
   setStatus(query.origin ? "Finding hikes within the drive, then ranking…" : "Ranking every hike…");
   try {
@@ -651,17 +652,17 @@ async function findSimilar() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(query),
     });
-    if (query.seed !== state.liked.id) return;
+    if (request !== ranked || query.seed !== state.liked.id) return;
     state.query = { weights: body.weights, month: body.month, drive: Boolean(query.origin) };
     state.results = body.results;
     renderResults(body);
     setStatus(`Done in ${(body.elapsed_ms / 1000).toFixed(1)} s.`);
   } catch (error) {
-    if (query.seed !== state.liked.id) return;
+    if (request !== ranked || query.seed !== state.liked.id) return;
     markStale();
     setStatus(error.message, true);
   } finally {
-    $("#find").disabled = false;
+    if (request === ranked) $("#find").disabled = false;
   }
 }
 
