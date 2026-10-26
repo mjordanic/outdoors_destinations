@@ -129,11 +129,12 @@ def create_app(
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         return response
 
-    @app.get("/api/health")
+    # Reads answer HEAD too (health checks); otherwise HEAD falls through to the page mount's 404.
+    @app.api_route("/api/health", methods=["GET", "HEAD"])
     def health() -> dict:
         return {"ok": True}
 
-    @app.get("/api/info")
+    @app.api_route("/api/info", methods=["GET", "HEAD"])
     def info() -> dict:
         return {
             "dayhikes": data.meta["dayhikes"],
@@ -143,15 +144,15 @@ def create_app(
             "results": RESULTS,
         }
 
-    @app.get("/api/measures")
+    @app.api_route("/api/measures", methods=["GET", "HEAD"])
     def measure_list() -> dict:
         return {"groups": list(MEASURE_GROUPS), "measures": measures}
 
-    @app.get("/api/search")
+    @app.api_route("/api/search", methods=["GET", "HEAD"])
     def search(q: str = Query(max_length=100), limit: int = Query(20, ge=1, le=50)) -> dict:
         return {"results": data.search(q, limit)}
 
-    @app.get("/api/hikes/{dayhike_id}")
+    @app.api_route("/api/hikes/{dayhike_id}", methods=["GET", "HEAD"])
     def hike(dayhike_id: int) -> dict:
         try:
             return data.detail(dayhike_id)
