@@ -563,8 +563,9 @@ class ServingData:
         ]
 
     def in_box(self, south: float, west: float, north: float, east: float, limit: int) -> tuple[list[dict], bool]:
-        """Up to ``limit`` DayHikes whose line's bounding box meets the box, and
-        whether more do. Each has its id, name, walk length and line.
+        """The DayHikes whose line's bounding box meets the box, each with its id,
+        name, walk length and line, and whether there are more than ``limit``;
+        then none are listed.
         """
         with self._db() as db:
             found = db.execute(
@@ -572,8 +573,9 @@ class ServingData:
                 "WHERE b.north >= ? AND b.south <= ? AND b.east >= ? AND b.west <= ? LIMIT ?",
                 (south, north, west, east, limit + 1),
             ).fetchall()
-        hikes = [{"id": i, "name": name, "walk_m": walk_m, "line": line} for i, name, walk_m, line in found[:limit]]
-        return hikes, len(found) > limit
+        if len(found) > limit:
+            return [], True
+        return [{"id": i, "name": name, "walk_m": walk_m, "line": line} for i, name, walk_m, line in found], False
 
     def _names(self, ids: list[int]) -> dict[int, tuple[str, float | None, float | None]]:
         """Name, climb and descent (metres, walking direction) per DayHike id."""

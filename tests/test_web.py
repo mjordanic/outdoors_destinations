@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from dayhike import build_catalog, build_similarity
+from dayhike import build_catalog, build_similarity, web
 from dayhike.serving import ServingData, export_serving
 from dayhike.similarity import CORE_MEASURES, MEASURE_NAMES
 from dayhike.web import RESULTS, create_app
@@ -70,8 +70,16 @@ def test_hikes_in_a_map_box(client: TestClient) -> None:
     body = client.get("/api/hikes", params=box).json()
 
     assert [hike["id"] for hike in body["results"]] == [RIDGE_WALK_ID]
-    assert body["more"] is False
+    assert body["too_many"] is False
     assert set(body["results"][0]) == {"id", "name", "walk_m", "line"}
+
+
+def test_hikes_in_a_map_box_holding_too_many_lists_none(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(web, "MAP_HIKES", 3)
+
+    body = client.get("/api/hikes", params={"south": 44, "west": 14, "north": 46, "east": 16}).json()
+
+    assert body == {"results": [], "too_many": True}
 
 
 @pytest.mark.parametrize(
