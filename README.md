@@ -1587,19 +1587,19 @@ at the rebuild.
    curl -L --fail -o $NEW/osm/geofabrik-index-v1.json https://download.geofabrik.de/index-v1.json
    ```
 
-4. **Build**, in the new checkout, under `caffeinate -dimsu` (estimated times on an 8-core Mac):
+4. **Build**, in the new checkout, under `caffeinate -dimsu` (times measured on an 8-core Mac, 2026-10-25):
 
    ```bash
    B=32.6,-31.3,71.2,46.4
-   uv run dayhike fetch-landcover --bounds $B   # beside ingest: 243 new tiles, 11 GB
-   uv run dayhike fetch-climate --bounds $B     # beside ingest: 8 GB of zips, clipped
+   uv run dayhike fetch-landcover --bounds $B   # beside ingest: 243 new tiles, 11 GB, 11 min
+   uv run dayhike fetch-climate --bounds $B     # beside ingest: 8 GB of zips, clipped to 0.7 GB, 9 min
    uv run dayhike fetch-dem --bounds $B         # every tile is a link: proves none is missing
-   uv run dayhike ingest data/osm/europe-latest.osm.pbf --catalog data/catalog.sqlite --fresh  # ~2 h 15 min
-   uv run dayhike sample-dem                    # ~25 min
-   uv run dayhike sample-landcover              # ~20 min
-   uv run dayhike sample-climate                # ~7 h
-   uv run dayhike build-similarity              # ~30 min
-   uv run dayhike export-serving --valhalla-tiles data/valhalla/highways-eu --valhalla-url http://127.0.0.1:8003  # ~25 min
+   uv run dayhike ingest data/osm/europe-latest.osm.pbf --catalog data/catalog.sqlite --fresh  # 2 h 42 min, 5.6 GB
+   uv run dayhike sample-dem                    # 20 min
+   uv run dayhike sample-landcover              # 21 min
+   uv run dayhike sample-climate                # 7 h, GeometryStore grows to 32 GB
+   uv run dayhike build-similarity              # 19 min
+   uv run dayhike export-serving --valhalla-tiles data/valhalla/highways-eu --valhalla-url http://127.0.0.1:8003  # 22 min
    ```
 
    Beside the sample steps, rebuild the highway tiles ([Highway tiles](#highway-tiles-all-of-europe-small-server):
@@ -1610,9 +1610,9 @@ at the rebuild.
 5. **Check**, from the new checkout:
 
    ```bash
-   uv run pytest
+   uv run pytest                                # 1 min
    DAYHIKE_REAL_DATA=1 DAYHIKE_REFERENCE_DIR=$SNAP DAYHIKE_VALHALLA_URL=http://127.0.0.1:8003 \
-     uv run pytest -m real_data
+     uv run pytest -m real_data                 # 1 h 36 min, most of it tests/test_real_data.py
    ```
 
 6. **Replace** only after every check passes. Delete from `REF` the derived
