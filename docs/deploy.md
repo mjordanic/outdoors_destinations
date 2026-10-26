@@ -3,7 +3,7 @@
 The demo is one container: the FastAPI app (`dayhike serve`) and a
 highways-only Valhalla for the drive-time filter, with the serving export baked
 into the image. Nothing is written at run time; Cloud Run scales it to zero
-when idle and starts it again on the next visit (a cold start of a few seconds).
+when idle and starts it again on the next visit (a cold start of about 10-12 s).
 
 Nothing here has been deployed. Every `gcloud` command below creates cloud
 resources and costs money, so run them only once the deployment is approved.
@@ -52,12 +52,21 @@ uv run python web/smoke.py --data data/web-serving --valhalla-url http://127.0.0
 
 Region `europe-west1` (Belgium). Replace `PROJECT` and `BILLING_ACCOUNT`.
 
+`gcloud config set project PROJECT` would change the machine-wide default
+project, so the commands below use `CLOUDSDK_CORE_PROJECT` instead (or pass
+`--project PROJECT` on each command).
+
+A billing account caps the number of projects linked to it (3 on the
+account used for the first deployment), so linking a new project can fail with "Cloud billing quota
+exceeded". Unlink a project you no longer need, or request a quota increase.
+
 ```bash
-gcloud config set project PROJECT
+export CLOUDSDK_CORE_PROJECT=PROJECT
 gcloud services enable run.googleapis.com artifactregistry.googleapis.com billingbudgets.googleapis.com
 gcloud artifacts repositories create dayhike --repository-format=docker --location=europe-west1
-gcloud auth configure-docker europe-west1-docker.pkg.dev
+gcloud auth configure-docker europe-west1-docker.pkg.dev   # edits ~/.docker/config.json
 
+# the image is about 0.9 GB compressed, so the push takes a couple of minutes
 IMAGE=europe-west1-docker.pkg.dev/PROJECT/dayhike/web:$(git rev-parse --short HEAD)
 docker buildx build --platform linux/amd64 -f web/Dockerfile \
   --build-context serving=data/web-serving -t "$IMAGE" --push .
@@ -77,13 +86,15 @@ What the flags do:
 | `--min-instances 0` | Scale to zero; the captain accepted the cold start. |
 | `--max-instances 2` | The instance cap: at most two containers ever bill at once. |
 | `--concurrency 8` | Searches and hike pages run side by side; Rankings queue one at a time per instance (in the app). |
-| `--timeout 60` | No request may run longer; a 4 h drive query from the densest origin takes about 10 s. |
+| `--timeout 60` | No request may run longer; a 4 h drive query from the densest origin takes 23-31 s on 1 vCPU. |
 | `DAYHIKE_FORWARDED_HOPS=1` | The rate limit keys on the last `X-Forwarded-For` entry, the one Google's front end adds. Earlier entries are client-supplied and ignored, so the limit cannot be dodged by sending a fake header. If that last entry turns out to be a Google proxy address rather than the visitor, the limit becomes one shared budget per instance: stricter, never looser. |
 
 ## 4. Rate limit, instance cap and worst case
 
 The app limits each client to **20 Rankings and 300 other API calls per
-minute** (`HTTP 429` past that), runs one Ranking at a time per instance (others
+minute per instance** (`HTTP 429` past that; the counter lives in each
+instance's memory, so with `--max-instances 2` a client whose requests reach
+both instances gets up to 2x that), runs one Ranking at a time per instance (others
 wait up to 30 s, then get `503`; a Valhalla call stalled past 50 s also ends
 in `503` and frees the slot), and caps the drive filter at 4 hours. With
 `--max-instances 2` the most the service can ever bill is two instances busy
@@ -96,11 +107,14 @@ Registry costs about $0.10 to $0.20 a month.
 ## 5. Budget alert
 
 A budget does not stop spending; it emails the billing admins. Set it before
-the first deploy:
+the first deploy. The project must already be linked to the billing account for
+a project-scoped budget. The amount must be in the billing account's currency
+(`gcloud billing budgets list` shows it); another currency fails with a bare
+`INVALID_ARGUMENT`. This example uses `5USD`:
 
 ```bash
 gcloud billing budgets create --billing-account=BILLING_ACCOUNT \
-  --display-name="dayhike demo" --budget-amount=5EUR \
+  --display-name="dayhike demo" --budget-amount=5USD \
   --filter-projects=projects/PROJECT \
   --threshold-rule=percent=0.5 --threshold-rule=percent=0.9 --threshold-rule=percent=1.0
 ```
