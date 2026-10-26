@@ -27,7 +27,7 @@ from dayhike.similarity import DEFAULT_WEIGHTS, MEASURES
 STATIC_DIR = Path(__file__).parent / "static"
 RESULTS = 10
 MAX_DRIVE_HOURS = 4.0
-MAP_HIKES = 500  # at most this many hikes per map view
+MAP_HIKES = 100  # a map view shows its hikes only when it holds at most this many
 # Requests per client per RATE_WINDOW_S: Ranking, and everything else under /api.
 RANK_RATE = 20
 API_RATE = 300
@@ -185,8 +185,8 @@ def create_app(
     ) -> dict:
         if south > north or west > east:
             raise HTTPException(400, "the box needs south <= north and west <= east")
-        results, more = data.in_box(south, west, north, east, MAP_HIKES)
-        return {"results": results, "more": more}
+        results, too_many = data.in_box(south, west, north, east, MAP_HIKES)
+        return {"results": results, "too_many": too_many}
 
     @app.api_route("/api/hikes/{dayhike_id}", methods=["GET", "HEAD"])
     def hike(dayhike_id: int) -> dict:

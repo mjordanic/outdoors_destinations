@@ -599,7 +599,8 @@ async function choose(id) {
 
 // ---------- select on map ----------
 
-// A map of the hikes in view (from PICK_ZOOM on); clicking a line or an end chooses that hike.
+// A map of the hikes in view (from PICK_ZOOM on, and only while the view holds
+// at most the server's limit); clicking a line or an end chooses that hike.
 const pick = {
   map: null,
   layer: null,
@@ -663,8 +664,8 @@ const pick = {
         if (request !== boxed) return;
         this.draw(body.results);
         const count = body.results.length;
-        if (!count) this.hint("No hikes in view; move the map.");
-        else if (body.more) this.hint(`Showing ${count} of the hikes in view; zoom in to see them all. Click a line to choose it.`);
+        if (body.too_many) this.hint("Too many hikes in view; zoom in further to see them as lines.");
+        else if (!count) this.hint("No hikes in view; move the map.");
         else this.hint(`${count} hike${count === 1 ? "" : "s"} in view. Click a line to choose it.`);
       } catch (error) {
         if (error.name !== "AbortError" && request === boxed) this.hint(error.message);

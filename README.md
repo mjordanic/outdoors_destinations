@@ -1454,8 +1454,8 @@ tiles.
 ## Web demo
 
 A public, read-only page over the Catalog: search a hike you liked by name, or
-tick "Select hike on map", zoom in (hikes show from zoom 12 as lines with both
-ends marked) and click one; see what
+tick "Select hike on map", zoom in (hikes show from zoom 12, once the view holds at most 100, as lines
+with both ends marked) and click one; see what
 the similarity looks at (route and amenity points on an OpenStreetMap map,
 elevation profile in metres above sea level, land cover, trail surface,
 climate by month, and the fact behind every Measure), set a 0–100 weight or
@@ -1507,8 +1507,9 @@ and ue/oe/ae spellings ignored; the exact name first, then names starting with
 the query, then names where every word starts a word, shorter first; a number
 finds that id), `GET /api/hikes/{id}`, `GET
 /api/hikes?south=&west=&north=&east=` (the hikes whose line's bounding box
-meets that box, for "Select hike on map": up to 500, each with its id, name,
-walk length and encoded line, and `more` when the box holds more),
+meets that box, for "Select hike on map", each with its id, name, walk length
+and encoded line; when the box holds more than 100, none are listed and
+`too_many` is true, so the page asks to zoom in),
 `GET /api/measures`, `GET /api/info`
 (with the Trailheads' box, `coverage`, for the page's swapped "lat, lon"
 warning), `POST /api/rank` with `{"seed": id, "weights": {measure: 0-100},
