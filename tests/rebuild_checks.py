@@ -37,8 +37,9 @@ CHUNK = 2_000
 RECORDED_SNAPSHOT_BYTES = 34_999_693_913
 RECORDED_SNAPSHOT_SHA256 = "77aaa00727e343a9d44f118f04cd5165c4240c03c11c408f92e12a71ff4beba0"
 RECORDED_INGEST_REPORT = {
-    "kept": 161_614, "dropped_unnamed": 0, "dropped_length": 77_561, "dropped_network": 6_234,
-    "named_osm_name": 106_333, "named_osm_ref": 30_927, "named_synthetic": 24_354,
+    "kept": 135_588, "dropped_unnamed": 0, "dropped_length": 77_561, "dropped_network": 6_234,
+    "named_osm_name": 98_845, "named_osm_ref": 21_692, "named_synthetic": 90,
+    "dropped_node_network": 26_026, "named_from_to": 11_058, "named_place": 3_903,
 }  # fmt: skip
 # Tables and columns of a Catalog and its GeometryStore after ingest, the three
 # sample steps and build-similarity (tests/test_pipeline_rebuild.py checks it).
