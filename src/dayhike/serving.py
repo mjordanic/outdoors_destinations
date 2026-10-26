@@ -80,15 +80,15 @@ ELEVATION_POINTS = 128
 TRAILHEAD_NEAREST = 3  # parking and restaurant/cafe points kept per Trailhead
 VALHALLA_CACHE_BYTES = 256 * 1024 * 1024  # mjolnir.max_cache_size; the build default is 1 GB
 _HIKE_CHUNK = 2_000
-_SIMILARITY_FILES = ("ids.npy", "facts.npy", "profile.npy", "quantiles.npy", "pairs.npy", "meta.json")
+_SIMILARITY_FILES = ("ids.npy", "facts.npy", "profile.npy", "twins.npy", "quantiles.npy", "meta.json")
 
 # Groups are sections of the weights panel only; scoring knows no groups (ADR-0013).
 MEASURE_INFO: dict[str, tuple[str, str, str]] = {
     "length": ("effort", "Length", "Walk length; the shorter over the longer (floor 1 km)."),
     "elevation_gain": ("effort", "Elevation gain", "Metres climbed, the larger of climb and descent (floor 100 m)."),
     "difficulty": ("effort", "Difficulty", "Strictest SAC grade, 1-6; alike within 3 grades."),
-    "highest": ("altitude", "Highest point", "Highest elevation; alike within 1,000 m."),
-    "lowest": ("altitude", "Lowest point", "Lowest elevation; alike within 1,000 m."),
+    "highest": ("altitude", "Highest point", "Highest elevation; alike within 400 m."),
+    "lowest": ("altitude", "Lowest point", "Lowest elevation; alike within 400 m."),
     "profile": ("profile", "Profile shape", "Elevation profile scaled to 0-1 in length and height, walked either way."),
     "landcover": ("landscape", "Land cover", "Shared share of tree, shrub, grass, bare, snow and other cover."),
     "peak_summited": ("landscape", "Peak summited", "A Peak within 50 m of the line, or not."),
@@ -100,6 +100,7 @@ MEASURE_INFO: dict[str, tuple[str, str, str]] = {
     "southness": ("weather", "Sun-facing slopes", "Which way the slopes face: 1 south, 0 north (from FABDEM)."),
     "water_count": ("water", "Water sources", "WaterSources within 100 m of the line, counted up to 3."),
     "dry_stretch": ("water", "Dry stretch", "Longest walk between WaterSources (floor 1 km)."),
+    "waterside": ("water", "Waterside", "Share of the walk within 200 m of sea, lake or wide river (WorldCover); alike within 0.5."),
     "hut_along": ("facilities", "Hut along", "A Hut within 100 m of the line, or not."),
     "restaurant_cafe_along": ("facilities", "Restaurant or cafe along", "A restaurant or cafe within 100 m of the line, or not."),
     "shelter_along": ("facilities", "Shelter along", "A Shelter within 100 m of the line, or not."),

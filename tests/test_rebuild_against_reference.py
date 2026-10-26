@@ -210,7 +210,6 @@ def test_calibration_equals_reference_for_measures_not_touched_by_coverage() -> 
         CALIBRATION_KEYS[index]
         for index in keys
         if not np.array_equal(old.quantiles[index], new.quantiles[index], equal_nan=True)
-        or not np.array_equal(old.pairs[:, index], new.pairs[:, index], equal_nan=True)
     ]
 
     assert differing == []
@@ -227,10 +226,9 @@ def test_golden_rankings_reproduce() -> None:
     for (name, seed), rows in golden.items():
         got = rc.top_matches(store, seed, sets[name])
         assert [g[0] for g in got] == [int(row["dayhike_id"]) for row in rows], (name, seed)
-        for (_, similarity, raw, score), row in zip(got, rows):
+        for (_, similarity, raw), row in zip(got, rows):
             assert similarity == pytest.approx(float(row["similarity"]), abs=1e-6)
             assert raw == pytest.approx(float(row["raw"]), abs=1e-6)
-            assert score == pytest.approx(float(row["score"]), abs=1e-6)
 
 
 def test_raw_inputs_are_unchanged() -> None:

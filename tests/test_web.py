@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from dayhike import build_catalog, build_similarity
 from dayhike.serving import ServingData, export_serving
-from dayhike.similarity import MEASURE_NAMES
+from dayhike.similarity import CORE_MEASURES, MEASURE_NAMES
 from dayhike.web import RESULTS, create_app
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
@@ -51,6 +51,7 @@ def test_info_and_measures_describe_every_measure_in_groups(client: TestClient) 
     assert [m["name"] for m in body["measures"]] == list(MEASURE_NAMES)
     assert {m["group"] for m in body["measures"]} == set(body["groups"])
     assert all(m["label"] and m["description"] for m in body["measures"])
+    assert {m["name"] for m in body["measures"] if m["default_weight"] > 0} == set(CORE_MEASURES)
 
 
 def test_search_and_detail(client: TestClient) -> None:
@@ -74,6 +75,7 @@ def test_rank_returns_scored_results_with_every_measure(client: TestClient) -> N
     assert scores == sorted(scores, reverse=True)
     assert set(body["results"][0]["measures"]) == set(MEASURE_NAMES)
     assert body["reachable"] is None and body["results"][0]["drive_hours"] is None
+    assert set(body["weights"]) == set(CORE_MEASURES)
 
 
 def test_an_excluded_measure_counts_as_weight_zero(client: TestClient) -> None:

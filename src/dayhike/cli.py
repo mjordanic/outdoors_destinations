@@ -20,6 +20,7 @@ from dayhike.climate import DEFAULT_CLIMATE_DIR, fetch_chelsa, sample_climate
 from dayhike.extracts import fetch_geofabrik_extracts
 from dayhike.highways import HighwayDriveTimeClient, HighwaySnaps
 from dayhike.similarity import (
+    CORE_MEASURES,
     MEASURE_NAMES,
     StaleSimilarity,
     build_similarity,
@@ -181,6 +182,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Directory of FABDEM GeoTIFFs for SolarAspect (default: data/dem)",
     )
     similarity.add_argument(
+        "--landcover",
+        type=Path,
+        default=DEFAULT_LANDCOVER_DIR,
+        help="Directory of WorldCover GeoTIFFs for WaterSide (default: data/landcover)",
+    )
+    similarity.add_argument(
         "--calibrate-only",
         action="store_true",
         help="Keep the stored facts and only recompute the Calibration",
@@ -225,7 +232,9 @@ def main(argv: list[str] | None = None) -> int:
         type=_parse_weight,
         metavar="MEASURE=WEIGHT",
         help="Weight 0-100 of one Measure, repeatable; Measures not named are "
-        "excluded. Omit to weigh every Measure equally. Measures: "
+        "excluded. Omit to weigh the core Measures equally ("
+        + ", ".join(CORE_MEASURES)
+        + "). Measures: "
         + ", ".join(MEASURE_NAMES),
     )
     rank.add_argument("seeds", nargs="+", help="Seed DayHike names")
@@ -317,7 +326,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "sample-climate":
         return _sample_climate(args.catalog, args.climate)
     if args.command == "build-similarity":
-        return _build_similarity(args.catalog, args.dem, calibrate_only=args.calibrate_only)
+        return _build_similarity(
+            args.catalog, args.dem, args.landcover, calibrate_only=args.calibrate_only
+        )
     if args.command == "nearby":
         try:
             return _nearby(
@@ -437,7 +448,9 @@ def _sample_climate(catalog_path: Path, raster_dir: Path) -> int:
     return 0
 
 
-def _build_similarity(catalog_path: Path, dem_dir: Path, *, calibrate_only: bool) -> int:
+def _build_similarity(
+    catalog_path: Path, dem_dir: Path, landcover_dir: Path, *, calibrate_only: bool
+) -> int:
     def progress(message: str) -> None:
         print(message, file=sys.stderr, flush=True)
 
@@ -445,7 +458,11 @@ def _build_similarity(catalog_path: Path, dem_dir: Path, *, calibrate_only: bool
         if calibrate_only:
             print(calibrate_similarity(catalog_path, progress=progress))
         else:
-            print(build_similarity(catalog_path, dem_dir, progress=progress))
+            print(
+                build_similarity(
+                    catalog_path, dem_dir, landcover_dir=landcover_dir, progress=progress
+                )
+            )
     except StaleSimilarity as exc:
         print(exc, file=sys.stderr)
         return 1

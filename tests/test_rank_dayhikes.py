@@ -18,9 +18,10 @@ from dayhike import (
     rank_dayhikes,
 )
 from dayhike.similarity import (
+    CORE_MEASURES,
+    DEFAULT_WEIGHTS,
     FACT_COLUMNS,
     calibrate_similarity,
-    random_pair_percentile,
     score_rows,
     similarity_dir_for,
 )
@@ -133,19 +134,39 @@ def test_several_seeds_score_the_best_seed_not_the_mean(tmp_path: Path) -> None:
     assert both != pytest.approx((ridge + valley) / 2)
     ranking = rank_dayhikes(catalog, ["Ridge Walk", "Valley Path"], weights)
     scores = {item.dayhike.id: item.score for item in ranking.items}
-    assert scores[1003] == pytest.approx(random_pair_percentile(store, both[:1], weights)[0] ** 2)
+    assert scores[1003] == pytest.approx(both[0])
 
 
-def test_score_is_the_random_pair_percentile_of_the_similarity(tmp_path: Path) -> None:
+def test_score_is_the_similarity(tmp_path: Path) -> None:
     catalog = _catalog(tmp_path, LENGTHS)
-    store = catalog.similarity
     weights = dict.fromkeys(MEASURE_NAMES, 100.0)
 
-    percentile = random_pair_percentile(store, np.array([0.0, 0.5, 1.0]), weights)
+    ranking = rank_dayhikes(catalog, ["Ridge Walk"], weights)
 
-    assert percentile[0] == 0.0
-    assert percentile[2] == 1.0
-    assert 0.0 < percentile[1] < 1.0
+    rows = np.searchsorted(catalog.similarity.ids, [item.dayhike.id for item in ranking.items])
+    similarity, _ = score_rows(catalog.similarity, [0], rows, weights)
+    assert [item.score for item in ranking.items] == pytest.approx(similarity.tolist())
+
+
+def test_no_weights_weigh_the_core_measures(tmp_path: Path) -> None:
+    catalog = _catalog(tmp_path, LENGTHS)
+
+    assert {name for name, weight in DEFAULT_WEIGHTS.items() if weight > 0} == set(CORE_MEASURES)
+    assert rank_dayhikes(catalog, ["Ridge Walk"]) == rank_dayhikes(
+        catalog, ["Ridge Walk"], dict.fromkeys(CORE_MEASURES, 100)
+    )
+
+
+def test_only_the_best_of_twins_is_ranked_and_no_twin_of_a_seed(tmp_path: Path) -> None:
+    catalog = _catalog(tmp_path, LENGTHS)
+    twins_path = similarity_dir_for(catalog.path) / "twins.npy"
+    # Valley Path (row 1) is Ridge Walk's Twin; PS-1 (row 3) relation:1003's.
+    np.save(twins_path, np.array([0, 0, 2, 2]))
+    catalog = Catalog.open(catalog.path)
+
+    ranking = rank_dayhikes(catalog, ["Ridge Walk"], {"length": 100})
+
+    assert [item.dayhike.id for item in ranking.items] == [1003]
 
 
 def test_ranking_is_deterministic_across_two_builds(tmp_path: Path) -> None:

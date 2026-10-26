@@ -294,7 +294,7 @@ def coverage_by_country(
 # Golden rankings: Seeds by id (a name can be ambiguous Europe-wide) and weight
 # sets whose Measures do not read LandCover or climate, so a rebuild with wider
 # raster coverage must still reproduce them exactly.
-COVERAGE_MEASURES = frozenset({"landcover", "temperature", "precipitation", "solar_radiation"})
+COVERAGE_MEASURES = frozenset({"landcover", "waterside", "temperature", "precipitation", "solar_radiation"})
 GEOMETRY_WEIGHTS = {
     "length": 100, "elevation_gain": 100, "highest": 100, "lowest": 100, "profile": 100,
     "climb_grade": 100, "steepest_km": 100,
@@ -324,11 +324,11 @@ def golden_weight_sets() -> dict[str, dict[str, float]]:
 
 
 def top_matches(store, seed_id: int, weights: Mapping[str, float], limit: int = GOLDEN_TOP) -> list[tuple]:
-    """(id, similarity, raw, score) of the best ``limit`` DayHikes for one Seed id.
+    """(id, similarity, raw) of the best ``limit`` DayHikes for one Seed id.
 
-    Orders and scores as ``rank_dayhikes`` does, on the store alone.
+    Orders as ``rank_dayhikes`` does before it drops Twins, on the store alone.
     """
-    from dayhike.similarity import random_pair_percentile, score_rows
+    from dayhike.similarity import score_rows
 
     (seed_row,) = np.searchsorted(store.ids, [seed_id])
     assert store.ids[seed_row] == seed_id, seed_id
@@ -338,10 +338,9 @@ def top_matches(store, seed_id: int, weights: Mapping[str, float], limit: int = 
     scored = ~np.isnan(similarity)
     rows, similarity, raw = rows[scored], similarity[scored], raw[scored]
     order = np.lexsort((store.ids[rows], -raw, -similarity))[:limit]
-    score = random_pair_percentile(store, similarity[order], weights)
     return [
-        (int(store.ids[row]), float(s), float(r), float(p))
-        for row, s, r, p in zip(rows[order], similarity[order], raw[order], score)
+        (int(store.ids[row]), float(s), float(r))
+        for row, s, r in zip(rows[order], similarity[order], raw[order])
     ]
 
 

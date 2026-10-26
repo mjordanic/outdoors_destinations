@@ -38,6 +38,7 @@ from dayhike.catalog import (
     similarity_dir_for,
 )
 from dayhike.dem import DEFAULT_DEM_DIR, FABDEM_VERSION, fabdem_tile_id
+from dayhike.landcover import DEFAULT_LANDCOVER_DIR, worldcover_tile_id
 
 Progress = Callable[[str], None]
 
@@ -55,9 +56,16 @@ WATER_SOURCE_KINDS = ("drinking_water", "spring", "water_tap", "water_point")
 SOLAR_ASPECT_POINTS = 32  # about this many vertices sampled per DayHike
 SOLAR_ASPECT_OFFSET_ARCSEC = 2  # east and north offsets: two FABDEM cells
 SOLAR_ASPECT_MIN_SLOPE_DEG = 5.0  # flatter points face no way
+WATERSIDE_M = 200.0  # open water this close to the line counts (CONTEXT.md WaterSide)
+WATERSIDE_STEP_M = 200.0  # a WaterSide probe this often along the walk
+WATERSIDE_MIN_SHARE = 0.1  # of the WorldCover cells around a probe that are water
+WATERSIDE_OVERVIEW = 4  # WorldCover read at 4 x its 10 m cells
+WORLDCOVER_WATER = 80  # permanent water bodies: sea, lakes, wide rivers
+TWIN_STEP_M = 50.0  # each walk sampled this often to compare routes
+TWIN_M = 30.0  # a sample this close to the other walk lies on it
+TWIN_SHARE = 0.8  # each walk this much on the other: the same route (CONTEXT.md Twin)
 CALIBRATION_QUANTILES = 1_024
 CALIBRATION_PAIRS = 100_000
-JOINT_PAIRS = 20_000  # the first pairs, kept whole for the displayed score
 CALIBRATION_SEED = 20261024
 _HIKE_CHUNK = 2_000
 
@@ -96,6 +104,7 @@ FACT_COLUMNS = (
     "southness",
     "water_count",
     "dry_stretch_m",
+    "waterside_share",
     *FACILITIES_FLAG_COLUMNS,
     *SURFACE_SHARE_COLUMNS,
     "tarmac_approach_m",
@@ -158,8 +167,8 @@ MEASURES = (
     Measure("length", "ratio", ("length_m",), 1_000),
     Measure("elevation_gain", "ratio", ("elevation_gain_m",), 100),
     Measure("difficulty", "tolerance", ("difficulty_rank",), 3),
-    Measure("highest", "tolerance", ("highest_m",), 1_000),
-    Measure("lowest", "tolerance", ("lowest_m",), 1_000),
+    Measure("highest", "tolerance", ("highest_m",), 400),
+    Measure("lowest", "tolerance", ("lowest_m",), 400),
     Measure("profile", "profile", ()),
     Measure("landcover", "mix", LANDCOVER_SHARE_COLUMNS),
     Measure("peak_summited", "agree", ("peak_summited",)),
@@ -171,6 +180,7 @@ MEASURES = (
     Measure("southness", "tolerance", ("southness",), 1),
     Measure("water_count", "tolerance", ("water_count",), 3, cap=3),
     Measure("dry_stretch", "ratio", ("dry_stretch_m",), 1_000),
+    Measure("waterside", "tolerance", ("waterside_share",), 0.5),
     *(Measure(flag, "agree", (flag,)) for flag in FACILITIES_FLAG_COLUMNS),
     Measure("surface", "mix", SURFACE_SHARE_COLUMNS),
     Measure("tarmac_approach", "tolerance", ("tarmac_approach_m",), 2_000),
@@ -179,6 +189,13 @@ MEASURES = (
     Measure("steepest_km", "ratio", ("steepest_km_m",), 50),
 )
 MEASURE_NAMES = tuple(measure.name for measure in MEASURES)
+# On by default: the Measures that told good matches from poor ones for blind
+# judges (ADR-0015); the others are off until the Hiker weights them.
+CORE_MEASURES = (
+    "length", "elevation_gain", "highest", "lowest", "profile", "landcover",
+    "temperature", "precipitation", "solar_radiation", "waterside", "climb_grade",
+)  # fmt: skip
+DEFAULT_WEIGHTS = {name: 100.0 if name in CORE_MEASURES else 0.0 for name in MEASURE_NAMES}
 # Calibration rows: every Measure, then each monthly Measure once per QueryMonth.
 CALIBRATION_KEYS = (
     *MEASURE_NAMES,
@@ -196,8 +213,9 @@ _FACTS_VERSION = hashlib.sha256(
             FACT_COLUMNS, PROFILE_POINTS, PROFILE_RANGE_FLOOR_M, GAIN_HYSTERESIS_M, STEEPNESS_STEP_M,
             STEEPEST_KM_WINDOW_M, CORRIDOR_M, PEAK_SUMMITED_M, PEAKS_AROUND_M,
             TRAILHEAD_M, SEARCH_STEP_M, WATER_SOURCE_KINDS, SOLAR_ASPECT_POINTS,
-            SOLAR_ASPECT_OFFSET_ARCSEC, SOLAR_ASPECT_MIN_SLOPE_DEG,
-            sorted(_SURFACE_TAG_CLASS.items()), sorted(_ROAD_HIGHWAYS),
+            SOLAR_ASPECT_OFFSET_ARCSEC, SOLAR_ASPECT_MIN_SLOPE_DEG, WATERSIDE_M,
+            WATERSIDE_STEP_M, WATERSIDE_MIN_SHARE, WATERSIDE_OVERVIEW, WORLDCOVER_WATER,
+            TWIN_STEP_M, TWIN_M, TWIN_SHARE, sorted(_SURFACE_TAG_CLASS.items()), sorted(_ROAD_HIGHWAYS),
             sorted(_TRACKTYPE_CLASS.items()),
         ]
     ).encode()
@@ -206,7 +224,7 @@ _CALIBRATION_VERSION = hashlib.sha256(
     json.dumps(
         [
             [vars(measure) for measure in MEASURES], CALIBRATION_KEYS,
-            CALIBRATION_QUANTILES, CALIBRATION_PAIRS, JOINT_PAIRS, CALIBRATION_SEED,
+            CALIBRATION_QUANTILES, CALIBRATION_PAIRS, CALIBRATION_SEED,
         ]
     ).encode()
 ).hexdigest()[:16]  # fmt: skip
@@ -222,17 +240,17 @@ class SimilarityStore:
 
     ``facts`` is one float32 row per ``FACT_COLUMNS`` entry and one column per
     DayHike in ``ids`` order (NaN missing, yes/no as 0/1). ``profile`` is one
-    ProfileShape row per DayHike (NaN when missing). ``quantiles`` holds
-    ``CALIBRATION_QUANTILES`` sorted random-pair scores per
-    ``CALIBRATION_KEYS`` entry; ``pairs`` the raw scores of ``JOINT_PAIRS``
-    random pairs on every key.
+    ProfileShape row per DayHike (NaN when missing). ``twins`` gives each
+    DayHike the first row of its group of Twins (``twin_groups``; its own row
+    when it has none). ``quantiles`` holds ``CALIBRATION_QUANTILES`` sorted
+    random-pair scores per ``CALIBRATION_KEYS`` entry.
     """
 
     ids: np.ndarray
     facts: np.ndarray
     profile: np.ndarray
+    twins: np.ndarray
     quantiles: np.ndarray
-    pairs: np.ndarray
     catalog_digest: str | None = None
 
     @classmethod
@@ -283,8 +301,8 @@ class SimilarityStore:
             ids=load("ids"),
             facts=load("facts"),
             profile=load("profile"),
+            twins=load("twins"),
             quantiles=load("quantiles"),
-            pairs=load("pairs"),
             catalog_digest=meta.get("catalog_digest"),
         )
 
@@ -304,13 +322,13 @@ def rank_dayhikes(
     """Rank Catalog DayHikes by Measure similarity to named Seeds.
 
     ``weights`` maps Measure names (``MEASURE_NAMES``) to 0-100; a Measure
-    left out or at 0 is excluded. None weighs every Measure 100. Each
+    left out or at 0 is excluded. None is ``DEFAULT_WEIGHTS``. Each
     candidate's similarity to one Seed is the weighted mean of its calibrated
     Measure scores over the Measures both DayHikes have; with several Seeds the
     best Seed counts. Ties break on the same weighted mean of raw scores, then
-    on DayHike id. ``score`` is that similarity as a percentile of random
-    DayHike pairs under the same weights (to the power of the Seed count), so
-    0.5 is a typical random pair and 1.0 beats every stored pair. Seeds are
+    on DayHike id. ``score`` is that similarity: 0.5 is about a typical random
+    pair, 1.0 beats every random pair on every weighted Measure. Of a group of
+    Twins only the best is kept, and none of a Seed's Twins. Seeds are
     resolved with ``resolve_seed`` and omitted. A candidate with no weighted
     Measure scored is left out. ``allowed_ids`` restricts the candidates (for
     an upstream filter such as DriveTime). ``limit`` keeps only the best that
@@ -346,7 +364,7 @@ def rank_rows(
     allowed_ids: Collection[int] | None = None,
     limit: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """``rank_dayhikes`` on store rows: the ranked rows and their shown scores.
+    """``rank_dayhikes`` on store rows: the ranked rows and their scores.
 
     Seeds are store rows, not names, so a caller that already knows the
     DayHike (a web page that picked it from a list) needs no Catalog.
@@ -363,9 +381,13 @@ def rank_rows(
     similarity, raw = score_rows(store, seed_rows, rows, chosen, month=month)
     scored = ~np.isnan(similarity)
     rows, similarity, raw = rows[scored], similarity[scored], raw[scored]
-    order = np.lexsort((store.ids[rows], -raw, -similarity))[:limit]
-    percentile = random_pair_percentile(store, similarity[order], chosen, month=month)
-    return rows[order], percentile ** len(seed_rows)
+    order = np.lexsort((store.ids[rows], -raw, -similarity))
+    rows, similarity = rows[order], similarity[order]
+    group = store.twins[rows]
+    _, first = np.unique(group, return_index=True)
+    keep = np.sort(first)
+    keep = keep[~np.isin(group[keep], store.twins[seed_rows])][:limit]
+    return rows[keep], similarity[keep]
 
 
 def _check_month(month: int | None) -> None:
@@ -457,25 +479,6 @@ def calibrate(store: SimilarityStore, key: str, scores: np.ndarray) -> np.ndarra
     return _mid_rank(quantiles, scores)
 
 
-def random_pair_percentile(
-    store: SimilarityStore,
-    similarity: np.ndarray,
-    weights: Mapping[str, float],
-    *,
-    month: int | None = None,
-) -> np.ndarray:
-    """Share of the stored random pairs whose similarity under ``weights`` is lower."""
-    measures = [measure for measure in MEASURES if measure.name in weights]
-    keys = [_calibration_key(measure, month) for measure in measures]
-    calibrated = np.column_stack(
-        [calibrate(store, key, store.pairs[:, CALIBRATION_KEYS.index(key)]) for key in keys]
-    )
-    null = weighted_mean(
-        calibrated, np.array([weights[measure.name] for measure in measures], dtype=float)
-    )
-    return _mid_rank(np.sort(null[~np.isnan(null)]), similarity)
-
-
 def weighted_mean(scores: np.ndarray, weights: np.ndarray) -> np.ndarray:
     """Row-wise mean of ``scores`` columns weighted by ``weights``, skipping NaN.
 
@@ -509,7 +512,7 @@ def _calibration_key(measure: Measure, month: int | None) -> str:
 
 def _measure_weights(weights: Mapping[str, float] | None) -> dict[str, float]:
     if weights is None:
-        return dict.fromkeys(MEASURE_NAMES, 100.0)
+        weights = DEFAULT_WEIGHTS
     unknown = sorted(set(weights) - set(MEASURE_NAMES))
     if unknown:
         raise ValueError(f"unknown Measure(s): {', '.join(unknown)}")
@@ -526,25 +529,30 @@ def build_similarity(
     catalog_path: Path | str,
     dem_dir: Path | str = DEFAULT_DEM_DIR,
     *,
+    landcover_dir: Path | str = DEFAULT_LANDCOVER_DIR,
     progress: Progress | None = None,
 ) -> Path:
-    """Write the facts and Calibration of every Catalog DayHike.
+    """Write the facts, Twins and Calibration of every Catalog DayHike.
 
-    Reads the Catalog and its GeometryStore (read-only) and FABDEM tiles in
-    ``dem_dir`` for SolarAspect, then calibrates (``calibrate_similarity``).
-    Run it after ingest and every sample step; it replaces the directory.
+    Reads the Catalog and its GeometryStore (read-only), FABDEM tiles in
+    ``dem_dir`` for SolarAspect and WorldCover tiles in ``landcover_dir`` for
+    WaterSide, then calibrates (``calibrate_similarity``). Run it after ingest
+    and every sample step; it replaces the directory.
     """
     started = time.monotonic()
     catalog_path = Path(catalog_path)
     directory = similarity_dir_for(catalog_path)
     digest = catalog_digest(catalog_path)
-    ids, facts, profile = _build_facts(catalog_path, Path(dem_dir), progress)
+    ids, facts, profile, twins = _build_facts(
+        catalog_path, Path(dem_dir), Path(landcover_dir), progress
+    )
     directory.mkdir(exist_ok=True)
     for path in directory.glob("*"):
         path.unlink()
     np.save(directory / "ids.npy", ids)
     np.save(directory / "facts.npy", facts)
     np.save(directory / "profile.npy", profile)
+    np.save(directory / "twins.npy", twins)
     (directory / "meta.json").write_text(
         json.dumps(
             {
@@ -585,8 +593,8 @@ def calibrate_similarity(
 
     ``CALIBRATION_PAIRS`` random pairs of distinct DayHikes are scored on every
     ``CALIBRATION_KEYS`` entry; ``CALIBRATION_QUANTILES`` evenly spaced
-    quantiles of the scored ones are kept per key, and the first
-    ``JOINT_PAIRS`` pairs whole. Rerun after a Measure constant changes.
+    quantiles of the scored ones are kept per key. Rerun after a Measure
+    constant changes.
     """
     directory = similarity_dir_for(catalog_path)
     meta = json.loads((directory / "meta.json").read_text())
@@ -600,8 +608,8 @@ def calibrate_similarity(
         ids=ids,
         facts=np.load(directory / "facts.npy"),
         profile=np.load(directory / "profile.npy"),
+        twins=np.load(directory / "twins.npy"),
         quantiles=np.empty((0, 0), dtype=np.float32),
-        pairs=np.empty((0, 0), dtype=np.float32),
     )
     rng = np.random.default_rng(CALIBRATION_SEED)
     left, right = rng.integers(0, len(ids), size=(2, CALIBRATION_PAIRS))
@@ -627,7 +635,6 @@ def calibrate_similarity(
         if scored.size:
             quantiles[row] = np.quantile(scored, at, method="inverted_cdf")
     np.save(directory / "quantiles.npy", quantiles)
-    np.save(directory / "pairs.npy", scores[:JOINT_PAIRS])
     meta.update(
         calibration_version=_CALIBRATION_VERSION,
         calibration_keys=CALIBRATION_KEYS,
@@ -639,9 +646,9 @@ def calibrate_similarity(
 
 
 def _build_facts(
-    catalog_path: Path, dem_dir: Path, progress: Progress | None
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Facts (``FACT_COLUMNS`` x DayHikes, float32), ProfileShapes and ids."""
+    catalog_path: Path, dem_dir: Path, landcover_dir: Path, progress: Progress | None
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Ids, facts (``FACT_COLUMNS`` x DayHikes, float32), ProfileShapes and Twins."""
     column = {name: index for index, name in enumerate(FACT_COLUMNS)}
     catalog = sqlite3.connect(f"file:{catalog_path}?mode=ro", uri=True)
     try:
@@ -700,6 +707,9 @@ def _build_facts(
             facts[column[name]] = near > 0
         probes: list[np.ndarray] = []
         probe_rows: list[np.ndarray] = []
+        water_probes: list[np.ndarray] = []
+        water_rows: list[np.ndarray] = []
+        routes: list[np.ndarray | None] = [None] * n
         for start in range(0, n, _HIKE_CHUNK):
             chunk = ids[start : start + _HIKE_CHUNK]
             walks = _walks(geo, int(chunk[0]), int(chunk[-1]))
@@ -721,6 +731,10 @@ def _build_facts(
                 chosen = solar_aspect_points(len(lat))
                 probes.append(np.column_stack([lat[chosen], lon[chosen]]))
                 probe_rows.append(np.full(chosen.size, row))
+                if len(lat) >= 2:
+                    water_probes.append(_even_points(lat, lon, WATERSIDE_STEP_M))
+                    water_rows.append(np.full(len(water_probes[-1]), row))
+                    routes[row] = _even_points(lat, lon, TWIN_STEP_M).astype(np.float32)
             if progress is not None:
                 progress(f"similarity facts: {min(start + _HIKE_CHUNK, n)}/{n} DayHikes")
     finally:
@@ -730,7 +744,14 @@ def _build_facts(
     points = np.concatenate(probes) if probes else np.empty((0, 2))
     owners = np.concatenate(probe_rows) if probe_rows else np.empty(0, dtype=int)
     facts[column["southness"]] = solar_aspect_southness(dem_dir, points, owners, n)
-    return ids, facts, profile
+    if progress is not None:
+        progress("similarity facts: WaterSide")
+    points = np.concatenate(water_probes) if water_probes else np.empty((0, 2))
+    owners = np.concatenate(water_rows) if water_rows else np.empty(0, dtype=int)
+    facts[column["waterside_share"]] = waterside_share(landcover_dir, points, owners, n)
+    if progress is not None:
+        progress("similarity facts: Twins")
+    return ids, facts, profile, twin_groups(routes)
 
 
 def _amenities(geo: sqlite3.Connection) -> tuple[np.ndarray, np.ndarray]:
@@ -921,6 +942,15 @@ def _densify(lat: np.ndarray, lon: np.ndarray, step_m: float) -> np.ndarray:
     dense_lat = lat[start] + along * (lat[start + 1] - lat[start])
     dense_lon = lon[start] + along * (lon[start + 1] - lon[start])
     return np.column_stack([np.append(dense_lat, lat[-1]), np.append(dense_lon, lon[-1])])
+
+
+def _even_points(lat: np.ndarray, lon: np.ndarray, step_m: float) -> np.ndarray:
+    """(lat, lon) rows at equal distance steps of about ``step_m`` along the
+    vertices, both ends included.
+    """
+    distance = np.concatenate([[0.0], np.cumsum(_step_m(lat, lon))])
+    at = np.linspace(0.0, distance[-1], max(2, round(distance[-1] / step_m) + 1))
+    return np.column_stack([np.interp(at, distance, lat), np.interp(at, distance, lon)])
 
 
 def elevation_gain(ele: np.ndarray) -> float:
@@ -1129,6 +1159,101 @@ def solar_aspect_southness(
     total = np.bincount(owners[sloped], weights=southness, minlength=n)
     with np.errstate(invalid="ignore"):
         return np.where(count > 0, total / count, np.nan)
+
+
+def waterside_share(
+    landcover_dir: Path | str, points: np.ndarray, owners: np.ndarray, n: int
+) -> np.ndarray:
+    """WaterSide per DayHike row: the share of its probe points beside open water.
+
+    ``points`` are (lat, lon) rows every ``WATERSIDE_STEP_M`` along each walk;
+    ``owners`` gives each point's DayHike row, out of ``n`` rows. A point is
+    beside water when at least ``WATERSIDE_MIN_SHARE`` of the WorldCover cells
+    within ``WATERSIDE_M`` of it (a square, read at ``WATERSIDE_OVERVIEW`` times
+    the 10 m cells and cut at the tile edge) are permanent water: sea, lakes,
+    wide rivers. Points without a tile are left out; a DayHike with none left
+    is NaN.
+    """
+    import rasterio
+
+    beside = np.full(len(points), np.nan)
+    lat, lon = points[:, 0], points[:, 1]
+    corners = np.column_stack([np.floor(lat / 3), np.floor(lon / 3)]).astype(int) * 3
+    unique, tiles = np.unique(corners, axis=0, return_inverse=True)
+    order = np.argsort(tiles.ravel(), kind="stable")
+    bounds = np.searchsorted(tiles.ravel()[order], np.arange(len(unique) + 1))
+    for tile, (south, west) in enumerate(unique):
+        tile_id = worldcover_tile_id(south, west)
+        path = Path(landcover_dir) / f"ESA_WorldCover_10m_2021_v200_{tile_id}_Map.tif"
+        if not path.is_file():
+            continue
+        at = order[bounds[tile] : bounds[tile + 1]]
+        with rasterio.open(path) as dataset:
+            height = dataset.height // WATERSIDE_OVERVIEW
+            width = dataset.width // WATERSIDE_OVERVIEW
+            water = dataset.read(1, out_shape=(height, width)) == WORLDCOVER_WATER
+            transform = dataset.transform @ rasterio.Affine.scale(
+                dataset.width / width, dataset.height / height
+            )
+        rows, cols = rasterio.transform.rowcol(transform, lon[at], lat[at])
+        rows = np.clip(np.asarray(rows), 0, height - 1)
+        cols = np.clip(np.asarray(cols), 0, width - 1)
+        cell_m = math.radians(abs(transform.e)) * EARTH_RADIUS_M
+        reach_rows = round(WATERSIDE_M / cell_m)
+        reach_cols = np.round(WATERSIDE_M / (cell_m * np.cos(np.radians(lat[at])))).astype(int)
+        # Water cells in any window: four reads of the summed-area table.
+        summed = np.zeros((height + 1, width + 1), dtype=np.int32)
+        summed[1:, 1:] = water.cumsum(axis=0, dtype=np.int32).cumsum(axis=1, dtype=np.int32)
+        top, bottom = np.maximum(rows - reach_rows, 0), np.minimum(rows + reach_rows + 1, height)
+        left, right = np.maximum(cols - reach_cols, 0), np.minimum(cols + reach_cols + 1, width)
+        count = summed[bottom, right] - summed[top, right] - summed[bottom, left] + summed[top, left]
+        beside[at] = count >= WATERSIDE_MIN_SHARE * (bottom - top) * (right - left)
+    known = ~np.isnan(beside)
+    count = np.bincount(owners[known], minlength=n)
+    total = np.bincount(owners[known], weights=beside[known], minlength=n)
+    with np.errstate(invalid="ignore"):
+        return np.where(count > 0, total / count, np.nan)
+
+
+def twin_groups(routes: Sequence[np.ndarray | None]) -> np.ndarray:
+    """First row of each DayHike's group of Twins (its own row without one).
+
+    ``routes`` holds per DayHike row its walk as (lat, lon) rows every
+    ``TWIN_STEP_M``, or None. Two DayHikes are Twins (the same route, walked
+    either way) when at least ``TWIN_SHARE`` of each one's points lie within
+    ``TWIN_M`` of the other's line; Twins of Twins join one group. Only pairs
+    whose lengths and point centres allow that share are compared.
+    """
+    parent = np.arange(len(routes))
+
+    def root(row: int) -> int:
+        while parent[row] != row:
+            parent[row] = parent[parent[row]]
+            row = parent[row]
+        return row
+
+    have = [row for row, route in enumerate(routes) if route is not None]
+    if not have:
+        return parent
+    length = np.array([_path_length_m(routes[row][:, 0], routes[row][:, 1]) for row in have])
+    centre = np.radians([routes[row].mean(axis=0) for row in have])
+    # Twins' centres lie within the off-route share of the longer walk.
+    reach = np.maximum(TWIN_M, (1 - TWIN_SHARE) * length / TWIN_SHARE) / EARTH_RADIUS_M
+    near = BallTree(centre, metric="haversine").query_radius(centre, r=reach)
+
+    def share_on(a: np.ndarray, b: np.ndarray) -> float:
+        distance, _ = nearest_on_line(b[:, 0], b[:, 1], a[:, 0], a[:, 1])
+        return float((distance <= TWIN_M).mean())
+
+    for i, others in enumerate(near):
+        for j in others[others > i]:
+            if min(length[i], length[j]) < TWIN_SHARE * max(length[i], length[j]):
+                continue
+            a, b = routes[have[i]], routes[have[j]]
+            if share_on(a, b) >= TWIN_SHARE and share_on(b, a) >= TWIN_SHARE:
+                first, second = sorted((root(have[i]), root(have[j])))
+                parent[second] = first
+    return np.array([root(row) for row in range(len(routes))])
 
 
 def dem_heights(dem_dir: Path | str, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:

@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 
 from dayhike.catalog import MatrixClient, Origin
 from dayhike.serving import MEASURE_GROUPS, MEASURE_INFO, ServingData
-from dayhike.similarity import MEASURES
+from dayhike.similarity import DEFAULT_WEIGHTS, MEASURES
 
 STATIC_DIR = Path(__file__).parent / "static"
 RESULTS = 10
@@ -100,6 +100,7 @@ def create_app(
             "description": MEASURE_INFO[measure.name][2],
             "columns": list(measure.columns),
             "monthly": measure.monthly,
+            "default_weight": DEFAULT_WEIGHTS[measure.name],
         }
         for measure in MEASURES
     ]
@@ -162,7 +163,7 @@ def create_app(
     @app.post("/api/rank")
     def rank(body: RankRequest) -> dict:
         started = time.monotonic()
-        weights = dict.fromkeys(MEASURE_INFO, 100.0) if body.weights is None else dict(body.weights)
+        weights = dict(DEFAULT_WEIGHTS if body.weights is None else body.weights)
         for name in body.excluded:
             if name not in MEASURE_INFO:
                 raise HTTPException(400, f"unknown Measure: {name}")

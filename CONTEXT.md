@@ -96,6 +96,14 @@ _Avoid_: buffer, along-route radius, nearby
 The longest distance walked along a DayHike without passing a WaterSource in the Corridor, counting from the first and to the last vertex. A DayHike with no WaterSource has a DryStretch equal to its length.
 _Avoid_: water gap, thirst distance
 
+**WaterSide**:
+The share of a DayHike's walk that lies within 200 m of open water: sea, a lake, or a wide river, as WorldCover's permanent-water class. A point every 200 m along the walk counts when at least a tenth of the WorldCover cells within 200 m of it are water. It is not a WaterSource.
+_Avoid_: coast, lakeside, water nearby
+
+**Twin**:
+Another DayHike that follows the same route, walked either way: at least 80 % of each one's walk lies within 30 m of the other's. Duplicate OSM relations of one trail and a stage walked in both directions are Twins; a variant that shares less is not. Ranking lists only the best of a group of Twins.
+_Avoid_: duplicate, reversed route, variant
+
 **SurfaceMix**:
 The mix of trail surface along DayHikeGeometry, as length fractions of paved, gravel, natural, and rock. It comes from member-way surface tags, else from the way's highway kind. It is not LandCover.
 _Avoid_: ground type, terrain, trail type
@@ -133,15 +141,15 @@ The numeric Catalog description of a DayHike (length, elevation stats, Difficult
 _Avoid_: embedding, description, tags
 
 **Ranking**:
-An ordered list of Catalog DayHikes by similarity to the Seed set. A DayHike's similarity to one Seed is the MeasureWeights-weighted mean of its calibrated Measure scores; with several Seeds the best Seed counts. Its score is the share of random DayHike pairs that are less alike under the same weights (raised to the number of Seeds). An optional QueryMonth selects the ClimateNormal slice. The Seed carries the climate being matched.
+An ordered list of Catalog DayHikes by similarity to the Seed set. A DayHike's similarity to one Seed is the MeasureWeights-weighted mean of its calibrated Measure scores; with several Seeds the best Seed counts. Its score is that similarity. Of a group of Twins only the best is listed, and none of a Seed's Twins. An optional QueryMonth selects the ClimateNormal slice. The Seed carries the climate being matched.
 _Avoid_: recommendation, unsupervised clustering, prediction, climate target
 
 **Measure**:
-One fact compared between two DayHikes, giving 1 (alike) to 0 (unlike), or nothing when either DayHike lacks the fact: length, the Hut along the way, the ProfileShape, and 23 more. Each has a kind (ratio, tolerance, mix, agree, profile) and is the unit the Hiker weights. There is no grouping of Measures into themes.
+One fact compared between two DayHikes, giving 1 (alike) to 0 (unlike), or nothing when either DayHike lacks the fact: length, the Hut along the way, the ProfileShape, and 24 more. Each has a kind (ratio, tolerance, mix, agree, profile) and is the unit the Hiker weights. There is no grouping of Measures into themes.
 _Avoid_: Facet, feature, dimension, criterion
 
 **MeasureWeights**:
-The Hiker's weight for each Measure in one query, from 0 to 100. A Measure at 0 or left out is excluded; the weights of the Measures scored for a pair renormalize, so only their ratios matter.
+The Hiker's weight for each Measure in one query, from 0 to 100. A Measure at 0 or left out is excluded; without weights the core Measures (ADR-0015) weigh 100 and the others 0. The weights of the Measures scored for a pair renormalize, so only their ratios matter.
 _Avoid_: FacetWeights, preferences, priorities, importance
 
 **Calibration**:

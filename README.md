@@ -99,8 +99,8 @@ What each step **does not** do:
 Ingest **replaces** the Catalog (it does not append). `sample-dem`,
 `sample-landcover`, and `sample-climate` do **not** replace the Catalog: they
 only overwrite sampled columns on hikes whose geometry sits on a downloaded
-tile. `build-similarity` reads both SQLite files and FABDEM and replaces
-`data/catalog.similarity/`; ingest and every sample step that changes the
+tile. `build-similarity` reads both SQLite files, FABDEM and the WorldCover
+tiles (for `waterside`) and replaces `data/catalog.similarity/`; ingest and every sample step that changes the
 Catalog delete that directory, so rerun `build-similarity` after them (Ranking
 refuses missing facts and facts built for other DayHikes, other Catalog
 values or by other code).
@@ -335,7 +335,9 @@ scored 1 (alike) to 0 (unlike). The Hiker weighs each Measure 0–100; a Measure
 left out or at 0 is excluded. Each Measure score is **calibrated** first (the
 share of random DayHike pairs that score lower on it), then the weighted mean
 over the Measures both DayHikes have is the similarity (ADR-0013). Several
-Seeds: a candidate's similarity is its **best** Seed's, not the mean.
+Seeds: a candidate's similarity is its **best** Seed's, not the mean. Of
+DayHikes that follow the same route (**Twins**, ADR-0015) only the best is
+listed, and none of a Seed's Twins.
 
 The facts come from `dayhike build-similarity`, which writes them once with the
 Calibration into `data/catalog.similarity/`. Ranking reads that directory and
@@ -350,7 +352,7 @@ See every Measure and its Calibration on the real Catalog in
 [`notebooks/05_similarity.ipynb`](notebooks/05_similarity.ipynb).
 
 ```bash
-uv run dayhike build-similarity --catalog data/catalog.sqlite   # once; --dem defaults to data/dem/
+uv run dayhike build-similarity --catalog data/catalog.sqlite   # once; --dem data/dem/, --landcover data/landcover/
 uv run dayhike rank --catalog data/catalog.sqlite "Ridge Walk"
 uv run dayhike rank --catalog data/catalog.sqlite \
   --weight highest=100 --weight profile=50 --weight hut_along=30 "Ridge Walk"
@@ -363,8 +365,11 @@ Prints DayHike id, name, and score (tab-separated), best first:
 1002	Valley Path	<score>
 ```
 
-With no `--weight` every Measure weighs 100. Each `--weight MEASURE=WEIGHT`
-names one Measure; the ones not named are excluded. `--limit N` prints only the
+With no `--weight` the eleven core Measures weigh 100 and the others are off:
+`length`, `elevation_gain`, `highest`, `lowest`, `profile`, `landcover`,
+`temperature`, `precipitation`, `solar_radiation`, `waterside`,
+`climb_grade` (ADR-0015). Each `--weight MEASURE=WEIGHT` names one Measure;
+the ones not named are excluded. `--limit N` prints only the
 best N (every DayHike is still scored).
 
 ### Measures
@@ -374,7 +379,7 @@ best N (every DayHike is still scored).
 | `length` | Catalog length | ratio | floor 1 km |
 | `elevation_gain` | metres climbed, larger of climb and descent (direction-free); a change counts once it moves 10 m | ratio | floor 100 m |
 | `difficulty` | Difficulty as SAC rank 1–6 | tolerance | D = 3 |
-| `highest`, `lowest` | highest and lowest point | tolerance | D = 1,000 m |
+| `highest`, `lowest` | highest and lowest point | tolerance | D = 400 m |
 | `profile` | ProfileShape (64 points) | profile | — |
 | `landcover` | six LandCover shares (five plus the leftover) | mix | — |
 | `peak_summited` | a Peak within 50 m of the line | agree | — |
@@ -386,6 +391,7 @@ best N (every DayHike is still scored).
 | `southness` | SolarAspect from FABDEM (1 south, 0 north) | tolerance | D = 1 |
 | `water_count` | WaterSources in the Corridor, capped at 3 | tolerance | D = 3 |
 | `dry_stretch` | DryStretch | ratio | floor 1 km |
+| `waterside` | WaterSide: share of the walk within 200 m of sea, lake or wide river (WorldCover) | tolerance | D = 0.5 |
 | `hut_along`, `restaurant_cafe_along`, `shelter_along` | that amenity in the Corridor | agree | — |
 | `restaurant_cafe_trailhead`, `parking_trailhead` | that amenity within 500 m of the Trailhead | agree | — |
 | `surface` | SurfaceMix (paved, gravel, natural, rock) | mix | — |
@@ -408,9 +414,10 @@ scores 0.6 or more on `profile` nine times in ten, but rarely on `length`.
 Calibration maps each raw score to the share of random pairs (100,000, drawn
 once from the whole Catalog) that score lower on that Measure, ties counting
 half, so every Measure pulls with the weight it is given. The printed score is
-the similarity's share among 20,000 stored random pairs under the same
-weights, raised to the number of Seeds: 0.5 is a typical random pair and 1.0
-beats every stored pair. Ties in order break on the uncalibrated weighted mean,
+the similarity itself, the weighted mean of the calibrated Measure scores: a
+typical random pair scores about 0.5, and 1.0 needs a pair that beats every
+random pair on every weighted Measure, so the best matches stay apart instead
+of all reading 1.000. Ties in order break on the uncalibrated weighted mean,
 then on DayHike id.
 
 Omit `--month` to compare climate as the June–August regime (mean temperature,
@@ -1000,7 +1007,8 @@ uv run dayhike fetch-climate --bounds 32.6,-31.3,71.2,46.4
 ```
 
 `--dest` overrides `data/landcover/` or `data/climate/`. WorldCover is ESA
-WorldCover 2021. CHELSA V2.1 normals are 1981–2010.
+WorldCover 2021; `build-similarity` also reads it for the `waterside`
+Measure (its permanent-water class). CHELSA V2.1 normals are 1981–2010.
 
 **Store and update SQLite:** `dayhike sample-landcover` and
 `dayhike sample-climate` read those GeoTIFFs and:

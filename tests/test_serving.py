@@ -49,7 +49,7 @@ def test_export_writes_a_complete_directory(export: Path) -> None:
     assert meta["dayhikes"] == 4
     assert meta["attribution"]["osm"] == "© OpenStreetMap contributors"
     assert meta["drive_time"] is False
-    for name in ("ids.npy", "facts.npy", "profile.npy", "quantiles.npy", "pairs.npy", "meta.json"):
+    for name in ("ids.npy", "facts.npy", "profile.npy", "twins.npy", "quantiles.npy", "meta.json"):
         assert (export / "similarity" / name).is_file()
     assert np.load(export / "trailheads.npy").shape == (4, 2)
 
