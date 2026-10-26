@@ -480,9 +480,10 @@ Measured on the Europe Catalog (161,614 DayHikes) on an 8-core Mac:
 
 So a ranking server fits in 2 GB and is comfortable in 4 GB. Most of its memory
 is the Python DayHike objects `Catalog.open` builds; scoring itself needs the
-88 MB of memory-mapped arrays plus a few hundred MB per query. Building the
-facts needs 1.7 GB and is best run where the GeometryStore (21 GB) lives, with
-only `data/catalog.similarity/` and the Catalog copied to the server.
+85 MB of memory-mapped arrays plus a few hundred MB per query. Building the
+facts needs 1.7 GB (not yet re-measured) and is best run where the
+GeometryStore (21 GB) lives, with only `data/catalog.similarity/` and the
+Catalog copied to the server.
 
 ## 4. Optional Origin and max hours
 
