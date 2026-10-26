@@ -651,11 +651,13 @@ async function findSimilar() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(query),
     });
+    if (query.seed !== state.liked.id) return;
     state.query = { weights: body.weights, month: body.month, drive: Boolean(query.origin) };
     state.results = body.results;
     renderResults(body);
     setStatus(`Done in ${(body.elapsed_ms / 1000).toFixed(1)} s.`);
   } catch (error) {
+    if (query.seed !== state.liked.id) return;
     markStale();
     setStatus(error.message, true);
   } finally {
@@ -715,18 +717,19 @@ function renderResults(body) {
 async function showResult(index, row) {
   document.querySelectorAll("#results-table tr.active").forEach((r) => r.classList.remove("active"));
   row.classList.add("active");
-  const result = state.results[index];
+  const { results, liked } = state;
+  const result = results[index];
   const request = ++shown;
   setStatus("Loading the hike…");
   try {
     const hike = await api(`/api/hikes/${result.id}`);
-    if (request !== shown) return;
+    if (request !== shown || results !== state.results || liked !== state.liked) return;
     const card = $("#selected");
     renderDetail(card, hike, { role: `Similar hike #${index + 1}`, compare: state.liked, result });
     card.scrollIntoView({ behavior: "smooth", block: "start" });
     setStatus("");
   } catch (error) {
-    if (request === shown) setStatus(error.message, true);
+    if (request === shown && results === state.results && liked === state.liked) setStatus(error.message, true);
   }
 }
 
