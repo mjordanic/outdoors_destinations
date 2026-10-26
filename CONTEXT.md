@@ -5,15 +5,15 @@ A local Catalog of DayHikes built from OpenStreetMap, ranked by similarity to Se
 ## Language
 
 **DayHike**:
-A day-length hiking outing stored in the Catalog. It is an OSM `route=hiking` relation that survived the length band and superroute rules. Its label is OSM `name`, else `ref`, else `relation:{id}`. Its length is the length of its DayHikeGeometry, each way once: a there-and-back trail counts one way.
+A day-length hiking outing stored in the Catalog. It is an OSM `route=hiking` relation that survived the length band, superroute and node-network rules (a `network:type=node_network` leg that is not a RoundTrip is not a DayHike). Its label is OSM `name`, else `ref` with `from – to` or the nearest place, else `from – to`, else "Hike near" the nearest place, else `relation:{id}` (ADR-0015). Its length is the length of its DayHikeGeometry, each way once: a there-and-back trail counts one way.
 _Avoid_: destination, trail, route, path, recommendation
 
 **NameOrigin**:
-Whether a DayHike label came from OSM `name`, OSM `ref`, or a synthetic `relation:{id}` assigned at ingest. Synthetic labels can be dropped in postprocessing.
+Whether a DayHike label came from OSM `name`, OSM `ref`, the `from`/`to` tags, the nearest place, or a synthetic `relation:{id}` assigned at ingest. Synthetic labels can be dropped in postprocessing.
 _Avoid_: unnamed as a drop reason, title, display name
 
 **Trailhead**:
-The point where a DayHike's main walk starts, so it is the first vertex of DayHikeGeometry. A line starts at the end nearer an access point within 5 km, else at the end where member order starts it. A loop starts at the far end of the one dead end it keeps (its stem), else at its vertex nearest an access point within 5 km. An access point is a parking point and nothing else. Drive time and nearby amenities are measured from here.
+The point where a DayHike's main walk starts, so it is the first vertex of DayHikeGeometry. A line starts at the end its `from`/`to` names point to (ADR-0015), else at the end nearer an access point within 5 km, else at the end where member order starts it. A loop starts at the far end of the one dead end it keeps (its stem), else at its vertex nearest an access point within 5 km. An access point is a parking point and nothing else. Drive time and nearby amenities are measured from here.
 _Avoid_: start, parking (parking is an amenity near a Trailhead)
 
 **Catalog**:

@@ -171,7 +171,7 @@ a hair over 10 km / 5 km because it is computed on the sphere):
 
 ```
 data/catalog.sqlite
-IngestReport(kept=4, dropped_unnamed=0, dropped_length=2, dropped_network=1, named_osm_name=2, named_osm_ref=1, named_synthetic=1)
+IngestReport(kept=4, dropped_unnamed=0, dropped_length=2, dropped_network=1, named_osm_name=2, named_osm_ref=1, named_synthetic=1, dropped_node_network=0, named_from_to=0, named_place=0)
 ```
 
 Progress (`filter:`, `relations:`, `ways:`, `nodes:`, `assemble:`, `write:`)
@@ -377,7 +377,7 @@ best N (every DayHike is still scored).
 | Measure | Fact | Kind | Constant |
 | --- | --- | --- | --- |
 | `length` | Catalog length | ratio | floor 1 km |
-| `elevation_gain` | metres climbed, larger of climb and descent (direction-free); a change counts once it moves 10 m | ratio | floor 100 m |
+| `elevation_gain` | metres climbed, larger of climb and descent (direction-free); a one-vertex DEM spike (10 m+ above or below both neighbours at 25 %+ grade) is dropped, then a change counts once it moves 10 m | ratio | floor 100 m |
 | `difficulty` | Difficulty as SAC rank 1–6 | tolerance | D = 3 |
 | `highest`, `lowest` | highest and lowest point | tolerance | D = 400 m |
 | `profile` | ProfileShape (64 points) | profile | — |
@@ -792,9 +792,15 @@ uv run dayhike ingest data/osm/croatia-latest.osm.pbf \
 ```
 
 Stderr shows stage lines while it runs. Stdout is the path and an
-`IngestReport`. Routes outside 1–20 km and iwn/nwn superroutes are counted as
-dropped and are **not** DayHikes. A missing OSM `name` is kept: the Seed label
-is `name`, else `ref`, else `relation:{id}`, with `name_origin` recording which.
+`IngestReport`. Routes outside 1–20 km, iwn/nwn superroutes and node-network
+legs (`network:type=node_network`, not a RoundTrip) are counted as dropped and
+are **not** DayHikes. A missing OSM `name` is kept: the Seed label is `name`,
+else `ref` with `from – to` or "near" the nearest place, else `from – to`, else
+"Hike near" the nearest place (a named city, town, village or hamlet within
+5 km of the Trailhead), else `relation:{id}`, with `name_origin` recording
+which (ADR-0015). A line starts at the end its `from`/`to` names point to when
+they name one end (else parking decides); with `roundtrip=yes` a route with a
+loop is walked as a loop when that keeps as much of it.
 If the process
 stops before `write:`, run the same command again; it resumes from
 `data/catalog.sqlite.work`. `--fresh` discards that work file.
@@ -1477,7 +1483,8 @@ DAYHIKE_SERVING="$PWD/data/web-serving" docker compose -f web/compose.yaml up --
 What the export holds (`src/dayhike/serving.py`): a copy of
 `catalog.similarity/`, Trailheads as a numpy array, and `hikes.sqlite` with per
 DayHike its name, DayHikeGeometry simplified at 10 m (encoded polyline), its
-ElevationProfile at 128 equal steps in metres, and the amenity points the
+ElevationProfile at 128 equal steps in metres, the metres it climbs and
+descends in the walking direction (export format 2), and the amenity points the
 Measures count (WaterSources, Huts, restaurants, Shelters and Viewpoints in the
 Corridor, Peaks within 2 km, parking and restaurants within 500 m of the
 Trailhead) with their OSM names. With `--valhalla-tiles` it also links the
@@ -1486,12 +1493,16 @@ with `--valhalla-url` it snaps every Trailhead once (`snaps.npz`). Rerun it
 after any rebuild; `meta.json` is written last, so a half-written export never
 opens.
 
-API (JSON): `GET /api/search?q=` (name prefix first, then contains; case and
-accents ignored; a number finds that id), `GET /api/hikes/{id}`,
-`GET /api/measures`, `GET /api/info`, `POST /api/rank` with `{"seed": id,
-"weights": {measure: 0-100}, "excluded": [measure], "month": 1-12,
-"origin": {"lat", "lon"}, "max_hours": 0-4}`. The GET routes also answer
-HEAD. Each client gets 20 Rankings and
+API (JSON): `GET /api/search?q=` (every word in any order; case, accents
+and ue/oe/ae spellings ignored; the exact name first, then names starting with
+the query, then names where every word starts a word, shorter first; a number
+finds that id), `GET /api/hikes/{id}`, `GET /api/measures`, `GET /api/info`
+(with the Trailheads' box, `coverage`, for the page's swapped "lat, lon"
+warning), `POST /api/rank` with `{"seed": id, "weights": {measure: 0-100},
+"excluded": [measure], "month": 1-12, "origin": {"lat", "lon"}, "max_hours":
+0-4}`, and `POST /api/pair` with `{"a": id, "b": id}` plus the same weights,
+excluded and month, giving the score a Ranking would show for `b` with `a` as
+the Seed and every Measure's score. The GET routes also answer HEAD. Each client gets 20 Rankings and
 300 other calls a minute; one Ranking runs at a time per process.
 
 Measured on the Europe Catalog (161,614 DayHikes), 8-core Mac, the container
