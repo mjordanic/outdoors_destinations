@@ -198,14 +198,14 @@ def test_readme_documents_landcover_and_climate() -> None:
     assert "month=7" in text.replace(" ", "")
     assert "fetch_worldcover" in text
     assert "sample_landcover" in text
-    assert "fetch_worldclim" in text
+    assert "fetch_chelsa" in text
     assert "sample_climate" in text
     assert "month=" in text
     assert "### LandCover and ClimateNormal" in text
     assert "**When:**" in text.split("### LandCover and ClimateNormal", 1)[1]
     assert "WorldCover" in text
-    assert "Fick" in text
-    assert "Hijmans" in text
+    assert "Karger" in text
+    assert "CHELSA" in text
     assert "QueryMonth" in text
 
 
@@ -258,9 +258,9 @@ def test_notebook_geometry_samples_landcover_and_climate_without_download() -> N
     assert "sample_landcover" in source
     assert "sample_climate" in source
     assert "fetch_worldcover" not in source
-    assert "fetch_worldclim" not in source
+    assert "fetch_chelsa" not in source
     assert _tagged_int(output, "landcover_classes") > 0
-    assert _tagged_int(output, "vertex_climate_rows") > 0
+    assert _tagged_int(output, "climate_months_rows") > 0
 
 
 def test_notebook_ranking_shows_query_month_and_landcover() -> None:

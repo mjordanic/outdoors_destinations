@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-import math
 import re
 import shutil
 import sqlite3
 import tempfile
 import time
-import zipfile
 from collections.abc import Callable, Sequence
-from contextlib import ExitStack
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+import numpy as np
 
 from dayhike.catalog import CLIMATE_FEATURE_NAMES, geometry_store_path_for, remove_similarity
 from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS
@@ -20,61 +18,70 @@ from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS
 Progress = Callable[[str], None]
 Retrieve = Callable[[str, str], None]
 DEFAULT_CLIMATE_DIR = Path("data/climate")
-WORLDCLIM_BASE = "https://geodata.ucdavis.edu/climate/worldclim/2_1/base"
-WORLDCLIM_VARIABLES = ("tavg", "prec", "srad")
-WORLDCLIM_ATTRIBUTION = (
-    "Fick, S.E. and R.J. Hijmans, 2017. WorldClim 2: new 1km spatial resolution "
-    "climate surfaces for global land areas. International Journal of Climatology "
-    "37 (12): 4302-4315."
+CHELSA_BASE = "https://os.unil.cloud.switch.ch/chelsa02/chelsa/global/climatologies"
+CHELSA_PERIOD = "1981-2010"
+CHELSA_VARIABLES = ("tas", "pr", "rsds")
+CHELSA_ATTRIBUTION = (
+    "Karger, D.N., Conrad, O., Böhner, J., Kawohl, T., Kreft, H., Soria-Auza, R.W., "
+    "Zimmermann, N.E., Linder, H.P., Kessler, M., 2017. Climatologies at high "
+    "resolution for the earth's land surface areas. Scientific Data 4, 170122. "
+    "CHELSA V2.1, EnviDat, https://doi.org/10.16904/envidat.228.v2.1 (CC0 1.0)."
 )
-_VERTEX_CHUNK = 50_000
-_HIKE_IN_CHUNK = 500
-_CLIMATE_FILE = re.compile(
-    r"^wc2\.1_30s_(tavg|prec|srad)_(\d{1,2})\.tiff?$", re.IGNORECASE
-)
+# CHELSA stores uint16 with a per-file scale/offset to K, kg m-2 month-1 and W m-2.
+# After that, value * factor + offset gives °C, mm/month and kJ m-2 day-1
+# (W m-2 * 86 400 s / 1000), the units the climate Measures have always used.
+_UNITS = {"tas": (1.0, -273.15), "pr": (1.0, 0.0), "rsds": (86.4, 0.0)}
+_PLAUSIBLE = {"tas": (-70.0, 50.0), "pr": (0.0, 3000.0), "rsds": (0.0, 45000.0)}
+_VERTEX_CHUNK = 1_000_000
+_CLIMATE_FILE = re.compile(r"^chelsa_(tas|pr|rsds)_(\d{2})\.tif$", re.IGNORECASE)
 
 
-def worldclim_zip_url(variable: str) -> str:
-    """HTTPS URL of one WorldClim 2.1 30 arc-second monthly zip (tavg, prec, or srad)."""
-    return f"{WORLDCLIM_BASE}/wc2.1_30s_{variable}.zip"
+def chelsa_url(variable: str, month: int) -> str:
+    """HTTPS URL of one CHELSA V2.1 1981–2010 monthly climatology (tas, pr, or rsds)."""
+    name = f"CHELSA_{variable}_{month:02d}_{CHELSA_PERIOD}_V.2.1.tif"
+    return f"{CHELSA_BASE}/{variable}/{CHELSA_PERIOD}/{name}"
 
 
-def fetch_worldclim(
+def fetch_chelsa(
     dest: Path | str,
     bounds: Bounds = DEFAULT_DEM_BOUNDS,
     *,
     retrieve: Retrieve | None = None,
     progress: Progress | None = None,
 ) -> list[Path]:
-    """Download WorldClim 2.1 30s monthly GeoTIFFs missing from dest into dest.
+    """Download missing CHELSA V2.1 1981–2010 monthly GeoTIFFs into dest.
 
-    Extracts the three global monthly zips and clips each GeoTIFF to bounds
-    (default: the DEM Alps+Dinarides bbox). A present GeoTIFF that does not
-    cover bounds counts as missing and is replaced.
+    Each global GeoTIFF is clipped to bounds (default: the DEM Alps+Dinarides
+    bbox) and stored as float32 in °C, mm/month, or kJ m-2 day-1. A present
+    GeoTIFF that does not cover bounds or cannot be read counts as missing and
+    is replaced.
     """
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
     retrieve = retrieve or _download
     paths: list[Path] = []
-    for variable in WORLDCLIM_VARIABLES:
-        present = _present_month_tifs(dest, variable, bounds)
-        paths.extend(present)
-        if len(present) == 12:
-            continue
-        if progress is not None:
-            progress(f"climate fetch: {variable}")
-        with tempfile.TemporaryDirectory() as tmp:
-            zip_path = Path(tmp) / f"wc2.1_30s_{variable}.zip"
-            try:
-                retrieve(worldclim_zip_url(variable), str(zip_path))
-            except FileNotFoundError:
+    for variable in CHELSA_VARIABLES:
+        for month in range(1, 13):
+            out = _month_tif(dest, variable, month)
+            if _covers(out, bounds):
+                paths.append(out)
                 continue
-            if not zip_path.exists() or zip_path.stat().st_size == 0:
-                continue
-            paths.extend(
-                _extract_worldclim_month_tifs(zip_path, dest, variable, bounds)
-            )
-    return sorted(set(paths))
+            if progress is not None:
+                progress(f"climate fetch: {variable} {month:02d}")
+            with tempfile.TemporaryDirectory() as tmp:
+                download = Path(tmp) / "chelsa.tif"
+                try:
+                    retrieve(chelsa_url(variable, month), str(download))
+                except FileNotFoundError:
+                    continue
+                if not download.exists() or download.stat().st_size == 0:
+                    continue
+                # Unlink first: out may be a symlink to another data directory.
+                out.unlink(missing_ok=True)
+                _clip_and_convert(download, out, variable, bounds)
+            if out.exists():
+                paths.append(out)
+    return sorted(paths)
 
 
 def sample_climate(
@@ -83,7 +90,12 @@ def sample_climate(
     *,
     progress: Progress | None = None,
 ) -> int:
-    """Write monthly climate onto covered vertices and Catalog hike-level means."""
+    """Write Catalog hike-level monthly climate means from local rasters.
+
+    A vertex counts when all 36 rasters have a value there. A DayHike gets the
+    mean over its counted vertices, or no climate when none counts. Returns the
+    number of counted vertices.
+    """
     catalog_path = Path(catalog_path)
     raster_dir = Path(raster_dir)
     store_path = geometry_store_path_for(catalog_path)
@@ -94,7 +106,7 @@ def sample_climate(
         return 0
     missing = [
         f"{variable}_{month:02d}"
-        for variable in WORLDCLIM_VARIABLES
+        for variable in CHELSA_VARIABLES
         for month in range(1, 13)
         if not any(var == variable and m == month for var, m, _path in rasters)
     ]
@@ -102,88 +114,40 @@ def sample_climate(
         raise ValueError(f"incomplete climate rasters in {raster_dir}, missing: {', '.join(missing)}")
     if progress is not None:
         progress("climate sample: vertices")
-    sampled = 0
-    touched: set[int] = set()
-    stack = ExitStack()
-    write = sqlite3.connect(store_path)
-    try:
-        write.execute("PRAGMA journal_mode=WAL")
-        _ensure_vertex_climate(write)
-        datasets = _open_climate_rasters(stack, rasters)
-        read = sqlite3.connect(store_path)
-        try:
-            cursor = read.execute(
-                "SELECT dayhike_id, seq, latitude, longitude FROM vertices"
-            )
-            while True:
-                rows = cursor.fetchmany(_VERTEX_CHUNK)
-                if not rows:
-                    break
-                coverable = [
-                    (int(dayhike_id), int(seq), float(lat), float(lon))
-                    for dayhike_id, seq, lat, lon in rows
-                ]
-                climates = _sample_points(
-                    datasets, [(lat, lon) for _id, _seq, lat, lon in coverable]
-                )
-                inserts: list[tuple[int, int, int, float, float, float]] = []
-                for (dayhike_id, seq, _lat, _lon), months in zip(
-                    coverable, climates, strict=True
-                ):
-                    if months is None:
-                        continue
-                    sampled += 1
-                    touched.add(dayhike_id)
-                    for month, (temperature_c, precipitation_mm, solar_radiation) in (
-                        enumerate(months, start=1)
-                    ):
-                        inserts.append(
-                            (
-                                dayhike_id,
-                                seq,
-                                month,
-                                temperature_c,
-                                precipitation_mm,
-                                solar_radiation,
-                            )
-                        )
-                if not inserts:
-                    continue
-                write.executemany(
-                    "INSERT OR REPLACE INTO vertex_climate ("
-                    "dayhike_id, seq, month, temperature_c, precipitation_mm, "
-                    "solar_radiation) VALUES (?, ?, ?, ?, ?, ?)",
-                    inserts,
-                )
-                if progress is not None:
-                    progress(f"climate sample: {sampled} vertices")
-            if sampled:
-                write.execute(
-                    "INSERT OR REPLACE INTO geometry_meta (key, value) VALUES (?, ?)",
-                    ("worldclim_attribution", WORLDCLIM_ATTRIBUTION),
-                )
-            write.commit()
-        finally:
-            read.close()
-            if write.in_transaction:
-                write.rollback()
-            write.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            write.execute("PRAGMA journal_mode=DELETE")
-    finally:
-        stack.close()
-        write.close()
-    if not touched:
+    dayhike_ids, latitudes, longitudes = _read_vertices(store_path)
+    hike_ids, hike_index = np.unique(dayhike_ids, return_inverse=True)
+    # Two passes, one raster in memory at a time: which vertices every raster
+    # covers, then per-hike sums over those vertices only.
+    covered = np.ones(len(dayhike_ids), dtype=bool)
+    for _var, _month, path in rasters:
+        covered &= ~np.isnan(_raster_values(path, latitudes, longitudes))
+    sampled = int(covered.sum())
+    if not sampled:
         return 0
+    counts = np.bincount(hike_index[covered], minlength=len(hike_ids))
+    means = np.full((len(hike_ids), 12, 3), np.nan)
+    for var, month, path in rasters:
+        if progress is not None:
+            progress(f"climate sample: {var} {month:02d}")
+        values = _raster_values(path, latitudes, longitudes)
+        sums = np.bincount(
+            hike_index[covered], weights=values[covered], minlength=len(hike_ids)
+        )
+        with np.errstate(invalid="ignore", divide="ignore"):
+            means[:, month - 1, CHELSA_VARIABLES.index(var)] = sums / counts
+    if progress is not None:
+        progress(f"climate sample: {sampled} vertices")
+    _drop_vertex_climate(store_path)
     if progress is not None:
         progress("climate sample: feature_vectors")
-    _refresh_catalog_climate(catalog_path, store_path, touched)
+    _write_catalog_climate(catalog_path, hike_ids[counts > 0], means[counts > 0])
     remove_similarity(catalog_path, progress)
     return sampled
 
 
 def _climate_rasters(raster_dir: Path) -> list[tuple[str, int, Path]]:
     found: list[tuple[str, int, Path]] = []
-    for path in sorted(raster_dir.glob("*.tif")) + sorted(raster_dir.glob("*.tiff")):
+    for path in sorted(raster_dir.glob("*.tif")):
         match = _CLIMATE_FILE.match(path.name)
         if match is None:
             continue
@@ -193,68 +157,65 @@ def _climate_rasters(raster_dir: Path) -> list[tuple[str, int, Path]]:
     return found
 
 
-def _open_climate_rasters(
-    stack: ExitStack, rasters: Sequence[tuple[str, int, Path]]
-) -> list[tuple[str, int, object]]:
+def _read_vertices(store_path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    connection = sqlite3.connect(store_path)
+    try:
+        cursor = connection.execute("SELECT dayhike_id, latitude, longitude FROM vertices")
+        chunks: list[np.ndarray] = []
+        while rows := cursor.fetchmany(_VERTEX_CHUNK):
+            chunks.append(np.array(rows, dtype=np.float64))
+    finally:
+        connection.close()
+    table = np.concatenate(chunks) if chunks else np.empty((0, 3))
+    return table[:, 0].astype(np.int64), table[:, 1], table[:, 2]
+
+
+def _raster_values(
+    path: Path, latitudes: np.ndarray, longitudes: np.ndarray
+) -> np.ndarray:
+    """Cell value under each point as float64; NaN off the raster or on nodata."""
     import rasterio
+    from rasterio.windows import Window
 
-    return [
-        (var, month, stack.enter_context(rasterio.open(path)))
-        for var, month, path in rasters
-    ]
-
-
-def _sample_points(
-    datasets: Sequence[tuple[str, int, object]],
-    points: Sequence[tuple[float, float]],
-) -> list[tuple[tuple[float, float, float], ...] | None]:
-    n = len(points)
-    tavg: list[list[float | None]] = [[None] * 12 for _ in range(n)]
-    prec: list[list[float | None]] = [[None] * 12 for _ in range(n)]
-    srad: list[list[float | None]] = [[None] * 12 for _ in range(n)]
-    buckets = {"tavg": tavg, "prec": prec, "srad": srad}
-    for var, month, dataset in datasets:
-        target = buckets[var]
-        bounds = dataset.bounds
+    values = np.full(len(latitudes), np.nan)
+    with rasterio.open(path) as dataset:
+        cols, rows = ~dataset.transform @ (longitudes, latitudes)
+        rows = np.floor(rows).astype(np.int64)
+        cols = np.floor(cols).astype(np.int64)
+        inside = (rows >= 0) & (rows < dataset.height) & (cols >= 0) & (cols < dataset.width)
+        if not inside.any():
+            return values
+        rows, cols = rows[inside], cols[inside]
+        top, left = int(rows.min()), int(cols.min())
+        window = Window(left, top, int(cols.max()) - left + 1, int(rows.max()) - top + 1)
+        data = dataset.read(1, window=window).astype(np.float64)
         nodata = dataset.nodata
-        indices = [
-            index
-            for index in range(n)
-            if bounds.left <= points[index][1] <= bounds.right
-            and bounds.bottom <= points[index][0] <= bounds.top
-        ]
-        if not indices:
-            continue
-        coords = [(points[index][1], points[index][0]) for index in indices]
-        for index, sample in zip(indices, dataset.sample(coords), strict=True):
-            value = float(sample[0])
-            if not math.isfinite(value):
-                continue
-            if nodata is not None and value == nodata:
-                continue
-            target[index][month - 1] = value
-    out: list[tuple[tuple[float, float, float], ...] | None] = []
-    for index in range(n):
-        if any(
-            value is None
-            for row in (tavg[index], prec[index], srad[index])
-            for value in row
-        ):
-            out.append(None)
-            continue
-        out.append(
-            tuple(
-                (tavg[index][month], prec[index][month], srad[index][month])
-                for month in range(12)
-            )
-        )
-    return out
+    if nodata is not None and not np.isnan(nodata):
+        data[data == nodata] = np.nan
+    data[~np.isfinite(data)] = np.nan
+    values[inside] = data[rows - top, cols - left]
+    return values
 
 
-def _refresh_catalog_climate(
-    catalog_path: Path, store_path: Path, hike_ids: set[int]
-) -> None:
+def _drop_vertex_climate(store_path: Path) -> None:
+    """Drop the per-vertex climate older versions stored; run VACUUM to free the disk."""
     store = sqlite3.connect(store_path)
+    try:
+        store.execute("DROP TABLE IF EXISTS vertex_climate")
+        store.execute("DELETE FROM geometry_meta WHERE key = 'worldclim_attribution'")
+        store.execute(
+            "INSERT OR REPLACE INTO geometry_meta (key, value) VALUES (?, ?)",
+            ("chelsa_attribution", CHELSA_ATTRIBUTION),
+        )
+        store.commit()
+    finally:
+        store.close()
+
+
+def _write_catalog_climate(
+    catalog_path: Path, hike_ids: np.ndarray, means: np.ndarray
+) -> None:
+    """Replace every hike's climate: covered hikes get means, the rest NULL."""
     catalog = sqlite3.connect(catalog_path)
     try:
         for name in CLIMATE_FEATURE_NAMES:
@@ -262,61 +223,18 @@ def _refresh_catalog_climate(
         _ensure_climate_months(catalog)
         month_rows: list[tuple[int, int, float, float, float]] = []
         regime_rows: list[tuple[float, float, float, int]] = []
-        ids = list(hike_ids)
-        for start in range(0, len(ids), _HIKE_IN_CHUNK):
-            chunk = ids[start : start + _HIKE_IN_CHUNK]
-            # One chunk of samples at a time: all of Europe is ~500 M vertex-months.
-            by_hike: dict[int, dict[int, list[tuple[float, float, float]]]] = {
-                dayhike_id: {month: [] for month in range(1, 13)} for dayhike_id in chunk
-            }
-            placeholders = ",".join("?" * len(chunk))
-            for dayhike_id, month, temperature_c, precipitation_mm, solar_radiation in (
-                store.execute(
-                    "SELECT dayhike_id, month, temperature_c, precipitation_mm, "
-                    "solar_radiation FROM vertex_climate "
-                    f"WHERE dayhike_id IN ({placeholders})",
-                    chunk,
-                )
+        for dayhike_id, hike_means in zip(hike_ids.tolist(), means.tolist(), strict=True):
+            for month, (temperature_c, precipitation_mm, solar_radiation) in enumerate(
+                hike_means, start=1
             ):
-                by_hike[int(dayhike_id)][int(month)].append(
-                    (float(temperature_c), float(precipitation_mm), float(solar_radiation))
+                month_rows.append(
+                    (dayhike_id, month, temperature_c, precipitation_mm, solar_radiation)
                 )
-            for dayhike_id, months in by_hike.items():
-                if not any(months[month] for month in range(1, 13)):
-                    continue
-                hike_means: list[tuple[float, float, float]] = []
-                complete = True
-                for month in range(1, 13):
-                    samples = months[month]
-                    if not samples:
-                        complete = False
-                        break
-                    n = len(samples)
-                    hike_means.append(
-                        (
-                            sum(sample[0] for sample in samples) / n,
-                            sum(sample[1] for sample in samples) / n,
-                            sum(sample[2] for sample in samples) / n,
-                        )
-                    )
-                if not complete:
-                    continue
-                for month, (temperature_c, precipitation_mm, solar_radiation) in enumerate(
-                    hike_means, start=1
-                ):
-                    month_rows.append(
-                        (
-                            dayhike_id,
-                            month,
-                            temperature_c,
-                            precipitation_mm,
-                            solar_radiation,
-                        )
-                    )
-                regime_rows.append((*_regime(hike_means), dayhike_id))
-        catalog.executemany(
-            "DELETE FROM climate_months WHERE dayhike_id = ?",
-            [(dayhike_id,) for dayhike_id in hike_ids],
+            regime_rows.append((*_regime(hike_means), dayhike_id))
+        catalog.execute("DELETE FROM climate_months")
+        catalog.execute(
+            "UPDATE feature_vectors SET temperature_c = NULL, precipitation_mm = NULL, "
+            "solar_radiation = NULL"
         )
         catalog.executemany(
             "INSERT INTO climate_months (dayhike_id, month, temperature_c, "
@@ -330,33 +248,16 @@ def _refresh_catalog_climate(
         )
         catalog.commit()
     finally:
-        store.close()
         catalog.close()
 
 
 def _regime(
-    months: Sequence[tuple[float, float, float]],
+    months: Sequence[Sequence[float]],
 ) -> tuple[float, float, float]:
     return (
         (months[5][0] + months[6][0] + months[7][0]) / 3.0,
         sum(month[1] for month in months) / 12.0,
         (months[5][2] + months[6][2] + months[7][2]) / 3.0,
-    )
-
-
-def _ensure_vertex_climate(connection: sqlite3.Connection) -> None:
-    connection.execute(
-        """
-        CREATE TABLE IF NOT EXISTS vertex_climate (
-            dayhike_id INTEGER NOT NULL,
-            seq INTEGER NOT NULL,
-            month INTEGER NOT NULL,
-            temperature_c REAL NOT NULL,
-            precipitation_mm REAL NOT NULL,
-            solar_radiation REAL NOT NULL,
-            PRIMARY KEY (dayhike_id, seq, month)
-        )
-        """
     )
 
 
@@ -384,16 +285,7 @@ def _ensure_column(
 
 
 def _month_tif(dest: Path, variable: str, month: int) -> Path:
-    return dest / f"wc2.1_30s_{variable}_{month:02d}.tif"
-
-
-def _present_month_tifs(dest: Path, variable: str, bounds: Bounds) -> list[Path]:
-    paths: list[Path] = []
-    for month in range(1, 13):
-        path = _month_tif(dest, variable, month)
-        if _covers(path, bounds):
-            paths.append(path)
-    return paths
+    return dest / f"chelsa_{variable}_{month:02d}.tif"
 
 
 def _covers(path: Path, bounds: Bounds) -> bool:
@@ -417,65 +309,50 @@ def _covers(path: Path, bounds: Bounds) -> bool:
     )
 
 
-def _extract_worldclim_month_tifs(
-    zip_path: Path, dest: Path, variable: str, bounds: Bounds
-) -> list[Path]:
-    extracted: list[Path] = []
-    with zipfile.ZipFile(zip_path) as archive:
-        for info in archive.infolist():
-            name = Path(info.filename).name
-            match = _CLIMATE_FILE.match(name)
-            if match is None or match.group(1).lower() != variable:
-                continue
-            month = int(match.group(2))
-            if not 1 <= month <= 12:
-                continue
-            out = _month_tif(dest, variable, month)
-            if _covers(out, bounds):
-                continue
-            # Unlink first: out may be a symlink to another data directory.
-            out.unlink(missing_ok=True)
-            with archive.open(info) as source, out.open("wb") as target:
-                shutil.copyfileobj(source, target)
-            _clip_to_bounds(out, bounds)
-            if out.exists() and out.stat().st_size > 0:
-                extracted.append(out)
-    return extracted
-
-
-def _clip_to_bounds(path: Path, bounds: Bounds) -> None:
+def _clip_and_convert(source: Path, out: Path, variable: str, bounds: Bounds) -> None:
+    """Write source clipped to bounds as float32 in Measure units, NaN for nodata."""
     import rasterio
     from rasterio.windows import from_bounds
 
-    with rasterio.open(path) as dataset:
+    with rasterio.open(source) as dataset:
         west = max(bounds.west, float(dataset.bounds.left))
         south = max(bounds.south, float(dataset.bounds.bottom))
         east = min(bounds.east, float(dataset.bounds.right))
         north = min(bounds.north, float(dataset.bounds.top))
         if west >= east or south >= north:
-            clipped = None
-        else:
-            window = from_bounds(west, south, east, north, dataset.transform)
-            window = window.round_offsets().round_lengths()
-            if window.width <= 0 or window.height <= 0:
-                clipped = None
-            else:
-                data = dataset.read(1, window=window)
-                profile = dataset.profile.copy()
-                profile.update(
-                    height=data.shape[0],
-                    width=data.shape[1],
-                    transform=dataset.window_transform(window),
-                )
-                clipped = (data, profile)
-    if clipped is None:
-        path.unlink()
-        return
-    data, profile = clipped
-    tmp = path.with_name(path.name + ".clip")
-    with rasterio.open(tmp, "w", **profile) as out:
-        out.write(data, 1)
-    tmp.replace(path)
+            return
+        window = from_bounds(west, south, east, north, dataset.transform)
+        window = window.round_offsets().round_lengths()
+        if window.width <= 0 or window.height <= 0:
+            return
+        raw = dataset.read(1, window=window, masked=True)
+        factor, offset = _UNITS[variable]
+        physical = raw.astype(np.float64) * dataset.scales[0] + dataset.offsets[0]
+        data = (physical * factor + offset).astype(np.float32).filled(np.nan)
+        low, high = _PLAUSIBLE[variable]
+        if np.any((data < low) | (data > high)):
+            raise ValueError(
+                f"{out.name}: converted {variable} outside plausible range "
+                f"{low:g}..{high:g} (min {np.nanmin(data):g}, max {np.nanmax(data):g}); "
+                "check the file's scale and offset"
+            )
+        profile = {
+            "driver": "GTiff",
+            "height": data.shape[0],
+            "width": data.shape[1],
+            "count": 1,
+            "dtype": "float32",
+            "crs": dataset.crs,
+            "transform": dataset.window_transform(window),
+            "nodata": np.nan,
+            "compress": "deflate",
+            "predictor": 3,
+            "tiled": True,
+        }
+    tmp = out.with_name(out.name + ".part")
+    with rasterio.open(tmp, "w", **profile) as target:
+        target.write(data, 1)
+    tmp.replace(out)
 
 
 def _download(url: str, filename: str) -> None:

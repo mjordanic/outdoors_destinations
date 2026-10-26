@@ -42,26 +42,13 @@ def test_vertex_seq_is_dense_from_zero(geometry: sqlite3.Connection) -> None:
     assert gaps == []
 
 
-def test_every_sampled_vertex_has_twelve_climate_months(geometry: sqlite3.Connection) -> None:
-    partial = geometry.execute(
-        "SELECT dayhike_id, seq, COUNT(*), MIN(month), MAX(month) FROM vertex_climate "
-        "GROUP BY dayhike_id, seq HAVING COUNT(*) != 12 OR MIN(month) != 1 OR MAX(month) != 12 LIMIT 20"
-    ).fetchall()
-    orphans = geometry.execute(
-        "SELECT c.dayhike_id, c.seq FROM vertex_climate c LEFT JOIN vertices v "
-        "ON v.dayhike_id = c.dayhike_id AND v.seq = c.seq WHERE c.month = 1 AND v.seq IS NULL LIMIT 20"
-    ).fetchall()
-
-    assert partial == []
-    assert orphans == []
-
-
-def test_geometry_meta_has_the_osm_worldcover_and_worldclim_attributions(geometry: sqlite3.Connection) -> None:
-    from dayhike.climate import WORLDCLIM_ATTRIBUTION
+def test_geometry_meta_has_the_osm_worldcover_and_chelsa_attributions(geometry: sqlite3.Connection) -> None:
+    from dayhike.climate import CHELSA_ATTRIBUTION
     from dayhike.landcover import WORLDCOVER_ATTRIBUTION
 
     meta = dict(geometry.execute("SELECT key, value FROM geometry_meta"))
 
     assert meta["attribution"] == "© OpenStreetMap contributors"
     assert meta["worldcover_attribution"] == WORLDCOVER_ATTRIBUTION
-    assert meta["worldclim_attribution"] == WORLDCLIM_ATTRIBUTION
+    assert meta["chelsa_attribution"] == CHELSA_ATTRIBUTION
+    assert "worldclim_attribution" not in meta

@@ -66,7 +66,7 @@ uv run dayhike sample-dem         # writes heights into the two SQLite files
 # 5–8. LandCover and climate. Skip these if length, elevation, and amenities are enough.
 uv run dayhike fetch-landcover    # ESA WorldCover 2021 tiles
 uv run dayhike sample-landcover
-uv run dayhike fetch-climate      # WorldClim 2.1 monthly normals
+uv run dayhike fetch-climate      # CHELSA V2.1 monthly normals
 uv run dayhike sample-climate
 
 # 9. Similarity facts and Calibration of every DayHike, once (rerun after 2–8).
@@ -92,7 +92,7 @@ What each step **does not** do:
 | `fetch-landcover` | GeoTIFFs in `data/landcover/` | touch SQLite; sample classes |
 | `sample-landcover` | `vertices.landcover` + Catalog fractions | download rasters; rewrite hike list |
 | `fetch-climate` | GeoTIFFs in `data/climate/` | touch SQLite; sample climate |
-| `sample-climate` | `vertex_climate` + Catalog monthly means | download rasters; rewrite hike list |
+| `sample-climate` | Catalog monthly means (drops an old `vertex_climate`) | download rasters; rewrite hike list |
 | `build-similarity` | `data/catalog.similarity/` (facts + Calibration) | touch either SQLite file; download anything |
 | `rank` | nothing on disk | fetch OSM or rasters; rebuild facts |
 
@@ -134,7 +134,7 @@ call on your machine.
 | `data/valhalla/*.osm.pbf` | Road extract for tiles | **gitignored** |
 | `data/dem/` | FABDEM 1° GeoTIFFs for elevation | **gitignored** |
 | `data/landcover/` | ESA WorldCover 2021 map GeoTIFFs | **gitignored** |
-| `data/climate/` | WorldClim 2.1 monthly GeoTIFFs | **gitignored** |
+| `data/climate/` | CHELSA V2.1 monthly GeoTIFFs | **gitignored** |
 
 `uv sync` does **not** download OSM and does **not** install Valhalla. Tests
 never read `data/` and never start Docker. They rebuild a Catalog in a temp
@@ -258,10 +258,9 @@ absent):
 | --- | --- |
 | `dayhikes` | id, Seed label, `name_origin`, length, `unconnected_m`, Difficulty, member list, relation tags |
 | `vertices` | ordered DayHikeGeometry: `seq`, OSM `node_id`, lat, lon, `ele`, `landcover` |
-| `vertex_climate` | per sampled vertex per month 1–12: temperature, precipitation, solar radiation |
 | `ways` | member ways in listed order: node id lists, way tags, `in_chain` (1 when any part of the way is walked), `leftover` (the reason when not), `walked_m`, `walk_order` |
 | `amenities` | raw points: OSM id, kind, lat, lon, tags |
-| `geometry_meta` | OSM attribution; WorldCover and WorldClim after those samples |
+| `geometry_meta` | OSM attribution; WorldCover and CHELSA after those samples |
 
 DayHikeGeometry is the main walk of the member-way graph: each distinct member
 way once, from the Trailhead, with no jump between consecutive ways except a
@@ -273,13 +272,13 @@ distinct length. Catalog `length_m` and `vertices` follow the walk only. See
 which supersedes ADR-0009.
 
 At ingest, `vertices.ele` is OSM `ele` on that node, or NULL, and
-`vertices.landcover` is NULL. `vertex_climate` is empty. After
+`vertices.landcover` is NULL. After
 `sample-dem`, vertices that sit on a FABDEM tile get raster heights in
 metres. After `sample-landcover`, covered vertices get a WorldCover class
 code (10 tree, 20 shrub, 30 grass, 60 bare, 70 permanent snow; other codes
-stay in the leftover share). After `sample-climate`, each covered vertex
-gets twelve monthly rows (°C, mm, kJ m⁻² day⁻¹). Vertices with no covering
-tile stay unset. Amenities include hut, parking, restaurant/cafe, drinking
+stay in the leftover share). Vertices with no covering tile stay unset.
+Climate is not stored per vertex: `sample-climate` writes only the Catalog's
+hike-level means. Amenities include hut, parking, restaurant/cafe, drinking
 water, Viewpoint, Peak, Shelter, and the other WaterSources (spring, water tap,
 water point). Catalog AmenityFacts still use only the first four kinds, counted
 from the Trailhead.
@@ -287,8 +286,6 @@ from the Trailhead.
 ```bash
 sqlite3 data/catalog.geometry.sqlite \
   'SELECT dayhike_id, seq, latitude, longitude, ele, landcover FROM vertices LIMIT 5;'
-sqlite3 data/catalog.geometry.sqlite \
-  'SELECT dayhike_id, seq, month, temperature_c, precipitation_mm, solar_radiation FROM vertex_climate LIMIT 5;'
 sqlite3 data/catalog.geometry.sqlite \
   'SELECT kind, COUNT(*) FROM amenities GROUP BY 1;'
 ```
@@ -949,32 +946,50 @@ sample_dem("data/catalog.sqlite", DEFAULT_DEM_DIR)
 
 ### LandCover and ClimateNormal
 
-Ingest does **not** download WorldCover or WorldClim. A fresh Catalog has
+Ingest does **not** download WorldCover or CHELSA. A fresh Catalog has
 NULL LandCover fractions, NULL regime climate, and no `climate_months` rows.
-A fresh GeometryStore has NULL `vertices.landcover` and an empty
-`vertex_climate` table. Ranking without a month still works on that Catalog.
+A fresh GeometryStore has NULL `vertices.landcover` and no climate (older
+versions kept a per-vertex `vertex_climate` table; `sample-climate` drops it).
+Ranking without a month still works on that Catalog.
 
 **When:** after a successful ingest, when both `data/catalog.sqlite` and
 `data/catalog.geometry.sqlite` exist. Same moment as FABDEM sampling. You
 can sample DEM, LandCover, and climate in any order. `sample-climate` needs all
-36 monthly rasters (tavg, prec, srad × 12) and stops with the missing names if
+36 monthly rasters (tas, pr, rsds × 12, named `chelsa_<var>_<MM>.tif`) and stops with the missing names if
 any are absent. A sample that covers no vertex prints a warning and `0`. Ranking with `--month`
 needs climate sampled.
 
 **Pull (rasters only):** `dayhike fetch-landcover` downloads ESA WorldCover
 2021 v200 3×3° Map Cloud-Optimized GeoTIFFs into `data/landcover/`
-(gitignored). `dayhike fetch-climate` downloads WorldClim 2.1 30 arc-second
-monthly GeoTIFFs for mean temperature (°C), precipitation (mm), and solar
-radiation (kJ m⁻² day⁻¹) into `data/climate/` (gitignored), from the three
-base zips `wc2.1_30s_tavg`, `wc2.1_30s_prec`, and `wc2.1_30s_srad`, then
-clips them to the bbox. Default `--bounds` is `41.8,5.9,50.6,20.4` (Alps +
+(gitignored). `dayhike fetch-climate` downloads the CHELSA V2.1 30 arc-second
+1981–2010 monthly climatologies of mean temperature (`tas`), precipitation
+(`pr`), and surface downwelling shortwave radiation (`rsds`) into
+`data/climate/` (gitignored), one global GeoTIFF per variable and month (about
+150 MB each), clips each to the bbox, and stores it as float32 in the Measure
+units. CHELSA ships uint16 with a per-file scale and offset (`tas` 0.1 K,
+`pr` 0.1 kg m⁻² month⁻¹, `rsds` 1 W m⁻²; 65535 is nodata). `fetch-climate`
+applies the file's scale and offset, then converts K to °C (− 273.15),
+kg m⁻² month⁻¹ to mm per month (the same number), and W m⁻² to kJ m⁻² day⁻¹
+(× 86.4, the unit WorldClim used before, so the Measure constants did not
+change). Nodata becomes NaN. These tags were checked on the real CHELSA V2.1
+July 1981–2010 files (read over HTTP with rasterio): `tas` uint16, nodata
+65535, scale 0.1, offset 0, `variable_unit` K; `pr` uint16, nodata 65535,
+scale 0.1, offset 0, kg m-2 month-1; `rsds` uint16, nodata 65535, scale 1.0,
+offset 0, W m-2. A before/after check on the Europe Catalog compared the
+converted values with WorldClim for 24 hikes across regions: June–August
+temperature median +0.5 °C against WorldClim (e.g. Crete 18.9 °C, Chamonix
+Lac Cornu 8.7 °C; January near Zagreb 0.49 vs 0.36 °C), all plausible.
+`fetch-climate` stops with an error naming the file if a converted value falls
+outside −70..50 °C, 0..3000 mm/month, or 0..45000 kJ m⁻² day⁻¹ (for example
+a file without a scale tag). Default `--bounds` is `41.8,5.9,50.6,20.4` (Alps +
 Dinarides, same as `fetch-dem`). Tiles already on disk are skipped.
-`fetch-landcover` skips a tile the server does not have, but fails if a tile
-download errors. `fetch-climate` always downloads the three **global** base zips
-in full (very large downloads) into a temporary directory before clipping, even for a
-small bbox, and repeats that for any variable with a missing month or with a
-present month that does not cover `--bounds` (that file is replaced). Neither
-command opens SQLite.
+`fetch-landcover` and `fetch-climate` skip a file the server does not have,
+but fail if a download errors. `fetch-climate` always downloads each
+**global** monthly file in full (about 5.4 GB for all 36) into a temporary
+directory before clipping, even for a small bbox, and does that for any month
+whose file is missing, unreadable, or does not cover `--bounds` (that file is
+replaced). Neither command opens SQLite. Rasters from older versions
+(`wc2.1_30s_*.tif`, WorldClim) are ignored; run `fetch-climate` again.
 
 ```bash
 uv run dayhike fetch-landcover
@@ -985,7 +1000,7 @@ uv run dayhike fetch-climate --bounds 32.6,-31.3,71.2,46.4
 ```
 
 `--dest` overrides `data/landcover/` or `data/climate/`. WorldCover is ESA
-WorldCover 2021. WorldClim 2.1 normals are 1970–2000.
+WorldCover 2021. CHELSA V2.1 normals are 1981–2010.
 
 **Store and update SQLite:** `dayhike sample-landcover` and
 `dayhike sample-climate` read those GeoTIFFs and:
@@ -996,23 +1011,30 @@ WorldCover 2021. WorldClim 2.1 normals are 1970–2000.
    `tree_fraction` / `shrub_fraction` / `grass_fraction` / `bare_fraction` /
    `snow_fraction` (each GeometryStore vertex counted once; crop, built-up,
    water, wetland, and moss stay in the leftover share).
-2. `sample-climate` writes twelve months onto GeometryStore `vertex_climate`
-   for covered vertices. Uncovered vertices get no climate rows. It then
-   writes Catalog `climate_months` (hike-level means) and the three regime
-   columns: June–August mean temperature, mean of the twelve monthly
-   precipitations, June–August solar radiation.
+2. `sample-climate` reads one raster at a time into memory, looks up every
+   GeometryStore vertex in it at once, and averages per DayHike. A vertex
+   counts only when all 36 rasters have a value there; a DayHike with no
+   such vertex gets no climate. It replaces Catalog `climate_months`
+   (hike-level means) and the three regime columns of every DayHike:
+   June–August mean temperature, mean of the twelve monthly precipitations,
+   June–August solar radiation. Nothing is stored per vertex. It drops an
+   old GeometryStore `vertex_climate` table if one is there; the file keeps
+   its size until `sqlite3 data/catalog.geometry.sqlite VACUUM` (optional,
+   needs free disk about the size of the file).
 
 They do not add or drop DayHikes, do not change amenities, and do not
 download tiles. `--catalog` defaults to `data/catalog.sqlite`.
 `--landcover` defaults to `data/landcover/`; `--climate` defaults to
 `data/climate/`. Re-ingest replaces both SQLite files and clears samples.
 
-Each sampling run opens each raster once and holds it open until the run
+`sample-landcover` opens each raster once and holds it open until the run
 ends, so run time grows with the number of vertices sampled, not with repeated
-file opens. `sample-climate` keeps its 36 files open. `sample-landcover` opens
-a WorldCover tile when a vertex first needs it and keeps at most 128 open,
-closing the least recently used (Europe has 267 tiles; the macOS default limit
-is 256 open files).
+file opens. `sample-landcover` opens a WorldCover tile when a vertex first
+needs it and keeps at most 128 open, closing the least recently used (Europe
+has 267 tiles; the macOS default limit is 256 open files). `sample-climate`
+holds one climate raster at a time (about 170 MB as float32 for Europe) plus
+the vertex coordinates and their cell indices in memory: peak 4.4 GB for
+Europe's 42 million vertices.
 
 ```bash
 uv run dayhike sample-landcover
@@ -1028,14 +1050,14 @@ the month.
 Python:
 
 ```python
-from dayhike import fetch_worldcover, sample_landcover, fetch_worldclim, sample_climate
+from dayhike import fetch_worldcover, sample_landcover, fetch_chelsa, sample_climate
 from dayhike.climate import DEFAULT_CLIMATE_DIR
 from dayhike.dem import DEFAULT_DEM_BOUNDS
 from dayhike.landcover import DEFAULT_LANDCOVER_DIR
 
 fetch_worldcover(DEFAULT_LANDCOVER_DIR, DEFAULT_DEM_BOUNDS)
 sample_landcover("data/catalog.sqlite", DEFAULT_LANDCOVER_DIR)
-fetch_worldclim(DEFAULT_CLIMATE_DIR, DEFAULT_DEM_BOUNDS)
+fetch_chelsa(DEFAULT_CLIMATE_DIR, DEFAULT_DEM_BOUNDS)
 sample_climate("data/catalog.sqlite", DEFAULT_CLIMATE_DIR)
 ```
 
@@ -1174,7 +1196,7 @@ length band, Leftover reasons, loop starts, the similarity facts, notebook
 and, with `data/baseline/`, list the DayHikes that left and joined the Catalog;
 each that left must have left by the main walk. On the Europe snapshot
 (161,614 DayHikes) on an 8-core Mac this took: ingest 2 h 7 min, `sample-dem`
-24 min, `sample-landcover` 12 min, `sample-climate` 3 h 54 min,
+24 min, `sample-landcover` 12 min, `sample-climate` 5 min (peak memory 4.4 GB),
 `build-similarity` 28 min, the checks 1 h 42 min. The baseline is about 150 MB; delete
 `data/baseline/` once the checks pass.
 
@@ -1532,7 +1554,7 @@ DAYHIKE_REAL_DATA=1 uv run pytest -m real_data
 | --- | --- |
 | `test_raw_inputs.py` | the Europe PBF is the recorded snapshot (size, sha256); every 1° vertex cell has a FABDEM tile except the three known 404 tiles in Georgia; every 3° vertex cell has a WorldCover tile; 36 climate rasters on one 30″ grid cover the vertex extent; the hiking extract was cut with today's filter list |
 | `test_catalog_invariants.py` | exact schema and no work files; the ingest report adds up (and equals the recorded one on the same snapshot); one row per DayHike in every table; values in range; NULL budgets; every Trailhead is vertex 0 |
-| `test_geometry_invariants.py` | GeometryStore DayHikes equal the Catalog's; dense `seq`; twelve climate months per sampled vertex; the attributions |
+| `test_geometry_invariants.py` | GeometryStore DayHikes equal the Catalog's; dense `seq`; the attributions (CHELSA, not WorldClim) |
 | `test_coverage_by_country.py` | DayHikes per Geofabrik country within ±0.5% of the recorded counts (±15% on another snapshot); LandCover, climate and elevation on ≥ 99% of the DayHikes of every country with ≥ 50 (Georgia's elevation 79%). Needs `data/osm/geofabrik-index-v1.json` from https://download.geofabrik.de/index-v1.json |
 | `test_similarity_store_real.py` | store ids, shapes, versions and digest match the Catalog; Calibration monotone, in [0, 1] and reproducible from the stored facts; NaN budgets; stale stores refused |
 | `test_rebuild_against_reference.py` | against `DAYHIKE_REFERENCE_DIR`: every Catalog and GeometryStore table, the facts, the Calibration of the 22 Measures that do not read LandCover or climate, and the golden top-50 rankings are exact; LandCover and climate are exact where the reference had full coverage and never lost; the raw downloads are unchanged |
@@ -1545,8 +1567,8 @@ DAYHIKE_REAL_DATA=1 uv run pytest -m real_data
 
 Rebuild every derived file from the raw downloads into a fresh data directory,
 compare it with the old one, then replace the old one. Raw downloads are the
-Europe PBF, the FABDEM tiles and the WorldCover tiles (WorldClim is clipped
-from three large zips and is rebuilt like derived data). Nothing is written
+Europe PBF, the FABDEM tiles and the WorldCover tiles (CHELSA is clipped
+from 36 large global files and is rebuilt like derived data). Nothing is written
 into the old directory until the end. `REF` is the old `data/`, `SNAP` a
 directory for frozen copies, `NEW` the `data/` of a second checkout of the
 repo (`git worktree add` or a `git archive` export with its own `uv sync`), so
@@ -1594,12 +1616,12 @@ at the rebuild.
    ```bash
    B=32.6,-31.3,71.2,46.4
    uv run dayhike fetch-landcover --bounds $B   # beside ingest: 243 new tiles, 11 GB, 11 min
-   uv run dayhike fetch-climate --bounds $B     # beside ingest: 8 GB of zips, clipped to 0.7 GB, 9 min
+   uv run dayhike fetch-climate --bounds $B     # beside ingest: 36 global files (about 5.4 GB), clipped
    uv run dayhike fetch-dem --bounds $B         # every tile is a link: proves none is missing
    uv run dayhike ingest data/osm/europe-latest.osm.pbf --catalog data/catalog.sqlite --fresh  # 2 h 42 min, 5.6 GB
    uv run dayhike sample-dem                    # 20 min
    uv run dayhike sample-landcover              # 21 min
-   uv run dayhike sample-climate                # 7 h, GeometryStore grows to 32 GB
+   uv run dayhike sample-climate                # 5 min, peak 4.4 GB; no per-vertex climate
    uv run dayhike build-similarity              # 19 min
    uv run dayhike export-serving --valhalla-tiles data/valhalla/highways-eu --valhalla-url http://127.0.0.1:8003  # 22 min
    ```
@@ -1640,7 +1662,7 @@ The same seams the CLI wraps:
 - `geometry_store_path_for` — sidecar path for DayHikeGeometry
 - `fetch_fabdem` / `sample_dem` — local FABDEM tiles → GeometryStore vertices and Catalog elevation
 - `fetch_worldcover` / `sample_landcover` — local WorldCover tiles → GeometryStore classes and Catalog fractions
-- `fetch_worldclim` / `sample_climate` — local WorldClim tiles → GeometryStore monthly climate and Catalog means
+- `fetch_chelsa` / `sample_climate` — local CHELSA rasters → Catalog hike-level monthly means
 - `filter_by_drive_time` — Ranking filtered by DriveTime from Origin
 - `ValhallaMatrixClient` — HTTP adapter for `/sources_to_targets`
 - `dayhike.similarity.rank_rows` — `rank_dayhikes` on store rows, for callers that know the Seed's row and have no Catalog
@@ -1674,7 +1696,7 @@ uv run jupyter notebook notebooks/01_raw_data_and_ingestion.ipynb
 | [`notebooks/02_catalog.ipynb`](notebooks/02_catalog.ipynb) | SQLite Catalog + GeometryStore: schema (including LandCover fractions, regime climate, and `climate_months`), pandas, maps, DayHike objects. Uses `data/catalog.sqlite` when present. |
 | [`notebooks/03_ranking.ipynb`](notebooks/03_ranking.ipynb) | Production ranking on the fixture: the facts and Measures, one Seed, Measure weights, max-not-mean, unknown Seeds, stubbed DriveTime, Ranking with no month and with QueryMonth 7, LandCover order. |
 | [`notebooks/04_rank_feature_lab.ipynb`](notebooks/04_rank_feature_lab.ipynb) | Sandbox to try a new fact as a calibrated Measure, ablate Measures with weight 0, and compare order to production. |
-| [`notebooks/04a_geometry.ipynb`](notebooks/04a_geometry.ipynb) | GeometryStore tables as GeoPandas: vertices, amenities, DayHike lines, member ways, leftover `in_chain`, per-vertex land-cover classes and `vertex_climate` (synthetic rasters, no download). |
+| [`notebooks/04a_geometry.ipynb`](notebooks/04a_geometry.ipynb) | GeometryStore tables as GeoPandas: vertices, amenities, DayHike lines, member ways, leftover `in_chain`, per-vertex land-cover classes and hike-level climate (synthetic rasters, no download). |
 | [`notebooks/05_similarity.ipynb`](notebooks/05_similarity.ipynb) | Measures and Calibration on the real Catalog (ADR-0013), from `data/catalog.similarity/`: every fact's spread over Europe, each Measure's raw random-pair scale against its calibrated one, named similar/dissimilar pairs per group of Measures with `verify` PASS/FAIL lines, identity/symmetry checks for every Measure and a reversed-direction rebuild of the geometry facts, one Seed ranked against all of Europe under a facilities-heavy and an altitude-heavy weight set, a RoundTrip and a steep Seed with and without weight on those Measures, two Seeds under the maximum rule, how often each Measure is missing, and one verification summary. Needs the local Catalog after `build-similarity`; stops with an error without it. |
 
 `01` and `03` always rebuild the committed OSM fixture (no Geofabrik, no live
@@ -1719,12 +1741,14 @@ Zanaga, D. et al., 2022. ESA WorldCover 10 m 2021 v200.
 https://doi.org/10.5281/zenodo.7254221. CC BY 4.0. Written into GeometryStore
 `geometry_meta` when LandCover has been sampled.
 
-WorldClim 2.1: Fick, S.E. and R.J. Hijmans, 2017. WorldClim 2: new 1km
-spatial resolution climate surfaces for global land areas. International
-Journal of Climatology 37 (12): 4302-4315. Written into GeometryStore
-`geometry_meta` when climate has been sampled. WorldClim allows academic and
-other non-commercial use and no redistribution without permission: the web
-demo shows only per-DayHike averages derived from it, never the rasters.
+CHELSA V2.1: Karger, D.N., Conrad, O., Böhner, J., Kawohl, T., Kreft, H.,
+Soria-Auza, R.W., Zimmermann, N.E., Linder, H.P., Kessler, M., 2017.
+Climatologies at high resolution for the earth's land surface areas.
+Scientific Data 4, 170122. https://doi.org/10.1038/sdata.2017.122. Data:
+Karger et al. (2021), CHELSA V2.1, EnviDat,
+https://doi.org/10.16904/envidat.228.v2.1, released under CC0 1.0 (no rights
+reserved; citation requested). Written into GeometryStore `geometry_meta` when
+climate has been sampled.
 
 Natural Earth (https://www.naturalearthdata.com/, public domain): country
 shapes of the coverage map. Valhalla (MIT, https://github.com/valhalla/valhalla)
@@ -1742,7 +1766,7 @@ Bulky local files stay out of git:
 - `data/osm/` — Geofabrik / osmium extracts
 - `data/dem/` — FABDEM GeoTIFFs
 - `data/landcover/` — ESA WorldCover GeoTIFFs
-- `data/climate/` — WorldClim monthly GeoTIFFs
+- `data/climate/` — CHELSA monthly GeoTIFFs
 - `data/valhalla/` — road PBF and routing tiles (`compose.yaml`,
   `prepare-roads.sh`, `prepare-highways.sh`, and `mjolnir.drive-time.json`
   are tracked)

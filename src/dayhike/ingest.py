@@ -718,15 +718,6 @@ def write_geometry_store(
                 longitude REAL NOT NULL,
                 tags TEXT NOT NULL
             );
-            CREATE TABLE vertex_climate (
-                dayhike_id INTEGER NOT NULL,
-                seq INTEGER NOT NULL,
-                month INTEGER NOT NULL,
-                temperature_c REAL NOT NULL,
-                precipitation_mm REAL NOT NULL,
-                solar_radiation REAL NOT NULL,
-                PRIMARY KEY (dayhike_id, seq, month)
-            );
             """
         )
         out.execute(

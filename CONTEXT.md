@@ -29,7 +29,7 @@ A member way of a DayHike that is not on its main walk: a side trip, a variant, 
 _Avoid_: stray, unconnected way, excursion, side trip, optional part
 
 **GeometryStore**:
-The sidecar SQLite written at ingest next to a Catalog. It holds DayHikeGeometry, member-way and relation tags, raw amenity points, and the per-vertex LandCover and ClimateNormal samples. Ranking does not read it.
+The sidecar SQLite written at ingest next to a Catalog. It holds DayHikeGeometry, member-way and relation tags, raw amenity points, and the per-vertex LandCover samples. ClimateNormal is not stored per vertex (ADR-0015). Ranking does not read it.
 _Avoid_: experimental database, work file, Catalog, lab
 
 **Origin**:
