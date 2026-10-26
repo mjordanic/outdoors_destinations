@@ -375,7 +375,7 @@ best N (every DayHike is still scored).
 | Measure | Fact | Kind | Constant |
 | --- | --- | --- | --- |
 | `length` | Catalog length | ratio | floor 1 km |
-| `elevation_gain` | metres climbed, larger of climb and descent (direction-free) | ratio | floor 100 m |
+| `elevation_gain` | metres climbed, larger of climb and descent (direction-free); a change counts once it moves 10 m | ratio | floor 100 m |
 | `difficulty` | Difficulty as SAC rank 1–6 | tolerance | D = 3 |
 | `highest`, `lowest` | highest and lowest point | tolerance | D = 1,000 m |
 | `profile` | ProfileShape (64 points) | profile | — |
@@ -1459,7 +1459,8 @@ API (JSON): `GET /api/search?q=` (name prefix first, then contains; case and
 accents ignored; a number finds that id), `GET /api/hikes/{id}`,
 `GET /api/measures`, `GET /api/info`, `POST /api/rank` with `{"seed": id,
 "weights": {measure: 0-100}, "excluded": [measure], "month": 1-12,
-"origin": {"lat", "lon"}, "max_hours": 0-4}`. Each client gets 20 Rankings and
+"origin": {"lat", "lon"}, "max_hours": 0-4}`. The GET routes also answer
+HEAD. Each client gets 20 Rankings and
 300 other calls a minute; one Ranking runs at a time per process.
 
 Measured on the Europe Catalog (161,614 DayHikes), 8-core Mac, the container

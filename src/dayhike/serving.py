@@ -614,9 +614,16 @@ class ServingData:
         return hours
 
 
+# Letters with no Unicode decomposition to a base letter, spelt as a plain keyboard would.
+_PLAIN_LETTERS = str.maketrans(
+    {"ł": "l", "ø": "o", "đ": "d", "ð": "d", "æ": "ae", "œ": "oe", "ı": "i", "þ": "th"}
+)
+
+
 def _fold(text: str) -> str:
     """Casefolded, accents removed: what search compares."""
-    decomposed = unicodedata.normalize("NFKD", text.replace("\n", " "))
+    plain = text.replace("\n", " ").casefold().translate(_PLAIN_LETTERS)
+    decomposed = unicodedata.normalize("NFKD", plain)
     return "".join(c for c in decomposed if not unicodedata.combining(c)).casefold()
 
 

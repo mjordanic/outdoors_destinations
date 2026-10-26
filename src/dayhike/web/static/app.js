@@ -102,13 +102,13 @@ function niceTicks(low, high, count) {
   const power = 10 ** Math.floor(Math.log10(raw));
   const step = [1, 2, 2.5, 5, 10].map((f) => f * power).find((s) => s >= raw);
   const ticks = [];
-  for (let t = Math.ceil(low / step) * step; t <= high + 1e-9; t += step) ticks.push(Math.round(t * 1e6) / 1e6);
+  for (let t = Math.ceil(low / step) * step; t <= high + 1e-9; t += step) ticks.push(Math.round(t * 1e6) / 1e6 + 0);
   return ticks;
 }
 
 const fmt = {
   km: (m) => `${(m / 1000).toFixed(m < 10000 ? 1 : 0)} km`,
-  m: (m) => `${Math.round(m).toLocaleString("en")} m`,
+  m: (m) => `${(Math.round(m) + 0).toLocaleString("en")} m`, // + 0: no "-0 m"
   pct: (x) => `${Math.round(x * 100)} %`,
   yes: (x) => (x ? "yes" : "no"),
 };
@@ -201,7 +201,7 @@ function elevationChart(hike, onHover, width) {
     if (p.where !== "line" || p.along_m == null || (p.kind === "peak" && p.off_m > 50)) continue;
     const [label, color] = KINDS[p.kind] || [p.kind, "#333"];
     const dot = svg("circle", { cx: x(p.along_m), cy: y(at(p.along_m)), r: 4.5, fill: color, stroke: "#fff", "stroke-width": 1.5 }, root);
-    svg("title", {}, dot).textContent = `${label}${p.name ? `: ${p.name}` : ""} at ${fmt.km(p.along_m)}`;
+    svg("title", {}, dot).textContent = `${label}${p.name ? `: ${p.name}` : ""} at ${fmt.km(p.along_m)}, ${fmt.m(at(p.along_m))}`;
   }
   const cursor = svg("line", { y1: T, y2: H - B, stroke: "#c2410c", "stroke-width": 1, visibility: "hidden" }, root);
   const readout = document.createElement("span");
@@ -306,8 +306,9 @@ function sparkline(values) {
   return root;
 }
 
+// Light to mid green, dark enough at most for the dark cell text to keep 4.5:1 contrast.
 function scoreColor(score) {
-  return `hsl(145, 42%, ${Math.round(88 - 52 * score)}%)`;
+  return `hsl(145, 42%, ${Math.round(90 - 46 * score)}%)`;
 }
 
 // ---------- detail view (liked hike and clicked result share it) ----------
@@ -529,7 +530,12 @@ function moveActive(step) {
 function onSearchInput() {
   clearTimeout(searchTimer);
   const query = $("#search").value.trim();
-  if (query.length < 2) { showSuggestions([]); return; }
+  if (query.length < 2) {
+    searchAbort?.abort();
+    showSuggestions([]);
+    if ($("#status").textContent.startsWith("No hike name contains")) setStatus("");
+    return;
+  }
   searchTimer = setTimeout(async () => {
     searchAbort?.abort();
     searchAbort = new AbortController();
@@ -544,11 +550,17 @@ function onSearchInput() {
   }, 200);
 }
 
+let chosen = 0, shown = 0, ranked = 0; // the latest hike load or ranking each; an older response that lands later is dropped
+
 async function choose(id) {
+  clearTimeout(searchTimer);
+  searchAbort?.abort();
   showSuggestions([]);
+  const request = ++chosen;
   setStatus("Loading the hike…");
   try {
     const hike = await api(`/api/hikes/${id}`);
+    if (request !== chosen) return;
     state.liked = hike;
     $("#search").value = hike.name;
     $("#liked-name").textContent = `Chosen: ${hike.name}`;
@@ -559,7 +571,7 @@ async function choose(id) {
     $("#selected").hidden = true;
     setStatus("");
   } catch (error) {
-    setStatus(error.message, true);
+    if (request === chosen) setStatus(error.message, true);
   }
 }
 
@@ -621,7 +633,7 @@ async function findSimilar() {
       const origin = parseLatLon($("#origin").value) || state.origin;
       if (!origin) throw new Error("Set a starting place for the drive-time filter.");
       const hours = Number($("#hours").value);
-      if (!(hours > 0 && hours <= state.info.max_drive_hours)) {
+      if (!(hours >= 0.5 && hours <= state.info.max_drive_hours)) {
         throw new Error(`Max hours is from 0.5 to ${state.info.max_drive_hours}.`);
       }
       query.origin = { lat: origin.lat, lon: origin.lon };
@@ -631,6 +643,7 @@ async function findSimilar() {
     setStatus(error.message, true);
     return;
   }
+  const request = ++ranked;
   $("#find").disabled = true;
   setStatus(query.origin ? "Finding hikes within the drive, then ranking…" : "Ranking every hike…");
   try {
@@ -639,20 +652,32 @@ async function findSimilar() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(query),
     });
+    if (request !== ranked || query.seed !== state.liked.id) return;
     state.query = { weights: body.weights, month: body.month, drive: Boolean(query.origin) };
     state.results = body.results;
     renderResults(body);
     setStatus(`Done in ${(body.elapsed_ms / 1000).toFixed(1)} s.`);
   } catch (error) {
+    if (request !== ranked || query.seed !== state.liked.id) return;
+    markStale();
     setStatus(error.message, true);
   } finally {
-    $("#find").disabled = false;
+    if (request === ranked) $("#find").disabled = false;
   }
+}
+
+// The shown results no longer match the query on the left.
+function markStale() {
+  if ($("#results").hidden) return;
+  $("#results").classList.add("stale");
+  $("#results-stale").hidden = false;
 }
 
 function renderResults(body) {
   const section = $("#results");
   section.hidden = false;
+  section.classList.remove("stale");
+  $("#results-stale").hidden = true;
   $("#selected").hidden = true;
   const considered = body.reachable == null
     ? `${state.info.dayhikes.toLocaleString("en")} hikes`
@@ -671,15 +696,19 @@ function renderResults(body) {
     const cells = state.measures.map((m) => {
       const score = result.measures[m.name].score;
       if (score == null) return '<td class="cell none" title="no data">–</td>';
-      const style = `background:${scoreColor(score)};color:${score > 0.55 ? "#fff" : "#1f2a24"}`;
-      return `<td class="cell" style="${style}" title="${escapeHtml(m.label)}: ${score.toFixed(2)}">${Math.round(score * 100)}</td>`;
+      if (!body.weights[m.name]) {
+        return `<td class="cell left-out" title="${escapeHtml(m.label)}: ${score.toFixed(2)}, left out of this ranking">${Math.round(score * 100)}</td>`;
+      }
+      return `<td class="cell" style="background:${scoreColor(score)}" title="${escapeHtml(m.label)}: ${score.toFixed(2)}">${Math.round(score * 100)}</td>`;
     }).join("");
     row.innerHTML = `<td>${i + 1}</td><td class="name" title="${escapeHtml(result.name)}">${escapeHtml(result.name)}</td>
       <td class="score">${result.score.toFixed(3)}</td>
       ${state.query.drive ? `<td>${result.drive_hours.toFixed(1)} h</td>` : ""}${cells}`;
     const open = () => showResult(i, row);
     row.addEventListener("click", open);
-    row.addEventListener("keydown", (event) => { if (event.key === "Enter") open(); });
+    row.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); }
+    });
     tbody.appendChild(row);
   });
   table.appendChild(tbody);
@@ -689,16 +718,19 @@ function renderResults(body) {
 async function showResult(index, row) {
   document.querySelectorAll("#results-table tr.active").forEach((r) => r.classList.remove("active"));
   row.classList.add("active");
-  const result = state.results[index];
+  const { results, liked } = state;
+  const result = results[index];
+  const request = ++shown;
   setStatus("Loading the hike…");
   try {
     const hike = await api(`/api/hikes/${result.id}`);
+    if (request !== shown || results !== state.results || liked !== state.liked) return;
     const card = $("#selected");
     renderDetail(card, hike, { role: `Similar hike #${index + 1}`, compare: state.liked, result });
     card.scrollIntoView({ behavior: "smooth", block: "start" });
     setStatus("");
   } catch (error) {
-    setStatus(error.message, true);
+    if (request === shown && results === state.results && liked === state.liked) setStatus(error.message, true);
   }
 }
 
@@ -730,16 +762,26 @@ async function start() {
     else if (event.key === "Escape") showSuggestions([]);
   });
   $("#search").addEventListener("blur", () => setTimeout(() => showSuggestions([]), 150));
-  $("#reset-weights").addEventListener("click", buildWeights);
-  $("#drive-on").addEventListener("change", (event) => { $("#drive").hidden = !event.target.checked; });
-  $("#origin").addEventListener("input", () => { state.origin = null; $("#origin-found").textContent = ""; });
+  $("#reset-weights").addEventListener("click", () => { buildWeights(); markStale(); });
+  $("#weights").addEventListener("input", markStale);
+  $("#weights").addEventListener("change", markStale);
+  $("#drive-on").addEventListener("change", (event) => { $("#drive").hidden = !event.target.checked; markStale(); });
+  $("#origin").addEventListener("input", () => { state.origin = null; $("#origin-found").textContent = ""; markStale(); });
+  $("#hours").addEventListener("input", markStale);
   $("#origin").addEventListener("keydown", (event) => { if (event.key === "Enter") findPlace(); });
   $("#origin-find").addEventListener("click", findPlace);
   $("#origin-here").addEventListener("click", useMyLocation);
-  $("#month").addEventListener("change", () => { if (state.liked) renderDetail($("#liked"), state.liked, { role: "Liked hike" }); });
+  $("#month").addEventListener("change", () => {
+    if (state.liked) renderDetail($("#liked"), state.liked, { role: "Liked hike" });
+    markStale();
+  });
   $("#find").addEventListener("click", findSimilar);
-  const linked = location.hash.match(/^#hike=(\d+)$/);
-  if (linked) choose(Number(linked[1]));
+  const openLinked = () => {
+    const linked = location.hash.match(/^#hike=(\d+)$/);
+    if (linked && Number(linked[1]) !== state.liked?.id) choose(Number(linked[1]));
+  };
+  window.addEventListener("hashchange", openLinked);
+  openLinked();
 }
 
 start();

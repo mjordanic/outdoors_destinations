@@ -43,6 +43,7 @@ Progress = Callable[[str], None]
 
 PROFILE_POINTS = 64
 PROFILE_RANGE_FLOOR_M = 50.0
+GAIN_HYSTERESIS_M = 10.0  # a climb or descent counts once it reaches this; DEM noise does not
 STEEPNESS_STEP_M = 50.0  # elevation resampled this often along the walk
 STEEPEST_KM_WINDOW_M = 1_000.0
 CORRIDOR_M = 100.0  # amenity along the DayHike (CONTEXT.md Corridor)
@@ -192,7 +193,7 @@ CALIBRATION_KEYS = (
 _FACTS_VERSION = hashlib.sha256(
     json.dumps(
         [
-            FACT_COLUMNS, PROFILE_POINTS, PROFILE_RANGE_FLOOR_M, STEEPNESS_STEP_M,
+            FACT_COLUMNS, PROFILE_POINTS, PROFILE_RANGE_FLOOR_M, GAIN_HYSTERESIS_M, STEEPNESS_STEP_M,
             STEEPEST_KM_WINDOW_M, CORRIDOR_M, PEAK_SUMMITED_M, PEAKS_AROUND_M,
             TRAILHEAD_M, SEARCH_STEP_M, WATER_SOURCE_KINDS, SOLAR_ASPECT_POINTS,
             SOLAR_ASPECT_OFFSET_ARCSEC, SOLAR_ASPECT_MIN_SLOPE_DEG,
@@ -926,11 +927,24 @@ def elevation_gain(ele: np.ndarray) -> float:
     """Metres climbed: the larger of the climb and the descent, so the walking
     direction does not matter. Vertices without elevation are skipped; none
     with it gives NaN.
+
+    A change counts only once it moves ``GAIN_HYSTERESIS_M`` from the last
+    counted elevation, so DEM jitter between vertices does not add up on long
+    flat or cross-slope walks.
     """
-    step = np.diff(ele[np.isfinite(ele)])
-    if not np.isfinite(ele).any():
+    known = ele[np.isfinite(ele)].tolist()
+    if not known:
         return math.nan
-    return float(max(step[step > 0].sum(), -step[step < 0].sum()))
+    climb = descent = 0.0
+    last = known[0]
+    for metres in known[1:]:
+        if metres - last >= GAIN_HYSTERESIS_M:
+            climb += metres - last
+            last = metres
+        elif last - metres >= GAIN_HYSTERESIS_M:
+            descent += last - metres
+            last = metres
+    return max(climb, descent)
 
 
 def profile_shape(

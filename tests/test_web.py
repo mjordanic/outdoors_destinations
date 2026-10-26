@@ -165,6 +165,13 @@ def test_rate_limit_is_per_client_and_spares_health(data: ServingData) -> None:
     assert client.get("/api/health", headers=first).status_code == 200
 
 
+def test_api_reads_answer_head_like_get(client: TestClient) -> None:
+    for path in ("/api/health", "/api/info", "/api/measures", "/api/search?q=ridge", f"/api/hikes/{RIDGE_WALK_ID}"):
+        response = client.head(path)
+        assert response.status_code == 200, path
+        assert response.content == b""
+
+
 def test_the_page_and_its_assets_are_served(client: TestClient) -> None:
     page = client.get("/")
 

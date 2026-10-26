@@ -213,22 +213,21 @@ lengths, so a 5 km line and a 5 km RoundTrip look equally long. The
 
 ---
 
-## 12. Smoothed elevation gain
+## 12. Smoothed elevation gain in the Catalog
 
 ### Why it's parked
 
-The `elevation_gain_m` fact sums the climb between consecutive vertices, which
-mappers place 5–50 m apart (median about 16 m in the Slovenia + Croatia
-region). FABDEM's metre-scale jitter between close vertices adds climb that is
-not there: on elevation resampled every 50 m, as Steepness reads it, the
-region's gain is a median 83% of the raw-vertex gain, and walks along a cliff
-edge can show several times their height range. Steepness (ClimbGrade,
-SteepestKm) already reads the 50 m resample; the `elevation_gain` fact and the
-Catalog do not, so changing them moves existing rankings.
+The `elevation_gain_m` similarity fact (shown on the web page and read by the
+`elevation_gain` Measure) counts a climb or descent only once it moves 10 m
+(`GAIN_HYSTERESIS_M`), so FABDEM's metre-scale jitter between close vertices no
+longer adds climb that is not there. Checked against published gains: Ben
+Nevis Mountain Path 1,661 m raw, 1,422 m now (published about 1,350 m);
+Aljažev dom - Kredarica - Triglav 2,230 m raw, 2,121 m now (about 1,850 m); a
+15 km Dutch coast path 287 m raw, 44 m now (21 m height range). The Catalog's
+`feature_vectors.elevation_gain_m`, written by `sample-dem`, still sums the raw
+uphill between vertices.
 
 ### What would have to be true to start
 
-- One smoothing rule (resample step, or a filter over the ElevationProfile)
-  checked against a few DayHikes with a known published gain.
-- A decision on which gain the Catalog stores, so the direction-free
-  `elevation_gain_m` fact (ADR-0013) and the Catalog agree.
+- A decision on which gain the Catalog stores, so it and the direction-free
+  `elevation_gain_m` fact (ADR-0013) agree, then `sample-dem` rerun.
