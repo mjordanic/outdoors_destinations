@@ -468,13 +468,13 @@ Measured on the Europe Catalog (161,614 DayHikes) on an 8-core Mac:
 
 | What | Measured |
 | --- | --- |
-| `build-similarity` | 28 min on one core: 24 min facts, 4 min SolarAspect, under 1 s Calibration; peak memory 1.7 GB |
-| `build-similarity --calibrate-only` | under 1 s |
-| `data/catalog.similarity/` | 88 MB: facts 45 MB, ProfileShapes 41 MB, random pairs 5 MB, quantiles 0.25 MB |
+| `build-similarity` | 28 min wall, facts 1,701 s including WaterSide and Twins (about 1 min of that); run beside a second build, not on an idle machine; per-phase split and peak memory not yet re-measured |
+| `build-similarity --calibrate-only` | Calibration 0.6 s |
+| `data/catalog.similarity/` | 85 MB: facts 45 MB, ProfileShapes 41 MB, Twins 1.3 MB, ids 1.3 MB, quantiles 0.26 MB |
 | `Catalog.open` (once per process) | 4 s, 0.77 GB |
 | One Seed, 4–6 weighted Measures, `limit=50` | 0.09–0.12 s |
-| One Seed, all 26 Measures, `limit=50` | 0.42 s (0.56 s returning all 161,613) |
-| Five Seeds, 4–6 / 26 Measures, `limit=50` | 0.36–0.44 s / 1.8 s |
+| One Seed, all 27 Measures, `limit=50` | not yet re-measured (27 Measures) |
+| Five Seeds, 4–6 / 27 Measures, `limit=50` | 0.36–0.44 s / not yet re-measured (27 Measures) |
 | One Seed, `allowed_ids` of 5,000 DayHikes | 0.03–0.06 s |
 | Peak memory of a ranking process | 1.0 GB (0.48 GB without `Catalog.open`) |
 
@@ -1498,12 +1498,12 @@ limited to 2 GiB and 1 CPU like Cloud Run (`web/smoke.py`):
 
 | What | Measured |
 | --- | --- |
-| `export-serving` | 23 min, peak memory 1.4 GB (reads the 21 GB GeometryStore) |
-| Export size | 1.04 GB: tiles 790 MB (hard-linked), `hikes.sqlite` 154 MB, similarity 88 MB, snaps 4.5 MB, Trailheads 2.6 MB |
+| `export-serving` | 24 min without Valhalla tiles and with an existing snaps file (reads the 21 GB GeometryStore); peak memory not yet re-measured |
+| Export size | `hikes.sqlite` 154 MB, similarity 85 MB, snaps 4.5 MB, Trailheads 2.6 MB; total with tiles not yet re-measured |
 | Image | 3.2 GB uncompressed (Valhalla base 0.9 GB, Python and packages 0.5 GB, data 1.04 GB) |
 | Container start to first answer | 3 s (both processes); 215 MiB |
 | Search / hike detail | 6–10 ms / 3–5 ms |
-| Ranking, one Seed, 3 / 26 Measures | 0.3 s / 1.3 s (0.07 s / 0.5 s on the Mac without the 1-CPU cap) |
+| Ranking, one Seed, 3 / 27 Measures | 0.3 s / not yet re-measured (27 Measures); 3 Measures 0.07 s on the Mac without the 1-CPU cap |
 | Ranking within 2 h / 4 h drive (Ljubljana, Munich) | 2.7 s / 12 s; 4 h from Paris 14 s, Berlin 8 s, Prague 8 s, Rome 3 s, Oslo 3 s |
 | Container memory peak (cgroup, after those queries) | 1.5 GB of the 2 GiB: Valhalla 1.0–1.3 GB resident (0.46 GB its own, the rest the mapped tiles), the app 0.96 GB resident (0.82 GB its own) |
 
