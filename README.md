@@ -1023,7 +1023,8 @@ file opens. `sample-landcover` opens a WorldCover tile when a vertex first
 needs it and keeps at most 128 open, closing the least recently used (Europe
 has 267 tiles; the macOS default limit is 256 open files). `sample-climate`
 holds one climate raster at a time (about 170 MB as float32 for Europe) plus
-the vertex coordinates (about 1 GB for Europe's 42 million vertices) in memory.
+the vertex coordinates and their cell indices in memory: peak 4.4 GB for
+Europe's 42 million vertices.
 
 ```bash
 uv run dayhike sample-landcover
@@ -1185,7 +1186,7 @@ length band, Leftover reasons, loop starts, the similarity facts, notebook
 and, with `data/baseline/`, list the DayHikes that left and joined the Catalog;
 each that left must have left by the main walk. On the Europe snapshot
 (161,614 DayHikes) on an 8-core Mac this took: ingest 2 h 7 min, `sample-dem`
-24 min, `sample-landcover` 12 min, `sample-climate` 3 h 54 min,
+24 min, `sample-landcover` 12 min, `sample-climate` 5 min (peak memory 4.4 GB),
 `build-similarity` 28 min, the checks 1 h 42 min. The baseline is about 150 MB; delete
 `data/baseline/` once the checks pass.
 
@@ -1609,7 +1610,7 @@ at the rebuild.
    uv run dayhike ingest data/osm/europe-latest.osm.pbf --catalog data/catalog.sqlite --fresh  # 2 h 42 min, 5.6 GB
    uv run dayhike sample-dem                    # 20 min
    uv run dayhike sample-landcover              # 21 min
-   uv run dayhike sample-climate                # stores no per-vertex climate
+   uv run dayhike sample-climate                # 5 min, peak 4.4 GB; no per-vertex climate
    uv run dayhike build-similarity              # 19 min
    uv run dayhike export-serving --valhalla-tiles data/valhalla/highways-eu --valhalla-url http://127.0.0.1:8003  # 22 min
    ```
