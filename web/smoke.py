@@ -76,6 +76,13 @@ def smoke(base: str, drive: bool, pid: int | None) -> None:
             bool(hike["line"]) and len(ele) > 2,
             f"detail {name}: {len(hike['points'])} points, {min(ele)}-{max(ele)} m ({ms:.0f} ms)",
         )
+        lat, lon = hike["trailhead"]
+        box = {"south": lat - 0.05, "west": lon - 0.1, "north": lat + 0.05, "east": lon + 0.1}
+        in_view, ms = call(base, "/api/hikes?" + urllib.parse.urlencode(box))
+        check(
+            dayhike_id in [found["id"] for found in in_view["results"]],
+            f"map view around {name}: {len(in_view['results'])} hikes, more={in_view['more']} ({ms:.0f} ms)",
+        )
     seed = seeds["Pot kralja Triglava"]
     for label, body in [
         ("all 26 Measures", {"seed": seed}),

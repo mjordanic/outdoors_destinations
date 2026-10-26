@@ -1,7 +1,7 @@
 """The public read-only web demo: a JSON API over a serving export, and the page.
 
-``create_app`` serves ``ServingData`` (``dayhike.serving``): name search, hike
-detail, the Measure list, the score of any two hikes, and Ranking with an
+``create_app`` serves ``ServingData`` (``dayhike.serving``): name search, the
+hikes in a map view, hike detail, the Measure list, the score of any two hikes, and Ranking with an
 optional highways-only DriveTime pre-filter. Every client gets a request budget per minute, and one Ranking
 runs at a time per instance, so a small container holds its memory.
 """
@@ -27,6 +27,7 @@ from dayhike.similarity import DEFAULT_WEIGHTS, MEASURES
 STATIC_DIR = Path(__file__).parent / "static"
 RESULTS = 10
 MAX_DRIVE_HOURS = 4.0
+MAP_HIKES = 500  # at most this many hikes per map view
 # Requests per client per RATE_WINDOW_S: Ranking, and everything else under /api.
 RANK_RATE = 20
 API_RATE = 300
@@ -174,6 +175,18 @@ def create_app(
     @app.api_route("/api/search", methods=["GET", "HEAD"])
     def search(q: str = Query(max_length=100), limit: int = Query(20, ge=1, le=50)) -> dict:
         return {"results": data.search(q, limit)}
+
+    @app.api_route("/api/hikes", methods=["GET", "HEAD"])
+    def hikes_in_box(
+        south: float = Query(ge=-90, le=90),
+        west: float = Query(ge=-180, le=180),
+        north: float = Query(ge=-90, le=90),
+        east: float = Query(ge=-180, le=180),
+    ) -> dict:
+        if south > north or west > east:
+            raise HTTPException(400, "the box needs south <= north and west <= east")
+        results, more = data.in_box(south, west, north, east, MAP_HIKES)
+        return {"results": results, "more": more}
 
     @app.api_route("/api/hikes/{dayhike_id}", methods=["GET", "HEAD"])
     def hike(dayhike_id: int) -> dict:
