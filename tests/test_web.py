@@ -112,6 +112,7 @@ def test_pair_scores_any_two_hikes_like_a_ranking_would(client: TestClient) -> N
         ({"a": RIDGE_WALK_ID, "b": 1002, "weights": {"length": 0}}, 400),
         ({"a": RIDGE_WALK_ID, "b": 1002, "excluded": ["nonsense"]}, 400),
         ({"a": RIDGE_WALK_ID, "b": 1002, "month": 0}, 422),
+        ({"a": RIDGE_WALK_ID, "b": 1002, "month": 7}, 400),
         ({"a": RIDGE_WALK_ID}, 422),
     ],
 )

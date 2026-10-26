@@ -372,9 +372,7 @@ def rank_rows(
     DayHike (a web page that picked it from a list) needs no Catalog.
     """
     chosen = _measure_weights(weights)
-    _check_month(month)
-    if month is not None and np.isnan(store.column(f"temperature_c_{month:02d}")).all():
-        raise ValueError("climate has not been sampled")
+    _check_climate(store, month)
     seed_rows = np.asarray(seed_rows, dtype=np.int64)
     rows = np.arange(len(store.ids))
     if allowed_ids is not None:
@@ -390,6 +388,12 @@ def rank_rows(
     keep = np.sort(first)
     keep = keep[~np.isin(group[keep], store.twins[seed_rows])][:limit]
     return rows[keep], similarity[keep]
+
+
+def _check_climate(store: SimilarityStore, month: int | None) -> None:
+    _check_month(month)
+    if month is not None and np.isnan(store.column(f"temperature_c_{month:02d}")).all():
+        raise ValueError("climate has not been sampled")
 
 
 def _check_month(month: int | None) -> None:

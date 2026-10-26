@@ -25,6 +25,7 @@ hike detail and Ranking all read the memory-mapped arrays and the SQLite file.
 from __future__ import annotations
 
 import bisect
+import itertools
 import json
 import math
 import os
@@ -64,7 +65,7 @@ from dayhike.similarity import (
     SimilarityStore,
     StaleSimilarity,
     _calibration_key,
-    _check_month,
+    _check_climate,
     _densify,
     _measure_weights,
     _resample,
@@ -85,6 +86,7 @@ LINE_TOLERANCE_M = 10.0
 ELEVATION_POINTS = 128
 TRAILHEAD_NEAREST = 3  # parking and restaurant/cafe points kept per Trailhead
 VALHALLA_CACHE_BYTES = 256 * 1024 * 1024  # mjolnir.max_cache_size; the build default is 1 GB
+SEARCH_SCAN_CAP = 5_000  # occurrences of the scanned word a search looks at, so short queries stay fast
 _HIKE_CHUNK = 2_000
 _SIMILARITY_FILES = ("ids.npy", "facts.npy", "profile.npy", "twins.npy", "quantiles.npy", "meta.json")
 
@@ -507,6 +509,8 @@ class ServingData:
         The best come first: the exact name, then names starting with the
         query, then names where every word starts a word, then the rest;
         shorter names first within each. A number also finds that DayHike id.
+        Only the first SEARCH_SCAN_CAP occurrences, in id order, of the
+        longest word (two letters or more) are considered.
         """
         needle = _fold(query.strip())
         words = needle.split()
@@ -516,10 +520,11 @@ class ServingData:
                 rows.append(self.row_of(int(needle)))
             except KeyError:
                 pass
-        if len(needle) >= 2:
+        scan = max(words, key=len, default="")
+        if len(scan) >= 2:
             found = [
                 row
-                for row in self._rows_containing(max(words, key=len))
+                for row in self._rows_containing(scan)
                 if row not in rows and all(word in self._folded[row] for word in words)
             ]
             found.sort(key=lambda row: (_relevance(self._folded[row], needle, words), len(self._folded[row]), row))
@@ -527,15 +532,10 @@ class ServingData:
         return self._summaries(rows[:limit])
 
     def _rows_containing(self, word: str) -> list[int]:
-        rows: list[int] = []
-        at = self._haystack.find(word)
-        while at != -1:
-            row = int(np.searchsorted(self._starts, at, side="right")) - 1
-            rows.append(row)
-            if row + 1 >= len(self._starts):
-                break
-            at = self._haystack.find(word, int(self._starts[row + 1]))
-        return rows
+        """Rows whose name holds ``word``, in id order, from its first SEARCH_SCAN_CAP occurrences."""
+        hits = itertools.islice(re.finditer(re.escape(word), self._haystack), SEARCH_SCAN_CAP)
+        offsets = np.fromiter((hit.start() for hit in hits), dtype=np.int64)
+        return np.unique(np.searchsorted(self._starts, offsets, side="right") - 1).tolist()
 
     def _summaries(self, rows: list[int]) -> list[dict]:
         names = self._names([int(self.store.ids[row]) for row in rows])
@@ -625,7 +625,7 @@ class ServingData:
         """
         a, b = self.row_of(a_id), self.row_of(b_id)
         chosen = _measure_weights(weights)
-        _check_month(month)
+        _check_climate(self.store, month)
         rows = np.array([b])
         similarity, _ = score_rows(self.store, [a], rows, chosen, month=month)
         return {"a": a_id, "b": b_id, "score": _value(similarity[0]), "measures": self._measures(a, rows, month)[0]}

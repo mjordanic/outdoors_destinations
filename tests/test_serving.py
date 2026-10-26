@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from dayhike import Catalog, build_catalog, build_similarity, rank_dayhikes
+from dayhike import serving
 from dayhike.catalog import Origin
 from dayhike.serving import (
     ELEVATION_POINTS,
@@ -177,6 +178,15 @@ def test_search_prefix_matches_come_first(data: ServingData) -> None:
     names = [hit["name"] for hit in data.search("p")] + [hit["name"] for hit in data.search("pa")]
     assert names == ["Valley Path"]
     assert [hit["name"] for hit in data.search("ps")] == ["PS-1"]
+
+
+def test_search_scans_a_bounded_number_of_occurrences_of_a_word_of_two_letters_or_more(
+    data: ServingData, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert [hit["name"] for hit in data.search("al")] == ["Ridge Walk", "Valley Path"]
+    assert data.search("r w") == []
+    monkeypatch.setattr(serving, "SEARCH_SCAN_CAP", 1)
+    assert [hit["name"] for hit in data.search("al")] == ["Ridge Walk"]
 
 
 def test_rank_matches_rank_dayhikes_and_reports_every_measure(
