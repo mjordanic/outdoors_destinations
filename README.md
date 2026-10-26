@@ -1493,7 +1493,8 @@ with `--valhalla-url` it snaps every Trailhead once (`snaps.npz`). Rerun it
 after any rebuild; `meta.json` is written last, so a half-written export never
 opens.
 
-API (JSON): `GET /api/search?q=` (every word in any order; case, accents
+API (JSON): `GET /api/search?q=` (every word in any order, at least one of
+two letters or more; case, accents
 and ue/oe/ae spellings ignored; the exact name first, then names starting with
 the query, then names where every word starts a word, shorter first; a number
 finds that id), `GET /api/hikes/{id}`, `GET /api/measures`, `GET /api/info`
