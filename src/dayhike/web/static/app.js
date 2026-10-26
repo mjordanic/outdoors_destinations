@@ -28,7 +28,6 @@ const LANDCOVER = [["tree_share", "Trees", "#2f6b3a"], ["shrub_share", "Shrub", 
   ["snow_share", "Snow / ice", "#bcd7ea"], ["other_share", "Other", "#a7a9ac"]];
 const SURFACE = [["paved_share", "Paved", "#6b7280"], ["gravel_share", "Gravel", "#c8a96a"],
   ["natural_share", "Natural", "#7f9d4f"], ["rock_share", "Rock", "#8d8d8d"]];
-const DEFAULT_WEIGHT = 50;
 
 const state = {
   info: null,
@@ -149,6 +148,7 @@ function factText(measure, facts, month) {
     case "solar_radiation": return `${Math.round(v).toLocaleString("en")} kJ/m²/day`;
     case "southness": return `${v.toFixed(2)} (${v >= 0.6 ? "south-facing" : v <= 0.4 ? "north-facing" : "mixed"})`;
     case "climb_grade": return `${(v * 100).toFixed(1)} %`;
+    case "waterside": return `${fmt.pct(v)} of the walk`;
     default: return fmt.yes(v);
   }
 }
@@ -461,7 +461,7 @@ function buildWeights() {
       const id = `w-${measure.name}`;
       row.innerHTML = `
         <label class="name" for="${id}" title="${escapeHtml(measure.description)}">${escapeHtml(measure.label)}</label>
-        <input id="${id}" type="number" min="0" max="100" step="1" value="${DEFAULT_WEIGHT}" inputmode="numeric" aria-label="${escapeHtml(measure.label)} weight, 0 to 100">
+        <input id="${id}" type="number" min="0" max="100" step="1" value="${measure.default_weight}" inputmode="numeric" aria-label="${escapeHtml(measure.label)} weight, 0 to 100">
         <label class="off"><input type="checkbox" aria-label="Leave ${escapeHtml(measure.label)} out"> off</label>`;
       const [number, off] = row.querySelectorAll("input");
       off.addEventListener("change", () => {

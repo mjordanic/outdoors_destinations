@@ -1,5 +1,5 @@
 ---
-status: accepted (supersedes ADR-0003 and ADR-0011)
+status: accepted (supersedes ADR-0003 and ADR-0011; default weights, the shown score and the altitude tolerance amended by ADR-0015)
 ---
 
 # Similarity is a Hiker-weighted mean of calibrated Measures

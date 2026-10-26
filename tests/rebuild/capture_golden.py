@@ -8,7 +8,7 @@ catalog.sqlite, catalog.geometry.sqlite, catalog.similarity/ and
 valhalla/{valhalla_tiles.tar,file_hashes.txt}. They are only read. The
 reference Valhalla serves the old highway tiles. Writes REFERENCE_DIR/golden/:
 
-- rankings.tsv: top 50 per golden Seed id and weight set (ids, scores);
+- rankings.tsv: top 50 per golden Seed id and weight set (ids, similarities);
 - pairs.tsv: similarity and rank of the golden pairs (route and its reverse);
 - countries.tsv: hikes per Geofabrik country and how many have each sampled value;
 - summits.tsv: elevation_max_m of the famous-summit DayHikes;
@@ -62,11 +62,11 @@ def main(argv: list[str] | None = None) -> int:
     rows = []
     for name, weights in sets.items():
         for seed in rc.GOLDEN_SEEDS:
-            for rank, (dayhike_id, similarity, raw, score) in enumerate(
+            for rank, (dayhike_id, similarity, raw) in enumerate(
                 rc.top_matches(store, seed, weights), start=1
             ):
-                rows.append((name, seed, rank, dayhike_id, repr(similarity), repr(raw), repr(score)))
-    rc.write_tsv(golden / "rankings.tsv", ("set", "seed", "rank", "dayhike_id", "similarity", "raw", "score"), rows)
+                rows.append((name, seed, rank, dayhike_id, repr(similarity), repr(raw)))
+    rc.write_tsv(golden / "rankings.tsv", ("set", "seed", "rank", "dayhike_id", "similarity", "raw"), rows)
     pairs = []
     for seed, other, name in GOLDEN_PAIRS:
         similarity, raw, rank = rc.similarity_between(store, seed, other, sets[name])

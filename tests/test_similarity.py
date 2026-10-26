@@ -12,10 +12,10 @@ from dayhike.similarity import (
     CALIBRATION_QUANTILES,
     FACT_COLUMNS,
     FACILITIES_FLAG_COLUMNS,
-    JOINT_PAIRS,
     LANDCOVER_SHARE_COLUMNS,
     MEASURES,
     SURFACE_SHARE_COLUMNS,
+    TWIN_STEP_M,
     AmenityPoints,
     SimilarityStore,
     calibrate,
@@ -31,7 +31,9 @@ from dayhike.similarity import (
     surface_class,
     surface_class_from_tag,
     trail_facts,
+    twin_groups,
     walk_facts,
+    waterside_share,
     weighted_mean,
 )
 
@@ -52,7 +54,7 @@ def _store(rows: int, profile=None, quantiles=None, **columns) -> SimilarityStor
         quantiles=np.full((len(CALIBRATION_KEYS), 4), np.nan)
         if quantiles is None
         else quantiles,
-        pairs=np.empty((0, len(CALIBRATION_KEYS))),
+        twins=np.arange(rows),
     )
 
 
@@ -72,8 +74,8 @@ def test_ratio_is_smaller_over_larger_with_a_floor() -> None:
 
 
 def test_tolerance_is_one_minus_the_difference_over_d() -> None:
-    scores = _scores("highest", highest_m=[2_000, 1_800, 1_000, 500, np.nan])
-    assert scores[:4] == pytest.approx([1.0, 0.8, 0.0, 0.0])
+    scores = _scores("highest", highest_m=[2_000, 1_800, 1_600, 500, np.nan])
+    assert scores[:4] == pytest.approx([1.0, 0.5, 0.0, 0.0])
     assert math.isnan(scores[4])
 
 
@@ -167,7 +169,7 @@ def test_monthly_measures_read_the_query_month_column() -> None:
     assert january == pytest.approx([1.0, 0.0])
     # A Measure that is not monthly ignores the month.
     assert measure_scores(
-        _store(2, highest_m=[0, 500]), BY_NAME["highest"], 0, np.arange(2), month=1
+        _store(2, highest_m=[0, 200]), BY_NAME["highest"], 0, np.arange(2), month=1
     ) == pytest.approx([1.0, 0.5])
 
 
@@ -513,6 +515,74 @@ def test_southness_does_not_depend_on_the_walking_direction(tmp_path: Path) -> N
     )
 
 
+def _write_worldcover_tile(landcover_dir, water_east_of_m):
+    """A small WorldCover-named tile around (45, 15) at its 10 m cells: water
+    (class 80) east of ``water_east_of_m`` metres east of 15°, tree (10) west.
+    """
+    import rasterio
+    from rasterio.transform import from_origin
+
+    cell = 1 / 12_000
+    west, north, size = 14.98, 45.02, 480
+    lon = west + (np.arange(size) + 0.5) * cell
+    data = np.where(lon > _metres_east(water_east_of_m), 80, 10).astype("uint8")
+    landcover_dir.mkdir(parents=True, exist_ok=True)
+    with rasterio.open(
+        landcover_dir / "ESA_WorldCover_10m_2021_v200_N45E015_Map.tif",
+        "w",
+        driver="GTiff",
+        height=size,
+        width=size,
+        count=1,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_origin(west, north, cell, cell),
+        nodata=0,
+    ) as dataset:
+        dataset.write(np.broadcast_to(data, (size, size)), 1)
+
+
+def _waterside(landcover_dir, lat, lon) -> float:
+    points = np.column_stack([lat, lon])
+    return waterside_share(landcover_dir, points, np.zeros(len(lat), dtype=int), 1)[0]
+
+
+def test_waterside_is_the_share_of_the_walk_within_200_m_of_water(tmp_path: Path) -> None:
+    _write_worldcover_tile(tmp_path, 1_000)
+    north = np.array([_metres_north(100 * i + 100) for i in range(11)])
+
+    assert _waterside(tmp_path, north, np.full(11, _metres_east(900))) == 1.0
+    assert _waterside(tmp_path, north, np.full(11, 15.0)) == 0.0
+    # Four of ten points 100 m from the water, six 1 km from it.
+    beside = np.where(np.arange(10) < 4, _metres_east(900), 15.0)
+    assert _waterside(tmp_path, north[:10], beside) == pytest.approx(0.4)
+
+
+def test_waterside_is_missing_without_a_covering_tile(tmp_path: Path) -> None:
+    assert math.isnan(_waterside(tmp_path, np.array([45.0]), np.array([15.0])))
+
+
+def _route(start_m, end_m, east_m=0.0) -> np.ndarray:
+    """A walk due north along ``east_m`` east of 15°, sampled as ``twin_groups`` takes it."""
+    north = np.arange(start_m, end_m + 1, TWIN_STEP_M)
+    return np.column_stack(
+        [[_metres_north(m) for m in north], np.full(len(north), _metres_east(east_m))]
+    ).astype(np.float32)
+
+
+def test_twins_are_routes_that_each_lie_80_percent_on_the_other() -> None:
+    routes = [
+        _route(0, 3_000),
+        _route(0, 3_000)[::-1],  # the same route walked the other way
+        _route(0, 3_000, east_m=100),  # beside it, not on it
+        _route(0, 4_500),  # holds the first, but a third of it is elsewhere
+        _route(-500, 3_000),  # 86 % on the first
+        None,
+    ]
+
+    assert twin_groups(routes).tolist() == [0, 0, 2, 3, 0, 5]
+
+
 def _fixture_catalog(tmp_path: Path) -> Path:
     catalog_path = tmp_path / "catalog.sqlite"
     build_catalog(FIXTURE, catalog_path)
@@ -580,12 +650,9 @@ def test_calibration_keeps_sorted_random_pair_quantiles_per_key(tmp_path: Path) 
     directory = build_similarity(_fixture_catalog(tmp_path), tmp_path / "dem")
 
     quantiles = np.load(directory / "quantiles.npy")
-    pairs = np.load(directory / "pairs.npy")
     assert quantiles.shape == (len(CALIBRATION_KEYS), CALIBRATION_QUANTILES)
-    assert pairs.shape == (JOINT_PAIRS, len(CALIBRATION_KEYS))
     length = quantiles[CALIBRATION_KEYS.index("length")]
     assert (np.diff(length) >= 0).all()
-    assert set(np.unique(length)) <= set(np.unique(pairs[:, CALIBRATION_KEYS.index("length")]))
     # Only Ridge Walk has a Difficulty, so no pair can be scored on it.
     assert np.isnan(quantiles[CALIBRATION_KEYS.index("difficulty")]).all()
 
@@ -648,7 +715,7 @@ def test_store_refuses_facts_built_before_a_resample_with_the_same_ids(tmp_path:
 def test_calibration_is_identical_when_rerun(tmp_path: Path) -> None:
     catalog_path = _fixture_catalog(tmp_path)
     directory = build_similarity(catalog_path, tmp_path / "dem")
-    first = {name: (directory / name).read_bytes() for name in ("quantiles.npy", "pairs.npy")}
+    first = {name: (directory / name).read_bytes() for name in ("quantiles.npy",)}
 
     calibrate_similarity(catalog_path)
 
@@ -659,10 +726,8 @@ def test_quantiles_are_monotone_and_in_unit_interval(tmp_path: Path) -> None:
     directory = build_similarity(_fixture_catalog(tmp_path), tmp_path / "dem")
 
     quantiles = np.load(directory / "quantiles.npy")
-    pairs = np.load(directory / "pairs.npy")
     scored = quantiles[~np.isnan(quantiles).all(axis=1)]
     assert scored.size
     assert not np.isnan(scored).any()
     assert (np.diff(scored, axis=1) >= 0).all()
     assert ((scored >= 0) & (scored <= 1)).all()
-    assert ((pairs[~np.isnan(pairs)] >= 0) & (pairs[~np.isnan(pairs)] <= 1)).all()

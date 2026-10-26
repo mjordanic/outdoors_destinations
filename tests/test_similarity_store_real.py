@@ -23,7 +23,6 @@ from dayhike.similarity import (
     CALIBRATION_PAIRS,
     CALIBRATION_QUANTILES,
     FACT_COLUMNS,
-    JOINT_PAIRS,
     LANDCOVER_SHARE_COLUMNS,
     PROFILE_POINTS,
     calibrate_similarity,
@@ -42,7 +41,7 @@ NAN_BUDGETS = {
     "southness": 0.10,
     **{name: 0.001 for name in ("elevation_gain_m", "highest_m", "lowest_m", "climb_grade", "steepest_km_m")},
     **{name: 0.001 for name in ("paved_share", "gravel_share", "natural_share", "rock_share", "tarmac_approach_m")},
-    **{name: 0.01 for name in (*LANDCOVER_SHARE_COLUMNS, *CLIMATE_COLUMNS)},
+    **{name: 0.01 for name in (*LANDCOVER_SHARE_COLUMNS, "waterside_share", *CLIMATE_COLUMNS)},
 }
 
 
@@ -82,7 +81,7 @@ def test_store_shapes_dtypes_and_meta_versions(store: SimilarityStore, catalog_i
     assert store.facts.shape == (len(FACT_COLUMNS), n) and store.facts.dtype == np.float32
     assert store.profile.shape == (n, PROFILE_POINTS)
     assert store.quantiles.shape == (len(CALIBRATION_KEYS), CALIBRATION_QUANTILES)
-    assert store.pairs.shape == (JOINT_PAIRS, len(CALIBRATION_KEYS))
+    assert store.twins.shape == (n,) and (store.twins <= np.arange(n)).all()
     assert (meta["facts_version"], meta["calibration_version"]) == (_FACTS_VERSION, _CALIBRATION_VERSION)
     assert meta["fact_columns"] == list(FACT_COLUMNS)
     assert meta["dayhikes"] == n
@@ -91,13 +90,10 @@ def test_store_shapes_dtypes_and_meta_versions(store: SimilarityStore, catalog_i
 
 def test_calibration_quantiles_are_monotone_and_in_unit_interval(store: SimilarityStore) -> None:
     quantiles = np.asarray(store.quantiles)
-    pairs = np.asarray(store.pairs)
 
     assert [CALIBRATION_KEYS[row] for row in np.flatnonzero(np.isnan(quantiles).any(axis=1))] == []
     assert (np.diff(quantiles, axis=1) >= 0).all()
     assert ((quantiles >= 0) & (quantiles <= 1)).all()
-    scored = pairs[~np.isnan(pairs)]
-    assert ((scored >= 0) & (scored <= 1)).all()
 
 
 def test_fact_nan_budgets(store: SimilarityStore) -> None:
@@ -113,13 +109,12 @@ def test_calibration_reproduces_from_the_stored_facts(tmp_path: Path) -> None:
     built = similarity_dir_for(rc.catalog_path())
     copy = similarity_dir_for(tmp_path / "catalog.sqlite")
     copy.mkdir()
-    for name in ("ids.npy", "facts.npy", "profile.npy", "meta.json"):
+    for name in ("ids.npy", "facts.npy", "profile.npy", "twins.npy", "meta.json"):
         shutil.copyfile(built / name, copy / name)
 
     calibrate_similarity(tmp_path / "catalog.sqlite")
 
-    for name in ("quantiles.npy", "pairs.npy"):
-        assert (copy / name).read_bytes() == (built / name).read_bytes(), name
+    assert (copy / "quantiles.npy").read_bytes() == (built / "quantiles.npy").read_bytes()
 
 
 def test_store_was_built_from_this_catalog() -> None:
