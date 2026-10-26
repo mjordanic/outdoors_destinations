@@ -1,13 +1,22 @@
+import math
 import sqlite3
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from dayhike import Catalog, build_catalog, geometry_store_path_for
+from dayhike import (
+    Catalog,
+    StaleSimilarity,
+    build_catalog,
+    build_similarity,
+    geometry_store_path_for,
+    rank_dayhikes,
+)
 from dayhike.dem import (
     Bounds,
     DEFAULT_DEM_BOUNDS,
+    _elevation_stats,
     fabdem_archive_id,
     fabdem_tile_id,
     fabdem_tile_url,
@@ -86,6 +95,24 @@ def test_fetch_fabdem_skips_missing_remote_tiles(tmp_path: Path) -> None:
     assert not (tmp_path / "N45E015_FABDEM_V1-2.tif").exists()
 
 
+def test_fetch_fabdem_raises_on_a_non_404_download_error(tmp_path: Path) -> None:
+    from urllib.error import URLError
+
+    def broken_for_one(url: str, filename: str) -> None:
+        if url == fabdem_tile_url("N45E016"):
+            raise URLError("connection reset")
+        Path(filename).write_bytes(b"tif-bytes")
+
+    with pytest.raises(RuntimeError, match="N45E016"):
+        fetch_fabdem(
+            tmp_path,
+            Bounds(south=45.1, west=15.5, north=45.2, east=16.1),
+            retrieve=broken_for_one,
+        )
+
+    assert (tmp_path / "N45E015_FABDEM_V1-2.tif").read_bytes() == b"tif-bytes"
+
+
 def _write_constant_tif(
     path: Path, *, west: float, south: float, east: float, north: float, z: float
 ) -> None:
@@ -146,8 +173,6 @@ def test_sample_geometry_store_writes_dem_ele_and_catalog_feature_vectors(
     assert valley.feature_vector.elevation_max_m == pytest.approx(1400.0)
     assert valley.feature_vector.elevation_gain_m == pytest.approx(0.0)
     assert ridge.feature_vector.elevation_min_m == pytest.approx(1400.0)
-    assert catalog.scaler.feature_names[1] == "elevation_min_m"
-    assert catalog.scaler.mean[1] == pytest.approx(1400.0)
 
     store_path = geometry_store_path_for(catalog_path)
     assert not Path(str(store_path) + "-wal").exists()
@@ -171,3 +196,35 @@ def test_sample_dem_without_rasters_keeps_osm_ele(tmp_path: Path) -> None:
     assert ridge.feature_vector.elevation_min_m == 200.0
     assert ridge.feature_vector.elevation_gain_m == 450.0
     assert valley.feature_vector.elevation_min_m is None
+
+
+def test_sample_dem_removes_similarity_facts(tmp_path: Path) -> None:
+    catalog_path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, catalog_path)
+    directory = build_similarity(catalog_path, tmp_path / "dem")
+    raster_dir = tmp_path / "sample_dem"
+    raster_dir.mkdir()
+    _write_constant_tif(
+        raster_dir / "N45E015_FABDEM_V1-2.tif",
+        west=14.99, south=44.99, east=16.01, north=46.01, z=1400.0,
+    )
+    messages: list[str] = []
+
+    assert sample_dem(catalog_path, raster_dir, progress=messages.append) > 0
+
+    assert not directory.exists()
+    assert messages[-1] == (
+        f"removed stale similarity facts {directory}; run `dayhike build-similarity`"
+    )
+    with pytest.raises(StaleSimilarity, match="build-similarity"):
+        rank_dayhikes(Catalog.open(catalog_path), ["Ridge Walk"])
+
+
+def test_catalog_gain_uses_the_similarity_gain_rule() -> None:
+    # Vertices 30 m apart due north: jitter under 10 m and a one-vertex DEM spike add nothing.
+    step = 30 / 111_195
+    elevations = [400.0, 405.0, 398.0, 460.0, 402.0, 404.0, 430.0]
+    vertices = [(45 + i * step, 15.0, ele) for i, ele in enumerate(elevations)]
+
+    assert _elevation_stats(vertices) == (398.0, 460.0, pytest.approx(30.0))
+    assert _elevation_stats([(45.0, 15.0, math.nan), *vertices[:2]]) == (400.0, 405.0, 0.0)

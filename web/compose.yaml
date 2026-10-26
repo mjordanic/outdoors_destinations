@@ -1,0 +1,16 @@
+# Run the demo locally, the same image Cloud Run runs:
+#   DAYHIKE_SERVING=/abs/path/to/web-serving docker compose -f web/compose.yaml up --build
+# then open http://127.0.0.1:8080
+services:
+  web:
+    build:
+      context: ..
+      dockerfile: web/Dockerfile
+      additional_contexts:
+        serving: ${DAYHIKE_SERVING:?set DAYHIKE_SERVING to the export-serving directory}
+    image: dayhike-web
+    ports:
+      - "127.0.0.1:8080:8080"
+    # The Cloud Run limit (docs/deploy.md); raise it to watch where memory goes.
+    mem_limit: 2g
+    cpus: 1

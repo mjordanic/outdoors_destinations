@@ -37,12 +37,16 @@ def _osm(
     parking: Sequence[tuple[float, float]] = (),
     road: tuple[tuple[float, float], tuple[float, float]] | None = None,
     roles: Mapping[int, str] = {},
+    tags: Mapping[str, str] = {"name": "Shape"},
+    points: Sequence[tuple[float, float, Mapping[str, str]]] = (),
 ) -> str:
     """Nodes by one-letter name at (x_km, y_km); ways as strings of node names.
 
     ``parking`` are parking nodes at (x_km, y_km). ``road`` is a drivable road
     from one (x_km, y_km) to another, not a member. ``roles`` maps a member
-    way to its role; every other member has role "".
+    way to its role; every other member has role "". ``tags`` are the
+    relation's tags besides type and route; ``points`` are tagged nodes
+    (peaks, huts, places) at (x_km, y_km).
     """
     node_ids = {name: 100 + index for index, name in enumerate(nodes)}
     xml = '<?xml version="1.0" encoding="UTF-8"?>\n<osm version="0.6">\n'
@@ -55,6 +59,10 @@ def _osm(
             f'<node id="{node_id}" lat="{lat:.10f}" lon="{lon:.10f}" version="1">'
             '<tag k="amenity" v="parking"/></node>\n'
         )
+    for node_id, (x_km, y_km, point_tags) in enumerate(points, start=60):
+        lat, lon = _lat_lon(x_km, y_km)
+        point_xml = "".join(f'<tag k="{k}" v="{v}"/>' for k, v in point_tags.items())
+        xml += f'<node id="{node_id}" lat="{lat:.10f}" lon="{lon:.10f}" version="1">{point_xml}</node>\n'
     if road is not None:
         for node_id, point in zip((97, 98), road):
             lat, lon = _lat_lon(*point)
@@ -70,19 +78,22 @@ def _osm(
         f'<member type="way" ref="{way_id}" role="{roles.get(way_id, "")}"/>'
         for way_id in members
     )
+    relation_tags = "".join(f'<tag k="{k}" v="{v}"/>' for k, v in tags.items())
     xml += (
         f'<relation id="{RELATION_ID}" version="1">{listed}<tag k="type" v="route"/>'
-        '<tag k="route" v="hiking"/><tag k="name" v="Shape"/></relation>\n</osm>\n'
+        f'<tag k="route" v="hiking"/>{relation_tags}</relation>\n</osm>\n'
     )
     return xml
 
 
 class Walk:
     def __init__(
-        self, tmp_path: Path, nodes, ways, members, parking=(), road=None, roles={}
+        self, tmp_path: Path, nodes, ways, members, parking=(), road=None, roles={},
+        tags={"name": "Shape"}, points=(),
     ) -> None:
+        tmp_path.mkdir(exist_ok=True)
         osm = tmp_path / "shape.osm"
-        osm.write_text(_osm(nodes, ways, members, parking, road, roles))
+        osm.write_text(_osm(nodes, ways, members, parking, road, roles, tags, points))
         catalog_path = tmp_path / "catalog.sqlite"
         catalog = build_catalog(osm, catalog_path)
         self.hike = next((hike for hike in catalog.dayhikes if hike.id == RELATION_ID), None)
@@ -665,3 +676,106 @@ def test_of_two_dead_ends_near_access_the_nearest_is_the_stem(tmp_path: Path) ->
     assert walk.way(5) == _left("dead_end")
     assert walk.unconnected_m == pytest.approx(2_000.0, abs=1.0)
     assert walk.jumps == []
+
+
+# A line a-d with parking by d, so without from/to names it starts at d.
+PEAK_AT_D = (0, 6.2, {"natural": "peak", "name": "Triglav"})
+HUT_AT_A = (0.3, 0, {"tourism": "alpine_hut", "name": "Koča na Doliču"})
+
+
+@pytest.mark.parametrize(
+    "tags",
+    [
+        {"name": "Dolič - Triglav"},
+        {"name": "Path 12", "from": "Dolič", "to": "Triglav"},
+        {"name": "Path 12", "from": "Koča na Doliču", "to": "Triglav summit"},
+    ],
+)
+def test_a_line_starts_at_the_end_its_from_and_to_names(tmp_path: Path, tags) -> None:
+    walk = Walk(tmp_path, LINE, LINE_WAYS, [1, 2, 3], parking=[(0, 6.1)], tags=tags, points=[PEAK_AT_D, HUT_AT_A])
+
+    _assert_line_abcd(walk)
+
+
+@pytest.mark.parametrize(
+    "tags",
+    [
+        {"name": "Shape"},  # no from/to
+        {"name": "Ljubljana - Bled"},  # names nothing near either end
+        {"name": "Triglav - Triglav"},  # names the same end both ways
+    ],
+)
+def test_without_a_from_or_to_name_at_one_end_parking_picks_the_start(tmp_path: Path, tags) -> None:
+    walk = Walk(tmp_path, LINE, LINE_WAYS, [1, 2, 3], parking=[(0, 6.1)], tags=tags, points=[PEAK_AT_D, HUT_AT_A])
+
+    assert walk.vertices == "dcba"
+
+
+# A stem a-b from parking at a, two branches b-m-c and b-n-c, and a short spur c-d:
+# four odd nodes, so without roundtrip=yes one branch is shed and it is a line to d.
+LOLLIPOP = {"a": (0, -1), "b": (0, 3), "m": (0.6, 3.6), "c": (0, 4.2), "n": (-0.6, 3.6), "d": (0, 4.5)}
+LOLLIPOP_WAYS = {1: "ab", 2: "bmc", 3: "cnb", 4: "cd"}
+
+
+def test_roundtrip_yes_walks_the_loop_when_it_keeps_more_than_the_line(tmp_path: Path) -> None:
+    line = Walk(tmp_path / "line", LOLLIPOP, LOLLIPOP_WAYS, [1, 2, 3, 4], parking=[(0, -1.1)])
+    loop = Walk(
+        tmp_path / "loop", LOLLIPOP, LOLLIPOP_WAYS, [1, 2, 3, 4], parking=[(0, -1.1)],
+        tags={"name": "Shape", "roundtrip": "yes"},
+    )
+
+    assert line.vertices in ("abmcd", "abncd")
+    assert loop.vertices == "abmcnb"
+    assert loop.hike.length_m > line.hike.length_m
+    assert loop.trailhead == pytest.approx(_lat_lon(*LOLLIPOP["a"]))
+    assert loop.way(4) == _left("dead_end")
+
+
+def test_roundtrip_yes_keeps_a_line_whose_loop_walk_would_be_shorter(tmp_path: Path) -> None:
+    # The small variant loop mid-line: walking only the loop would drop both 3 km ends.
+    nodes = {"a": (0, 0), "b": (0, 3), "m": (0.3, 3.5), "c": (0, 4), "d": (0, 7)}
+    ways = {1: "ab", 2: "bmc", 3: "cd", 4: "bc"}
+    walk = Walk(tmp_path, nodes, ways, [1, 2, 4, 3], tags={"name": "Shape", "roundtrip": "yes"})
+
+    assert walk.vertices == "abmcd"
+
+
+def test_a_node_network_leg_is_not_a_dayhike_but_a_node_network_loop_is(tmp_path: Path) -> None:
+    leg = Walk(tmp_path / "leg", LINE, LINE_WAYS, [1, 2, 3], tags={"ref": "26-78", "network:type": "node_network"})
+    square = {"a": (0, 0), "b": (0, 2), "c": (2, 2), "d": (2, 0)}
+    loop = Walk(
+        tmp_path / "loop", square, {1: "ab", 2: "bc", 3: "cd", 4: "da"}, [1, 2, 3, 4],
+        tags={"name": "Runde", "network:type": "node_network"},
+    )
+
+    assert leg.hike is None
+    assert loop.hike is not None
+
+
+VILLAGE_BY_A = (0.5, -0.5, {"place": "village", "name": "Zadnjica"})
+TOWN_FAR = (0, -9, {"place": "town", "name": "Bovec"})  # over 5 km from the Trailhead
+
+
+@pytest.mark.parametrize(
+    ("tags", "label", "origin"),
+    [
+        ({"name": "Shape", "ref": "12"}, "Shape", "osm_name"),
+        ({"ref": "12", "from": "Dolič", "to": "Triglav"}, "12: Dolič – Triglav", "osm_ref"),
+        ({"ref": "12"}, "12 near Zadnjica", "osm_ref"),
+        ({"from": "Dolič", "to": "Triglav"}, "Dolič – Triglav", "osm_from_to"),
+        ({"from": "Dolič"}, "Hike near Zadnjica", "nearest_place"),
+        ({}, "Hike near Zadnjica", "nearest_place"),
+    ],
+)
+def test_a_relation_without_a_name_is_labelled_from_its_tags_or_nearest_place(
+    tmp_path: Path, tags, label, origin
+) -> None:
+    walk = Walk(tmp_path, LINE, LINE_WAYS, [1, 2, 3], tags=tags, points=[VILLAGE_BY_A, TOWN_FAR])
+
+    assert (walk.hike.name, walk.hike.name_origin) == (label, origin)
+
+
+def test_a_relation_with_no_place_within_5_km_keeps_its_synthetic_label(tmp_path: Path) -> None:
+    walk = Walk(tmp_path, LINE, LINE_WAYS, [1, 2, 3], tags={}, points=[TOWN_FAR])
+
+    assert (walk.hike.name, walk.hike.name_origin) == (f"relation:{RELATION_ID}", "synthetic")

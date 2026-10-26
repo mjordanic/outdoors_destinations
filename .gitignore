@@ -22,14 +22,16 @@ data/*.tif
 data/*.tiff
 data/*.pbf
 data/catalog.sqlite
+data/*.snaps.npz
 data/baseline/
+data/web-serving/
 *.geometry.sqlite
 *.sqlite-wal
 *.sqlite-shm
 *.sqlite.work
 *.sqlite.work-journal
 *.sqlite.tmp
-*.similarity_facts.pkl
+*.similarity/
 
 # env / secrets
 .env

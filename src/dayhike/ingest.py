@@ -12,16 +12,24 @@ from pathlib import Path
 import osmium
 
 from dayhike.catalog import (
+    GAP_JOIN_M,
+    NAME_ORIGIN_FROM_TO,
     NAME_ORIGIN_OSM_NAME,
     NAME_ORIGIN_OSM_REF,
+    NAME_ORIGIN_PLACE,
     NAME_ORIGIN_SYNTHETIC,
     DayHike,
     IngestReport,
+    MainWalk,
+    NamedPoints,
     _access_tree,
     _amenity_index,
     _dayhike_from_relation,
     _drop_reason,
+    _haversine_m,
     assemble_main_walk,
+    declared_start,
+    named_points,
 )
 from dayhike.osm import (
     OsmRelation,
@@ -32,7 +40,7 @@ from dayhike.osm import (
     amenity_kind,
 )
 
-INGEST_WORK_SCHEMA = 5
+INGEST_WORK_SCHEMA = 6
 INGEST_CHECKPOINT_OBJECTS = 50_000
 INGEST_PROGRESS_EVERY_OBJECTS = 100_000
 CATALOG_TAG_FILTERS = (
@@ -41,6 +49,7 @@ CATALOG_TAG_FILTERS = (
     "nwr/amenity=parking,restaurant,cafe,drinking_water,shelter,water_point",
     "nwr/natural=peak,spring",
     "nwr/man_made=water_tap",
+    "n/place=city,town,village,hamlet",
 )
 
 Progress = Callable[[str], None]
@@ -103,6 +112,8 @@ def run_ingest(
             amenity_index,
             _drop_reason,
             _dayhike_from_relation,
+            named_points(snapshot.named_points),
+            named_points(snapshot.places),
         )
         origin_counts = Counter(hike.name_origin for hike in kept)
         report = IngestReport(
@@ -113,6 +124,9 @@ def run_ingest(
             named_osm_name=origin_counts[NAME_ORIGIN_OSM_NAME],
             named_osm_ref=origin_counts[NAME_ORIGIN_OSM_REF],
             named_synthetic=origin_counts[NAME_ORIGIN_SYNTHETIC],
+            dropped_node_network=report_counts["node_network"],
+            named_from_to=origin_counts[NAME_ORIGIN_FROM_TO],
+            named_place=origin_counts[NAME_ORIGIN_PLACE],
         )
         return kept, report, work_path
     finally:
@@ -607,8 +621,15 @@ def _load_hiking_snapshot(
         loaded += 1
         if loaded % INGEST_PROGRESS_EVERY_OBJECTS == 0:
             emit_progress(progress, "assemble", f"loading relations {loaded}")
-    for _key, kind, lat, lon in conn.execute("SELECT osm_key, kind, lat, lon FROM amenities"):
-        snapshot.amenities.append((kind, ((lat, lon),)))
+    for kind, lat, lon, name in conn.execute(
+        "SELECT kind, lat, lon, json_extract(tags, '$.name') FROM amenities"
+    ):
+        if kind == "place":
+            snapshot.places.append((lat, lon, name))
+        else:
+            snapshot.amenities.append((kind, ((lat, lon),)))
+        if name:
+            snapshot.named_points.append((lat, lon, name))
         if kind == "parking":
             snapshot.access_points.append((lat, lon))
     return snapshot
@@ -620,8 +641,10 @@ def _keep_dayhikes(
     amenity_index,
     drop_reason,
     dayhike_from_relation,
+    named: NamedPoints | None = None,
+    places: NamedPoints | None = None,
 ):
-    report_counts = {"unnamed": 0, "length": 0, "network": 0}
+    report_counts = {"unnamed": 0, "length": 0, "network": 0, "node_network": 0}
     kept = []
     seen: set[int] = set()
     for relation in snapshot.relations:
@@ -630,11 +653,12 @@ def _keep_dayhikes(
         seen.add(relation.id)
         if relation.tags.get("route") != "hiking":
             continue
-        walk = assemble_main_walk(relation, snapshot.ways, snapshot.nodes, access_tree)
+        walk = _main_walk(relation, snapshot, access_tree, named)
         vertices = walk.vertices
         points = [point for _, point in vertices]
         length_m = walk.length_m
-        reason = drop_reason(relation, length_m)
+        round_trip = bool(points) and _haversine_m(*points[0], *points[-1]) <= GAP_JOIN_M
+        reason = drop_reason(relation, length_m, round_trip)
         if reason is not None:
             report_counts[reason] += 1
             continue
@@ -646,10 +670,20 @@ def _keep_dayhikes(
                 points,
                 length_m,
                 amenity_index,
+                places,
             )
         )
     kept.sort(key=lambda hike: hike.id)
     return kept, report_counts
+
+
+def _main_walk(
+    relation: OsmRelation, snapshot: OsmSnapshot, access_tree, named: NamedPoints | None
+) -> MainWalk:
+    """The relation's main walk, its line started where its from/to names say if they can."""
+    return assemble_main_walk(
+        relation, snapshot.ways, snapshot.nodes, access_tree, declared_start(relation.tags, named)
+    )
 
 
 def write_geometry_store(
@@ -659,14 +693,15 @@ def write_geometry_store(
 ) -> None:
     """Write DayHikeGeometry, member ways, and raw amenity points beside the Catalog.
 
-    Access points are the work file's parking, as in ``run_ingest``, so each
-    main walk starts at the same Trailhead as in the Catalog.
+    Access points and named points are the work file's, as in ``run_ingest``,
+    so each main walk starts at the same Trailhead as in the Catalog.
     """
     from dayhike.catalog import OSM_ATTRIBUTION
 
     snapshot = _load_hiking_snapshot(conn)
     relations = {relation.id: relation for relation in snapshot.relations}
     access_tree = _access_tree(snapshot.access_points)
+    named = named_points(snapshot.named_points)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     if tmp.exists():
@@ -718,15 +753,6 @@ def write_geometry_store(
                 longitude REAL NOT NULL,
                 tags TEXT NOT NULL
             );
-            CREATE TABLE vertex_climate (
-                dayhike_id INTEGER NOT NULL,
-                seq INTEGER NOT NULL,
-                month INTEGER NOT NULL,
-                temperature_c REAL NOT NULL,
-                precipitation_mm REAL NOT NULL,
-                solar_radiation REAL NOT NULL,
-                PRIMARY KEY (dayhike_id, seq, month)
-            );
             """
         )
         out.execute(
@@ -735,7 +761,7 @@ def write_geometry_store(
         )
         for hike in dayhikes:
             relation = relations[hike.id]
-            walk = assemble_main_walk(relation, snapshot.ways, snapshot.nodes, access_tree)
+            walk = _main_walk(relation, snapshot, access_tree, named)
             out.execute(
                 "INSERT INTO dayhikes (id, name, name_origin, length_m, unconnected_m, "
                 "difficulty, members, relation_tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",

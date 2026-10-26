@@ -11,13 +11,9 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from dayhike.catalog import (
-    Catalog,
-    Scaler,
-    feature_matrix,
-    fit_scaler_from_matrix,
-    geometry_store_path_for,
-)
+import numpy as np
+
+from dayhike.catalog import geometry_store_path_for, remove_similarity
 
 FABDEM_VERSION = "V1-2"
 FABDEM_DATASET = "https://huggingface.co/datasets/pavelzaitsau/fabdem-v12/resolve/main/tiles"
@@ -109,17 +105,21 @@ def fetch_fabdem(
     if max_workers <= 1:
         return [path for tile_id in tiles if (path := fetch_one(tile_id)) is not None]
     paths: list[Path] = []
+    failed: list[str] = []
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = [pool.submit(fetch_one, tile_id) for tile_id in tiles]
+        futures = {pool.submit(fetch_one, tile_id): tile_id for tile_id in tiles}
         for future in as_completed(futures):
             try:
                 path = future.result()
             except Exception as exc:
                 if progress is not None:
                     progress(f"dem fetch error: {exc}")
+                failed.append(futures[future])
                 continue
             if path is not None:
                 paths.append(path)
+    if failed:
+        raise RuntimeError(f"dem fetch failed for tile(s): {', '.join(sorted(failed))}")
     paths.sort()
     return paths
 
@@ -235,6 +235,7 @@ def sample_dem(
     if progress is not None:
         progress("dem sample: feature_vectors")
     _refresh_catalog_elevations(catalog_path, store_path, touched)
+    remove_similarity(catalog_path, progress)
     return sampled
 
 
@@ -244,23 +245,23 @@ def _refresh_catalog_elevations(
     store = sqlite3.connect(store_path)
     catalog = sqlite3.connect(catalog_path)
     try:
-        by_hike: dict[int, list[float]] = {dayhike_id: [] for dayhike_id in hike_ids}
+        by_hike: dict[int, list[tuple[float, float, float]]] = {dayhike_id: [] for dayhike_id in hike_ids}
         ids = list(hike_ids)
         for start in range(0, len(ids), _HIKE_IN_CHUNK):
             chunk = ids[start : start + _HIKE_IN_CHUNK]
             placeholders = ",".join("?" * len(chunk))
-            for dayhike_id, elevation in store.execute(
-                "SELECT dayhike_id, ele FROM vertices "
+            for dayhike_id, lat, lon, elevation in store.execute(
+                "SELECT dayhike_id, latitude, longitude, ele FROM vertices "
                 f"WHERE dayhike_id IN ({placeholders}) ORDER BY dayhike_id, seq",
                 chunk,
             ):
-                if elevation is None:
-                    continue
-                by_hike[int(dayhike_id)].append(float(elevation))
+                by_hike[int(dayhike_id)].append(
+                    (lat, lon, math.nan if elevation is None else float(elevation))
+                )
         updates = [
-            (*_elevation_stats(values), dayhike_id)
-            for dayhike_id, values in by_hike.items()
-            if values
+            (*_elevation_stats(vertices), dayhike_id)
+            for dayhike_id, vertices in by_hike.items()
+            if any(math.isfinite(ele) for _, _, ele in vertices)
         ]
         catalog.executemany(
             "UPDATE feature_vectors SET elevation_min_m = ?, elevation_max_m = ?, "
@@ -271,34 +272,19 @@ def _refresh_catalog_elevations(
     finally:
         store.close()
         catalog.close()
-    loaded = Catalog.open(catalog_path)
-    _rewrite_scaler(catalog_path, fit_scaler_from_matrix(feature_matrix(loaded.dayhikes)))
 
 
-def _rewrite_scaler(catalog_path: Path, scaler: Scaler) -> None:
-    connection = sqlite3.connect(catalog_path)
-    try:
-        connection.execute("DELETE FROM scaler")
-        connection.executemany(
-            "INSERT INTO scaler (position, feature_name, mean, scale) VALUES (?, ?, ?, ?)",
-            [
-                (position, name, mean, scale)
-                for position, (name, mean, scale) in enumerate(
-                    zip(scaler.feature_names, scaler.mean, scaler.scale, strict=True)
-                )
-            ],
-        )
-        connection.commit()
-    finally:
-        connection.close()
+def _elevation_stats(vertices: Sequence[tuple[float, float, float]]) -> tuple[float, float, float]:
+    """Lowest, highest and gain of (lat, lon, ele) vertices in walk order (NaN ele missing).
 
+    Gain is the similarity facts' rule: spikes dropped, a 10 m dead-band, the
+    larger of climb and descent.
+    """
+    from dayhike.similarity import elevation_gain
 
-def _elevation_stats(elevations: Sequence[float]) -> tuple[float, float, float]:
-    gain_m = 0.0
-    for start, end in zip(elevations, elevations[1:]):
-        if end > start:
-            gain_m += end - start
-    return min(elevations), max(elevations), gain_m
+    lat, lon, ele = np.array(vertices, dtype=float).T
+    known = ele[np.isfinite(ele)]
+    return float(known.min()), float(known.max()), elevation_gain(lat, lon, ele)
 
 
 def _format_corner(lat_sw: int, lon_sw: int) -> str:

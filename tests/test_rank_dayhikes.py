@@ -1,19 +1,29 @@
+import sqlite3
 import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from dayhike import (
+    MEASURE_NAMES,
     AmbiguousSeedName,
     Catalog,
+    StaleSimilarity,
     UnknownSeedName,
     build_catalog,
-    feature_matrix,
+    build_similarity,
     rank_dayhikes,
-    rank_scaled_rows,
-    scale_matrix,
+)
+from dayhike.similarity import (
+    CORE_MEASURES,
+    DEFAULT_WEIGHTS,
+    FACT_COLUMNS,
+    calibrate_similarity,
+    score_rows,
+    similarity_dir_for,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
@@ -21,123 +31,210 @@ RIDGE_WALK_ID = 1001
 VALLEY_PATH_ID = 1002
 
 
-def test_one_seed_returns_the_other_in_band_dayhike_and_omits_the_seed(
-    tmp_path: Path,
-) -> None:
-    catalog = build_catalog(FIXTURE, tmp_path / "catalog.sqlite")
+def _catalog(tmp_path: Path, lengths: dict[int, float] | None = None) -> Catalog:
+    """The fixture Catalog with its similarity facts, optionally other lengths."""
+    path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, path)
+    if lengths:
+        connection = sqlite3.connect(path)
+        connection.executemany(
+            "UPDATE feature_vectors SET length_m = ? WHERE dayhike_id = ?",
+            [(length, dayhike_id) for dayhike_id, length in lengths.items()],
+        )
+        connection.commit()
+        connection.close()
+    build_similarity(path, tmp_path / "dem")
+    return Catalog.open(path)
+
+
+# Ridge Walk 10 km; the others at 9, 5 and 2 km.
+LENGTHS = {1002: 5_000.0, 1003: 9_000.0, 1007: 2_000.0}
+
+
+def test_one_seed_ranks_every_other_dayhike_and_omits_the_seed(tmp_path: Path) -> None:
+    catalog = _catalog(tmp_path)
 
     ranking = rank_dayhikes(catalog, ["Ridge Walk"])
 
-    names = [item.dayhike.name for item in ranking.items]
-    assert VALLEY_PATH_ID in {item.dayhike.id for item in ranking.items}
-    assert RIDGE_WALK_ID not in {item.dayhike.id for item in ranking.items}
-    assert "Ridge Walk" not in names
-    assert ranking.items
-    assert -1.0 <= ranking.items[0].score <= 1.0
-
-
-def test_scaler_persists_and_ranking_matches_after_catalog_open(tmp_path: Path) -> None:
-    path = tmp_path / "catalog.sqlite"
-    built = build_catalog(FIXTURE, path)
-    opened = Catalog.open(path)
-
-    first = rank_dayhikes(built, ["Ridge Walk"])
-    second = rank_dayhikes(opened, ["Ridge Walk"])
-
-    assert opened.scaler == built.scaler
-    assert [item.dayhike.id for item in first.items] == [item.dayhike.id for item in second.items]
-    assert [item.score for item in first.items] == [item.score for item in second.items]
-
-
-def test_two_seeds_score_is_max_not_mean(tmp_path: Path) -> None:
-    catalog = build_catalog(FIXTURE, tmp_path / "catalog.sqlite")
-    ridge = next(hike for hike in catalog.dayhikes if hike.id == RIDGE_WALK_ID)
-    valley = next(hike for hike in catalog.dayhikes if hike.id == VALLEY_PATH_ID)
-    near_ridge = replace(ridge, id=9001, name="Near Ridge")
-    midpoint = replace(
-        valley,
-        id=9002,
-        name="Mid Path",
-        length_m=(ridge.length_m + valley.length_m) / 2,
-        feature_vector=replace(
-            valley.feature_vector,
-            length_m=(ridge.feature_vector.length_m + valley.feature_vector.length_m) / 2,
-            elevation_min_m=ridge.feature_vector.elevation_min_m,
-            elevation_max_m=ridge.feature_vector.elevation_max_m,
-            elevation_gain_m=ridge.feature_vector.elevation_gain_m,
-            difficulty_ordinal=1,
-        ),
+    ids = [item.dayhike.id for item in ranking.items]
+    assert sorted(ids) == sorted(hike.id for hike in catalog.dayhikes if hike.id != RIDGE_WALK_ID)
+    assert all(0.0 <= item.score <= 1.0 for item in ranking.items)
+    assert [item.score for item in ranking.items] == sorted(
+        (item.score for item in ranking.items), reverse=True
     )
-    catalog = replace(catalog, dayhikes=(ridge, valley, near_ridge, midpoint))
-
-    only_ridge = _scores(rank_dayhikes(catalog, ["Ridge Walk"]))
-    only_valley = _scores(rank_dayhikes(catalog, ["Valley Path"]))
-    both = rank_dayhikes(catalog, ["Ridge Walk", "Valley Path"])
-    both_scores = _scores(both)
-
-    assert [item.dayhike.name for item in both.items][0] == "Near Ridge"
-    assert both_scores["Near Ridge"] > both_scores["Mid Path"]
-    for name in ("Near Ridge", "Mid Path"):
-        expected_max = max(only_ridge[name], only_valley[name])
-        expected_mean = (only_ridge[name] + only_valley[name]) / 2
-        assert both_scores[name] == pytest.approx(expected_max)
-        assert both_scores[name] != pytest.approx(expected_mean)
 
 
-def test_ranking_is_deterministic_across_two_build_and_rank_runs(tmp_path: Path) -> None:
-    first = rank_dayhikes(build_catalog(FIXTURE, tmp_path / "a.sqlite"), ["Ridge Walk"])
-    second = rank_dayhikes(build_catalog(FIXTURE, tmp_path / "b.sqlite"), ["Ridge Walk"])
+def test_one_weighted_measure_orders_by_that_measure(tmp_path: Path) -> None:
+    catalog = _catalog(tmp_path, LENGTHS)
+
+    ranking = rank_dayhikes(catalog, ["Ridge Walk"], {"length": 100})
+
+    assert [item.dayhike.id for item in ranking.items] == [1003, 1002, 1007]
+
+
+def test_a_measure_at_weight_0_is_excluded(tmp_path: Path) -> None:
+    catalog = _catalog(tmp_path, LENGTHS)
+
+    only_length = rank_dayhikes(catalog, ["Ridge Walk"], {"length": 100})
+    with_zero = rank_dayhikes(catalog, ["Ridge Walk"], {"length": 100, "hut_along": 0})
+
+    assert with_zero == only_length
+
+
+def test_weights_shift_the_ranking_between_measures(tmp_path: Path) -> None:
+    # PS-1 (1007) is the shortest, but it shares Ridge Walk's Peak.
+    catalog = _catalog(tmp_path, LENGTHS)
+    facts_path = similarity_dir_for(catalog.path) / "facts.npy"
+    facts = np.load(facts_path)
+    facts[FACT_COLUMNS.index("peak_summited"), 3] = 1.0
+    np.save(facts_path, facts)
+    calibrate_similarity(catalog.path)
+    catalog = Catalog.open(catalog.path)
+
+    by_length = rank_dayhikes(catalog, ["Ridge Walk"], {"length": 100, "peak_summited": 10})
+    by_peak = rank_dayhikes(catalog, ["Ridge Walk"], {"length": 10, "peak_summited": 100})
+
+    assert by_length.items[0].dayhike.id == 1003
+    assert by_peak.items[0].dayhike.id == 1007
+
+
+def test_allowed_ids_restrict_the_candidates(tmp_path: Path) -> None:
+    catalog = _catalog(tmp_path, LENGTHS)
+
+    ranking = rank_dayhikes(
+        catalog, ["Ridge Walk"], {"length": 100}, allowed_ids={1002, 1007, RIDGE_WALK_ID}
+    )
+
+    assert [item.dayhike.id for item in ranking.items] == [1002, 1007]
+    full = rank_dayhikes(catalog, ["Ridge Walk"], {"length": 100})
+    full = {item.dayhike.id: item.score for item in full.items}
+    assert [item.score for item in ranking.items] == [full[1002], full[1007]]
+
+
+def test_limit_keeps_the_best_items_with_the_same_scores(tmp_path: Path) -> None:
+    catalog = _catalog(tmp_path, LENGTHS)
+
+    full = rank_dayhikes(catalog, ["Ridge Walk"], {"length": 100})
+    best = rank_dayhikes(catalog, ["Ridge Walk"], {"length": 100}, limit=2)
+
+    assert best.items == full.items[:2]
+
+
+def test_several_seeds_score_the_best_seed_not_the_mean(tmp_path: Path) -> None:
+    catalog = _catalog(tmp_path, LENGTHS)
+    store = catalog.similarity
+    weights = {"length": 100.0}
+    rows = np.array([2, 3])  # relation:1003 and PS-1
+
+    ridge, _ = score_rows(store, [0], rows, weights)
+    valley, _ = score_rows(store, [1], rows, weights)
+    both, _ = score_rows(store, [0, 1], rows, weights)
+
+    assert both == pytest.approx(np.maximum(ridge, valley))
+    assert both != pytest.approx((ridge + valley) / 2)
+    ranking = rank_dayhikes(catalog, ["Ridge Walk", "Valley Path"], weights)
+    scores = {item.dayhike.id: item.score for item in ranking.items}
+    assert scores[1003] == pytest.approx(both[0])
+
+
+def test_score_is_the_similarity(tmp_path: Path) -> None:
+    catalog = _catalog(tmp_path, LENGTHS)
+    weights = dict.fromkeys(MEASURE_NAMES, 100.0)
+
+    ranking = rank_dayhikes(catalog, ["Ridge Walk"], weights)
+
+    rows = np.searchsorted(catalog.similarity.ids, [item.dayhike.id for item in ranking.items])
+    similarity, _ = score_rows(catalog.similarity, [0], rows, weights)
+    assert [item.score for item in ranking.items] == pytest.approx(similarity.tolist())
+
+
+def test_no_weights_weigh_the_core_measures(tmp_path: Path) -> None:
+    catalog = _catalog(tmp_path, LENGTHS)
+
+    assert {name for name, weight in DEFAULT_WEIGHTS.items() if weight > 0} == set(CORE_MEASURES)
+    assert rank_dayhikes(catalog, ["Ridge Walk"]) == rank_dayhikes(
+        catalog, ["Ridge Walk"], dict.fromkeys(CORE_MEASURES, 100)
+    )
+
+
+def test_only_the_best_of_twins_is_ranked_and_no_twin_of_a_seed(tmp_path: Path) -> None:
+    catalog = _catalog(tmp_path, LENGTHS)
+    twins_path = similarity_dir_for(catalog.path) / "twins.npy"
+    # Valley Path (row 1) is Ridge Walk's Twin; PS-1 (row 3) relation:1003's.
+    np.save(twins_path, np.array([0, 0, 2, 2]))
+    catalog = Catalog.open(catalog.path)
+
+    ranking = rank_dayhikes(catalog, ["Ridge Walk"], {"length": 100})
+
+    assert [item.dayhike.id for item in ranking.items] == [1003]
+
+
+def test_ranking_is_deterministic_across_two_builds(tmp_path: Path) -> None:
+    first = rank_dayhikes(_catalog(tmp_path / "a"), ["Ridge Walk"])
+    second = rank_dayhikes(_catalog(tmp_path / "b"), ["Ridge Walk"])
 
     assert [(item.dayhike.id, item.score) for item in first.items] == [
         (item.dayhike.id, item.score) for item in second.items
     ]
 
 
-def test_rank_scaled_rows_matches_rank_dayhikes(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "weights, message",
+    [
+        ({"huts": 50}, "unknown Measure"),
+        ({"length": 101}, "0-100"),
+        ({"length": -1}, "0-100"),
+        ({"length": 0, "profile": 0}, "above 0"),
+    ],
+)
+def test_bad_weights_fail(tmp_path: Path, weights, message) -> None:
+    catalog = _catalog(tmp_path)
+
+    with pytest.raises(ValueError, match=message):
+        rank_dayhikes(catalog, ["Ridge Walk"], weights)
+
+
+def test_query_month_must_be_1_to_12_and_needs_sampled_climate(tmp_path: Path) -> None:
+    catalog = _catalog(tmp_path)
+
+    for month in (0, 13, True):
+        with pytest.raises(ValueError, match="QueryMonth"):
+            rank_dayhikes(catalog, ["Ridge Walk"], month=month)
+    with pytest.raises(ValueError, match="climate has not been sampled"):
+        rank_dayhikes(catalog, ["Ridge Walk"], month=7)
+
+
+def test_ranking_needs_the_similarity_facts(tmp_path: Path) -> None:
     catalog = build_catalog(FIXTURE, tmp_path / "catalog.sqlite")
-    ranking = rank_dayhikes(catalog, ["Ridge Walk"])
-    scaled = scale_matrix(feature_matrix(catalog.dayhikes), catalog.scaler)
-    rows = rank_scaled_rows(
-        [hike.id for hike in catalog.dayhikes],
-        [hike.name for hike in catalog.dayhikes],
-        scaled,
-        {RIDGE_WALK_ID},
-    )
 
-    assert [(item.dayhike.id, item.dayhike.name, item.score) for item in ranking.items] == [
-        row for row in rows
-    ]
+    with pytest.raises(StaleSimilarity, match="build-similarity"):
+        rank_dayhikes(catalog, ["Ridge Walk"])
 
 
-def test_unknown_seed_still_fails_via_name_resolution(tmp_path: Path) -> None:
+def test_ingest_removes_similarity_facts_built_for_the_old_catalog(
+    tmp_path: Path,
+) -> None:
+    catalog_path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, catalog_path)
+    directory = build_similarity(catalog_path, tmp_path / "dem")
+    messages: list[str] = []
+
+    catalog = build_catalog(FIXTURE, catalog_path, progress=messages.append)
+
+    assert not directory.exists()
+    assert f"removed stale similarity facts {directory}; run `dayhike build-similarity`" in messages
+    with pytest.raises(StaleSimilarity, match="build-similarity"):
+        rank_dayhikes(catalog, ["Ridge Walk"])
+
+
+def test_unknown_seed_fails_via_name_resolution(tmp_path: Path) -> None:
     catalog = build_catalog(FIXTURE, tmp_path / "catalog.sqlite")
 
     with pytest.raises(UnknownSeedName, match="Unknown Ridge"):
         rank_dayhikes(catalog, ["Unknown Ridge"])
 
 
-def test_cli_prints_id_name_and_score(tmp_path: Path) -> None:
-    path = tmp_path / "catalog.sqlite"
-    build_catalog(FIXTURE, path)
-
-    result = subprocess.run(
-        [sys.executable, "-m", "dayhike", "rank", "--catalog", str(path), "Ridge Walk"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 0, result.stderr
-    lines = result.stdout.strip().splitlines()
-    ids = [line.split("\t")[0] for line in lines]
-    names = [line.split("\t")[1] for line in lines]
-    assert str(RIDGE_WALK_ID) not in ids
-    assert str(VALLEY_PATH_ID) in ids
-    assert "Valley Path" in names
-    assert all(-1.0 <= float(line.split("\t")[2]) <= 1.0 for line in lines)
-
-
-def test_ambiguous_seed_still_fails_via_name_resolution(tmp_path: Path) -> None:
+def test_ambiguous_seed_fails_via_name_resolution(tmp_path: Path) -> None:
     catalog = build_catalog(FIXTURE, tmp_path / "catalog.sqlite")
     catalog = replace(
         catalog,
@@ -148,5 +245,43 @@ def test_ambiguous_seed_still_fails_via_name_resolution(tmp_path: Path) -> None:
         rank_dayhikes(catalog, ["Shared Path"])
 
 
-def _scores(ranking) -> dict[str, float]:
-    return {item.dayhike.name: item.score for item in ranking.items}
+def _cli(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, "-m", "dayhike", *args], check=False, capture_output=True, text=True
+    )
+
+
+def test_cli_builds_similarity_and_prints_id_name_and_score(tmp_path: Path) -> None:
+    path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, path)
+
+    built = _cli("build-similarity", "--catalog", str(path), "--dem", str(tmp_path / "dem"))
+    assert built.returncode == 0, built.stderr
+    assert built.stdout.strip() == str(tmp_path / "catalog.similarity")
+    recalibrated = _cli("build-similarity", "--catalog", str(path), "--calibrate-only")
+    assert recalibrated.returncode == 0, recalibrated.stderr
+
+    result = _cli("rank", "--catalog", str(path), "--weight", "length=100", "Ridge Walk")
+    limited = _cli("rank", "--catalog", str(path), "--limit", "1", "Ridge Walk")
+
+    assert result.returncode == 0, result.stderr
+    lines = [line.split("\t") for line in result.stdout.strip().splitlines()]
+    assert str(RIDGE_WALK_ID) not in [line[0] for line in lines]
+    assert "Valley Path" in [line[1] for line in lines]
+    assert all(0.0 <= float(line[2]) <= 1.0 for line in lines)
+    assert limited.returncode == 0, limited.stderr
+    assert len(limited.stdout.strip().splitlines()) == 1
+
+
+def test_cli_rejects_a_bad_weight(tmp_path: Path) -> None:
+    path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, path)
+    build_similarity(path, tmp_path / "dem")
+
+    malformed = _cli("rank", "--catalog", str(path), "--weight", "length", "Ridge Walk")
+    unknown = _cli("rank", "--catalog", str(path), "--weight", "huts=50", "Ridge Walk")
+
+    assert malformed.returncode == 2
+    assert "MEASURE=WEIGHT" in malformed.stderr
+    assert unknown.returncode == 2
+    assert "unknown Measure" in unknown.stderr

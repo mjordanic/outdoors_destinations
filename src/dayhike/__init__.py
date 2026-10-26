@@ -1,6 +1,6 @@
 from dayhike.dem import Bounds, fetch_fabdem, sample_dem
 from dayhike.landcover import fetch_worldcover, sample_landcover
-from dayhike.climate import fetch_worldclim, sample_climate
+from dayhike.climate import fetch_chelsa, sample_climate
 from dayhike.catalog import (
     AmbiguousSeedName,
     AmenityFact,
@@ -18,16 +18,19 @@ from dayhike.catalog import (
     Trailhead,
     UnknownSeedName,
     build_catalog,
-    cosine_similarity,
     dayhike_label,
-    feature_matrix,
     filter_by_drive_time,
-    fit_scaler_from_matrix,
     geometry_store_path_for,
-    rank_dayhikes,
-    rank_scaled_rows,
     resolve_seed,
-    scale_matrix,
+)
+from dayhike.similarity import (
+    MEASURE_NAMES,
+    SimilarityStore,
+    StaleSimilarity,
+    build_similarity,
+    calibrate_similarity,
+    rank_dayhikes,
+    similarity_dir_for,
 )
 from dayhike.valhalla import ValhallaMatrixClient
 
@@ -42,28 +45,29 @@ __all__ = [
     "DriveTime",
     "FeatureVector",
     "IngestReport",
+    "MEASURE_NAMES",
     "Origin",
     "RankedDayHike",
     "Ranking",
     "SeedNameError",
+    "SimilarityStore",
+    "StaleSimilarity",
     "Trailhead",
     "UnknownSeedName",
     "ValhallaMatrixClient",
     "build_catalog",
-    "cosine_similarity",
+    "build_similarity",
+    "calibrate_similarity",
     "dayhike_label",
-    "feature_matrix",
     "fetch_fabdem",
-    "fetch_worldclim",
+    "fetch_chelsa",
     "fetch_worldcover",
     "filter_by_drive_time",
-    "fit_scaler_from_matrix",
     "geometry_store_path_for",
     "rank_dayhikes",
-    "rank_scaled_rows",
     "resolve_seed",
     "sample_climate",
     "sample_dem",
     "sample_landcover",
-    "scale_matrix",
+    "similarity_dir_for",
 ]
