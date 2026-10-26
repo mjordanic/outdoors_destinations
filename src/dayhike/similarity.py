@@ -192,7 +192,7 @@ MEASURES = (
 )
 MEASURE_NAMES = tuple(measure.name for measure in MEASURES)
 # On by default: the Measures that told good matches from poor ones for blind
-# judges (ADR-0015); the others are off until the Hiker weights them.
+# judges (ADR-0016); the others are off until the Hiker weights them.
 CORE_MEASURES = (
     "length", "elevation_gain", "highest", "lowest", "profile", "landcover",
     "temperature", "precipitation", "solar_radiation", "waterside", "climb_grade",

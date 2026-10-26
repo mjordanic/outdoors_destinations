@@ -336,7 +336,7 @@ left out or at 0 is excluded. Each Measure score is **calibrated** first (the
 share of random DayHike pairs that score lower on it), then the weighted mean
 over the Measures both DayHikes have is the similarity (ADR-0013). Several
 Seeds: a candidate's similarity is its **best** Seed's, not the mean. Of
-DayHikes that follow the same route (**Twins**, ADR-0015) only the best is
+DayHikes that follow the same route (**Twins**, ADR-0016) only the best is
 listed, and none of a Seed's Twins.
 
 The facts come from `dayhike build-similarity`, which writes them once with the
@@ -368,7 +368,7 @@ Prints DayHike id, name, and score (tab-separated), best first:
 With no `--weight` the eleven core Measures weigh 100 and the others are off:
 `length`, `elevation_gain`, `highest`, `lowest`, `profile`, `landcover`,
 `temperature`, `precipitation`, `solar_radiation`, `waterside`,
-`climb_grade` (ADR-0015). Each `--weight MEASURE=WEIGHT` names one Measure;
+`climb_grade` (ADR-0016). Each `--weight MEASURE=WEIGHT` names one Measure;
 the ones not named are excluded. `--limit N` prints only the
 best N (every DayHike is still scored).
 
@@ -798,7 +798,7 @@ are **not** DayHikes. A missing OSM `name` is kept: the Seed label is `name`,
 else `ref` with `from – to` or "near" the nearest place, else `from – to`, else
 "Hike near" the nearest place (a named city, town, village or hamlet within
 5 km of the Trailhead), else `relation:{id}`, with `name_origin` recording
-which (ADR-0015). A line starts at the end its `from`/`to` names point to when
+which (ADR-0017). A line starts at the end its `from`/`to` names point to when
 they name one end (else parking decides); with `roundtrip=yes` a route with a
 loop is walked as a loop when that keeps as much of it.
 If the process
