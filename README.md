@@ -1595,6 +1595,7 @@ DAYHIKE_REAL_DATA=1 uv run pytest -m real_data
 | `test_drive_time_real.py` | rebuilt highway tiles: tile counts, Valhalla 3.5.1, city routes within 2–5% of the reference, `nearby --highways` sets from Munich, Oslo and Lisbon (Jaccard ≥ 0.999, times within a minute), the same six Trailheads with no highway |
 | `test_serving_export_real.py` | the serving export: same ids and Trailheads as the store, a byte copy of it; data ≤ 300 MB and tiles ≤ 900 MB; simplified lines within 10 m (+1.5 m polyline rounding) on 2,000 DayHikes; no rasters or per-vertex climate; every attribution; golden rankings from the export; the tile tar is the built one |
 | `test_real_data.py` | the main walk, WaterSources, the similarity facts, notebook 05 (which reads `data/` of its checkout and must see the Catalog under test) |
+| `test_notebooks_real.py` | every notebook runs top to bottom in a Jupyter kernel on `data/` of its checkout (skipped when `DAYHIKE_DATA_DIR` points elsewhere); `02`, `04`, `04a` and `05` read the real Catalog, `01` and `03` the fixture; about 2 minutes |
 
 ## Clean rebuild
 
@@ -1726,17 +1727,19 @@ uv run jupyter notebook notebooks/01_raw_data_and_ingestion.ipynb
 | Notebook | What you will find |
 | --- | --- |
 | [`notebooks/01_raw_data_and_ingestion.ipynb`](notebooks/01_raw_data_and_ingestion.ipynb) | OSM fixture vs a real snapshot, ingest stages, keep/drop, resume after a kill. |
-| [`notebooks/02_catalog.ipynb`](notebooks/02_catalog.ipynb) | SQLite Catalog + GeometryStore: schema (including LandCover fractions, regime climate, and `climate_months`), pandas, maps, DayHike objects. Uses `data/catalog.sqlite` when present. |
+| [`notebooks/02_catalog.ipynb`](notebooks/02_catalog.ipynb) | SQLite Catalog + GeometryStore: schema (including LandCover fractions, regime climate, and `climate_months`), sanity checks, pandas, maps, DayHike objects, NameOrigin counts with examples. Uses `data/catalog.sqlite` when present. |
 | [`notebooks/03_ranking.ipynb`](notebooks/03_ranking.ipynb) | Production ranking on the fixture: the facts and Measures, one Seed, Measure weights, max-not-mean, unknown Seeds, stubbed DriveTime, Ranking with no month and with QueryMonth 7, LandCover order. |
-| [`notebooks/04_rank_feature_lab.ipynb`](notebooks/04_rank_feature_lab.ipynb) | Sandbox to try a new fact as a calibrated Measure, ablate Measures with weight 0, and compare order to production. |
-| [`notebooks/04a_geometry.ipynb`](notebooks/04a_geometry.ipynb) | GeometryStore tables as GeoPandas: vertices, amenities, DayHike lines, member ways, leftover `in_chain`, per-vertex land-cover classes and hike-level climate (synthetic rasters, no download). |
-| [`notebooks/05_similarity.ipynb`](notebooks/05_similarity.ipynb) | Measures and Calibration on the real Catalog (ADR-0013), from `data/catalog.similarity/`: every fact's spread over Europe, each Measure's raw random-pair scale against its calibrated one, named similar/dissimilar pairs per group of Measures with `verify` PASS/FAIL lines, identity/symmetry checks for every Measure and a reversed-direction rebuild of the geometry facts, one Seed ranked against all of Europe under a facilities-heavy and an altitude-heavy weight set, a RoundTrip and a steep Seed with and without weight on those Measures, two Seeds under the maximum rule, how often each Measure is missing, and one verification summary. Needs the local Catalog after `build-similarity`; stops with an error without it. |
+| [`notebooks/04_rank_feature_lab.ipynb`](notebooks/04_rank_feature_lab.ipynb) | Sandbox to try a new fact as a calibrated Measure against the default weights, ablate Measures with weight 0, compare order to production, and map the Seed and its neighbours with their amenity points. |
+| [`notebooks/04a_geometry.ipynb`](notebooks/04a_geometry.ipynb) | GeometryStore tables as GeoPandas for the DayHikes in one `REGION` box (default the Julian Alps): vertices, amenities, DayHike lines and their orientation, member ways and Leftovers by reason, way-tag trail character, LandCover and climate per DayHike, an elevation profile in metres next to the stored ProfileShape. On the fixture: per-vertex land-cover classes and hike-level climate from synthetic rasters (no download). |
+| [`notebooks/05_similarity.ipynb`](notebooks/05_similarity.ipynb) | Measures and Calibration on the real Catalog (ADR-0013), from `data/catalog.similarity/`: every fact's spread over Europe, each Measure's raw random-pair scale against its calibrated one, named similar/dissimilar pairs per group of Measures with `verify` PASS/FAIL lines, identity/symmetry checks for every Measure and a reversed-direction rebuild of the geometry facts, one Seed ranked against all of Europe under a facilities-heavy and an altitude-heavy weight set and the default weights, a RoundTrip and a steep Seed with and without weight on those Measures, two Seeds under the maximum rule, Twins and how a Ranking drops them, how often each Measure is missing, and one verification summary. Needs the local Catalog after `build-similarity`; stops with an error without it. |
 
 `01` and `03` always rebuild the committed OSM fixture (no Geofabrik, no live
 Valhalla). `02`, `04` and `04a` open your local Catalog and GeometryStore
 when those files exist; tests force the fixture so they do not load a Europe
 Catalog. `05` needs the local Catalog and does not run on the fixture;
-`tests/test_real_data.py` runs it.
+`tests/test_real_data.py` runs it. `tests/test_notebooks_real.py` runs all six
+on the local Catalog (see [Tests](#tests)). Outputs are not committed: run a
+notebook to see its tables and figures.
 
 ## Attribution
 
