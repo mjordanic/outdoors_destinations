@@ -92,6 +92,41 @@ def test_an_excluded_measure_counts_as_weight_zero(client: TestClient) -> None:
     assert [r["score"] for r in excluded["results"]] == [r["score"] for r in only_length["results"]]
 
 
+def test_pair_scores_any_two_hikes_like_a_ranking_would(client: TestClient) -> None:
+    weights = {"length": 100, "hut_along": 40}
+    ranked = client.post("/api/rank", json={"seed": RIDGE_WALK_ID, "weights": weights}).json()["results"]
+    other = ranked[-1]
+
+    body = client.post("/api/pair", json={"a": RIDGE_WALK_ID, "b": other["id"], "weights": weights}).json()
+
+    assert (body["a"], body["b"]) == (RIDGE_WALK_ID, other["id"])
+    assert body["score"] == pytest.approx(other["score"])
+    assert body["measures"] == other["measures"]
+    assert body["weights"] == weights
+
+
+@pytest.mark.parametrize(
+    ("body", "status"),
+    [
+        ({"a": RIDGE_WALK_ID, "b": 999}, 404),
+        ({"a": RIDGE_WALK_ID, "b": 1002, "weights": {"length": 0}}, 400),
+        ({"a": RIDGE_WALK_ID, "b": 1002, "excluded": ["nonsense"]}, 400),
+        ({"a": RIDGE_WALK_ID, "b": 1002, "month": 0}, 422),
+        ({"a": RIDGE_WALK_ID, "b": 1002, "month": 7}, 400),
+        ({"a": RIDGE_WALK_ID}, 422),
+    ],
+)
+def test_pair_refuses_bad_queries(client: TestClient, body: dict, status: int) -> None:
+    assert client.post("/api/pair", json=body).status_code == status
+
+
+def test_info_gives_the_trailhead_box_for_the_swapped_coordinates_warning(client: TestClient) -> None:
+    south, west, north, east = client.get("/api/info").json()["coverage"]
+
+    assert south <= 45.0 <= north and west <= 15.0 <= east
+    assert south < north and west <= east
+
+
 @pytest.mark.parametrize(
     ("body", "status"),
     [

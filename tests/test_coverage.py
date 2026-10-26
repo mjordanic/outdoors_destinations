@@ -1,9 +1,11 @@
 import json
 from pathlib import Path
 
+import shapely
+
 from dayhike import build_catalog
 from dayhike.cli import main
-from dayhike.coverage import COVERED, UNCOVERED, coverage_map
+from dayhike.coverage import COVERED, UNCOVERED, VIEW, coverage_map
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
 
@@ -51,3 +53,9 @@ def test_cli_prints_covered_countries(tmp_path: Path, capsys) -> None:
     assert main(["coverage-map", "--catalog", str(catalog), "--countries", str(countries), "--out", str(tmp_path / "m.svg")]) == 0
     assert (tmp_path / "m.svg").is_file()
     assert capsys.readouterr().out == ""  # 4 Trailheads are under the default 10
+
+
+def test_the_map_frame_holds_the_atlantic_islands() -> None:
+    frame = shapely.box(*VIEW)
+    # Flores (Azores, the westernmost hikes) and Ponta do Pargo (Madeira, the southernmost).
+    assert frame.contains(shapely.points([(-31.2, 39.45), (-17.25, 32.65)])).all()

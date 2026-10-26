@@ -11,6 +11,8 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+import numpy as np
+
 from dayhike.catalog import geometry_store_path_for, remove_similarity
 
 FABDEM_VERSION = "V1-2"
@@ -243,23 +245,23 @@ def _refresh_catalog_elevations(
     store = sqlite3.connect(store_path)
     catalog = sqlite3.connect(catalog_path)
     try:
-        by_hike: dict[int, list[float]] = {dayhike_id: [] for dayhike_id in hike_ids}
+        by_hike: dict[int, list[tuple[float, float, float]]] = {dayhike_id: [] for dayhike_id in hike_ids}
         ids = list(hike_ids)
         for start in range(0, len(ids), _HIKE_IN_CHUNK):
             chunk = ids[start : start + _HIKE_IN_CHUNK]
             placeholders = ",".join("?" * len(chunk))
-            for dayhike_id, elevation in store.execute(
-                "SELECT dayhike_id, ele FROM vertices "
+            for dayhike_id, lat, lon, elevation in store.execute(
+                "SELECT dayhike_id, latitude, longitude, ele FROM vertices "
                 f"WHERE dayhike_id IN ({placeholders}) ORDER BY dayhike_id, seq",
                 chunk,
             ):
-                if elevation is None:
-                    continue
-                by_hike[int(dayhike_id)].append(float(elevation))
+                by_hike[int(dayhike_id)].append(
+                    (lat, lon, math.nan if elevation is None else float(elevation))
+                )
         updates = [
-            (*_elevation_stats(values), dayhike_id)
-            for dayhike_id, values in by_hike.items()
-            if values
+            (*_elevation_stats(vertices), dayhike_id)
+            for dayhike_id, vertices in by_hike.items()
+            if any(math.isfinite(ele) for _, _, ele in vertices)
         ]
         catalog.executemany(
             "UPDATE feature_vectors SET elevation_min_m = ?, elevation_max_m = ?, "
@@ -272,12 +274,17 @@ def _refresh_catalog_elevations(
         catalog.close()
 
 
-def _elevation_stats(elevations: Sequence[float]) -> tuple[float, float, float]:
-    gain_m = 0.0
-    for start, end in zip(elevations, elevations[1:]):
-        if end > start:
-            gain_m += end - start
-    return min(elevations), max(elevations), gain_m
+def _elevation_stats(vertices: Sequence[tuple[float, float, float]]) -> tuple[float, float, float]:
+    """Lowest, highest and gain of (lat, lon, ele) vertices in walk order (NaN ele missing).
+
+    Gain is the similarity facts' rule: spikes dropped, a 10 m dead-band, the
+    larger of climb and descent.
+    """
+    from dayhike.similarity import elevation_gain
+
+    lat, lon, ele = np.array(vertices, dtype=float).T
+    known = ele[np.isfinite(ele)]
+    return float(known.min()), float(known.max()), elevation_gain(lat, lon, ele)
 
 
 def _format_corner(lat_sw: int, lon_sw: int) -> str:

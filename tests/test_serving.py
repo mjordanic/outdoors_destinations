@@ -6,12 +6,14 @@ import numpy as np
 import pytest
 
 from dayhike import Catalog, build_catalog, build_similarity, rank_dayhikes
+from dayhike import serving
 from dayhike.catalog import Origin
 from dayhike.serving import (
     ELEVATION_POINTS,
     ServingData,
     ServingExportError,
     _fold,
+    _relevance,
     decode_polyline,
     encode_polyline,
     export_serving,
@@ -45,7 +47,7 @@ def data(export: Path) -> ServingData:
 def test_export_writes_a_complete_directory(export: Path) -> None:
     meta = json.loads((export / "meta.json").read_text())
 
-    assert meta["format"] == 1
+    assert meta["format"] == 2
     assert meta["dayhikes"] == 4
     assert meta["attribution"]["osm"] == "© OpenStreetMap contributors"
     assert meta["drive_time"] is False
@@ -72,6 +74,9 @@ def test_export_keeps_the_route_the_true_metre_profile_and_the_measured_points(
     along = [point["along_m"] for point in ridge["points"] if point["where"] == "line"]
     assert along == sorted(along)
     assert set(ridge["facts"]) == set(FACT_COLUMNS)
+    # Climb and descent follow the drawn direction; the gain fact is the larger.
+    assert (ridge["climb_m"], ridge["descent_m"]) == (450, 250)
+    assert ridge["facts"]["elevation_gain_m"] == pytest.approx(450)
     assert ridge["facts"]["hut_along"] == 1.0
     assert len(ridge["profile_shape"]) == 64
 
@@ -81,6 +86,7 @@ def test_a_dayhike_without_elevation_has_no_profile(data: ServingData) -> None:
 
     assert valley["elevation"] is None
     assert valley["facts"]["elevation_gain_m"] is None
+    assert (valley["climb_m"], valley["descent_m"]) == (None, None)
 
 
 def test_export_refuses_a_similarity_store_for_other_dayhikes(
@@ -139,6 +145,7 @@ def test_search_finds_prefix_then_contains_ignoring_case_and_accents(data: Servi
     hit = data.search("ridge")[0]
     assert hit["trailhead"] == [45.0, 15.0]
     assert hit["length_m"] == pytest.approx(10_000, abs=1)
+    assert (hit["climb_m"], hit["descent_m"]) == (450, 250)
 
 
 def test_search_folds_letters_without_a_decomposition_to_plain_letters() -> None:
@@ -148,11 +155,38 @@ def test_search_folds_letters_without_a_decomposition_to_plain_letters() -> None
     assert _fold("Ærø Œuvre Iğdır") == _fold("aero oeuvre igdir")
 
 
+def test_search_matches_every_word_in_any_order(data: ServingData) -> None:
+    assert [hit["name"] for hit in data.search("walk ridge")] == ["Ridge Walk"]
+    assert [hit["name"] for hit in data.search("  RIDGE   wa ")] == ["Ridge Walk"]
+    assert data.search("ridge path") == []
+
+
+def test_search_folds_german_ue_oe_ae_spellings() -> None:
+    assert _fold("Müller-Hütte") == _fold("Mueller-Huette")
+    assert _fold("Schönau Bärental") == _fold("Schoenau Baerental")
+
+
+def test_search_relevance_puts_exact_then_prefix_then_word_starts_first() -> None:
+    assert _relevance("triglav", "triglav", ["triglav"]) == 0
+    assert _relevance("triglav north face", "triglav", ["triglav"]) == 1
+    assert _relevance("dolic - triglav", "triglav dolic", ["triglav", "dolic"]) == 2
+    assert _relevance("pod triglavom", "riglav", ["riglav"]) == 3
+
+
 def test_search_prefix_matches_come_first(data: ServingData) -> None:
     # "path" is inside "Valley Path"; "ps" starts "PS-1" and is inside no other name.
     names = [hit["name"] for hit in data.search("p")] + [hit["name"] for hit in data.search("pa")]
     assert names == ["Valley Path"]
     assert [hit["name"] for hit in data.search("ps")] == ["PS-1"]
+
+
+def test_search_scans_a_bounded_number_of_occurrences_of_a_word_of_two_letters_or_more(
+    data: ServingData, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert [hit["name"] for hit in data.search("al")] == ["Ridge Walk", "Valley Path"]
+    assert data.search("r w") == []
+    monkeypatch.setattr(serving, "SEARCH_SCAN_CAP", 1)
+    assert [hit["name"] for hit in data.search("al")] == ["Ridge Walk"]
 
 
 def test_rank_matches_rank_dayhikes_and_reports_every_measure(

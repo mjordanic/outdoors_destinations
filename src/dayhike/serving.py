@@ -8,7 +8,8 @@ similarity directory live. It writes a directory a server memory-maps:
   in the similarity ``ids`` order.
 - ``hikes.sqlite``: per DayHike its name, the DayHikeGeometry simplified to
   about ``LINE_TOLERANCE_M`` (Google polyline), its ElevationProfile in true
-  metres at ``ELEVATION_POINTS`` equal steps, and the amenity points the
+  metres at ``ELEVATION_POINTS`` equal steps, the metres it climbs and
+  descends in the walking direction, and the amenity points the
   Measures count (along the line, Peaks around it, at the Trailhead) as
   zlib-compressed JSON (``POINT_COLUMNS`` per point).
 - ``snaps.npz``: highway snaps of every Trailhead (``HighwaySnaps``), when a
@@ -24,9 +25,11 @@ hike detail and Ranking all read the memory-mapped arrays and the SQLite file.
 from __future__ import annotations
 
 import bisect
+import itertools
 import json
 import math
 import os
+import re
 import shutil
 import sqlite3
 import time
@@ -62,23 +65,28 @@ from dayhike.similarity import (
     SimilarityStore,
     StaleSimilarity,
     _calibration_key,
+    _check_climate,
     _densify,
+    _measure_weights,
     _resample,
     _step_m,
     calibrate,
+    climb_and_descent,
     measure_scores,
     nearest_on_line,
     rank_rows,
+    score_rows,
 )
 
 Progress = Callable[[str], None]
 
-SERVING_FORMAT = 1
+SERVING_FORMAT = 2
 SERVING_ROOT = "/data"  # where the container finds the export (web/Dockerfile)
 LINE_TOLERANCE_M = 10.0
 ELEVATION_POINTS = 128
 TRAILHEAD_NEAREST = 3  # parking and restaurant/cafe points kept per Trailhead
 VALHALLA_CACHE_BYTES = 256 * 1024 * 1024  # mjolnir.max_cache_size; the build default is 1 GB
+SEARCH_SCAN_CAP = 5_000  # occurrences of the scanned word a search looks at, so short queries stay fast
 _HIKE_CHUNK = 2_000
 _SIMILARITY_FILES = ("ids.npy", "facts.npy", "profile.npy", "twins.npy", "quantiles.npy", "meta.json")
 
@@ -211,7 +219,8 @@ def _write_hikes(
             "PRAGMA journal_mode = OFF;"
             "CREATE TABLE hikes ("
             " id INTEGER PRIMARY KEY, name TEXT NOT NULL, name_origin TEXT NOT NULL,"
-            " sac_scale TEXT, walk_m REAL, line TEXT, elevation BLOB, points BLOB NOT NULL)"
+            " sac_scale TEXT, walk_m REAL, line TEXT, elevation BLOB, climb_m REAL, descent_m REAL,"
+            " points BLOB NOT NULL)"
         )
         for start in range(0, len(hikes), _HIKE_CHUNK):
             chunk = hikes[start : start + _HIKE_CHUNK]
@@ -219,7 +228,7 @@ def _write_hikes(
             rows = []
             for dayhike_id, name, name_origin, sac_scale, th_lat, th_lon in chunk:
                 points = _trailhead_points(trailhead_kinds, th_lat, th_lon)
-                line = elevation = walk_m = None
+                line = elevation = walk_m = climb_m = descent_m = None
                 walk = walks.get(dayhike_id)
                 if walk is not None and len(walk[0]) >= 2:
                     lat, lon, ele = walk
@@ -228,13 +237,16 @@ def _write_hikes(
                     profile = _resample(lat, lon, ele, points=ELEVATION_POINTS)
                     if profile is not None:
                         elevation = np.round(profile).astype("<i2").tobytes()
+                        climb_m, descent_m = (round(v) for v in climb_and_descent(lat, lon, ele))
                     along = [p for kinds, radius in line_kinds for p in _line_points(kinds, lat, lon, radius)]
                     points = sorted(along, key=lambda point: point[4]) + points
-                rows.append((dayhike_id, name, name_origin, sac_scale, walk_m, line, elevation, points))
+                rows.append(
+                    (dayhike_id, name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points)
+                )
             _name_points(geo, rows)
             db.executemany(
-                "INSERT INTO hikes VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                [(*row[:7], zlib.compress(json.dumps(row[7], ensure_ascii=False).encode())) for row in rows],
+                "INSERT INTO hikes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [(*row[:9], zlib.compress(json.dumps(row[9], ensure_ascii=False).encode())) for row in rows],
             )
             if progress is not None:
                 progress(f"serving export: {min(start + _HIKE_CHUNK, len(hikes))}/{len(hikes)} DayHikes")
@@ -336,7 +348,7 @@ def _trailhead_points(kinds: Mapping[str, _Kinds], lat: float, lon: float) -> li
 
 def _name_points(geo: sqlite3.Connection, rows: list[tuple]) -> None:
     """Replace each point's rowid with its OSM name and ``ele`` tag (or None)."""
-    wanted = sorted({point[6] for row in rows for point in row[7]})
+    wanted = sorted({point[6] for row in rows for point in row[-1]})
     tags: dict[int, dict] = {}
     for start in range(0, len(wanted), 900):
         batch = wanted[start : start + 900]
@@ -346,7 +358,7 @@ def _name_points(geo: sqlite3.Connection, rows: list[tuple]) -> None:
         ):
             tags[rowid] = json.loads(text)
     for row in rows:
-        for point in row[7]:
+        for point in row[-1]:
             found = tags.get(point[6], {})
             point[6] = found.get("name")
             point[7] = _number(found.get("ele"))
@@ -476,10 +488,10 @@ class ServingData:
         self.trailheads = np.load(self.directory / "trailheads.npy", mmap_mode="r")
         self._db_uri = f"file:{self.directory / 'hikes.sqlite'}?mode=ro&immutable=1"
         with self._db() as db:
-            folded = [_fold(name) for (name,) in db.execute("SELECT name FROM hikes ORDER BY id")]
+            self._folded = [_fold(name) for (name,) in db.execute("SELECT name FROM hikes ORDER BY id")]
         # One string of every folded name between newlines: str.find walks it in C.
-        self._haystack = "\n" + "\n".join(folded) + "\n"
-        self._starts = np.cumsum([1] + [len(name) + 1 for name in folded[:-1]])
+        self._haystack = "\n" + "\n".join(self._folded) + "\n"
+        self._starts = np.cumsum([1] + [len(name) + 1 for name in self._folded[:-1]])
 
     def _db(self) -> sqlite3.Connection:
         return sqlite3.connect(self._db_uri, uri=True)
@@ -491,37 +503,50 @@ class ServingData:
         return row
 
     def search(self, query: str, limit: int = 20) -> list[dict]:
-        """DayHikes whose name starts with the query, then those containing it.
+        """DayHikes whose name holds every word of the query, in any order.
 
-        Matching ignores case and accents. A number also finds that DayHike id.
+        Matching ignores case and accents and folds German ue/oe/ae to u/o/a.
+        The best come first: the exact name, then names starting with the
+        query, then names where every word starts a word, then the rest;
+        shorter names first within each. A number also finds that DayHike id.
+        Only the first SEARCH_SCAN_CAP occurrences, in id order, of the
+        longest word (two letters or more) are considered.
         """
         needle = _fold(query.strip())
+        words = needle.split()
         rows: list[int] = []
         if needle.isdigit():
             try:
                 rows.append(self.row_of(int(needle)))
             except KeyError:
                 pass
-        if len(needle) >= 2:
-            for pattern in ("\n" + needle, needle):
-                at = self._haystack.find(pattern)
-                while at != -1 and len(rows) < limit:
-                    row = int(np.searchsorted(self._starts, at + (pattern[0] == "\n"), side="right")) - 1
-                    if row not in rows:
-                        rows.append(row)
-                    if row + 1 >= len(self._starts):
-                        break
-                    at = self._haystack.find(pattern, int(self._starts[row + 1]) - 1)
+        scan = max(words, key=len, default="")
+        if len(scan) >= 2:
+            found = [
+                row
+                for row in self._rows_containing(scan)
+                if row not in rows and all(word in self._folded[row] for word in words)
+            ]
+            found.sort(key=lambda row: (_relevance(self._folded[row], needle, words), len(self._folded[row]), row))
+            rows += found
         return self._summaries(rows[:limit])
+
+    def _rows_containing(self, word: str) -> list[int]:
+        """Rows whose name holds ``word``, in id order, from its first SEARCH_SCAN_CAP occurrences."""
+        hits = itertools.islice(re.finditer(re.escape(word), self._haystack), SEARCH_SCAN_CAP)
+        offsets = np.fromiter((hit.start() for hit in hits), dtype=np.int64)
+        return np.unique(np.searchsorted(self._starts, offsets, side="right") - 1).tolist()
 
     def _summaries(self, rows: list[int]) -> list[dict]:
         names = self._names([int(self.store.ids[row]) for row in rows])
         return [
             {
                 "id": int(self.store.ids[row]),
-                "name": names[int(self.store.ids[row])],
+                "name": names[int(self.store.ids[row])][0],
                 "length_m": _value(self.store.column("length_m")[row]),
                 "elevation_gain_m": _value(self.store.column("elevation_gain_m")[row]),
+                "climb_m": names[int(self.store.ids[row])][1],
+                "descent_m": names[int(self.store.ids[row])][2],
                 "highest_m": _value(self.store.column("highest_m")[row]),
                 "difficulty_rank": _value(self.store.column("difficulty_rank")[row]),
                 "trailhead": [float(v) for v in self.trailheads[row]],
@@ -529,20 +554,22 @@ class ServingData:
             for row in rows
         ]
 
-    def _names(self, ids: list[int]) -> dict[int, str]:
+    def _names(self, ids: list[int]) -> dict[int, tuple[str, float | None, float | None]]:
+        """Name, climb and descent (metres, walking direction) per DayHike id."""
         with self._db() as db:
-            return dict(
-                db.execute(
-                    f"SELECT id, name FROM hikes WHERE id IN ({','.join('?' * len(ids))})", ids
+            return {
+                dayhike_id: (name, climb_m, descent_m)
+                for dayhike_id, name, climb_m, descent_m in db.execute(
+                    f"SELECT id, name, climb_m, descent_m FROM hikes WHERE id IN ({','.join('?' * len(ids))})", ids
                 )
-            )
+            }
 
     def detail(self, dayhike_id: int) -> dict:
         """Everything the page plots for one DayHike, and the facts behind every Measure."""
         row = self.row_of(dayhike_id)
         with self._db() as db:
-            name, name_origin, sac_scale, walk_m, line, elevation, points = db.execute(
-                "SELECT name, name_origin, sac_scale, walk_m, line, elevation, points "
+            name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points = db.execute(
+                "SELECT name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points "
                 "FROM hikes WHERE id = ?",
                 (dayhike_id,),
             ).fetchone()
@@ -554,6 +581,8 @@ class ServingData:
             "sac_scale": sac_scale,
             "trailhead": [float(v) for v in self.trailheads[row]],
             "walk_m": walk_m,
+            "climb_m": climb_m,
+            "descent_m": descent_m,
             "line": line,
             "elevation": None
             if profile is None
@@ -581,18 +610,36 @@ class ServingData:
         seed = self.row_of(seed_id)
         allowed = None if allowed_rows is None else self.store.ids[allowed_rows]
         rows, scores = rank_rows(self.store, [seed], weights, month=month, allowed_ids=allowed, limit=limit)
+        results = self._summaries(rows.tolist())
+        for result, score, measures in zip(results, scores, self._measures(seed, rows, month)):
+            result["score"] = float(score)
+            result["measures"] = measures
+        return results
+
+    def pair(
+        self, a_id: int, b_id: int, weights: Mapping[str, float], *, month: int | None = None
+    ) -> dict:
+        """How alike two DayHikes are: the score a Ranking would show for b
+        with a as the Seed (None when no weighted Measure is scored), and
+        every Measure's calibrated and raw score.
+        """
+        a, b = self.row_of(a_id), self.row_of(b_id)
+        chosen = _measure_weights(weights)
+        _check_climate(self.store, month)
+        rows = np.array([b])
+        similarity, _ = score_rows(self.store, [a], rows, chosen, month=month)
+        return {"a": a_id, "b": b_id, "score": _value(similarity[0]), "measures": self._measures(a, rows, month)[0]}
+
+    def _measures(self, seed: int, rows: np.ndarray, month: int | None) -> list[dict]:
+        """Per row, every Measure's calibrated ``score`` and ``raw`` score against the Seed."""
         measures = {}
         for measure in MEASURES:
             raw = measure_scores(self.store, measure, seed, rows, month=month)
             measures[measure.name] = (raw, calibrate(self.store, _calibration_key(measure, month), raw))
-        results = self._summaries(rows.tolist())
-        for i, (result, score) in enumerate(zip(results, scores)):
-            result["score"] = float(score)
-            result["measures"] = {
-                name: {"score": _value(calibrated[i]), "raw": _value(raw[i])}
-                for name, (raw, calibrated) in measures.items()
-            }
-        return results
+        return [
+            {name: {"score": _value(calibrated[i]), "raw": _value(raw[i])} for name, (raw, calibrated) in measures.items()}
+            for i in range(len(rows))
+        ]
 
     def reachable(
         self, origin: Origin, max_hours: float, client: MatrixClient
@@ -622,10 +669,23 @@ _PLAIN_LETTERS = str.maketrans(
 
 
 def _fold(text: str) -> str:
-    """Casefolded, accents removed: what search compares."""
+    """Casefolded, accents removed, ue/oe/ae as u/o/a (Mueller is Müller): what search compares."""
     plain = text.replace("\n", " ").casefold().translate(_PLAIN_LETTERS)
     decomposed = unicodedata.normalize("NFKD", plain)
-    return "".join(c for c in decomposed if not unicodedata.combining(c)).casefold()
+    bare = "".join(c for c in decomposed if not unicodedata.combining(c)).casefold()
+    return bare.replace("ue", "u").replace("oe", "o").replace("ae", "a")
+
+
+def _relevance(name: str, needle: str, words: list[str]) -> int:
+    """0 the exact name, 1 starts with the query, 2 every word starts a word, else 3."""
+    if name == needle:
+        return 0
+    if name.startswith(needle):
+        return 1
+    name_words = re.split(r"\W+", name)
+    if all(any(part.startswith(word) for part in name_words) for word in words):
+        return 2
+    return 3
 
 
 def _value(value: float) -> float | None:

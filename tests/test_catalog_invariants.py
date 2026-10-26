@@ -57,7 +57,8 @@ def test_schema_is_exactly_the_current_schema(catalog: sqlite3.Connection) -> No
 def test_ingest_report_is_consistent_and_matches_the_snapshot(catalog: sqlite3.Connection) -> None:
     report = json.loads(_one(catalog, "SELECT value FROM catalog_meta WHERE key = 'ingest_report'"))
 
-    assert report["kept"] == report["named_osm_name"] + report["named_osm_ref"] + report["named_synthetic"]
+    origins = ("named_osm_name", "named_osm_ref", "named_from_to", "named_place", "named_synthetic")
+    assert report["kept"] == sum(report.get(origin, 0) for origin in origins)
     assert report["kept"] == _one(catalog, "SELECT COUNT(*) FROM dayhikes")
     if rc.same_snapshot():
         assert report == rc.RECORDED_INGEST_REPORT

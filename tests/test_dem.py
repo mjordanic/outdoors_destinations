@@ -1,3 +1,4 @@
+import math
 import sqlite3
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from dayhike import (
 from dayhike.dem import (
     Bounds,
     DEFAULT_DEM_BOUNDS,
+    _elevation_stats,
     fabdem_archive_id,
     fabdem_tile_id,
     fabdem_tile_url,
@@ -216,3 +218,13 @@ def test_sample_dem_removes_similarity_facts(tmp_path: Path) -> None:
     )
     with pytest.raises(StaleSimilarity, match="build-similarity"):
         rank_dayhikes(Catalog.open(catalog_path), ["Ridge Walk"])
+
+
+def test_catalog_gain_uses_the_similarity_gain_rule() -> None:
+    # Vertices 30 m apart due north: jitter under 10 m and a one-vertex DEM spike add nothing.
+    step = 30 / 111_195
+    elevations = [400.0, 405.0, 398.0, 460.0, 402.0, 404.0, 430.0]
+    vertices = [(45 + i * step, 15.0, ele) for i, ele in enumerate(elevations)]
+
+    assert _elevation_stats(vertices) == (398.0, 460.0, pytest.approx(30.0))
+    assert _elevation_stats([(45.0, 15.0, math.nan), *vertices[:2]]) == (400.0, 405.0, 0.0)

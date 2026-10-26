@@ -3,8 +3,10 @@ from __future__ import annotations
 import heapq
 import json
 import math
+import re
 import shutil
 import sqlite3
+import unicodedata
 from collections import Counter
 from dataclasses import dataclass
 from functools import cached_property
@@ -29,10 +31,14 @@ GAP_JOIN_M = 50  # member-way ends this close join two pieces with a straight ga
 LOOP_SHARE = 0.5  # a piece whose closed loop is at least this share of its length is a loop
 STEM_ACCESS_RADIUS_M = 200  # a loop's dead end ending this close to parking is its stem
 STEM_MIN_LENGTH_M = 1_000  # else a loop's only dead end at least this long is its stem
+END_NAME_RADIUS_M = 1_000  # a named point this close to a line end can name that end
+PLACE_RADIUS_M = 5_000  # a label without name, ref or from/to names the nearest place this close
 OSM_ATTRIBUTION = "© OpenStreetMap contributors"
 AMENITY_KINDS = ("hut", "parking", "restaurant_cafe", "drinking_water")
 NAME_ORIGIN_OSM_NAME = "osm_name"
 NAME_ORIGIN_OSM_REF = "osm_ref"
+NAME_ORIGIN_FROM_TO = "osm_from_to"
+NAME_ORIGIN_PLACE = "nearest_place"
 NAME_ORIGIN_SYNTHETIC = "synthetic"
 LANDCOVER_FEATURE_NAMES = (
     "tree_fraction",
@@ -152,6 +158,9 @@ class IngestReport:
     named_osm_name: int = 0
     named_osm_ref: int = 0
     named_synthetic: int = 0
+    dropped_node_network: int = 0
+    named_from_to: int = 0
+    named_place: int = 0
 
 
 @dataclass(frozen=True)
@@ -313,6 +322,9 @@ class Catalog:
                     named_osm_name=report_data.get("named_osm_name", 0),
                     named_osm_ref=report_data.get("named_osm_ref", 0),
                     named_synthetic=report_data.get("named_synthetic", 0),
+                    dropped_node_network=report_data.get("dropped_node_network", 0),
+                    named_from_to=report_data.get("named_from_to", 0),
+                    named_place=report_data.get("named_place", 0),
                 ),
                 attribution=meta["attribution"],
             )
@@ -363,14 +375,30 @@ def remove_similarity(
         progress(f"removed stale similarity facts {directory}; run `dayhike build-similarity`")
 
 
-def dayhike_label(relation_id: int, tags: Mapping[str, str]) -> tuple[str, str]:
-    """Return the Seed label and NameOrigin for a hiking relation."""
+def dayhike_label(
+    relation_id: int, tags: Mapping[str, str], place: str | None = None
+) -> tuple[str, str]:
+    """Return the Seed label and NameOrigin for a hiking relation.
+
+    OSM ``name``; else ``ref``, followed by the ``from`` and ``to`` tags
+    ("R32: Aa – Bb") or else by the nearest ``place`` ("R32 near Cc"); else
+    "Aa – Bb" from the ``from`` and ``to`` tags; else "Hike near Cc"; else
+    ``relation:{id}``.
+    """
     name = (tags.get("name") or "").strip()
     if name:
         return name, NAME_ORIGIN_OSM_NAME
+    start, end = ((tags.get(key) or "").strip() for key in ("from", "to"))
+    from_to = f"{start} – {end}" if start and end else None
     ref = (tags.get("ref") or "").strip()
     if ref:
-        return ref, NAME_ORIGIN_OSM_REF
+        if from_to:
+            return f"{ref}: {from_to}", NAME_ORIGIN_OSM_REF
+        return (f"{ref} near {place}" if place else ref), NAME_ORIGIN_OSM_REF
+    if from_to:
+        return from_to, NAME_ORIGIN_FROM_TO
+    if place:
+        return f"Hike near {place}", NAME_ORIGIN_PLACE
     return f"relation:{relation_id}", NAME_ORIGIN_SYNTHETIC
 
 
@@ -514,11 +542,14 @@ def _osm_paths(osm_path: Path | str | Sequence[Path | str]) -> list[Path]:
     return [Path(path) for path in osm_path]
 
 
-def _drop_reason(relation: OsmRelation, length_m: float) -> str | None:
+def _drop_reason(relation: OsmRelation, length_m: float, round_trip: bool = False) -> str | None:
     if _is_network_superroute(relation, length_m):
         return "network"
     if length_m < MIN_LENGTH_M or length_m > MAX_LENGTH_M:
         return "length"
+    # A node-network route is one leg between two numbered junctions, not an outing.
+    if relation.tags.get("network:type") == "node_network" and not round_trip:
+        return "node_network"
     return None
 
 
@@ -540,6 +571,7 @@ def _dayhike_from_relation(
     points: Sequence[tuple[float, float]],
     length_m: float,
     amenity_index: _AmenityIndex | None,
+    places: NamedPoints | None = None,
 ) -> DayHike:
     # The main walk starts at the Trailhead.
     latitude, longitude = points[0]
@@ -548,7 +580,8 @@ def _dayhike_from_relation(
     elevation_min_m, elevation_max_m, elevation_gain_m = _elevation_stats(
         vertices, snapshot.node_elevations
     )
-    name, name_origin = dayhike_label(relation.id, relation.tags)
+    place = None if places is None else places.nearest(latitude, longitude, PLACE_RADIUS_M)
+    name, name_origin = dayhike_label(relation.id, relation.tags, place)
     return DayHike(
         id=relation.id,
         name=name,
@@ -569,6 +602,85 @@ def _dayhike_from_relation(
         ),
         name_origin=name_origin,
     )
+
+
+class NamedPoints:
+    """Named OSM points (places, huts, peaks, ...) with a haversine BallTree.
+
+    They name a DayHike's area (the nearest place) and its line ends (a
+    ``from`` or ``to`` name, see ``declared_start``).
+    """
+
+    def __init__(self, points: Sequence[tuple[float, float, str]]) -> None:
+        self.names = [_name_words(name) for _, _, name in points]
+        self.labels = [name for _, _, name in points]
+        self.tree = BallTree(np.radians([(lat, lon) for lat, lon, _ in points]), metric="haversine")
+        # How many points use each word: the rarest word of a from/to name identifies it.
+        self.word_counts = Counter(word for words in self.names for word in set(words))
+
+    def nearest(self, lat: float, lon: float, radius_m: float) -> str | None:
+        """Name of the nearest point within ``radius_m``, or None."""
+        (distance,), (index,) = self.tree.query(np.radians([[lat, lon]]), k=1)
+        return self.labels[int(index[0])] if distance[0] * EARTH_RADIUS_M <= radius_m else None
+
+    def names_end(self, text: str, lat: float, lon: float) -> bool:
+        """Whether a point within ``END_NAME_RADIUS_M`` has the rarest word of ``text``."""
+        words = [word for word in set(_name_words(text)) if len(word) >= 4 and self.word_counts[word]]
+        if not words:
+            return False
+        rarest = min(words, key=lambda word: (self.word_counts[word], word))
+        (near,) = self.tree.query_radius(np.radians([[lat, lon]]), r=END_NAME_RADIUS_M / EARTH_RADIUS_M)
+        return any(rarest in self.names[int(index)] for index in near)
+
+
+def _name_words(text: str) -> list[str]:
+    plain = unicodedata.normalize("NFKD", text.casefold())
+    return re.findall(r"\w+", "".join(c for c in plain if not unicodedata.combining(c)))
+
+
+def named_points(points: Sequence[tuple[float, float, str]]) -> NamedPoints | None:
+    return NamedPoints(points) if points else None
+
+
+_NAME_DASH = re.compile(r"\s+[-–—]\s+")
+
+
+def declared_ends(tags: Mapping[str, str]) -> tuple[str, str] | None:
+    """The (from, to) names a hiking relation declares: its ``from`` and ``to``
+    tags, else a name of exactly two parts joined by a spaced dash ("Dolič - Triglav").
+    """
+    start, end = ((tags.get(key) or "").strip() for key in ("from", "to"))
+    if start and end:
+        return start, end
+    parts = _NAME_DASH.split((tags.get("name") or "").strip())
+    return (parts[0], parts[1]) if len(parts) == 2 and all(parts) else None
+
+
+EndChoice = Callable[[tuple[float, float], tuple[float, float]], "tuple[float, float] | None"]
+
+
+def declared_start(tags: Mapping[str, str], named: NamedPoints | None) -> EndChoice | None:
+    """Which of a line's two ends its ``from``/``to`` names make the start, or None.
+
+    An end is the start when ``from`` names it and not the other end, or
+    ``to`` names the other end and not it; when the names point both ways
+    or nowhere, there is no choice and parking decides (``_pick_trailhead``).
+    """
+    ends = declared_ends(tags)
+    if ends is None or named is None:
+        return None
+    start_name, end_name = ends
+
+    def choose(a: tuple[float, float], b: tuple[float, float]) -> tuple[float, float] | None:
+        from_a, from_b = named.names_end(start_name, *a), named.names_end(start_name, *b)
+        to_a, to_b = named.names_end(end_name, *a), named.names_end(end_name, *b)
+        starts_a = (from_a and not from_b) or (to_b and not to_a)
+        starts_b = (from_b and not from_a) or (to_a and not to_b)
+        if starts_a == starts_b:
+            return None
+        return a if starts_a else b
+
+    return choose
 
 
 def _access_tree(
@@ -679,6 +791,8 @@ def _elevation_stats(
     vertices: Sequence[tuple[int, tuple[float, float]]],
     node_elevations: Mapping[int, float],
 ) -> tuple[float | None, float | None, float | None]:
+    from dayhike.similarity import elevation_gain
+
     elevations = [
         node_elevations[node_id]
         for node_id, _ in vertices
@@ -687,11 +801,10 @@ def _elevation_stats(
     if not elevations:
         # OSM ele absent: missing, not zero. sample-dem fills this from FABDEM.
         return None, None, None
-    gain_m = 0.0
-    for start, end in zip(elevations, elevations[1:]):
-        if end > start:
-            gain_m += end - start
-    return min(elevations), max(elevations), gain_m
+    # The same gain rule as the similarity facts (spikes dropped, 10 m dead-band).
+    lat, lon = np.array([point for _, point in vertices], dtype=float).T
+    ele = np.array([node_elevations.get(node_id, np.nan) for node_id, _ in vertices], dtype=float)
+    return min(elevations), max(elevations), elevation_gain(lat, lon, ele)
 
 
 LEFTOVER_ROLES = frozenset(
@@ -743,6 +856,7 @@ def assemble_main_walk(
     ways: Mapping[int, OsmWay],
     nodes: Mapping[int, tuple[float, float]],
     access_tree: BallTree | None,
+    declared: EndChoice | None = None,
 ) -> MainWalk:
     """The one place member ways become a DayHike's line (ADR-0012).
 
@@ -753,12 +867,14 @@ def assemble_main_walk(
     dead ends and then shortcuts, is at least ``LOOP_SHARE`` of its length is
     a loop: it walks that loop plus at most one stem (see ``_stem``), from the
     stem's far end or else from its vertex nearest ``access_tree``, in
-    member-order direction.
+    member-order direction. With OSM ``roundtrip=yes`` any smaller loop is
+    walked that way too when that walk is at least as long as the line's.
     Otherwise it is a line: it sheds its shortest dead ends until two remain,
     then its shortest odd-junction cycle paths until it can be walked once.
     When neither can be shed, it sheds the smaller side of a bridge (see
     ``_shed_bridge_side``) and both steps run again. It is walked from the end
-    ``_pick_trailhead`` chooses with ``access_tree``.
+    its ``from``/``to`` names choose (``declared``, see ``declared_start``),
+    else from the end ``_pick_trailhead`` chooses with ``access_tree``.
     """
     listed: list[int] = []  # way id per member-way listing in the snapshot
     leftovers: list[str | None] = []
@@ -795,20 +911,18 @@ def assemble_main_walk(
     alive |= set(range(len(edges), len(edges) + len(tip_gaps)))
     edges += tip_gaps
     loop = _loop(edges, alive)
-    if loop is None:
-        while True:
-            _shed_dead_ends(edges, alive, removed)
-            _shed_shortcuts(edges, alive, removed, max_odd=2)
-            if not _shed_bridge_side(edges, alive, removed):
-                break
-        segments = _segments(edges, _walk(edges, alive, nodes, access_tree))
+    if loop is not None:
+        segments = _loop_main(edges, alive, removed, loop, nodes, access_tree)
     else:
-        core, shortcuts = loop
-        for index in shortcuts:
-            alive.discard(index)
-            removed[index] = "shortcut"
-        circuit = _segments(edges, _walk(edges, core, nodes, None))
-        segments = _loop_walk(edges, alive, core, circuit, nodes, access_tree, removed)
+        line_alive, line_removed = set(alive), dict(removed)
+        segments = _line_walk(edges, line_alive, line_removed, nodes, access_tree, declared)
+        # OSM roundtrip=yes: walk any loop the piece has when that keeps as much as the line.
+        loop = _loop(edges, alive, 0.0) if relation.tags.get("roundtrip") == "yes" else None
+        loop_segments = None if loop is None else _loop_main(edges, alive, removed, loop, nodes, access_tree)
+        if loop_segments is not None and _segments_m(loop_segments, nodes) >= _segments_m(segments, nodes):
+            segments = loop_segments
+        else:
+            alive, removed = line_alive, line_removed
     for index in alive - {index for index, _ in segments}:
         removed[index] = "shortcut"
 
@@ -856,6 +970,43 @@ def assemble_main_walk(
         walked,
         walk_order,
     )
+
+
+def _line_walk(
+    edges: Sequence[_Edge],
+    alive: set[int],
+    removed: dict[int, str],
+    nodes: Mapping[int, tuple[float, float]],
+    access_tree: BallTree | None,
+    declared: EndChoice | None,
+) -> list[_Segment]:
+    # Shed until the piece is a line walkable once, then walk it from its start.
+    while True:
+        _shed_dead_ends(edges, alive, removed)
+        _shed_shortcuts(edges, alive, removed, max_odd=2)
+        if not _shed_bridge_side(edges, alive, removed):
+            break
+    return _segments(edges, _walk(edges, alive, nodes, access_tree, declared))
+
+
+def _loop_main(
+    edges: Sequence[_Edge],
+    alive: set[int],
+    removed: dict[int, str],
+    loop: tuple[set[int], set[int]],
+    nodes: Mapping[int, tuple[float, float]],
+    access_tree: BallTree | None,
+) -> list[_Segment]:
+    core, shortcuts = loop
+    for index in shortcuts:
+        alive.discard(index)
+        removed[index] = "shortcut"
+    circuit = _segments(edges, _walk(edges, core, nodes, None))
+    return _loop_walk(edges, alive, core, circuit, nodes, access_tree, removed)
+
+
+def _segments_m(segments: Sequence[_Segment], nodes: Mapping[int, tuple[float, float]]) -> float:
+    return sum(_linestring_length_m([nodes[node_id] for node_id in node_ids]) for _, node_ids in segments)
 
 
 def _split_ways(
@@ -1038,12 +1189,14 @@ def _shed_dead_ends(edges: Sequence[_Edge], alive: set[int], removed: dict[int, 
             removed[index] = "dead_end"
 
 
-def _loop(edges: Sequence[_Edge], alive: set[int]) -> tuple[set[int], set[int]] | None:
+def _loop(
+    edges: Sequence[_Edge], alive: set[int], share: float = LOOP_SHARE
+) -> tuple[set[int], set[int]] | None:
     """(closed loop, shortcuts) when the piece is a loop, else None.
 
     Dead ends are set aside down to the piece's cycles, then shortcuts until
     every node is even. The piece is a loop when what remains is at least
-    ``LOOP_SHARE`` of its length. A figure-eight (all junctions even) stays
+    ``share`` of its length. A figure-eight (all junctions even) stays
     whole.
     """
     incident = _incidence(edges, alive)
@@ -1064,7 +1217,7 @@ def _loop(edges: Sequence[_Edge], alive: set[int]) -> tuple[set[int], set[int]] 
     if not core or any(len(here) % 2 for here in _incidence(edges, core).values()):
         return None
     loop_m = sum(edges[index].length_m for index in core)
-    if loop_m < LOOP_SHARE * sum(edges[index].length_m for index in alive):
+    if loop_m < share * sum(edges[index].length_m for index in alive):
         return None
     return core, set(shortcuts)
 
@@ -1225,12 +1378,14 @@ def _walk(
     alive: set[int],
     nodes: Mapping[int, tuple[float, float]],
     access_tree: BallTree | None,
+    declared: EndChoice | None = None,
 ) -> list[tuple[int, int]]:
     """(edge, node it is entered from) along the walk, from the Trailhead.
 
     Each edge once (Hierholzer), taking the edge earliest in member order
-    wherever there is a choice. A line starts at the end ``_pick_trailhead``
-    chooses; a piece with no odd node starts where member order starts it.
+    wherever there is a choice. A line starts at the end ``declared`` chooses,
+    else at the one ``_pick_trailhead`` chooses; a piece with no odd node
+    starts where member order starts it.
     """
     incident = _incidence(edges, alive)
     if not incident:
@@ -1247,10 +1402,12 @@ def _walk(
 
     if odd:
         first, last = sorted(odd, key=member_order)[:2]
-        if len(odd) == 2 and _pick_trailhead(
-            [nodes[first], nodes[last]], access_tree
-        ) != nodes[first]:
-            first = last
+        if len(odd) == 2:
+            start = None if declared is None else declared(nodes[first], nodes[last])
+            if start is None:
+                start = _pick_trailhead([nodes[first], nodes[last]], access_tree)
+            if start != nodes[first]:
+                first = last
     else:
         first = min(incident, key=member_order)
     if len(odd) > 2:
@@ -1520,6 +1677,9 @@ def _write_sqlite(path: Path, dayhikes: Iterable[DayHike], report: IngestReport)
                         "named_osm_name": report.named_osm_name,
                         "named_osm_ref": report.named_osm_ref,
                         "named_synthetic": report.named_synthetic,
+                        "dropped_node_network": report.dropped_node_network,
+                        "named_from_to": report.named_from_to,
+                        "named_place": report.named_place,
                     }
                 ),
             ),

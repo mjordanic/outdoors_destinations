@@ -213,21 +213,27 @@ lengths, so a 5 km line and a 5 km RoundTrip look equally long. The
 
 ---
 
-## 12. Smoothed elevation gain in the Catalog
+## 12. Elevation gain on cliff-side and gorge routes
 
 ### Why it's parked
 
-The `elevation_gain_m` similarity fact (shown on the web page and read by the
-`elevation_gain` Measure) counts a climb or descent only once it moves 10 m
-(`GAIN_HYSTERESIS_M`), so FABDEM's metre-scale jitter between close vertices no
-longer adds climb that is not there. Checked against published gains: Ben
-Nevis Mountain Path 1,661 m raw, 1,422 m now (published about 1,350 m);
-Aljažev dom - Kredarica - Triglav 2,230 m raw, 2,121 m now (about 1,850 m); a
-15 km Dutch coast path 287 m raw, 44 m now (21 m height range). The Catalog's
-`feature_vectors.elevation_gain_m`, written by `sample-dem`, still sums the raw
-uphill between vertices.
+Elevation gain (the `elevation_gain_m` fact, the web page's climb and descent,
+and the Catalog's `feature_vectors.elevation_gain_m`) drops one-vertex DEM
+spikes (10 m or more above or below both neighbours at a 25 % or steeper grade
+each side), then counts a climb or descent only once it moves 10 m. Against
+2,973 OSM `ascent` tags the median error is 12 %, and 5 % of DayHikes are over
+1.5 times the tag (8 % before the spike filter). Checked against published
+gains: Ben Nevis Mountain Path 1,357 m (about 1,350 m), BergeSeen Trail D5
+1,693 m (OSM 1,692 m), a 15 km Dutch coast path 28 m (21 m height range).
+
+Routes cut into a cliff side still get far too much: Levada da Ribeira da
+Janela (Madeira, 357 m height range, nearly flat in reality) has 1,557 m. There
+the DEM is wrong by 20–40 m over many vertices in a row, which neither the
+spike filter nor the 10 m dead-band removes; a wider median filter that fixes
+it also cuts real mountain gain by about 10 %.
 
 ### What would have to be true to start
 
-- A decision on which gain the Catalog stores, so it and the direction-free
-  `elevation_gain_m` fact (ADR-0013) agree, then `sample-dem` rerun.
+- A better DEM in steep valleys (lidar where a country publishes it), or a
+  rule that recognises a canal or cliff-side path (OSM `waterway=canal` along
+  the route, a levada name) and smooths only there.

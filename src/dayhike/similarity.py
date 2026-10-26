@@ -45,6 +45,8 @@ Progress = Callable[[str], None]
 PROFILE_POINTS = 64
 PROFILE_RANGE_FLOOR_M = 50.0
 GAIN_HYSTERESIS_M = 10.0  # a climb or descent counts once it reaches this; DEM noise does not
+SPIKE_RISE_M = 10.0  # a vertex at least this far above (or below) both neighbours ...
+SPIKE_GRADE = 0.25  # ... and this steep on both sides is a DEM spike, not the trail
 STEEPNESS_STEP_M = 50.0  # elevation resampled this often along the walk
 STEEPEST_KM_WINDOW_M = 1_000.0
 CORRIDOR_M = 100.0  # amenity along the DayHike (CONTEXT.md Corridor)
@@ -190,7 +192,7 @@ MEASURES = (
 )
 MEASURE_NAMES = tuple(measure.name for measure in MEASURES)
 # On by default: the Measures that told good matches from poor ones for blind
-# judges (ADR-0015); the others are off until the Hiker weights them.
+# judges (ADR-0016); the others are off until the Hiker weights them.
 CORE_MEASURES = (
     "length", "elevation_gain", "highest", "lowest", "profile", "landcover",
     "temperature", "precipitation", "solar_radiation", "waterside", "climb_grade",
@@ -210,8 +212,8 @@ CALIBRATION_KEYS = (
 _FACTS_VERSION = hashlib.sha256(
     json.dumps(
         [
-            FACT_COLUMNS, PROFILE_POINTS, PROFILE_RANGE_FLOOR_M, GAIN_HYSTERESIS_M, STEEPNESS_STEP_M,
-            STEEPEST_KM_WINDOW_M, CORRIDOR_M, PEAK_SUMMITED_M, PEAKS_AROUND_M,
+            FACT_COLUMNS, PROFILE_POINTS, PROFILE_RANGE_FLOOR_M, GAIN_HYSTERESIS_M, SPIKE_RISE_M, SPIKE_GRADE,
+            STEEPNESS_STEP_M, STEEPEST_KM_WINDOW_M, CORRIDOR_M, PEAK_SUMMITED_M, PEAKS_AROUND_M,
             TRAILHEAD_M, SEARCH_STEP_M, WATER_SOURCE_KINDS, SOLAR_ASPECT_POINTS,
             SOLAR_ASPECT_OFFSET_ARCSEC, SOLAR_ASPECT_MIN_SLOPE_DEG, WATERSIDE_M,
             WATERSIDE_STEP_M, WATERSIDE_MIN_SHARE, WATERSIDE_OVERVIEW, WORLDCOVER_WATER,
@@ -370,9 +372,7 @@ def rank_rows(
     DayHike (a web page that picked it from a list) needs no Catalog.
     """
     chosen = _measure_weights(weights)
-    _check_month(month)
-    if month is not None and np.isnan(store.column(f"temperature_c_{month:02d}")).all():
-        raise ValueError("climate has not been sampled")
+    _check_climate(store, month)
     seed_rows = np.asarray(seed_rows, dtype=np.int64)
     rows = np.arange(len(store.ids))
     if allowed_ids is not None:
@@ -388,6 +388,12 @@ def rank_rows(
     keep = np.sort(first)
     keep = keep[~np.isin(group[keep], store.twins[seed_rows])][:limit]
     return rows[keep], similarity[keep]
+
+
+def _check_climate(store: SimilarityStore, month: int | None) -> None:
+    _check_month(month)
+    if month is not None and np.isnan(store.column(f"temperature_c_{month:02d}")).all():
+        raise ValueError("climate has not been sampled")
 
 
 def _check_month(month: int | None) -> None:
@@ -855,7 +861,7 @@ def walk_facts(
     """
     round_trip = _haversine_m(lat[0], lon[0], lat[-1], lon[-1]) <= GAP_JOIN_M
     facts: dict[str, float] = {
-        "elevation_gain_m": elevation_gain(ele),
+        "elevation_gain_m": elevation_gain(lat, lon, ele),
         "round_trip": float(round_trip),
         **dict(zip(("climb_grade", "steepest_km_m"), steepness(lat, lon, ele))),
         **trail_facts(walked, loop=round_trip),
@@ -953,28 +959,54 @@ def _even_points(lat: np.ndarray, lon: np.ndarray, step_m: float) -> np.ndarray:
     return np.column_stack([np.interp(at, distance, lat), np.interp(at, distance, lon)])
 
 
-def elevation_gain(ele: np.ndarray) -> float:
-    """Metres climbed: the larger of the climb and the descent, so the walking
-    direction does not matter. Vertices without elevation are skipped; none
-    with it gives NaN.
-
-    A change counts only once it moves ``GAIN_HYSTERESIS_M`` from the last
-    counted elevation, so DEM jitter between vertices does not add up on long
-    flat or cross-slope walks.
+def elevation_gain(lat: np.ndarray, lon: np.ndarray, ele: np.ndarray) -> float:
+    """Metres climbed: the larger of the climb and the descent (see
+    ``climb_and_descent``), so the walking direction does not matter. NaN
+    when no vertex has elevation.
     """
-    known = ele[np.isfinite(ele)].tolist()
-    if not known:
-        return math.nan
+    return max(climb_and_descent(lat, lon, ele))
+
+
+def climb_and_descent(lat: np.ndarray, lon: np.ndarray, ele: np.ndarray) -> tuple[float, float]:
+    """Metres climbed and metres descended along the vertices in walk order.
+
+    Vertices without elevation are skipped; none with it gives NaN for both.
+    First a DEM spike is dropped: a vertex at least ``SPIKE_RISE_M`` above
+    or below both its neighbours with a grade of at least ``SPIKE_GRADE`` on
+    both sides (the ends stay). Then a change counts only once it moves
+    ``GAIN_HYSTERESIS_M`` from the last counted elevation, so DEM jitter
+    between vertices does not add up on long flat or cross-slope walks.
+    """
+    ele = np.asarray(ele, dtype=float)
+    known = np.isfinite(ele)
+    along = np.concatenate([[0.0], np.cumsum(_step_m(np.asarray(lat, float), np.asarray(lon, float)))])
+    kept: list[tuple[float, float]] = []  # (metres along, elevation)
+    for here in zip(along[known].tolist(), ele[known].tolist()):
+        while len(kept) >= 2 and _is_spike(kept[-2], kept[-1], here):
+            kept.pop()
+        kept.append(here)
+    if not kept:
+        return math.nan, math.nan
     climb = descent = 0.0
-    last = known[0]
-    for metres in known[1:]:
+    last = kept[0][1]
+    for _, metres in kept[1:]:
         if metres - last >= GAIN_HYSTERESIS_M:
             climb += metres - last
             last = metres
         elif last - metres >= GAIN_HYSTERESIS_M:
             descent += last - metres
             last = metres
-    return max(climb, descent)
+    return climb, descent
+
+
+def _is_spike(before: tuple[float, float], vertex: tuple[float, float], after: tuple[float, float]) -> bool:
+    rise, fall = vertex[1] - before[1], vertex[1] - after[1]
+    return (
+        rise * fall > 0
+        and min(abs(rise), abs(fall)) >= SPIKE_RISE_M
+        and abs(rise) >= SPIKE_GRADE * (vertex[0] - before[0])
+        and abs(fall) >= SPIKE_GRADE * (after[0] - vertex[0])
+    )
 
 
 def profile_shape(

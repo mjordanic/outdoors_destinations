@@ -112,6 +112,12 @@ const fmt = {
   yes: (x) => (x ? "yes" : "no"),
 };
 
+// Climb and descent in the drawn direction; the gain fact (the larger of the two) when they are missing.
+function climbText(hike, gain) {
+  if (hike.climb_m != null) return `↑ ${fmt.m(hike.climb_m)} ↓ ${fmt.m(hike.descent_m)}`;
+  return gain != null ? `climb or descent ${fmt.m(gain)}` : null;
+}
+
 function factColumn(column, month) {
   return month ? `${column}_${String(month).padStart(2, "0")}` : column;
 }
@@ -360,22 +366,23 @@ function drawMap(node, hike) {
   return { map, hover };
 }
 
-function renderDetail(card, hike, { role, compare = null, result = null }) {
+// ``query``: the weights and month the compare scores were made with (a Ranking's, or a pair's).
+function renderDetail(card, hike, { role, compare = null, result = null, query = state.query }) {
   if (card._map) card._map.remove();
   card.hidden = false;
   card.classList.remove("empty");
-  const month = compare ? state.query?.month : Number($("#month").value) || null;
+  const month = compare ? query?.month : Number($("#month").value) || null;
   const f = hike.facts;
   const badges = [
     f.length_m != null && fmt.km(f.length_m),
-    f.elevation_gain_m != null && `↑ ${fmt.m(f.elevation_gain_m)}`,
+    climbText(hike, f.elevation_gain_m),
     f.highest_m != null && `top ${fmt.m(f.highest_m)}`,
     f.lowest_m != null && `low ${fmt.m(f.lowest_m)}`,
     f.difficulty_rank != null && SAC[Math.round(f.difficulty_rank)],
     f.round_trip != null && (f.round_trip ? "round trip" : "one way / lollipop"),
   ].filter(Boolean);
   const scoreLine = result
-    ? `<p class="hint">Similarity score ${result.score.toFixed(3)}${result.drive_hours != null ? ` · about ${result.drive_hours.toFixed(1)} h drive` : ""}</p>`
+    ? `<p class="hint">Similarity score ${result.score == null ? "– (no weighted measure has data for both)" : result.score.toFixed(3)}${result.drive_hours != null ? ` · about ${result.drive_hours.toFixed(1)} h drive` : ""}</p>`
     : "";
   card.innerHTML = `
     <div class="detail-head">
@@ -399,13 +406,12 @@ function renderDetail(card, hike, { role, compare = null, result = null }) {
     stackedBar("Trail surface", shares(f, SURFACE), "No surface tags on this route."),
     climateChart(f, month),
   );
-  card.querySelector(".facts").replaceWith(factsTable(hike, compare, result, month));
+  card.querySelector(".facts").replaceWith(factsTable(hike, compare, result, month, query?.weights));
 }
 
-function factsTable(hike, compare, result, month) {
+function factsTable(hike, compare, result, month, weights) {
   const table = document.createElement("table");
   table.className = "facts";
-  const weights = state.query?.weights;
   const head = compare
     ? "<tr><th>Measure</th><th>This hike</th><th>Liked hike</th><th>Score</th></tr>"
     : "<tr><th>Measure</th><th>Value</th></tr>";
@@ -436,7 +442,7 @@ function factsTable(hike, compare, result, month) {
         row.lastElementChild.innerHTML = score == null
           ? '<span class="nodata">no data</span>'
           : `<span class="bar"><i style="width:${Math.round(score * 100)}%"></i></span>${score.toFixed(2)}`;
-        if (weights && !weights[measure.name]) row.lastElementChild.title = "Left out of this ranking";
+        if (weights && !weights[measure.name]) row.lastElementChild.title = "Left out of this score";
       }
       body.appendChild(row);
     }
@@ -494,68 +500,78 @@ function readWeights() {
 
 // ---------- search ----------
 
-let searchTimer = null, searchAbort = null, suggestions = [], active = -1;
-
-function showSuggestions(items) {
-  const list = $("#suggestions");
-  suggestions = items;
-  active = -1;
-  list.innerHTML = "";
-  items.forEach((item, i) => {
-    const li = document.createElement("li");
-    li.role = "option";
-    li.id = `s-${i}`;
-    const meta = [
-      item.length_m != null && fmt.km(item.length_m),
-      item.elevation_gain_m != null && `↑ ${fmt.m(item.elevation_gain_m)}`,
-      item.highest_m != null && `top ${fmt.m(item.highest_m)}`,
-      `${item.trailhead[0].toFixed(2)}, ${item.trailhead[1].toFixed(2)}`,
-    ].filter(Boolean).join(" · ");
-    li.innerHTML = `${escapeHtml(item.name)}<span class="meta">${escapeHtml(meta)}</span>`;
-    li.addEventListener("mousedown", (event) => { event.preventDefault(); choose(item.id); });
-    list.appendChild(li);
-  });
-  list.hidden = items.length === 0;
-  $("#search").setAttribute("aria-expanded", String(items.length > 0));
-}
-
-function moveActive(step) {
-  if (!suggestions.length) return;
-  active = (active + step + suggestions.length) % suggestions.length;
-  document.querySelectorAll("#suggestions li").forEach((li, i) => li.setAttribute("aria-selected", String(i === active)));
-  $("#search").setAttribute("aria-activedescendant", `s-${active}`);
-  document.getElementById(`s-${active}`).scrollIntoView({ block: "nearest" });
-}
-
-function onSearchInput() {
-  clearTimeout(searchTimer);
-  const query = $("#search").value.trim();
-  if (query.length < 2) {
-    searchAbort?.abort();
-    showSuggestions([]);
-    if ($("#status").textContent.startsWith("No hike name contains")) setStatus("");
-    return;
-  }
-  searchTimer = setTimeout(async () => {
-    searchAbort?.abort();
-    searchAbort = new AbortController();
-    try {
-      const body = await api(`/api/search?q=${encodeURIComponent(query)}&limit=20`, { signal: searchAbort.signal });
-      showSuggestions(body.results);
-      if (!body.results.length) setStatus(`No hike name contains “${query}”.`);
-      else setStatus("");
-    } catch (error) {
-      if (error.name !== "AbortError") setStatus(error.message, true);
+// A hike-name box with a suggestion list; ``onPick(id)`` loads the chosen hike.
+function nameSearch(input, list, onPick) {
+  let timer = null, abort = null, items = [], active = -1;
+  const show = (found) => {
+    items = found;
+    active = -1;
+    list.innerHTML = "";
+    found.forEach((item, i) => {
+      const li = document.createElement("li");
+      li.role = "option";
+      li.id = `${list.id}-${i}`;
+      const meta = [
+        item.length_m != null && fmt.km(item.length_m),
+        climbText(item, item.elevation_gain_m),
+        item.highest_m != null && `top ${fmt.m(item.highest_m)}`,
+        `${item.trailhead[0].toFixed(2)}, ${item.trailhead[1].toFixed(2)}`,
+      ].filter(Boolean).join(" · ");
+      li.innerHTML = `${escapeHtml(item.name)}<span class="meta">${escapeHtml(meta)}</span>`;
+      li.addEventListener("mousedown", (event) => { event.preventDefault(); pick(item.id); });
+      list.appendChild(li);
+    });
+    list.hidden = found.length === 0;
+    input.setAttribute("aria-expanded", String(found.length > 0));
+  };
+  const move = (step) => {
+    if (!items.length) return;
+    active = (active + step + items.length) % items.length;
+    list.querySelectorAll("li").forEach((li, i) => li.setAttribute("aria-selected", String(i === active)));
+    input.setAttribute("aria-activedescendant", `${list.id}-${active}`);
+    document.getElementById(`${list.id}-${active}`).scrollIntoView({ block: "nearest" });
+  };
+  const pick = (id) => {
+    clearTimeout(timer);
+    abort?.abort();
+    show([]);
+    onPick(id);
+  };
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    const query = input.value.trim();
+    if (query.length < 2) {
+      abort?.abort();
+      show([]);
+      if ($("#status").textContent.startsWith("No hike name has")) setStatus("");
+      return;
     }
-  }, 200);
+    timer = setTimeout(async () => {
+      abort?.abort();
+      abort = new AbortController();
+      try {
+        const body = await api(`/api/search?q=${encodeURIComponent(query)}&limit=20`, { signal: abort.signal });
+        show(body.results);
+        if (!body.results.length) setStatus(`No hike name has every word of “${query}”.`);
+        else setStatus("");
+      } catch (error) {
+        if (error.name !== "AbortError") setStatus(error.message, true);
+      }
+    }, 200);
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown") { event.preventDefault(); move(1); }
+    else if (event.key === "ArrowUp") { event.preventDefault(); move(-1); }
+    else if (event.key === "Enter" && items.length) { event.preventDefault(); pick(items[Math.max(active, 0)].id); }
+    else if (event.key === "Escape") show([]);
+  });
+  input.addEventListener("blur", () => setTimeout(() => show([]), 150));
+  return { pick };
 }
 
-let chosen = 0, shown = 0, ranked = 0; // the latest hike load or ranking each; an older response that lands later is dropped
+let chosen = 0, shown = 0, ranked = 0, paired = 0; // the latest of each request; an older response that lands later is dropped
 
 async function choose(id) {
-  clearTimeout(searchTimer);
-  searchAbort?.abort();
-  showSuggestions([]);
   const request = ++chosen;
   setStatus("Loading the hike…");
   try {
@@ -565,6 +581,7 @@ async function choose(id) {
     $("#search").value = hike.name;
     $("#liked-name").textContent = `Chosen: ${hike.name}`;
     $("#find").disabled = false;
+    $("#pair-search").disabled = false;
     history.replaceState(null, "", `#hike=${id}`);
     renderDetail($("#liked"), hike, { role: "Liked hike" });
     $("#results").hidden = true;
@@ -572,6 +589,40 @@ async function choose(id) {
     setStatus("");
   } catch (error) {
     if (request === chosen) setStatus(error.message, true);
+  }
+}
+
+// ---------- pair score ----------
+
+// The score of the liked hike and any other one, under the weights and month on the left.
+async function comparePair(id) {
+  if (!state.liked) return;
+  let query;
+  try {
+    query = { a: state.liked.id, b: id, ...readWeights(), month: Number($("#month").value) || null };
+  } catch (error) {
+    setStatus(error.message, true);
+    return;
+  }
+  const request = ++paired, liked = state.liked;
+  setStatus("Scoring the pair…");
+  try {
+    const [pair, hike] = await Promise.all([
+      api("/api/pair", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(query) }),
+      api(`/api/hikes/${id}`),
+    ]);
+    if (request !== paired || liked !== state.liked) return;
+    $("#pair-search").value = hike.name;
+    document.querySelectorAll("#results-table tr.active").forEach((r) => r.classList.remove("active"));
+    const card = $("#selected");
+    renderDetail(card, hike, {
+      role: "Compared with the liked hike", compare: liked, result: { ...pair, drive_hours: null },
+      query: { weights: pair.weights, month: pair.month },
+    });
+    card.scrollIntoView({ behavior: "smooth", block: "start" });
+    setStatus("");
+  } catch (error) {
+    if (request === paired && liked === state.liked) setStatus(error.message, true);
   }
 }
 
@@ -584,11 +635,23 @@ function parseLatLon(text) {
   return Math.abs(lat) <= 90 && Math.abs(lon) <= 180 ? { lat, lon, label: `${lat}, ${lon}` } : null;
 }
 
+// A typed "lat, lon" outside the hikes' box whose swap is inside was most likely typed "lon, lat".
+function swappedWarning(origin) {
+  const [south, west, north, east] = state.info.coverage;
+  const inside = (lat, lon) => lat >= south && lat <= north && lon >= west && lon <= east;
+  if (inside(origin.lat, origin.lon) || !inside(origin.lon, origin.lat)) return null;
+  return `${origin.lat}, ${origin.lon} is outside the area with hikes; did you mean ${origin.lon}, ${origin.lat}? Type latitude first.`;
+}
+
 async function findPlace() {
   const text = $("#origin").value.trim();
   if (!text) return;
   const parsed = parseLatLon(text);
-  if (parsed) { setOrigin(parsed); return; }
+  if (parsed) {
+    const warning = swappedWarning(parsed);
+    if (warning) $("#origin-found").textContent = warning; else setOrigin(parsed);
+    return;
+  }
   if (state.geocoded.has(text)) { setOrigin(state.geocoded.get(text)); return; }
   $("#origin-found").textContent = "Searching…";
   try {
@@ -630,7 +693,10 @@ async function findSimilar() {
   try {
     query = { seed: state.liked.id, ...readWeights(), month: Number($("#month").value) || null };
     if ($("#drive-on").checked) {
-      const origin = parseLatLon($("#origin").value) || state.origin;
+      const typed = parseLatLon($("#origin").value);
+      const warning = typed && swappedWarning(typed);
+      if (warning) throw new Error(warning);
+      const origin = typed || state.origin;
       if (!origin) throw new Error("Set a starting place for the drive-time filter.");
       const hours = Number($("#hours").value);
       if (!(hours >= 0.5 && hours <= state.info.max_drive_hours)) {
@@ -754,14 +820,8 @@ async function start() {
     $("#drive-on").disabled = true;
     $("#drive-off").hidden = false;
   }
-  $("#search").addEventListener("input", onSearchInput);
-  $("#search").addEventListener("keydown", (event) => {
-    if (event.key === "ArrowDown") { event.preventDefault(); moveActive(1); }
-    else if (event.key === "ArrowUp") { event.preventDefault(); moveActive(-1); }
-    else if (event.key === "Enter" && suggestions.length) { event.preventDefault(); choose(suggestions[Math.max(active, 0)].id); }
-    else if (event.key === "Escape") showSuggestions([]);
-  });
-  $("#search").addEventListener("blur", () => setTimeout(() => showSuggestions([]), 150));
+  const likedSearch = nameSearch($("#search"), $("#suggestions"), choose);
+  nameSearch($("#pair-search"), $("#pair-suggestions"), comparePair);
   $("#reset-weights").addEventListener("click", () => { buildWeights(); markStale(); });
   $("#weights").addEventListener("input", markStale);
   $("#weights").addEventListener("change", markStale);
@@ -778,7 +838,7 @@ async function start() {
   $("#find").addEventListener("click", findSimilar);
   const openLinked = () => {
     const linked = location.hash.match(/^#hike=(\d+)$/);
-    if (linked && Number(linked[1]) !== state.liked?.id) choose(Number(linked[1]));
+    if (linked && Number(linked[1]) !== state.liked?.id) likedSearch.pick(Number(linked[1]));
   };
   window.addEventListener("hashchange", openLinked);
   openLinked();
