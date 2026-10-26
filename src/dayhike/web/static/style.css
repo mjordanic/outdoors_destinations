@@ -57,14 +57,14 @@ button.primary:disabled { background: var(--nodata); border-color: var(--nodata)
 button.secondary:hover { border-color: var(--green); }
 
 .search { position: relative; }
-#suggestions {
+.suggestions {
   position: absolute; z-index: 1000; left: 0; right: 0; top: 100%; margin: 2px 0 0; padding: 0;
   list-style: none; background: #fff; border: 1px solid var(--line); border-radius: 6px;
   max-height: 320px; overflow-y: auto; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
 }
-#suggestions li { padding: 6px 8px; cursor: pointer; border-bottom: 1px solid #f0f2ee; }
-#suggestions li[aria-selected="true"], #suggestions li:hover { background: #e8f1ea; }
-#suggestions .meta { display: block; color: var(--muted); font-size: 0.8rem; }
+.suggestions li { padding: 6px 8px; cursor: pointer; border-bottom: 1px solid #f0f2ee; }
+.suggestions li[aria-selected="true"], .suggestions li:hover { background: #e8f1ea; }
+.suggestions .meta { display: block; color: var(--muted); font-size: 0.8rem; }
 
 .weights-group { border: none; margin: 8px 0 0; padding: 0; }
 .weights-group legend { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); padding: 0; margin-bottom: 2px; }

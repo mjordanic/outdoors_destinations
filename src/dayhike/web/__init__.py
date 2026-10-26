@@ -1,8 +1,8 @@
 """The public read-only web demo: a JSON API over a serving export, and the page.
 
 ``create_app`` serves ``ServingData`` (``dayhike.serving``): name search, hike
-detail, the Measure list, and Ranking with an optional highways-only DriveTime
-pre-filter. Every client gets a request budget per minute, and one Ranking
+detail, the Measure list, the score of any two hikes, and Ranking with an
+optional highways-only DriveTime pre-filter. Every client gets a request budget per minute, and one Ranking
 runs at a time per instance, so a small container holds its memory.
 """
 
@@ -42,13 +42,30 @@ class Place(BaseModel):
     lon: float = Field(ge=-180, le=180)
 
 
-class RankRequest(BaseModel):
-    seed: int
+class Weighted(BaseModel):
     weights: dict[str, float] | None = None
     excluded: list[str] = []
     month: int | None = Field(default=None, ge=1, le=12)
+
+    def measure_weights(self) -> dict[str, float]:
+        """The weights with every excluded Measure at 0; None is the default weights."""
+        weights = dict(DEFAULT_WEIGHTS if self.weights is None else self.weights)
+        for name in self.excluded:
+            if name not in MEASURE_INFO:
+                raise HTTPException(400, f"unknown Measure: {name}")
+            weights[name] = 0.0
+        return weights
+
+
+class RankRequest(Weighted):
+    seed: int
     origin: Place | None = None
     max_hours: float | None = Field(default=None, gt=0, le=MAX_DRIVE_HOURS)
+
+
+class PairRequest(Weighted):
+    a: int
+    b: int
 
 
 class RateLimiter:
@@ -135,10 +152,15 @@ def create_app(
     def health() -> dict:
         return {"ok": True}
 
+    # The Trailheads' box (south, west, north, east): the page warns when a typed
+    # "lat, lon" is outside it but its swap is inside.
+    coverage = [*map(float, data.trailheads.min(axis=0)), *map(float, data.trailheads.max(axis=0))]
+
     @app.api_route("/api/info", methods=["GET", "HEAD"])
     def info() -> dict:
         return {
             "dayhikes": data.meta["dayhikes"],
+            "coverage": coverage,
             "attribution": data.meta["attribution"],
             "drive_time": drive_client is not None,
             "max_drive_hours": MAX_DRIVE_HOURS,
@@ -163,11 +185,7 @@ def create_app(
     @app.post("/api/rank")
     def rank(body: RankRequest) -> dict:
         started = time.monotonic()
-        weights = dict(DEFAULT_WEIGHTS if body.weights is None else body.weights)
-        for name in body.excluded:
-            if name not in MEASURE_INFO:
-                raise HTTPException(400, f"unknown Measure: {name}")
-            weights[name] = 0.0
+        weights = body.measure_weights()
         if (body.origin is None) != (body.max_hours is None):
             raise HTTPException(400, "give both origin and max_hours, or neither")
         if body.origin is not None and drive_client is None:
@@ -207,6 +225,17 @@ def create_app(
             "results": results,
             "elapsed_ms": round((time.monotonic() - started) * 1000),
         }
+
+    @app.post("/api/pair")
+    def pair(body: PairRequest) -> dict:
+        weights = body.measure_weights()
+        try:
+            result = data.pair(body.a, body.b, weights, month=body.month)
+        except KeyError as error:
+            raise HTTPException(404, f"no DayHike {error.args[0]}") from None
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from None
+        return {**result, "month": body.month, "weights": {name: w for name, w in weights.items() if w > 0}}
 
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="page")
     return app

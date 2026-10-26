@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 import shapely
 
-VIEW = (-25.0, 33.0, 47.0, 72.0)  # west, south, east, north (degrees)
+VIEW = (-32.0, 32.0, 47.0, 72.0)  # west, south, east, north (degrees): Azores and Madeira too
 CENTRE = (10.0, 52.0)  # Lambert azimuthal equal-area centre (lon, lat)
 WIDTH = 1000.0  # SVG user units across
 SIMPLIFY = 1.2  # SVG units

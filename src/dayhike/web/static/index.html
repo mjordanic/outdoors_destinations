@@ -32,7 +32,7 @@
         <input id="search" type="search" autocomplete="off" spellcheck="false"
                placeholder="Type a hike name, e.g. Triglav" aria-controls="suggestions" aria-expanded="false" maxlength="100"
                role="combobox" aria-autocomplete="list">
-        <ul id="suggestions" role="listbox" hidden></ul>
+        <ul id="suggestions" class="suggestions" role="listbox" hidden></ul>
       </div>
       <p id="liked-name" class="hint">No hike chosen yet.</p>
     </section>
@@ -75,6 +75,17 @@
 
     <button type="button" id="find" class="primary" disabled>Find similar</button>
     <p id="status" class="status" role="status" aria-live="polite"></p>
+
+    <section class="panel">
+      <label class="panel-title" for="pair-search">4. Check any pair (optional)</label>
+      <p class="hint">Score the liked hike against any other one, with the weights and month above.</p>
+      <div class="search">
+        <input id="pair-search" type="search" autocomplete="off" spellcheck="false" disabled
+               placeholder="Another hike's name" aria-controls="pair-suggestions" aria-expanded="false" maxlength="100"
+               role="combobox" aria-autocomplete="list">
+        <ul id="pair-suggestions" class="suggestions" role="listbox" hidden></ul>
+      </div>
+    </section>
   </aside>
 
   <section class="content">
