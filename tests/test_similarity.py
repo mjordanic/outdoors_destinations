@@ -244,6 +244,14 @@ def test_elevation_gain_is_the_larger_of_climb_and_descent() -> None:
     assert math.isnan(elevation_gain(np.array([math.nan, math.nan])))
 
 
+def test_elevation_gain_ignores_jitter_below_the_hysteresis() -> None:
+    flat = np.array([5.0, 8.0, 4.0, 9.0, 3.0, 7.0, 5.0] * 20)
+    assert elevation_gain(flat) == 0.0
+    # A noisy climb counts its rise once, not every wobble on the way up.
+    climb = np.array([100.0, 106.0, 101.0, 112.0, 108.0, 125.0, 119.0, 140.0])
+    assert elevation_gain(climb) == 40.0
+
+
 def test_climb_grade_is_the_gain_over_the_climbing_length() -> None:
     # 1 km up 200 m, then 1 km flat: the flat km does not dilute the grade.
     climb_grade, _ = steepness(*_north_line([*np.linspace(0, 200, 11), *[200.0] * 10]))
