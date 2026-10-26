@@ -21,6 +21,7 @@ from dayhike.similarity import (
     calibrate,
     calibrate_similarity,
     dem_heights,
+    climb_and_descent,
     elevation_gain,
     measure_scores,
     profile_shape,
@@ -240,18 +241,39 @@ def test_profile_shape_skips_vertices_without_elevation() -> None:
 
 
 def test_elevation_gain_is_the_larger_of_climb_and_descent() -> None:
-    assert elevation_gain(np.array([100.0, 400.0, 300.0])) == 300.0
-    assert elevation_gain(np.array([400.0, 100.0, 200.0])) == 300.0
-    assert elevation_gain(np.array([100.0, math.nan, 200.0])) == 100.0
-    assert math.isnan(elevation_gain(np.array([math.nan, math.nan])))
+    def gain(elevations):
+        return elevation_gain(*_north_line(elevations, step_m=2_000.0))
+
+    assert gain([100.0, 400.0, 300.0]) == 300.0
+    assert gain([400.0, 100.0, 200.0]) == 300.0
+    assert gain([100.0, math.nan, 200.0]) == 100.0
+    assert math.isnan(gain([math.nan, math.nan]))
+
+
+def test_climb_and_descent_follow_the_walking_direction() -> None:
+    assert climb_and_descent(*_north_line([100.0, 400.0, 300.0], step_m=2_000.0)) == (300.0, 100.0)
+    assert climb_and_descent(*_north_line([400.0, 300.0, 100.0], step_m=2_000.0)) == (0.0, 300.0)
+    assert all(math.isnan(v) for v in climb_and_descent(*_north_line([math.nan])))
 
 
 def test_elevation_gain_ignores_jitter_below_the_hysteresis() -> None:
-    flat = np.array([5.0, 8.0, 4.0, 9.0, 3.0, 7.0, 5.0] * 20)
-    assert elevation_gain(flat) == 0.0
+    flat = [5.0, 8.0, 4.0, 9.0, 3.0, 7.0, 5.0] * 20
+    assert elevation_gain(*_north_line(flat)) == 0.0
     # A noisy climb counts its rise once, not every wobble on the way up.
-    climb = np.array([100.0, 106.0, 101.0, 112.0, 108.0, 125.0, 119.0, 140.0])
-    assert elevation_gain(climb) == 40.0
+    climb = [100.0, 106.0, 101.0, 112.0, 108.0, 125.0, 119.0, 140.0]
+    assert elevation_gain(*_north_line(climb)) == 40.0
+
+
+def test_elevation_gain_drops_dem_spikes_but_keeps_a_steep_summit() -> None:
+    # 60 m up and down within 30 m of trail on a flat walk is the DEM, not the trail.
+    spiky = [400.0, 402.0, 462.0, 401.0, 403.0, 340.0, 404.0, 400.0]
+    assert elevation_gain(*_north_line(spiky, step_m=30.0)) == 0.0
+    # A spike next to a spike goes too, once the first is dropped.
+    assert elevation_gain(*_north_line([400.0, 401.0, 460.0, 345.0, 402.0], step_m=30.0)) == 0.0
+    # A summit 100 m above both neighbours 500 m away is a 20 % grade: real.
+    assert elevation_gain(*_north_line([1000.0, 1100.0, 1000.0], step_m=500.0)) == 100.0
+    # The ends are never spikes.
+    assert elevation_gain(*_north_line([460.0, 400.0, 401.0], step_m=30.0)) == 60.0
 
 
 def test_climb_grade_is_the_gain_over_the_climbing_length() -> None:

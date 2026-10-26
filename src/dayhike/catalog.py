@@ -679,6 +679,8 @@ def _elevation_stats(
     vertices: Sequence[tuple[int, tuple[float, float]]],
     node_elevations: Mapping[int, float],
 ) -> tuple[float | None, float | None, float | None]:
+    from dayhike.similarity import elevation_gain
+
     elevations = [
         node_elevations[node_id]
         for node_id, _ in vertices
@@ -687,11 +689,10 @@ def _elevation_stats(
     if not elevations:
         # OSM ele absent: missing, not zero. sample-dem fills this from FABDEM.
         return None, None, None
-    gain_m = 0.0
-    for start, end in zip(elevations, elevations[1:]):
-        if end > start:
-            gain_m += end - start
-    return min(elevations), max(elevations), gain_m
+    # The same gain rule as the similarity facts (spikes dropped, 10 m dead-band).
+    lat, lon = np.array([point for _, point in vertices], dtype=float).T
+    ele = np.array([node_elevations.get(node_id, np.nan) for node_id, _ in vertices], dtype=float)
+    return min(elevations), max(elevations), elevation_gain(lat, lon, ele)
 
 
 LEFTOVER_ROLES = frozenset(
