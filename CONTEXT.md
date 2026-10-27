@@ -165,7 +165,7 @@ A point where a Hiker can refill water: an OSM drinking-water point, spring, wat
 _Avoid_: water point (one OSM kind), fountain, water amenity
 
 **Seed**:
-A DayHike the hiker names as "like the outing I want," or a ComposedHike they drew. Ranking is similarity to Seeds, not a trained taste model. A ComposedHike Seed is compared with Catalog DayHikes only, and the DayHikes it retraces (its Twins) are not listed.
+A DayHike the hiker names as "like the outing I want," or a ComposedHike they drew. Ranking is similarity to Seeds, not a trained taste model. A ComposedHike Seed is compared with Catalog DayHikes and SuggestedLoops alike, and the DayHikes it retraces (its Twins) are not listed.
 _Avoid_: label, like, rating, example (example is too vague)
 
 **FeatureVector**:
