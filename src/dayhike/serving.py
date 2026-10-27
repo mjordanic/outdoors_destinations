@@ -35,6 +35,7 @@ lists them among them (``dayhike.loops``, ADR-0020).
 from __future__ import annotations
 
 import bisect
+import heapq
 import itertools
 import json
 import math
@@ -919,42 +920,64 @@ class ServingData:
         One row per area: best first, a hike starting within ``GROUP_M`` of a
         better row's start is a version of that row, listed in its
         ``versions`` (at most ``VERSIONS`` - 1, each walking more than
-        ``VERSION_DIFFERS`` of its length off every version kept), else left out.
+        ``VERSION_DIFFERS`` of its length off every version kept), else left
+        out. Hikes are taken down the whole Ranking until one starts in a
+        ``limit`` + 1st area, so ``limit`` rows are listed where the hikes
+        allow; loops are searched near the best ``LOOP_SEEDS`` DayHikes only.
         """
         store = self.store.mode(return_to_start)
         seed_row, seed_walk = self._seed(seed, return_to_start)
         allowed = None if allowed_rows is None else self.store.ids[allowed_rows]
-        rows, scores = rank_rows(
-            store, [seed_row], weights, month=month, allowed_ids=allowed, limit=max(limit, LOOP_SEEDS)
-        )
-        hikes = self._summaries(rows.tolist(), return_to_start)
-        lines = self._served_lines([hike["id"] for hike in hikes])
-        candidates = []
-        for hike, score, measures in zip(hikes, scores, self._measures(store, seed_row, rows, month)):
-            hike["line"] = lines[hike["id"]]
-            line = np.array(decode_polyline(hike["line"]))
-            hike["score"] = float(score)
-            hike["measures"] = measures
-            candidates.append((hike, _even_points(line[:, 0], line[:, 1], TWIN_STEP_M)))
+        rows, scores = rank_rows(store, [seed_row], weights, month=month, allowed_ids=allowed)
+        loops = []
         if self.trailgraph is not None and LOOP_SEEDS:
             seed_line = (
                 np.array(decode_polyline(self._served_lines([seed])[seed]))
                 if seed_walk is None
                 else np.column_stack([seed_walk.lat, seed_walk.lon])
             )
-            candidates += self._loops(
-                store, seed_row, seed_line, weights, month, rows[:LOOP_SEEDS], return_to_start, reach
-            )
-        groups: list[list[tuple[dict, np.ndarray]]] = []  # the best first in each
-        for hike, points in sorted(candidates, key=lambda candidate: -candidate[0]["score"]):
-            start = hike["trailhead"]
-            group = next((g for g in groups if _haversine_m(*start, *g[0][0]["trailhead"]) < GROUP_M), None)
+            loops = self._loops(store, seed_row, seed_line, weights, month, rows[:LOOP_SEEDS], return_to_start, reach)
+        # [score, store row or None, the loop or None, points once needed]
+        catalog = ([float(score), row, None, None] for row, score in zip(rows.tolist(), scores.tolist()))
+        found = sorted(([loop["score"], None, loop, points] for loop, points in loops), key=lambda c: -c[0])
+        groups: list[list[list]] = []  # the best first in each
+        for hike in heapq.merge(catalog, found, key=lambda candidate: -candidate[0]):
+            start = self._start(hike)
+            group = next((g for g in groups if _haversine_m(*start, *self._start(g[0])) < GROUP_M), None)
             if group is None:
-                if len(groups) < limit:
-                    groups.append([(hike, points)])
-            elif len(group) < VERSIONS and all(1.0 - _share_on(points, kept) > VERSION_DIFFERS for _, kept in group):
-                group.append((hike, points))
-        return [{**group[0][0], "versions": [hike for hike, _ in group[1:]]} for group in groups]
+                if len(groups) == limit:
+                    break
+                groups.append([hike])
+            elif len(group) < VERSIONS and all(
+                1.0 - _share_on(self._points(hike), self._points(kept)) > VERSION_DIFFERS for kept in group
+            ):
+                group.append(hike)
+        listed = [hike for group in groups for hike in group if hike[1] is not None]
+        listed_rows = [hike[1] for hike in listed]
+        summaries = self._summaries(listed_rows, return_to_start)
+        lines = self._served_lines([summary["id"] for summary in summaries])
+        measures = self._measures(store, seed_row, np.array(listed_rows, dtype=np.int64), month)
+        dayhikes = {
+            hike[1]: {**summary, "line": lines[summary["id"]], "score": hike[0], "measures": scored}
+            for hike, summary, scored in zip(listed, summaries, measures)
+        }
+        results = [[hike[2] if hike[1] is None else dayhikes[hike[1]] for hike in group] for group in groups]
+        return [{**group[0], "versions": group[1:]} for group in results]
+
+    def _start(self, hike: list) -> tuple[float, float]:
+        """Where a hike of ``rank``'s grouping starts: a DayHike at its Trailhead."""
+        if hike[1] is None:
+            return tuple(hike[2]["trailhead"])
+        lat, lon = self.trailheads[hike[1]]
+        return float(lat), float(lon)
+
+    def _points(self, hike: list) -> np.ndarray:
+        """A hike of ``rank``'s grouping every ``TWIN_STEP_M``; a DayHike's on its served line, read once."""
+        if hike[3] is None:
+            dayhike_id = int(self.store.ids[hike[1]])
+            line = np.array(decode_polyline(self._served_lines([dayhike_id])[dayhike_id]))
+            hike[3] = _even_points(line[:, 0], line[:, 1], TWIN_STEP_M)
+        return hike[3]
 
     def _loops(
         self,

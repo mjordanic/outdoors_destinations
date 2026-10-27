@@ -217,6 +217,22 @@ def test_cli_compose_lists_loops_by_their_link(data, capsys) -> None:
     ]
 
 
+def test_cli_compose_prints_each_rows_versions_under_it(data, capsys) -> None:
+    from dayhike.cli import main
+
+    seed = data.rank(MEADOW_PATH, DEFAULT_WEIGHTS)[0]["route"]["text"]
+    rows = data.rank(Route.parse(seed), DEFAULT_WEIGHTS)
+
+    assert main(["compose", "--data", str(data.directory), seed]) == 0
+    listed = [line.split("\t")[0] for line in capsys.readouterr().out.rstrip("\n").splitlines()[1:]]
+    assert any(r["versions"] for r in rows)
+    assert listed == [
+        f"{indent}{hike['id'] if hike['id'] is not None else hike['route']['text']}"
+        for row in rows
+        for indent, hike in (("", row), *(("  ", version) for version in row["versions"]))
+    ]
+
+
 def test_a_found_loop_names_whole_segments_from_its_start(data) -> None:
     from dayhike.loops import LoopTarget, find_loops
 
