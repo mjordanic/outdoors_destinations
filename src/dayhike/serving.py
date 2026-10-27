@@ -79,6 +79,7 @@ from dayhike.similarity import (
     TWIN_SHARE,
     TWIN_STEP_M,
     AmenityPoints,
+    Measure,
     OutsideSeed,
     SimilarityStore,
     StaleSimilarity,
@@ -96,6 +97,7 @@ from dayhike.similarity import (
     climb_and_descent,
     measure_scores,
     nearest_on_line,
+    random_pair_shares,
     rank_rows,
     score_rows,
 )
@@ -137,34 +139,58 @@ _SIMILARITY_FILES = (
 
 # Groups are sections of the weights panel only; scoring knows no groups (ADR-0013).
 MEASURE_INFO: dict[str, tuple[str, str, str]] = {
-    "length": ("effort", "Length", "Walk length; the shorter over the longer (floor 1 km)."),
-    "elevation_gain": ("effort", "Elevation gain", "Metres climbed, the larger of climb and descent (floor 100 m)."),
-    "difficulty": ("effort", "Difficulty", "Strictest SAC grade, 1-6; alike within 3 grades."),
-    "highest": ("altitude", "Highest point", "Highest elevation; alike within 400 m."),
-    "lowest": ("altitude", "Lowest point", "Lowest elevation; alike within 400 m."),
+    "length": ("effort", "Length", "Walk length; scored by the shorter over the longer (floor 1 km), against random hike pairs."),
+    "elevation_gain": ("effort", "Elevation gain", "Metres climbed, the larger of climb and descent; scored by the smaller over the larger (floor 100 m), against random hike pairs."),
+    "difficulty": ("effort", "Difficulty", "Strictest SAC grade, 1-6; scored by the gap against random hike pairs, lowest from 3 grades apart."),
+    "highest": ("altitude", "Highest point", "Highest elevation; scored by the gap against random hike pairs, lowest from 400 m apart."),
+    "lowest": ("altitude", "Lowest point", "Lowest elevation; scored by the gap against random hike pairs, lowest from 400 m apart."),
     "profile": ("profile", "Profile shape", "Elevation profile scaled to 0-1 in length and height, walked either way."),
     "landcover": ("landscape", "Land cover", "Shared share of tree, shrub, grass, bare, snow and other cover."),
     "peak_summited": ("landscape", "Peak summited", "A Peak within 50 m of the line, or not."),
     "viewpoint_along": ("landscape", "Viewpoint along", "A Viewpoint within 100 m of the line, or not."),
-    "peaks_around": ("landscape", "Peaks around", "Peaks within 2 km of the line (floor 1)."),
-    "temperature": ("weather", "Temperature", "Mean temperature (June-August, or the chosen month); alike within 10 °C."),
-    "precipitation": ("weather", "Precipitation", "Mean monthly precipitation (or the chosen month's) (floor 10 mm)."),
-    "solar_radiation": ("weather", "Solar radiation", "Solar radiation (June-August, or the chosen month); alike within 5,000 kJ m⁻² day⁻¹."),
-    "southness": ("weather", "Sun-facing slopes", "Which way the slopes face: 1 south, 0 north (from FABDEM)."),
-    "water_count": ("water", "Water sources", "WaterSources within 100 m of the line, counted up to 3."),
-    "dry_stretch": ("water", "Dry stretch", "Longest walk between WaterSources (floor 1 km)."),
-    "waterside": ("water", "Waterside", "Share of the walk within 200 m of sea, lake or wide river (WorldCover); alike within 0.5."),
+    "peaks_around": ("landscape", "Peaks around", "Peaks within 2 km of the line; scored by the fewer over the more (floor 1), against random hike pairs."),
+    "temperature": ("weather", "Temperature", "Mean temperature (June-August, or the chosen month); scored by the gap against random hike pairs, lowest from 10 °C apart."),
+    "precipitation": ("weather", "Precipitation", "Mean monthly precipitation (or the chosen month's); scored by the smaller over the larger (floor 10 mm), against random hike pairs."),
+    "solar_radiation": ("weather", "Solar radiation", "Solar radiation (June-August, or the chosen month), kJ m⁻² day⁻¹; scored by the gap against random hike pairs, lowest from 5,000 apart."),
+    "southness": ("weather", "Sun-facing slopes", "Which way the slopes face: 1 south, 0 north (from FABDEM); scored by the gap against random hike pairs."),
+    "water_count": ("water", "Water sources", "WaterSources within 100 m of the line, counted up to 3; scored by the gap against random hike pairs."),
+    "dry_stretch": ("water", "Dry stretch", "Longest walk between WaterSources; scored by the shorter over the longer (floor 1 km), against random hike pairs."),
+    "waterside": ("water", "Waterside", "Share of the walk within 200 m of sea, lake or wide river (WorldCover); scored by the gap against random hike pairs, a gap under 0.15 counting as none, lowest from 0.5 apart."),
     "hut_along": ("facilities", "Hut along", "A Hut within 100 m of the line, or not."),
     "restaurant_cafe_along": ("facilities", "Restaurant or cafe along", "A restaurant or cafe within 100 m of the line, or not."),
     "shelter_along": ("facilities", "Shelter along", "A Shelter within 100 m of the line, or not."),
     "restaurant_cafe_trailhead": ("facilities", "Restaurant at trailhead", "A restaurant or cafe within 500 m of the Trailhead, or not."),
     "parking_trailhead": ("facilities", "Parking at trailhead", "Parking within 500 m of the Trailhead, or not."),
     "surface": ("trail", "Surface", "Shared share of paved, gravel, natural and rock surface."),
-    "tarmac_approach": ("trail", "Tarmac approach", "Paved metres before the trail leaves the road; alike within 2 km."),
+    "tarmac_approach": ("trail", "Tarmac approach", "Paved metres before the trail leaves the road; scored by the gap against random hike pairs, lowest from 2 km apart."),
     "round_trip": ("trail", "Round trip", "Ends within 50 m of the Trailhead, or not (always, with the way back)."),
-    "climb_grade": ("steepness", "Climb grade", "Gain over the length of the stretches that climb (floor 3 %)."),
-    "steepest_km": ("steepness", "Steepest km", "Largest height change over 1 km (floor 50 m)."),
+    "climb_grade": ("steepness", "Climb grade", "Gain over the length of the stretches that climb; scored by the smaller over the larger (floor 3 %), against random hike pairs."),
+    "steepest_km": ("steepness", "Steepest km", "Largest height change over 1 km; scored by the smaller over the larger (floor 50 m), against random hike pairs."),
 }
+
+
+def score_note(
+    measure: Measure, raw: float | None, less_alike: float | None, as_alike: float | None
+) -> str | None:
+    """What a calibrated Measure score says, in words: the share of random hike
+    pairs less alike than this pair (``less_alike``), and of those scoring the same.
+
+    Without ties the share is the score itself. Pairs scoring the same are
+    never counted as less alike, so the sentence holds on Measures with many
+    ties (yes/no flags, zero-inflated facts).
+    """
+    if raw is None or less_alike is None or as_alike is None:
+        return None
+    less, same = round(100 * less_alike), round(100 * as_alike)
+    if measure.kind == "agree":
+        return f"Alike, as are {same}% of random hike pairs" if raw else f"Differ, as do {same}% of random hike pairs"
+    gap = measure.kind in ("ratio", "tolerance")
+    if less_alike == 0 and same:
+        return f"No random hike pair is {'further apart' if gap else 'less alike'}; {same}% score the same"
+    note = f"{'Difference smaller' if gap else 'More alike'} than {less}% of random hike pairs"
+    return f"{note}; {same}% score the same" if same else note
+
+
 MEASURE_GROUPS = ("effort", "altitude", "profile", "landscape", "weather", "water", "facilities", "trail", "steepness")
 POINT_COLUMNS = ("kind", "where", "lat", "lon", "along_m", "off_m", "name", "ele")
 
@@ -1114,13 +1140,22 @@ class ServingData:
     def _measures(
         self, store: SimilarityStore, seed: int | OutsideSeed, rows: np.ndarray, month: int | None
     ) -> list[dict]:
-        """Per row, every Measure's calibrated ``score`` and ``raw`` score against the Seed."""
+        """Per row, every Measure's calibrated ``score``, ``raw`` score and
+        ``score_note`` against the Seed."""
         measures = {}
         for measure in MEASURES:
             raw = measure_scores(store, measure, seed, rows, month=month)
-            measures[measure.name] = (raw, calibrate(store, _calibration_key(measure, month), raw))
+            key = _calibration_key(measure, month)
+            measures[measure.name] = (measure, raw, calibrate(store, key, raw), *random_pair_shares(store, key, raw))
         return [
-            {name: {"score": _value(calibrated[i]), "raw": _value(raw[i])} for name, (raw, calibrated) in measures.items()}
+            {
+                name: {
+                    "score": _value(calibrated[i]),
+                    "raw": _value(raw[i]),
+                    "note": score_note(measure, _value(raw[i]), _value(less[i]), _value(same[i])),
+                }
+                for name, (measure, raw, calibrated, less, same) in measures.items()
+            }
             for i in range(len(rows))
         ]
 

@@ -17,9 +17,10 @@ from dayhike.serving import (
     decode_polyline,
     encode_polyline,
     export_serving,
+    score_note,
     simplify_line,
 )
-from dayhike.similarity import FACT_COLUMNS, MEASURE_NAMES
+from dayhike.similarity import FACT_COLUMNS, MEASURE_NAMES, MEASURES
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
 RIDGE_WALK_ID = 1001
@@ -221,7 +222,31 @@ def test_rank_matches_rank_dayhikes_and_reports_every_measure(
     for result in results:
         assert set(result["measures"]) == set(MEASURE_NAMES)
     assert results[0]["measures"]["length"]["raw"] == pytest.approx(0.5)
-    assert results[0]["measures"]["elevation_gain"] == {"score": None, "raw": None}
+    assert "random hike pair" in results[0]["measures"]["length"]["note"]
+    assert results[0]["measures"]["elevation_gain"] == {"score": None, "raw": None, "note": None}
+
+
+BY_NAME = {measure.name: measure for measure in MEASURES}
+
+
+@pytest.mark.parametrize(
+    ("name", "raw", "less_alike", "as_alike", "note"),
+    [
+        # Calibrated 0.52 with no ties: the same 52 as the score.
+        ("solar_radiation", 0.696, 0.52, 0.0, "Difference smaller than 52% of random hike pairs"),
+        ("length", 0.9, 0.996, 0.0, "Difference smaller than 100% of random hike pairs"),
+        # Tied pairs are never counted as further apart.
+        ("waterside", 1.0, 0.156, 0.844, "Difference smaller than 16% of random hike pairs; 84% score the same"),
+        ("highest", 0.0, 0.0, 0.4, "No random hike pair is further apart; 40% score the same"),
+        ("landcover", 0.8, 0.7, 0.0, "More alike than 70% of random hike pairs"),
+        ("profile", 0.2, 0.0, 0.02, "No random hike pair is less alike; 2% score the same"),
+        ("hut_along", 1.0, 0.2, 0.8, "Alike, as are 80% of random hike pairs"),
+        ("round_trip", 0.0, 0.0, 0.3, "Differ, as do 30% of random hike pairs"),
+        ("length", None, None, None, None),
+    ],
+)
+def test_score_note_says_how_many_random_pairs_are_further_apart(name, raw, less_alike, as_alike, note) -> None:
+    assert score_note(BY_NAME[name], raw, less_alike, as_alike) == note
 
 
 def test_rank_respects_the_limit_and_the_allowed_rows(data: ServingData) -> None:

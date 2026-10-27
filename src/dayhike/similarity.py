@@ -160,7 +160,8 @@ class Measure:
 
     ``kind`` is ``ratio`` (smaller over larger, each raised to ``constant``),
     ``tolerance`` (1 at equal values, 0 once they differ by ``constant``;
-    values first capped at ``cap``), ``mix`` (shared share of fraction
+    values first capped at ``cap``, and gaps under ``dead_band`` count as
+    equal), ``mix`` (shared share of fraction
     columns), ``agree`` (1 when two yes/no flags agree, both-absent agrees) or
     ``profile`` (1 - mean abs difference of two ProfileShapes, the better of
     forward or reversed). A ``monthly`` Measure reads the QueryMonth column of
@@ -173,6 +174,7 @@ class Measure:
     constant: float | None = None
     cap: float | None = None
     monthly: bool = False
+    dead_band: float | None = None
 
 
 MEASURES = (
@@ -192,7 +194,7 @@ MEASURES = (
     Measure("southness", "tolerance", ("southness",), 1),
     Measure("water_count", "tolerance", ("water_count",), 3, cap=3),
     Measure("dry_stretch", "ratio", ("dry_stretch_m",), 1_000),
-    Measure("waterside", "tolerance", ("waterside_share",), 0.5),
+    Measure("waterside", "tolerance", ("waterside_share",), 0.5, dead_band=0.15),
     *(Measure(flag, "agree", (flag,)) for flag in FACILITIES_FLAG_COLUMNS),
     Measure("surface", "mix", SURFACE_SHARE_COLUMNS),
     Measure("tarmac_approach", "tolerance", ("tarmac_approach_m",), 2_000),
@@ -539,7 +541,10 @@ def measure_scores(
         return np.minimum(left, right) / np.maximum(left, right)
     if measure.cap is not None:
         left, right = np.minimum(left, measure.cap), np.minimum(right, measure.cap)
-    return np.maximum(0.0, 1.0 - np.abs(left - right) / measure.constant)
+    gap = np.abs(left - right)
+    if measure.dead_band is not None:
+        gap = np.where(gap < measure.dead_band, 0.0, gap)
+    return np.maximum(0.0, 1.0 - gap / measure.constant)
 
 
 def calibrate(store: SimilarityStore, key: str, scores: np.ndarray) -> np.ndarray:
@@ -549,6 +554,16 @@ def calibrate(store: SimilarityStore, key: str, scores: np.ndarray) -> np.ndarra
     """
     quantiles = store.quantiles[CALIBRATION_KEYS.index(key)]
     return _mid_rank(quantiles, scores)
+
+
+def random_pair_shares(
+    store: SimilarityStore, key: str, scores: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Shares of random pairs that score lower on ``key``, and that score the same.
+
+    The Calibration is the first plus half the second. NaN stays NaN.
+    """
+    return _below_and_ties(store.quantiles[CALIBRATION_KEYS.index(key)], scores)
 
 
 def weighted_mean(scores: np.ndarray, weights: np.ndarray) -> np.ndarray:
@@ -563,19 +578,29 @@ def weighted_mean(scores: np.ndarray, weights: np.ndarray) -> np.ndarray:
 
 
 def _mid_rank(sorted_values: np.ndarray, scores: np.ndarray) -> np.ndarray:
-    """Share of ``sorted_values`` below each score, ties counting half.
+    """Share of ``sorted_values`` below each score, ties counting half."""
+    below, ties = _below_and_ties(sorted_values, scores)
+    return below + ties / 2
+
+
+def _below_and_ties(sorted_values: np.ndarray, scores: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Shares of ``sorted_values`` below each score and equal to it; NaN for a NaN score.
 
     One search over the distinct values: ``below`` counts the values under
     each score and ``ties`` those equal to it.
     """
     if sorted_values.size == 0 or np.isnan(sorted_values).all():
-        return np.full(np.shape(scores), np.nan)
+        return np.full(np.shape(scores), np.nan), np.full(np.shape(scores), np.nan)
     distinct, first, count = np.unique(sorted_values, return_index=True, return_counts=True)
     at = np.searchsorted(distinct, scores, side="left")
     below = np.append(first, len(sorted_values))[at]
     nearest = np.minimum(at, len(distinct) - 1)
     ties = np.where(distinct[nearest] == scores, count[nearest], 0)
-    return np.where(np.isnan(scores), np.nan, (below + ties / 2) / len(sorted_values))
+    missing = np.isnan(scores)
+    return (
+        np.where(missing, np.nan, below / len(sorted_values)),
+        np.where(missing, np.nan, ties / len(sorted_values)),
+    )
 
 
 def _calibration_key(measure: Measure, month: int | None) -> str:

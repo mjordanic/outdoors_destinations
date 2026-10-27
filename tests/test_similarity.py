@@ -19,6 +19,7 @@ from dayhike.similarity import (
     AmenityPoints,
     SimilarityStore,
     calibrate,
+    random_pair_shares,
     calibrate_similarity,
     dem_heights,
     climb_and_descent,
@@ -83,6 +84,12 @@ def test_tolerance_is_one_minus_the_difference_over_d() -> None:
 def test_water_count_is_capped_before_the_tolerance() -> None:
     scores = _scores("water_count", water_count=[5, 3, 9, 0])
     assert scores == pytest.approx([1.0, 1.0, 1.0, 0.0])
+
+
+def test_waterside_counts_gaps_under_its_dead_band_as_equal() -> None:
+    # A cove or a bridge (gap under 0.15) is no difference; wider gaps keep the tolerance.
+    scores = _scores("waterside", waterside_share=[0.0, 0.107, 0.149, 0.2, 0.5, 0.8])
+    assert scores == pytest.approx([1.0, 1.0, 1.0, 0.6, 0.0, 0.0])
 
 
 def test_mix_is_the_shared_share_and_missing_with_any_share_missing() -> None:
@@ -184,6 +191,16 @@ def test_calibration_is_the_mid_rank_share_of_random_pairs_below() -> None:
     assert math.isnan(calibrated[5])
     # A key without random-pair scores cannot be calibrated.
     assert np.isnan(calibrate(store, "profile", scores)).all()
+
+
+def test_random_pair_shares_count_the_pairs_less_alike_and_as_alike() -> None:
+    quantiles = np.full((len(CALIBRATION_KEYS), 4), np.nan)
+    quantiles[CALIBRATION_KEYS.index("length")] = [0.2, 0.5, 0.5, 0.9]
+    store = _store(1, quantiles=quantiles)
+    less_alike, as_alike = random_pair_shares(store, "length", np.array([0.1, 0.5, 0.9, 0.95, np.nan]))
+    assert less_alike[:4] == pytest.approx([0.0, 0.25, 0.75, 1.0])
+    assert as_alike[:4] == pytest.approx([0.0, 0.5, 0.25, 0.0])
+    assert math.isnan(less_alike[4]) and math.isnan(as_alike[4])
 
 
 def test_weighted_mean_renormalizes_over_the_scored_columns() -> None:
