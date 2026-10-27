@@ -83,6 +83,7 @@ button.secondary:hover { border-color: var(--green); }
 .pick-map { height: 460px; }
 .compose-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0; }
 .compose-tools { display: flex; flex-wrap: wrap; gap: 6px; }
+.compose-tools[hidden] { display: none; }
 .compose-tools button.primary { padding: 7px 12px; font-size: 0.95rem; }
 .compose-tools input { min-width: 16em; }
 #compose-on[aria-pressed="true"] { border-color: var(--green); background: #e8f1ea; }
