@@ -534,6 +534,7 @@ dependencies = [
     { name = "osmium" },
     { name = "rasterio" },
     { name = "scikit-learn" },
+    { name = "scipy" },
     { name = "shapely" },
 ]
 
@@ -563,6 +564,7 @@ requires-dist = [
     { name = "osmium", specifier = ">=4.3.1" },
     { name = "rasterio", specifier = ">=1.5.1" },
     { name = "scikit-learn", specifier = ">=1.9.1" },
+    { name = "scipy", specifier = ">=1.18.1" },
     { name = "shapely", specifier = ">=2.1.2" },
     { name = "uvicorn", marker = "extra == 'web'", specifier = ">=0.54.0" },
 ]

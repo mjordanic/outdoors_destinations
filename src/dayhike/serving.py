@@ -13,6 +13,10 @@ similarity directory live. It writes a directory a server memory-maps:
   Measures count (along the line, Peaks around it, at the Trailhead) as
   zlib-compressed JSON (``POINT_COLUMNS`` per point); and ``hike_boxes``, an
   R*Tree of each simplified line's bounding box, for the hikes in a map view.
+- ``trailgraph.sqlite``: the Catalog's TrailGraph (ADR-0018), each Segment
+  with its line simplified like the hikes' and the metres it climbs each way,
+  when the Catalog has one: the page composes hikes from it, and its OSM node
+  and way ids resolve a shared link.
 - ``snaps.npz``: highway snaps of every Trailhead (``HighwaySnaps``), when a
   snap file or a Valhalla URL is given.
 - ``valhalla/``: the highways-only tile extract and a ``valhalla.json`` that
@@ -21,6 +25,8 @@ similarity directory live. It writes a directory a server memory-maps:
 
 ``ServingData`` opens such a directory without ``Catalog.open``: name search,
 the hikes in a map view, hike detail and Ranking all read the memory-mapped arrays and the SQLite file.
+The Segments in a map view and a ComposedHike's detail read ``trailgraph.sqlite``; a Ranking
+from a ComposedHike scores its facts against every DayHike like any Seed's.
 """
 
 from __future__ import annotations
@@ -53,6 +59,7 @@ from dayhike.catalog import (
     geometry_store_path_for,
     similarity_dir_for,
     straight_line_distances_m,
+    trailgraph_path_for,
 )
 from dayhike.similarity import (
     ALONG_KINDS,
@@ -62,15 +69,22 @@ from dayhike.similarity import (
     PEAKS_AROUND_M,
     SEARCH_STEP_M,
     TRAILHEAD_M,
+    TWIN_SHARE,
+    TWIN_STEP_M,
     AmenityPoints,
+    OutsideSeed,
     SimilarityStore,
     StaleSimilarity,
     _calibration_key,
     _check_climate,
     _densify,
+    _even_points,
+    _haversine_m,
     _measure_weights,
+    _path_length_m,
     _resample,
     _step_m,
+    are_twins,
     calibrate,
     climb_and_descent,
     measure_scores,
@@ -78,10 +92,11 @@ from dayhike.similarity import (
     rank_rows,
     score_rows,
 )
+from dayhike.trailgraph import TRAILHEAD_KINDS, ComposedWalk, Route, TrailGraph, decode_coords
 
 Progress = Callable[[str], None]
 
-SERVING_FORMAT = 3
+SERVING_FORMAT = 4
 SERVING_ROOT = "/data"  # where the container finds the export (web/Dockerfile)
 LINE_TOLERANCE_M = 10.0
 ELEVATION_POINTS = 128
@@ -89,6 +104,7 @@ TRAILHEAD_NEAREST = 3  # parking and restaurant/cafe points kept per Trailhead
 VALHALLA_CACHE_BYTES = 256 * 1024 * 1024  # mjolnir.max_cache_size; the build default is 1 GB
 SEARCH_SCAN_CAP = 5_000  # occurrences of the scanned word a search looks at, so short queries stay fast
 _HIKE_CHUNK = 2_000
+_RASTER_FACTS = ("tree_share", "temperature_c", "southness", "waterside_share")  # read from rasters
 _SIMILARITY_FILES = ("ids.npy", "facts.npy", "profile.npy", "twins.npy", "quantiles.npy", "meta.json")
 
 # Groups are sections of the weights panel only; scoring knows no groups (ADR-0013).
@@ -162,9 +178,10 @@ def export_serving(
         catalog.close()
     ids = np.array([row[0] for row in hikes], dtype=np.int64)
     try:
-        SimilarityStore.open_for(catalog_path, ids)
+        store = SimilarityStore.open_for(catalog_path, ids)
     except StaleSimilarity as exc:
         raise ServingExportError(str(exc)) from exc
+    _check_trailgraph_sampled(trailgraph_path_for(catalog_path), store)
     similarity = out / "similarity"
     similarity.mkdir(exist_ok=True)
     for name in _SIMILARITY_FILES:
@@ -172,6 +189,7 @@ def export_serving(
     trailheads = np.array([(row[4], row[5]) for row in hikes], dtype=np.float64).reshape(-1, 2)
     np.save(out / "trailheads.npy", trailheads)
     sources = _write_hikes(catalog_path, out / "hikes.sqlite", hikes, progress)
+    compose = _write_trailgraph(trailgraph_path_for(catalog_path), out / "trailgraph.sqlite", progress)
     # A rerun without tiles or snaps drops the old ones: they may be for other tiles.
     if valhalla_dir is not None:
         _write_valhalla(Path(valhalla_dir), out / "valhalla")
@@ -189,6 +207,7 @@ def export_serving(
         "elevation_points": ELEVATION_POINTS,
         "attribution": {"osm": attribution, **sources},
         "drive_time": (out / "valhalla" / "valhalla.json").is_file() and (out / "snaps.npz").is_file(),
+        "compose": compose,
         "export_seconds": round(time.monotonic() - started, 1),
     }
     (out / "meta.json").write_text(json.dumps(meta, indent=1, ensure_ascii=False))
@@ -260,6 +279,64 @@ def _write_hikes(
         geo.close()
         db.close()
     return sources
+
+
+def _check_trailgraph_sampled(source: Path, store: SimilarityStore) -> None:
+    """Refuse a TrailGraph ``sample-trailgraph`` never ran on when the similarity
+    facts read the rasters: its ComposedHikes would lack those facts."""
+    if not source.is_file() or all(np.isnan(store.column(name)).all() for name in _RASTER_FACTS):
+        return
+    graph = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+    try:
+        unsampled = graph.execute("SELECT 1 FROM segments WHERE landcover IS NULL LIMIT 1").fetchone()
+    finally:
+        graph.close()
+    if unsampled is not None:
+        raise ServingExportError(
+            f"{source}: the TrailGraph has no raster samples but the similarity facts do; "
+            "run `dayhike sample-trailgraph`"
+        )
+
+
+def _write_trailgraph(source: Path, path: Path, progress: Progress | None) -> bool:
+    """Copy the TrailGraph, adding each Segment's display line and
+    its climb each way; False (and no file) when the Catalog has no TrailGraph."""
+    path.unlink(missing_ok=True)
+    if not source.is_file():
+        return False
+    if progress is not None:
+        progress("serving export: TrailGraph")
+    graph = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+    try:
+        graph.execute("VACUUM INTO ?", (str(path),))
+    finally:
+        graph.close()
+    db = sqlite3.connect(path)
+    try:
+        db.executescript(
+            "ALTER TABLE segments ADD COLUMN line TEXT;"
+            "ALTER TABLE segments ADD COLUMN climb_ab REAL;"
+            "ALTER TABLE segments ADD COLUMN climb_ba REAL;"
+        )
+        updates = []
+        for segment_id, coords, ele in db.execute("SELECT id, coords, ele FROM segments"):
+            lat, lon = decode_coords(coords).T
+            ele = np.frombuffer(ele, dtype="<f4").astype(float)
+            climb_ab, climb_ba = climb_and_descent(lat, lon, ele)[0], climb_and_descent(lat[::-1], lon[::-1], ele[::-1])[0]
+            updates.append(
+                (
+                    encode_polyline(*simplify_line(lat, lon, LINE_TOLERANCE_M)),
+                    None if math.isnan(climb_ab) else round(climb_ab),
+                    None if math.isnan(climb_ba) else round(climb_ba),
+                    segment_id,
+                )
+            )
+        db.executemany("UPDATE segments SET line = ?, climb_ab = ?, climb_ba = ? WHERE id = ?", updates)
+        db.commit()
+        db.execute("VACUUM")
+    finally:
+        db.close()
+    return True
 
 
 @dataclass
@@ -493,6 +570,8 @@ class ServingData:
                 "rerun `dayhike export-serving`"
             )
         self.store = SimilarityStore.open_dir(self.directory / "similarity")
+        graph = self.directory / "trailgraph.sqlite"
+        self.trailgraph = TrailGraph(graph) if self.meta.get("compose") and graph.is_file() else None
         self.trailheads = np.load(self.directory / "trailheads.npy", mmap_mode="r")
         self._db_uri = f"file:{self.directory / 'hikes.sqlite'}?mode=ro&immutable=1"
         with self._db() as db:
@@ -615,9 +694,153 @@ class ServingData:
             "profile_shape": [_value(v) for v in self.store.profile[row]],
         }
 
+    def segments_in_box(
+        self, south: float, west: float, north: float, east: float, limit: int
+    ) -> tuple[dict, bool]:
+        """The TrailGraph Segments whose box meets the box, Links included, and
+        their Junctions; whether there are more than ``limit``, and then none.
+
+        A Segment is ``[id, kind, a, b, length_m, climb_ab, climb_ba, line,
+        sac_scale, routes, step_ab, step_ba]``, routes the labels of its OSM
+        relations and the steps how a ``Route`` names it walked from a and
+        from b; a Junction is ``[id, lat, lon, degree, key]``.
+        """
+        empty = {"junctions": [], "segments": []}
+        with sqlite3.connect(f"file:{self.trailgraph.path}?mode=ro", uri=True) as db:
+            found = db.execute(
+                "SELECT s.id, s.kind, s.a, s.b, s.length_m, s.climb_ab, s.climb_ba, s.line, s.sac_scale, "
+                "s.relation_ids, s.step_ab, s.step_ba FROM segment_boxes b JOIN segments s ON s.id = b.id "
+                "WHERE b.north >= ? AND b.south <= ? AND b.east >= ? AND b.west <= ? ORDER BY s.id LIMIT ?",
+                (south, north, west, east, limit + 1),
+            ).fetchall()
+            if len(found) > limit:
+                return empty, True
+            relation_ids = sorted({rel for row in found for rel in json.loads(row[9])})
+            labels = dict(
+                _in_chunks(db, "SELECT id, coalesce(name, ref) FROM relations WHERE id IN ({})", relation_ids)
+            )
+            ends = sorted({end for row in found for end in row[2:4]})
+            junctions = _in_chunks(
+                db, "SELECT id, latitude, longitude, degree, key FROM junctions WHERE id IN ({})", ends
+            )
+        segments = [
+            [*row[:9], [labels[rel] for rel in json.loads(row[9]) if labels.get(rel)][:3], *row[10:]]
+            for row in found
+        ]
+        return {"junctions": [list(row) for row in junctions], "segments": segments}, False
+
+    def compose(self, route: Route, name: str | None = None) -> dict:
+        """The detail of a ComposedHike, in the shape of ``detail``: ``id`` is None
+        and ``route`` holds the Route as text and its start Junction, Segment
+        ids and their steps in this export (None where the walk cuts a Segment,
+        as a link from an older build may). ``name`` is the Hiker's; without one it is proposed
+        from the trails walked most and a named place at the start."""
+        walk = self.trailgraph.walk(route)
+        facts, shape = self.trailgraph.facts(walk)
+        lat, lon, ele = walk.lat, walk.lon, walk.ele
+        walk_m = float(_step_m(lat, lon).sum())
+        line = elevation = climb_m = descent_m = None
+        if len(lat) >= 2:
+            line = encode_polyline(*simplify_line(lat, lon, LINE_TOLERANCE_M))
+            profile = _resample(lat, lon, ele, points=ELEVATION_POINTS)
+            if profile is not None:
+                elevation = {"step_m": walk_m / (ELEVATION_POINTS - 1), "metres": np.round(profile).astype(int).tolist()}
+                climb_m, descent_m = (round(v) for v in climb_and_descent(lat, lon, ele))
+        with sqlite3.connect(f"file:{self.trailgraph.path}?mode=ro", uri=True) as db:
+            labels = dict(
+                _in_chunks(db, "SELECT id, coalesce(name, ref) FROM relations WHERE id IN ({})", list(walk.relation_m))
+            )
+        routes = list(dict.fromkeys(labels[rel] for rel in walk.relation_m if labels.get(rel)))
+        return {
+            "id": None,
+            "route": {"text": str(route), "start": walk.start, "segments": walk.segments, "steps": walk.steps},
+            "name": name or self._proposed_name(walk, labels),
+            "name_origin": "hiker" if name else "proposed",
+            "sac_scale": walk.sac_scale,
+            "trailhead": [float(lat[0]), float(lon[0])],
+            "walk_m": walk_m,
+            "climb_m": climb_m,
+            "descent_m": descent_m,
+            "line": line,
+            "elevation": elevation,
+            "points": self._composed_points(lat, lon),
+            "facts": {column: _value(value) for column, value in facts.items()},
+            "profile_shape": None if shape is None else [_value(v) for v in shape],
+            "routes": routes,
+        }
+
+    def _proposed_name(self, walk: ComposedWalk, labels: dict[int, str]) -> str:
+        """The two trails walked longest, and the named place nearest the start
+        within ``TRAILHEAD_M``: "Summit Line and Lake Loop from Lakeside Inn"."""
+        main: dict[str, float] = {}
+        for relation, metres in walk.relation_m.items():
+            if labels.get(relation):
+                main[labels[relation]] = main.get(labels[relation], 0.0) + metres
+        trails = " and ".join(sorted(main, key=lambda label: -main[label])[:2]) or "Your hike"
+        lat, lon = float(walk.lat[0]), float(walk.lon[0])
+        near = [
+            (metres, row[4])
+            for row in self.trailgraph.amenities_near(walk.lat[:1], walk.lon[:1], TRAILHEAD_M)
+            if row[4] and (metres := _haversine_m(lat, lon, row[2], row[3])) <= TRAILHEAD_M
+        ]
+        return f"{trails} from {min(near)[1]}" if near else trails
+
+    def _composed_points(self, lat: np.ndarray, lon: np.ndarray) -> list[dict]:
+        """The amenity points a ComposedHike's detail shows, as ``_write_hikes`` picks them."""
+        rows = self.trailgraph.amenities_near(lat, lon, PEAKS_AROUND_M)
+        named = {row[0]: (row[4], _number(row[5])) for row in rows}
+
+        def kinds(wanted: tuple[str, ...]) -> _Kinds:
+            chosen = [row for row in rows if row[1] in wanted]
+            return _Kinds(
+                AmenityPoints([(row[2], row[3]) for row in chosen], [row[1] for row in chosen]),
+                np.array([row[0] for row in chosen], dtype=np.int64),
+            )
+
+        points = []
+        if len(lat) >= 2:
+            along = tuple(kind for kind in ALONG_KINDS if kind != "peak")
+            points = [p for wanted, radius in ((along, CORRIDOR_M), (("peak",), PEAKS_AROUND_M))
+                      for p in _line_points(kinds(wanted), lat, lon, radius)]  # fmt: skip
+            points.sort(key=lambda point: point[4])
+        points += _trailhead_points({kind: kinds((kind,)) for kind in TRAILHEAD_KINDS}, float(lat[0]), float(lon[0]))
+        for point in points:
+            point[6], point[7] = named[point[6]]
+        return [dict(zip(POINT_COLUMNS, point)) for point in points]
+
+    def _seed(self, seed: int | Route) -> int | OutsideSeed:
+        """A DayHike's store row, or a ComposedHike's facts beside the store
+        (the DayHikes it retraces as its Twins)."""
+        if not isinstance(seed, Route):
+            return self.row_of(seed)
+        walk = self.trailgraph.walk(seed)
+        facts, shape = self.trailgraph.facts(walk)
+        return OutsideSeed.of(facts, shape, self._retraced_rows(walk.lat, walk.lon))
+
+    def _retraced_rows(self, lat: np.ndarray, lon: np.ndarray) -> list[int]:
+        """Rows of the DayHikes a walk retraces: its Twins, on their served lines."""
+        if len(lat) < 2:
+            return []
+        walk = _even_points(lat, lon, TWIN_STEP_M)
+        length = _path_length_m(walk[:, 0], walk[:, 1])
+        with self._db() as db:
+            found = db.execute(
+                "SELECT h.id, h.line FROM hike_boxes b JOIN hikes h ON h.id = b.id "
+                "WHERE b.north >= ? AND b.south <= ? AND b.east >= ? AND b.west <= ?",
+                (lat.min(), lat.max(), lon.min(), lon.max()),
+            ).fetchall()
+        rows = []
+        for dayhike_id, line in found:
+            points = np.array(decode_polyline(line))
+            other = _even_points(points[:, 0], points[:, 1], TWIN_STEP_M)
+            other_length = _path_length_m(other[:, 0], other[:, 1])
+            if min(length, other_length) >= TWIN_SHARE * max(length, other_length) and are_twins(walk, other):
+                rows.append(self.row_of(dayhike_id))
+        return rows
+
     def rank(
         self,
-        seed_id: int,
+        seed: int | Route,
         weights: Mapping[str, float],
         *,
         month: int | None = None,
@@ -626,34 +849,41 @@ class ServingData:
     ) -> list[dict]:
         """The ``limit`` DayHikes most similar to one Seed, with every Measure's score.
 
-        Each Measure's ``score`` is its calibrated score (what the weights
-        average), ``raw`` the uncalibrated one; both are None where either
-        DayHike lacks the fact.
+        The Seed is a DayHike id or a ComposedHike's Route (the DayHikes it
+        retraces are left out, as a Seed's Twins). Each Measure's ``score`` is
+        its calibrated score (what the weights average), ``raw`` the
+        uncalibrated one; both are None where either hike lacks the fact.
         """
-        seed = self.row_of(seed_id)
+        seed_row = self._seed(seed)
         allowed = None if allowed_rows is None else self.store.ids[allowed_rows]
-        rows, scores = rank_rows(self.store, [seed], weights, month=month, allowed_ids=allowed, limit=limit)
+        rows, scores = rank_rows(self.store, [seed_row], weights, month=month, allowed_ids=allowed, limit=limit)
         results = self._summaries(rows.tolist())
-        for result, score, measures in zip(results, scores, self._measures(seed, rows, month)):
+        for result, score, measures in zip(results, scores, self._measures(seed_row, rows, month)):
             result["score"] = float(score)
             result["measures"] = measures
         return results
 
     def pair(
-        self, a_id: int, b_id: int, weights: Mapping[str, float], *, month: int | None = None
+        self, a: int | Route, b_id: int, weights: Mapping[str, float], *, month: int | None = None
     ) -> dict:
-        """How alike two DayHikes are: the score a Ranking would show for b
-        with a as the Seed (None when no weighted Measure is scored), and
-        every Measure's calibrated and raw score.
+        """How alike two hikes are: the score a Ranking would show for DayHike b
+        with a (a DayHike id or a ComposedHike's Route) as the Seed (None when no
+        weighted Measure is scored), and every Measure's calibrated and raw score.
         """
-        a, b = self.row_of(a_id), self.row_of(b_id)
+        a_row = self._seed(a)
+        b = self.row_of(b_id)
         chosen = _measure_weights(weights)
         _check_climate(self.store, month)
         rows = np.array([b])
-        similarity, _ = score_rows(self.store, [a], rows, chosen, month=month)
-        return {"a": a_id, "b": b_id, "score": _value(similarity[0]), "measures": self._measures(a, rows, month)[0]}
+        similarity, _ = score_rows(self.store, [a_row], rows, chosen, month=month)
+        return {
+            "a": None if isinstance(a, Route) else a,
+            "b": b_id,
+            "score": _value(similarity[0]),
+            "measures": self._measures(a_row, rows, month)[0],
+        }
 
-    def _measures(self, seed: int, rows: np.ndarray, month: int | None) -> list[dict]:
+    def _measures(self, seed: int | OutsideSeed, rows: np.ndarray, month: int | None) -> list[dict]:
         """Per row, every Measure's calibrated ``score`` and ``raw`` score against the Seed."""
         measures = {}
         for measure in MEASURES:
@@ -709,6 +939,15 @@ def _relevance(name: str, needle: str, words: list[str]) -> int:
     if all(any(part.startswith(word) for part in name_words) for word in words):
         return 2
     return 3
+
+
+def _in_chunks(db: sqlite3.Connection, query: str, values: list) -> list[tuple]:
+    """``query`` with its ``IN ({})`` filled by ``values``, a few hundred at a time."""
+    rows = []
+    for start in range(0, len(values), 900):
+        batch = values[start : start + 900]
+        rows += db.execute(query.format(",".join("?" * len(batch))), batch).fetchall()
+    return rows
 
 
 def _value(value: float) -> float | None:

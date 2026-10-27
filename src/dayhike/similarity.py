@@ -312,6 +312,31 @@ class SimilarityStore:
         return self.facts[FACT_COLUMNS.index(name)]
 
 
+@dataclass(frozen=True, eq=False)
+class OutsideSeed:
+    """A Seed that is no Catalog DayHike (a ComposedHike), scored beside a
+    store without joining it: its facts in ``FACT_COLUMNS`` order (NaN
+    missing), its ProfileShape, and the store rows of the DayHikes it
+    retraces, whose groups of Twins a Ranking from it leaves out.
+    """
+
+    facts: np.ndarray
+    profile: np.ndarray
+    twin_rows: np.ndarray
+
+    @classmethod
+    def of(
+        cls, facts: Mapping[str, float], profile: np.ndarray | None, twin_rows: Sequence[int] = ()
+    ) -> OutsideSeed:
+        return cls(
+            facts=np.array([facts.get(name, math.nan) for name in FACT_COLUMNS], dtype=np.float32),
+            profile=np.asarray(
+                np.full(PROFILE_POINTS, np.nan) if profile is None else profile, dtype=np.float32
+            ),
+            twin_rows=np.asarray(twin_rows, dtype=np.int64),
+        )
+
+
 def rank_dayhikes(
     catalog: Catalog,
     seeds: Sequence[str],
@@ -359,7 +384,7 @@ def rank_dayhikes(
 
 def rank_rows(
     store: SimilarityStore,
-    seed_rows: Sequence[int] | np.ndarray,
+    seed_rows: Sequence[int | OutsideSeed] | np.ndarray,
     weights: Mapping[str, float] | None = None,
     *,
     month: int | None = None,
@@ -369,16 +394,19 @@ def rank_rows(
     """``rank_dayhikes`` on store rows: the ranked rows and their scores.
 
     Seeds are store rows, not names, so a caller that already knows the
-    DayHike (a web page that picked it from a list) needs no Catalog.
+    DayHike (a web page that picked it from a list) needs no Catalog. A Seed
+    may also be an ``OutsideSeed``; the DayHikes it retraces count as its Twins.
     """
     chosen = _measure_weights(weights)
     _check_climate(store, month)
-    seed_rows = np.asarray(seed_rows, dtype=np.int64)
+    seeds = list(seed_rows)
+    inside = np.array([seed for seed in seeds if not isinstance(seed, OutsideSeed)], dtype=np.int64)
+    twin_rows = np.concatenate([inside, *(seed.twin_rows for seed in seeds if isinstance(seed, OutsideSeed))])
     rows = np.arange(len(store.ids))
     if allowed_ids is not None:
         rows = rows[np.isin(store.ids, np.fromiter(allowed_ids, dtype=np.int64))]
-    rows = rows[~np.isin(rows, seed_rows)]
-    similarity, raw = score_rows(store, seed_rows, rows, chosen, month=month)
+    rows = rows[~np.isin(rows, inside)]
+    similarity, raw = score_rows(store, seeds, rows, chosen, month=month)
     scored = ~np.isnan(similarity)
     rows, similarity, raw = rows[scored], similarity[scored], raw[scored]
     order = np.lexsort((store.ids[rows], -raw, -similarity))
@@ -386,7 +414,7 @@ def rank_rows(
     group = store.twins[rows]
     _, first = np.unique(group, return_index=True)
     keep = np.sort(first)
-    keep = keep[~np.isin(group[keep], store.twins[seed_rows])][:limit]
+    keep = keep[~np.isin(group[keep], store.twins[twin_rows])][:limit]
     return rows[keep], similarity[keep]
 
 
@@ -405,7 +433,7 @@ def _check_month(month: int | None) -> None:
 
 def score_rows(
     store: SimilarityStore,
-    seed_rows: Sequence[int],
+    seed_rows: Sequence[int | OutsideSeed],
     rows: np.ndarray,
     weights: Mapping[str, float],
     *,
@@ -441,17 +469,24 @@ def score_rows(
 def measure_scores(
     store: SimilarityStore,
     measure: Measure,
-    a: int | np.ndarray,
+    a: int | np.ndarray | OutsideSeed,
     b: np.ndarray,
     *,
     month: int | None = None,
 ) -> np.ndarray:
     """Raw scores of one Measure between DayHike rows ``a`` and ``b``.
 
-    ``a`` is one row (a Seed) or an array of rows paired with ``b``.
+    ``a`` is one row (a Seed), an ``OutsideSeed``, or an array of rows paired with ``b``.
     """
+
+    def seed_column(name: str) -> np.ndarray:
+        if isinstance(a, OutsideSeed):
+            return a.facts[FACT_COLUMNS.index(name)]
+        return store.column(name)[a]
+
     if measure.kind == "profile":
-        left, right = store.profile[a], store.profile[b]
+        left = a.profile if isinstance(a, OutsideSeed) else store.profile[a]
+        right = store.profile[b]
         forward = np.abs(right - left).mean(axis=-1)
         backward = np.abs(right - left[..., ::-1]).mean(axis=-1)
         return 1.0 - np.minimum(forward, backward)
@@ -460,11 +495,9 @@ def measure_scores(
         for name in measure.columns
     ]
     if measure.kind == "mix":
-        shared = sum(
-            np.minimum(store.column(name)[a], store.column(name)[b]) for name in columns
-        )
+        shared = sum(np.minimum(seed_column(name), store.column(name)[b]) for name in columns)
         return np.minimum(shared, 1.0)
-    left, right = store.column(columns[0])[a], store.column(columns[0])[b]
+    left, right = seed_column(columns[0]), store.column(columns[0])[b]
     if measure.kind == "agree":
         return np.where(np.isnan(left) | np.isnan(right), np.nan, left == right)
     if measure.kind == "ratio":
@@ -1171,8 +1204,20 @@ def solar_aspect_southness(
     component) / 2. Points flatter than ``SOLAR_ASPECT_MIN_SLOPE_DEG`` or
     without a height are left out; a DayHike with none left is NaN.
     """
+    southness = slope_southness(dem_dir, points[:, 0], points[:, 1])
+    sloped = ~np.isnan(southness)
+    count = np.bincount(owners[sloped], minlength=n)
+    total = np.bincount(owners[sloped], weights=southness[sloped], minlength=n)
+    with np.errstate(invalid="ignore"):
+        return np.where(count > 0, total / count, np.nan)
+
+
+def slope_southness(dem_dir: Path | str, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
+    """Southness of the slope at each point (see ``solar_aspect_southness``),
+    NaN where it is flatter than ``SOLAR_ASPECT_MIN_SLOPE_DEG`` or has no height.
+    """
     offset = SOLAR_ASPECT_OFFSET_ARCSEC / 3600
-    lat, lon = points[:, 0], points[:, 1]
+    lat, lon = np.asarray(lat, dtype=float), np.asarray(lon, dtype=float)
     here, east, north = dem_heights(
         dem_dir,
         np.concatenate([lat, lat, lat + offset]),
@@ -1183,14 +1228,11 @@ def solar_aspect_southness(
     rise_east = (east - here) / east_m
     rise_north = (north - here) / north_m
     grade = np.hypot(rise_east, rise_north)
-    sloped = np.degrees(np.arctan(grade)) >= SOLAR_ASPECT_MIN_SLOPE_DEG
-    # Downslope points against the gradient; its north component is
-    # -rise_north / grade, so a slope rising northward faces south.
-    southness = (1 + rise_north[sloped] / grade[sloped]) / 2
-    count = np.bincount(owners[sloped], minlength=n)
-    total = np.bincount(owners[sloped], weights=southness, minlength=n)
-    with np.errstate(invalid="ignore"):
-        return np.where(count > 0, total / count, np.nan)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        sloped = np.degrees(np.arctan(grade)) >= SOLAR_ASPECT_MIN_SLOPE_DEG
+        # Downslope points against the gradient; its north component is
+        # -rise_north / grade, so a slope rising northward faces south.
+        return np.where(sloped, (1 + rise_north / grade) / 2, np.nan)
 
 
 def waterside_share(
@@ -1206,8 +1248,6 @@ def waterside_share(
     wide rivers. Points without a tile are left out; a DayHike with none left
     is NaN.
     """
-    import rasterio
-
     beside = np.full(len(points), np.nan)
     lat, lon = points[:, 0], points[:, 1]
     corners = np.column_stack([np.floor(lat / 3), np.floor(lon / 3)]).astype(int) * 3
@@ -1215,11 +1255,41 @@ def waterside_share(
     order = np.argsort(tiles.ravel(), kind="stable")
     bounds = np.searchsorted(tiles.ravel()[order], np.arange(len(unique) + 1))
     for tile, (south, west) in enumerate(unique):
+        water = WaterTile.open(landcover_dir, south, west)
+        if water is None:
+            continue
+        at = order[bounds[tile] : bounds[tile + 1]]
+        rows, cols = water.cells(lat[at], lon[at])
+        beside[at] = water.beside(rows, cols, lat[at])
+    known = ~np.isnan(beside)
+    count = np.bincount(owners[known], minlength=n)
+    total = np.bincount(owners[known], weights=beside[known], minlength=n)
+    with np.errstate(invalid="ignore"):
+        return np.where(count > 0, total / count, np.nan)
+
+
+@dataclass(frozen=True)
+class WaterTile:
+    """One WorldCover tile read at ``WATERSIDE_OVERVIEW`` times its cells, for WaterSide.
+
+    ``summed`` is the summed-area table of its permanent-water cells, so the
+    water cells in any window are four reads.
+    """
+
+    transform: object  # rasterio Affine of the overview grid
+    height: int
+    width: int
+    summed: np.ndarray
+
+    @classmethod
+    def open(cls, landcover_dir: Path | str, south: int, west: int) -> WaterTile | None:
+        """The tile whose southwest corner is (south, west), or None without one."""
+        import rasterio
+
         tile_id = worldcover_tile_id(south, west)
         path = Path(landcover_dir) / f"ESA_WorldCover_10m_2021_v200_{tile_id}_Map.tif"
         if not path.is_file():
-            continue
-        at = order[bounds[tile] : bounds[tile + 1]]
+            return None
         with rasterio.open(path) as dataset:
             height = dataset.height // WATERSIDE_OVERVIEW
             width = dataset.width // WATERSIDE_OVERVIEW
@@ -1227,24 +1297,33 @@ def waterside_share(
             transform = dataset.transform @ rasterio.Affine.scale(
                 dataset.width / width, dataset.height / height
             )
-        rows, cols = rasterio.transform.rowcol(transform, lon[at], lat[at])
-        rows = np.clip(np.asarray(rows), 0, height - 1)
-        cols = np.clip(np.asarray(cols), 0, width - 1)
-        cell_m = math.radians(abs(transform.e)) * EARTH_RADIUS_M
-        reach_rows = round(WATERSIDE_M / cell_m)
-        reach_cols = np.round(WATERSIDE_M / (cell_m * np.cos(np.radians(lat[at])))).astype(int)
-        # Water cells in any window: four reads of the summed-area table.
         summed = np.zeros((height + 1, width + 1), dtype=np.int32)
         summed[1:, 1:] = water.cumsum(axis=0, dtype=np.int32).cumsum(axis=1, dtype=np.int32)
-        top, bottom = np.maximum(rows - reach_rows, 0), np.minimum(rows + reach_rows + 1, height)
-        left, right = np.maximum(cols - reach_cols, 0), np.minimum(cols + reach_cols + 1, width)
+        return cls(transform, height, width, summed)
+
+    def cells(self, lat: np.ndarray, lon: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """The overview row and column of each point (clipped to the grid)."""
+        import rasterio
+
+        rows, cols = rasterio.transform.rowcol(self.transform, lon, lat)
+        return (
+            np.clip(np.atleast_1d(np.asarray(rows)), 0, self.height - 1),
+            np.clip(np.atleast_1d(np.asarray(cols)), 0, self.width - 1),
+        )
+
+    def beside(self, rows: np.ndarray, cols: np.ndarray, lat: np.ndarray) -> np.ndarray:
+        """Whether each cell is beside open water, seen from a point at ``lat``:
+        at least ``WATERSIDE_MIN_SHARE`` of the cells within ``WATERSIDE_M``
+        (a square cut at the tile edge) are water.
+        """
+        cell_m = math.radians(abs(self.transform.e)) * EARTH_RADIUS_M
+        reach_rows = round(WATERSIDE_M / cell_m)
+        reach_cols = np.round(WATERSIDE_M / (cell_m * np.cos(np.radians(lat)))).astype(int)
+        top, bottom = np.maximum(rows - reach_rows, 0), np.minimum(rows + reach_rows + 1, self.height)
+        left, right = np.maximum(cols - reach_cols, 0), np.minimum(cols + reach_cols + 1, self.width)
+        summed = self.summed
         count = summed[bottom, right] - summed[top, right] - summed[bottom, left] + summed[top, left]
-        beside[at] = count >= WATERSIDE_MIN_SHARE * (bottom - top) * (right - left)
-    known = ~np.isnan(beside)
-    count = np.bincount(owners[known], minlength=n)
-    total = np.bincount(owners[known], weights=beside[known], minlength=n)
-    with np.errstate(invalid="ignore"):
-        return np.where(count > 0, total / count, np.nan)
+        return count >= WATERSIDE_MIN_SHARE * (bottom - top) * (right - left)
 
 
 def twin_groups(routes: Sequence[np.ndarray | None]) -> np.ndarray:
@@ -1273,19 +1352,27 @@ def twin_groups(routes: Sequence[np.ndarray | None]) -> np.ndarray:
     reach = np.maximum(TWIN_M, (1 - TWIN_SHARE) * length / TWIN_SHARE) / EARTH_RADIUS_M
     near = BallTree(centre, metric="haversine").query_radius(centre, r=reach)
 
-    def share_on(a: np.ndarray, b: np.ndarray) -> float:
-        distance, _ = nearest_on_line(b[:, 0], b[:, 1], a[:, 0], a[:, 1])
-        return float((distance <= TWIN_M).mean())
-
     for i, others in enumerate(near):
         for j in others[others > i]:
             if min(length[i], length[j]) < TWIN_SHARE * max(length[i], length[j]):
                 continue
-            a, b = routes[have[i]], routes[have[j]]
-            if share_on(a, b) >= TWIN_SHARE and share_on(b, a) >= TWIN_SHARE:
+            if are_twins(routes[have[i]], routes[have[j]]):
                 first, second = sorted((root(have[i]), root(have[j])))
                 parent[second] = first
     return np.array([root(row) for row in range(len(routes))])
+
+
+def are_twins(a: np.ndarray, b: np.ndarray) -> bool:
+    """Whether two walks, as (lat, lon) rows every ``TWIN_STEP_M``, are Twins:
+    at least ``TWIN_SHARE`` of each one's points lie within ``TWIN_M`` of the
+    other's line.
+    """
+
+    def share_on(a: np.ndarray, b: np.ndarray) -> float:
+        distance, _ = nearest_on_line(b[:, 0], b[:, 1], a[:, 0], a[:, 1])
+        return float((distance <= TWIN_M).mean())
+
+    return share_on(a, b) >= TWIN_SHARE and share_on(b, a) >= TWIN_SHARE
 
 
 def dem_heights(dem_dir: Path | str, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
