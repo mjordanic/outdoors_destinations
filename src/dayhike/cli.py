@@ -62,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     ingest.add_argument(
         "--snap-tolerance",
-        type=float,
+        type=_parse_snap_tolerance,
         default=SNAP_TOLERANCE_M,
         metavar="METRES",
         help="TrailGraph: join a dead-end tip to another way this close, at most 50 "
@@ -269,7 +269,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Compose a hike from TrailGraph Segments and rank DayHikes like it (reads a serving export)",
     )
     compose.add_argument("--data", type=Path, default=Path("data/web-serving"), help="Serving export directory")
-    compose.add_argument("--start", required=True, type=int, help="Start Junction id (an OSM node id)")
+    compose.add_argument("--name", default=None, help="Name of the hike (default: proposed from its trails)")
     compose.add_argument("--month", type=int, default=None, help="QueryMonth 1-12")
     compose.add_argument(
         "--limit", type=int, default=10, help="Print the best this many DayHikes like it (default: 10)"
@@ -281,7 +281,9 @@ def main(argv: list[str] | None = None) -> int:
         metavar="MEASURE=WEIGHT",
         help="Weight 0-100 of one Measure, repeatable, as for rank",
     )
-    compose.add_argument("segments", nargs="+", type=int, help="Segment ids in walking order")
+    compose.add_argument(
+        "route", help="The hike as its shared link holds it: start:step,step,... (the text after #compose=)"
+    )
     nearby = subparsers.add_parser(
         "nearby", help="List DayHikes within a max DriveTime of an Origin, nearest first"
     )
@@ -365,8 +367,8 @@ def main(argv: list[str] | None = None) -> int:
         try:
             return _compose(
                 args.data,
-                args.start,
-                args.segments,
+                args.route,
+                args.name,
                 dict(args.weight) if args.weight else None,
                 args.month,
                 args.limit,
@@ -529,8 +531,8 @@ def _sample_trailgraph(catalog_path: Path, dem_dir: Path, landcover_dir: Path, c
 
 def _compose(
     data: Path,
-    start: int,
-    segments: list[int],
+    route_text: str,
+    name: str | None,
     weights: dict[str, float] | None,
     month: int | None,
     limit: int,
@@ -543,11 +545,11 @@ def _compose(
     if serving.trailgraph is None:
         print(f"{data}: no TrailGraph in this export; ingest again, then export-serving", file=sys.stderr)
         return 1
-    route = Route(start, tuple(segments))
-    hike = serving.compose(route)
+    route = Route.parse(route_text)
+    hike = serving.compose(route, name)
     facts = hike["facts"]
     print(
-        f"composed\t{hike['walk_m']:.0f} m\tclimb {hike['climb_m']} m\tdescent {hike['descent_m']} m"
+        f"{hike['name']}\t{hike['walk_m']:.0f} m\tclimb {hike['climb_m']} m\tdescent {hike['descent_m']} m"
         f"\thighest {facts['highest_m']}\tround trip {bool(facts['round_trip'])}"
     )
     for result in serving.rank(route, DEFAULT_WEIGHTS if weights is None else weights, month=month, limit=limit):
@@ -633,6 +635,17 @@ def _serve(data: Path, host: str, port: int, valhalla_url: str | None, forwarded
     socket.setdefaulttimeout(VALHALLA_TIMEOUT_S)
     uvicorn.run(app, host=host, port=port, log_level="info", proxy_headers=False)
     return 0
+
+
+def _parse_snap_tolerance(value: str) -> float:
+    from dayhike.trailgraph import check_snap_tolerance
+
+    try:
+        metres = float(value)
+        check_snap_tolerance(metres)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+    return metres
 
 
 def _parse_weight(value: str) -> tuple[str, float]:

@@ -518,8 +518,9 @@ def build_catalog(
     (``snap_tolerance_m``, see ``dayhike.trailgraph``) are written beside it.
     """
     from dayhike.ingest import emit_progress, run_ingest, write_geometry_store
-    from dayhike.trailgraph import write_trailgraph
+    from dayhike.trailgraph import check_snap_tolerance, write_trailgraph
 
+    check_snap_tolerance(snap_tolerance_m)
     catalog_path = Path(catalog_path)
     kept, report, work_path = run_ingest(
         _osm_paths(osm_path), catalog_path, progress=progress, fresh=fresh

@@ -20,7 +20,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from dayhike.catalog import MatrixClient, Origin
 from dayhike.serving import MEASURE_GROUPS, MEASURE_INFO, ServingData
@@ -33,6 +33,7 @@ MAX_DRIVE_HOURS = 4.0
 MAP_HIKES = 100  # a map view shows its hikes only when it holds at most this many
 MAP_SEGMENTS = 1_500  # and its TrailGraph Segments only when it holds at most this many
 ROUTE_SEGMENTS = 500  # the most Segments a ComposedHike may have
+NAME_LENGTH = 120  # the longest name a Hiker may give a ComposedHike
 # Requests per client per RATE_WINDOW_S: Ranking, and everything else under /api.
 RANK_RATE = 20
 API_RATE = 300
@@ -64,13 +65,25 @@ class Weighted(BaseModel):
 
 
 class Composed(BaseModel):
-    """A ComposedHike: its start Junction and its Segments in walking order."""
+    """A ComposedHike: its Route as text (``Route.parse``) and the Hiker's name for it."""
 
-    start: int
-    segments: list[int] = Field(min_length=1, max_length=ROUTE_SEGMENTS)
+    route: str = Field(max_length=40 * ROUTE_SEGMENTS)  # a step is at most about 36 characters
+    name: str | None = Field(default=None, max_length=NAME_LENGTH)
 
-    def route(self) -> Route:
-        return Route(self.start, tuple(self.segments))
+    @field_validator("route")
+    @classmethod
+    def _route(cls, text: str) -> str:
+        if not 1 <= len(Route.parse(text).steps) <= ROUTE_SEGMENTS:
+            raise ValueError(f"a composed hike has 1 to {ROUTE_SEGMENTS} segments")
+        return text
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, name: str | None) -> str | None:
+        return (name or "").strip() or None
+
+    def parsed(self) -> Route:
+        return Route.parse(self.route)
 
 
 class RankRequest(Weighted):
@@ -221,7 +234,7 @@ def create_app(
                 raise HTTPException(404, f"no DayHike {dayhike_id}") from None
             return dayhike_id
         trailgraph()
-        return composed.route()
+        return composed.parsed()
 
     @app.api_route("/api/segments", methods=["GET", "HEAD"])
     def segments_in_box(
@@ -240,7 +253,7 @@ def create_app(
     def compose(body: Composed) -> dict:
         trailgraph()
         try:
-            return data.compose(body.route())
+            return data.compose(body.parsed(), body.name)
         except RouteError as error:
             raise HTTPException(400, str(error)) from None
 

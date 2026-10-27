@@ -186,7 +186,7 @@ IngestReport(kept=4, dropped_unnamed=0, dropped_length=2, dropped_network=1, nam
 Progress (`filter:`, `relations:`, `ways:`, `nodes:`, `assemble:`, `write:`,
 `trailgraph:`) goes to **stderr**. The same command also writes
 `data/catalog.geometry.sqlite` and `data/catalog.trailgraph.sqlite`
-(`--snap-tolerance` sets the TrailGraph's snap tolerance). Add `--list` to print kept DayHikes as
+(`--snap-tolerance` sets the TrailGraph's snap tolerance, above 0 and at most 50 m, checked before ingest starts). Add `--list` to print kept DayHikes as
 `id`, name, `length_m`. `--fresh` ignores a leftover work file and starts
 again.
 
@@ -354,8 +354,8 @@ web demo as "connect here" and never walked unless picked. See
 
 | Table | Contents |
 | --- | --- |
-| `junctions` | id (the OSM node id; a crossing is negative), lat, lon, degree |
-| `segments` | id, kind (`trail`, `gap`, `link`), Junctions `a` and `b`, length, strictest `sac_scale`, OSM way and relation ids, per-way metres and surface (`parts`), node ids, and vertices as packed arrays: coordinates (1e-7 degree integers), `ele`, `landcover`, `climate_cell`, `southness` |
+| `junctions` | id (the OSM node id; a crossing is negative), lat, lon, degree, and `key`, its name in a shared link (the OSM node id, or `c{lat}_{lon}` in 1e-7 degrees for a crossing) |
+| `segments` | id, kind (`trail`, `gap`, `link`), Junctions `a` and `b`, length, strictest `sac_scale`, OSM way and relation ids, per-way metres and surface (`parts`), node ids, vertices as packed arrays: coordinates (1e-7 degree integers), `ele`, `landcover`, `climate_cell`, `southness`, and `step_ab` / `step_ba`, how a shared link names it walked from `a` and from `b` |
 | `segment_boxes` | R*Tree of each Segment's bounding box |
 | `relations` | id, name, ref and network of the relations on the Segments |
 | `amenities`, `amenity_boxes` | the amenity points the Measures count near the network, with an R*Tree |
@@ -367,7 +367,9 @@ At ingest `ele` is OSM `ele` and the other per-vertex arrays are unset.
 `sample-trailgraph` reads the same FABDEM, WorldCover and CHELSA rasters as
 the other sample steps, so a server without rasters can compute a composed
 hike's facts with the same rules as a DayHike's. It does not touch the Catalog
-and needs rerunning after every ingest. On Slovenia the file is 35 MB.
+and needs rerunning after every ingest: `export-serving` refuses a TrailGraph
+it never ran on when the similarity facts read the rasters. On Slovenia the
+file is 35 MB.
 
 ## 3. Rank by Seed
 
@@ -1498,9 +1500,13 @@ tick "Select hike on map", zoom in (hikes show from zoom 12, once the view
 holds at most 100, as lines with both ends marked) and click one, or press
 "Design your own from segments" there and draw a walk from the marked hiking
 network (Segments show from zoom 13; click a Junction or a Segment to start,
-then a Segment to walk the shortest way to it and along it; "connect here" crosses
-a Link; the walk may repeat a Segment and is measured as drawn; its link,
-`#compose=start:1,2,3`, shares it, nothing is stored); see what
+then a Segment to walk along it; one away from the walk's end is reached the
+shortest way over trail Segments, drawn dashed in amber, never over a gap or
+Link the Hiker did not take; "connect here" crosses a Link; the walk may repeat
+a Segment and is measured as drawn; it gets a proposed name, from the trails
+walked longest and a named place at the start, that the Hiker may change; its
+link, `#compose=1:104.11,105.13&name=…`, shares it by OSM node and way ids, so
+it opens the same walk after a rebuild, and nothing is stored); see what
 the similarity looks at (route and amenity points on an OpenStreetMap map,
 elevation profile in metres above sea level, land cover, trail surface,
 climate by month, and the fact behind every Measure), set a 0–100 weight or
@@ -1567,10 +1573,13 @@ excluded and month, giving the score a Ranking would show for `b` with `a` as
 the Seed and every Measure's score. With a TrailGraph (`compose` true in
 `/api/info`): `GET /api/segments?south=&west=&north=&east=` (the Segments and
 Junctions in that box, none and `too_many` true above 1,500), `POST
-/api/compose` with `{"start": junction, "segments": [id, ...]}` (up to 500,
-each starting where the walk so far ends), giving the same detail as `GET
-/api/hikes/{id}` with `id` null, and `"composed": {"start", "segments"}` in
-place of `seed` (rank) or `a` (pair). A composed Seed is compared with Catalog
+/api/compose` with `{"route": "start:step,...", "name": optional}` (the
+Route as its link holds it, up to 500 Segments; see `dayhike.trailgraph.Route`),
+giving the same detail as `GET /api/hikes/{id}` with `id` null, the proposed or
+given `name`, and `route` with its text and its Junction and Segment ids in
+this export; a step that no longer names a Segment is refused with a message
+naming the OSM way and nodes. `"composed": {"route"}` stands in place of
+`seed` (rank) or `a` (pair). A composed Seed is compared with Catalog
 DayHikes only; the DayHikes it retraces (its Twins) are not listed. The GET routes also answer HEAD. Each client gets 20 Rankings and
 300 other calls a minute; one Ranking runs at a time per process.
 
@@ -1766,8 +1775,8 @@ CLI: `dayhike ingest`, `dayhike fetch-extracts`, `dayhike fetch-dem`,
 `dayhike sample-dem`, `dayhike fetch-landcover`, `dayhike sample-landcover`,
 `dayhike fetch-climate`, `dayhike sample-climate`, `dayhike sample-trailgraph`,
 `dayhike build-similarity` (`--calibrate-only`), `dayhike rank` (`--weight`,
-`--month`, `--limit`), `dayhike compose` (`--start`, Segment ids, `--weight`,
-`--month`, `--limit`; reads a serving export), `dayhike nearby`, `dayhike export-serving`, `dayhike serve`, `dayhike coverage-map`.
+`--month`, `--limit`), `dayhike compose` (the Route text of a shared link,
+`--name`, `--weight`, `--month`, `--limit`; reads a serving export), `dayhike nearby`, `dayhike export-serving`, `dayhike serve`, `dayhike coverage-map`.
 
 Docstrings on those functions use the glossary in `CONTEXT.md`.
 Examples: [`01`](notebooks/01_raw_data_and_ingestion.ipynb) ingest,

@@ -311,29 +311,29 @@ class SimilarityStore:
     def column(self, name: str) -> np.ndarray:
         return self.facts[FACT_COLUMNS.index(name)]
 
-    def with_seed(
-        self,
-        facts: Mapping[str, float],
-        profile: np.ndarray | None,
-        twins_of: Sequence[int] = (),
-    ) -> SimilarityStore:
-        """This store with one more row last: a Seed that is no Catalog DayHike
-        (a ComposedHike), with id -1. The groups of Twins of ``twins_of`` rows
-        join its group, so a Ranking from it leaves them out (``rank_rows``).
-        """
-        n = len(self.ids)
-        column = np.array([facts.get(name, math.nan) for name in FACT_COLUMNS], dtype=np.float32)
-        shape = np.full(PROFILE_POINTS, np.nan, dtype=np.float32) if profile is None else profile
-        twins = np.append(self.twins, n)
-        if len(twins_of):
-            twins[:n][np.isin(self.twins, self.twins[np.asarray(twins_of)])] = n
-        return SimilarityStore(
-            ids=np.append(self.ids, -1),
-            facts=np.concatenate([self.facts, column[:, None]], axis=1),
-            profile=np.concatenate([self.profile, np.asarray(shape, dtype=np.float32)[None]]),
-            twins=twins,
-            quantiles=self.quantiles,
-            catalog_digest=self.catalog_digest,
+
+@dataclass(frozen=True, eq=False)
+class OutsideSeed:
+    """A Seed that is no Catalog DayHike (a ComposedHike), scored beside a
+    store without joining it: its facts in ``FACT_COLUMNS`` order (NaN
+    missing), its ProfileShape, and the store rows of the DayHikes it
+    retraces, whose groups of Twins a Ranking from it leaves out.
+    """
+
+    facts: np.ndarray
+    profile: np.ndarray
+    twin_rows: np.ndarray
+
+    @classmethod
+    def of(
+        cls, facts: Mapping[str, float], profile: np.ndarray | None, twin_rows: Sequence[int] = ()
+    ) -> OutsideSeed:
+        return cls(
+            facts=np.array([facts.get(name, math.nan) for name in FACT_COLUMNS], dtype=np.float32),
+            profile=np.asarray(
+                np.full(PROFILE_POINTS, np.nan) if profile is None else profile, dtype=np.float32
+            ),
+            twin_rows=np.asarray(twin_rows, dtype=np.int64),
         )
 
 
@@ -384,7 +384,7 @@ def rank_dayhikes(
 
 def rank_rows(
     store: SimilarityStore,
-    seed_rows: Sequence[int] | np.ndarray,
+    seed_rows: Sequence[int | OutsideSeed] | np.ndarray,
     weights: Mapping[str, float] | None = None,
     *,
     month: int | None = None,
@@ -394,16 +394,19 @@ def rank_rows(
     """``rank_dayhikes`` on store rows: the ranked rows and their scores.
 
     Seeds are store rows, not names, so a caller that already knows the
-    DayHike (a web page that picked it from a list) needs no Catalog.
+    DayHike (a web page that picked it from a list) needs no Catalog. A Seed
+    may also be an ``OutsideSeed``; the DayHikes it retraces count as its Twins.
     """
     chosen = _measure_weights(weights)
     _check_climate(store, month)
-    seed_rows = np.asarray(seed_rows, dtype=np.int64)
+    seeds = list(seed_rows)
+    inside = np.array([seed for seed in seeds if not isinstance(seed, OutsideSeed)], dtype=np.int64)
+    twin_rows = np.concatenate([inside, *(seed.twin_rows for seed in seeds if isinstance(seed, OutsideSeed))])
     rows = np.arange(len(store.ids))
     if allowed_ids is not None:
         rows = rows[np.isin(store.ids, np.fromiter(allowed_ids, dtype=np.int64))]
-    rows = rows[~np.isin(rows, seed_rows)]
-    similarity, raw = score_rows(store, seed_rows, rows, chosen, month=month)
+    rows = rows[~np.isin(rows, inside)]
+    similarity, raw = score_rows(store, seeds, rows, chosen, month=month)
     scored = ~np.isnan(similarity)
     rows, similarity, raw = rows[scored], similarity[scored], raw[scored]
     order = np.lexsort((store.ids[rows], -raw, -similarity))
@@ -411,7 +414,7 @@ def rank_rows(
     group = store.twins[rows]
     _, first = np.unique(group, return_index=True)
     keep = np.sort(first)
-    keep = keep[~np.isin(group[keep], store.twins[seed_rows])][:limit]
+    keep = keep[~np.isin(group[keep], store.twins[twin_rows])][:limit]
     return rows[keep], similarity[keep]
 
 
@@ -430,7 +433,7 @@ def _check_month(month: int | None) -> None:
 
 def score_rows(
     store: SimilarityStore,
-    seed_rows: Sequence[int],
+    seed_rows: Sequence[int | OutsideSeed],
     rows: np.ndarray,
     weights: Mapping[str, float],
     *,
@@ -466,17 +469,24 @@ def score_rows(
 def measure_scores(
     store: SimilarityStore,
     measure: Measure,
-    a: int | np.ndarray,
+    a: int | np.ndarray | OutsideSeed,
     b: np.ndarray,
     *,
     month: int | None = None,
 ) -> np.ndarray:
     """Raw scores of one Measure between DayHike rows ``a`` and ``b``.
 
-    ``a`` is one row (a Seed) or an array of rows paired with ``b``.
+    ``a`` is one row (a Seed), an ``OutsideSeed``, or an array of rows paired with ``b``.
     """
+
+    def seed_column(name: str) -> np.ndarray:
+        if isinstance(a, OutsideSeed):
+            return a.facts[FACT_COLUMNS.index(name)]
+        return store.column(name)[a]
+
     if measure.kind == "profile":
-        left, right = store.profile[a], store.profile[b]
+        left = a.profile if isinstance(a, OutsideSeed) else store.profile[a]
+        right = store.profile[b]
         forward = np.abs(right - left).mean(axis=-1)
         backward = np.abs(right - left[..., ::-1]).mean(axis=-1)
         return 1.0 - np.minimum(forward, backward)
@@ -485,11 +495,9 @@ def measure_scores(
         for name in measure.columns
     ]
     if measure.kind == "mix":
-        shared = sum(
-            np.minimum(store.column(name)[a], store.column(name)[b]) for name in columns
-        )
+        shared = sum(np.minimum(seed_column(name), store.column(name)[b]) for name in columns)
         return np.minimum(shared, 1.0)
-    left, right = store.column(columns[0])[a], store.column(columns[0])[b]
+    left, right = seed_column(columns[0]), store.column(columns[0])[b]
     if measure.kind == "agree":
         return np.where(np.isnan(left) | np.isnan(right), np.nan, left == right)
     if measure.kind == "ratio":

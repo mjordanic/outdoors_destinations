@@ -39,6 +39,7 @@ const SEGMENT_LINE = { color: "#2563eb", weight: 3, opacity: 0.75 };
 const SEGMENT_GAP = { ...SEGMENT_LINE, dashArray: "4 6" };
 const SEGMENT_HOVER = { color: "#c2410c", weight: 5, opacity: 1, dashArray: null };
 const ROUTE_LINE = { color: "#c2410c", weight: 6, opacity: 0.85 };
+const AUTO_LINE = { color: "#d97706", weight: 6, opacity: 0.9, dashArray: "10 6" }; // added to reach a click
 const LINK_LINE = { color: "#8e44ad", weight: 4, opacity: 0.9, dashArray: "2 7" };
 
 const state = {
@@ -180,12 +181,12 @@ function nodata(text) {
 
 // What a request names as the liked hike: a DayHike id, or a composed hike's route.
 function likedSeed(liked, key) {
-  return liked.route ? { composed: liked.route } : { [key]: liked.id };
+  return liked.route ? { composed: { route: liked.route.text } } : { [key]: liked.id };
 }
 
-// A composed hike's shareable address: its start junction and segments.
-function routeHash(route) {
-  return `#compose=${route.start}:${route.segments.join(",")}`;
+// A composed hike's shareable address: its route by OSM node and way ids, and its name.
+function routeHash(hike) {
+  return `#compose=${hike.route.text}&name=${encodeURIComponent(hike.name)}`;
 }
 
 // ---------- charts ----------
@@ -410,7 +411,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     <div class="detail-head">
       <div><div class="role">${escapeHtml(role)}</div><h2>${escapeHtml(hike.name)}</h2></div>
       ${hike.route
-        ? `<a href="${routeHash(hike.route)}" title="This page's address opens this hike again">Link to this hike</a>`
+        ? `<a href="${routeHash(hike)}" title="This page's address opens this hike again">Link to this hike</a>`
         : `<a href="https://www.openstreetmap.org/relation/${hike.id}" target="_blank" rel="noopener">OpenStreetMap relation ${hike.id}</a>`}
     </div>
     ${scoreLine}
@@ -618,22 +619,25 @@ async function choose(id) {
   }
 }
 
-async function chooseComposed(route) {
+async function chooseComposed(route, name) {
   const request = ++chosen;
   setStatus("Measuring your hike…");
   try {
     const hike = await api("/api/compose", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(route),
+      body: JSON.stringify({ route, name: name || null }),
     });
     if (request !== chosen) return;
     state.liked = hike;
     $("#search").value = "";
-    $("#liked-name").textContent = `Chosen: your hike, ${fmt.km(hike.walk_m)} from ${route.segments.length} segment${route.segments.length === 1 ? "" : "s"}`;
+    const count = hike.route.segments.length;
+    $("#liked-name").textContent = `Chosen: ${hike.name}, ${fmt.km(hike.walk_m)} from ${count} segment${count === 1 ? "" : "s"}`;
+    $("#compose-name").value = hike.name;
+    compose.named = hike.name_origin === "hiker";
     $("#find").disabled = false;
     $("#pair-search").disabled = false;
-    history.replaceState(null, "", routeHash(route));
+    history.replaceState(null, "", routeHash(hike));
     renderDetail($("#liked"), hike, { role: "Your hike" });
     $("#results").hidden = true;
     $("#selected").hidden = true;
@@ -759,13 +763,16 @@ const pick = {
 
 // The marked trails in view as segments, junction to junction (from COMPOSE_ZOOM on).
 // Click a junction or a segment to start, then segments to walk on; one away from the
-// route's end is reached the shortest way over the segments loaded so far. A dotted
+// route's end is reached the shortest way over the trail segments loaded so far (and
+// gaps or links the Hiker took themselves), drawn apart so they can see it. A dotted
 // "connect here" link is offered where two trails pass close with no junction.
 const compose = {
   on: false,
   layer: null,
   start: null, // junction id
-  route: [], // segment ids in walking order
+  startKey: null, // its key in a shared link
+  route: [], // { id, step, auto } in walking order; step names it in a shared link, auto when added to reach a click
+  named: false, // the Hiker typed the name
   segments: new Map(), // every segment loaded so far, by id
   junctions: new Map(),
   shown: [], // segment ids in the last view
@@ -788,8 +795,11 @@ const compose = {
     this.layer.clearLayers();
     if (on && state.liked?.route && this.start == null) {
       // Go on from the composed hike shown below.
+      const [startKey, text] = state.liked.route.text.split(":");
+      const steps = text.split(",");
       this.start = state.liked.route.start;
-      this.route = [...state.liked.route.segments];
+      this.startKey = startKey;
+      this.route = state.liked.route.segments.map((id, at) => ({ id, step: steps[at], auto: false }));
       if (state.liked.line) pick.map.fitBounds(L.latLngBounds(decodePolyline(state.liked.line)).pad(0.1));
     }
     pick.load();
@@ -811,10 +821,10 @@ const compose = {
       try {
         const body = await api(`/api/segments?${pick.box()}`, { signal: this.abort.signal });
         if (request !== boxed || !this.on) return;
-        for (const [id, lat, lon, degree] of body.junctions) this.junctions.set(id, { id, latlng: [lat, lon], degree });
-        for (const [id, kind, a, b, length, climbAB, climbBA, line, sac, routes] of body.segments) {
+        for (const [id, lat, lon, degree, key] of body.junctions) this.junctions.set(id, { id, latlng: [lat, lon], degree, key });
+        for (const [id, kind, a, b, length, climbAB, climbBA, line, sac, routes, stepAB, stepBA] of body.segments) {
           if (!this.segments.has(id)) {
-            this.segments.set(id, { id, kind, a, b, length, climbAB, climbBA, latlngs: decodePolyline(line), sac, routes });
+            this.segments.set(id, { id, kind, a, b, length, climbAB, climbBA, latlngs: decodePolyline(line), sac, routes, stepAB, stepBA });
           }
         }
         this.shown = body.segments.map((segment) => segment[0]);
@@ -837,7 +847,7 @@ const compose = {
   // The junction the route ends at so far (null while a segment of it is not loaded).
   end() {
     let here = this.start;
-    for (const id of this.route) {
+    for (const { id } of this.route) {
       const segment = this.segments.get(id);
       if (!segment) return null;
       here = segment.a === here ? segment.b : segment.a;
@@ -859,7 +869,8 @@ const compose = {
   draw() {
     this.layer.clearLayers();
     const end = this.end();
-    const onRoute = new Set(this.route);
+    const onRoute = new Set(this.route.map((step) => step.id));
+    const picked = new Set(this.route.filter((step) => !step.auto).map((step) => step.id));
     const ends = new Set();
     for (const id of this.shown) {
       const segment = this.segments.get(id);
@@ -871,7 +882,9 @@ const compose = {
     }
     for (const id of onRoute) {
       const segment = this.segments.get(id);
-      if (segment) this.line(segment, segment.kind === "trail" ? ROUTE_LINE : { ...ROUTE_LINE, dashArray: "4 8" });
+      if (!segment) continue;
+      if (!picked.has(id)) this.line(segment, AUTO_LINE, "Added to reach the segment you clicked");
+      else this.line(segment, segment.kind === "trail" ? ROUTE_LINE : { ...ROUTE_LINE, dashArray: "4 8" });
     }
     for (const id of ends) {
       const junction = this.junctions.get(id);
@@ -913,9 +926,9 @@ const compose = {
     }
   },
 
-  line(segment, style) {
+  line(segment, style, note) {
     const line = L.polyline(segment.latlngs, style).addTo(this.layer);
-    line.bindTooltip(this.label(segment), { sticky: true });
+    line.bindTooltip(this.label(segment) + (note ? `<br><em>${note}</em>` : ""), { sticky: true });
     line.on("mouseover", () => { line.setStyle(SEGMENT_HOVER); line.bringToFront(); });
     line.on("mouseout", () => line.setStyle(style));
     line.on("click", (event) => this.add(segment, event.latlng));
@@ -924,6 +937,7 @@ const compose = {
   startAt(junction) {
     if (this.start != null) return;
     this.start = junction;
+    this.startKey = this.junctions.get(junction).key;
     this.changed();
   },
 
@@ -933,27 +947,35 @@ const compose = {
       const click = [latlng.lat, latlng.lng];
       const [a, b] = [segment.a, segment.b].map((id) => this.junctions.get(id));
       this.start = a && b && metresBetween(click, b.latlng) < metresBetween(click, a.latlng) ? segment.b : segment.a;
+      this.startKey = this.junctions.get(this.start).key;
     }
     const end = this.end();
     if (end == null) return;
-    if (end === segment.a || end === segment.b) this.route.push(segment.id);
-    else {
-      const way = segment.kind === "link" ? null : this.shortest(end, segment);
+    let way = [];
+    if (end !== segment.a && end !== segment.b) {
+      way = segment.kind === "link" ? null : this.shortest(end, segment);
       if (!way) {
         pick.hint("That segment is not connected to your route's end over the trails loaded so far; zoom out to load the way there.");
         return;
       }
-      this.route.push(...way, segment.id);
+    }
+    let here = end;
+    for (const [step, auto] of [...way.map((s) => [s, true]), [segment, false]]) {
+      this.route.push({ id: step.id, step: here === step.a ? step.stepAB : step.stepBA, auto });
+      here = here === step.a ? step.b : step.a;
     }
     this.changed();
+    if (way.length) pick.hint(`Added ${way.length} segment${way.length === 1 ? "" : "s"} (amber, dashed) to reach it; Undo takes them back too.`);
   },
 
-  // Segment ids of the shortest way from a junction to either end of ``target``
-  // over the trail segments loaded so far (links left out), or null.
+  // The shortest way from a junction to either end of ``target`` over the trail
+  // segments loaded so far, as segments, or null. A gap or link is crossed only
+  // where the Hiker took it themselves.
   shortest(from, target) {
+    const taken = new Set(this.route.map((step) => step.id));
     const touching = new Map();
     for (const segment of this.segments.values()) {
-      if (segment.kind === "link") continue;
+      if (segment.kind !== "trail" && !taken.has(segment.id)) continue;
       for (const id of [segment.a, segment.b]) {
         if (!touching.has(id)) touching.set(id, []);
         touching.get(id).push(segment);
@@ -970,7 +992,7 @@ const compose = {
         const way = [];
         for (let at = here; at !== from;) {
           const segment = via.get(at);
-          way.unshift(segment.id);
+          way.unshift(segment);
           at = segment.a === at ? segment.b : segment.a;
         }
         return way;
@@ -987,20 +1009,24 @@ const compose = {
     return null;
   },
 
+  // Takes back the last click: its segment and those added to reach it.
   undo() {
-    if (this.route.length) this.route.pop();
-    else this.start = null;
+    if (this.route.length) {
+      this.route.pop();
+      while (this.route.at(-1)?.auto) this.route.pop();
+    } else this.start = this.startKey = null;
     this.changed();
   },
 
   clear() {
-    this.start = null;
+    this.start = this.startKey = null;
     this.route = [];
     this.changed();
   },
 
   changed() {
     $("#compose-done").disabled = !this.route.length;
+    if (!this.named) $("#compose-name").value = "";
     this.draw();
     this.hintNext();
   },
@@ -1011,7 +1037,7 @@ const compose = {
     if (this.start == null) { out.textContent = "No hike drawn yet."; return; }
     let metres = 0, up = 0, down = 0, here = this.start, reused = false;
     const seen = new Set();
-    for (const id of this.route) {
+    for (const { id } of this.route) {
       const segment = this.segments.get(id);
       if (!segment) { out.textContent = `${this.route.length} segments; move the map over them to see the totals.`; return; }
       const forward = segment.a === here;
@@ -1029,11 +1055,15 @@ const compose = {
     ];
     if (this.route.length && here === this.start) parts.push("back at the start");
     if (reused) parts.push("walks a segment twice");
+    const added = this.route.filter((step) => step.auto).length;
+    if (added) parts.push(`${added} added to connect (amber)`);
     out.textContent = parts.join(" · ");
   },
 
   done() {
-    if (this.start != null && this.route.length) chooseComposed({ start: this.start, segments: [...this.route] });
+    if (this.start == null || !this.route.length) return;
+    const route = `${this.startKey}:${this.route.map((step) => step.step).join(",")}`;
+    chooseComposed(route, this.named ? $("#compose-name").value.trim() : null);
   },
 };
 
@@ -1273,6 +1303,7 @@ async function start() {
   $("#compose-undo").addEventListener("click", () => compose.undo());
   $("#compose-clear").addEventListener("click", () => compose.clear());
   $("#compose-done").addEventListener("click", () => compose.done());
+  $("#compose-name").addEventListener("input", (event) => { compose.named = event.target.value.trim() !== ""; });
   nameSearch($("#pair-search"), $("#pair-suggestions"), comparePair);
   $("#reset-weights").addEventListener("click", () => { buildWeights(); markStale(); });
   $("#weights").addEventListener("input", markStale);
@@ -1291,9 +1322,11 @@ async function start() {
   const openLinked = () => {
     const linked = location.hash.match(/^#hike=(\d+)$/);
     if (linked && Number(linked[1]) !== state.liked?.id) likedSearch.pick(Number(linked[1]));
-    const drawn = location.hash.match(/^#compose=(-?\d+):(\d+(?:,\d+)*)$/);
-    if (drawn && state.info.compose && !(state.liked?.route && routeHash(state.liked.route) === location.hash)) {
-      chooseComposed({ start: Number(drawn[1]), segments: drawn[2].split(",").map(Number) });
+    const drawn = location.hash.match(/^#compose=([^&]+)(?:&name=(.*))?$/);
+    if (drawn && state.info.compose && !(state.liked?.route && routeHash(state.liked) === location.hash)) {
+      let name = null;
+      try { name = drawn[2] ? decodeURIComponent(drawn[2]) : null; } catch { /* a broken name: propose one */ }
+      chooseComposed(drawn[1], name);
     }
   };
   window.addEventListener("hashchange", openLinked);

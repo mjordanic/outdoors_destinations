@@ -19,14 +19,16 @@ Catalog (``trailgraph_path_for``). Its input is every member way of every
   closest nodes: a Link is walked only when the Hiker picks "connect here".
 
 Each Segment keeps its OSM way and relation ids, per-way metres and surface
-class, strictest ``sac_scale`` and full-resolution vertices with OSM ``ele``.
+class, strictest ``sac_scale``, full-resolution vertices with OSM ``ele``, and
+how a ``Route`` names it walked each way.
 The amenity points the Measures count near the network are kept too.
 
 ``sample_trailgraph`` stores per vertex what the Measures read from rasters
 (FABDEM height, WorldCover class, CHELSA cell, slope southness) and the
 WorldCover cells beside open water, so a server without rasters can compute
 the facts of a ComposedHike. ``TrailGraph`` opens the file (or its serving
-copy) and composes a hike from a start Junction and Segment ids.
+copy) and composes a hike from a ``Route``: a start Junction and Segments named
+by OSM node and way ids, so a shared link holds across rebuilds.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ from __future__ import annotations
 import heapq
 import json
 import math
+import re
 import sqlite3
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
@@ -96,8 +99,7 @@ def write_trailgraph(
     progress: Progress | None = None,
 ) -> None:
     """Write the TrailGraph of an ingest work file (see the module doc)."""
-    if not 0 < snap_tolerance_m <= GAP_JOIN_M:
-        raise ValueError(f"snap tolerance must be above 0 and at most {GAP_JOIN_M} m, got {snap_tolerance_m}")
+    check_snap_tolerance(snap_tolerance_m)
     path = Path(path)
     _emit(progress, "loading the network")
     net = _load_network(conn)
@@ -123,6 +125,12 @@ def write_trailgraph(
     _emit(progress, f"{len(junctions)} Junctions, {len(segments)} Segments")
     amenities = _amenities_near(conn, net, segments)
     _write(path, net, segments, junctions, amenities, conn, snap_tolerance_m)
+
+
+def check_snap_tolerance(snap_tolerance_m: float) -> None:
+    """Refuse a snap tolerance that is not above 0 and at most ``GAP_JOIN_M``."""
+    if not 0 < snap_tolerance_m <= GAP_JOIN_M:
+        raise ValueError(f"snap tolerance must be above 0 and at most {GAP_JOIN_M} m, got {snap_tolerance_m}")
 
 
 def _load_network(conn: sqlite3.Connection) -> _Network:
@@ -478,6 +486,7 @@ class _Segment:
     kind: str  # trail, gap or link
     nodes: np.ndarray  # node indices, a to b
     step_way: np.ndarray  # way index of each step, -1 for a gap or link
+    step_dir: np.ndarray  # 1 where a step follows its way's node order, else -1
 
 
 def _segments(
@@ -535,12 +544,14 @@ def _segments(
     extra_junctions: list[int] = []
 
     def walk(start: int, edge: int) -> None:
-        node, chain_nodes, chain_ways = start, [np.array([start])], []
+        node, chain_nodes, chain_ways, chain_dirs = start, [np.array([start])], [], []
         while True:
             used[edge] = True
-            nodes, ways = edge_nodes(edge, edge_u[edge] == node)
+            forward = edge_u[edge] == node
+            nodes, ways = edge_nodes(edge, forward)
             chain_nodes.append(nodes[1:])
             chain_ways.append(ways)
+            chain_dirs.append(np.full(len(ways), 1 if forward else -1))
             node = int(nodes[-1])
             if junction[node] or edge >= n_pieces:
                 break
@@ -548,15 +559,15 @@ def _segments(
             if not following:
                 break
             edge = following[0]
-        all_nodes, all_ways = np.concatenate(chain_nodes), np.concatenate(chain_ways)
+        all_nodes, all_ways, all_dirs = (np.concatenate(c) for c in (chain_nodes, chain_ways, chain_dirs))
         kind = "gap" if all_ways[0] == -1 and len(all_ways) == 1 else "trail"
         if all_nodes[0] == all_nodes[-1]:  # a Segment never ends where it starts
             middle = len(all_nodes) // 2
             extra_junctions.append(int(all_nodes[middle]))
-            segments.append(_Segment(kind, all_nodes[: middle + 1], all_ways[:middle]))
-            segments.append(_Segment(kind, all_nodes[middle:], all_ways[middle:]))
+            segments.append(_Segment(kind, all_nodes[: middle + 1], all_ways[:middle], all_dirs[:middle]))
+            segments.append(_Segment(kind, all_nodes[middle:], all_ways[middle:], all_dirs[middle:]))
         else:
-            segments.append(_Segment(kind, all_nodes, all_ways))
+            segments.append(_Segment(kind, all_nodes, all_ways, all_dirs))
 
     for node in np.flatnonzero(junction).tolist():
         for edge in incident(node).tolist():
@@ -568,7 +579,7 @@ def _segments(
             walk(int(edge_u[edge]), edge)
     junction[extra_junctions] = True
     for a, b, _ in links:
-        segments.append(_Segment("link", np.array([a, b]), np.array([-1])))
+        segments.append(_Segment("link", np.array([a, b]), np.array([-1]), np.array([1])))
     return segments, np.flatnonzero(junction)
 
 
@@ -632,7 +643,8 @@ def _write(
                 id INTEGER PRIMARY KEY,
                 latitude REAL NOT NULL,
                 longitude REAL NOT NULL,
-                degree INTEGER NOT NULL
+                degree INTEGER NOT NULL,
+                key TEXT NOT NULL
             );
             CREATE TABLE segments (
                 id INTEGER PRIMARY KEY,
@@ -649,7 +661,9 @@ def _write(
                 ele BLOB NOT NULL,
                 landcover BLOB,
                 climate_cell BLOB,
-                southness BLOB
+                southness BLOB,
+                step_ab TEXT NOT NULL,
+                step_ba TEXT NOT NULL
             );
             CREATE VIRTUAL TABLE segment_boxes USING rtree(id, south, north, west, east);
             CREATE TABLE relations (id INTEGER PRIMARY KEY, name TEXT, ref TEXT, network TEXT);
@@ -671,9 +685,9 @@ def _write(
                 degree[segment.nodes[0]] += 1
                 degree[segment.nodes[-1]] += 1
         out.executemany(
-            "INSERT INTO junctions VALUES (?, ?, ?, ?)",
+            "INSERT INTO junctions VALUES (?, ?, ?, ?, ?)",
             (
-                (int(net.node_id[j]), float(net.lat[j]), float(net.lon[j]), int(degree[j]))
+                (int(net.node_id[j]), float(net.lat[j]), float(net.lon[j]), int(degree[j]), _junction_key(net, j))
                 for j in junctions.tolist()
             ),
         )
@@ -683,7 +697,7 @@ def _write(
                 rows.append(_segment_row(number, segment, net))
                 lat, lon = net.lat[segment.nodes], net.lon[segment.nodes]
                 boxes.append((number, lat.min(), lat.max(), lon.min(), lon.max()))
-            out.executemany(f"INSERT INTO segments VALUES ({','.join('?' * 15)})", rows)
+            out.executemany(f"INSERT INTO segments VALUES ({','.join('?' * 17)})", rows)
             out.executemany("INSERT INTO segment_boxes VALUES (?, ?, ?, ?, ?)", boxes)
         out.executemany(
             "INSERT INTO relations VALUES (?, ?, ?, ?)",
@@ -699,6 +713,11 @@ def _write(
         out.executemany(
             "INSERT INTO amenity_boxes VALUES (?, ?, ?, ?, ?)",
             ((number, lat, lat, lon, lon) for number, (_, _, lat, lon, _, _) in enumerate(amenities, start=1)),
+        )
+        out.executescript(
+            "CREATE INDEX junction_keys ON junctions (key);"
+            "CREATE INDEX steps_ab ON segments (a, step_ab);"
+            "CREATE INDEX steps_ba ON segments (b, step_ba);"
         )
         out.executemany(
             "INSERT INTO trailgraph_meta VALUES (?, ?)",
@@ -751,7 +770,30 @@ def _segment_row(number: int, segment: _Segment, net: _Network) -> tuple:
         None,
         None,
         None,
+        _step(net, segment, forward=True),
+        _step(net, segment, forward=False),
     )
+
+
+def _junction_key(net: _Network, node: int) -> str:
+    """A Junction's name in a shared link, the same in every build: its OSM
+    node id, or ``c{lat}_{lon}`` (1e-7 degrees) for a crossing ingest added."""
+    node_id = int(net.node_id[node])
+    if node_id > 0:
+        return str(node_id)
+    return f"c{round(float(net.lat[node]) * COORD_SCALE)}_{round(float(net.lon[node]) * COORD_SCALE)}"
+
+
+def _step(net: _Network, segment: _Segment, *, forward: bool) -> str:
+    """A Segment walked one way, as a shared link names it (see ``Route``)."""
+    end = segment.nodes[-1] if forward else segment.nodes[0]
+    if segment.kind != "trail":
+        return f"{segment.kind[0]}.{_junction_key(net, end)}"
+    if forward:
+        way, direction = segment.step_way[0], segment.step_dir[0]
+    else:
+        way, direction = segment.step_way[-1], -segment.step_dir[-1]
+    return f"{int(direction) * int(net.way_id[way])}.{_junction_key(net, end)}"
 
 
 # ---------- sampling ----------
@@ -972,12 +1014,35 @@ _WATER_STEP_M = 5.0  # well under a WorldCover overview cell (40 m by about 28 m
 # ---------- composing ----------
 
 
+_JUNCTION_KEY = r"\d+|c-?\d+_-?\d+"
+_STEP = re.compile(rf"(?:-?\d+|g|l)\.(?:{_JUNCTION_KEY})")
+
+
 @dataclass(frozen=True)
 class Route:
-    """A ComposedHike as the Hiker drew it: a start Junction and Segment ids in walking order."""
+    """A ComposedHike as the Hiker drew it, named so that a shared link outlives a rebuild.
 
-    start: int
-    segments: tuple[int, ...]
+    ``start`` is the start Junction's key: its OSM node id, or ``c{lat}_{lon}``
+    in 1e-7 degrees for a crossing ingest added. Each step is one Segment in
+    walking order, ``{way}.{junction}``: the OSM way it leaves on (negative
+    when it walks against the way's node order) and the key of the Junction it
+    reaches; ``g.{junction}`` for a gap Segment and ``l.{junction}`` for a
+    Link. As text (``str``, ``parse``) it is ``start:step,step,...``.
+    """
+
+    start: str
+    steps: tuple[str, ...]
+
+    @classmethod
+    def parse(cls, text: str) -> Route:
+        start, _, steps = text.partition(":")
+        route = cls(start, tuple(steps.split(",")) if steps else ())
+        if not re.fullmatch(_JUNCTION_KEY, start) or not all(_STEP.fullmatch(step) for step in route.steps):
+            raise RouteError(f"not a composed hike: {text[:80]!r}")
+        return route
+
+    def __str__(self) -> str:
+        return f"{self.start}:{','.join(self.steps)}"
 
 
 @dataclass
@@ -985,6 +1050,8 @@ class ComposedWalk:
     """The stitched vertices of a Route and what the facts need of its Segments."""
 
     route: Route
+    start: int  # the start Junction's id in this TrailGraph
+    segments: list[int]  # the Segment ids walked, in this TrailGraph
     lat: np.ndarray
     lon: np.ndarray
     ele: np.ndarray
@@ -993,11 +1060,24 @@ class ComposedWalk:
     southness: np.ndarray
     walked: list[tuple[float, str | None]]  # (metres, surface class) per walked way, first walked first
     sac_scale: str | None
-    relation_ids: list[int]
+    relation_m: dict[int, float]  # metres walked along each OSM relation, first walked first
 
 
 class RouteError(ValueError):
-    """The Segments do not make one walk from the start Junction."""
+    """The Route is not one walk on this TrailGraph."""
+
+
+def _describe(key: str) -> str:
+    if key.startswith("c"):
+        lat, lon = (int(value) / COORD_SCALE for value in key[1:].split("_"))
+        return f"the trail crossing at {lat:.7f}, {lon:.7f}"
+    return f"OSM node {key}"
+
+
+def _describe_step(here: str, step: str) -> str:
+    way, _, end = step.partition(".")
+    what = {"g": "the gap", "l": "the connect-here link"}.get(way, f"OSM way {way.lstrip('-')}")
+    return f"{what} from {_describe(here)} to {_describe(end)}"
 
 
 class TrailGraph:
@@ -1013,40 +1093,52 @@ class TrailGraph:
         return sqlite3.connect(self._uri, uri=True)
 
     def walk(self, route: Route) -> ComposedWalk:
-        """Stitch the Route's Segments end to end from its start Junction.
+        """Find the Route's Junction and Segments and stitch them end to end.
 
-        Each Segment must start where the walk so far ends; it is walked in
-        whichever direction does that. A Segment may be walked more than once.
+        Each step names the Segment that leaves the Junction the walk has
+        reached on its way and reaches its Junction; it is walked in that
+        direction. A Segment may be walked more than once. Where a key no
+        longer names one (the OSM data changed), the RouteError says which.
         The vertices are kept as drawn: the shared Junction once, a vertex at
         the same place as the one before it dropped (as DayHikeGeometry).
         """
-        if not route.segments:
+        if not route.steps:
             raise RouteError("a composed hike needs at least one Segment")
-        wanted = sorted(set(route.segments))
         with self._db() as db:
-            if db.execute("SELECT 1 FROM junctions WHERE id = ?", (route.start,)).fetchone() is None:
-                raise RouteError(f"no Junction {route.start}")
+            start = db.execute("SELECT id FROM junctions WHERE key = ? ORDER BY id LIMIT 1", (route.start,)).fetchone()
+            if start is None:
+                raise RouteError(f"the start of this hike, {_describe(route.start)}, is no longer on the marked network")
+            here, here_key, ids = start[0], route.start, []
+            for number, step in enumerate(route.steps, start=1):
+                found = db.execute(
+                    "SELECT id, b FROM segments WHERE a = ? AND step_ab = ? "
+                    "UNION ALL SELECT id, a FROM segments WHERE b = ? AND step_ba = ? ORDER BY 1 LIMIT 1",
+                    (here, step, here, step),
+                ).fetchone()
+                if found is None:
+                    raise RouteError(
+                        f"segment {number} of this hike, {_describe_step(here_key, step)}, "
+                        "is no longer on the marked network"
+                    )
+                ids.append(found[0])
+                here, here_key = found[1], step.partition(".")[2]
+            wanted = sorted(set(ids))
             found = {
                 row[0]: row
-                for start in range(0, len(wanted), 900)
+                for chunk in range(0, len(wanted), 900)
                 for row in db.execute(
-                    "SELECT id, a, b, sac_scale, relation_ids, parts, coords, ele, landcover, climate_cell, southness "
-                    f"FROM segments WHERE id IN ({','.join('?' * len(wanted[start : start + 900]))})",
-                    wanted[start : start + 900],
+                    "SELECT id, a, b, length_m, sac_scale, relation_ids, parts, coords, ele, landcover, climate_cell, "
+                    f"southness FROM segments WHERE id IN ({','.join('?' * len(wanted[chunk : chunk + 900]))})",
+                    wanted[chunk : chunk + 900],
                 )
             }
-        missing = [segment for segment in wanted if segment not in found]
-        if missing:
-            raise RouteError(f"no Segment {missing[0]}")
-        here = route.start
+        here = start[0]
         columns: list[list[np.ndarray]] = [[], [], [], [], [], []]
         walked: dict[int, list] = {}
         scales: set[str] = set()
-        relations: dict[int, None] = {}
-        for number, segment in enumerate(route.segments):
-            _, a, b, sac_scale, relation_ids, parts, coords, ele, landcover, climate, southness = found[segment]
-            if here not in (a, b):
-                raise RouteError(f"Segment {segment} does not start where the walk reaches (Junction {here})")
+        relations: dict[int, float] = {}
+        for number, segment in enumerate(ids):
+            _, a, b, length_m, sac_scale, relation_ids, parts, coords, ele, landcover, climate, southness = found[segment]
             forward = here == a
             here = b if forward else a
             points = decode_coords(coords)
@@ -1068,11 +1160,14 @@ class TrailGraph:
                     walked.setdefault(way, [0.0, surface])[0] += metres
             if sac_scale is not None:
                 scales.add(sac_scale)
-            relations.update(dict.fromkeys(json.loads(relation_ids)))
+            for relation in json.loads(relation_ids):
+                relations[relation] = relations.get(relation, 0.0) + length_m
         lat, lon, ele, landcover, climate, southness = (np.concatenate(column) for column in columns)
         keep = np.concatenate([[True], (np.diff(lat) != 0) | (np.diff(lon) != 0)])
         return ComposedWalk(
             route=route,
+            start=start[0],
+            segments=ids,
             lat=lat[keep],
             lon=lon[keep],
             ele=ele[keep],
@@ -1081,7 +1176,7 @@ class TrailGraph:
             southness=southness[keep],
             walked=[(metres, surface) for metres, surface in walked.values()],
             sac_scale=max(scales, key=SAC_SCALE_RANK.__getitem__) if scales else None,
-            relation_ids=list(relations),
+            relation_m=relations,
         )
 
     def amenities_near(self, lat: np.ndarray, lon: np.ndarray, radius_m: float) -> list[tuple]:

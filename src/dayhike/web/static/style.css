@@ -84,6 +84,7 @@ button.secondary:hover { border-color: var(--green); }
 .compose-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0; }
 .compose-tools { display: flex; flex-wrap: wrap; gap: 6px; }
 .compose-tools button.primary { padding: 7px 12px; font-size: 0.95rem; }
+.compose-tools input { min-width: 16em; }
 #compose-on[aria-pressed="true"] { border-color: var(--green); background: #e8f1ea; }
 .compose-readout { font-size: 0.9rem; margin: 4px 0; font-variant-numeric: tabular-nums; }
 .compose-links { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
