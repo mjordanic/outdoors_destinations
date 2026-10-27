@@ -52,6 +52,10 @@ _Avoid_: shortcut, snap, gap (a gap Segment is joined automatically)
 A walk the Hiker draws from TrailGraph Segments, from a start Junction, Segment after Segment. It may reuse a Segment, and is measured as drawn, by distance walked: its facts come from the same rules as a DayHike's, applied to the vertices walked. It has a name the Hiker may change (proposed from the trails it walks longest and a named place at its start). It is not stored; it is shared through its URL, which names the OSM ways it walks from OSM node to OSM node, not Junctions or Segments, so the link opens the same walk after a rebuild, and it is not in the Catalog.
 _Avoid_: custom route, user route, composed DayHike
 
+**SuggestedLoop**:
+A ComposedHike that a Ranking proposes itself: a loop drawn on the TrailGraph from a Junction near the Trailhead of one of the best Catalog DayHikes, that ends where it starts, visits no Junction twice and crosses no Link. It is found at query time by following the Seed's ElevationProfile and length, scored like a DayHike and listed among them, and left out when it is a Twin of a DayHike, of the Seed or of a better SuggestedLoop (ADR-0020). It is shared, opened and edited like any ComposedHike.
+_Avoid_: generated route, composed DayHike, recommendation
+
 **Origin**:
 The hiker's departure point for this query. It is not stored on the DayHike.
 _Avoid_: home, location, user location

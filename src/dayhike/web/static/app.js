@@ -41,6 +41,7 @@ const SEGMENT_HOVER = { color: "#c2410c", weight: 5, opacity: 1, dashArray: null
 const ROUTE_LINE = { color: "#c2410c", weight: 6, opacity: 0.85 };
 const AUTO_LINE = { color: "#d97706", weight: 6, opacity: 0.9, dashArray: "10 6" }; // added to reach a click
 const LINK_LINE = { color: "#8e44ad", weight: 4, opacity: 0.9, dashArray: "2 7" };
+const LOOP_LINE = { color: "#15803d", weight: 4, opacity: 0.9, dashArray: "8 6" }; // a suggested loop
 
 const state = {
   info: null,
@@ -432,7 +433,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     <div class="detail-head">
       <div><div class="role">${escapeHtml(role)}</div><h2>${escapeHtml(hike.name)}</h2></div>
       ${hike.route
-        ? `<a href="${routeHash(hike)}${modeHash()}" title="This page's address opens this hike again">Link to this hike</a>`
+        ? `<span><a href="${routeHash(hike)}${modeHash()}" title="This address opens this hike as your hike">Link to this hike</a>${compare ? ' <button type="button" class="secondary edit-composed">Edit on the map</button>' : ""}</span>`
         : `<a href="https://www.openstreetmap.org/relation/${hike.id}" target="_blank" rel="noopener">OpenStreetMap relation ${hike.id}</a>`}
     </div>
     ${scoreLine}
@@ -445,6 +446,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     <div class="charts"></div>
     <h3>${compare ? "Every measure: this hike against the liked one" : "The facts behind every measure"}</h3>
     <div class="table-wrap"><table class="facts"></table></div>`;
+  card.querySelector(".edit-composed")?.addEventListener("click", () => editComposed(hike));
   const { map, hover } = drawMap(card.querySelector(".map"), hike);
   card._map = map;
   const slot = card.querySelector(".slot-elevation");
@@ -636,6 +638,7 @@ async function choose(id) {
     $("#results").hidden = true;
     $("#selected").hidden = true;
     pick.restyle();
+    pick.drawLoops();
     setStatus("");
   } catch (error) {
     if (request === chosen) setStatus(error.message, true);
@@ -665,10 +668,23 @@ async function chooseComposed(route, name) {
     $("#results").hidden = true;
     $("#selected").hidden = true;
     pick.restyle();
+    pick.drawLoops();
     setStatus("");
   } catch (error) {
     if (request === chosen) setStatus(error.message, true);
   }
+}
+
+// A suggested loop becomes your hike, drawn on the map to go on from.
+async function editComposed(hike) {
+  await chooseComposed(hike.route.text, null);
+  if (state.liked?.route?.text !== hike.route.text) return;
+  $("#map-pick-on").checked = true;
+  pick.open();
+  if (compose.on) compose.toggle(false);
+  compose.start = compose.startKey = null;
+  compose.route = [];
+  compose.toggle(true);
 }
 
 // ---------- select on map ----------
@@ -679,6 +695,7 @@ const pick = {
   map: null,
   layer: null,
   lines: new Map(), // hike id -> its polyline
+  loops: null, // the suggested loops of the shown Ranking
   timer: null,
   abort: null,
 
@@ -699,6 +716,7 @@ const pick = {
         this.map.fitBounds([[south, west], [north, east]]);
       }
       this.map.on("moveend", () => this.load());
+      this.drawLoops();
     }
     this.map.invalidateSize();
     this.load();
@@ -779,6 +797,22 @@ const pick = {
   restyle() {
     for (const [id, line] of this.lines) line.setStyle(this.style(id));
     this.lines.get(state.liked?.id)?.bringToFront();
+  },
+
+  // The loops composed from segments in the shown Ranking (a catalog hike is on the map already).
+  drawLoops() {
+    if (!this.map) return;
+    if (!this.loops) this.loops = L.layerGroup().addTo(this.map);
+    this.loops.clearLayers();
+    if ($("#results").hidden) return;
+    const rows = document.querySelectorAll("#results-table tbody tr");
+    state.results.forEach((result, i) => {
+      if (!result.route) return;
+      L.polyline(decodePolyline(result.line), LOOP_LINE)
+        .bindTooltip(`<strong>Similar hike #${i + 1}, composed</strong><br>${escapeHtml(result.name)}<br>${fmt.km(result.length_m)}`, { sticky: true })
+        .on("click", () => showResult(i, rows[i]))
+        .addTo(this.loops);
+    });
   },
 };
 
@@ -1256,8 +1290,11 @@ function renderResults(body) {
     ? `${state.info.dayhikes.toLocaleString("en")} hikes`
     : `${body.reachable.toLocaleString("en")} hikes within the drive`;
   const mode = body.return_to_start ? "each with its way back to the start" : "each one way";
+  const composed = body.results.some((result) => result.route)
+    ? " Rows marked composed are loops drawn from marked trail segments, not catalog hikes; the map shows them dashed green."
+    : "";
   $("#results-note").textContent = body.results.length
-    ? `Like “${state.liked.name}”, out of ${considered}, ${mode}. Click a row to see it.`
+    ? `Like “${state.liked.name}”, out of ${considered}${state.info.compose ? " and loops composed near the best of them" : ""}, ${mode}. Click a row to see it.${composed}`
     : `No hike matched, out of ${considered}. Try a longer drive or other weights.`;
   const table = $("#results-table");
   const measureHeads = state.measures.map((m) =>
@@ -1276,7 +1313,8 @@ function renderResults(body) {
       }
       return `<td class="cell" style="background:${scoreColor(score)}" title="${escapeHtml(m.label)}: ${score.toFixed(2)}">${Math.round(score * 100)}</td>`;
     }).join("");
-    row.innerHTML = `<td>${i + 1}</td><td class="name" title="${escapeHtml(result.name)}">${escapeHtml(result.name)}</td>
+    const tag = result.route ? '<span class="composed-tag" title="A loop drawn from marked trail segments, not a catalog hike">composed</span> ' : "";
+    row.innerHTML = `<td>${i + 1}</td><td class="name" title="${escapeHtml(result.name)}">${tag}${escapeHtml(result.name)}</td>
       <td class="score">${result.score.toFixed(3)}</td>
       ${state.query.drive ? `<td>${result.drive_hours.toFixed(1)} h</td>` : ""}
       <td class="figure">${result.length_m != null ? fmt.km(result.length_m) : "–"}</td>
@@ -1289,6 +1327,7 @@ function renderResults(body) {
     tbody.appendChild(row);
   });
   table.appendChild(tbody);
+  pick.drawLoops();
   section.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -1300,10 +1339,17 @@ async function showResult(index, row) {
   const request = ++shown;
   setStatus("Loading the hike…");
   try {
-    const hike = await api(`/api/hikes/${result.id}?return_to_start=${state.query.return_to_start}`);
+    const hike = result.route
+      ? await api("/api/compose", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ route: result.route.text, return_to_start: state.query.return_to_start }),
+      })
+      : await api(`/api/hikes/${result.id}?return_to_start=${state.query.return_to_start}`);
     if (request !== shown || results !== state.results || liked !== state.liked) return;
     const card = $("#selected");
-    renderDetail(card, hike, { role: `Similar hike #${index + 1}`, compare: state.liked, result });
+    const role = `Similar hike #${index + 1}${result.route ? ", composed from trail segments" : ""}`;
+    renderDetail(card, hike, { role, compare: state.liked, result });
     card.scrollIntoView({ behavior: "smooth", block: "start" });
     setStatus("");
   } catch (error) {

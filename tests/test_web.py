@@ -183,7 +183,7 @@ def test_drive_filter_keeps_only_reachable_hikes_with_their_hours(
         json={"seed": RIDGE_WALK_ID, "origin": {"lat": 45.1, "lon": 15.1}, "max_hours": 2},
     ).json()
 
-    assert matrix.calls == 1
+    assert matrix.calls == 2  # the Trailheads, then the starts of SuggestedLoops (ADR-0020)
     assert body["reachable"] == 3  # the Seed's Trailhead counts; 1003 is unreachable
     assert sorted(r["id"] for r in body["results"]) == [1002, 1007]
     assert all(r["drive_hours"] == 1.0 for r in body["results"])
@@ -203,7 +203,7 @@ def test_a_stalled_drive_service_gives_503_and_frees_the_ranking(
     assert client.post("/api/rank", json=query).status_code == 503
     response = client.post("/api/rank", json=query)
     assert response.status_code == 200
-    assert matrix.calls == 1
+    assert matrix.calls == 2
 
 
 def test_drive_filter_off_without_a_drive_client(data: ServingData) -> None:

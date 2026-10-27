@@ -577,7 +577,8 @@ def _compose(
         limit=limit,
         return_to_start=return_to_start,
     ):
-        print(f"{result['id']}\t{result['name']}\t{result['score']}")
+        listed = result["route"]["text"] if result["id"] is None else result["id"]  # a SuggestedLoop by its link
+        print(f"{listed}\t{result['name']}\t{result['score']}")
     return 0
 
 

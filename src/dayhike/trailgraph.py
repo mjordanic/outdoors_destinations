@@ -1289,6 +1289,23 @@ class TrailGraph:
                 here = end
         return self._stitch(route, rows, pieces)
 
+    def walk_segments(self, start: int, segments: Sequence[int]) -> ComposedWalk:
+        """The walk along whole Segments of this TrailGraph from Junction
+        ``start``, each from the end the walk so far reached, with the Route
+        a shared link names it by (what ``walk`` of that Route stitches)."""
+        rows: dict[int, tuple] = {}
+        with self._db() as db:
+            self._load(db, rows, f"WHERE id IN ({','.join('?' * len(segments))})", tuple(segments))
+            (key,) = db.execute("SELECT key FROM junctions WHERE id = ?", (start,)).fetchone()
+        pieces, here = [], start
+        for segment in segments:
+            last = len(rows[segment][7]) // 8 - 1
+            forward = rows[segment][2] == here
+            pieces.append([segment, 0, last] if forward else [segment, last, 0])
+            here = rows[segment][3] if forward else rows[segment][2]
+        walk = self._stitch(None, rows, pieces)
+        return replace(walk, route=Route(key, tuple(",".join(walk.steps).split(","))))
+
     def _load(self, db: sqlite3.Connection, rows: dict[int, tuple], where: str, values: tuple) -> list[tuple]:
         found = db.execute(f"SELECT {_SEGMENT_COLUMNS} FROM segments s {where}", values).fetchall()
         for row in found:
