@@ -125,6 +125,9 @@ svg text { font-size: 11px; fill: var(--muted); }
 #results.stale .table-wrap { opacity: 0.55; }
 .stale-note { font-size: 0.82rem; margin: 6px 0; color: #8a4b08; }
 #results-table td.score { font-weight: 600; }
+#results-table tr.version td { background: #f6faf7; }
+#results-table tr.version td:first-child { color: var(--muted); font-size: 0.75rem; }
+.versions { color: var(--muted); font-size: 0.75rem; }
 .composed-tag { background: #dcfce7; color: #15803d; border-radius: 999px; padding: 0 6px; font-size: 0.75rem; font-weight: 600; }
 
 .credits { max-width: 1600px; margin: 0 auto; padding: 8px 16px 32px; font-size: 0.85rem; color: var(--muted); }

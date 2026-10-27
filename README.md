@@ -1531,9 +1531,12 @@ climate by month, and the fact behind every Measure), set a 0–100 weight or
 an "off" tick per Measure, and list the 10 most similar hikes with their score,
 length, climb and descent, and per-Measure scores. With a TrailGraph the list
 mixes in SuggestedLoops (ADR-0020): loops drawn on the marked network near the
-best Catalog results, found as the query runs, marked "composed" and drawn
-dashed green on the map; one opens like a composed hike, with its link, and
-"Edit on the map" makes it the liked hike in the composer. The "Return to start" tick
+best Catalog results, found as the query runs, named after where they start, marked "composed" and
+drawn dashed green on the map. Loops starting within 10 km of each other share
+one row; clicking it lists up to three versions (var 1, 2, 3), each more than
+half a different route, under it and on the map. Each opens like a composed
+hike, with its link, and "Edit on the map" makes it the liked hike in the
+composer. A loop that mostly walks the liked hike again is not suggested. The "Return to start" tick
 box above the results (on by default) measures the liked hike and every hike
 compared with it with its way back to its start, so a summit line is compared
 up and back; off, every hike is compared one way. Turning it changes the
@@ -1614,9 +1617,11 @@ a step whose way is gone, whose node is off the way, or whose way no longer
 leads there is refused with a message saying which. `"composed": {"route"}` stands in place of
 `seed` (rank) or `a` (pair). The DayHikes a composed Seed retraces (its Twins)
 are not listed. With a TrailGraph a Ranking also lists SuggestedLoops
-(ADR-0020): `id` null, `route` `{"text"}` (what `/api/compose` takes), `line`
-and the figures of a DayHike row; with `origin` and `max_hours` only loops
-starting within the drive, each with its `drive_hours`. Loop work stops at 5 s. The GET routes also answer HEAD. Each client gets 20 Rankings and
+(ADR-0020): `id` null, `route` `{"text"}` (what `/api/compose` takes), `line`,
+`name` (from where it starts), the figures of a DayHike row, and `versions`, the
+other loops of its row in that shape (one row per 10 km, at most three loops);
+with `origin` and `max_hours` only loops starting within the drive, each with
+its `drive_hours`. Loop work stops at 5 s. The GET routes also answer HEAD. Each client gets 20 Rankings and
 300 other calls a minute; one Ranking runs at a time per process.
 
 Measured on the Europe Catalog (161,614 DayHikes), 8-core Mac, the container
