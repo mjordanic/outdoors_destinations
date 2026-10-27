@@ -531,7 +531,7 @@ Measured on the Europe Catalog (161,614 DayHikes) on an 8-core Mac:
 
 | What | Measured |
 | --- | --- |
-| `build-similarity` | 28 min wall, facts 1,701 s including WaterSide and Twins (about 1 min of that); run beside a second build, not on an idle machine; per-phase split and peak memory not yet re-measured |
+| `build-similarity` | 28 min wall, facts 1,701 s including WaterSide and Twins (about 1 min of that); run beside a second build, not on an idle machine; per-phase split and peak memory not yet re-measured. Measuring every DayHike with its way back too (ADR-0019) took Slovenia from 11 s to 37 s; Europe not yet re-measured |
 | `build-similarity --calibrate-only` | Calibration 0.6 s |
 | `data/catalog.similarity/` | 85 MB: facts 45 MB, ProfileShapes 41 MB, Twins 1.3 MB, ids 1.3 MB, quantiles 0.26 MB |
 | `Catalog.open` (once per process) | 4 s, 0.77 GB |
