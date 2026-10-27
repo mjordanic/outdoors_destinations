@@ -26,7 +26,8 @@ similarity directory live. It writes a directory a server memory-maps:
 ``ServingData`` opens such a directory without ``Catalog.open``: name search,
 the hikes in a map view, hike detail and Ranking all read the memory-mapped arrays and the SQLite file.
 The Segments in a map view and a ComposedHike's detail read ``trailgraph.sqlite``; a Ranking
-from a ComposedHike scores its facts against every DayHike like any Seed's.
+from a ComposedHike scores its facts against every DayHike like any Seed's. Detail, pair and
+Ranking measure every hike with its way back to the start, or every hike one way (ADR-0019).
 """
 
 from __future__ import annotations
@@ -92,7 +93,17 @@ from dayhike.similarity import (
     rank_rows,
     score_rows,
 )
-from dayhike.trailgraph import TRAILHEAD_KINDS, ComposedWalk, Route, TrailGraph, decode_coords
+from dayhike.trailgraph import (
+    TRAILHEAD_KINDS,
+    WAY_BACK_KINDS,
+    ComposedWalk,
+    Route,
+    TrailGraph,
+    WayBack,
+    decode_coords,
+    round_trip,
+    way_back,
+)
 
 Progress = Callable[[str], None]
 
@@ -105,7 +116,10 @@ VALHALLA_CACHE_BYTES = 256 * 1024 * 1024  # mjolnir.max_cache_size; the build de
 SEARCH_SCAN_CAP = 5_000  # occurrences of the scanned word a search looks at, so short queries stay fast
 _HIKE_CHUNK = 2_000
 _RASTER_FACTS = ("tree_share", "temperature_c", "southness", "waterside_share")  # read from rasters
-_SIMILARITY_FILES = ("ids.npy", "facts.npy", "profile.npy", "twins.npy", "quantiles.npy", "meta.json")
+_SIMILARITY_FILES = (
+    "ids.npy", "facts.npy", "profile.npy", "twins.npy", "quantiles.npy",
+    "facts_back.npy", "profile_back.npy", "quantiles_back.npy", "way_back.npy", "meta.json",
+)  # fmt: skip
 
 # Groups are sections of the weights panel only; scoring knows no groups (ADR-0013).
 MEASURE_INFO: dict[str, tuple[str, str, str]] = {
@@ -133,7 +147,7 @@ MEASURE_INFO: dict[str, tuple[str, str, str]] = {
     "parking_trailhead": ("facilities", "Parking at trailhead", "Parking within 500 m of the Trailhead, or not."),
     "surface": ("trail", "Surface", "Shared share of paved, gravel, natural and rock surface."),
     "tarmac_approach": ("trail", "Tarmac approach", "Paved metres before the trail leaves the road; alike within 2 km."),
-    "round_trip": ("trail", "Round trip", "Ends within 50 m of the Trailhead, or not."),
+    "round_trip": ("trail", "Round trip", "Ends within 50 m of the Trailhead, or not (always, with the way back)."),
     "climb_grade": ("steepness", "Climb grade", "Gain over the length of the stretches that climb (floor 3 %)."),
     "steepest_km": ("steepness", "Steepest km", "Largest height change over 1 km (floor 50 m)."),
 }
@@ -624,22 +638,30 @@ class ServingData:
         offsets = np.fromiter((hit.start() for hit in hits), dtype=np.int64)
         return np.unique(np.searchsorted(self._starts, offsets, side="right") - 1).tolist()
 
-    def _summaries(self, rows: list[int]) -> list[dict]:
+    def _summaries(self, rows: list[int], return_to_start: bool = False) -> list[dict]:
+        """Name and main figures per row, one way or with the way back."""
+        store = self.store.mode(return_to_start)
         names = self._names([int(self.store.ids[row]) for row in rows])
         return [
             {
                 "id": int(self.store.ids[row]),
                 "name": names[int(self.store.ids[row])][0],
-                "length_m": _value(self.store.column("length_m")[row]),
-                "elevation_gain_m": _value(self.store.column("elevation_gain_m")[row]),
-                "climb_m": names[int(self.store.ids[row])][1],
-                "descent_m": names[int(self.store.ids[row])][2],
-                "highest_m": _value(self.store.column("highest_m")[row]),
-                "difficulty_rank": _value(self.store.column("difficulty_rank")[row]),
+                "length_m": _value(store.column("length_m")[row]),
+                "elevation_gain_m": _value(store.column("elevation_gain_m")[row]),
+                **self._climb(row, names[int(self.store.ids[row])][1:], return_to_start),
+                "highest_m": _value(store.column("highest_m")[row]),
+                "difficulty_rank": _value(store.column("difficulty_rank")[row]),
                 "trailhead": [float(v) for v in self.trailheads[row]],
             }
             for row in rows
         ]
+
+    def _climb(self, row: int, one_way: tuple, return_to_start: bool) -> dict:
+        """Climb and descent (metres, walking direction), one way or with the way back."""
+        if not return_to_start:
+            return {"climb_m": one_way[0], "descent_m": one_way[1]}
+        _, climb_m, descent_m, _ = self.store.with_way_back.way_back[:, row]
+        return {"climb_m": _round(climb_m), "descent_m": _round(descent_m)}
 
     def in_box(self, south: float, west: float, north: float, east: float, limit: int) -> tuple[list[dict], bool]:
         """The DayHikes whose line's bounding box meets the box, each with its id,
@@ -666,9 +688,13 @@ class ServingData:
                 )
             }
 
-    def detail(self, dayhike_id: int) -> dict:
-        """Everything the page plots for one DayHike, and the facts behind every Measure."""
+    def detail(self, dayhike_id: int, return_to_start: bool = True) -> dict:
+        """Everything the page plots for one DayHike, and the facts behind every
+        Measure. With ``return_to_start`` the facts, climb and descent are of
+        the walk with its way back, and ``way_back`` says how it gets back;
+        the line and ElevationProfile stay the DayHike's own."""
         row = self.row_of(dayhike_id)
+        store = self.store.mode(return_to_start)
         with self._db() as db:
             name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points = db.execute(
                 "SELECT name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points "
@@ -683,15 +709,15 @@ class ServingData:
             "sac_scale": sac_scale,
             "trailhead": [float(v) for v in self.trailheads[row]],
             "walk_m": walk_m,
-            "climb_m": climb_m,
-            "descent_m": descent_m,
+            **self._climb(row, (climb_m, descent_m), return_to_start),
             "line": line,
             "elevation": None
             if profile is None
             else {"step_m": walk_m / (len(profile) - 1), "metres": profile},
             "points": [dict(zip(POINT_COLUMNS, point)) for point in json.loads(zlib.decompress(points))],
-            "facts": {column: _value(self.store.facts[i, row]) for i, column in enumerate(FACT_COLUMNS)},
-            "profile_shape": [_value(v) for v in self.store.profile[row]],
+            "facts": {column: _value(store.facts[i, row]) for i, column in enumerate(FACT_COLUMNS)},
+            "profile_shape": [_value(v) for v in store.profile[row]],
+            "way_back": _way_back(*store.way_back[[0, 3], row]) if return_to_start else None,
         }
 
     def segments_in_box(
@@ -729,14 +755,16 @@ class ServingData:
         ]
         return {"junctions": [list(row) for row in junctions], "segments": segments}, False
 
-    def compose(self, route: Route, name: str | None = None) -> dict:
+    def compose(self, route: Route, name: str | None = None, return_to_start: bool = True) -> dict:
         """The detail of a ComposedHike, in the shape of ``detail``: ``id`` is None
         and ``route`` holds the Route as text and its start Junction, Segment
         ids and their steps in this export (None where the walk cuts a Segment,
         as a link from an older build may). ``name`` is the Hiker's; without one it is proposed
-        from the trails walked most and a named place at the start."""
+        from the trails walked most and a named place at the start. ``return_to_start``
+        measures it with its way back, as ``detail``."""
         walk = self.trailgraph.walk(route)
-        facts, shape = self.trailgraph.facts(walk)
+        trip, back = self._trip(walk, return_to_start)
+        facts, shape = self.trailgraph.facts(trip)
         lat, lon, ele = walk.lat, walk.lon, walk.ele
         walk_m = float(_step_m(lat, lon).sum())
         line = elevation = climb_m = descent_m = None
@@ -745,7 +773,7 @@ class ServingData:
             profile = _resample(lat, lon, ele, points=ELEVATION_POINTS)
             if profile is not None:
                 elevation = {"step_m": walk_m / (ELEVATION_POINTS - 1), "metres": np.round(profile).astype(int).tolist()}
-                climb_m, descent_m = (round(v) for v in climb_and_descent(lat, lon, ele))
+                climb_m, descent_m = (_round(v) for v in climb_and_descent(trip.lat, trip.lon, trip.ele))
         with sqlite3.connect(f"file:{self.trailgraph.path}?mode=ro", uri=True) as db:
             labels = dict(
                 _in_chunks(db, "SELECT id, coalesce(name, ref) FROM relations WHERE id IN ({})", list(walk.relation_m))
@@ -767,7 +795,15 @@ class ServingData:
             "facts": {column: _value(value) for column, value in facts.items()},
             "profile_shape": None if shape is None else [_value(v) for v in shape],
             "routes": routes,
+            "way_back": None if back is None else {"m": back.metres, "kind": back.kind},
         }
+
+    def _trip(self, walk: ComposedWalk, return_to_start: bool) -> tuple[ComposedWalk, WayBack | None]:
+        """The walk with its way back and the way back (ADR-0019), or the walk and None."""
+        if not return_to_start:
+            return walk, None
+        back = way_back(walk.lat, walk.lon, self.trailgraph)
+        return round_trip(walk, back), back
 
     def _proposed_name(self, walk: ComposedWalk, labels: dict[int, str]) -> str:
         """The two trails walked longest, and the named place nearest the start
@@ -808,13 +844,13 @@ class ServingData:
             point[6], point[7] = named[point[6]]
         return [dict(zip(POINT_COLUMNS, point)) for point in points]
 
-    def _seed(self, seed: int | Route) -> int | OutsideSeed:
+    def _seed(self, seed: int | Route, return_to_start: bool) -> int | OutsideSeed:
         """A DayHike's store row, or a ComposedHike's facts beside the store
-        (the DayHikes it retraces as its Twins)."""
+        (with its way back when the DayHikes are; the DayHikes it retraces as its Twins)."""
         if not isinstance(seed, Route):
             return self.row_of(seed)
         walk = self.trailgraph.walk(seed)
-        facts, shape = self.trailgraph.facts(walk)
+        facts, shape = self.trailgraph.facts(self._trip(walk, return_to_start)[0])
         return OutsideSeed.of(facts, shape, self._retraced_rows(walk.lat, walk.lon))
 
     def _retraced_rows(self, lat: np.ndarray, lon: np.ndarray) -> list[int]:
@@ -846,6 +882,7 @@ class ServingData:
         month: int | None = None,
         allowed_rows: np.ndarray | None = None,
         limit: int = 10,
+        return_to_start: bool = True,
     ) -> list[dict]:
         """The ``limit`` DayHikes most similar to one Seed, with every Measure's score.
 
@@ -853,42 +890,55 @@ class ServingData:
         retraces are left out, as a Seed's Twins). Each Measure's ``score`` is
         its calibrated score (what the weights average), ``raw`` the
         uncalibrated one; both are None where either hike lacks the fact.
+        ``return_to_start`` measures the Seed and every DayHike alike with
+        its way back (and the figures listed are of that walk), else one way.
         """
-        seed_row = self._seed(seed)
+        store = self.store.mode(return_to_start)
+        seed_row = self._seed(seed, return_to_start)
         allowed = None if allowed_rows is None else self.store.ids[allowed_rows]
-        rows, scores = rank_rows(self.store, [seed_row], weights, month=month, allowed_ids=allowed, limit=limit)
-        results = self._summaries(rows.tolist())
-        for result, score, measures in zip(results, scores, self._measures(seed_row, rows, month)):
+        rows, scores = rank_rows(store, [seed_row], weights, month=month, allowed_ids=allowed, limit=limit)
+        results = self._summaries(rows.tolist(), return_to_start)
+        for result, score, measures in zip(results, scores, self._measures(store, seed_row, rows, month)):
             result["score"] = float(score)
             result["measures"] = measures
         return results
 
     def pair(
-        self, a: int | Route, b_id: int, weights: Mapping[str, float], *, month: int | None = None
+        self,
+        a: int | Route,
+        b_id: int,
+        weights: Mapping[str, float],
+        *,
+        month: int | None = None,
+        return_to_start: bool = True,
     ) -> dict:
         """How alike two hikes are: the score a Ranking would show for DayHike b
         with a (a DayHike id or a ComposedHike's Route) as the Seed (None when no
-        weighted Measure is scored), and every Measure's calibrated and raw score.
+        weighted Measure is scored), and every Measure's calibrated and raw score;
+        both hikes with their way back, or both one way.
         """
-        a_row = self._seed(a)
+        store = self.store.mode(return_to_start)
+        a_row = self._seed(a, return_to_start)
         b = self.row_of(b_id)
         chosen = _measure_weights(weights)
-        _check_climate(self.store, month)
+        _check_climate(store, month)
         rows = np.array([b])
-        similarity, _ = score_rows(self.store, [a_row], rows, chosen, month=month)
+        similarity, _ = score_rows(store, [a_row], rows, chosen, month=month)
         return {
             "a": None if isinstance(a, Route) else a,
             "b": b_id,
             "score": _value(similarity[0]),
-            "measures": self._measures(a_row, rows, month)[0],
+            "measures": self._measures(store, a_row, rows, month)[0],
         }
 
-    def _measures(self, seed: int | OutsideSeed, rows: np.ndarray, month: int | None) -> list[dict]:
+    def _measures(
+        self, store: SimilarityStore, seed: int | OutsideSeed, rows: np.ndarray, month: int | None
+    ) -> list[dict]:
         """Per row, every Measure's calibrated ``score`` and ``raw`` score against the Seed."""
         measures = {}
         for measure in MEASURES:
-            raw = measure_scores(self.store, measure, seed, rows, month=month)
-            measures[measure.name] = (raw, calibrate(self.store, _calibration_key(measure, month), raw))
+            raw = measure_scores(store, measure, seed, rows, month=month)
+            measures[measure.name] = (raw, calibrate(store, _calibration_key(measure, month), raw))
         return [
             {name: {"score": _value(calibrated[i]), "raw": _value(raw[i])} for name, (raw, calibrated) in measures.items()}
             for i in range(len(rows))
@@ -953,3 +1003,12 @@ def _in_chunks(db: sqlite3.Connection, query: str, values: list) -> list[tuple]:
 def _value(value: float) -> float | None:
     value = float(value)
     return None if math.isnan(value) else value
+
+
+def _round(value: float) -> int | None:
+    return None if math.isnan(value) else round(float(value))
+
+
+def _way_back(metres: float, kind: float) -> dict:
+    """How a DayHike gets back to its start, as ``way_back`` stores it."""
+    return {"m": float(metres), "kind": WAY_BACK_KINDS[int(kind)]}

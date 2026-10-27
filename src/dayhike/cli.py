@@ -263,6 +263,12 @@ def main(argv: list[str] | None = None) -> int:
         + "). Measures: "
         + ", ".join(MEASURE_NAMES),
     )
+    rank.add_argument(
+        "--one-way",
+        action="store_true",
+        help="Compare every hike one way; by default every hike, the Seeds included, "
+        "is measured with its way back to its start",
+    )
     rank.add_argument("seeds", nargs="+", help="Seed DayHike names")
     compose = subparsers.add_parser(
         "compose",
@@ -280,6 +286,12 @@ def main(argv: list[str] | None = None) -> int:
         type=_parse_weight,
         metavar="MEASURE=WEIGHT",
         help="Weight 0-100 of one Measure, repeatable, as for rank",
+    )
+    compose.add_argument(
+        "--one-way",
+        action="store_true",
+        help="Compare every hike one way; by default every hike, the Seed included, "
+        "is measured with its way back to its start",
     )
     compose.add_argument(
         "route", help="The hike as its shared link holds it: start:step,step,... (the text after #compose=)"
@@ -372,6 +384,7 @@ def main(argv: list[str] | None = None) -> int:
                 dict(args.weight) if args.weight else None,
                 args.month,
                 args.limit,
+                return_to_start=not args.one_way,
             )
         except ValueError as exc:
             compose.error(str(exc))
@@ -413,6 +426,7 @@ def main(argv: list[str] | None = None) -> int:
             dict(args.weight) if args.weight else None,
             args.limit,
             args.highways,
+            return_to_start=not args.one_way,
         )
     except ValueError as exc:
         rank.error(str(exc))
@@ -536,6 +550,8 @@ def _compose(
     weights: dict[str, float] | None,
     month: int | None,
     limit: int,
+    *,
+    return_to_start: bool = True,
 ) -> int:
     from dayhike.serving import ServingData
     from dayhike.similarity import DEFAULT_WEIGHTS
@@ -546,13 +562,21 @@ def _compose(
         print(f"{data}: no TrailGraph in this export; ingest again, then export-serving", file=sys.stderr)
         return 1
     route = Route.parse(route_text)
-    hike = serving.compose(route, name)
+    hike = serving.compose(route, name, return_to_start)
     facts = hike["facts"]
+    back = hike["way_back"]
     print(
-        f"{hike['name']}\t{hike['walk_m']:.0f} m\tclimb {hike['climb_m']} m\tdescent {hike['descent_m']} m"
+        f"{hike['name']}\t{facts['length_m']:.0f} m\tclimb {hike['climb_m']} m\tdescent {hike['descent_m']} m"
         f"\thighest {facts['highest_m']}\tround trip {bool(facts['round_trip'])}"
+        + ("" if back is None else f"\tway back {back['m']:.0f} m ({back['kind']})")
     )
-    for result in serving.rank(route, DEFAULT_WEIGHTS if weights is None else weights, month=month, limit=limit):
+    for result in serving.rank(
+        route,
+        DEFAULT_WEIGHTS if weights is None else weights,
+        month=month,
+        limit=limit,
+        return_to_start=return_to_start,
+    ):
         print(f"{result['id']}\t{result['name']}\t{result['score']}")
     return 0
 
@@ -723,11 +747,13 @@ def _rank(
     weights: dict[str, float] | None,
     limit: int | None,
     highways: bool = False,
+    *,
+    return_to_start: bool = True,
 ) -> int:
     catalog = Catalog.open(catalog_path)
     if origin is not None and max_hours is not None:
         ranking = _filter_by_drive_time(
-            rank_dayhikes(catalog, seeds, weights, month=month),
+            rank_dayhikes(catalog, seeds, weights, month=month, return_to_start=return_to_start),
             catalog_path,
             origin,
             max_hours,
@@ -736,7 +762,9 @@ def _rank(
         )
         ranking = Ranking(items=ranking.items[:limit])
     else:
-        ranking = rank_dayhikes(catalog, seeds, weights, month=month, limit=limit)
+        ranking = rank_dayhikes(
+            catalog, seeds, weights, month=month, limit=limit, return_to_start=return_to_start
+        )
     for item in ranking.items:
         line = f"{item.dayhike.id}\t{item.dayhike.name}\t{item.score}"
         if item.drive_time is not None:

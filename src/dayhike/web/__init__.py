@@ -5,7 +5,8 @@ hikes in a map view, hike detail, the Measure list, the score of any two hikes, 
 optional highways-only DriveTime pre-filter. Every client gets a request budget per minute, and one Ranking
 runs at a time per instance, so a small container holds its memory. When the export has a TrailGraph,
 it also serves the Segments in a map view and the detail of a ComposedHike, which can then be the
-Seed of a Ranking or of a pair.
+Seed of a Ranking or of a pair. Detail, compose, pair and Ranking measure every hike with its way
+back to the start unless ``return_to_start`` is false (ADR-0019).
 """
 
 from __future__ import annotations
@@ -53,6 +54,7 @@ class Weighted(BaseModel):
     weights: dict[str, float] | None = None
     excluded: list[str] = []
     month: int | None = Field(default=None, ge=1, le=12)
+    return_to_start: bool = True  # every hike with its way back, or every hike one way
 
     def measure_weights(self) -> dict[str, float]:
         """The weights with every excluded Measure at 0; None is the default weights."""
@@ -84,6 +86,10 @@ class Composed(BaseModel):
 
     def parsed(self) -> Route:
         return Route.parse(self.route)
+
+
+class ComposeRequest(Composed):
+    return_to_start: bool = True
 
 
 class RankRequest(Weighted):
@@ -250,17 +256,17 @@ def create_app(
         return {**found, "too_many": too_many}
 
     @app.post("/api/compose")
-    def compose(body: Composed) -> dict:
+    def compose(body: ComposeRequest) -> dict:
         trailgraph()
         try:
-            return data.compose(body.parsed(), body.name)
+            return data.compose(body.parsed(), body.name, body.return_to_start)
         except RouteError as error:
             raise HTTPException(400, str(error)) from None
 
     @app.api_route("/api/hikes/{dayhike_id}", methods=["GET", "HEAD"])
-    def hike(dayhike_id: int) -> dict:
+    def hike(dayhike_id: int, return_to_start: bool = True) -> dict:
         try:
-            return data.detail(dayhike_id)
+            return data.detail(dayhike_id, return_to_start)
         except KeyError:
             raise HTTPException(404, f"no DayHike {dayhike_id}") from None
 
@@ -289,6 +295,7 @@ def create_app(
                 month=body.month,
                 allowed_rows=None if hours is None else sorted(hours),
                 limit=RESULTS,
+                return_to_start=body.return_to_start,
             )
         except ValueError as error:  # a RouteError too
             raise HTTPException(400, str(error)) from None
@@ -300,6 +307,7 @@ def create_app(
             "seed": body.seed,
             "composed": None if body.composed is None else body.composed.model_dump(),
             "month": body.month,
+            "return_to_start": body.return_to_start,
             "weights": {name: weight for name, weight in weights.items() if weight > 0},
             "reachable": None if hours is None else len(hours),
             "results": results,
@@ -311,12 +319,17 @@ def create_app(
         weights = body.measure_weights()
         a = seed_of(body.a, body.composed)
         try:
-            result = data.pair(a, body.b, weights, month=body.month)
+            result = data.pair(a, body.b, weights, month=body.month, return_to_start=body.return_to_start)
         except KeyError as error:
             raise HTTPException(404, f"no DayHike {error.args[0]}") from None
         except ValueError as error:
             raise HTTPException(400, str(error)) from None
-        return {**result, "month": body.month, "weights": {name: w for name, w in weights.items() if w > 0}}
+        return {
+            **result,
+            "month": body.month,
+            "return_to_start": body.return_to_start,
+            "weights": {name: w for name, w in weights.items() if w > 0},
+        }
 
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="page")
     return app

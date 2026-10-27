@@ -41,6 +41,7 @@ h3 { font-size: 0.95rem; margin: 14px 0 6px; }
 .panel-title.check { display: flex; gap: 8px; align-items: center; cursor: pointer; }
 .check { display: flex; gap: 6px; align-items: center; cursor: pointer; font-size: 0.9rem; margin-top: 8px; }
 .hint { color: var(--muted); font-size: 0.82rem; margin: 6px 0; }
+.return-bar { margin: 0; padding: 10px 12px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
 .status { min-height: 1.2em; font-size: 0.9rem; margin: 0; }
 .status.error { color: #b42318; }
 

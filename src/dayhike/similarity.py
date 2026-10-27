@@ -11,6 +11,10 @@ NaN when either DayHike lacks the fact. Calibration maps each raw score to the
 share of random DayHike pairs that score lower on that Measure (ties count
 half), so Measures on very different raw scales can be weighted against each
 other.
+
+Every DayHike has a second set of facts, measured with its way back to its
+Trailhead (ADR-0019), with its own Calibration; a query compares Seeds and
+candidates in one mode or the other (``SimilarityStore.mode``).
 """
 
 from __future__ import annotations
@@ -30,15 +34,18 @@ from sklearn.neighbors import BallTree
 from dayhike.catalog import (
     EARTH_RADIUS_M,
     GAP_JOIN_M,
+    SAC_SCALE_RANK,
     Catalog,
     RankedDayHike,
     Ranking,
     geometry_store_path_for,
     resolve_seed,
     similarity_dir_for,
+    trailgraph_path_for,
 )
 from dayhike.dem import DEFAULT_DEM_DIR, FABDEM_VERSION, fabdem_tile_id
-from dayhike.landcover import DEFAULT_LANDCOVER_DIR, worldcover_tile_id
+from dayhike.landcover import DEFAULT_LANDCOVER_DIR, _landcover_fractions, worldcover_tile_id
+from dayhike.trailgraph import WAY_BACK_KINDS, ComposedWalk, TrailGraph, WayBack, round_trip, way_back
 
 Progress = Callable[[str], None]
 
@@ -91,6 +98,9 @@ CLIMATE_NAMES = ("temperature_c", "precipitation_mm", "solar_radiation")
 CLIMATE_MONTH_COLUMNS = tuple(
     f"{name}_{month:02d}" for month in range(1, 13) for name in CLIMATE_NAMES
 )
+# Per DayHike with its way back: the metres back, the climb and descent of the
+# whole walk, and how it gets back (an index into ``WAY_BACK_KINDS``).
+WAY_BACK_COLUMNS = ("back_m", "climb_m", "descent_m", "kind")
 FACT_COLUMNS = (
     "length_m",
     "elevation_gain_m",
@@ -218,7 +228,7 @@ _FACTS_VERSION = hashlib.sha256(
             SOLAR_ASPECT_OFFSET_ARCSEC, SOLAR_ASPECT_MIN_SLOPE_DEG, WATERSIDE_M,
             WATERSIDE_STEP_M, WATERSIDE_MIN_SHARE, WATERSIDE_OVERVIEW, WORLDCOVER_WATER,
             TWIN_STEP_M, TWIN_M, TWIN_SHARE, sorted(_SURFACE_TAG_CLASS.items()), sorted(_ROAD_HIGHWAYS),
-            sorted(_TRACKTYPE_CLASS.items()),
+            sorted(_TRACKTYPE_CLASS.items()), GAP_JOIN_M, WAY_BACK_KINDS, WAY_BACK_COLUMNS,
         ]
     ).encode()
 ).hexdigest()[:16]  # fmt: skip
@@ -246,6 +256,10 @@ class SimilarityStore:
     DayHike the first row of its group of Twins (``twin_groups``; its own row
     when it has none). ``quantiles`` holds ``CALIBRATION_QUANTILES`` sorted
     random-pair scores per ``CALIBRATION_KEYS`` entry.
+
+    ``with_way_back`` is the same DayHikes measured with their way back to the
+    Trailhead (ADR-0019): its own facts, ProfileShapes and Calibration, the
+    same Twins, and ``way_back`` (``WAY_BACK_COLUMNS`` x DayHikes).
     """
 
     ids: np.ndarray
@@ -254,6 +268,8 @@ class SimilarityStore:
     twins: np.ndarray
     quantiles: np.ndarray
     catalog_digest: str | None = None
+    with_way_back: SimilarityStore | None = None
+    way_back: np.ndarray | None = None
 
     @classmethod
     def open(cls, catalog_path: Path | str) -> SimilarityStore:
@@ -299,17 +315,31 @@ class SimilarityStore:
         def load(name: str) -> np.ndarray:
             return np.load(directory / f"{name}.npy", mmap_mode="r")
 
+        ids, twins, digest = load("ids"), load("twins"), meta.get("catalog_digest")
         return cls(
-            ids=load("ids"),
+            ids=ids,
             facts=load("facts"),
             profile=load("profile"),
-            twins=load("twins"),
+            twins=twins,
             quantiles=load("quantiles"),
-            catalog_digest=meta.get("catalog_digest"),
+            catalog_digest=digest,
+            with_way_back=cls(
+                ids=ids,
+                facts=load("facts_back"),
+                profile=load("profile_back"),
+                twins=twins,
+                quantiles=load("quantiles_back"),
+                catalog_digest=digest,
+                way_back=load("way_back"),
+            ),
         )
 
     def column(self, name: str) -> np.ndarray:
         return self.facts[FACT_COLUMNS.index(name)]
+
+    def mode(self, return_to_start: bool) -> SimilarityStore:
+        """The DayHikes measured with their way back to the start, or one way."""
+        return self.with_way_back if return_to_start else self
 
 
 @dataclass(frozen=True, eq=False)
@@ -345,6 +375,7 @@ def rank_dayhikes(
     month: int | None = None,
     allowed_ids: Collection[int] | None = None,
     limit: int | None = None,
+    return_to_start: bool = True,
 ) -> Ranking:
     """Rank Catalog DayHikes by Measure similarity to named Seeds.
 
@@ -360,12 +391,14 @@ def rank_dayhikes(
     Measure scored is left out. ``allowed_ids`` restricts the candidates (for
     an upstream filter such as DriveTime). ``limit`` keeps only the best that
     many items (every candidate is still scored). QueryMonth selects that
-    month's climate in the monthly Measures.
+    month's climate in the monthly Measures. ``return_to_start`` measures
+    Seeds and candidates alike with their way back to the start (ADR-0019),
+    else one way.
     """
     chosen = _measure_weights(weights)
     _check_month(month)
     seed_ids = sorted({resolve_seed(catalog, name) for name in seeds})
-    store = catalog.similarity
+    store = catalog.similarity.mode(return_to_start)
     rows, scores = rank_rows(
         store,
         np.searchsorted(store.ids, seed_ids),
@@ -571,27 +604,26 @@ def build_similarity(
     landcover_dir: Path | str = DEFAULT_LANDCOVER_DIR,
     progress: Progress | None = None,
 ) -> Path:
-    """Write the facts, Twins and Calibration of every Catalog DayHike.
+    """Write the facts, Twins and Calibration of every Catalog DayHike, one
+    way and with its way back.
 
     Reads the Catalog and its GeometryStore (read-only), FABDEM tiles in
     ``dem_dir`` for SolarAspect and WorldCover tiles in ``landcover_dir`` for
-    WaterSide, then calibrates (``calibrate_similarity``). Run it after ingest
-    and every sample step; it replaces the directory.
+    WaterSide, and the TrailGraph for each way back (its per-vertex samples,
+    so after ``sample_trailgraph``), then calibrates (``calibrate_similarity``).
+    Run it after ingest and every sample step; it replaces the directory.
     """
     started = time.monotonic()
     catalog_path = Path(catalog_path)
     directory = similarity_dir_for(catalog_path)
     digest = catalog_digest(catalog_path)
-    ids, facts, profile, twins = _build_facts(
-        catalog_path, Path(dem_dir), Path(landcover_dir), progress
-    )
+    arrays = _build_facts(catalog_path, Path(dem_dir), Path(landcover_dir), progress)
     directory.mkdir(exist_ok=True)
     for path in directory.glob("*"):
         path.unlink()
-    np.save(directory / "ids.npy", ids)
-    np.save(directory / "facts.npy", facts)
-    np.save(directory / "profile.npy", profile)
-    np.save(directory / "twins.npy", twins)
+    for name, values in arrays.items():
+        np.save(directory / f"{name}.npy", values)
+    ids = arrays["ids"]
     (directory / "meta.json").write_text(
         json.dumps(
             {
@@ -632,8 +664,8 @@ def calibrate_similarity(
 
     ``CALIBRATION_PAIRS`` random pairs of distinct DayHikes are scored on every
     ``CALIBRATION_KEYS`` entry; ``CALIBRATION_QUANTILES`` evenly spaced
-    quantiles of the scored ones are kept per key. Rerun after a Measure
-    constant changes.
+    quantiles of the scored ones are kept per key, for the facts one way and
+    with the way back alike. Rerun after a Measure constant changes.
     """
     directory = similarity_dir_for(catalog_path)
     meta = json.loads((directory / "meta.json").read_text())
@@ -643,37 +675,38 @@ def calibrate_similarity(
         progress("similarity: calibration")
     started = time.monotonic()
     ids = np.load(directory / "ids.npy")
-    store = SimilarityStore(
-        ids=ids,
-        facts=np.load(directory / "facts.npy"),
-        profile=np.load(directory / "profile.npy"),
-        twins=np.load(directory / "twins.npy"),
-        quantiles=np.empty((0, 0), dtype=np.float32),
-    )
     rng = np.random.default_rng(CALIBRATION_SEED)
     left, right = rng.integers(0, len(ids), size=(2, CALIBRATION_PAIRS))
     distinct = left != right
     left, right = left[distinct], right[distinct]
     by_name = {measure.name: measure for measure in MEASURES}
-    scores = np.column_stack(
-        [
-            measure_scores(
-                store,
-                by_name[key.split("@")[0]],
-                left,
-                right,
-                month=int(key.split("@")[1]) if "@" in key else None,
-            )
-            for key in CALIBRATION_KEYS
-        ]
-    ).astype(np.float32)
     at = (np.arange(CALIBRATION_QUANTILES) + 0.5) / CALIBRATION_QUANTILES
-    quantiles = np.full((len(CALIBRATION_KEYS), CALIBRATION_QUANTILES), np.nan, np.float32)
-    for row, column in enumerate(scores.T):
-        scored = column[~np.isnan(column)]
-        if scored.size:
-            quantiles[row] = np.quantile(scored, at, method="inverted_cdf")
-    np.save(directory / "quantiles.npy", quantiles)
+    for suffix in ("", "_back"):
+        store = SimilarityStore(
+            ids=ids,
+            facts=np.load(directory / f"facts{suffix}.npy"),
+            profile=np.load(directory / f"profile{suffix}.npy"),
+            twins=np.load(directory / "twins.npy"),
+            quantiles=np.empty((0, 0), dtype=np.float32),
+        )
+        scores = np.column_stack(
+            [
+                measure_scores(
+                    store,
+                    by_name[key.split("@")[0]],
+                    left,
+                    right,
+                    month=int(key.split("@")[1]) if "@" in key else None,
+                )
+                for key in CALIBRATION_KEYS
+            ]
+        ).astype(np.float32)
+        quantiles = np.full((len(CALIBRATION_KEYS), CALIBRATION_QUANTILES), np.nan, np.float32)
+        for row, column in enumerate(scores.T):
+            scored = column[~np.isnan(column)]
+            if scored.size:
+                quantiles[row] = np.quantile(scored, at, method="inverted_cdf")
+        np.save(directory / f"quantiles{suffix}.npy", quantiles)
     meta.update(
         calibration_version=_CALIBRATION_VERSION,
         calibration_keys=CALIBRATION_KEYS,
@@ -686,8 +719,10 @@ def calibrate_similarity(
 
 def _build_facts(
     catalog_path: Path, dem_dir: Path, landcover_dir: Path, progress: Progress | None
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Ids, facts (``FACT_COLUMNS`` x DayHikes, float32), ProfileShapes and Twins."""
+) -> dict[str, np.ndarray]:
+    """Ids, facts (``FACT_COLUMNS`` x DayHikes, float32), ProfileShapes and
+    Twins; the facts and ProfileShapes with the way back (``_back``) and
+    ``way_back`` (``WAY_BACK_COLUMNS`` x DayHikes)."""
     column = {name: index for index, name in enumerate(FACT_COLUMNS)}
     catalog = sqlite3.connect(f"file:{catalog_path}?mode=ro", uri=True)
     try:
@@ -726,6 +761,8 @@ def _build_facts(
         for index, name in enumerate(CLIMATE_NAMES):
             facts[column[f"{name}_{month:02d}"], month_rows[at]] = months[at, 2 + index]
 
+    graph_path = trailgraph_path_for(catalog_path)
+    graph = TrailGraph(graph_path) if graph_path.is_file() else None
     geo = sqlite3.connect(f"file:{geometry_store_path_for(catalog_path)}?mode=ro", uri=True)
     try:
         kinds, amenity_points = _amenities(geo)
@@ -744,53 +781,121 @@ def _build_facts(
                 trailheads, r=TRAILHEAD_M / EARTH_RADIUS_M, count_only=True
             )
             facts[column[name]] = near > 0
-        probes: list[np.ndarray] = []
-        probe_rows: list[np.ndarray] = []
-        water_probes: list[np.ndarray] = []
-        water_rows: list[np.ndarray] = []
+        back_facts, back_profile = facts.copy(), profile.copy()
+        back_rows = np.zeros((len(WAY_BACK_COLUMNS), n), dtype=np.float32)
+        back_rows[1:3] = np.nan
+        has_landcover = "landcover" in {row[1] for row in geo.execute("PRAGMA table_info(vertices)")}
+        probes: dict[str, list[np.ndarray]] = {"": [], "_back": []}
+        probe_rows: dict[str, list[np.ndarray]] = {"": [], "_back": []}
+        water_probes: dict[str, list[np.ndarray]] = {"": [], "_back": []}
+        water_rows: dict[str, list[np.ndarray]] = {"": [], "_back": []}
         routes: list[np.ndarray | None] = [None] * n
         for start in range(0, n, _HIKE_CHUNK):
             chunk = ids[start : start + _HIKE_CHUNK]
-            walks = _walks(geo, int(chunk[0]), int(chunk[-1]))
+            walks = _walks(geo, int(chunk[0]), int(chunk[-1]), has_landcover)
             for row, dayhike_id in enumerate(chunk, start=start):
                 walk = walks.get(int(dayhike_id))
                 if walk is None:
-                    facts[column["round_trip"], row] = 0.0
-                    for name in ("peak_summited", "viewpoint_along", "peaks_around"):
-                        facts[column[name], row] = 0.0
-                    for name in FACILITIES_FLAG_COLUMNS[:3]:
-                        facts[column[name], row] = 0.0
+                    for target in (facts, back_facts):
+                        target[column["round_trip"], row] = 0.0
+                        for name in ("peak_summited", "viewpoint_along", "peaks_around"):
+                            target[column[name], row] = 0.0
+                        for name in FACILITIES_FLAG_COLUMNS[:3]:
+                            target[column[name], row] = 0.0
                     continue
-                lat, lon, ele, ways = walk
-                for name, value in walk_facts(lat, lon, ele, ways, along, peaks).items():
-                    facts[column[name], row] = value
-                shape = profile_shape(lat, lon, ele)
-                if shape is not None:
-                    profile[row] = shape
-                chosen = solar_aspect_points(len(lat))
-                probes.append(np.column_stack([lat[chosen], lon[chosen]]))
-                probe_rows.append(np.full(chosen.size, row))
+                lat, lon, ele, ways, codes = walk
+                one_way = ComposedWalk(
+                    None, None, None, None, lat, lon, ele, codes,
+                    np.full(len(lat), -1), np.full(len(lat), np.nan), ways, None, {},
+                )  # fmt: skip
+                back = way_back(lat, lon, graph)
+                trip = round_trip(one_way, back)
+                for suffix, measured, target, shapes in (
+                    ("", one_way, facts, profile),
+                    ("_back", trip, back_facts, back_profile),
+                ):
+                    for name, value in walk_facts(
+                        measured.lat, measured.lon, measured.ele, measured.walked, along, peaks
+                    ).items():
+                        target[column[name], row] = value
+                    shape = profile_shape(measured.lat, measured.lon, measured.ele)
+                    if shape is not None:
+                        shapes[row] = shape
+                    chosen = solar_aspect_points(len(measured.lat))
+                    probes[suffix].append(np.column_stack([measured.lat[chosen], measured.lon[chosen]]))
+                    probe_rows[suffix].append(np.full(chosen.size, row))
+                    if len(measured.lat) >= 2:
+                        water_probes[suffix].append(_even_points(measured.lat, measured.lon, WATERSIDE_STEP_M))
+                        water_rows[suffix].append(np.full(len(water_probes[suffix][-1]), row))
                 if len(lat) >= 2:
-                    water_probes.append(_even_points(lat, lon, WATERSIDE_STEP_M))
-                    water_rows.append(np.full(len(water_probes[-1]), row))
                     routes[row] = _even_points(lat, lon, TWIN_STEP_M).astype(np.float32)
+                _add_way_back(back_facts[:, row], len(lat), back, trip, graph, has_landcover)
+                back_rows[:, row] = (
+                    back.metres, *climb_and_descent(trip.lat, trip.lon, trip.ele), WAY_BACK_KINDS.index(back.kind)
+                )
             if progress is not None:
                 progress(f"similarity facts: {min(start + _HIKE_CHUNK, n)}/{n} DayHikes")
     finally:
         geo.close()
-    if progress is not None:
-        progress("similarity facts: SolarAspect")
-    points = np.concatenate(probes) if probes else np.empty((0, 2))
-    owners = np.concatenate(probe_rows) if probe_rows else np.empty(0, dtype=int)
-    facts[column["southness"]] = solar_aspect_southness(dem_dir, points, owners, n)
-    if progress is not None:
-        progress("similarity facts: WaterSide")
-    points = np.concatenate(water_probes) if water_probes else np.empty((0, 2))
-    owners = np.concatenate(water_rows) if water_rows else np.empty(0, dtype=int)
-    facts[column["waterside_share"]] = waterside_share(landcover_dir, points, owners, n)
+    for suffix, target in (("", facts), ("_back", back_facts)):
+        if progress is not None:
+            progress(f"similarity facts{suffix}: SolarAspect")
+        points = np.concatenate(probes[suffix]) if probes[suffix] else np.empty((0, 2))
+        owners = np.concatenate(probe_rows[suffix]) if probe_rows[suffix] else np.empty(0, dtype=int)
+        target[column["southness"]] = solar_aspect_southness(dem_dir, points, owners, n)
+        if progress is not None:
+            progress(f"similarity facts{suffix}: WaterSide")
+        points = np.concatenate(water_probes[suffix]) if water_probes[suffix] else np.empty((0, 2))
+        owners = np.concatenate(water_rows[suffix]) if water_rows[suffix] else np.empty(0, dtype=int)
+        target[column["waterside_share"]] = waterside_share(landcover_dir, points, owners, n)
     if progress is not None:
         progress("similarity facts: Twins")
-    return ids, facts, profile, twin_groups(routes)
+    return {
+        "ids": ids,
+        "facts": facts,
+        "profile": profile,
+        "twins": twin_groups(routes),
+        "facts_back": back_facts,
+        "profile_back": back_profile,
+        "way_back": back_rows,
+    }
+
+
+def _add_way_back(
+    facts: np.ndarray, one_way: int, back: WayBack, trip: ComposedWalk, graph: TrailGraph | None, has_landcover: bool
+) -> None:
+    """Bring the Catalog's own facts of one DayHike (its column of ``facts``)
+    to the walk with its way back: ``trip``, whose first ``one_way`` vertices
+    are the DayHike's. Length adds the metres back; highest, lowest and
+    Difficulty take the way back's too; LandCover counts every vertex of the
+    trip (when the GeometryStore has its classes); climate averages the
+    vertices back with the DayHike's, weighted by the vertex count.
+    """
+    column = {name: index for index, name in enumerate(FACT_COLUMNS)}
+    facts[column["length_m"]] += back.metres
+    tail = trip.ele[one_way:]
+    tail = tail[np.isfinite(tail)]
+    if tail.size:
+        facts[column["highest_m"]] = np.fmax(facts[column["highest_m"]], tail.max())
+        facts[column["lowest_m"]] = np.fmin(facts[column["lowest_m"]], tail.min())
+    if back.walk is not None and back.walk.sac_scale is not None:
+        facts[column["difficulty_rank"]] = np.fmax(facts[column["difficulty_rank"]], SAC_SCALE_RANK[back.walk.sac_scale])
+    codes = trip.landcover[trip.landcover > 0]
+    if has_landcover and codes.size:
+        fractions = list(_landcover_fractions(codes.tolist()))
+        fractions.append(max(1.0 - sum(fractions), 0.0))
+        facts[[column[name] for name in LANDCOVER_SHARE_COLUMNS]] = fractions
+    cells = trip.climate_cell[one_way:]
+    cells = cells[cells >= 0]
+    if graph is None or not cells.size:
+        return
+    climate = graph._climate(cells)  # (cells, 12, 3)
+    months = [f"{name}_{month:02d}" for month in range(1, 13) for name in CLIMATE_NAMES]
+    tails = [*climate.reshape(len(cells), -1).T, climate[:, 5:8, 0].mean(axis=1), climate[:, :, 1].mean(axis=1), climate[:, 5:8, 2].mean(axis=1)]
+    for name, values in zip([*months, *CLIMATE_NAMES], tails):
+        own = facts[column[name]]
+        weight = 0 if np.isnan(own) else one_way
+        facts[column[name]] = ((own * weight if weight else 0.0) + values.sum()) / (weight + len(values))
 
 
 def _amenities(geo: sqlite3.Connection) -> tuple[np.ndarray, np.ndarray]:
@@ -834,14 +939,15 @@ class AmenityPoints:
 
 
 def _walks(
-    geo: sqlite3.Connection, first_id: int, last_id: int
-) -> dict[int, tuple[np.ndarray, np.ndarray, np.ndarray, list[tuple[float, str | None]]]]:
-    """DayHikeGeometry (lat, lon, ele) and walked ways for DayHikes in an id range.
+    geo: sqlite3.Connection, first_id: int, last_id: int, has_landcover: bool = False
+) -> dict[int, tuple[np.ndarray, np.ndarray, np.ndarray, list[tuple[float, str | None]], np.ndarray]]:
+    """DayHikeGeometry (lat, lon, ele), walked ways and per-vertex WorldCover
+    class (0 missing, and without ``has_landcover``) for DayHikes in an id range.
 
     Ways are (walked metres, surface class) in walk order; Leftovers are out.
     """
     vertices = geo.execute(
-        "SELECT dayhike_id, latitude, longitude, ele FROM vertices "
+        f"SELECT dayhike_id, latitude, longitude, ele, {'landcover' if has_landcover else 'NULL'} FROM vertices "
         "WHERE dayhike_id BETWEEN ? AND ? ORDER BY dayhike_id, seq",
         (first_id, last_id),
     ).fetchall()
@@ -857,7 +963,7 @@ def _walks(
     if not vertices:
         return {}
     table = np.array(
-        [(i, lat, lon, math.nan if ele is None else ele) for i, lat, lon, ele in vertices],
+        [(i, lat, lon, math.nan if ele is None else ele, code or 0) for i, lat, lon, ele, code in vertices],
         dtype=float,
     )
     hike_ids, starts = np.unique(table[:, 0], return_index=True)
@@ -868,6 +974,7 @@ def _walks(
             table[start:end, 2],
             table[start:end, 3],
             ways.get(int(dayhike_id), []),
+            table[start:end, 4].astype(np.int64),
         )
         for dayhike_id, start, end in zip(hike_ids, starts, ends)
     }

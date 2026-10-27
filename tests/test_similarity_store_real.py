@@ -109,12 +109,13 @@ def test_calibration_reproduces_from_the_stored_facts(tmp_path: Path) -> None:
     built = similarity_dir_for(rc.catalog_path())
     copy = similarity_dir_for(tmp_path / "catalog.sqlite")
     copy.mkdir()
-    for name in ("ids.npy", "facts.npy", "profile.npy", "twins.npy", "meta.json"):
+    for name in ("ids.npy", "facts.npy", "profile.npy", "facts_back.npy", "profile_back.npy", "twins.npy", "meta.json"):
         shutil.copyfile(built / name, copy / name)
 
     calibrate_similarity(tmp_path / "catalog.sqlite")
 
-    assert (copy / "quantiles.npy").read_bytes() == (built / "quantiles.npy").read_bytes()
+    for name in ("quantiles.npy", "quantiles_back.npy"):
+        assert (copy / name).read_bytes() == (built / name).read_bytes(), name
 
 
 def test_store_was_built_from_this_catalog() -> None:

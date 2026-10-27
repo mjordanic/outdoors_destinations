@@ -91,8 +91,9 @@ def test_weights_shift_the_ranking_between_measures(tmp_path: Path) -> None:
     calibrate_similarity(catalog.path)
     catalog = Catalog.open(catalog.path)
 
-    by_length = rank_dayhikes(catalog, ["Ridge Walk"], {"length": 100, "peak_summited": 10})
-    by_peak = rank_dayhikes(catalog, ["Ridge Walk"], {"length": 10, "peak_summited": 100})
+    # One way: the facts changed above are the one-way ones.
+    by_length = rank_dayhikes(catalog, ["Ridge Walk"], {"length": 100, "peak_summited": 10}, return_to_start=False)
+    by_peak = rank_dayhikes(catalog, ["Ridge Walk"], {"length": 10, "peak_summited": 100}, return_to_start=False)
 
     assert by_length.items[0].dayhike.id == 1003
     assert by_peak.items[0].dayhike.id == 1007
@@ -132,7 +133,7 @@ def test_several_seeds_score_the_best_seed_not_the_mean(tmp_path: Path) -> None:
 
     assert both == pytest.approx(np.maximum(ridge, valley))
     assert both != pytest.approx((ridge + valley) / 2)
-    ranking = rank_dayhikes(catalog, ["Ridge Walk", "Valley Path"], weights)
+    ranking = rank_dayhikes(catalog, ["Ridge Walk", "Valley Path"], weights, return_to_start=False)
     scores = {item.dayhike.id: item.score for item in ranking.items}
     assert scores[1003] == pytest.approx(both[0])
 
@@ -141,11 +142,13 @@ def test_score_is_the_similarity(tmp_path: Path) -> None:
     catalog = _catalog(tmp_path, LENGTHS)
     weights = dict.fromkeys(MEASURE_NAMES, 100.0)
 
-    ranking = rank_dayhikes(catalog, ["Ridge Walk"], weights)
+    for return_to_start in (True, False):
+        ranking = rank_dayhikes(catalog, ["Ridge Walk"], weights, return_to_start=return_to_start)
 
-    rows = np.searchsorted(catalog.similarity.ids, [item.dayhike.id for item in ranking.items])
-    similarity, _ = score_rows(catalog.similarity, [0], rows, weights)
-    assert [item.score for item in ranking.items] == pytest.approx(similarity.tolist())
+        store = catalog.similarity.mode(return_to_start)
+        rows = np.searchsorted(store.ids, [item.dayhike.id for item in ranking.items])
+        similarity, _ = score_rows(store, [0], rows, weights)
+        assert [item.score for item in ranking.items] == pytest.approx(similarity.tolist())
 
 
 def test_no_weights_weigh_the_core_measures(tmp_path: Path) -> None:
@@ -271,6 +274,14 @@ def test_cli_builds_similarity_and_prints_id_name_and_score(tmp_path: Path) -> N
     assert all(0.0 <= float(line[2]) <= 1.0 for line in lines)
     assert limited.returncode == 0, limited.stderr
     assert len(limited.stdout.strip().splitlines()) == 1
+    # With the way back by default; --one-way compares every hike one way.
+    catalog = Catalog.open(path)
+    for flags, return_to_start in (((), True), (("--one-way",), False)):
+        printed = _cli("rank", "--catalog", str(path), *flags, "--weight", "length=100", "Ridge Walk")
+        expected = rank_dayhikes(catalog, ["Ridge Walk"], {"length": 100}, return_to_start=return_to_start)
+        assert [line.split("\t")[2] for line in printed.stdout.strip().splitlines()] == [
+            str(item.score) for item in expected.items
+        ]
 
 
 def test_cli_rejects_a_bad_weight(tmp_path: Path) -> None:

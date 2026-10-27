@@ -28,7 +28,9 @@ The amenity points the Measures count near the network are kept too.
 WorldCover cells beside open water, so a server without rasters can compute
 the facts of a ComposedHike. ``TrailGraph`` opens the file (or its serving
 copy) and composes a hike from a ``Route``: the OSM ways it walks from OSM
-node to OSM node, so a shared link holds across rebuilds.
+node to OSM node, so a shared link holds across rebuilds. ``way_back`` finds
+how any walk gets back to its start (ADR-0019), and ``round_trip`` measures a
+walk with it.
 """
 
 from __future__ import annotations
@@ -39,7 +41,7 @@ import math
 import re
 import sqlite3
 from collections.abc import Callable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -50,6 +52,7 @@ from dayhike.catalog import (
     OSM_ATTRIBUTION,
     SAC_SCALE_RANK,
     SNAP_TOLERANCE_M,
+    remove_similarity,
     trailgraph_path_for,
 )
 
@@ -865,8 +868,9 @@ def sample_trailgraph(
     - ``water_tiles`` and ``water_cells``: per WorldCover tile its overview
       grid and the cells near the network that are beside open water.
 
-    A missing raster directory leaves its values as they are. Returns the
-    number of vertices.
+    A missing raster directory leaves its values as they are. The similarity
+    facts read these samples on each way back, so they are deleted, as
+    after every sample step. Returns the number of vertices.
     """
     from dayhike.climate import _climate_rasters
     from dayhike.dem import FABDEM_VERSION, sample_elevations
@@ -933,6 +937,7 @@ def sample_trailgraph(
         db.commit()
     finally:
         db.close()
+    remove_similarity(catalog_path, progress)  # a way back reads these samples (ADR-0019)
     return sampled
 
 
@@ -1096,7 +1101,7 @@ class Route:
 class ComposedWalk:
     """The stitched vertices of a Route and what the facts need of its Segments."""
 
-    route: Route
+    route: Route | None  # None for a way back
     start: int | None  # the start Junction's id in this TrailGraph; None where the walk cuts a Segment
     segments: list[int] | None  # the Segment ids walked in this TrailGraph; None where it cuts one
     steps: list[str] | None  # each of them walked, as ``Route`` names it
@@ -1113,6 +1118,80 @@ class ComposedWalk:
 
 class RouteError(ValueError):
     """The Route is not one walk on this TrailGraph."""
+
+
+WAY_BACK_KINDS = ("none", "trail", "step", "retrace")
+
+
+@dataclass
+class WayBack:
+    """How a walk gets from its last vertex back to its first (ADR-0019).
+
+    ``kind`` is ``none`` (it ends where it starts), ``step`` (a straight step
+    over a gap of at most ``GAP_JOIN_M``, as the main walk joins its ways),
+    ``trail`` (the shortest walk over the TrailGraph, in ``walk``) or
+    ``retrace`` (the walk itself, backwards), the shortest of them; ``metres``
+    is its length.
+    """
+
+    kind: str
+    metres: float
+    walk: ComposedWalk | None = None
+
+
+def way_back(lat: np.ndarray, lon: np.ndarray, graph: TrailGraph | None) -> WayBack:
+    """The way back of the walk with these vertices (see ``WayBack``).
+
+    Ends at most ``GAP_JOIN_M`` apart take the straight step. Otherwise the
+    shortest walk over the TrailGraph's trails and gaps (never a Link), when
+    both ends are TrailGraph vertices and it is shorter than retracing the
+    walk; else the walk retraced. Without a TrailGraph there is no trail.
+    """
+    if len(lat) < 2:
+        return WayBack("none", 0.0)
+    gap = float(_haversine(lat[-1:], lon[-1:], lat[:1], lon[:1])[0])
+    if gap == 0.0:
+        return WayBack("none", 0.0)
+    if gap <= GAP_JOIN_M:
+        return WayBack("step", gap)
+    retrace = float(_haversine(lat[:-1], lon[:-1], lat[1:], lon[1:]).sum())
+    trail = None if graph is None else graph.trail_back(lat, lon, retrace - 1.0)
+    if trail is None:
+        return WayBack("retrace", retrace)
+    return WayBack("trail", float(_haversine(trail.lat[:-1], trail.lon[:-1], trail.lat[1:], trail.lon[1:]).sum()), trail)
+
+
+def round_trip(walk: ComposedWalk, back: WayBack) -> ComposedWalk:
+    """The walk followed by its way back, as one walk that ends where it starts.
+
+    Only a trail back adds climate cells: a step or a retrace walks no new
+    ground, so the walk's mean climate stands (as the Catalog's does).
+    """
+    columns = ("lat", "lon", "ele", "landcover", "climate_cell", "southness")
+    if back.kind == "none":
+        return walk
+    if back.kind == "trail":
+        tail = {column: getattr(back.walk, column)[1:] for column in columns}
+        walked, scale, relations = back.walk.walked, back.walk.sac_scale, back.walk.relation_m
+    elif back.kind == "step":
+        tail = {column: getattr(walk, column)[:1] for column in columns}
+        walked, scale, relations = [], None, {}
+    else:
+        tail = {column: getattr(walk, column)[::-1][1:] for column in columns}
+        walked, scale, relations = walk.walked[::-1], walk.sac_scale, walk.relation_m
+    if back.kind != "trail":
+        tail["climate_cell"] = np.full(len(tail["lat"]), -1, dtype=walk.climate_cell.dtype)
+    scales = [s for s in (walk.sac_scale, scale) if s is not None]
+    merged = dict(walk.relation_m)
+    for relation, metres in relations.items():
+        merged[relation] = merged.get(relation, 0.0) + metres
+    return replace(
+        walk,
+        **{column: np.concatenate([getattr(walk, column), tail[column]]) for column in columns},
+        walked=[*walk.walked, *walked],
+        sac_scale=max(scales, key=SAC_SCALE_RANK.__getitem__) if scales else None,
+        relation_m=merged,
+    )
 
 
 def _decode(row: tuple) -> tuple[list[np.ndarray], list, np.ndarray, list[int]]:
@@ -1162,6 +1241,7 @@ class TrailGraph:
         if not self.path.is_file():
             raise FileNotFoundError(self.path)
         self._uri = f"file:{self.path}?mode=ro"
+        self._graph: tuple | None = None  # what ``trail_back`` searches, read once
 
     def _db(self) -> sqlite3.Connection:
         return sqlite3.connect(self._uri, uri=True)
@@ -1289,7 +1369,7 @@ class TrailGraph:
                 at += count
         return leaving, on_way
 
-    def _stitch(self, route: Route, rows: dict[int, tuple], pieces: list[list[int]]) -> ComposedWalk:
+    def _stitch(self, route: Route | None, rows: dict[int, tuple], pieces: list[list[int]]) -> ComposedWalk:
         columns: list[list[np.ndarray]] = [[], [], [], [], [], []]
         walked: dict[int, list] = {}
         scales: set[str] = set()
@@ -1336,6 +1416,102 @@ class TrailGraph:
             sac_scale=max(scales, key=SAC_SCALE_RANK.__getitem__) if scales else None,
             relation_m=relations,
         )
+
+    def trail_back(self, lat: np.ndarray, lon: np.ndarray, limit_m: float) -> ComposedWalk | None:
+        """The shortest walk over trail and gap Segments (never a Link) from
+        the walk's last vertex to its first, when both are TrailGraph vertices
+        and it is shorter than ``limit_m``; else None."""
+        from scipy.sparse.csgraph import dijkstra
+
+        rows: dict[int, tuple] = {}
+        with self._db() as db:
+            end = self._locate(db, rows, lat[-1], lon[-1])
+            start = self._locate(db, rows, lat[0], lon[0])
+            if end is None or start is None:
+                return None
+            nodes, matrix, edges = self._network()
+
+            def ends(segment: int, vertex: int, along: np.ndarray) -> list[tuple[int, float, int]]:
+                """(node, metres to it, its vertex) for both ends of the Segment."""
+                a, b = np.searchsorted(nodes, rows[segment][2:4])
+                return [(int(a), along[vertex], 0), (int(b), along[-1] - along[vertex], len(along) - 1)]
+
+            sources, targets = ends(*end), ends(*start)
+            best, via = limit_m, None
+            if end[0] == start[0] and abs(end[2][end[1]] - start[2][start[1]]) < best:
+                best, via = abs(end[2][end[1]] - start[2][start[1]]), ()
+            metres, previous = dijkstra(
+                matrix, indices=[node for node, _, _ in sources], limit=limit_m, return_predecessors=True
+            )
+            for s, (_, to_source, _) in enumerate(sources):
+                for t, (node, to_target, _) in enumerate(targets):
+                    if to_source + metres[s, node] + to_target < best:
+                        best, via = to_source + metres[s, node] + to_target, (s, t)
+            if via is None:
+                return None
+            if not via:
+                return self._stitch(None, rows, [[end[0], end[1], start[1]]])
+            s, t = via
+            chain = [targets[t][0]]
+            while chain[-1] != sources[s][0]:
+                chain.append(int(previous[s, chain[-1]]))
+            chain.reverse()
+            middle = [edges[min(x, y), max(x, y)] for x, y in zip(chain, chain[1:])]
+            if middle:
+                self._load(db, rows, f"WHERE id IN ({','.join('?' * len(middle))})", tuple(middle))
+        pieces = [[end[0], end[1], sources[s][2]]]
+        for x, segment in zip(chain, middle):
+            last = len(rows[segment][7]) // 8 - 1
+            pieces.append([segment, 0, last] if np.searchsorted(nodes, rows[segment][2]) == x else [segment, last, 0])
+        pieces.append([start[0], targets[t][2], start[1]])
+        return self._stitch(None, rows, [piece for piece in pieces if piece[1] != piece[2]])
+
+    def _locate(
+        self, db: sqlite3.Connection, rows: dict[int, tuple], lat: float, lon: float
+    ) -> tuple[int, int, np.ndarray] | None:
+        """A Segment (not a Link) with a vertex exactly at this point: its id,
+        the vertex and the metres along it to each vertex; None off the network."""
+        fixed = np.round(np.array([lat, lon]) * COORD_SCALE).astype("<i4")
+        found = self._load(
+            db, rows,
+            "WHERE s.kind != 'link' AND s.id IN (SELECT id FROM segment_boxes "
+            "WHERE south <= ? AND north >= ? AND west <= ? AND east >= ?) ORDER BY s.id",
+            (float(lat), float(lat), float(lon), float(lon)),
+        )  # fmt: skip
+        for row in found:
+            at = np.flatnonzero((np.frombuffer(row[7], dtype="<i4").reshape(-1, 2) == fixed).all(axis=1))
+            if at.size:
+                points = decode_coords(row[7])
+                steps = _haversine(points[:-1, 0], points[:-1, 1], points[1:, 0], points[1:, 1])
+                return row[0], int(at[0]), np.concatenate([[0.0], np.cumsum(steps)])
+        return None
+
+    def _network(self) -> tuple[np.ndarray, object, dict[tuple[int, int], int]]:
+        """The Junction ids (sorted), the symmetric matrix of the shortest
+        Segment between two of them (metres, Links and rings left out) and
+        that Segment's id per (lower, higher) Junction index."""
+        if self._graph is None:
+            from scipy.sparse import csr_matrix
+
+            with self._db() as db:
+                found = db.execute("SELECT id, a, b, length_m FROM segments WHERE kind != 'link'").fetchall()
+            ids = np.array([row[0] for row in found], dtype=np.int64)
+            ends = np.array([row[1:3] for row in found], dtype=np.int64).reshape(-1, 2)
+            metres = np.array([row[3] for row in found], dtype=float)
+            nodes = np.unique(ends)
+            low, high = np.sort(np.searchsorted(nodes, ends), axis=1).T
+            shortest = np.argsort(metres, kind="stable")
+            shortest = shortest[low[shortest] != high[shortest]]
+            _, first = np.unique(low[shortest] * len(nodes) + high[shortest], return_index=True)
+            keep = shortest[first]
+            weight = np.maximum(metres[keep], 1e-3)  # a stored zero would be no edge
+            matrix = csr_matrix(
+                (np.concatenate([weight, weight]), (np.concatenate([low[keep], high[keep]]), np.concatenate([high[keep], low[keep]]))),
+                shape=(len(nodes), len(nodes)),
+            )  # fmt: skip
+            edges = dict(zip(zip(low[keep].tolist(), high[keep].tolist()), ids[keep].tolist()))
+            self._graph = (nodes, matrix, edges)
+        return self._graph
 
     def amenities_near(self, lat: np.ndarray, lon: np.ndarray, radius_m: float) -> list[tuple]:
         """(id, kind, lat, lon, name, ele tag) of the amenity points in the walk's

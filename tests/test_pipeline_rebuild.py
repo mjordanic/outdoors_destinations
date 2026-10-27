@@ -120,7 +120,10 @@ def test_fixture_pipeline_twice_gives_identical_outputs(two_runs: tuple[Path, Pa
     assert any(row[3] is not None for row in _rows(first)["climate_months"])
     first_store, second_store = similarity_dir_for(first), similarity_dir_for(second)
     arrays = sorted(path.name for path in first_store.glob("*.npy"))
-    assert arrays == ["facts.npy", "ids.npy", "profile.npy", "quantiles.npy", "twins.npy"]
+    assert arrays == [
+        "facts.npy", "facts_back.npy", "ids.npy", "profile.npy", "profile_back.npy",
+        "quantiles.npy", "quantiles_back.npy", "twins.npy", "way_back.npy",
+    ]  # fmt: skip
     for name in arrays:
         assert (first_store / name).read_bytes() == (second_store / name).read_bytes(), name
     assert _meta(first_store) == _meta(second_store)
