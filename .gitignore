@@ -26,6 +26,7 @@ data/*.snaps.npz
 data/baseline/
 data/web-serving/
 *.geometry.sqlite
+*.trailgraph.sqlite
 *.sqlite-wal
 *.sqlite-shm
 *.sqlite.work

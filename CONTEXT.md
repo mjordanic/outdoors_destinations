@@ -32,6 +32,26 @@ _Avoid_: stray, unconnected way, excursion, side trip, optional part
 The sidecar SQLite written at ingest next to a Catalog. It holds DayHikeGeometry, member-way and relation tags, raw amenity points, and the per-vertex LandCover samples. ClimateNormal is not stored per vertex (ADR-0015). Ranking does not read it.
 _Avoid_: experimental database, work file, Catalog, lab
 
+**TrailGraph**:
+The sidecar SQLite written at ingest next to a Catalog (`{catalog}.trailgraph.sqlite`): every member way of every `route=hiking` relation ingest read, including relations dropped as too short, too long, superroutes or node-network legs, split into Segments that meet at Junctions (ADR-0018). Unmarked paths are not in it. A ComposedHike is drawn on it; Ranking of Catalog DayHikes does not read it.
+_Avoid_: routing graph (that is Valhalla's), network, member-way graph (the per-DayHike graph of ADR-0012)
+
+**Junction**:
+A point of the TrailGraph where Segments meet: an OSM node shared by two or more member ways, a dead end, a point where the set of relations along the trail changes (a stage boundary), or a crossing of two same-layer ways that share no node. A dead-end tip within the snap tolerance (20 m by default) of a Junction elsewhere on the network is joined to it.
+_Avoid_: node (an OSM node is not always a Junction), intersection, vertex
+
+**Segment**:
+A stretch of the TrailGraph between two Junctions with no Junction inside: one or more OSM ways end to end, with their way ids, relation ids, `sac_scale`, surface, and full-resolution vertices. A short gap Segment bridges a joined dead-end tip. A Segment is walked either way.
+_Avoid_: edge, leg, stage (a stage is a relation), section
+
+**Link**:
+A "connect here" offer: two nearby TrailGraph points, within the snap tolerance of each other but far apart along the network, that ingest does not join because they may be two trails passing each other. The Hiker composing a ComposedHike may cross one; it is then walked as a straight step.
+_Avoid_: shortcut, snap, gap (a gap Segment is joined automatically)
+
+**ComposedHike**:
+A walk the Hiker draws from TrailGraph Segments, from a start Junction, Segment after Segment. It may reuse a Segment, and is measured as drawn, by distance walked: its facts come from the same rules as a DayHike's, applied to the vertices walked. It is not stored; it is shared through its URL, and it is not in the Catalog.
+_Avoid_: custom route, user route, composed DayHike
+
 **Origin**:
 The hiker's departure point for this query. It is not stored on the DayHike.
 _Avoid_: home, location, user location
@@ -133,7 +153,7 @@ A point where a Hiker can refill water: an OSM drinking-water point, spring, wat
 _Avoid_: water point (one OSM kind), fountain, water amenity
 
 **Seed**:
-A DayHike the hiker names as "like the outing I want." Ranking is similarity to Seeds, not a trained taste model.
+A DayHike the hiker names as "like the outing I want," or a ComposedHike they drew. Ranking is similarity to Seeds, not a trained taste model. A ComposedHike Seed is compared with Catalog DayHikes only, and the DayHikes it retraces (its Twins) are not listed.
 _Avoid_: label, like, rating, example (example is too vague)
 
 **FeatureVector**:

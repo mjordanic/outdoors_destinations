@@ -3,7 +3,9 @@
 ``create_app`` serves ``ServingData`` (``dayhike.serving``): name search, the
 hikes in a map view, hike detail, the Measure list, the score of any two hikes, and Ranking with an
 optional highways-only DriveTime pre-filter. Every client gets a request budget per minute, and one Ranking
-runs at a time per instance, so a small container holds its memory.
+runs at a time per instance, so a small container holds its memory. When the export has a TrailGraph,
+it also serves the Segments in a map view and the detail of a ComposedHike, which can then be the
+Seed of a Ranking or of a pair.
 """
 
 from __future__ import annotations
@@ -23,11 +25,14 @@ from pydantic import BaseModel, Field
 from dayhike.catalog import MatrixClient, Origin
 from dayhike.serving import MEASURE_GROUPS, MEASURE_INFO, ServingData
 from dayhike.similarity import DEFAULT_WEIGHTS, MEASURES
+from dayhike.trailgraph import Route, RouteError
 
 STATIC_DIR = Path(__file__).parent / "static"
 RESULTS = 10
 MAX_DRIVE_HOURS = 4.0
 MAP_HIKES = 100  # a map view shows its hikes only when it holds at most this many
+MAP_SEGMENTS = 1_500  # and its TrailGraph Segments only when it holds at most this many
+ROUTE_SEGMENTS = 500  # the most Segments a ComposedHike may have
 # Requests per client per RATE_WINDOW_S: Ranking, and everything else under /api.
 RANK_RATE = 20
 API_RATE = 300
@@ -58,14 +63,26 @@ class Weighted(BaseModel):
         return weights
 
 
+class Composed(BaseModel):
+    """A ComposedHike: its start Junction and its Segments in walking order."""
+
+    start: int
+    segments: list[int] = Field(min_length=1, max_length=ROUTE_SEGMENTS)
+
+    def route(self) -> Route:
+        return Route(self.start, tuple(self.segments))
+
+
 class RankRequest(Weighted):
-    seed: int
+    seed: int | None = None
+    composed: Composed | None = None
     origin: Place | None = None
     max_hours: float | None = Field(default=None, gt=0, le=MAX_DRIVE_HOURS)
 
 
 class PairRequest(Weighted):
-    a: int
+    a: int | None = None
+    composed: Composed | None = None
     b: int
 
 
@@ -164,6 +181,7 @@ def create_app(
             "coverage": coverage,
             "attribution": data.meta["attribution"],
             "drive_time": drive_client is not None,
+            "compose": data.trailgraph is not None,
             "max_drive_hours": MAX_DRIVE_HOURS,
             "results": RESULTS,
         }
@@ -188,6 +206,44 @@ def create_app(
         results, too_many = data.in_box(south, west, north, east, MAP_HIKES)
         return {"results": results, "too_many": too_many}
 
+    def trailgraph() -> None:
+        if data.trailgraph is None:
+            raise HTTPException(404, "composing hikes is not available on this server")
+
+    def seed_of(dayhike_id: int | None, composed: Composed | None) -> int | Route:
+        """The Seed a request names: a DayHike id or a ComposedHike, exactly one."""
+        if (dayhike_id is None) == (composed is None):
+            raise HTTPException(400, "give a DayHike or a composed hike, not both or neither")
+        if composed is None:
+            try:
+                data.row_of(dayhike_id)
+            except KeyError:
+                raise HTTPException(404, f"no DayHike {dayhike_id}") from None
+            return dayhike_id
+        trailgraph()
+        return composed.route()
+
+    @app.api_route("/api/segments", methods=["GET", "HEAD"])
+    def segments_in_box(
+        south: float = Query(ge=-90, le=90),
+        west: float = Query(ge=-180, le=180),
+        north: float = Query(ge=-90, le=90),
+        east: float = Query(ge=-180, le=180),
+    ) -> dict:
+        trailgraph()
+        if south > north or west > east:
+            raise HTTPException(400, "the box needs south <= north and west <= east")
+        found, too_many = data.segments_in_box(south, west, north, east, MAP_SEGMENTS)
+        return {**found, "too_many": too_many}
+
+    @app.post("/api/compose")
+    def compose(body: Composed) -> dict:
+        trailgraph()
+        try:
+            return data.compose(body.route())
+        except RouteError as error:
+            raise HTTPException(400, str(error)) from None
+
     @app.api_route("/api/hikes/{dayhike_id}", methods=["GET", "HEAD"])
     def hike(dayhike_id: int) -> dict:
         try:
@@ -203,10 +259,7 @@ def create_app(
             raise HTTPException(400, "give both origin and max_hours, or neither")
         if body.origin is not None and drive_client is None:
             raise HTTPException(400, "the drive-time filter is not available on this server")
-        try:
-            data.row_of(body.seed)
-        except KeyError:
-            raise HTTPException(404, f"no DayHike {body.seed}") from None
+        seed = seed_of(body.seed, body.composed)
         if not one_ranking.acquire(timeout=RANK_WAIT_S):
             raise HTTPException(503, "busy; try again in a moment")
         try:
@@ -218,13 +271,13 @@ def create_app(
                 except (urllib.error.URLError, ConnectionError, TimeoutError):
                     raise HTTPException(503, "the drive-time service is not answering; try again") from None
             results = data.rank(
-                body.seed,
+                seed,
                 weights,
                 month=body.month,
                 allowed_rows=None if hours is None else sorted(hours),
                 limit=RESULTS,
             )
-        except ValueError as error:
+        except ValueError as error:  # a RouteError too
             raise HTTPException(400, str(error)) from None
         finally:
             one_ranking.release()
@@ -232,6 +285,7 @@ def create_app(
             result["drive_hours"] = None if hours is None else hours[data.row_of(result["id"])]
         return {
             "seed": body.seed,
+            "composed": None if body.composed is None else body.composed.model_dump(),
             "month": body.month,
             "weights": {name: weight for name, weight in weights.items() if weight > 0},
             "reachable": None if hours is None else len(hours),
@@ -242,8 +296,9 @@ def create_app(
     @app.post("/api/pair")
     def pair(body: PairRequest) -> dict:
         weights = body.measure_weights()
+        a = seed_of(body.a, body.composed)
         try:
-            result = data.pair(body.a, body.b, weights, month=body.month)
+            result = data.pair(a, body.b, weights, month=body.month)
         except KeyError as error:
             raise HTTPException(404, f"no DayHike {error.args[0]}") from None
         except ValueError as error:

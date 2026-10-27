@@ -41,12 +41,14 @@ Every real file under `data/` is built by a command. This is the order:
 1. OSM snapshot          data/osm/*.osm.pbf          fetch-extracts (or curl)
 2. Ingest                data/catalog.sqlite         dayhike ingest
                          data/catalog.geometry.sqlite     (always, same ingest)
+                         data/catalog.trailgraph.sqlite   (always, same ingest)
 3. DEM rasters           data/dem/*_FABDEM_V1-2.tif  dayhike fetch-dem
 4. Sample heights        updates both SQLite files   dayhike sample-dem
 5. LandCover rasters     data/landcover/*.tif        dayhike fetch-landcover
 6. Sample LandCover      updates both SQLite files   dayhike sample-landcover
 7. Climate rasters       data/climate/*.tif          dayhike fetch-climate
 8. Sample climate        updates both SQLite files   dayhike sample-climate
+8b. Sample TrailGraph    updates the TrailGraph      dayhike sample-trailgraph (for composing hikes)
 9. Similarity facts      data/catalog.similarity/    dayhike build-similarity
 10. Rank                 stdout scores               dayhike rank [--weight] [--month]
 11. Optional DriveTime   local Valhalla Docker       rank --origin --max-hours, nearby
@@ -60,7 +62,7 @@ mkdir -p data/osm data/dem data/landcover data/climate
 # 1. Snapshot (Geofabrik PBF). Ranking never talks to OpenStreetMap.
 uv run dayhike fetch-extracts --dest data/osm
 
-# 2. Catalog + GeometryStore. One command writes both SQLite files.
+# 2. Catalog + GeometryStore + TrailGraph. One command writes the three SQLite files.
 uv run dayhike ingest data/osm --catalog data/catalog.sqlite
 
 # 3–4. Elevation. Skip these if OSM ele on nodes is enough (it usually is not).
@@ -72,6 +74,7 @@ uv run dayhike fetch-landcover    # ESA WorldCover 2021 tiles
 uv run dayhike sample-landcover
 uv run dayhike fetch-climate      # CHELSA V2.1 monthly normals
 uv run dayhike sample-climate
+uv run dayhike sample-trailgraph  # the same rasters onto the TrailGraph, for composed hikes
 
 # 9. Similarity facts and Calibration of every DayHike, once (rerun after 2–8).
 uv run dayhike build-similarity
@@ -90,13 +93,14 @@ What each step **does not** do:
 | Step | Writes | Does not |
 | --- | --- | --- |
 | `fetch-extracts` | `data/osm/*.pbf` | Catalog, GeometryStore, DEM |
-| `ingest` | Catalog + GeometryStore from the PBF | download OSM; download rasters; talk to Valhalla |
+| `ingest` | Catalog + GeometryStore + TrailGraph from the PBF | download OSM; download rasters; talk to Valhalla |
 | `fetch-dem` | GeoTIFFs in `data/dem/` | touch SQLite; sample heights |
 | `sample-dem` | `vertices.ele` + Catalog elevation | download rasters; rewrite hike list |
 | `fetch-landcover` | GeoTIFFs in `data/landcover/` | touch SQLite; sample classes |
 | `sample-landcover` | `vertices.landcover` + Catalog fractions | download rasters; rewrite hike list |
 | `fetch-climate` | GeoTIFFs in `data/climate/` | touch SQLite; sample climate |
 | `sample-climate` | Catalog monthly means (drops an old `vertex_climate`) | download rasters; rewrite hike list |
+| `sample-trailgraph` | per-vertex height, LandCover, climate cell, southness and water cells in the TrailGraph | touch the Catalog or GeometryStore; download rasters |
 | `build-similarity` | `data/catalog.similarity/` (facts + Calibration) | touch either SQLite file; download anything |
 | `rank` | nothing on disk | fetch OSM or rasters; rebuild facts |
 
@@ -124,6 +128,7 @@ call on your machine.
 | `tests/fixtures/catalog.osm` | Tiny OSM XML **oracle** for tests and demos | yes |
 | `data/catalog.sqlite` | The Catalog you work with (SQLite database) | **gitignored** |
 | `data/catalog.geometry.sqlite` | GeometryStore: DayHikeGeometry + raw amenities | **gitignored** |
+| `data/catalog.trailgraph.sqlite` | TrailGraph: the marked hiking network as Junctions and Segments | **gitignored** |
 | `data/catalog.similarity/` | Similarity facts + Calibration (numpy arrays) | **gitignored** |
 | `data/osm/` | Geofabrik / osmium extracts you download | gitignored |
 | `data/valhalla/` | Road PBF + Valhalla routing tiles Docker builds | gitignored |
@@ -178,9 +183,10 @@ data/catalog.sqlite
 IngestReport(kept=4, dropped_unnamed=0, dropped_length=2, dropped_network=1, named_osm_name=2, named_osm_ref=1, named_synthetic=1, dropped_node_network=0, named_from_to=0, named_place=0)
 ```
 
-Progress (`filter:`, `relations:`, `ways:`, `nodes:`, `assemble:`, `write:`)
-goes to **stderr**. The same command also writes
-`data/catalog.geometry.sqlite`. Add `--list` to print kept DayHikes as
+Progress (`filter:`, `relations:`, `ways:`, `nodes:`, `assemble:`, `write:`,
+`trailgraph:`) goes to **stderr**. The same command also writes
+`data/catalog.geometry.sqlite` and `data/catalog.trailgraph.sqlite`
+(`--snap-tolerance` sets the TrailGraph's snap tolerance). Add `--list` to print kept DayHikes as
 `id`, name, `length_m`. `--fresh` ignores a leftover work file and starts
 again.
 
@@ -328,6 +334,40 @@ Do not hand-edit FeatureVectors and expect Ranking to follow unless you rerun
 `dayhike ingest` (full Catalog), `dayhike sample-dem` (elevation columns),
 `dayhike sample-landcover` (LandCover fractions), and `dayhike sample-climate`
 (climate columns and monthly table), each followed by `build-similarity`.
+
+## TrailGraph (written at ingest, for composed hikes)
+
+`dayhike ingest` also writes `data/catalog.trailgraph.sqlite`
+(`trailgraph_path_for`) from the ingest work file, so there is no extra OSM
+pass. It holds the marked hiking network: every member way of every
+`route=hiking` relation ingest read, **including** the relations it dropped
+(too short, too long, superroutes, node-network legs). Unmarked paths are not
+in it. Ways split into Segments that meet at Junctions: a node two ways share,
+a dead end, a node where the relations along the trail change (a stage
+boundary), or a crossing of two same-layer ways with no node. A dead-end tip
+within `--snap-tolerance` (20 m by default, at most 50 m) of a node more than
+three times that far away along the network is joined by a `gap` Segment,
+never across a bridge, tunnel or layer. Two ways that pass that close with no
+join nearer than 100 m along the network get a `link` Segment, offered in the
+web demo as "connect here" and never walked unless picked. See
+[`docs/adr/0018-trailgraph-and-composed-hikes.md`](docs/adr/0018-trailgraph-and-composed-hikes.md).
+
+| Table | Contents |
+| --- | --- |
+| `junctions` | id (the OSM node id; a crossing is negative), lat, lon, degree |
+| `segments` | id, kind (`trail`, `gap`, `link`), Junctions `a` and `b`, length, strictest `sac_scale`, OSM way and relation ids, per-way metres and surface (`parts`), node ids, and vertices as packed arrays: coordinates (1e-7 degree integers), `ele`, `landcover`, `climate_cell`, `southness` |
+| `segment_boxes` | R*Tree of each Segment's bounding box |
+| `relations` | id, name, ref and network of the relations on the Segments |
+| `amenities`, `amenity_boxes` | the amenity points the Measures count near the network, with an R*Tree |
+| `climate_cells` | 12 months x 3 CHELSA values per cell, after `sample-trailgraph` |
+| `water_tiles`, `water_cells` | the WorldCover cells beside open water near the network, for WaterSide |
+| `trailgraph_meta` | OSM attribution, snap tolerance, Link distance, and the CHELSA grid after `sample-trailgraph` |
+
+At ingest `ele` is OSM `ele` and the other per-vertex arrays are unset.
+`sample-trailgraph` reads the same FABDEM, WorldCover and CHELSA rasters as
+the other sample steps, so a server without rasters can compute a composed
+hike's facts with the same rules as a DayHike's. It does not touch the Catalog
+and needs rerunning after every ingest. On Slovenia the file is 35 MB.
 
 ## 3. Rank by Seed
 
@@ -1455,7 +1495,12 @@ tiles.
 
 A public, read-only page over the Catalog: search a hike you liked by name, or
 tick "Select hike on map", zoom in (hikes show from zoom 12, once the view
-holds at most 100, as lines with both ends marked) and click one; see what
+holds at most 100, as lines with both ends marked) and click one, or press
+"Design your own from segments" there and draw a walk from the marked hiking
+network (Segments show from zoom 13; click a Junction or a Segment to start,
+then a Segment to walk the shortest way to it and along it; "connect here" crosses
+a Link; the walk may repeat a Segment and is measured as drawn; its link,
+`#compose=start:1,2,3`, shares it, nothing is stored); see what
 the similarity looks at (route and amenity points on an OpenStreetMap map,
 elevation profile in metres above sea level, land cover, trail surface,
 climate by month, and the fact behind every Measure), set a 0–100 weight or
@@ -1494,7 +1539,10 @@ descends in the walking direction (export format 2), and the amenity points the
 Measures count (WaterSources, Huts, restaurants, Shelters and Viewpoints in the
 Corridor, Peaks within 2 km, parking and restaurants within 500 m of the
 Trailhead) with their OSM names, plus an R*Tree of each simplified line's
-bounding box for the map picker (export format 3; `dayhike serve` refuses an
+bounding box for the map picker (export format 3), and, when the Catalog has a
+TrailGraph, `trailgraph.sqlite`: its Segments with a simplified line and the
+metres each climbs either way, the Junctions, amenity points and sampled
+values, without OSM node ids (export format 4; `dayhike serve` refuses an
 older export, so rerun `export-serving` once). With `--valhalla-tiles` it also links the
 tile extract and writes a `valhalla.json` that serves it inside the container;
 with `--valhalla-url` it snaps every Trailhead once (`snaps.npz`). Rerun it
@@ -1516,7 +1564,14 @@ warning), `POST /api/rank` with `{"seed": id, "weights": {measure: 0-100},
 "excluded": [measure], "month": 1-12, "origin": {"lat", "lon"}, "max_hours":
 0-4}`, and `POST /api/pair` with `{"a": id, "b": id}` plus the same weights,
 excluded and month, giving the score a Ranking would show for `b` with `a` as
-the Seed and every Measure's score. The GET routes also answer HEAD. Each client gets 20 Rankings and
+the Seed and every Measure's score. With a TrailGraph (`compose` true in
+`/api/info`): `GET /api/segments?south=&west=&north=&east=` (the Segments and
+Junctions in that box, none and `too_many` true above 1,500), `POST
+/api/compose` with `{"start": junction, "segments": [id, ...]}` (up to 500,
+each starting where the walk so far ends), giving the same detail as `GET
+/api/hikes/{id}` with `id` null, and `"composed": {"start", "segments"}` in
+place of `seed` (rank) or `a` (pair). A composed Seed is compared with Catalog
+DayHikes only; the DayHikes it retraces (its Twins) are not listed. The GET routes also answer HEAD. Each client gets 20 Rankings and
 300 other calls a minute; one Ranking runs at a time per process.
 
 Measured on the Europe Catalog (161,614 DayHikes), 8-core Mac, the container
@@ -1657,6 +1712,7 @@ at the rebuild.
    uv run dayhike sample-dem                    # 20 min
    uv run dayhike sample-landcover              # 21 min
    uv run dayhike sample-climate                # 5 min, peak 4.4 GB; no per-vertex climate
+   uv run dayhike sample-trailgraph             # not yet timed on Europe
    uv run dayhike build-similarity              # 19 min
    uv run dayhike export-serving --valhalla-tiles data/valhalla/highways-eu --valhalla-url http://127.0.0.1:8003  # 22 min
    ```
@@ -1675,7 +1731,7 @@ at the rebuild.
    ```
 
 6. **Replace** only after every check passes. Delete from `REF` the derived
-   files (`catalog.sqlite`, `catalog.geometry.sqlite`, `catalog.similarity/`,
+   files (`catalog.sqlite`, `catalog.geometry.sqlite`, `catalog.trailgraph.sqlite`, `catalog.similarity/`,
    `osm/europe-latest.catalog.osm.pbf` and its `.filters`, `climate/`,
    `valhalla/highways-eu/`, `valhalla/europe-latest-roads.osm.pbf`), then move
    the same paths, the real (non-link) files of `NEW/landcover/` and
@@ -1695,6 +1751,8 @@ The same seams the CLI wraps:
 - `rank_dayhikes` — Catalog + Seeds → Ranking (MeasureWeights by `MEASURE_NAMES`; `month=` QueryMonth 1–12, omit for the June–August climate regime; `allowed_ids=` to restrict the candidates; `limit=` for the best N)
 - `Catalog.similarity` / `SimilarityStore` — the memory-mapped facts and Calibration; `dayhike.similarity.score_rows` scores rows against Seeds without building a Ranking
 - `geometry_store_path_for` — sidecar path for DayHikeGeometry
+- `trailgraph_path_for` / `dayhike.trailgraph.write_trailgraph` / `sample_trailgraph` — the TrailGraph sidecar, written at ingest and sampled from the rasters
+- `dayhike.trailgraph.TrailGraph` / `Route` — open a TrailGraph (or its serving copy) and compute the facts of a ComposedHike
 - `fetch_fabdem` / `sample_dem` — local FABDEM tiles → GeometryStore vertices and Catalog elevation
 - `fetch_worldcover` / `sample_landcover` — local WorldCover tiles → GeometryStore classes and Catalog fractions
 - `fetch_chelsa` / `sample_climate` — local CHELSA rasters → Catalog hike-level monthly means
@@ -1706,9 +1764,10 @@ The same seams the CLI wraps:
 
 CLI: `dayhike ingest`, `dayhike fetch-extracts`, `dayhike fetch-dem`,
 `dayhike sample-dem`, `dayhike fetch-landcover`, `dayhike sample-landcover`,
-`dayhike fetch-climate`, `dayhike sample-climate`, `dayhike build-similarity`
-(`--calibrate-only`), `dayhike rank` (`--weight`, `--month`, `--limit`),
-`dayhike nearby`, `dayhike export-serving`, `dayhike serve`, `dayhike coverage-map`.
+`dayhike fetch-climate`, `dayhike sample-climate`, `dayhike sample-trailgraph`,
+`dayhike build-similarity` (`--calibrate-only`), `dayhike rank` (`--weight`,
+`--month`, `--limit`), `dayhike compose` (`--start`, Segment ids, `--weight`,
+`--month`, `--limit`; reads a serving export), `dayhike nearby`, `dayhike export-serving`, `dayhike serve`, `dayhike coverage-map`.
 
 Docstrings on those functions use the glossary in `CONTEXT.md`.
 Examples: [`01`](notebooks/01_raw_data_and_ingestion.ipynb) ingest,
@@ -1798,6 +1857,7 @@ Bulky local files stay out of git:
 
 - `data/catalog.sqlite` — Catalog built from ingest
 - `data/catalog.geometry.sqlite` — GeometryStore (DayHikeGeometry + raw amenities)
+- `data/catalog.trailgraph.sqlite` — TrailGraph (the marked hiking network)
 - `data/catalog.similarity/` — similarity facts and Calibration (`build-similarity`)
 - `data/catalog.sqlite.work` — in-progress ingest (resume handle)
 - `data/osm/` — Geofabrik / osmium extracts

@@ -92,7 +92,17 @@
   <section class="content">
     <section id="map-pick" class="card" hidden>
       <h2>Select a hike on the map</h2>
+      <div class="compose-bar" id="compose-bar" hidden>
+        <button type="button" id="compose-on" class="secondary" aria-pressed="false">Design your own from segments</button>
+        <span id="compose-tools" class="compose-tools" hidden>
+          <button type="button" id="compose-undo" class="secondary">Undo</button>
+          <button type="button" id="compose-clear" class="secondary">Clear</button>
+          <button type="button" id="compose-done" class="primary" disabled>Use this hike</button>
+        </span>
+      </div>
       <p class="hint" id="map-pick-hint" role="status" aria-live="polite"></p>
+      <p class="compose-readout" id="compose-readout" aria-live="polite" hidden></p>
+      <div class="compose-links" id="compose-links"></div>
       <div class="map pick-map"></div>
     </section>
 
