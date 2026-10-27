@@ -184,9 +184,11 @@ function likedSeed(liked, key) {
   return liked.route ? { composed: { route: liked.route.text } } : { [key]: liked.id };
 }
 
-// A composed hike's shareable address: its route by OSM node and way ids, and its name.
+// A composed hike's shareable address: its route by OSM node and way ids, and the
+// Hiker's name for it (a proposed name is proposed again).
 function routeHash(hike) {
-  return `#compose=${hike.route.text}&name=${encodeURIComponent(hike.name)}`;
+  const name = hike.name_origin === "hiker" ? `&name=${encodeURIComponent(hike.name)}` : "";
+  return `#compose=${hike.route.text}${name}`;
 }
 
 // ---------- charts ----------
@@ -415,7 +417,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
         : `<a href="https://www.openstreetmap.org/relation/${hike.id}" target="_blank" rel="noopener">OpenStreetMap relation ${hike.id}</a>`}
     </div>
     ${scoreLine}
-    ${hike.route ? `<p class="hint">Drawn from ${hike.route.segments.length} trail segment${hike.route.segments.length === 1 ? "" : "s"}${hike.routes?.length ? ` along ${escapeHtml(hike.routes.slice(0, 5).join(", "))}${hike.routes.length > 5 ? " and more" : ""}` : ""}; measured as drawn.</p>` : ""}
+    ${hike.route ? `<p class="hint">Drawn from marked trail segments${hike.routes?.length ? ` along ${escapeHtml(hike.routes.slice(0, 5).join(", "))}${hike.routes.length > 5 ? " and more" : ""}` : ""}; measured as drawn.</p>` : ""}
     <ul class="badges">${badges.map((b) => `<li>${escapeHtml(b)}</li>`).join("")}</ul>
     <div class="map"></div>
     <div class="legend">${LEGEND.map(([label, color]) => `<span style="--c:${color}">${label}</span>`).join("")}</div>
@@ -631,8 +633,7 @@ async function chooseComposed(route, name) {
     if (request !== chosen) return;
     state.liked = hike;
     $("#search").value = "";
-    const count = hike.route.segments.length;
-    $("#liked-name").textContent = `Chosen: ${hike.name}, ${fmt.km(hike.walk_m)} from ${count} segment${count === 1 ? "" : "s"}`;
+    $("#liked-name").textContent = `Chosen: ${hike.name}, ${fmt.km(hike.walk_m)}`;
     $("#compose-name").value = hike.name;
     compose.named = hike.name_origin === "hiker";
     $("#find").disabled = false;
@@ -793,13 +794,12 @@ const compose = {
     pick.layer.clearLayers();
     pick.lines.clear();
     this.layer.clearLayers();
-    if (on && state.liked?.route && this.start == null) {
-      // Go on from the composed hike shown below.
-      const [startKey, text] = state.liked.route.text.split(":");
-      const steps = text.split(",");
-      this.start = state.liked.route.start;
-      this.startKey = startKey;
-      this.route = state.liked.route.segments.map((id, at) => ({ id, step: steps[at], auto: false }));
+    if (on && state.liked?.route?.segments && this.start == null) {
+      // Go on from the composed hike shown below (unless its link cuts a Segment of this data).
+      const { start, segments, steps, text } = state.liked.route;
+      this.start = start;
+      this.startKey = text.split(":")[0];
+      this.route = segments.map((id, at) => ({ id, step: steps[at], auto: false }));
       if (state.liked.line) pick.map.fitBounds(L.latLngBounds(decodePolyline(state.liked.line)).pad(0.1));
     }
     pick.load();

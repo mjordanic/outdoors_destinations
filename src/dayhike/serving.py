@@ -13,9 +13,10 @@ similarity directory live. It writes a directory a server memory-maps:
   Measures count (along the line, Peaks around it, at the Trailhead) as
   zlib-compressed JSON (``POINT_COLUMNS`` per point); and ``hike_boxes``, an
   R*Tree of each simplified line's bounding box, for the hikes in a map view.
-- ``trailgraph.sqlite``: the Catalog's TrailGraph (ADR-0018) without OSM node
-  ids, each Segment with its line simplified like the hikes' and the metres it
-  climbs each way, when the Catalog has one: the page composes hikes from it.
+- ``trailgraph.sqlite``: the Catalog's TrailGraph (ADR-0018), each Segment
+  with its line simplified like the hikes' and the metres it climbs each way,
+  when the Catalog has one: the page composes hikes from it, and its OSM node
+  and way ids resolve a shared link.
 - ``snaps.npz``: highway snaps of every Trailhead (``HighwaySnaps``), when a
   snap file or a Valhalla URL is given.
 - ``valhalla/``: the highways-only tile extract and a ``valhalla.json`` that
@@ -298,7 +299,7 @@ def _check_trailgraph_sampled(source: Path, store: SimilarityStore) -> None:
 
 
 def _write_trailgraph(source: Path, path: Path, progress: Progress | None) -> bool:
-    """Copy the TrailGraph without node ids, adding each Segment's display line and
+    """Copy the TrailGraph, adding each Segment's display line and
     its climb each way; False (and no file) when the Catalog has no TrailGraph."""
     path.unlink(missing_ok=True)
     if not source.is_file():
@@ -313,7 +314,6 @@ def _write_trailgraph(source: Path, path: Path, progress: Progress | None) -> bo
     db = sqlite3.connect(path)
     try:
         db.executescript(
-            "ALTER TABLE segments DROP COLUMN node_ids;"
             "ALTER TABLE segments ADD COLUMN line TEXT;"
             "ALTER TABLE segments ADD COLUMN climb_ab REAL;"
             "ALTER TABLE segments ADD COLUMN climb_ba REAL;"
@@ -731,8 +731,9 @@ class ServingData:
 
     def compose(self, route: Route, name: str | None = None) -> dict:
         """The detail of a ComposedHike, in the shape of ``detail``: ``id`` is None
-        and ``route`` holds the Route as text and its start Junction and Segment
-        ids in this export. ``name`` is the Hiker's; without one it is proposed
+        and ``route`` holds the Route as text and its start Junction, Segment
+        ids and their steps in this export (None where the walk cuts a Segment,
+        as a link from an older build may). ``name`` is the Hiker's; without one it is proposed
         from the trails walked most and a named place at the start."""
         walk = self.trailgraph.walk(route)
         facts, shape = self.trailgraph.facts(walk)
@@ -752,7 +753,7 @@ class ServingData:
         routes = list(dict.fromkeys(labels[rel] for rel in walk.relation_m if labels.get(rel)))
         return {
             "id": None,
-            "route": {"text": str(route), "start": walk.start, "segments": walk.segments},
+            "route": {"text": str(route), "start": walk.start, "segments": walk.segments, "steps": walk.steps},
             "name": name or self._proposed_name(walk, labels),
             "name_origin": "hiker" if name else "proposed",
             "sac_scale": walk.sac_scale,

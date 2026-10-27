@@ -49,7 +49,7 @@ A "connect here" offer: two nearby TrailGraph points, within the snap tolerance 
 _Avoid_: shortcut, snap, gap (a gap Segment is joined automatically)
 
 **ComposedHike**:
-A walk the Hiker draws from TrailGraph Segments, from a start Junction, Segment after Segment. It may reuse a Segment, and is measured as drawn, by distance walked: its facts come from the same rules as a DayHike's, applied to the vertices walked. It has a name the Hiker may change (proposed from the trails it walks longest and a named place at its start). It is not stored; it is shared through its URL, which names its start Junction and Segments by OSM node and way ids, so the link opens the same walk after a rebuild, and it is not in the Catalog.
+A walk the Hiker draws from TrailGraph Segments, from a start Junction, Segment after Segment. It may reuse a Segment, and is measured as drawn, by distance walked: its facts come from the same rules as a DayHike's, applied to the vertices walked. It has a name the Hiker may change (proposed from the trails it walks longest and a named place at its start). It is not stored; it is shared through its URL, which names the OSM ways it walks from OSM node to OSM node, not Junctions or Segments, so the link opens the same walk after a rebuild, and it is not in the Catalog.
 _Avoid_: custom route, user route, composed DayHike
 
 **Origin**:

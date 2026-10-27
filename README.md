@@ -355,8 +355,9 @@ web demo as "connect here" and never walked unless picked. See
 | Table | Contents |
 | --- | --- |
 | `junctions` | id (the OSM node id; a crossing is negative), lat, lon, degree, and `key`, its name in a shared link (the OSM node id, or `c{lat}_{lon}` in 1e-7 degrees for a crossing) |
-| `segments` | id, kind (`trail`, `gap`, `link`), Junctions `a` and `b`, length, strictest `sac_scale`, OSM way and relation ids, per-way metres and surface (`parts`), node ids, vertices as packed arrays: coordinates (1e-7 degree integers), `ele`, `landcover`, `climate_cell`, `southness`, and `step_ab` / `step_ba`, how a shared link names it walked from `a` and from `b` |
+| `segments` | id, kind (`trail`, `gap`, `link`), Junctions `a` and `b`, length, strictest `sac_scale`, OSM way and relation ids, node ids, vertices as packed arrays: coordinates (1e-7 degree integers), `ele`, `landcover`, `climate_cell`, `southness`, per-way runs of steps (`parts`: way, negative against its node order, metres, surface, steps, `sac_scale`), and `step_ab` / `step_ba`, how a shared link names it walked from `a` and from `b` |
 | `segment_boxes` | R*Tree of each Segment's bounding box |
+| `segment_ways` | the Segments of each OSM way, for resolving a shared link |
 | `relations` | id, name, ref and network of the relations on the Segments |
 | `amenities`, `amenity_boxes` | the amenity points the Measures count near the network, with an R*Tree |
 | `climate_cells` | 12 months x 3 CHELSA values per cell, after `sample-trailgraph` |
@@ -1505,8 +1506,9 @@ shortest way over trail Segments, drawn dashed in amber, never over a gap or
 Link the Hiker did not take; "connect here" crosses a Link; the walk may repeat
 a Segment and is measured as drawn; it gets a proposed name, from the trails
 walked longest and a named place at the start, that the Hiker may change; its
-link, `#compose=1:104.11,105.13&name=…`, shares it by OSM node and way ids, so
-it opens the same walk after a rebuild, and nothing is stored); see what
+link, `#compose=1:104.11,105.13`, shares it as the OSM ways it walks from node
+to node (and `&name=…` when the Hiker named it), so it opens the same walk after
+a rebuild that adds or drops Junctions, and nothing is stored); see what
 the similarity looks at (route and amenity points on an OpenStreetMap map,
 elevation profile in metres above sea level, land cover, trail surface,
 climate by month, and the fact behind every Measure), set a 0–100 weight or
@@ -1548,7 +1550,7 @@ Trailhead) with their OSM names, plus an R*Tree of each simplified line's
 bounding box for the map picker (export format 3), and, when the Catalog has a
 TrailGraph, `trailgraph.sqlite`: its Segments with a simplified line and the
 metres each climbs either way, the Junctions, amenity points and sampled
-values, without OSM node ids (export format 4; `dayhike serve` refuses an
+values, with the OSM node and way ids a shared link names (export format 4; `dayhike serve` refuses an
 older export, so rerun `export-serving` once). With `--valhalla-tiles` it also links the
 tile extract and writes a `valhalla.json` that serves it inside the container;
 with `--valhalla-url` it snaps every Trailhead once (`snaps.npz`). Rerun it
@@ -1574,11 +1576,12 @@ the Seed and every Measure's score. With a TrailGraph (`compose` true in
 `/api/info`): `GET /api/segments?south=&west=&north=&east=` (the Segments and
 Junctions in that box, none and `too_many` true above 1,500), `POST
 /api/compose` with `{"route": "start:step,...", "name": optional}` (the
-Route as its link holds it, up to 500 Segments; see `dayhike.trailgraph.Route`),
+Route as its link holds it, up to 2,000 steps; see `dayhike.trailgraph.Route`),
 giving the same detail as `GET /api/hikes/{id}` with `id` null, the proposed or
-given `name`, and `route` with its text and its Junction and Segment ids in
-this export; a step that no longer names a Segment is refused with a message
-naming the OSM way and nodes. `"composed": {"route"}` stands in place of
+given `name`, and `route` with its text and its start Junction, Segment ids
+and their steps in this export (null where an older link now cuts a Segment);
+a step whose way is gone, whose node is off the way, or whose way no longer
+leads there is refused with a message saying which. `"composed": {"route"}` stands in place of
 `seed` (rank) or `a` (pair). A composed Seed is compared with Catalog
 DayHikes only; the DayHikes it retraces (its Twins) are not listed. The GET routes also answer HEAD. Each client gets 20 Rankings and
 300 other calls a minute; one Ranking runs at a time per process.

@@ -32,7 +32,7 @@ RESULTS = 10
 MAX_DRIVE_HOURS = 4.0
 MAP_HIKES = 100  # a map view shows its hikes only when it holds at most this many
 MAP_SEGMENTS = 1_500  # and its TrailGraph Segments only when it holds at most this many
-ROUTE_SEGMENTS = 500  # the most Segments a ComposedHike may have
+ROUTE_STEPS = 2_000  # the most steps (OSM ways walked) a ComposedHike may have
 NAME_LENGTH = 120  # the longest name a Hiker may give a ComposedHike
 # Requests per client per RATE_WINDOW_S: Ranking, and everything else under /api.
 RANK_RATE = 20
@@ -67,14 +67,14 @@ class Weighted(BaseModel):
 class Composed(BaseModel):
     """A ComposedHike: its Route as text (``Route.parse``) and the Hiker's name for it."""
 
-    route: str = Field(max_length=40 * ROUTE_SEGMENTS)  # a step is at most about 36 characters
+    route: str = Field(max_length=40 * ROUTE_STEPS)  # a step is at most about 36 characters
     name: str | None = Field(default=None, max_length=NAME_LENGTH)
 
     @field_validator("route")
     @classmethod
     def _route(cls, text: str) -> str:
-        if not 1 <= len(Route.parse(text).steps) <= ROUTE_SEGMENTS:
-            raise ValueError(f"a composed hike has 1 to {ROUTE_SEGMENTS} segments")
+        if not 1 <= len(Route.parse(text).steps) <= ROUTE_STEPS:
+            raise ValueError(f"a composed hike has 1 to {ROUTE_STEPS} steps")
         return text
 
     @field_validator("name")

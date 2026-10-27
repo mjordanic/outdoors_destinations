@@ -68,7 +68,7 @@ def _route(path: Path, start: int, segment_ids: Sequence[int]) -> Route:
     here, steps = start, []
     for segment in segment_ids:
         a, b, step_ab, step_ba = rows[segment]
-        steps.append(step_ab if here == a else step_ba)
+        steps.extend((step_ab if here == a else step_ba).split(","))
         here = b if here == a else a
     return Route(keys[start], tuple(steps))
 
@@ -87,7 +87,10 @@ def test_ingest_writes_the_trailgraph_of_every_relation_it_read(catalog_path: Pa
     up = _segment(segments, D, P)
     assert up["sac_scale"] == "demanding_mountain_hiking"
     assert json.loads(up["way_ids"]) == [105]
-    assert json.loads(up["parts"]) == [[105, pytest.approx(up["length_m"]), "natural"]]
+    # Per run of steps on one way: the way (negative against its node order), metres, surface, steps, sac_scale.
+    assert json.loads(up["parts"]) == [
+        [105 if up["a"] == D else -105, pytest.approx(up["length_m"]), "natural", 2, "demanding_mountain_hiking"]
+    ]
     assert np.frombuffer(up["node_ids"], dtype="<i8").tolist() == [D, 12, P]
     assert np.frombuffer(up["ele"], dtype="<f4").tolist() == [900, 1250, 1640]
 
@@ -165,13 +168,14 @@ def test_a_walk_follows_segments_end_to_end_and_may_reuse_one(catalog_path: Path
     ("route", "message"),
     [
         ("1:", "at least one Segment"),
-        ("999:104.11", "the start of this hike, OSM node 999, is no longer on the marked network"),
-        ("1:999.11", "segment 1 of this hike, OSM way 999 from OSM node 1 to OSM node 11, is no longer"),
-        # The Summit Line's upper way leaves D, not A.
-        ("1:104.11,104.11", "segment 2 of this hike, OSM way 104 from OSM node 11 to OSM node 11"),
-        ("1:105.13", "segment 1 of this hike, OSM way 105 from OSM node 1 to OSM node 13"),
-        ("1:g.4", "the gap from OSM node 1 to OSM node 4"),
-        ("c460000000_140000000:l.1", "the trail crossing at 46.0000000, 14.0000000"),
+        ("999:104.11", "step 1 of this hike: OSM node 999 is no longer on OSM way 104"),
+        ("1:999.11", "step 1 of this hike: OSM way 999 is no longer on the marked network"),
+        ("1:104.13", "step 1 of this hike: OSM node 13 is no longer on OSM way 104"),
+        # Way 104 runs from A to D: walked against its node order it does not leave A.
+        ("1:-104.11", "step 1 of this hike: OSM way 104 no longer leads from OSM node 1 to OSM node 11"),
+        ("1:104.11,104.11", "step 2 of this hike: OSM way 104 no longer leads from OSM node 11 to OSM node 11"),
+        ("1:g.4", "step 1 of this hike: the gap from OSM node 1 to OSM node 4 is no longer"),
+        ("c460000000_140000000:l.1", "the connect-here link from the trail crossing at 46.0000000, 14.0000000"),
     ],
 )
 def test_a_walk_refuses_what_is_not_one_walk(catalog_path: Path, route: str, message: str) -> None:
@@ -204,15 +208,18 @@ def test_a_route_names_segments_and_crossings_by_osm_ids(catalog_path: Path) -> 
 # ---------- shared links across a rebuild ----------
 
 
-def _variant(root: Path, *, add_trail: bool = False, drop_way: int | None = None) -> Path:
-    """The fixture with a short trail added at A (its way id the lowest, so
-    every Segment is renumbered), or with one way deleted."""
+def _variant(root: Path, *, attach_at: int | None = None, drop_ways: Sequence[int] = ()) -> Path:
+    """The fixture with a short trail (way 100, the lowest way id, so every
+    Segment is renumbered) leaving node ``attach_at``, or with ways deleted."""
     text = FIXTURE.read_text()
-    if add_trail:
-        text = text.replace("  <way ", '  <node id="60" lat="46.0464027" lon="14.0448168" version="1"/>\n  <way ', 1)
+    if attach_at is not None:
+        # 566 m south-west of A, or 500 m south-west of Q2: near no other trail.
+        lat, lon = (46.0464027, 14.0448168) if attach_at == A else (46.0580939, 14.02538)
+        text = text.replace("  <way ", f'  <node id="60" lat="{lat}" lon="{lon}" version="1"/>\n  <way ', 1)
         text = text.replace(
             "  <relation ",
-            '  <way id="100" version="1"><nd ref="1"/><nd ref="60"/><tag k="highway" v="path"/></way>\n  <relation ',
+            f'  <way id="100" version="1"><nd ref="{attach_at}"/><nd ref="60"/><tag k="highway" v="path"/></way>\n'
+            "  <relation ",
             1,
         )
         text = text.replace(
@@ -220,38 +227,60 @@ def _variant(root: Path, *, add_trail: bool = False, drop_way: int | None = None
             '  <relation id="2000" version="1"><member type="way" ref="100" role=""/><tag k="type" v="route"/>'
             '<tag k="route" v="hiking"/><tag k="name" v="Short Way"/></relation>\n</osm>',
         )
-    if drop_way is not None:
-        text = re.sub(rf'  <way id="{drop_way}" .*?</way>\n', "", text, flags=re.S)
-        text = text.replace(f'<member type="way" ref="{drop_way}" role=""/>', "")
+    for way in drop_ways:
+        text = re.sub(rf'  <way id="{way}" .*?</way>\n', "", text, flags=re.S)
+        text = text.replace(f'<member type="way" ref="{way}" role=""/>', "")
     path = root / "variant.osm"
     path.write_text(text)
     return path
 
 
-def test_a_shared_link_opens_the_same_walk_after_a_rebuild_renumbers_the_segments(
-    catalog_path: Path, tmp_path: Path
+SUMMIT_LINK = "1:104.11,105.13"  # A to D on way 104, D to P on way 105
+
+
+def _same_walk(after, before) -> None:
+    assert after.lat.tolist() == before.lat.tolist() and after.lon.tolist() == before.lon.tolist()
+    assert after.ele.tolist() == before.ele.tolist()
+    assert [surface for _, surface in after.walked] == [surface for _, surface in before.walked]
+    assert [metres for metres, _ in after.walked] == pytest.approx([metres for metres, _ in before.walked])
+    assert after.relation_m == pytest.approx(before.relation_m) and after.sac_scale == before.sac_scale
+
+
+@pytest.mark.parametrize(
+    ("change", "link", "segments_after"),
+    [
+        # A trail added at A: every Segment is renumbered.
+        ({"attach_at": A}, SUMMIT_LINK, 2),
+        # A trail added at Q2, inside the Segment D-P: the walk crosses the new Junction.
+        ({"attach_at": 12}, SUMMIT_LINK, 3),
+        # The Spur gone: D is no longer a Junction, and A-D and D-P are one Segment.
+        ({"drop_ways": [106]}, SUMMIT_LINK, 1),
+        # ... and a walk that starts at D, now inside that Segment, still starts there.
+        ({"drop_ways": [106]}, "11:105.13", None),
+    ],
+)
+def test_a_shared_link_opens_the_same_walk_after_a_rebuild(
+    catalog_path: Path, tmp_path: Path, change: dict, link: str, segments_after: int | None
 ) -> None:
-    segments = _segments(catalog_path)
-    link = str(_route(catalog_path, A, (_segment(segments, A, D)["id"], _segment(segments, D, P)["id"])))
     rebuilt = tmp_path / "catalog.sqlite"
-    build_catalog(_variant(tmp_path, add_trail=True), rebuilt)
+    build_catalog(_variant(tmp_path, **change), rebuilt)
 
     before = TrailGraph(trailgraph_path_for(catalog_path)).walk(Route.parse(link))
     after = TrailGraph(trailgraph_path_for(rebuilt)).walk(Route.parse(link))
 
-    assert after.segments != before.segments
-    assert after.lat.tolist() == before.lat.tolist() and after.lon.tolist() == before.lon.tolist()
-    assert after.walked == before.walked and after.relation_m == before.relation_m
+    _same_walk(after, before)
+    if segments_after is None:  # it cuts a Segment: the page cannot go on drawing from it
+        assert after.segments is None and after.start is None
+    else:
+        assert len(after.segments) == segments_after and after.segments != before.segments
 
 
-def test_a_shared_link_whose_way_was_deleted_says_what_no_longer_exists(catalog_path: Path, tmp_path: Path) -> None:
-    segments = _segments(catalog_path)
-    link = str(_route(catalog_path, A, (_segment(segments, A, D)["id"], _segment(segments, D, P)["id"])))
+def test_a_shared_link_whose_way_was_deleted_says_so(catalog_path: Path, tmp_path: Path) -> None:
     rebuilt = tmp_path / "catalog.sqlite"
-    build_catalog(_variant(tmp_path, drop_way=105), rebuilt)
+    build_catalog(_variant(tmp_path, drop_ways=[105]), rebuilt)
 
-    with pytest.raises(RouteError, match=re.escape("segment 2 of this hike, OSM way 105 from OSM node 11 to OSM node 13")):
-        TrailGraph(trailgraph_path_for(rebuilt)).walk(Route.parse(link))
+    with pytest.raises(RouteError, match=re.escape("step 2 of this hike: OSM way 105 is no longer on the marked network")):
+        TrailGraph(trailgraph_path_for(rebuilt)).walk(Route.parse(SUMMIT_LINK))
 
 
 # ---------- composing a DayHike's own Segments gives its facts ----------
@@ -385,12 +414,12 @@ def summit(sampled: Path) -> Route:
     return _route_of(sampled, SUMMIT_LINE)
 
 
-def test_the_export_keeps_the_trailgraph_without_node_ids_and_with_display_lines(data, sampled: Path) -> None:
+def test_the_export_keeps_the_trailgraph_with_display_lines(data, sampled: Path) -> None:
     from dayhike.serving import decode_polyline
 
     db = sqlite3.connect(data.trailgraph.path)
     columns = {row[1] for row in db.execute("PRAGMA table_info(segments)")}
-    assert "node_ids" not in columns and {"line", "climb_ab", "climb_ba"} <= columns
+    assert {"node_ids", "line", "climb_ab", "climb_ba"} <= columns
     found, too_many = data.segments_in_box(46.04, 14.0, 46.07, 14.1, 100)
     assert too_many is False
     assert len(found["segments"]) == len(_segments(sampled))
@@ -415,7 +444,12 @@ def test_a_composed_hike_has_the_detail_shape_of_a_dayhike(data, summit: Route) 
 
     assert set(catalog) <= set(composed)
     assert composed["id"] is None
-    assert composed["route"] == {"text": "1:104.11,105.13", "start": A, "segments": composed["route"]["segments"]}
+    assert composed["route"] == {
+        "text": "1:104.11,105.13",
+        "start": A,
+        "segments": composed["route"]["segments"],
+        "steps": ["104.11", "105.13"],
+    }
     assert len(composed["route"]["segments"]) == 2
     assert composed["routes"] == ["Summit Line"]
     for key in ("walk_m", "climb_m", "descent_m", "line", "elevation", "trailhead", "sac_scale"):
@@ -485,7 +519,7 @@ def test_api_segments_compose_rank_and_pair(client, summit: Route) -> None:
         ("/api/compose", {"route": "1:999.11"}, 400),
         ("/api/compose", {"route": "1:"}, 422),
         ("/api/compose", {"route": "1;drop"}, 422),
-        ("/api/compose", {"route": "1:" + ",".join(["104.11"] * 501)}, 422),
+        ("/api/compose", {"route": "1:" + ",".join(["104.11"] * 2001)}, 422),
         ("/api/compose", {"route": "1:104.11", "name": "x" * 121}, 422),
         ("/api/rank", {"seed": SUMMIT_LINE, "composed": {"route": "1:104.11"}}, 400),
         ("/api/rank", {}, 400),
