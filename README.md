@@ -454,7 +454,7 @@ way instead of with its way back.
 | `southness` | SolarAspect from FABDEM (1 south, 0 north) | tolerance | D = 1 |
 | `water_count` | WaterSources in the Corridor, capped at 3 | tolerance | D = 3 |
 | `dry_stretch` | DryStretch | ratio | floor 1 km |
-| `waterside` | WaterSide: share of the walk within 200 m of sea, lake or wide river (WorldCover) | tolerance | D = 0.5 |
+| `waterside` | WaterSide: share of the walk within 200 m of sea, lake or wide river (WorldCover) | tolerance | D = 0.5, dead band 0.15 (ADR-0021) |
 | `hut_along`, `restaurant_cafe_along`, `shelter_along` | that amenity in the Corridor | agree | — |
 | `restaurant_cafe_trailhead`, `parking_trailhead` | that amenity within 500 m of the Trailhead | agree | — |
 | `surface` | SurfaceMix (paved, gravel, natural, rock) | mix | — |
@@ -464,8 +464,9 @@ way instead of with its way back.
 | `steepest_km` | SteepestKm | ratio | floor 50 m |
 
 `ratio` is smaller over larger (each raised to the floor first), `tolerance`
-is max(0, 1 − |a − b| / D), `mix` is the shared share of fractions, `agree` is
-1 when two yes/no facts agree (both absent agrees), `profile` is 1 − the mean
+is max(0, 1 − |a − b| / D) with a gap under a dead band counting as 0, `mix`
+is the shared share of fractions, `agree` is 1 when two yes/no facts agree
+(both absent agrees), `profile` is 1 − the mean
 absolute difference of two ProfileShapes, walked either way. A Measure whose
 fact is missing on either DayHike drops out of that pair and the other weights
 renormalize; a candidate with no weighted Measure scored is left out.
