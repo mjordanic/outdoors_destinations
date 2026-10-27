@@ -120,9 +120,9 @@ ELEVATION_POINTS = 128
 LOOP_MEASURED = 40  # the SuggestedLoops guessed best that a Ranking measures exactly
 LOOP_BUDGET_S = 5.0  # the most a Ranking spends on SuggestedLoops
 LOOP_SEED_SHARE = 0.5  # a loop sharing more of its walk with the Seed, or of the Seed's, is no suggestion
-LOOP_GROUP_M = 10_000.0  # loops starting this close to a better one are its versions, one row
-LOOP_VERSIONS = 3  # versions per row, the row's own included
-LOOP_VERSION_DIFFERS = 0.5  # a version walks more than this share of its length off every other one
+GROUP_M = 10_000.0  # hikes starting closer than this to a better one are its versions, one row
+VERSIONS = 3  # versions per row, the row's own included
+VERSION_DIFFERS = 0.5  # a version walks more than this share of its length off every other one
 LOOP_NAME_M = 2_000.0  # a loop is named after a named point this near its start
 TRAILHEAD_NEAREST = 3  # parking and restaurant/cafe points kept per Trailhead
 VALHALLA_CACHE_BYTES = 256 * 1024 * 1024  # mjolnir.max_cache_size; the build default is 1 GB
@@ -909,30 +909,52 @@ class ServingData:
         uncalibrated one; both are None where either hike lacks the fact.
         ``return_to_start`` measures the Seed and every hike alike with
         its way back (and the figures listed are of that walk), else one way.
+        Each hike has its served ``line``.
 
         With a TrailGraph the hikes are DayHikes and SuggestedLoops (ADR-0020),
-        ranked together, one row per group of loops starting near each other: a
-        loop has ``id`` None, its ``route``, ``line``, a name from where it
-        starts, ``drive_hours`` to its start from ``reach`` (None without it),
-        which leaves out a loop starting out of reach, and ``versions``, the
-        other loops of its row in that shape.
+        ranked together: a loop has ``id`` None, its ``route``, a name from
+        where it starts, and ``drive_hours`` to its start from ``reach`` (None
+        without it), which leaves out a loop starting out of reach.
+
+        One row per area: best first, a hike starting within ``GROUP_M`` of a
+        better row's start is a version of that row, listed in its
+        ``versions`` (at most ``VERSIONS`` - 1, each walking more than
+        ``VERSION_DIFFERS`` of its length off every version kept), else left out.
         """
         store = self.store.mode(return_to_start)
         seed_row, seed_walk = self._seed(seed, return_to_start)
         allowed = None if allowed_rows is None else self.store.ids[allowed_rows]
-        seeding = LOOP_SEEDS if self.trailgraph is not None else 0
         rows, scores = rank_rows(
-            store, [seed_row], weights, month=month, allowed_ids=allowed, limit=max(limit, seeding)
+            store, [seed_row], weights, month=month, allowed_ids=allowed, limit=max(limit, LOOP_SEEDS)
         )
-        results = self._summaries(rows[:limit].tolist(), return_to_start)
-        for result, score, measures in zip(results, scores, self._measures(store, seed_row, rows[:limit], month)):
-            result["score"] = float(score)
-            result["measures"] = measures
-        if not seeding:
-            return results
-        seed_line = self._served_line(seed) if seed_walk is None else np.column_stack([seed_walk.lat, seed_walk.lon])
-        loops = self._loops(store, seed_row, seed_line, weights, month, rows[:seeding], limit, return_to_start, reach)
-        return sorted(results + loops, key=lambda result: -result["score"])[:limit]
+        hikes = self._summaries(rows.tolist(), return_to_start)
+        lines = self._served_lines([hike["id"] for hike in hikes])
+        candidates = []
+        for hike, score, measures in zip(hikes, scores, self._measures(store, seed_row, rows, month)):
+            hike["line"] = lines[hike["id"]]
+            line = np.array(decode_polyline(hike["line"]))
+            hike["score"] = float(score)
+            hike["measures"] = measures
+            candidates.append((hike, _even_points(line[:, 0], line[:, 1], TWIN_STEP_M)))
+        if self.trailgraph is not None and LOOP_SEEDS:
+            seed_line = (
+                np.array(decode_polyline(self._served_lines([seed])[seed]))
+                if seed_walk is None
+                else np.column_stack([seed_walk.lat, seed_walk.lon])
+            )
+            candidates += self._loops(
+                store, seed_row, seed_line, weights, month, rows[:LOOP_SEEDS], return_to_start, reach
+            )
+        groups: list[list[tuple[dict, np.ndarray]]] = []  # the best first in each
+        for hike, points in sorted(candidates, key=lambda candidate: -candidate[0]["score"]):
+            start = hike["trailhead"]
+            group = next((g for g in groups if _haversine_m(*start, *g[0][0]["trailhead"]) < GROUP_M), None)
+            if group is None:
+                if len(groups) < limit:
+                    groups.append([(hike, points)])
+            elif len(group) < VERSIONS and all(1.0 - _share_on(points, kept) > VERSION_DIFFERS for _, kept in group):
+                group.append((hike, points))
+        return [{**group[0][0], "versions": [hike for hike, _ in group[1:]]} for group in groups]
 
     def _loops(
         self,
@@ -942,21 +964,16 @@ class ServingData:
         weights: Mapping[str, float],
         month: int | None,
         rows: np.ndarray,
-        limit: int,
         return_to_start: bool,
         reach: Reach | None,
-    ) -> list[dict]:
-        """The best ``limit`` rows of SuggestedLoops from Junctions near the
-        Trailheads of ``rows``, as ``rank`` lists them: the ``LOOP_MEASURED``
-        best guesses of ``find_loops`` measured (with their way back when the
-        Seed is) and scored like a DayHike. Best first, a loop is left out that
-        shares more than ``LOOP_SEED_SHARE`` of its walk with the Seed's line
-        (``seed_line``, (lat, lon) rows) or of the Seed's with it, or that is a
-        Twin of a DayHike. A loop starting within ``LOOP_GROUP_M`` of a better
-        one's start is a version of it: one row, with at most
-        ``LOOP_VERSIONS`` - 1 more in ``versions``, each walking more than
-        ``LOOP_VERSION_DIFFERS`` of its length off every version kept; others
-        are left out. All of it stops at ``LOOP_BUDGET_S``."""
+    ) -> list[tuple[dict, np.ndarray]]:
+        """SuggestedLoops from Junctions near the Trailheads of ``rows``, as
+        ``rank`` lists them, each with its walk every ``TWIN_STEP_M``: the
+        ``LOOP_MEASURED`` best guesses of ``find_loops`` measured (with their
+        way back when the Seed is) and scored like a DayHike. A loop is left out
+        that shares more than ``LOOP_SEED_SHARE`` of its walk with the Seed's
+        line (``seed_line``, (lat, lon) rows) or of the Seed's with it, or that
+        is a Twin of a DayHike. All of it stops at ``LOOP_BUDGET_S``."""
         deadline = time.monotonic() + LOOP_BUDGET_S
         if not isinstance(seed, OutsideSeed):
             seed = OutsideSeed.of(dict(zip(FACT_COLUMNS, store.facts[:, seed].tolist())), store.profile[seed])
@@ -988,55 +1005,45 @@ class ServingData:
         )
         similarity, _ = score_rows(loops, [seed], np.arange(len(measured)), _measure_weights(weights), month=month)
         seed_points = _even_points(seed_line[:, 0], seed_line[:, 1], TWIN_STEP_M)
-        groups: list[list[int]] = []  # measured loops, the best first in each
-        points: dict[int, np.ndarray] = {}
-        starts: dict[int, tuple[float, float]] = {}
-        for i in np.argsort(-np.nan_to_num(similarity, nan=-1.0), kind="stable").tolist():
-            if np.isnan(similarity[i]):
-                break
+        kept: dict[int, np.ndarray] = {}
+        for i in np.flatnonzero(~np.isnan(similarity)).tolist():
             walk = measured[i][1]
-            points[i] = _even_points(walk.lat, walk.lon, TWIN_STEP_M)
-            if max(_share_on(points[i], seed_points), _share_on(seed_points, points[i])) > LOOP_SEED_SHARE:
+            points = _even_points(walk.lat, walk.lon, TWIN_STEP_M)
+            if max(_share_on(points, seed_points), _share_on(seed_points, points)) > LOOP_SEED_SHARE:
                 continue  # it mostly walks the Seed again
             if self._retraced_rows(walk.lat, walk.lon):
                 continue  # a Catalog DayHike stands for it
-            start = starts[i] = (float(walk.lat[0]), float(walk.lon[0]))
-            group = next((g for g in groups if _haversine_m(*start, *starts[g[0]]) <= LOOP_GROUP_M), None)
-            if group is None:
-                if len(groups) < limit:
-                    groups.append([i])
-            elif len(group) < LOOP_VERSIONS and all(
-                1.0 - _share_on(points[i], points[j]) > LOOP_VERSION_DIFFERS for j in group
-            ):
-                group.append(i)
-        chosen = [i for group in groups for i in group]
-        listed = {}
+            kept[i] = points
+        chosen = list(kept)
+        listed = []
         for i, measures in zip(chosen, self._measures(loops, seed, np.array(chosen, dtype=np.int64), month)):
             loop, walk, trip, facts, _ = measured[i]
             climb_m, descent_m = climb_and_descent(trip.lat, trip.lon, trip.ele)
-            listed[i] = {
-                "id": None,
-                "route": {"text": str(walk.route)},
-                "name": self._loop_name(walk),
-                "length_m": _value(facts["length_m"]),
-                "elevation_gain_m": _value(facts["elevation_gain_m"]),
-                "climb_m": _round(climb_m),
-                "descent_m": _round(descent_m),
-                "highest_m": _value(facts["highest_m"]),
-                "difficulty_rank": _value(facts["difficulty_rank"]),
-                "trailhead": [float(walk.lat[0]), float(walk.lon[0])],
-                "line": encode_polyline(*simplify_line(walk.lat, walk.lon, LINE_TOLERANCE_M)),
-                "drive_hours": loop.drive_hours,
-                "score": float(similarity[i]),
-                "measures": measures,
-            }
-        return [{**listed[group[0]], "versions": [listed[i] for i in group[1:]]} for group in groups]
+            listed.append((
+                {
+                    "id": None,
+                    "route": {"text": str(walk.route)},
+                    "name": self._loop_name(walk),
+                    "length_m": _value(facts["length_m"]),
+                    "elevation_gain_m": _value(facts["elevation_gain_m"]),
+                    "climb_m": _round(climb_m),
+                    "descent_m": _round(descent_m),
+                    "highest_m": _value(facts["highest_m"]),
+                    "difficulty_rank": _value(facts["difficulty_rank"]),
+                    "trailhead": [float(walk.lat[0]), float(walk.lon[0])],
+                    "line": encode_polyline(*simplify_line(walk.lat, walk.lon, LINE_TOLERANCE_M)),
+                    "drive_hours": loop.drive_hours,
+                    "score": float(similarity[i]),
+                    "measures": measures,
+                },
+                kept[i],
+            ))
+        return listed
 
-    def _served_line(self, dayhike_id: int) -> np.ndarray:
-        """A DayHike's served line as (lat, lon) rows, what its Twins are found on."""
+    def _served_lines(self, ids: list[int]) -> dict[int, str]:
+        """DayHikes' served lines, encoded, what their Twins are found on, by id."""
         with self._db() as db:
-            (line,) = db.execute("SELECT line FROM hikes WHERE id = ?", (dayhike_id,)).fetchone()
-        return np.array(decode_polyline(line))
+            return dict(_in_chunks(db, "SELECT id, line FROM hikes WHERE id IN ({})", ids))
 
     def _loop_name(self, walk: ComposedWalk) -> str:
         """A SuggestedLoop's name, from where it starts: the named amenity point

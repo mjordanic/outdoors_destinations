@@ -307,7 +307,7 @@ def create_app(
             raise HTTPException(400, str(error)) from None
         finally:
             one_ranking.release()
-        for result in results:
+        for result in (hike for row in results for hike in (row, *row["versions"])):
             if result["id"] is not None:  # a SuggestedLoop has the hours to its own start
                 result["drive_hours"] = None if hours is None else hours[data.row_of(result["id"])]
         return {

@@ -53,7 +53,7 @@ A walk the Hiker draws from TrailGraph Segments, from a start Junction, Segment 
 _Avoid_: custom route, user route, composed DayHike
 
 **SuggestedLoop**:
-A ComposedHike that a Ranking proposes itself: a loop drawn on the TrailGraph from a Junction near the Trailhead of one of the best Catalog DayHikes, that ends where it starts, visits no Junction twice and crosses no Link. It is found at query time by following the Seed's ElevationProfile and length, scored like a DayHike and listed among them, and left out when more than half of it lies on the Seed (or of the Seed on it) or when it is a Twin of a DayHike. SuggestedLoops starting within 10 km of each other share one row, as at most three versions, each more than half off the others (ADR-0020). It is named after where it starts, and shared, opened and edited like any ComposedHike.
+A ComposedHike that a Ranking proposes itself: a loop drawn on the TrailGraph from a Junction near the Trailhead of one of the best Catalog DayHikes, that ends where it starts, visits no Junction twice and crosses no Link. It is found at query time by following the Seed's ElevationProfile and length, scored like a DayHike and listed among them, and left out when more than half of it lies on the Seed (or of the Seed on it) or when it is a Twin of a DayHike. It shares rows with DayHikes as the Ranking groups them (ADR-0020). It is named after where it starts, and shared, opened and edited like any ComposedHike.
 _Avoid_: generated route, composed DayHike, recommendation
 
 **Origin**:
@@ -173,7 +173,7 @@ The numeric Catalog description of a DayHike (length, elevation stats, Difficult
 _Avoid_: embedding, description, tags
 
 **Ranking**:
-An ordered list of Catalog DayHikes by similarity to the Seed set. A DayHike's similarity to one Seed is the MeasureWeights-weighted mean of its calibrated Measure scores; with several Seeds the best Seed counts. Its score is that similarity. Of a group of Twins only the best is listed, and none of a Seed's Twins. An optional QueryMonth selects the ClimateNormal slice. The Seed carries the climate being matched. With ReturnToStart every hike in it is measured with its WayBack.
+An ordered list of Catalog DayHikes by similarity to the Seed set. A DayHike's similarity to one Seed is the MeasureWeights-weighted mean of its calibrated Measure scores; with several Seeds the best Seed counts. Its score is that similarity. Of a group of Twins only the best is listed, and none of a Seed's Twins. An optional QueryMonth selects the ClimateNormal slice. The Seed carries the climate being matched. With ReturnToStart every hike in it is measured with its WayBack. From a serving export it lists one row per area: a hike, DayHike or SuggestedLoop, starting within 10 km of a better row's start is a version of that row, and a row holds at most three versions, each more than half off the others (ADR-0020).
 _Avoid_: recommendation, unsupervised clustering, prediction, climate target
 
 **Measure**:

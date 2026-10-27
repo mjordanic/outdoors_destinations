@@ -661,7 +661,7 @@ def test_a_line_takes_a_shorter_way_back_where_one_exists(data) -> None:
     assert hike["way_back"]["kind"] == "trail" and hike["way_back"]["m"] == pytest.approx(1000, abs=2)
 
 
-def test_a_line_doubles_and_climbs_its_descent_back(data, sampled: Path) -> None:
+def test_a_line_doubles_and_climbs_its_descent_back(data, sampled: Path, monkeypatch) -> None:
     store = SimilarityStore.open(sampled)
     row = list(store.ids).index(SUMMIT_LINE)
     one_way, back = data.detail(SUMMIT_LINE, return_to_start=False), data.detail(SUMMIT_LINE)
@@ -675,6 +675,7 @@ def test_a_line_doubles_and_climbs_its_descent_back(data, sampled: Path) -> None
     assert back["facts"]["elevation_gain_m"] == pytest.approx(max(back["climb_m"], back["descent_m"]), abs=0.5)
     assert back["facts"]["highest_m"] == one_way["facts"]["highest_m"]
     # The listed figures are the round trip's too.
+    monkeypatch.setattr("dayhike.serving.GROUP_M", 0.0)  # each hike its own row
     listed = data.rank(LAKE_LOOP, {"length": 100}, limit=10)
     summit = next(r for r in listed if r["id"] == SUMMIT_LINE)
     assert (summit["length_m"], summit["climb_m"], summit["descent_m"]) == (
@@ -724,8 +725,12 @@ def test_api_carries_the_return_to_start_choice(client, summit: Route) -> None:
     assert client.post("/api/rank", json={"composed": composed}).json()["return_to_start"] is True
 
 
-def test_cli_samples_the_trailgraph_and_composes(sampled: Path, data, summit: Route, tmp_path: Path, capsys) -> None:
+def test_cli_samples_the_trailgraph_and_composes(
+    sampled: Path, data, summit: Route, tmp_path: Path, capsys, monkeypatch
+) -> None:
     from dayhike.cli import main
+
+    monkeypatch.setattr("dayhike.serving.GROUP_M", 0.0)  # each hike its own row
 
     assert main(["sample-trailgraph", "--catalog", str(sampled), "--dem", str(tmp_path), "--landcover",
                  str(tmp_path), "--climate", str(tmp_path)]) == 0  # fmt: skip

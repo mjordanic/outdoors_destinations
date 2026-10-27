@@ -5,7 +5,9 @@ W across the Lake Loop to G, 1.1 km by a node 200 m north of the straight
 line: it cuts the Lake Loop into two 3.1 km loops that are no Catalog
 DayHike, one each side of it. Each walks two thirds of its length on the Lake
 Loop, so from the Lake Loop neither is suggested; from the Meadow Path (3 km
-there and back, south of the Lake Loop) both are, as versions of one row.
+there and back, south of the Lake Loop) both are. Every hike there starts
+within 10 km of the others, so a Ranking lists one row; the tests that look
+at the loops themselves list every hike in its own row.
 """
 
 import pytest
@@ -48,6 +50,12 @@ def data(tmp_path_factory: pytest.TempPathFactory):
     return ServingData(export_serving(path, root / "web-serving"))
 
 
+@pytest.fixture
+def rows_apart(monkeypatch) -> None:
+    """Every hike its own row, as if no two started within 10 km of each other."""
+    monkeypatch.setattr("dayhike.serving.GROUP_M", 0.0)
+
+
 def _loops(results: list[dict]) -> list[dict]:
     return [result for result in results if result["id"] is None]
 
@@ -56,17 +64,17 @@ def _segments(data, loop: dict) -> set[int]:
     return set(data.compose(Route.parse(loop["route"]["text"]))["route"]["segments"])
 
 
+@pytest.mark.usefixtures("rows_apart")
 def test_a_ranking_lists_loops_drawn_from_segments_beside_dayhikes(data) -> None:
     results = data.rank(MEADOW_PATH, DEFAULT_WEIGHTS)
-    (row,) = _loops(results)
+    loops = _loops(results)
 
-    # One row for both sides of the Middle Path: they start together and two thirds of each is off the other.
-    assert len(row["versions"]) == 1 and "versions" not in row["versions"][0]
-    assert _segments(data, row) != _segments(data, row["versions"][0])
+    # Both sides of the Middle Path.
+    assert len(loops) == 2 and _segments(data, loops[0]) != _segments(data, loops[1])
     assert {r["id"] for r in results} - {None} == set(data.store.ids.tolist()) - {MEADOW_PATH}
     assert [r["score"] for r in results] == sorted((r["score"] for r in results), reverse=True)
-    assert row["score"] >= row["versions"][0]["score"]
-    for loop in (row, *row["versions"]):
+    assert all(r["versions"] == [] for r in results)
+    for loop in loops:
         # Named by where it starts, not by the trails it walks.
         assert loop["name"] == "Loop from Lakeside Inn"
         assert loop["length_m"] == pytest.approx(3077, abs=2)
@@ -86,36 +94,59 @@ def test_a_ranking_lists_loops_drawn_from_segments_beside_dayhikes(data) -> None
         assert loop["drive_hours"] is None
 
 
+@pytest.mark.usefixtures("rows_apart")
 def test_a_loop_mostly_on_the_seed_is_no_suggestion(data) -> None:
-    row = _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS))[0]
+    loops = _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS))
 
     # Two thirds of either loop is the Lake Loop.
     assert _loops(data.rank(LAKE_LOOP, DEFAULT_WEIGHTS)) == []
     # From one loop, the other is a third the same: suggested; the Seed itself, walked either way, is not.
-    for seed, other in ((row, row["versions"][0]), (row["versions"][0], row)):
+    for seed, other in (loops, loops[::-1]):
         results = data.rank(Route.parse(seed["route"]["text"]), DEFAULT_WEIGHTS)
         assert [_segments(data, r) for r in _loops(results)] == [_segments(data, other)]
         assert LAKE_LOOP in [r["id"] for r in results]
 
 
+def test_hikes_starting_near_each_other_share_a_row_of_versions(data) -> None:
+    apart = {r["id"] if r["id"] is not None else r["route"]["text"]: r for r in _rows_apart(data)}
+
+    (row,) = data.rank(MEADOW_PATH, DEFAULT_WEIGHTS)
+
+    # The best hike leads; the Middle Path and the Lake Loop, though better than
+    # the Connector, lie mostly on it, so the Connector and the Summit Line are its versions.
+    assert row["id"] is None and row["score"] == max(r["score"] for r in apart.values())
+    assert [v["id"] for v in row["versions"]] == [2004, 2002]
+    assert row["score"] > apart[2008]["score"] > apart[LAKE_LOOP]["score"] > row["versions"][0]["score"]
+    for version in row["versions"]:  # each as it is listed in a row of its own, but for versions
+        assert version == {k: v for k, v in apart[version["id"]].items() if k != "versions"}
+
+
+def _rows_apart(data) -> list[dict]:
+    import dayhike.serving as serving
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(serving, "GROUP_M", 0.0)
+        return data.rank(MEADOW_PATH, DEFAULT_WEIGHTS)
+
+
 @pytest.mark.parametrize(
-    ("name", "value", "rows", "versions"),
+    ("name", "value", "versions"),
     [
-        ("LOOP_GROUP_M", 0.0, 2, 0),  # each loop its own row
-        ("LOOP_VERSIONS", 1, 1, 0),  # no room for a second version
-        ("LOOP_VERSION_DIFFERS", 0.7, 1, 0),  # two thirds off the other is not enough
+        ("VERSIONS", 1, []),  # no room for a second version
+        ("VERSION_DIFFERS", 0.99, [2005, 2006]),  # only hikes all but wholly off the others
     ],
 )
-def test_loops_starting_near_each_other_share_a_row(
-    data, monkeypatch, name: str, value: float, rows: int, versions: int
+def test_a_row_keeps_few_versions_each_mostly_a_different_route(
+    data, monkeypatch, name: str, value: float, versions: list[int]
 ) -> None:
     monkeypatch.setattr(f"dayhike.serving.{name}", value)
 
-    loops = _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS))
+    (row,) = data.rank(MEADOW_PATH, DEFAULT_WEIGHTS)
 
-    assert len(loops) == rows and sum(len(r["versions"]) for r in loops) == versions
+    assert [v["id"] for v in row["versions"]] == versions
 
 
+@pytest.mark.usefixtures("rows_apart")
 def test_a_loop_starts_within_the_drive_and_shows_its_hours(data) -> None:
     def everywhere(places: list) -> list:
         return [1.5] * len(places)
@@ -123,8 +154,8 @@ def test_a_loop_starts_within_the_drive_and_shows_its_hours(data) -> None:
     def nowhere(places: list) -> list:
         return [None] * len(places)
 
-    (row,) = _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, reach=everywhere))
-    assert {r["drive_hours"] for r in (row, *row["versions"])} == {1.5}
+    loops = _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, reach=everywhere))
+    assert len(loops) == 2 and {r["drive_hours"] for r in loops} == {1.5}
     assert _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, reach=nowhere)) == []
 
 
@@ -137,6 +168,7 @@ def test_a_loop_starts_within_the_drive_and_shows_its_hours(data) -> None:
         ("dayhike.serving", "LOOP_BUDGET_S", 0.0),
     ],
 )
+@pytest.mark.usefixtures("rows_apart")
 def test_a_search_stops_at_its_budget(data, monkeypatch, module: str, name: str, value: float) -> None:
     monkeypatch.setattr(f"{module}.{name}", value)
 
@@ -155,25 +187,27 @@ def test_api_ranks_loops_with_their_link_versions_and_drive_hours(data) -> None:
             return [3600.0] * len(trailheads)
 
     client = TestClient(create_app(data, lambda max_hours: Hour()))
-    (plain,) = _loops(client.post("/api/rank", json={"seed": MEADOW_PATH}).json()["results"])
-    driven = client.post(
+    (plain,) = client.post("/api/rank", json={"seed": MEADOW_PATH}).json()["results"]
+    (driven,) = client.post(
         "/api/rank", json={"seed": MEADOW_PATH, "origin": {"lat": 46.0, "lon": 14.0}, "max_hours": 2}
     ).json()["results"]
 
-    assert [r["route"]["text"] for r in _loops(driven)] == [plain["route"]["text"]]
-    assert plain["drive_hours"] is None and plain["versions"][0]["drive_hours"] is None
-    assert {r["drive_hours"] for r in driven} == {1.0}
-    assert _loops(driven)[0]["versions"][0]["drive_hours"] == 1.0
-    for loop in (plain, plain["versions"][0]):
-        hike = client.post("/api/compose", json={"route": loop["route"]["text"], "name": loop["name"]}).json()
-        assert (hike["line"], hike["name"]) == (loop["line"], loop["name"])
+    # One row, a loop with two Catalog DayHikes as its versions, each with the hours to its start.
+    assert driven["route"]["text"] == plain["route"]["text"]
+    assert [v["id"] for v in driven["versions"]] == [v["id"] for v in plain["versions"]] == [2004, 2002]
+    assert {r["drive_hours"] for r in (plain, *plain["versions"])} == {None}
+    assert {r["drive_hours"] for r in (driven, *driven["versions"])} == {1.0}
+    hike = client.post("/api/compose", json={"route": plain["route"]["text"], "name": plain["name"]}).json()
+    assert (hike["line"], hike["name"]) == (plain["line"], plain["name"])
+    for version in plain["versions"]:  # drawn on the map as the hike's own page draws it
+        assert client.get(f"/api/hikes/{version['id']}").json()["line"] == version["line"]
 
 
+@pytest.mark.usefixtures("rows_apart")
 def test_cli_compose_lists_loops_by_their_link(data, capsys) -> None:
     from dayhike.cli import main
 
-    row = _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS))[0]
-    seed = row["versions"][0]["route"]["text"]
+    seed = _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS))[1]["route"]["text"]
 
     assert main(["compose", "--data", str(data.directory), seed]) == 0
     listed = [line.split("\t")[0] for line in capsys.readouterr().out.strip().splitlines()[1:]]

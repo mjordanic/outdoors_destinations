@@ -42,7 +42,8 @@ const ROUTE_LINE = { color: "#c2410c", weight: 6, opacity: 0.85 };
 const AUTO_LINE = { color: "#d97706", weight: 6, opacity: 0.9, dashArray: "10 6" }; // added to reach a click
 const LINK_LINE = { color: "#8e44ad", weight: 4, opacity: 0.9, dashArray: "2 7" };
 const LOOP_LINE = { color: "#15803d", weight: 4, opacity: 0.9, dashArray: "8 6" }; // a suggested loop
-const VERSION_LINE = { color: "#0e7490", weight: 4, opacity: 0.9, dashArray: "3 6" }; // another version of it
+const VERSION_LINE = { color: "#0e7490", weight: 4, opacity: 0.9, dashArray: "3 6" }; // another version of a row
+const RESULT_LINE = { color: "#1d4ed8", weight: 4, opacity: 0.9 }; // a catalog hike leading the row shown
 
 const state = {
   info: null,
@@ -697,7 +698,7 @@ const pick = {
   map: null,
   layer: null,
   lines: new Map(), // hike id -> its polyline
-  loops: null, // the suggested loops of the shown Ranking
+  loops: null, // the suggested loops and the shown row's versions of the Ranking
   timer: null,
   abort: null,
 
@@ -801,19 +802,20 @@ const pick = {
     this.lines.get(state.liked?.id)?.bringToFront();
   },
 
-  // The loops composed from segments in the shown Ranking (a catalog hike is on the map already).
+  // The loops composed from segments in the shown Ranking (a catalog hike is on the map already),
+  // and every version of the row shown, catalog or composed.
   drawLoops() {
     if (!this.map) return;
     if (!this.loops) this.loops = L.layerGroup().addTo(this.map);
     this.loops.clearLayers();
     if ($("#results").hidden) return;
     state.results.forEach((result, i) => {
-      if (!result.route) return;
-      const versions = state.expanded === i ? [result, ...result.versions] : [result];
+      const versions = state.expanded === i ? [result, ...result.versions] : result.route ? [result] : [];
       versions.forEach((version, k) => {
         const label = versions.length > 1 ? `, var ${k + 1}` : "";
-        L.polyline(decodePolyline(version.line), k ? VERSION_LINE : LOOP_LINE)
-          .bindTooltip(`<strong>Similar hike #${i + 1}, composed${label}</strong><br>${escapeHtml(version.name)}<br>${fmt.km(version.length_m)}`, { sticky: true })
+        const kind = version.route ? ", composed" : "";
+        L.polyline(decodePolyline(version.line), k ? VERSION_LINE : version.route ? LOOP_LINE : RESULT_LINE)
+          .bindTooltip(`<strong>Similar hike #${i + 1}${kind}${label}</strong><br>${escapeHtml(version.name)}<br>${fmt.km(version.length_m)}`, { sticky: true })
           .on("click", () => showResult(i, k))
           .addTo(this.loops);
       });
@@ -1296,10 +1298,13 @@ function renderResults(body) {
     : `${body.reachable.toLocaleString("en")} hikes within the drive`;
   const mode = body.return_to_start ? "each with its way back to the start" : "each one way";
   const composed = body.results.some((result) => result.route)
-    ? " Rows marked composed are loops drawn from marked trail segments, not catalog hikes; the map shows them dashed green. Click one with versions to see each."
+    ? " Rows marked composed are loops drawn from marked trail segments, not catalog hikes; the map shows them dashed green."
+    : "";
+  const versions = body.results.some((result) => result.versions.length)
+    ? " Hikes starting within 10 km of a better one are its versions: click a row with versions to see each in the table and on the map."
     : "";
   $("#results-note").textContent = body.results.length
-    ? `Like “${state.liked.name}”, out of ${considered}${state.info.compose ? " and loops composed near the best of them" : ""}, ${mode}. Click a row to see it.${composed}`
+    ? `Like “${state.liked.name}”, out of ${considered}${state.info.compose ? " and loops composed near the best of them" : ""}, ${mode}. Click a row to see it.${composed}${versions}`
     : `No hike matched, out of ${considered}. Try a longer drive or other weights.`;
   const table = $("#results-table");
   const measureHeads = state.measures.map((m) =>
@@ -1347,7 +1352,7 @@ function resultRow(result, number, open) {
   return row;
 }
 
-// The versions of a row of composed loops, as rows var 1, 2, 3 under it and on the map.
+// The versions of a row, catalog or composed, as rows var 1, 2, 3 under it and on the map.
 function expandVersions(index) {
   document.querySelectorAll("#results-table tr.version").forEach((row) => row.remove());
   state.expanded = index;
@@ -1385,7 +1390,7 @@ async function showResult(index, version = 0) {
     if (request !== shown || results !== state.results || liked !== state.liked) return;
     const card = $("#selected");
     const which = versions ? `, var ${version + 1} of ${versions.length}` : "";
-    const role = `Similar hike #${index + 1}${result.route ? `, composed from trail segments${which}` : ""}`;
+    const role = `Similar hike #${index + 1}${result.route ? ", composed from trail segments" : ""}${which}`;
     renderDetail(card, hike, { role, compare: state.liked, result });
     card.scrollIntoView({ behavior: "smooth", block: "start" });
     setStatus("");
