@@ -1429,7 +1429,7 @@ class TrailGraph:
             start = self._locate(db, rows, lat[0], lon[0])
             if end is None or start is None:
                 return None
-            nodes, (start_of, neighbour, weight), edges = self._network()
+            nodes, start_of, neighbour, weight, segment_of = self._network()
 
             def ends(segment: int, vertex: int, along: np.ndarray) -> list[tuple[int, float, int]]:
                 """(node, metres to it, its vertex) for both ends of the Segment."""
@@ -1444,22 +1444,25 @@ class TrailGraph:
             reach: dict[int, list[tuple[int, float]]] = {}
             for t, (node, to_target, _) in enumerate(targets):
                 reach.setdefault(node, []).append((t, to_target))
-            settled: dict[int, tuple[int, int]] = {}  # node: (Junction before it, source)
-            heap = [(to_source, node, -1, s) for s, (node, to_source, _) in enumerate(sources)]
+            settled: dict[int, tuple[int, int, int]] = {}  # node: (Junction before it, source, entry to it)
+            heap = [(to_source, node, -1, s, -1) for s, (node, to_source, _) in enumerate(sources)]
             heapq.heapify(heap)
             while heap:
-                metres, node, before, s = heapq.heappop(heap)
+                metres, node, before, s, k = heapq.heappop(heap)
                 if metres >= best:
                     break
                 if node in settled:
                     continue
-                settled[node] = (before, s)
+                settled[node] = (before, s, k)
                 for t, to_target in reach.get(node, ()):
                     if metres + to_target < best:
                         best, via = metres + to_target, (node, t)
-                for k in range(start_of[node], start_of[node + 1]):
-                    if neighbour[k] not in settled:
-                        heapq.heappush(heap, (metres + weight[k], neighbour[k], node, s))
+                first, after = int(start_of[node]), int(start_of[node + 1])
+                for k, other, step_m in zip(
+                    range(first, after), neighbour[first:after].tolist(), weight[first:after].tolist()
+                ):
+                    if other not in settled:
+                        heapq.heappush(heap, (metres + step_m, other, node, s, k))
             if via is None:
                 return None
             if not via:
@@ -1470,7 +1473,7 @@ class TrailGraph:
                 chain.append(settled[chain[-1]][0])
             s = settled[reached][1]
             chain.reverse()
-            middle = [edges[min(x, y), max(x, y)] for x, y in zip(chain, chain[1:])]
+            middle = [int(segment_of[settled[y][2]]) for y in chain[1:]]
             if middle:
                 self._load(db, rows, f"WHERE id IN ({','.join('?' * len(middle))})", tuple(middle))
         pieces = [[end[0], end[1], sources[s][2]]]
@@ -1500,14 +1503,12 @@ class TrailGraph:
                 return row[0], int(at[0]), np.concatenate([[0.0], np.cumsum(steps)])
         return None
 
-    def _network(self) -> tuple[np.ndarray, tuple[list, list, list], dict[tuple[int, int], int]]:
+    def _network(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """The Junction ids (sorted); per Junction index its neighbours along
-        the shortest Segment to each (Links and rings left out), as lists of
-        the first entry per Junction, neighbour and metres; and that
-        Segment's id per (lower, higher) Junction index."""
+        the shortest Segment to each (Links and rings left out), as arrays of
+        the first entry per Junction, then per entry the neighbour, metres
+        and that Segment's id."""
         if self._graph is None:
-            from scipy.sparse import csr_matrix
-
             with self._db() as db:
                 found = db.execute("SELECT id, a, b, length_m FROM segments WHERE kind != 'link'").fetchall()
             ids = np.array([row[0] for row in found], dtype=np.int64)
@@ -1519,14 +1520,14 @@ class TrailGraph:
             shortest = shortest[low[shortest] != high[shortest]]
             _, first = np.unique(low[shortest] * len(nodes) + high[shortest], return_index=True)
             keep = shortest[first]
-            weight = np.maximum(metres[keep], 1e-3)  # a stored zero would be no edge
-            matrix = csr_matrix(
-                (np.concatenate([weight, weight]), (np.concatenate([low[keep], high[keep]]), np.concatenate([high[keep], low[keep]]))),
-                shape=(len(nodes), len(nodes)),
-            )  # fmt: skip
-            edges = dict(zip(zip(low[keep].tolist(), high[keep].tolist()), ids[keep].tolist()))
-            adjacency = (matrix.indptr.tolist(), matrix.indices.tolist(), matrix.data.tolist())
-            self._graph = (nodes, adjacency, edges)
+            weight = np.maximum(metres[keep], 1e-3)
+            here = np.concatenate([low[keep], high[keep]])
+            order = np.argsort(here, kind="stable")
+            start_of = np.concatenate([[0], np.cumsum(np.bincount(here, minlength=len(nodes)))]).astype(np.int64)
+            neighbour = np.concatenate([high[keep], low[keep]])[order].astype(np.int32)
+            step_m = np.concatenate([weight, weight])[order].astype(np.float32)
+            segment_of = np.concatenate([ids[keep], ids[keep]])[order]
+            self._graph = (nodes, start_of, neighbour, step_m, segment_of)
         return self._graph
 
     def amenities_near(self, lat: np.ndarray, lon: np.ndarray, radius_m: float) -> list[tuple]:
