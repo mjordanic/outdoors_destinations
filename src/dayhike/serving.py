@@ -48,6 +48,7 @@ import unicodedata
 import zlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 import numpy as np
@@ -79,7 +80,6 @@ from dayhike.similarity import (
     TWIN_SHARE,
     TWIN_STEP_M,
     AmenityPoints,
-    Measure,
     OutsideSeed,
     SimilarityStore,
     StaleSimilarity,
@@ -169,26 +169,16 @@ MEASURE_INFO: dict[str, tuple[str, str, str]] = {
 }
 
 
-def score_note(
-    measure: Measure, raw: float | None, less_alike: float | None, as_alike: float | None
-) -> str | None:
-    """What a calibrated Measure score says, in words: the share of random hike
-    pairs less alike than this pair (``less_alike``), and of those scoring the same.
-
-    Without ties the share is the score itself. Pairs scoring the same are
-    never counted as less alike, so the sentence holds on Measures with many
-    ties (yes/no flags, zero-inflated facts).
+def score_note(score: float | None, tied: float | None) -> str | None:
+    """A calibrated Measure score in words, with the number the compare table
+    shows for it (two decimals, half rounding up). ``tied`` is the share of
+    random hike pairs scoring the same, each counting half in the score.
     """
-    if raw is None or less_alike is None or as_alike is None:
+    if score is None or tied is None:
         return None
-    less, same = round(100 * less_alike), round(100 * as_alike)
-    if measure.kind == "agree":
-        return f"Alike, as are {same}% of random hike pairs" if raw else f"Differ, as do {same}% of random hike pairs"
-    gap = measure.kind in ("ratio", "tolerance")
-    if less_alike == 0 and same:
-        return f"No random hike pair is {'further apart' if gap else 'less alike'}; {same}% score the same"
-    note = f"{'Difference smaller' if gap else 'More alike'} than {less}% of random hike pairs"
-    return f"{note}; {same}% score the same" if same else note
+    percent = int(Decimal(score).quantize(Decimal("0.01"), ROUND_HALF_UP) * 100)
+    note = f"Difference smaller than {percent}% of random hike pairs"
+    return f"{note} (ties count half)" if tied else note
 
 
 MEASURE_GROUPS = ("effort", "altitude", "profile", "landscape", "weather", "water", "facilities", "trail", "steepness")
@@ -1146,15 +1136,15 @@ class ServingData:
         for measure in MEASURES:
             raw = measure_scores(store, measure, seed, rows, month=month)
             key = _calibration_key(measure, month)
-            measures[measure.name] = (measure, raw, calibrate(store, key, raw), *random_pair_shares(store, key, raw))
+            measures[measure.name] = (raw, calibrate(store, key, raw), random_pair_shares(store, key, raw)[1])
         return [
             {
                 name: {
                     "score": _value(calibrated[i]),
                     "raw": _value(raw[i]),
-                    "note": score_note(measure, _value(raw[i]), _value(less[i]), _value(same[i])),
+                    "note": score_note(_value(calibrated[i]), _value(tied[i])),
                 }
-                for name, (measure, raw, calibrated, less, same) in measures.items()
+                for name, (raw, calibrated, tied) in measures.items()
             }
             for i in range(len(rows))
         ]

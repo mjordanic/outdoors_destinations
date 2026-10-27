@@ -20,7 +20,7 @@ from dayhike.serving import (
     score_note,
     simplify_line,
 )
-from dayhike.similarity import FACT_COLUMNS, MEASURE_NAMES, MEASURES
+from dayhike.similarity import FACT_COLUMNS, MEASURE_NAMES
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
 RIDGE_WALK_ID = 1001
@@ -226,27 +226,23 @@ def test_rank_matches_rank_dayhikes_and_reports_every_measure(
     assert results[0]["measures"]["elevation_gain"] == {"score": None, "raw": None, "note": None}
 
 
-BY_NAME = {measure.name: measure for measure in MEASURES}
-
-
 @pytest.mark.parametrize(
-    ("name", "raw", "less_alike", "as_alike", "note"),
+    ("score", "tied", "note"),
     [
         # Calibrated 0.52 with no ties: the same 52 as the score.
-        ("solar_radiation", 0.696, 0.52, 0.0, "Difference smaller than 52% of random hike pairs"),
-        ("length", 0.9, 0.996, 0.0, "Difference smaller than 100% of random hike pairs"),
-        # Tied pairs are never counted as further apart.
-        ("waterside", 1.0, 0.156, 0.844, "Difference smaller than 16% of random hike pairs; 84% score the same"),
-        ("highest", 0.0, 0.0, 0.4, "No random hike pair is further apart; 40% score the same"),
-        ("landcover", 0.8, 0.7, 0.0, "More alike than 70% of random hike pairs"),
-        ("profile", 0.2, 0.0, 0.02, "No random hike pair is less alike; 2% score the same"),
-        ("hut_along", 1.0, 0.2, 0.8, "Alike, as are 80% of random hike pairs"),
-        ("round_trip", 0.0, 0.0, 0.3, "Differ, as do 30% of random hike pairs"),
-        ("length", None, None, None, None),
+        (0.52, 0.0, "Difference smaller than 52% of random hike pairs"),
+        # 128/1024 shows as 0.13 (half rounding up), so the note says 13, not 12.
+        (0.125, 0.0, "Difference smaller than 13% of random hike pairs"),
+        (0.625, 0.0, "Difference smaller than 63% of random hike pairs"),
+        (0.996, 0.0, "Difference smaller than 100% of random hike pairs"),
+        # A WaterSide pair inside the dead band: the score's own 58.
+        (0.578, 0.844, "Difference smaller than 58% of random hike pairs (ties count half)"),
+        (0.6, 0.8, "Difference smaller than 60% of random hike pairs (ties count half)"),
+        (None, None, None),
     ],
 )
-def test_score_note_says_how_many_random_pairs_are_further_apart(name, raw, less_alike, as_alike, note) -> None:
-    assert score_note(BY_NAME[name], raw, less_alike, as_alike) == note
+def test_score_note_says_the_score_in_words(score, tied, note) -> None:
+    assert score_note(score, tied) == note
 
 
 def test_rank_respects_the_limit_and_the_allowed_rows(data: ServingData) -> None:
