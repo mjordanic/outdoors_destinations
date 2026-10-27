@@ -1529,7 +1529,15 @@ the similarity looks at (route and amenity points on an OpenStreetMap map,
 elevation profile in metres above sea level, land cover, trail surface,
 climate by month, and the fact behind every Measure), set a 0–100 weight or
 an "off" tick per Measure, and list the 10 most similar hikes with their score,
-length, climb and descent, and per-Measure scores. The "Return to start" tick
+length, climb and descent, and per-Measure scores. With a TrailGraph the list
+mixes in SuggestedLoops (ADR-0020): loops drawn on the marked network near the
+best Catalog results, found as the query runs, named after where they start, marked "composed" and
+drawn dashed green on the map. Each opens like a composed hike, with its
+link, and "Edit on the map" makes it the liked hike in the composer. The list
+holds one row per area: hikes, catalog or composed, starting within 10 km of a
+better one are its versions; clicking the row lists up to three versions
+(var 1, 2, 3), each more than half a different route, under it and on the map,
+each to open. A loop that mostly walks the liked hike again is not suggested. The "Return to start" tick
 box above the results (on by default) measures the liked hike and every hike
 compared with it with its way back to its start, so a summit line is compared
 up and back; off, every hike is compared one way. Turning it changes the
@@ -1608,8 +1616,14 @@ given `name`, and `route` with its text and its start Junction, Segment ids
 and their steps in this export (null where an older link now cuts a Segment);
 a step whose way is gone, whose node is off the way, or whose way no longer
 leads there is refused with a message saying which. `"composed": {"route"}` stands in place of
-`seed` (rank) or `a` (pair). A composed Seed is compared with Catalog
-DayHikes only; the DayHikes it retraces (its Twins) are not listed. The GET routes also answer HEAD. Each client gets 20 Rankings and
+`seed` (rank) or `a` (pair). The DayHikes a composed Seed retraces (its Twins)
+are not listed. With a TrailGraph a Ranking also lists SuggestedLoops
+(ADR-0020): `id` null, `route` `{"text"}` (what `/api/compose` takes), `line`,
+`name` (from where it starts) and the figures of a DayHike row; with `origin`
+and `max_hours` only loops starting within the drive, each with its
+`drive_hours`. Every row has its `line` and `versions`, the other hikes of its
+area (DayHikes or loops starting within 10 km of it, at most three hikes per
+row) in the same shape. Loop work stops at 5 s. The GET routes also answer HEAD. Each client gets 20 Rankings and
 300 other calls a minute; one Ranking runs at a time per process.
 
 Measured on the Europe Catalog (161,614 DayHikes), 8-core Mac, the container
@@ -1791,6 +1805,7 @@ The same seams the CLI wraps:
 - `geometry_store_path_for` — sidecar path for DayHikeGeometry
 - `trailgraph_path_for` / `dayhike.trailgraph.write_trailgraph` / `sample_trailgraph` — the TrailGraph sidecar, written at ingest and sampled from the rasters
 - `dayhike.trailgraph.TrailGraph` / `Route` — open a TrailGraph (or its serving copy) and compute the facts of a ComposedHike
+- `dayhike.loops.find_loops` — the beam search for SuggestedLoops near given Trailheads (`ServingData.rank` measures and lists them)
 - `fetch_fabdem` / `sample_dem` — local FABDEM tiles → GeometryStore vertices and Catalog elevation
 - `fetch_worldcover` / `sample_landcover` — local WorldCover tiles → GeometryStore classes and Catalog fractions
 - `fetch_chelsa` / `sample_climate` — local CHELSA rasters → Catalog hike-level monthly means
@@ -1805,7 +1820,7 @@ CLI: `dayhike ingest`, `dayhike fetch-extracts`, `dayhike fetch-dem`,
 `dayhike fetch-climate`, `dayhike sample-climate`, `dayhike sample-trailgraph`,
 `dayhike build-similarity` (`--calibrate-only`), `dayhike rank` (`--weight`,
 `--month`, `--limit`, `--one-way`), `dayhike compose` (the Route text of a shared link,
-`--name`, `--weight`, `--month`, `--limit`, `--one-way`; reads a serving export), `dayhike nearby`, `dayhike export-serving`, `dayhike serve`, `dayhike coverage-map`.
+`--name`, `--weight`, `--month`, `--limit`, `--one-way`; reads a serving export; a SuggestedLoop is listed by its link text, and each row's versions indented under it), `dayhike nearby`, `dayhike export-serving`, `dayhike serve`, `dayhike coverage-map`.
 
 Docstrings on those functions use the glossary in `CONTEXT.md`.
 Examples: [`01`](notebooks/01_raw_data_and_ingestion.ipynb) ingest,

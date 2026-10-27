@@ -5,8 +5,9 @@ hikes in a map view, hike detail, the Measure list, the score of any two hikes, 
 optional highways-only DriveTime pre-filter. Every client gets a request budget per minute, and one Ranking
 runs at a time per instance, so a small container holds its memory. When the export has a TrailGraph,
 it also serves the Segments in a map view and the detail of a ComposedHike, which can then be the
-Seed of a Ranking or of a pair. Detail, compose, pair and Ranking measure every hike with its way
-back to the start unless ``return_to_start`` is false (ADR-0019).
+Seed of a Ranking or of a pair, and a Ranking lists SuggestedLoops beside the DayHikes (ADR-0020).
+Detail, compose, pair and Ranking measure every hike with its way back to the start unless
+``return_to_start`` is false (ADR-0019).
 """
 
 from __future__ import annotations
@@ -282,13 +283,15 @@ def create_app(
         if not one_ranking.acquire(timeout=RANK_WAIT_S):
             raise HTTPException(503, "busy; try again in a moment")
         try:
-            hours = None
+            hours = reach = None
             if body.origin is not None:
-                origin = Origin(body.origin.lat, body.origin.lon)
-                try:
-                    hours = data.reachable(origin, body.max_hours, drive_client(body.max_hours))
-                except (urllib.error.URLError, ConnectionError, TimeoutError):
-                    raise HTTPException(503, "the drive-time service is not answering; try again") from None
+                origin, max_hours = Origin(body.origin.lat, body.origin.lon), body.max_hours
+                client = drive_client(max_hours)
+                hours = data.reachable(origin, max_hours, client)
+
+                def reach(places: list[tuple[float, float]]) -> list[float | None]:
+                    return data.drive_hours(origin, max_hours, client, places)
+
             results = data.rank(
                 seed,
                 weights,
@@ -296,13 +299,17 @@ def create_app(
                 allowed_rows=None if hours is None else sorted(hours),
                 limit=RESULTS,
                 return_to_start=body.return_to_start,
+                reach=reach,
             )
+        except (urllib.error.URLError, ConnectionError, TimeoutError):
+            raise HTTPException(503, "the drive-time service is not answering; try again") from None
         except ValueError as error:  # a RouteError too
             raise HTTPException(400, str(error)) from None
         finally:
             one_ranking.release()
-        for result in results:
-            result["drive_hours"] = None if hours is None else hours[data.row_of(result["id"])]
+        for result in (hike for row in results for hike in (row, *row["versions"])):
+            if result["id"] is not None:  # a SuggestedLoop has the hours to its own start
+                result["drive_hours"] = None if hours is None else hours[data.row_of(result["id"])]
         return {
             "seed": body.seed,
             "composed": None if body.composed is None else body.composed.model_dump(),

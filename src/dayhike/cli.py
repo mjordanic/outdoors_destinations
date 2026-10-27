@@ -577,7 +577,9 @@ def _compose(
         limit=limit,
         return_to_start=return_to_start,
     ):
-        print(f"{result['id']}\t{result['name']}\t{result['score']}")
+        for indent, hike in (("", result), *(("  ", version) for version in result["versions"])):
+            listed = hike["route"]["text"] if hike["id"] is None else hike["id"]  # a SuggestedLoop by its link
+            print(f"{indent}{listed}\t{hike['name']}\t{hike['score']}")
     return 0
 
 

@@ -242,3 +242,21 @@ it also cuts real mountain gain by about 10 %.
 - A better DEM in steep valleys (lidar where a country publishes it), or a
   rule that recognises a canal or cliff-side path (OSM `waterway=canal` along
   the route, a levada name) and smooths only there.
+
+---
+
+## 13. Suggested lines (A to B)
+
+### Why it's parked
+
+ADR-0020 suggests loops composed from the TrailGraph. Composed lines, which
+start and end at different Junctions, are 10^3 to 10^5 times more numerous
+than loops on the marked network, and with ReturnToStart a line's WayBack is
+usually its retrace, so most would compare like a shorter out-and-back.
+
+### What would have to be true to start
+
+- A beam that ends anywhere the length band allows and scores the walk with
+  its WayBack as it grows, within the same per-request budget as loops.
+- A rule for which of the near-copies of one line to keep, since a line
+  can end at any Junction along its last Segments.

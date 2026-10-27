@@ -41,6 +41,9 @@ const SEGMENT_HOVER = { color: "#c2410c", weight: 5, opacity: 1, dashArray: null
 const ROUTE_LINE = { color: "#c2410c", weight: 6, opacity: 0.85 };
 const AUTO_LINE = { color: "#d97706", weight: 6, opacity: 0.9, dashArray: "10 6" }; // added to reach a click
 const LINK_LINE = { color: "#8e44ad", weight: 4, opacity: 0.9, dashArray: "2 7" };
+const LOOP_LINE = { color: "#15803d", weight: 4, opacity: 0.9, dashArray: "8 6" }; // a suggested loop
+const VERSION_LINE = { color: "#0e7490", weight: 4, opacity: 0.9, dashArray: "3 6" }; // another version of a row
+const RESULT_LINE = { color: "#1d4ed8", weight: 4, opacity: 0.9 }; // a catalog hike leading the row shown
 
 const state = {
   info: null,
@@ -49,6 +52,7 @@ const state = {
   liked: null,
   query: null, // the weights, month and return to start of the last Ranking
   results: [],
+  expanded: null, // the result row whose versions (var 1, 2, 3) are shown
   origin: null,
   geocoded: new Map(),
 };
@@ -432,7 +436,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     <div class="detail-head">
       <div><div class="role">${escapeHtml(role)}</div><h2>${escapeHtml(hike.name)}</h2></div>
       ${hike.route
-        ? `<a href="${routeHash(hike)}${modeHash()}" title="This page's address opens this hike again">Link to this hike</a>`
+        ? `<span><a href="${routeHash(hike)}${modeHash()}" title="This address opens this hike as your hike">Link to this hike</a>${compare ? ' <button type="button" class="secondary edit-composed">Edit on the map</button>' : ""}</span>`
         : `<a href="https://www.openstreetmap.org/relation/${hike.id}" target="_blank" rel="noopener">OpenStreetMap relation ${hike.id}</a>`}
     </div>
     ${scoreLine}
@@ -445,6 +449,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     <div class="charts"></div>
     <h3>${compare ? "Every measure: this hike against the liked one" : "The facts behind every measure"}</h3>
     <div class="table-wrap"><table class="facts"></table></div>`;
+  card.querySelector(".edit-composed")?.addEventListener("click", () => editComposed(hike));
   const { map, hover } = drawMap(card.querySelector(".map"), hike);
   card._map = map;
   const slot = card.querySelector(".slot-elevation");
@@ -636,6 +641,7 @@ async function choose(id) {
     $("#results").hidden = true;
     $("#selected").hidden = true;
     pick.restyle();
+    pick.drawLoops();
     setStatus("");
   } catch (error) {
     if (request === chosen) setStatus(error.message, true);
@@ -665,10 +671,23 @@ async function chooseComposed(route, name) {
     $("#results").hidden = true;
     $("#selected").hidden = true;
     pick.restyle();
+    pick.drawLoops();
     setStatus("");
   } catch (error) {
     if (request === chosen) setStatus(error.message, true);
   }
+}
+
+// A suggested loop becomes your hike, drawn on the map to go on from.
+async function editComposed(hike) {
+  await chooseComposed(hike.route.text, hike.name);
+  if (state.liked?.route?.text !== hike.route.text) return;
+  $("#map-pick-on").checked = true;
+  pick.open();
+  if (compose.on) compose.toggle(false);
+  compose.start = compose.startKey = null;
+  compose.route = [];
+  compose.toggle(true);
 }
 
 // ---------- select on map ----------
@@ -679,6 +698,7 @@ const pick = {
   map: null,
   layer: null,
   lines: new Map(), // hike id -> its polyline
+  loops: null, // the suggested loops and the shown row's versions of the Ranking
   timer: null,
   abort: null,
 
@@ -699,6 +719,7 @@ const pick = {
         this.map.fitBounds([[south, west], [north, east]]);
       }
       this.map.on("moveend", () => this.load());
+      this.drawLoops();
     }
     this.map.invalidateSize();
     this.load();
@@ -779,6 +800,26 @@ const pick = {
   restyle() {
     for (const [id, line] of this.lines) line.setStyle(this.style(id));
     this.lines.get(state.liked?.id)?.bringToFront();
+  },
+
+  // The loops composed from segments in the shown Ranking (a catalog hike is on the map already),
+  // and every version of the row shown, catalog or composed.
+  drawLoops() {
+    if (!this.map) return;
+    if (!this.loops) this.loops = L.layerGroup().addTo(this.map);
+    this.loops.clearLayers();
+    if ($("#results").hidden) return;
+    state.results.forEach((result, i) => {
+      const versions = state.expanded === i ? [result, ...result.versions] : result.route ? [result] : [];
+      versions.forEach((version, k) => {
+        const label = versions.length > 1 ? `, var ${k + 1}` : "";
+        const kind = version.route ? ", composed" : "";
+        L.polyline(decodePolyline(version.line), k ? VERSION_LINE : version.route ? LOOP_LINE : RESULT_LINE)
+          .bindTooltip(`<strong>Similar hike #${i + 1}${kind}${label}</strong><br>${escapeHtml(version.name)}<br>${fmt.km(version.length_m)}`, { sticky: true })
+          .on("click", () => showResult(i, k))
+          .addTo(this.loops);
+      });
+    });
   },
 };
 
@@ -1256,8 +1297,14 @@ function renderResults(body) {
     ? `${state.info.dayhikes.toLocaleString("en")} hikes`
     : `${body.reachable.toLocaleString("en")} hikes within the drive`;
   const mode = body.return_to_start ? "each with its way back to the start" : "each one way";
+  const composed = body.results.some((result) => result.route)
+    ? " Rows marked composed are loops drawn from marked trail segments, not catalog hikes; the map shows them dashed green."
+    : "";
+  const versions = body.results.some((result) => result.versions.length)
+    ? " Hikes starting within 10 km of a better one are its versions: click a row with versions to see each in the table and on the map."
+    : "";
   $("#results-note").textContent = body.results.length
-    ? `Like “${state.liked.name}”, out of ${considered}, ${mode}. Click a row to see it.`
+    ? `Like “${state.liked.name}”, out of ${considered}${state.info.compose ? " and loops composed near the best of them" : ""}, ${mode}. Click a row to see it.${composed}${versions}`
     : `No hike matched, out of ${considered}. Try a longer drive or other weights.`;
   const table = $("#results-table");
   const measureHeads = state.measures.map((m) =>
@@ -1265,45 +1312,86 @@ function renderResults(body) {
   const figures = body.return_to_start ? "with the way back" : "one way";
   table.innerHTML = `<thead><tr><th>#</th><th class="name">Hike</th><th>Score</th>${state.query.drive ? "<th>Drive</th>" : ""}<th title="Length, ${figures}">Length</th><th title="Climb and descent, ${figures}">Up / down</th>${measureHeads}</tr></thead>`;
   const tbody = document.createElement("tbody");
+  state.expanded = null;
   body.results.forEach((result, i) => {
-    const row = document.createElement("tr");
-    row.tabIndex = 0;
-    const cells = state.measures.map((m) => {
-      const score = result.measures[m.name].score;
-      if (score == null) return '<td class="cell none" title="no data">–</td>';
-      if (!body.weights[m.name]) {
-        return `<td class="cell left-out" title="${escapeHtml(m.label)}: ${score.toFixed(2)}, left out of this ranking">${Math.round(score * 100)}</td>`;
-      }
-      return `<td class="cell" style="background:${scoreColor(score)}" title="${escapeHtml(m.label)}: ${score.toFixed(2)}">${Math.round(score * 100)}</td>`;
-    }).join("");
-    row.innerHTML = `<td>${i + 1}</td><td class="name" title="${escapeHtml(result.name)}">${escapeHtml(result.name)}</td>
-      <td class="score">${result.score.toFixed(3)}</td>
-      ${state.query.drive ? `<td>${result.drive_hours.toFixed(1)} h</td>` : ""}
-      <td class="figure">${result.length_m != null ? fmt.km(result.length_m) : "–"}</td>
-      <td class="figure">${result.climb_m != null ? `↑ ${fmt.m(result.climb_m)} ↓ ${fmt.m(result.descent_m)}` : "–"}</td>${cells}`;
-    const open = () => showResult(i, row);
-    row.addEventListener("click", open);
-    row.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); }
-    });
+    const row = resultRow(result, i + 1, () => showResult(i));
+    row.dataset.index = i;
     tbody.appendChild(row);
   });
   table.appendChild(tbody);
+  pick.drawLoops();
   section.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-async function showResult(index, row) {
-  document.querySelectorAll("#results-table tr.active").forEach((r) => r.classList.remove("active"));
-  row.classList.add("active");
+// One row of the results table: the hike's figures and every Measure's score.
+function resultRow(result, number, open) {
+  const { weights, drive } = state.query;
+  const row = document.createElement("tr");
+  row.tabIndex = 0;
+  const cells = state.measures.map((m) => {
+    const score = result.measures[m.name].score;
+    if (score == null) return '<td class="cell none" title="no data">–</td>';
+    if (!weights[m.name]) {
+      return `<td class="cell left-out" title="${escapeHtml(m.label)}: ${score.toFixed(2)}, left out of this ranking">${Math.round(score * 100)}</td>`;
+    }
+    return `<td class="cell" style="background:${scoreColor(score)}" title="${escapeHtml(m.label)}: ${score.toFixed(2)}">${Math.round(score * 100)}</td>`;
+  }).join("");
+  const tag = result.route ? '<span class="composed-tag" title="A loop drawn from marked trail segments, not a catalog hike">composed</span> ' : "";
+  const versions = result.versions?.length
+    ? ` <span class="versions" title="Click to see each on the map and in this table">${result.versions.length + 1} versions</span>`
+    : "";
+  row.innerHTML = `<td>${number}</td><td class="name" title="${escapeHtml(result.name)}">${tag}${escapeHtml(result.name)}${versions}</td>
+    <td class="score">${result.score.toFixed(3)}</td>
+    ${drive ? `<td>${result.drive_hours.toFixed(1)} h</td>` : ""}
+    <td class="figure">${result.length_m != null ? fmt.km(result.length_m) : "–"}</td>
+    <td class="figure">${result.climb_m != null ? `↑ ${fmt.m(result.climb_m)} ↓ ${fmt.m(result.descent_m)}` : "–"}</td>${cells}`;
+  row.addEventListener("click", open);
+  row.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); }
+  });
+  return row;
+}
+
+// The versions of a row, catalog or composed, as rows var 1, 2, 3 under it and on the map.
+function expandVersions(index) {
+  document.querySelectorAll("#results-table tr.version").forEach((row) => row.remove());
+  state.expanded = index;
+  const result = state.results[index];
+  let after = document.querySelector(`#results-table tr[data-index="${index}"]`);
+  [result, ...result.versions].forEach((version, k) => {
+    const row = resultRow(version, `var ${k + 1}`, () => showResult(index, k));
+    row.classList.add("version");
+    row.dataset.version = `${index}-${k}`;
+    after.after(row);
+    after = row;
+  });
+  pick.drawLoops();
+}
+
+// Show result ``index`` (its version ``version`` when it has several) against the liked hike.
+async function showResult(index, version = 0) {
   const { results, liked } = state;
-  const result = results[index];
+  const versions = results[index].versions?.length ? [results[index], ...results[index].versions] : null;
+  if (versions && state.expanded !== index) expandVersions(index);
+  const result = versions ? versions[version] : results[index];
+  document.querySelectorAll("#results-table tr.active").forEach((r) => r.classList.remove("active"));
+  const selector = versions ? `tr[data-version="${index}-${version}"]` : `tr[data-index="${index}"]`;
+  document.querySelector(`#results-table ${selector}`)?.classList.add("active");
   const request = ++shown;
   setStatus("Loading the hike…");
   try {
-    const hike = await api(`/api/hikes/${result.id}?return_to_start=${state.query.return_to_start}`);
+    const hike = result.route
+      ? await api("/api/compose", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ route: result.route.text, name: result.name, return_to_start: state.query.return_to_start }),
+      })
+      : await api(`/api/hikes/${result.id}?return_to_start=${state.query.return_to_start}`);
     if (request !== shown || results !== state.results || liked !== state.liked) return;
     const card = $("#selected");
-    renderDetail(card, hike, { role: `Similar hike #${index + 1}`, compare: state.liked, result });
+    const which = versions ? `, var ${version + 1} of ${versions.length}` : "";
+    const role = `Similar hike #${index + 1}${result.route ? ", composed from trail segments" : ""}${which}`;
+    renderDetail(card, hike, { role, compare: state.liked, result });
     card.scrollIntoView({ behavior: "smooth", block: "start" });
     setStatus("");
   } catch (error) {

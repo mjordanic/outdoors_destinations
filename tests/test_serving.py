@@ -230,6 +230,19 @@ def test_rank_respects_the_limit_and_the_allowed_rows(data: ServingData) -> None
     assert [r["id"] for r in data.rank(RIDGE_WALK_ID, {"length": 100}, allowed_rows=allowed)] == [1003]
 
 
+def test_rank_fills_its_rows_from_further_down_when_the_best_hikes_share_an_area(
+    data: ServingData, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 1002 and 1003 start 14 km apart, 1007 farther; no SuggestedLoops read more of the Catalog.
+    monkeypatch.setattr(serving, "GROUP_M", 20_000.0)
+    monkeypatch.setattr(serving, "LOOP_SEEDS", 0)
+
+    results = data.rank(RIDGE_WALK_ID, {"length": 100}, limit=2)
+
+    assert [(r["id"], [v["id"] for v in r["versions"]]) for r in results] == [(1002, [1003]), (1007, [])]
+    assert [len(data.rank(RIDGE_WALK_ID, {"length": 100}, limit=limit)) for limit in (1, 3)] == [1, 2]
+
+
 def test_reachable_asks_only_trailheads_within_straight_line_reach(data: ServingData) -> None:
     class Matrix:
         def sources_to_targets(self, origin, trailheads):
