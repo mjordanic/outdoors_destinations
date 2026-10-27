@@ -60,7 +60,7 @@ def test_export_writes_a_complete_directory(export: Path) -> None:
 def test_export_keeps_the_route_the_true_metre_profile_and_the_measured_points(
     data: ServingData,
 ) -> None:
-    ridge = data.detail(RIDGE_WALK_ID)
+    ridge = data.detail(RIDGE_WALK_ID, return_to_start=False)
 
     line = decode_polyline(ridge["line"])
     assert line[0] == pytest.approx(tuple(ridge["trailhead"]), abs=1e-5)

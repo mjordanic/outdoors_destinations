@@ -211,6 +211,11 @@ lengths, so a 5 km line and a 5 km RoundTrip look equally long. The
 - Whether the Catalog length band (1–20 km) and the `length` Measure read that walked length
   or keep the one-way length.
 
+ADR-0019 takes up the comparison: with ReturnToStart (on by default) every hike
+is measured with its WayBack, the shortest walk back to its Trailhead. The
+Catalog keeps the one-way length and the 1–20 km band; a line left as is near a
+bus stop (a shuttle) is still open.
+
 ---
 
 ## 12. Elevation gain on cliff-side and gorge routes

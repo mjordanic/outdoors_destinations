@@ -47,7 +47,7 @@ const state = {
   groups: [],
   measures: [],
   liked: null,
-  query: null, // the weights and month of the last Ranking
+  query: null, // the weights, month and return to start of the last Ranking
   results: [],
   origin: null,
   geocoded: new Map(),
@@ -189,6 +189,24 @@ function likedSeed(liked, key) {
 function routeHash(hike) {
   const name = hike.name_origin === "hiker" ? `&name=${encodeURIComponent(hike.name)}` : "";
   return `#compose=${hike.route.text}${name}`;
+}
+
+// Whether every hike is measured with its way back to its start; an address ends in
+// "&oneway" when every hike is compared one way.
+function returnToStart() {
+  return $("#return-on").checked;
+}
+
+function modeHash() {
+  return returnToStart() ? "" : "&oneway";
+}
+
+const WAY_BACK = { trail: "along the trails", retrace: "the same way", step: "a short step", none: "" };
+
+// How a hike measured with its way back gets back to its start.
+function wayBackText(back) {
+  if (back.kind === "none") return "ends at its start";
+  return `+ ${fmt.km(back.m)} back, ${WAY_BACK[back.kind]}`;
 }
 
 // ---------- charts ----------
@@ -404,7 +422,8 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     f.highest_m != null && `top ${fmt.m(f.highest_m)}`,
     f.lowest_m != null && `low ${fmt.m(f.lowest_m)}`,
     f.difficulty_rank != null && SAC[Math.round(f.difficulty_rank)],
-    f.round_trip != null && (f.round_trip ? "round trip" : "one way / lollipop"),
+    hike.way_back ? wayBackText(hike.way_back)
+      : f.round_trip != null && (f.round_trip ? "round trip" : "one way / lollipop"),
   ].filter(Boolean);
   const scoreLine = result
     ? `<p class="hint">Similarity score ${result.score == null ? "– (no weighted measure has data for both)" : result.score.toFixed(3)}${result.drive_hours != null ? ` · about ${result.drive_hours.toFixed(1)} h drive` : ""}</p>`
@@ -413,11 +432,12 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     <div class="detail-head">
       <div><div class="role">${escapeHtml(role)}</div><h2>${escapeHtml(hike.name)}</h2></div>
       ${hike.route
-        ? `<a href="${routeHash(hike)}" title="This page's address opens this hike again">Link to this hike</a>`
+        ? `<a href="${routeHash(hike)}${modeHash()}" title="This page's address opens this hike again">Link to this hike</a>`
         : `<a href="https://www.openstreetmap.org/relation/${hike.id}" target="_blank" rel="noopener">OpenStreetMap relation ${hike.id}</a>`}
     </div>
     ${scoreLine}
-    ${hike.route ? `<p class="hint">Drawn from marked trail segments${hike.routes?.length ? ` along ${escapeHtml(hike.routes.slice(0, 5).join(", "))}${hike.routes.length > 5 ? " and more" : ""}` : ""}; measured as drawn.</p>` : ""}
+    ${hike.route ? `<p class="hint">Drawn from marked trail segments${hike.routes?.length ? ` along ${escapeHtml(hike.routes.slice(0, 5).join(", "))}${hike.routes.length > 5 ? " and more" : ""}` : ""}; measured as drawn${hike.way_back ? ", with its way back" : ""}.</p>` : ""}
+    ${hike.way_back && hike.way_back.kind !== "none" ? `<p class="hint">Length, climb, descent and every measure include the way back to the start (${escapeHtml(wayBackText(hike.way_back))}); the map and profile show the hike itself.</p>` : ""}
     <ul class="badges">${badges.map((b) => `<li>${escapeHtml(b)}</li>`).join("")}</ul>
     <div class="map"></div>
     <div class="legend">${LEGEND.map(([label, color]) => `<span style="--c:${color}">${label}</span>`).join("")}</div>
@@ -603,14 +623,15 @@ async function choose(id) {
   const request = ++chosen;
   setStatus("Loading the hike…");
   try {
-    const hike = await api(`/api/hikes/${id}`);
+    const hike = await api(`/api/hikes/${id}?return_to_start=${returnToStart()}`);
     if (request !== chosen) return;
     state.liked = hike;
     $("#search").value = hike.name;
     $("#liked-name").textContent = `Chosen: ${hike.name}`;
     $("#find").disabled = false;
     $("#pair-search").disabled = false;
-    history.replaceState(null, "", `#hike=${id}`);
+    $("#return-bar").hidden = false;
+    history.replaceState(null, "", `#hike=${id}${modeHash()}`);
     renderDetail($("#liked"), hike, { role: "Liked hike" });
     $("#results").hidden = true;
     $("#selected").hidden = true;
@@ -628,7 +649,7 @@ async function chooseComposed(route, name) {
     const hike = await api("/api/compose", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ route, name: name || null }),
+      body: JSON.stringify({ route, name: name || null, return_to_start: returnToStart() }),
     });
     if (request !== chosen) return;
     state.liked = hike;
@@ -638,7 +659,8 @@ async function chooseComposed(route, name) {
     compose.named = hike.name_origin === "hiker";
     $("#find").disabled = false;
     $("#pair-search").disabled = false;
-    history.replaceState(null, "", routeHash(hike));
+    $("#return-bar").hidden = false;
+    history.replaceState(null, "", routeHash(hike) + modeHash());
     renderDetail($("#liked"), hike, { role: "Your hike" });
     $("#results").hidden = true;
     $("#selected").hidden = true;
@@ -1075,7 +1097,10 @@ async function comparePair(id) {
   if (!state.liked) return;
   let query;
   try {
-    query = { ...likedSeed(state.liked, "a"), b: id, ...readWeights(), month: Number($("#month").value) || null };
+    query = {
+      ...likedSeed(state.liked, "a"), b: id, ...readWeights(), month: Number($("#month").value) || null,
+      return_to_start: state.liked.way_back != null,
+    };
   } catch (error) {
     setStatus(error.message, true);
     return;
@@ -1085,7 +1110,7 @@ async function comparePair(id) {
   try {
     const [pair, hike] = await Promise.all([
       api("/api/pair", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(query) }),
-      api(`/api/hikes/${id}`),
+      api(`/api/hikes/${id}?return_to_start=${query.return_to_start}`),
     ]);
     if (request !== paired || liked !== state.liked) return;
     $("#pair-search").value = hike.name;
@@ -1093,7 +1118,7 @@ async function comparePair(id) {
     const card = $("#selected");
     renderDetail(card, hike, {
       role: "Compared with the liked hike", compare: liked, result: { ...pair, drive_hours: null },
-      query: { weights: pair.weights, month: pair.month },
+      query: { weights: pair.weights, month: pair.month, return_to_start: pair.return_to_start },
     });
     card.scrollIntoView({ behavior: "smooth", block: "start" });
     setStatus("");
@@ -1168,7 +1193,10 @@ async function findSimilar() {
   const liked = state.liked;
   let query;
   try {
-    query = { ...likedSeed(liked, "seed"), ...readWeights(), month: Number($("#month").value) || null };
+    query = {
+      ...likedSeed(liked, "seed"), ...readWeights(), month: Number($("#month").value) || null,
+      return_to_start: liked.way_back != null,
+    };
     if ($("#drive-on").checked) {
       const typed = parseLatLon($("#origin").value);
       const warning = typed && swappedWarning(typed);
@@ -1196,7 +1224,9 @@ async function findSimilar() {
       body: JSON.stringify(query),
     });
     if (request !== ranked || liked !== state.liked) return;
-    state.query = { weights: body.weights, month: body.month, drive: Boolean(query.origin) };
+    state.query = {
+      weights: body.weights, month: body.month, drive: Boolean(query.origin), return_to_start: body.return_to_start,
+    };
     state.results = body.results;
     renderResults(body);
     setStatus(`Done in ${(body.elapsed_ms / 1000).toFixed(1)} s.`);
@@ -1225,13 +1255,15 @@ function renderResults(body) {
   const considered = body.reachable == null
     ? `${state.info.dayhikes.toLocaleString("en")} hikes`
     : `${body.reachable.toLocaleString("en")} hikes within the drive`;
+  const mode = body.return_to_start ? "each with its way back to the start" : "each one way";
   $("#results-note").textContent = body.results.length
-    ? `Like “${state.liked.name}”, out of ${considered}. Click a row to see it.`
+    ? `Like “${state.liked.name}”, out of ${considered}, ${mode}. Click a row to see it.`
     : `No hike matched, out of ${considered}. Try a longer drive or other weights.`;
   const table = $("#results-table");
   const measureHeads = state.measures.map((m) =>
     `<th class="measure${body.weights[m.name] ? "" : " excluded"}" title="${escapeHtml(`${m.label}: ${m.description}`)}">${escapeHtml(m.label)}</th>`).join("");
-  table.innerHTML = `<thead><tr><th>#</th><th class="name">Hike</th><th>Score</th>${state.query.drive ? "<th>Drive</th>" : ""}${measureHeads}</tr></thead>`;
+  const figures = body.return_to_start ? "with the way back" : "one way";
+  table.innerHTML = `<thead><tr><th>#</th><th class="name">Hike</th><th>Score</th>${state.query.drive ? "<th>Drive</th>" : ""}<th title="Length, ${figures}">Length</th><th title="Climb and descent, ${figures}">Up / down</th>${measureHeads}</tr></thead>`;
   const tbody = document.createElement("tbody");
   body.results.forEach((result, i) => {
     const row = document.createElement("tr");
@@ -1246,7 +1278,9 @@ function renderResults(body) {
     }).join("");
     row.innerHTML = `<td>${i + 1}</td><td class="name" title="${escapeHtml(result.name)}">${escapeHtml(result.name)}</td>
       <td class="score">${result.score.toFixed(3)}</td>
-      ${state.query.drive ? `<td>${result.drive_hours.toFixed(1)} h</td>` : ""}${cells}`;
+      ${state.query.drive ? `<td>${result.drive_hours.toFixed(1)} h</td>` : ""}
+      <td class="figure">${result.length_m != null ? fmt.km(result.length_m) : "–"}</td>
+      <td class="figure">${result.climb_m != null ? `↑ ${fmt.m(result.climb_m)} ↓ ${fmt.m(result.descent_m)}` : "–"}</td>${cells}`;
     const open = () => showResult(i, row);
     row.addEventListener("click", open);
     row.addEventListener("keydown", (event) => {
@@ -1266,7 +1300,7 @@ async function showResult(index, row) {
   const request = ++shown;
   setStatus("Loading the hike…");
   try {
-    const hike = await api(`/api/hikes/${result.id}`);
+    const hike = await api(`/api/hikes/${result.id}?return_to_start=${state.query.return_to_start}`);
     if (request !== shown || results !== state.results || liked !== state.liked) return;
     const card = $("#selected");
     renderDetail(card, hike, { role: `Similar hike #${index + 1}`, compare: state.liked, result });
@@ -1320,11 +1354,24 @@ async function start() {
     markStale();
   });
   $("#find").addEventListener("click", findSimilar);
+  // Remeasure the liked hike in the other mode, and rank again when a Ranking is shown.
+  $("#return-on").addEventListener("change", async () => {
+    const liked = state.liked;
+    if (!liked) return;
+    const shown = !$("#results").hidden;
+    if (liked.route) await chooseComposed(liked.route.text, liked.name_origin === "hiker" ? liked.name : null);
+    else await choose(liked.id);
+    if (shown && state.liked !== liked) findSimilar();
+  });
   const openLinked = () => {
-    const linked = location.hash.match(/^#hike=(\d+)$/);
-    if (linked && Number(linked[1]) !== state.liked?.id) likedSearch.pick(Number(linked[1]));
-    const drawn = location.hash.match(/^#compose=([^&]+)(?:&name=(.*))?$/);
-    if (drawn && state.info.compose && !(state.liked?.route && routeHash(state.liked) === location.hash)) {
+    const oneWay = location.hash.endsWith("&oneway");
+    const hash = oneWay ? location.hash.slice(0, -"&oneway".length) : location.hash;
+    const modeChanged = returnToStart() === oneWay;
+    $("#return-on").checked = !oneWay;
+    const linked = hash.match(/^#hike=(\d+)$/);
+    if (linked && (modeChanged || Number(linked[1]) !== state.liked?.id)) likedSearch.pick(Number(linked[1]));
+    const drawn = hash.match(/^#compose=([^&]+)(?:&name=(.*))?$/);
+    if (drawn && state.info.compose && (modeChanged || !(state.liked?.route && routeHash(state.liked) === hash))) {
       let name = null;
       try { name = drawn[2] ? decodeURIComponent(drawn[2]) : null; } catch { /* a broken name: propose one */ }
       chooseComposed(drawn[1], name);

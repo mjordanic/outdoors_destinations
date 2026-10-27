@@ -132,6 +132,14 @@ _Avoid_: ground type, terrain, trail type
 A DayHike whose main walk ends within 50 m of its Trailhead, so its length is the whole walk back to the car. A lollipop (a loop with a stem) ends where the stem meets the loop and is not a RoundTrip; nor is a line, whose length is one way whether it is walked point-to-point or out-and-back.
 _Avoid_: loop (the main walk's loop includes lollipops), circular, closed route
 
+**WayBack**:
+The shortest walk from where a hike ends back to its Trailhead: nothing when it ends there, a straight step across a gap of at most 50 m, else the shortest way along the TrailGraph's trails when it is shorter than the hike walked backwards, else the hike retraced. It never crosses a Link.
+_Avoid_: return route, loop closure, descent route
+
+**ReturnToStart**:
+The Hiker's choice, on by default, to measure every hike of a query with its WayBack, as the walk out from the Trailhead and back: the Seeds and every DayHike compared with them alike, so a summit line is compared up and back. Off, every hike is measured one way. The two are never mixed in one comparison.
+_Avoid_: round trip (a RoundTrip is a DayHike that itself ends at its Trailhead), loop mode, out-and-back mode
+
 **TarmacApproach**:
 The distance walked on paved surface from the Trailhead before the DayHike first leaves it.
 _Avoid_: distance from parking, road walk, access distance
@@ -161,7 +169,7 @@ The numeric Catalog description of a DayHike (length, elevation stats, Difficult
 _Avoid_: embedding, description, tags
 
 **Ranking**:
-An ordered list of Catalog DayHikes by similarity to the Seed set. A DayHike's similarity to one Seed is the MeasureWeights-weighted mean of its calibrated Measure scores; with several Seeds the best Seed counts. Its score is that similarity. Of a group of Twins only the best is listed, and none of a Seed's Twins. An optional QueryMonth selects the ClimateNormal slice. The Seed carries the climate being matched.
+An ordered list of Catalog DayHikes by similarity to the Seed set. A DayHike's similarity to one Seed is the MeasureWeights-weighted mean of its calibrated Measure scores; with several Seeds the best Seed counts. Its score is that similarity. Of a group of Twins only the best is listed, and none of a Seed's Twins. An optional QueryMonth selects the ClimateNormal slice. The Seed carries the climate being matched. With ReturnToStart every hike in it is measured with its WayBack.
 _Avoid_: recommendation, unsupervised clustering, prediction, climate target
 
 **Measure**:
@@ -173,7 +181,7 @@ The Hiker's weight for each Measure in one query, from 0 to 100. A Measure at 0 
 _Avoid_: FacetWeights, preferences, priorities, importance
 
 **Calibration**:
-The map from a Measure's raw score to the share of random DayHike pairs that score lower on that Measure, ties counting half. It puts every Measure on the same scale, so a raw 0.6 on the ProfileShape (typical of a random pair) and a raw 0.6 on length (a close pair) stop meaning the same. It is computed once from random pairs of the whole Catalog and stored beside it; it changes only when the facts, a Measure's constant, or the Catalog's DayHikes change.
+The map from a Measure's raw score to the share of random DayHike pairs that score lower on that Measure, ties counting half. It puts every Measure on the same scale, so a raw 0.6 on the ProfileShape (typical of a random pair) and a raw 0.6 on length (a close pair) stop meaning the same. It is computed once from random pairs of the whole Catalog and stored beside it, once for DayHikes one way and once with their WayBack; it changes only when the facts, a Measure's constant, or the Catalog's DayHikes change.
 _Avoid_: normalization, scaling, z-score, percentile rank among candidates
 
 **Hiker**:
