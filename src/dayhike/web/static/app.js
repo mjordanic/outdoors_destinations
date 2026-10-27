@@ -800,6 +800,7 @@ const compose = {
       this.start = start;
       this.startKey = text.split(":")[0];
       this.route = segments.map((id, at) => ({ id, step: steps[at], auto: false }));
+      $("#compose-done").disabled = !this.route.length;
       if (state.liked.line) pick.map.fitBounds(L.latLngBounds(decodePolyline(state.liked.line)).pad(0.1));
     }
     pick.load();
