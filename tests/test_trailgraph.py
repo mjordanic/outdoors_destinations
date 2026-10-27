@@ -545,6 +545,25 @@ def test_an_over_long_back_and_forth_link_is_refused_while_it_is_stitched(client
         TrailGraph(trailgraph_path_for(catalog_path)).walk(Route.parse("1:104.11,-104.1"))
 
 
+def test_a_one_vertex_back_and_forth_link_decodes_each_segment_once(catalog_path: Path, monkeypatch) -> None:
+    import dayhike.trailgraph
+
+    calls = {"decode_coords": 0, "_vertex_keys": 0}
+    for name in calls:
+        original = getattr(dayhike.trailgraph, name)
+
+        def counted(*args, _original=original, _name=name):
+            calls[_name] += 1
+            return _original(*args)
+
+        monkeypatch.setattr(dayhike.trailgraph, name, counted)
+    # D to Q2 and back on way 105, one vertex step each (78 km): 100 pieces of one Segment.
+    walk = TrailGraph(trailgraph_path_for(catalog_path)).walk(Route.parse("11:" + ",".join(["105.12", "-105.11"] * 50)))
+
+    assert len(walk.lat) == 101 and walk.segments is None
+    assert calls == {"decode_coords": 1, "_vertex_keys": 1}
+
+
 def test_an_export_without_a_trailgraph_does_not_compose(sampled: Path, tmp_path: Path) -> None:
     from fastapi.testclient import TestClient
 

@@ -1115,6 +1115,24 @@ class RouteError(ValueError):
     """The Route is not one walk on this TrailGraph."""
 
 
+def _decode(row: tuple) -> tuple[list[np.ndarray], list, np.ndarray, list[int]]:
+    """A Segment row's per-vertex columns (lat, lon, ele, landcover, climate
+    cell, southness), its runs, the run of each step and its relation ids."""
+    _, _, _, _, relation_ids, parts, _, coords, ele, landcover, climate, southness, _, _ = row
+    points = decode_coords(coords)
+    size = len(points)
+    runs = json.loads(parts)
+    vertices = [
+        points[:, 0],
+        points[:, 1],
+        np.frombuffer(ele, dtype="<f4").astype(float),
+        _blob(landcover, "u1", size, 0).astype(np.int64),
+        _blob(climate, "<i4", size, -1).astype(np.int64),
+        _blob(southness, "<f4", size, np.nan).astype(float),
+    ]
+    return vertices, runs, np.repeat(np.arange(len(runs)), [run[3] for run in runs]), json.loads(relation_ids)
+
+
 def _describe(key: str) -> str:
     if key.startswith("c"):
         lat, lon = (int(value) / COORD_SCALE for value in key[1:].split("_"))
@@ -1164,6 +1182,7 @@ class TrailGraph:
             raise RouteError("a composed hike needs at least one Segment")
         rows: dict[int, tuple] = {}
         ways: dict[int, tuple[dict, set]] = {}
+        keys: dict[int, list[str]] = {}
         pieces: list[list[int]] = []  # [segment id, first vertex, last vertex], walked in that order
         here, total = route.start, 0
         with self._db() as db:
@@ -1173,7 +1192,7 @@ class TrailGraph:
                 if way in ("g", "l"):
                     walked = self._cross(db, rows, "gap" if way == "g" else "link", here, end, where)
                 else:
-                    walked = self._follow(db, rows, ways, int(way), here, end, where)
+                    walked = self._follow(db, rows, ways, keys, int(way), here, end, where)
                 total += len(walked)
                 if total > MAX_WALK_STEPS:
                     raise RouteError(
@@ -1217,6 +1236,7 @@ class TrailGraph:
         db: sqlite3.Connection,
         rows: dict[int, tuple],
         ways: dict[int, tuple[dict, set]],
+        keys: dict[int, list[str]],
         way: int,
         here: str,
         end: str,
@@ -1224,9 +1244,9 @@ class TrailGraph:
     ) -> list[tuple[int, int, int]]:
         """The steps (segment, vertex, next vertex) along OSM way ``|way|`` from
         ``here`` to ``end``, in its node order when ``way`` is positive; ``ways``
-        keeps each way walked so far."""
+        keeps each way walked so far and ``keys`` each Segment's vertex keys."""
         if way not in ways:
-            ways[way] = self._way(db, rows, way, where)
+            ways[way] = self._way(db, rows, keys, way, where)
         leaving, on_way = ways[way]
         for node in (here, end):
             if node not in on_way:
@@ -1241,7 +1261,9 @@ class TrailGraph:
             steps.append((segment, first, last))
         return steps
 
-    def _way(self, db: sqlite3.Connection, rows: dict[int, tuple], way: int, where: str) -> tuple[dict, set]:
+    def _way(
+        self, db: sqlite3.Connection, rows: dict[int, tuple], keys: dict[int, list[str]], way: int, where: str
+    ) -> tuple[dict, set]:
         """The step leaving each node of OSM way ``|way|`` (segment, vertex, next
         vertex, next node), walked in its node order when ``way`` is positive, and its nodes."""
         found = self._load(
@@ -1252,16 +1274,18 @@ class TrailGraph:
         leaving: dict[str, tuple[int, int, int, str]] = {}
         on_way: set[str] = set()
         for row in found:
-            keys = _vertex_keys(row[6], row[7])
+            if row[0] not in keys:
+                keys[row[0]] = _vertex_keys(row[6], row[7])
+            vertex = keys[row[0]]
             at = 0
             for signed, _, _, count, _ in json.loads(row[5]):
                 if signed is not None and abs(signed) == abs(way):
                     for k in range(at, at + count):
-                        on_way.update((keys[k], keys[k + 1]))
+                        on_way.update((vertex[k], vertex[k + 1]))
                         if (signed > 0) == (way > 0):
-                            leaving.setdefault(keys[k], (row[0], k, k + 1, keys[k + 1]))
+                            leaving.setdefault(vertex[k], (row[0], k, k + 1, vertex[k + 1]))
                         else:
-                            leaving.setdefault(keys[k + 1], (row[0], k + 1, k, keys[k]))
+                            leaving.setdefault(vertex[k + 1], (row[0], k + 1, k, vertex[k]))
                 at += count
         return leaving, on_way
 
@@ -1271,26 +1295,17 @@ class TrailGraph:
         scales: set[str] = set()
         relations: dict[int, float] = {}
         whole, walk_m = True, 0.0
+        decoded: dict[int, tuple] = {}  # each Segment once, however many pieces walk it
         for number, (segment, first, last) in enumerate(pieces):
-            _, _, _, _, relation_ids, parts, _, coords, ele, landcover, climate, southness, _, _ = rows[segment]
-            points = decode_coords(coords)
-            size = len(points)
-            whole &= {first, last} == {0, size - 1}
+            if segment not in decoded:
+                decoded[segment] = _decode(rows[segment])
+            vertices, runs, run_of_step, relation_ids = decoded[segment]
+            whole &= {first, last} == {0, len(vertices[0]) - 1}
             low, high = min(first, last), max(first, last)
-            values = [
-                points[:, 0],
-                points[:, 1],
-                np.frombuffer(ele, dtype="<f4").astype(float),
-                _blob(landcover, "u1", size, 0).astype(np.int64),
-                _blob(climate, "<i4", size, -1).astype(np.int64),
-                _blob(southness, "<f4", size, np.nan).astype(float),
-            ]
-            values = [v[low : high + 1] if first < last else v[low : high + 1][::-1] for v in values]
+            values = [v[low : high + 1] if first < last else v[low : high + 1][::-1] for v in vertices]
             for column, value in zip(columns, values):
                 column.append(value if number == 0 else value[1:])
-            runs = json.loads(parts)
-            counts = [run[3] for run in runs]
-            step_runs = np.repeat(np.arange(len(runs)), counts)[low:high]
+            step_runs = run_of_step[low:high]
             metres = _haversine(values[0][:-1], values[1][:-1], values[0][1:], values[1][1:])
             walk_m += float(metres.sum())
             if walk_m > MAX_WALK_M:
@@ -1301,7 +1316,7 @@ class TrailGraph:
                     walked.setdefault(abs(way), [0.0, surface])[0] += step_m
                 if sac_scale is not None:
                     scales.add(sac_scale)
-            for relation in json.loads(relation_ids):
+            for relation in relation_ids:
                 relations[relation] = relations.get(relation, 0.0) + float(metres.sum())
         lat, lon, ele, landcover, climate, southness = (np.concatenate(column) for column in columns)
         keep = np.concatenate([[True], (np.diff(lat) != 0) | (np.diff(lon) != 0)])
