@@ -57,6 +57,8 @@ Progress = Callable[[str], None]
 
 SNAP_DETOUR_FACTOR = 3  # a tip joins only a node more than this x the tolerance away along the network
 LINK_DETOUR_M = 100.0  # ways passing this much farther apart along the network get a Link
+MAX_WALK_M = 100_000.0  # the longest ComposedHike
+MAX_WALK_STEPS = 50_000  # the most vertex steps a ComposedHike walks: 500 Segments of Slovenia's mean 72 vertices, and room
 TRAILHEAD_KINDS = ("parking", "restaurant_cafe")
 _SEGMENT_CHUNK = 5_000
 _NEVER = -(2**31)  # level of a bridge or tunnel: never joined
@@ -1161,8 +1163,9 @@ class TrailGraph:
         if not route.steps:
             raise RouteError("a composed hike needs at least one Segment")
         rows: dict[int, tuple] = {}
+        ways: dict[int, tuple[dict, set]] = {}
         pieces: list[list[int]] = []  # [segment id, first vertex, last vertex], walked in that order
-        here = route.start
+        here, total = route.start, 0
         with self._db() as db:
             for number, step in enumerate(route.steps, start=1):
                 way, _, end = step.partition(".")
@@ -1170,7 +1173,12 @@ class TrailGraph:
                 if way in ("g", "l"):
                     walked = self._cross(db, rows, "gap" if way == "g" else "link", here, end, where)
                 else:
-                    walked = self._follow(db, rows, int(way), here, end, where)
+                    walked = self._follow(db, rows, ways, int(way), here, end, where)
+                total += len(walked)
+                if total > MAX_WALK_STEPS:
+                    raise RouteError(
+                        f"{where}: a composed hike may walk at most {MAX_WALK_STEPS:,} vertex steps; draw a shorter one"
+                    )
                 for segment, first, last in walked:
                     previous = pieces[-1] if pieces else None
                     if previous and previous[0] == segment and previous[2] == first and (
@@ -1205,29 +1213,21 @@ class TrailGraph:
         return [(segment, 0, 1) if a == ids[here] else (segment, 1, 0)]
 
     def _follow(
-        self, db: sqlite3.Connection, rows: dict[int, tuple], way: int, here: str, end: str, where: str
+        self,
+        db: sqlite3.Connection,
+        rows: dict[int, tuple],
+        ways: dict[int, tuple[dict, set]],
+        way: int,
+        here: str,
+        end: str,
+        where: str,
     ) -> list[tuple[int, int, int]]:
         """The steps (segment, vertex, next vertex) along OSM way ``|way|`` from
-        ``here`` to ``end``, in its node order when ``way`` is positive."""
-        found = self._load(
-            db, rows, "JOIN segment_ways w ON w.segment_id = s.id WHERE w.way_id = ? ORDER BY s.id", (abs(way),)
-        )
-        if not found:
-            raise RouteError(f"{where}: OSM way {abs(way)} is no longer on the marked network")
-        leaving: dict[str, tuple[int, int, int, str]] = {}  # node -> segment, vertex, next vertex, next node
-        on_way: set[str] = set()
-        for row in found:
-            keys = _vertex_keys(row[6], row[7])
-            at = 0
-            for signed, _, _, count, _ in json.loads(row[5]):
-                if signed is not None and abs(signed) == abs(way):
-                    for k in range(at, at + count):
-                        on_way.update((keys[k], keys[k + 1]))
-                        if (signed > 0) == (way > 0):
-                            leaving.setdefault(keys[k], (row[0], k, k + 1, keys[k + 1]))
-                        else:
-                            leaving.setdefault(keys[k + 1], (row[0], k + 1, k, keys[k]))
-                at += count
+        ``here`` to ``end``, in its node order when ``way`` is positive; ``ways``
+        keeps each way walked so far."""
+        if way not in ways:
+            ways[way] = self._way(db, rows, way, where)
+        leaving, on_way = ways[way]
         for node in (here, end):
             if node not in on_way:
                 raise RouteError(f"{where}: {_describe(node)} is no longer on OSM way {abs(way)}")
@@ -1241,12 +1241,36 @@ class TrailGraph:
             steps.append((segment, first, last))
         return steps
 
+    def _way(self, db: sqlite3.Connection, rows: dict[int, tuple], way: int, where: str) -> tuple[dict, set]:
+        """The step leaving each node of OSM way ``|way|`` (segment, vertex, next
+        vertex, next node), walked in its node order when ``way`` is positive, and its nodes."""
+        found = self._load(
+            db, rows, "JOIN segment_ways w ON w.segment_id = s.id WHERE w.way_id = ? ORDER BY s.id", (abs(way),)
+        )
+        if not found:
+            raise RouteError(f"{where}: OSM way {abs(way)} is no longer on the marked network")
+        leaving: dict[str, tuple[int, int, int, str]] = {}
+        on_way: set[str] = set()
+        for row in found:
+            keys = _vertex_keys(row[6], row[7])
+            at = 0
+            for signed, _, _, count, _ in json.loads(row[5]):
+                if signed is not None and abs(signed) == abs(way):
+                    for k in range(at, at + count):
+                        on_way.update((keys[k], keys[k + 1]))
+                        if (signed > 0) == (way > 0):
+                            leaving.setdefault(keys[k], (row[0], k, k + 1, keys[k + 1]))
+                        else:
+                            leaving.setdefault(keys[k + 1], (row[0], k + 1, k, keys[k]))
+                at += count
+        return leaving, on_way
+
     def _stitch(self, route: Route, rows: dict[int, tuple], pieces: list[list[int]]) -> ComposedWalk:
         columns: list[list[np.ndarray]] = [[], [], [], [], [], []]
         walked: dict[int, list] = {}
         scales: set[str] = set()
         relations: dict[int, float] = {}
-        whole = True
+        whole, walk_m = True, 0.0
         for number, (segment, first, last) in enumerate(pieces):
             _, _, _, _, relation_ids, parts, _, coords, ele, landcover, climate, southness, _, _ = rows[segment]
             points = decode_coords(coords)
@@ -1268,6 +1292,9 @@ class TrailGraph:
             counts = [run[3] for run in runs]
             step_runs = np.repeat(np.arange(len(runs)), counts)[low:high]
             metres = _haversine(values[0][:-1], values[1][:-1], values[0][1:], values[1][1:])
+            walk_m += float(metres.sum())
+            if walk_m > MAX_WALK_M:
+                raise RouteError(f"a composed hike may be at most {MAX_WALK_M / 1000:.0f} km long; draw a shorter one")
             for run, step_m in zip(step_runs[:: 1 if first < last else -1].tolist(), metres.tolist()):
                 way, _, surface, _, sac_scale = runs[run]
                 if way is not None:

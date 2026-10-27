@@ -531,6 +531,20 @@ def test_api_refuses_a_bad_composed_hike(client, path: str, body: dict, status: 
     assert client.post(path, json=body).status_code == status
 
 
+def test_an_over_long_back_and_forth_link_is_refused_while_it_is_stitched(client, catalog_path: Path, monkeypatch) -> None:
+    import dayhike.trailgraph
+
+    # 45 times up and down way 104, A to D: about 105 km.
+    link = "1:" + ",".join(["104.11", "-104.1"] * 45)
+
+    for path, body in (("/api/compose", {"route": link}), ("/api/rank", {"composed": {"route": link}})):
+        response = client.post(path, json=body)
+        assert response.status_code == 400 and "at most 100 km" in response.json()["detail"]
+    monkeypatch.setattr(dayhike.trailgraph, "MAX_WALK_STEPS", 3)
+    with pytest.raises(RouteError, match="step 2 of this hike: a composed hike may walk at most 3 vertex steps"):
+        TrailGraph(trailgraph_path_for(catalog_path)).walk(Route.parse("1:104.11,-104.1"))
+
+
 def test_an_export_without_a_trailgraph_does_not_compose(sampled: Path, tmp_path: Path) -> None:
     from fastapi.testclient import TestClient
 

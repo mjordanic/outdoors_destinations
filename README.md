@@ -370,7 +370,7 @@ the other sample steps, so a server without rasters can compute a composed
 hike's facts with the same rules as a DayHike's. It does not touch the Catalog
 and needs rerunning after every ingest: `export-serving` refuses a TrailGraph
 it never ran on when the similarity facts read the rasters. On Slovenia the
-file is 35 MB.
+file is about 38 MB, and so is its copy in the serving export.
 
 ## 3. Rank by Seed
 
@@ -1576,7 +1576,7 @@ the Seed and every Measure's score. With a TrailGraph (`compose` true in
 `/api/info`): `GET /api/segments?south=&west=&north=&east=` (the Segments and
 Junctions in that box, none and `too_many` true above 1,500), `POST
 /api/compose` with `{"route": "start:step,...", "name": optional}` (the
-Route as its link holds it, up to 2,000 steps; see `dayhike.trailgraph.Route`),
+Route as its link holds it, up to 2,000 steps, 100 km and 50,000 vertex steps; see `dayhike.trailgraph.Route`),
 giving the same detail as `GET /api/hikes/{id}` with `id` null, the proposed or
 given `name`, and `route` with its text and its start Junction, Segment ids
 and their steps in this export (null where an older link now cuts a Segment);
