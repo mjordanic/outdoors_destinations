@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import sqlite3
 from pathlib import Path
@@ -18,6 +19,7 @@ from dayhike.serving import (
     encode_polyline,
     export_serving,
     score_note,
+    scored_measures,
     simplify_line,
 )
 from dayhike.similarity import FACT_COLUMNS, MEASURE_NAMES
@@ -238,11 +240,49 @@ def test_rank_matches_rank_dayhikes_and_reports_every_measure(
         # A WaterSide pair inside the dead band: the score's own 58.
         (0.578, 0.844, "Difference smaller than 58% of random hike pairs (ties count half)"),
         (0.6, 0.8, "Difference smaller than 60% of random hike pairs (ties count half)"),
+        # Less alike than all but a few random pairs: no "smaller than 0%".
+        (0.004, 0.0, "Difference bigger than almost all random hike pairs"),
+        (0.003, 0.2, "Difference bigger than almost all random hike pairs"),
+        (0.005, 0.0, "Difference smaller than 1% of random hike pairs"),
         (None, None, None),
     ],
 )
 def test_score_note_says_the_score_in_words(score, tied, note) -> None:
     assert score_note(score, tied) == note
+
+
+@pytest.mark.parametrize(
+    ("same", "note"),
+    [
+        ("identical", "Identical"),
+        ("within the dead band", "Counted as the same (within the dead band)"),
+    ],
+)
+def test_score_note_says_when_the_two_values_are_the_same(same: str, note: str) -> None:
+    # Two dry hikes tie with most random pairs: 0.58, yet nothing differs.
+    assert score_note(0.578, 0.844, same) == note
+    assert score_note(None, None, same) is None
+
+
+def test_compare_notes_tell_identical_values_and_values_counted_the_same(data: ServingData) -> None:
+    facts = np.array(data.store.facts)
+    column = {name: index for index, name in enumerate(FACT_COLUMNS)}
+    facts[:, 1] = facts[:, 0]
+    # Both beside a lake for about half the walk: inside WaterSide's dead band, not equal.
+    facts[column["waterside_share"], :2] = (0.41, 0.53)
+    facts[column["water_count"], :2] = (3, 5)  # both "3 or more"
+    facts[column["length_m"], :2] = (4000, 9000)
+    profile = np.repeat(data.store.profile[:1], len(facts[0]), 0)
+    # Random-pair scores for every Measure, as a Catalog with land cover has them.
+    quantiles = np.tile(np.linspace(0, 1, data.store.quantiles.shape[1]), (len(data.store.quantiles), 1))
+    store = dataclasses.replace(data.store, facts=facts, profile=profile, quantiles=quantiles)
+
+    (notes,) = scored_measures(store, 0, np.array([1]), None)
+
+    assert notes["waterside"]["note"] == "Counted as the same (within the dead band)"
+    assert notes["water_count"]["note"] == "Counted as the same (both 3 or more)"
+    assert notes["highest"]["note"] == notes["round_trip"]["note"] == "Identical"
+    assert notes["length"]["note"].startswith("Difference smaller than")
 
 
 def test_rank_respects_the_limit_and_the_allowed_rows(data: ServingData) -> None:

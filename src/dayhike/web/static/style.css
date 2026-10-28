@@ -40,8 +40,10 @@ h3 { font-size: 0.95rem; margin: 14px 0 6px; }
 .panel-title { display: block; font-weight: 600; margin-bottom: 6px; }
 .panel-title.check { display: flex; gap: 8px; align-items: center; cursor: pointer; }
 .check { display: flex; gap: 6px; align-items: center; cursor: pointer; font-size: 0.9rem; margin-top: 8px; }
+.check[hidden] { display: none; }
 .hint { color: var(--muted); font-size: 0.82rem; margin: 6px 0; }
 .return-bar { margin: 0; padding: 10px 12px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
+.error-text { color: #b42318; }
 .status { min-height: 1.2em; font-size: 0.9rem; margin: 0; }
 .status.error { color: #b42318; }
 
@@ -67,6 +69,7 @@ button.secondary:hover { border-color: var(--green); }
 .suggestions li { padding: 6px 8px; cursor: pointer; border-bottom: 1px solid #f0f2ee; }
 .suggestions li[aria-selected="true"], .suggestions li:hover { background: #e8f1ea; }
 .suggestions .meta { display: block; color: var(--muted); font-size: 0.8rem; }
+.suggestions li.nothing { cursor: default; background: #fff; }
 
 .weights-group { border: none; margin: 8px 0 0; padding: 0; }
 .weights-group legend { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); padding: 0; margin-bottom: 2px; }
@@ -75,6 +78,9 @@ button.secondary:hover { border-color: var(--green); }
 .weight input[type="number"] { padding: 3px 6px; text-align: right; }
 .weight .off { font-size: 0.78rem; color: var(--muted); display: flex; gap: 3px; align-items: center; }
 .weight.excluded .name { color: var(--muted); text-decoration: line-through; }
+.weight .weight-note { grid-column: 1 / -1; margin: 0; display: none; }
+.weight.unused .name { color: var(--muted); }
+.weight.unused .weight-note { display: block; }
 
 .detail-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; align-items: baseline; }
 .detail-head .role { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); }
@@ -83,12 +89,13 @@ button.secondary:hover { border-color: var(--green); }
 .map { height: 340px; border-radius: 6px; border: 1px solid var(--line); }
 .pick-map { height: 460px; }
 .compose-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0; }
-.compose-tools { display: flex; flex-wrap: wrap; gap: 6px; }
+.compose-tools { display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 100%; align-items: center; }
 .compose-tools[hidden] { display: none; }
 .compose-tools button.primary { padding: 7px 12px; font-size: 0.95rem; }
-.compose-tools input { min-width: 16em; }
+.compose-tools input { flex: 1 1 12em; width: auto; min-width: 0; }
 #compose-on[aria-pressed="true"] { border-color: var(--green); background: #e8f1ea; }
 .compose-readout { font-size: 0.9rem; margin: 4px 0; font-variant-numeric: tabular-nums; }
+.compose-readout.over { color: #b42318; font-weight: 600; }
 .compose-links { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
 .compose-links button { border-color: #8e44ad; color: #6b2fa3; border-style: dashed; }
 .legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 0.8rem; color: var(--muted); margin: 6px 0; }
@@ -137,8 +144,12 @@ svg text { font-size: 11px; fill: var(--muted); }
 .credits li { margin: 4px 0; }
 
 @media (max-width: 900px) {
-  .layout { grid-template-columns: minmax(0, 1fr); padding: 10px; }
-  .controls { position: static; max-height: none; overflow: visible; padding-right: 0; }
+  /* One column: the map to select or design a hike right under the search, not under every control. */
+  .layout { display: flex; flex-direction: column; padding: 10px; }
+  .controls, .content { display: contents; }
+  .layout > * > * { order: 3; }
+  .controls > :first-child { order: 1; }
+  #map-pick { order: 2; }
   .coverage { width: 84px; }
   .tagline { font-size: 0.82rem; }
   .map { height: 260px; }

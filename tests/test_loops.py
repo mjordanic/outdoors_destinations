@@ -75,8 +75,8 @@ def test_a_ranking_lists_loops_drawn_from_segments_beside_dayhikes(data) -> None
     assert [r["score"] for r in results] == sorted((r["score"] for r in results), reverse=True)
     assert all(r["versions"] == [] for r in results)
     for loop in loops:
-        # Named by where it starts, not by the trails it walks.
-        assert loop["name"] == "Loop from Lakeside Inn"
+        # Named by a hiking place near its start (the Lakeside Inn is a restaurant), not by its trails.
+        assert loop["name"] == "Loop near Cold Spring"
         assert loop["length_m"] == pytest.approx(3077, abs=2)
         route = Route.parse(loop["route"]["text"])
         for return_to_start in (True, False):  # it ends where it starts: measured the same either way
@@ -245,3 +245,14 @@ def test_a_found_loop_names_whole_segments_from_its_start(data) -> None:
     walk = data.trailgraph.walk_segments(found[0].start, found[0].segments)
     assert data.trailgraph.walk(walk.route).segments == list(found[0].segments)
     assert (walk.lat[0], walk.lon[0]) == (walk.lat[-1], walk.lon[-1])
+
+
+@pytest.mark.usefixtures("rows_apart")
+def test_a_loop_with_no_hiking_place_near_its_start_is_named_by_its_trails(data, monkeypatch) -> None:
+    import dayhike.serving as serving
+
+    monkeypatch.setattr(serving, "LOOP_NAME_M", 600.0)  # the Cold Spring is 1 km away
+
+    names = {loop["name"] for loop in _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS))}
+
+    assert names and all(name.startswith("Loop on ") for name in names), names
