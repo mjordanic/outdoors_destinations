@@ -17,6 +17,7 @@ from dayhike.serving import (
     decode_polyline,
     encode_polyline,
     export_serving,
+    score_note,
     simplify_line,
 )
 from dayhike.similarity import FACT_COLUMNS, MEASURE_NAMES
@@ -221,7 +222,27 @@ def test_rank_matches_rank_dayhikes_and_reports_every_measure(
     for result in results:
         assert set(result["measures"]) == set(MEASURE_NAMES)
     assert results[0]["measures"]["length"]["raw"] == pytest.approx(0.5)
-    assert results[0]["measures"]["elevation_gain"] == {"score": None, "raw": None}
+    assert "random hike pair" in results[0]["measures"]["length"]["note"]
+    assert results[0]["measures"]["elevation_gain"] == {"score": None, "raw": None, "note": None}
+
+
+@pytest.mark.parametrize(
+    ("score", "tied", "note"),
+    [
+        # Calibrated 0.52 with no ties: the same 52 as the score.
+        (0.52, 0.0, "Difference smaller than 52% of random hike pairs"),
+        # 128/1024 shows as 0.13 (half rounding up), so the note says 13, not 12.
+        (0.125, 0.0, "Difference smaller than 13% of random hike pairs"),
+        (0.625, 0.0, "Difference smaller than 63% of random hike pairs"),
+        (0.996, 0.0, "Difference smaller than 100% of random hike pairs"),
+        # A WaterSide pair inside the dead band: the score's own 58.
+        (0.578, 0.844, "Difference smaller than 58% of random hike pairs (ties count half)"),
+        (0.6, 0.8, "Difference smaller than 60% of random hike pairs (ties count half)"),
+        (None, None, None),
+    ],
+)
+def test_score_note_says_the_score_in_words(score, tied, note) -> None:
+    assert score_note(score, tied) == note
 
 
 def test_rank_respects_the_limit_and_the_allowed_rows(data: ServingData) -> None:

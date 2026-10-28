@@ -491,10 +491,10 @@ function factsTable(hike, compare, result, month, weights) {
         }
       });
       if (compare) {
-        const score = result?.measures?.[measure.name]?.score;
+        const { score, note } = result?.measures?.[measure.name] ?? {};
         row.lastElementChild.innerHTML = score == null
           ? '<span class="nodata">no data</span>'
-          : `<span class="bar"><i style="width:${Math.round(score * 100)}%"></i></span>${score.toFixed(2)}`;
+          : `<span class="bar"><i style="width:${Math.round(score * 100)}%"></i></span>${score.toFixed(2)}${note ? `<small class="note">${escapeHtml(note)}</small>` : ""}`;
         if (weights && !weights[measure.name]) row.lastElementChild.title = "Left out of this score";
       }
       body.appendChild(row);

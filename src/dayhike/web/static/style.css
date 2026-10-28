@@ -104,6 +104,7 @@ svg text { font-size: 11px; fill: var(--muted); }
 .facts th, .facts td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #eef0ec; vertical-align: middle; }
 .facts th[scope="rowgroup"] { background: #f3f6f2; text-transform: uppercase; font-size: 0.72rem; letter-spacing: 0.04em; color: var(--muted); }
 .facts td.num { white-space: nowrap; }
+.facts td.score .note { display: block; white-space: normal; font-size: 0.72rem; color: var(--muted); }
 .facts .nodata, .nodata { color: var(--muted); font-style: italic; }
 .bar { display: inline-block; width: 70px; height: 9px; background: #eef0ec; border-radius: 4px; vertical-align: middle; margin-right: 6px; overflow: hidden; }
 .bar > i { display: block; height: 100%; background: var(--green); }
