@@ -105,6 +105,13 @@ def test_mix_is_the_shared_share_and_missing_with_any_share_missing() -> None:
     assert math.isnan(scores[2])
 
 
+def test_equal_shares_score_a_raw_one_although_float32_sums_fall_short() -> None:
+    # 0.15 + 0.65 + 0.2 sums to 0.99999994 in float32.
+    shares = {"paved_share": 0.0, "gravel_share": 0.15, "natural_share": 0.65, "rock_share": 0.2}
+    scores = _scores("surface", **{name: [share, share] for name, share in shares.items()})
+    assert (scores == 1.0).all()
+
+
 def test_agree_is_one_when_flags_match_including_both_absent() -> None:
     assert _scores("hut_along", hut_along=[0, 0, 1]) == pytest.approx([1.0, 1.0, 0.0])
     assert _scores("hut_along", hut_along=[1, 1, 0]) == pytest.approx([1.0, 1.0, 0.0])

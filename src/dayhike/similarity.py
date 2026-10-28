@@ -240,6 +240,7 @@ _CALIBRATION_VERSION = hashlib.sha256(
             [vars(measure) for measure in MEASURES], CALIBRATION_KEYS,
             CALIBRATION_QUANTILES, CALIBRATION_PAIRS, CALIBRATION_SEED,
             "equal-scores-one",  # ties of a raw 1 count in full (``calibrate``, ADR-0023)
+            "mix-rounded",  # equal float32 shares sum to a raw 1 (``measure_scores``)
         ]
     ).encode()
 ).hexdigest()[:16]  # fmt: skip
@@ -532,7 +533,7 @@ def measure_scores(
     ]
     if measure.kind == "mix":
         shared = sum(np.minimum(seed_column(name), store.column(name)[b]) for name in columns)
-        return np.minimum(shared, 1.0)
+        return np.minimum(np.round(shared, 6), 1.0)
     left, right = seed_column(columns[0]), store.column(columns[0])[b]
     if measure.kind == "agree":
         return np.where(np.isnan(left) | np.isnan(right), np.nan, left == right)
