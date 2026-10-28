@@ -87,7 +87,7 @@ async function api(path, options) {
     if (response.status === 429) throw new Error("Too many requests; wait a minute and try again.");
     // A validation message without the "Value error, " pydantic puts before it.
     const detail = Array.isArray(body.detail) ? body.detail.map((d) => d.msg.replace(/^Value error, /, "")).join("; ") : body.detail;
-    throw new Error(detail || `Request failed (${response.status}).`);
+    throw Object.assign(new Error(detail || `Request failed (${response.status}).`), { status: response.status });
   }
   return body;
 }
@@ -684,9 +684,12 @@ async function choose(id, { fromLink = false } = {}) {
     setStatus("");
   } catch (error) {
     if (request !== chosen) return;
-    if (fromLink) brokenLink(error); else setStatus(error.message, true);
+    if (fromLink && namesNothing(error)) brokenLink(error); else setStatus(error.message, true);
   }
 }
+
+// The server read the request and found no such hike; not a dropped connection or a busy server.
+const namesNothing = (error) => [400, 404, 422].includes(error.status);
 
 // An address names no hike of this data: say so where the hike would be, and show none,
 // so the page and its address agree.
@@ -736,7 +739,7 @@ async function chooseComposed(route, name, from = null) {
     setStatus("");
   } catch (error) {
     if (request !== chosen) return;
-    if (from === "link") brokenLink(error);
+    if (from === "link" && namesNothing(error)) brokenLink(error);
     else {
       setStatus(error.message, true);
       if (from === "compose") pick.hint(`Not measured: ${error.message}`); // beside the button pressed
@@ -1154,6 +1157,7 @@ const compose = {
     if (this.route.length) {
       this.route.pop();
       while (this.route.at(-1)?.auto) this.route.pop();
+      if (!this.route.length) this.named = false;
     } else this.start = this.startKey = null;
     this.changed();
   },
