@@ -1532,16 +1532,18 @@ climate by month, and the fact behind every Measure), set a 0–100 weight or
 an "off" tick per Measure, and list the 10 most similar hikes with their score,
 length, climb and descent, and per-Measure scores. With a TrailGraph the list
 mixes in SuggestedLoops (ADR-0020): loops drawn on the marked network near the
-best Catalog results, found as the query runs, named after where they start, marked "composed" and
-drawn dashed green on the map. Each opens like a composed hike, with its
+best Catalog results, found as the query runs, named after a hiking place near
+where they start, else by the trails they walk (ADR-0022), marked "composed" and
+drawn dashed green on the "Select hike on map" map. Each opens like a composed hike, with its
 link, and "Edit on the map" makes it the liked hike in the composer. The list
 holds one row per area: hikes, catalog or composed, starting within 10 km of a
 better one are its versions; clicking the row lists up to three versions
 (var 1, 2, 3), each more than half a different route, under it and on the map,
 each to open. A loop that mostly walks the liked hike again is not suggested. The "Return to start" tick
-box above the results (on by default) measures the liked hike and every hike
+box above "Find similar" (on by default) measures the liked hike and every hike
 compared with it with its way back to its start, so a summit line is compared
-up and back; off, every hike is compared one way. Turning it changes the
+up and back; off, every hike is compared one way. While it is on, Round trip
+is left out (every hike is then a round trip; ADR-0022). Turning it changes the
 liked hike's figures and ranks again, and an address ends in `&oneway` when
 it is off. Clicking a result shows it the same way, next to the
 liked hike. An optional starting place and maximum drive (up to 4 h) keeps only
