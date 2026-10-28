@@ -21,6 +21,7 @@ from dayhike.similarity import (
     calibrate,
     random_pair_shares,
     calibrate_similarity,
+    score_rows,
     dem_heights,
     climb_and_descent,
     elevation_gain,
@@ -191,6 +192,45 @@ def test_calibration_is_the_mid_rank_share_of_random_pairs_below() -> None:
     assert math.isnan(calibrated[5])
     # A key without random-pair scores cannot be calibrated.
     assert np.isnan(calibrate(store, "profile", scores)).all()
+
+
+def _tied_quantiles(**rows) -> np.ndarray:
+    """Random-pair scores of 100 pairs for the given keys, NaN for the others."""
+    quantiles = np.full((len(CALIBRATION_KEYS), 100), np.nan)
+    for key, values in rows.items():
+        quantiles[CALIBRATION_KEYS.index(key)] = np.sort(values)
+    return quantiles
+
+
+def test_equal_or_within_dead_band_scores_one_on_a_heavily_tied_measure() -> None:
+    # As in the Catalog: most random pairs are both dry, so 84 of 100 score raw 1.0.
+    quantiles = _tied_quantiles(waterside=[*np.linspace(0.0, 0.96, 16), *[1.0] * 84])
+    store = _store(4, quantiles=quantiles, waterside_share=[0.0, 0.0, 0.1, 0.4])
+    similarity, _ = score_rows(store, [0], np.arange(4), {"waterside": 100})
+    # Both dry and inside the dead band score 1.0 (the mid-rank gave 0.16 + 0.84 / 2 = 0.58);
+    # 0.4 apart (raw 0.2) beats 4 random pairs and ties none, as before.
+    assert similarity == pytest.approx([1.0, 1.0, 1.0, 0.04])
+
+
+def test_real_differences_tied_at_raw_zero_keep_the_mid_rank() -> None:
+    # As in the Catalog: 59 of 100 random pairs have highest points 400 m or more apart.
+    quantiles = _tied_quantiles(highest=[*[0.0] * 59, *np.linspace(0.01, 0.99, 41)])
+    store = _store(3, quantiles=quantiles, highest_m=[2_800, 600, 2_000])
+    similarity, _ = score_rows(store, [0], np.arange(3), {"highest": 100})
+    # 2,200 m apart ties those 59 and counts them half; 800 m apart too, the same raw 0.
+    assert similarity == pytest.approx([1.0, 0.295, 0.295])
+
+
+def test_agreeing_yes_no_flags_score_one() -> None:
+    quantiles = _tied_quantiles(
+        parking_trailhead=[0.0] * 30 + [1.0] * 70, round_trip=[0.0] * 50 + [1.0] * 50
+    )
+    store = _store(3, quantiles=quantiles, parking_trailhead=[0, 0, 1], round_trip=[1, 1, 0])
+    parking, _ = score_rows(store, [0], np.arange(3), {"parking_trailhead": 100})
+    round_trip, _ = score_rows(store, [0], np.arange(3), {"round_trip": 100})
+    # Disagreeing is a real difference: random pairs that disagree too count half, as before.
+    assert parking == pytest.approx([1.0, 1.0, 0.15])
+    assert round_trip == pytest.approx([1.0, 1.0, 0.25])
 
 
 def test_random_pair_shares_count_the_pairs_less_alike_and_as_alike() -> None:
@@ -705,6 +745,10 @@ def test_similarity_store_refuses_facts_or_calibration_from_other_code(tmp_path:
     meta = json.loads(meta_path.read_text())
 
     meta_path.write_text(json.dumps({**meta, "calibration_version": "old"}))
+    with pytest.raises(StaleSimilarity, match="--calibrate-only"):
+        SimilarityStore.open(catalog_path)
+    # Calibrated when ties counted half (the mid-rank): refit before scoring.
+    meta_path.write_text(json.dumps({**meta, "calibration_version": "8889a2b218a8d639"}))
     with pytest.raises(StaleSimilarity, match="--calibrate-only"):
         SimilarityStore.open(catalog_path)
     calibrate_similarity(catalog_path)

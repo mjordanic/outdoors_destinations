@@ -9,8 +9,8 @@ and nothing is rebuilt per request.
 A Measure compares one fact of two DayHikes and gives a score in [0, 1], or
 NaN when either DayHike lacks the fact. Calibration maps each raw score to the
 share of random DayHike pairs that score lower on that Measure (ties count
-half), so Measures on very different raw scales can be weighted against each
-other.
+half; an equal pair counts them in full and scores 1), so Measures on very
+different raw scales can be weighted against each other.
 
 Every DayHike has a second set of facts, measured with its way back to its
 Trailhead (ADR-0019), with its own Calibration; a query compares Seeds and
@@ -239,6 +239,7 @@ _CALIBRATION_VERSION = hashlib.sha256(
         [
             [vars(measure) for measure in MEASURES], CALIBRATION_KEYS,
             CALIBRATION_QUANTILES, CALIBRATION_PAIRS, CALIBRATION_SEED,
+            "equal-scores-one",  # ties of a raw 1 count in full (``calibrate``, ADR-0023)
         ]
     ).encode()
 ).hexdigest()[:16]  # fmt: skip
@@ -550,10 +551,13 @@ def measure_scores(
 def calibrate(store: SimilarityStore, key: str, scores: np.ndarray) -> np.ndarray:
     """Share of random pairs that score lower on ``key`` (ties count half).
 
-    NaN stays NaN; a key without random-pair scores gives NaN.
+    A raw score of 1 (equal, or counted as equal) counts its ties in full, so
+    it calibrates to 1 however many random pairs tie with it (ADR-0023). NaN
+    stays NaN; a key without random-pair scores gives NaN.
     """
     quantiles = store.quantiles[CALIBRATION_KEYS.index(key)]
-    return _mid_rank(quantiles, scores)
+    below, ties = _below_and_ties(quantiles, scores)
+    return below + np.where(scores == 1.0, ties, ties / 2)
 
 
 def random_pair_shares(
@@ -561,7 +565,8 @@ def random_pair_shares(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Shares of random pairs that score lower on ``key``, and that score the same.
 
-    The Calibration is the first plus half the second. NaN stays NaN.
+    The Calibration is the first plus half the second (all of it at a raw
+    score of 1). NaN stays NaN.
     """
     return _below_and_ties(store.quantiles[CALIBRATION_KEYS.index(key)], scores)
 
@@ -575,12 +580,6 @@ def weighted_mean(scores: np.ndarray, weights: np.ndarray) -> np.ndarray:
     total = present @ weights
     with np.errstate(invalid="ignore", divide="ignore"):
         return np.where(total > 0, np.where(present, scores, 0.0) @ weights / total, np.nan)
-
-
-def _mid_rank(sorted_values: np.ndarray, scores: np.ndarray) -> np.ndarray:
-    """Share of ``sorted_values`` below each score, ties counting half."""
-    below, ties = _below_and_ties(sorted_values, scores)
-    return below + ties / 2
 
 
 def _below_and_ties(sorted_values: np.ndarray, scores: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

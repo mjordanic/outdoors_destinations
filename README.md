@@ -477,11 +477,13 @@ Raw Measure scores sit on very different scales: a random pair of DayHikes
 scores 0.6 or more on `profile` nine times in ten, but rarely on `length`.
 Calibration maps each raw score to the share of random pairs (100,000, drawn
 once from the whole Catalog) that score lower on that Measure, ties counting
-half, so every Measure pulls with the weight it is given. The printed score is
-the similarity itself, the weighted mean of the calibrated Measure scores: a
-typical random pair scores about 0.5, and 1.0 needs a pair that beats every
-random pair on every weighted Measure, so the best matches stay apart instead
-of all reading 1.000. Ties in order break on the uncalibrated weighted mean,
+half, so every Measure pulls with the weight it is given. Two values that are
+equal, or that the Measure counts as equal (a raw score of 1), count their ties
+in full and score 1.0 however many random pairs tie with them (ADR-0023). The
+printed score is the similarity itself, the weighted mean of the calibrated
+Measure scores: a typical random pair scores about 0.5, and 1.0 needs a pair
+that no random pair beats on any weighted Measure, so the best matches stay
+apart instead of all reading 1.000. Ties in order break on the uncalibrated weighted mean,
 then on DayHike id.
 
 Omit `--month` to compare climate as the June–August regime (mean temperature,
