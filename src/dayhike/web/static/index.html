@@ -74,6 +74,11 @@
       <p id="drive-off" class="hint" hidden>The drive-time filter is not available on this server.</p>
     </section>
 
+    <label class="check return-bar" id="return-bar" hidden
+           title="Measure every hike, the liked one and every hike compared with it, with its shortest way back to its start along the trails">
+      <input type="checkbox" id="return-on" checked autocomplete="off">
+      Return to start: compare every hike with its way back (untick to compare them one way)
+    </label>
     <button type="button" id="find" class="primary" disabled>Find similar</button>
     <p id="status" class="status" role="status" aria-live="polite"></p>
 
@@ -111,12 +116,6 @@
       <p>Search for a hike on the left, or select one on the map. Its route, elevation, water, huts, landscape and weather appear here — everything the similarity looks at.</p>
     </article>
 
-    <label class="check return-bar" id="return-bar" hidden
-           title="Measure every hike, the liked one and every hike compared with it, with its shortest way back to its start along the trails">
-      <input type="checkbox" id="return-on" checked autocomplete="off">
-      Return to start: compare every hike with its way back (untick to compare them one way)
-    </label>
-
     <section id="results" class="card" hidden>
       <h2>Most similar hikes</h2>
       <p class="hint" id="results-note"></p>
@@ -131,7 +130,7 @@
 
 <footer class="credits" id="credits">
   <h2>About and credits</h2>
-  <p>A non-commercial demo of the <a href="https://github.com/mjordanic/outdoors_destinations">DayHike catalog</a>: OpenStreetMap hiking routes of 1–20 km, compared on 27 measures. Each measure is calibrated against random pairs of hikes, so weights mean the same on every measure.</p>
+  <p>A non-commercial demo of the <a href="https://github.com/mjordanic/outdoors_destinations">DayHike catalog</a>: OpenStreetMap hiking routes of 1–20 km one way, compared on 27 measures (with Return to start, a hike that does not end at its start is measured with its way back, up to about 40 km). Each measure is calibrated against random pairs of hikes, so weights mean the same on every measure.</p>
   <ul>
     <li><strong>Hiking routes, huts, water, peaks, roads and names:</strong> map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, available under the <a href="https://opendatacommons.org/licenses/odbl/">Open Database License (ODbL)</a>. The hike data served here is a derivative database of OpenStreetMap and is also offered under the ODbL; the code that builds it is <a href="https://github.com/mjordanic/outdoors_destinations">open source</a>. Extracts from <a href="https://download.geofabrik.de/">Geofabrik</a>.</li>
     <li><strong>Base map:</strong> tiles © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, served by the OpenStreetMap Foundation under its <a href="https://operations.osmfoundation.org/policies/tiles/">tile usage policy</a>. Place search: <a href="https://nominatim.org/">Nominatim</a>, data © OpenStreetMap contributors.</li>

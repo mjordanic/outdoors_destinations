@@ -256,3 +256,33 @@ def test_the_page_and_its_assets_are_served(client: TestClient) -> None:
         assert client.get(f"/{asset}").status_code == 200
     for credit in ("OpenStreetMap", "ESA WorldCover", "CHELSA", "FABDEM", "Copernicus", "Natural Earth", "Valhalla", "Leaflet"):
         assert credit in page.text
+
+
+def test_round_trip_is_left_out_while_every_hike_returns_to_its_start(client: TestClient) -> None:
+    weights = {"length": 100, "round_trip": 100}
+    for path, seed in (("/api/rank", {"seed": RIDGE_WALK_ID}), ("/api/pair", {"a": RIDGE_WALK_ID, "b": 1003})):
+        back = client.post(path, json={**seed, "weights": weights}).json()
+        one_way = client.post(path, json={**seed, "weights": weights, "return_to_start": False}).json()
+        assert back["weights"] == {"length": 100}
+        assert one_way["weights"] == weights
+        only = client.post(path, json={**seed, "weights": {"round_trip": 100}})
+        assert only.status_code == 400 and "Round trip" in only.json()["detail"]
+
+
+def test_a_hike_with_no_name_in_osm_is_shown_as_unnamed(client: TestClient) -> None:
+    shown = "Unnamed hike (OSM relation 1003)"
+
+    assert client.get("/api/hikes/1003").json()["name"] == shown
+    assert [hit["name"] for hit in client.get("/api/search", params={"q": "1003"}).json()["results"]] == [shown]
+    box = client.get("/api/hikes", params={"south": 44, "west": 14, "north": 46, "east": 16}).json()["results"]
+    assert shown in [hike["name"] for hike in box]
+
+
+def test_a_search_hit_says_whether_the_hike_ends_at_its_start(client: TestClient) -> None:
+    hits = client.get("/api/search", params={"q": "al"}).json()["results"] + client.get("/api/search", params={"q": "ps"}).json()["results"]
+
+    assert hits
+    for hit in hits:  # the search lists every hike one way
+        one_way = client.get(f"/api/hikes/{hit['id']}", params={"return_to_start": False}).json()
+        assert hit["round_trip"] == one_way["facts"]["round_trip"]
+        assert hit["length_m"] == one_way["facts"]["length_m"]

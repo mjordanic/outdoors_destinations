@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import threading
 import time
+import unicodedata
 import urllib.error
 from collections import deque
 from collections.abc import Callable
@@ -58,12 +59,22 @@ class Weighted(BaseModel):
     return_to_start: bool = True  # every hike with its way back, or every hike one way
 
     def measure_weights(self) -> dict[str, float]:
-        """The weights with every excluded Measure at 0; None is the default weights."""
+        """The weights with every excluded Measure at 0; None is the default weights.
+
+        With the way back every hike is a round trip, so Round trip is left out (ADR-0022).
+        """
         weights = dict(DEFAULT_WEIGHTS if self.weights is None else self.weights)
         for name in self.excluded:
             if name not in MEASURE_INFO:
                 raise HTTPException(400, f"unknown Measure: {name}")
             weights[name] = 0.0
+        if self.return_to_start and weights.get("round_trip", 0) > 0:
+            weights["round_trip"] = 0.0
+            if not any(weight > 0 for weight in weights.values()):
+                raise HTTPException(
+                    400, "Round trip is left out with Return to start (every hike is then a round trip); "
+                    "give another measure a weight above 0"
+                )
         return weights
 
 
@@ -83,7 +94,9 @@ class Composed(BaseModel):
     @field_validator("name")
     @classmethod
     def _name(cls, name: str | None) -> str | None:
-        return (name or "").strip() or None
+        """Control and invisible format characters become spaces, then runs of spaces one."""
+        shown = "".join(" " if unicodedata.category(c).startswith("C") else c for c in name or "")
+        return " ".join(shown.split()) or None
 
     def parsed(self) -> Route:
         return Route.parse(self.route)

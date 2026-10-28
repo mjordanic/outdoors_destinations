@@ -35,6 +35,9 @@ const PICK_ZOOM = 12; // the map shows hikes from this zoom on
 const PICK_LINE = { color: "#6b2fa3", weight: 3, opacity: 0.85 };
 const PICK_HOVER = { color: "#c2410c", weight: 5, opacity: 1 };
 const COMPOSE_ZOOM = 13; // designing a hike shows the trail segments from this zoom on
+const MAX_COMPOSED_M = 100000; // the longest hike the server measures (trailgraph.MAX_WALK_M)
+const SHORTEST_HIKE_M = 1000; // the shortest catalog hike
+const NAME_LENGTH = 120; // the longest name of a composed hike (web.NAME_LENGTH)
 const SEGMENT_LINE = { color: "#2563eb", weight: 3, opacity: 0.75 };
 const SEGMENT_GAP = { ...SEGMENT_LINE, dashArray: "4 6" };
 const SEGMENT_HOVER = { color: "#c2410c", weight: 5, opacity: 1, dashArray: null };
@@ -53,6 +56,7 @@ const state = {
   query: null, // the weights, month and return to start of the last Ranking
   results: [],
   expanded: null, // the result row whose versions (var 1, 2, 3) are shown
+  selected: null, // the hike shown against the liked one: { key } of a result, or { pair } a DayHike id
   origin: null,
   geocoded: new Map(),
 };
@@ -81,8 +85,9 @@ async function api(path, options) {
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     if (response.status === 429) throw new Error("Too many requests; wait a minute and try again.");
-    const detail = Array.isArray(body.detail) ? body.detail.map((d) => d.msg).join("; ") : body.detail;
-    throw new Error(detail || `Request failed (${response.status}).`);
+    // A validation message without the "Value error, " pydantic puts before it.
+    const detail = Array.isArray(body.detail) ? body.detail.map((d) => d.msg.replace(/^Value error, /, "")).join("; ") : body.detail;
+    throw Object.assign(new Error(detail || `Request failed (${response.status}).`), { status: response.status });
   }
   return body;
 }
@@ -123,16 +128,29 @@ function niceTicks(low, high, count) {
 }
 
 const fmt = {
-  km: (m) => `${(m / 1000).toFixed(m < 10000 ? 1 : 0)} km`,
+  km: (m) => (m < 50 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(m < 10000 ? 1 : 0)} km`), // no "0.0 km"
   m: (m) => `${(Math.round(m) + 0).toLocaleString("en")} m`, // + 0: no "-0 m"
   pct: (x) => `${Math.round(x * 100)} %`,
   yes: (x) => (x ? "yes" : "no"),
 };
 
+// Climb and descent in the drawn direction; "flat" when neither reaches the 10 m a climb needs to count.
+function upDown(climb, descent) {
+  return climb === 0 && descent === 0 ? "flat (no 10 m climb or descent)" : `↑ ${fmt.m(climb)} ↓ ${fmt.m(descent)}`;
+}
+
 // Climb and descent in the drawn direction; the gain fact (the larger of the two) when they are missing.
 function climbText(hike, gain) {
-  if (hike.climb_m != null) return `↑ ${fmt.m(hike.climb_m)} ↓ ${fmt.m(hike.descent_m)}`;
+  if (hike.climb_m != null) return upDown(hike.climb_m, hike.descent_m);
   return gain != null ? `climb or descent ${fmt.m(gain)}` : null;
+}
+
+// A hike's length as drawn, and with its way back when it is measured with one:
+// "3.3 km one way (6.6 km with the way back)".
+function lengthText(hike) {
+  const back = hike.way_back;
+  if (!back || back.kind === "none") return fmt.km(hike.facts.length_m ?? hike.walk_m);
+  return `${fmt.km(hike.walk_m)} one way (${fmt.km(hike.facts.length_m ?? hike.walk_m + back.m)} with the way back)`;
 }
 
 function factColumn(column, month) {
@@ -161,7 +179,8 @@ function factText(measure, facts, month) {
   if (v == null) return null;
   switch (measure.name) {
     case "length": case "dry_stretch": return fmt.km(v);
-    case "elevation_gain": case "highest": case "lowest": case "tarmac_approach": return fmt.m(v);
+    case "elevation_gain": return `${fmt.m(v)} (the larger of up and down)`;
+    case "highest": case "lowest": case "tarmac_approach": return fmt.m(v);
     case "steepest_km": return `${fmt.m(v)} in 1 km`;
     case "difficulty": return SAC[Math.round(v)] || String(v);
     case "peaks_around": return `${v}`;
@@ -421,7 +440,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
   const month = compare ? query?.month : Number($("#month").value) || null;
   const f = hike.facts;
   const badges = [
-    f.length_m != null && fmt.km(f.length_m),
+    f.length_m != null && lengthText(hike),
     climbText(hike, f.elevation_gain_m),
     f.highest_m != null && `top ${fmt.m(f.highest_m)}`,
     f.lowest_m != null && `low ${fmt.m(f.lowest_m)}`,
@@ -459,10 +478,15 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     stackedBar("Trail surface", shares(f, SURFACE), "No surface tags on this route."),
     climateChart(f, month),
   );
-  card.querySelector(".facts").replaceWith(factsTable(hike, compare, result, month, query?.weights));
+  card.querySelector(".facts").replaceWith(factsTable(hike, compare, result, month, query?.weights, query?.return_to_start));
 }
 
-function factsTable(hike, compare, result, month, weights) {
+// The Measures a comparison shows: with the way back every hike is a round trip, so not Round trip.
+function comparedMeasures(returnToStart) {
+  return state.measures.filter((m) => !(returnToStart && m.name === "round_trip"));
+}
+
+function factsTable(hike, compare, result, month, weights, returnToStart) {
   const table = document.createElement("table");
   table.className = "facts";
   const head = compare
@@ -472,7 +496,7 @@ function factsTable(hike, compare, result, month, weights) {
   for (const group of state.groups) {
     const body = document.createElement("tbody");
     body.innerHTML = `<tr><th scope="rowgroup" colspan="${compare ? 4 : 2}">${escapeHtml(group)}</th></tr>`;
-    for (const measure of state.measures.filter((m) => m.group === group)) {
+    for (const measure of (compare ? comparedMeasures(returnToStart) : state.measures).filter((m) => m.group === group)) {
       const row = document.createElement("tr");
       if (compare && weights && !weights[measure.name]) row.className = "excluded";
       const cells = [`<td title="${escapeHtml(measure.description)}">${escapeHtml(measure.label)}</td>`];
@@ -522,9 +546,12 @@ function buildWeights() {
         <label class="name" for="${id}" title="${escapeHtml(measure.description)}">${escapeHtml(measure.label)}</label>
         <input id="${id}" type="number" min="0" max="100" step="1" value="${measure.default_weight}" inputmode="numeric" aria-label="${escapeHtml(measure.label)} weight, 0 to 100">
         <label class="off"><input type="checkbox" aria-label="Leave ${escapeHtml(measure.label)} out"> off</label>`;
+      if (measure.name === "round_trip") {
+        row.insertAdjacentHTML("beforeend", '<p class="hint weight-note">Left out with Return to start: every hike is then a round trip.</p>');
+      }
       const [number, off] = row.querySelectorAll("input");
       off.addEventListener("change", () => {
-        number.disabled = off.checked;
+        number.disabled = off.checked || row.classList.contains("unused");
         row.classList.toggle("excluded", off.checked);
       });
       number.addEventListener("input", () => number.setCustomValidity(""));
@@ -532,13 +559,24 @@ function buildWeights() {
     }
     host.appendChild(set);
   }
+  syncRoundTrip();
+}
+
+// Round trip tells no hike from another while every hike returns to its start: greyed out then.
+function syncRoundTrip() {
+  const row = document.querySelector('.weight[data-measure="round_trip"]');
+  if (!row) return;
+  const [number, off] = row.querySelectorAll("input");
+  row.classList.toggle("unused", returnToStart());
+  number.disabled = returnToStart() || off.checked;
+  off.disabled = returnToStart();
 }
 
 function readWeights() {
   const weights = {}, excluded = [];
   for (const row of document.querySelectorAll(".weight")) {
     const [number, off] = row.querySelectorAll("input");
-    if (off.checked) { excluded.push(row.dataset.measure); continue; }
+    if (off.checked || row.classList.contains("unused")) { excluded.push(row.dataset.measure); continue; }
     const value = Number(number.value);
     if (number.value === "" || !Number.isFinite(value) || value < 0 || value > 100) {
       number.setCustomValidity("0 to 100");
@@ -554,18 +592,22 @@ function readWeights() {
 // ---------- search ----------
 
 // A hike-name box with a suggestion list; ``onPick(id)`` loads the chosen hike.
+// A hit is listed one way, as walked: its length says so unless it ends at its start.
 function nameSearch(input, list, onPick) {
   let timer = null, abort = null, items = [], active = -1;
-  const show = (found) => {
+  const show = (found, nothingFor = null) => {
     items = found;
     active = -1;
     list.innerHTML = "";
+    if (nothingFor) {
+      list.innerHTML = `<li class="nothing">No hike name has every word of “${escapeHtml(nothingFor)}”.<span class="meta">Only hike names are searched, not places; try a word of a trail's name, or select a hike on the map.</span></li>`;
+    }
     found.forEach((item, i) => {
       const li = document.createElement("li");
       li.role = "option";
       li.id = `${list.id}-${i}`;
       const meta = [
-        item.length_m != null && fmt.km(item.length_m),
+        item.length_m != null && `${fmt.km(item.length_m)} ${item.round_trip ? "loop" : "one way"}`,
         climbText(item, item.elevation_gain_m),
         item.highest_m != null && `top ${fmt.m(item.highest_m)}`,
         `${item.trailhead[0].toFixed(2)}, ${item.trailhead[1].toFixed(2)}`,
@@ -574,7 +616,7 @@ function nameSearch(input, list, onPick) {
       li.addEventListener("mousedown", (event) => { event.preventDefault(); pick(item.id); });
       list.appendChild(li);
     });
-    list.hidden = found.length === 0;
+    list.hidden = found.length === 0 && !nothingFor;
     input.setAttribute("aria-expanded", String(found.length > 0));
   };
   const move = (step) => {
@@ -596,7 +638,6 @@ function nameSearch(input, list, onPick) {
     if (query.length < 2) {
       abort?.abort();
       show([]);
-      if ($("#status").textContent.startsWith("No hike name has")) setStatus("");
       return;
     }
     timer = setTimeout(async () => {
@@ -604,9 +645,7 @@ function nameSearch(input, list, onPick) {
       abort = new AbortController();
       try {
         const body = await api(`/api/search?q=${encodeURIComponent(query)}&limit=20`, { signal: abort.signal });
-        show(body.results);
-        if (!body.results.length) setStatus(`No hike name has every word of “${query}”.`);
-        else setStatus("");
+        show(body.results, body.results.length ? null : query);
       } catch (error) {
         if (error.name !== "AbortError") setStatus(error.message, true);
       }
@@ -619,12 +658,12 @@ function nameSearch(input, list, onPick) {
     else if (event.key === "Escape") show([]);
   });
   input.addEventListener("blur", () => setTimeout(() => show([]), 150));
-  return { pick };
 }
 
 let chosen = 0, shown = 0, ranked = 0, paired = 0, boxed = 0; // the latest of each request; an older response that lands later is dropped
 
-async function choose(id) {
+// ``fromLink``: the hike an address names; when it cannot be opened, the page shows no hike.
+async function choose(id, { fromLink = false } = {}) {
   const request = ++chosen;
   setStatus("Loading the hike…");
   try {
@@ -632,7 +671,7 @@ async function choose(id) {
     if (request !== chosen) return;
     state.liked = hike;
     $("#search").value = hike.name;
-    $("#liked-name").textContent = `Chosen: ${hike.name}`;
+    $("#liked-name").textContent = `Chosen: ${hike.name}, ${lengthText(hike)}`;
     $("#find").disabled = false;
     $("#pair-search").disabled = false;
     $("#return-bar").hidden = false;
@@ -644,11 +683,36 @@ async function choose(id) {
     pick.drawLoops();
     setStatus("");
   } catch (error) {
-    if (request === chosen) setStatus(error.message, true);
+    if (request !== chosen) return;
+    if (fromLink && namesNothing(error)) brokenLink(error); else setStatus(error.message, true);
   }
 }
 
-async function chooseComposed(route, name) {
+// The server read the request and found no such hike; not a dropped connection or a busy server.
+const namesNothing = (error) => [400, 404, 422].includes(error.status);
+
+// An address names no hike of this data: say so where the hike would be, and show none,
+// so the page and its address agree.
+function brokenLink(error) {
+  console.warn("This link opens no hike:", error.message);
+  state.liked = null;
+  const card = $("#liked");
+  if (card._map) { card._map.remove(); card._map = null; }
+  card.classList.add("empty");
+  card.innerHTML = `<p class="error-text"><strong>This link doesn't match the current trail data, so it shows no hike.</strong></p>
+    <p>The trails may have changed since it was shared. Search for a hike on the left, or select one on the map.</p>`;
+  $("#liked-name").textContent = "No hike chosen yet.";
+  $("#search").value = "";
+  $("#find").disabled = $("#pair-search").disabled = true;
+  $("#return-bar").hidden = true;
+  $("#results").hidden = $("#selected").hidden = true;
+  pick.restyle();
+  pick.drawLoops();
+  setStatus("");
+}
+
+// ``from``: "link" (an address), "compose" (the composer's Use this hike) or null.
+async function chooseComposed(route, name, from = null) {
   const request = ++chosen;
   setStatus("Measuring your hike…");
   try {
@@ -660,7 +724,7 @@ async function chooseComposed(route, name) {
     if (request !== chosen) return;
     state.liked = hike;
     $("#search").value = "";
-    $("#liked-name").textContent = `Chosen: ${hike.name}, ${fmt.km(hike.walk_m)}`;
+    $("#liked-name").textContent = `Chosen: ${hike.name}, ${lengthText(hike)}`;
     $("#compose-name").value = hike.name;
     compose.named = hike.name_origin === "hiker";
     $("#find").disabled = false;
@@ -674,7 +738,12 @@ async function chooseComposed(route, name) {
     pick.drawLoops();
     setStatus("");
   } catch (error) {
-    if (request === chosen) setStatus(error.message, true);
+    if (request !== chosen) return;
+    if (from === "link" && namesNothing(error)) brokenLink(error);
+    else {
+      setStatus(error.message, true);
+      if (from === "compose") pick.hint(`Not measured: ${error.message}`); // beside the button pressed
+    }
   }
 }
 
@@ -904,7 +973,7 @@ const compose = {
 
   hintNext() {
     pick.hint(this.start == null
-      ? "Click a junction or a trail segment to start your hike there."
+      ? "Click a junction or a trail segment to start your hike there. Only marked trails are segments, and a hike starts and ends at a junction."
       : "Click a segment to walk on it; Undo takes the last one back. Use this hike measures it.");
   },
 
@@ -944,11 +1013,13 @@ const compose = {
       const style = segment.kind === "link" ? LINK_LINE : segment.kind === "gap" ? SEGMENT_GAP : SEGMENT_LINE;
       this.line(segment, style);
     }
+    const added = new Set(this.route.filter((step) => step.auto).map((step) => step.id));
     for (const id of onRoute) {
       const segment = this.segments.get(id);
       if (!segment) continue;
-      if (!picked.has(id)) this.line(segment, AUTO_LINE, "Added to reach the segment you clicked");
-      else this.line(segment, segment.kind === "trail" ? ROUTE_LINE : { ...ROUTE_LINE, dashArray: "4 8" });
+      if (picked.has(id)) this.line(segment, segment.kind === "trail" ? ROUTE_LINE : { ...ROUTE_LINE, dashArray: "4 8" });
+      // Dashed over red where the way added walks a segment clicked too, so both show.
+      if (added.has(id)) this.line(segment, AUTO_LINE, "Added to reach the segment you clicked");
     }
     for (const id of ends) {
       const junction = this.junctions.get(id);
@@ -1006,12 +1077,14 @@ const compose = {
   },
 
   add(segment, latlng) {
+    let started = false;
     if (this.start == null) {
       // Start at the end of the segment nearer the click.
       const click = [latlng.lat, latlng.lng];
       const [a, b] = [segment.a, segment.b].map((id) => this.junctions.get(id));
       this.start = a && b && metresBetween(click, b.latlng) < metresBetween(click, a.latlng) ? segment.b : segment.a;
       this.startKey = this.junctions.get(this.start).key;
+      started = true;
     }
     const end = this.end();
     if (end == null) return;
@@ -1019,17 +1092,23 @@ const compose = {
     if (end !== segment.a && end !== segment.b) {
       way = segment.kind === "link" ? null : this.shortest(end, segment);
       if (!way) {
-        pick.hint("That segment is not connected to your route's end over the trails loaded so far; zoom out to load the way there.");
+        pick.hint("That segment is not connected to your route's end over the trails loaded so far. Pan the map along the trails between them, zoomed in so they load, then click it again; or click the segments in between.");
         return;
       }
     }
+    const walked = new Set(this.route.map((step) => step.id));
     let here = end;
     for (const [step, auto] of [...way.map((s) => [s, true]), [segment, false]]) {
       this.route.push({ id: step.id, step: here === step.a ? step.stepAB : step.stepBA, auto });
       here = here === step.a ? step.b : step.a;
     }
     this.changed();
-    if (way.length) pick.hint(`Added ${way.length} segment${way.length === 1 ? "" : "s"} (amber, dashed) to reach it; Undo takes them back too.`);
+    if (started) {
+      pick.hint(`Your hike starts at the end of ${segment.routes?.[0] ? `the ${segment.routes[0]} segment` : "that segment"} nearer your click (the green dot) and walks it to the other end; Clear, then click a junction, to start elsewhere.`);
+    } else if (way.length) {
+      const back = way.filter((s) => walked.has(s.id)).length;
+      pick.hint(`Added ${way.length} segment${way.length === 1 ? "" : "s"} (amber, dashed) to reach it${back ? `, ${back} of them back along your own route` : ""}; Undo takes them back too, or click the segments you want in between.`);
+    }
   },
 
   // The shortest way from a junction to either end of ``target`` over the trail
@@ -1078,6 +1157,7 @@ const compose = {
     if (this.route.length) {
       this.route.pop();
       while (this.route.at(-1)?.auto) this.route.pop();
+      if (!this.route.length) this.named = false;
     } else this.start = this.startKey = null;
     this.changed();
   },
@@ -1089,15 +1169,18 @@ const compose = {
   },
 
   changed() {
-    $("#compose-done").disabled = !this.route.length;
+    if (this.start == null) this.named = false; // a new hike: its name is proposed again
     if (!this.named) $("#compose-name").value = "";
     this.draw();
     this.hintNext();
   },
 
-  // Length and an estimate of the climb from the segments; "Use this hike" measures it exactly.
+  // Length and an estimate of the climb from the segments; "Use this hike" measures it exactly,
+  // with its way back when Return to start is on. Over MAX_COMPOSED_M it cannot be used.
   readout() {
     const out = $("#compose-readout");
+    out.classList.remove("over");
+    $("#compose-done").disabled = !this.route.length;
     if (this.start == null) { out.textContent = "No hike drawn yet."; return; }
     let metres = 0, up = 0, down = 0, here = this.start, reused = false;
     const seen = new Set();
@@ -1112,22 +1195,31 @@ const compose = {
       seen.add(id);
       here = forward ? segment.b : segment.a;
     }
+    const loop = this.route.length && here === this.start;
     const parts = [
       `${this.route.length} segment${this.route.length === 1 ? "" : "s"}`,
-      fmt.km(metres),
+      `${fmt.km(metres)}${loop ? "" : " one way"}`,
       `about ↑ ${fmt.m(up)} ↓ ${fmt.m(down)}`,
     ];
-    if (this.route.length && here === this.start) parts.push("back at the start");
+    if (loop) parts.push("back at the start");
+    else if (this.route.length && returnToStart()) parts.push("the way back to the start is added when you use it");
     if (reused) parts.push("walks a segment twice");
     const added = this.route.filter((step) => step.auto).length;
     if (added) parts.push(`${added} added to connect (amber)`);
+    if (metres > MAX_COMPOSED_M) {
+      parts.push(`over the ${fmt.km(MAX_COMPOSED_M)} a hike may be: Undo some of it`);
+      out.classList.add("over");
+      $("#compose-done").disabled = true;
+    } else if (this.route.length && metres < SHORTEST_HIKE_M) {
+      parts.push(`shorter than the ${fmt.km(SHORTEST_HIKE_M)} the catalog hikes start at`);
+    }
     out.textContent = parts.join(" · ");
   },
 
   done() {
     if (this.start == null || !this.route.length) return;
     const route = `${this.startKey}:${this.route.map((step) => step.step).join(",")}`;
-    chooseComposed(route, this.named ? $("#compose-name").value.trim() : null);
+    chooseComposed(route, this.named ? $("#compose-name").value.trim() : null, "compose");
   },
 };
 
@@ -1157,6 +1249,7 @@ async function comparePair(id) {
     $("#pair-search").value = hike.name;
     document.querySelectorAll("#results-table tr.active").forEach((r) => r.classList.remove("active"));
     const card = $("#selected");
+    state.selected = { pair: id };
     renderDetail(card, hike, {
       role: "Compared with the liked hike", compare: liked, result: { ...pair, drive_hours: null },
       query: { weights: pair.weights, month: pair.month, return_to_start: pair.return_to_start },
@@ -1298,19 +1391,19 @@ function renderResults(body) {
     : `${body.reachable.toLocaleString("en")} hikes within the drive`;
   const mode = body.return_to_start ? "each with its way back to the start" : "each one way";
   const composed = body.results.some((result) => result.route)
-    ? " Rows marked composed are loops drawn from marked trail segments, not catalog hikes; the map shows them dashed green."
+    ? " Rows marked composed are loops drawn from marked trail segments, not catalog hikes; with Select hike on map ticked, that map shows them dashed green."
     : "";
   const versions = body.results.some((result) => result.versions.length)
-    ? " Hikes starting within 10 km of a better one are its versions: click a row with versions to see each in the table and on the map."
+    ? " Hikes starting within 10 km of a better one are its versions: click a row with versions to list the others (var 2, 3) under it and see each on the map."
     : "";
   $("#results-note").textContent = body.results.length
     ? `Like “${state.liked.name}”, out of ${considered}${state.info.compose ? " and loops composed near the best of them" : ""}, ${mode}. Click a row to see it.${composed}${versions}`
     : `No hike matched, out of ${considered}. Try a longer drive or other weights.`;
   const table = $("#results-table");
-  const measureHeads = state.measures.map((m) =>
+  const measureHeads = comparedMeasures(body.return_to_start).map((m) =>
     `<th class="measure${body.weights[m.name] ? "" : " excluded"}" title="${escapeHtml(`${m.label}: ${m.description}`)}">${escapeHtml(m.label)}</th>`).join("");
   const figures = body.return_to_start ? "with the way back" : "one way";
-  table.innerHTML = `<thead><tr><th>#</th><th class="name">Hike</th><th>Score</th>${state.query.drive ? "<th>Drive</th>" : ""}<th title="Length, ${figures}">Length</th><th title="Climb and descent, ${figures}">Up / down</th>${measureHeads}</tr></thead>`;
+  table.innerHTML = `<thead><tr><th>#</th><th class="name">Hike</th><th>Score</th>${state.query.drive ? "<th>Drive</th>" : ""}<th title="Length, ${figures}">Length${body.return_to_start ? " with way back" : ""}</th><th title="Climb and descent, ${figures}">Up / down</th>${measureHeads}</tr></thead>`;
   const tbody = document.createElement("tbody");
   state.expanded = null;
   body.results.forEach((result, i) => {
@@ -1325,10 +1418,10 @@ function renderResults(body) {
 
 // One row of the results table: the hike's figures and every Measure's score.
 function resultRow(result, number, open) {
-  const { weights, drive } = state.query;
+  const { weights, drive, return_to_start: back } = state.query;
   const row = document.createElement("tr");
   row.tabIndex = 0;
-  const cells = state.measures.map((m) => {
+  const cells = comparedMeasures(back).map((m) => {
     const score = result.measures[m.name].score;
     if (score == null) return '<td class="cell none" title="no data">–</td>';
     if (!weights[m.name]) {
@@ -1344,7 +1437,7 @@ function resultRow(result, number, open) {
     <td class="score">${result.score.toFixed(3)}</td>
     ${drive ? `<td>${result.drive_hours.toFixed(1)} h</td>` : ""}
     <td class="figure">${result.length_m != null ? fmt.km(result.length_m) : "–"}</td>
-    <td class="figure">${result.climb_m != null ? `↑ ${fmt.m(result.climb_m)} ↓ ${fmt.m(result.descent_m)}` : "–"}</td>${cells}`;
+    <td class="figure">${result.climb_m != null ? upDown(result.climb_m, result.descent_m) : "–"}</td>${cells}`;
   row.addEventListener("click", open);
   row.addEventListener("keydown", (event) => {
     if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); }
@@ -1352,20 +1445,41 @@ function resultRow(result, number, open) {
   return row;
 }
 
-// The versions of a row, catalog or composed, as rows var 1, 2, 3 under it and on the map.
+// The versions of a row, catalog or composed, on the map, and under it as rows var 2 and 3:
+// the row itself is var 1.
 function expandVersions(index) {
   document.querySelectorAll("#results-table tr.version").forEach((row) => row.remove());
+  document.querySelectorAll("#results-table tr[data-version]").forEach((row) => {
+    delete row.dataset.version;
+    row.firstElementChild.textContent = Number(row.dataset.index) + 1;
+  });
   state.expanded = index;
   const result = state.results[index];
   let after = document.querySelector(`#results-table tr[data-index="${index}"]`);
-  [result, ...result.versions].forEach((version, k) => {
-    const row = resultRow(version, `var ${k + 1}`, () => showResult(index, k));
+  after.dataset.version = `${index}-0`;
+  after.firstElementChild.textContent = `${index + 1}, var 1`;
+  result.versions.forEach((version, k) => {
+    const row = resultRow(version, `var ${k + 2}`, () => showResult(index, k + 1));
     row.classList.add("version");
-    row.dataset.version = `${index}-${k}`;
+    row.dataset.version = `${index}-${k + 1}`;
     after.after(row);
     after = row;
   });
   pick.drawLoops();
+}
+
+// What names a result across Rankings: a DayHike's id, a composed loop's route.
+function resultKey(result) {
+  return result.id ?? result.route.text;
+}
+
+// Show again the hike that was shown against the liked one, when the new Ranking still lists it.
+function reopenSelected(selected) {
+  if (selected?.pair != null) { comparePair(selected.pair); return; }
+  state.results.forEach((result, index) => {
+    const k = [result, ...result.versions].findIndex((version) => resultKey(version) === selected?.key);
+    if (k >= 0) showResult(index, k);
+  });
 }
 
 // Show result ``index`` (its version ``version`` when it has several) against the liked hike.
@@ -1389,6 +1503,7 @@ async function showResult(index, version = 0) {
       : await api(`/api/hikes/${result.id}?return_to_start=${state.query.return_to_start}`);
     if (request !== shown || results !== state.results || liked !== state.liked) return;
     const card = $("#selected");
+    state.selected = { key: resultKey(result) };
     const which = versions ? `, var ${version + 1} of ${versions.length}` : "";
     const role = `Similar hike #${index + 1}${result.route ? ", composed from trail segments" : ""}${which}`;
     renderDetail(card, hike, { role, compare: state.liked, result });
@@ -1403,7 +1518,10 @@ async function showResult(index, version = 0) {
 
 async function start() {
   for (let m = 1; m <= 12; m++) $("#month").add(new Option(MONTHS[m - 1], String(m)));
-  if (window.matchMedia("(max-width: 900px)").matches) $("#weights-panel").open = false;
+  // The weights fold away on a narrow screen, also when the window narrows.
+  const narrow = window.matchMedia("(max-width: 900px)");
+  $("#weights-panel").open = !narrow.matches;
+  narrow.addEventListener("change", () => { $("#weights-panel").open = !narrow.matches; });
   try {
     const [info, measures] = await Promise.all([api("/api/info"), api("/api/measures")]);
     state.info = info;
@@ -1419,7 +1537,7 @@ async function start() {
     $("#drive-on").disabled = true;
     $("#drive-off").hidden = false;
   }
-  const likedSearch = nameSearch($("#search"), $("#suggestions"), choose);
+  nameSearch($("#search"), $("#suggestions"), choose);
   $("#map-pick-on").addEventListener("change", (event) => (event.target.checked ? pick.open() : pick.close()));
   $("#compose-bar").hidden = !state.info.compose;
   $("#compose-on").addEventListener("click", () => compose.toggle(!compose.on));
@@ -1442,27 +1560,37 @@ async function start() {
     markStale();
   });
   $("#find").addEventListener("click", findSimilar);
-  // Remeasure the liked hike in the other mode, and rank again when a Ranking is shown.
+  // Remeasure the liked hike in the other mode, and rank again when a Ranking is shown,
+  // keeping the hike shown against it open.
   $("#return-on").addEventListener("change", async () => {
+    syncRoundTrip();
+    if (compose.on) compose.readout();
     const liked = state.liked;
     if (!liked) return;
     const shown = !$("#results").hidden;
+    const selected = $("#selected").hidden ? null : state.selected;
     if (liked.route) await chooseComposed(liked.route.text, liked.name_origin === "hiker" ? liked.name : null);
     else await choose(liked.id);
-    if (shown && state.liked !== liked) findSimilar();
+    if (state.liked === liked) return;
+    if (shown) await findSimilar();
+    if (selected && (!shown || !$("#results").hidden)) reopenSelected(selected);
   });
   const openLinked = () => {
     const oneWay = location.hash.endsWith("&oneway");
     const hash = oneWay ? location.hash.slice(0, -"&oneway".length) : location.hash;
     const modeChanged = returnToStart() === oneWay;
     $("#return-on").checked = !oneWay;
+    syncRoundTrip();
     const linked = hash.match(/^#hike=(\d+)$/);
-    if (linked && (modeChanged || Number(linked[1]) !== state.liked?.id)) likedSearch.pick(Number(linked[1]));
+    if (linked && (modeChanged || Number(linked[1]) !== state.liked?.id)) choose(Number(linked[1]), { fromLink: true });
     const drawn = hash.match(/^#compose=([^&]+)(?:&name=(.*))?$/);
     if (drawn && state.info.compose && (modeChanged || !(state.liked?.route && routeHash(state.liked) === hash))) {
       let name = null;
       try { name = drawn[2] ? decodeURIComponent(drawn[2]) : null; } catch { /* a broken name: propose one */ }
-      chooseComposed(drawn[1], name);
+      chooseComposed(drawn[1], name?.slice(0, NAME_LENGTH), "link"); // a hand-made long name is cut, not refused
+    } else if (!linked && !drawn && /^#(hike|compose)=/.test(hash)) {
+      chosen++; // drops a hike still loading
+      brokenLink(new Error(`not a hike link: ${hash}`));
     }
   };
   window.addEventListener("hashchange", openLinked);

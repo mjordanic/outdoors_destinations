@@ -58,6 +58,7 @@ from sklearn.neighbors import BallTree
 from dayhike.catalog import (
     EARTH_RADIUS_M,
     MAX_CAR_SPEED_MS,
+    NAME_ORIGIN_SYNTHETIC,
     MatrixClient,
     Origin,
     Trailhead,
@@ -127,6 +128,7 @@ GROUP_M = 10_000.0  # hikes starting closer than this to a better one are its ve
 VERSIONS = 3  # versions per row, the row's own included
 VERSION_DIFFERS = 0.5  # a version walks more than this share of its length off every other one
 LOOP_NAME_M = 2_000.0  # a loop is named after a named point this near its start
+UNNAMING_KINDS = ("restaurant_cafe", "parking")  # amenity points that name no hike: a cafe, a car park
 TRAILHEAD_NEAREST = 3  # parking and restaurant/cafe points kept per Trailhead
 VALHALLA_CACHE_BYTES = 256 * 1024 * 1024  # mjolnir.max_cache_size; the build default is 1 GB
 SEARCH_SCAN_CAP = 5_000  # occurrences of the scanned word a search looks at, so short queries stay fast
@@ -169,14 +171,22 @@ MEASURE_INFO: dict[str, tuple[str, str, str]] = {
 }
 
 
-def score_note(score: float | None, tied: float | None) -> str | None:
+def score_note(score: float | None, tied: float | None, same: str | None = None) -> str | None:
     """A calibrated Measure score in words, with the number the compare table
     shows for it (two decimals, half rounding up). ``tied`` is the share of
     random hike pairs scoring the same, each counting half in the score.
+    ``same`` is "identical" when the two values are, else why the Measure
+    counts them as the same (ADR-0022); then no difference is told.
     """
     if score is None or tied is None:
         return None
+    if same == "identical":
+        return "Identical"
+    if same:
+        return f"Counted as the same ({same})"
     percent = int(Decimal(score).quantize(Decimal("0.01"), ROUND_HALF_UP) * 100)
+    if percent == 0:
+        return "Difference bigger than almost all random hike pairs"
     note = f"Difference smaller than {percent}% of random hike pairs"
     return f"{note} (ties count half)" if tied else note
 
@@ -681,6 +691,7 @@ class ServingData:
                 **self._climb(row, names[int(self.store.ids[row])][1:], return_to_start),
                 "highest_m": _value(store.column("highest_m")[row]),
                 "difficulty_rank": _value(store.column("difficulty_rank")[row]),
+                "round_trip": _value(store.column("round_trip")[row]),
                 "trailhead": [float(v) for v in self.trailheads[row]],
             }
             for row in rows
@@ -700,21 +711,25 @@ class ServingData:
         """
         with self._db() as db:
             found = db.execute(
-                "SELECT h.id, h.name, h.walk_m, h.line FROM hike_boxes b JOIN hikes h ON h.id = b.id "
+                "SELECT h.id, h.name, h.name_origin, h.walk_m, h.line FROM hike_boxes b JOIN hikes h ON h.id = b.id "
                 "WHERE b.north >= ? AND b.south <= ? AND b.east >= ? AND b.west <= ? LIMIT ?",
                 (south, north, west, east, limit + 1),
             ).fetchall()
         if len(found) > limit:
             return [], True
-        return [{"id": i, "name": name, "walk_m": walk_m, "line": line} for i, name, walk_m, line in found], False
+        return [
+            {"id": i, "name": _shown_name(i, name, origin), "walk_m": walk_m, "line": line}
+            for i, name, origin, walk_m, line in found
+        ], False
 
     def _names(self, ids: list[int]) -> dict[int, tuple[str, float | None, float | None]]:
         """Name, climb and descent (metres, walking direction) per DayHike id."""
         with self._db() as db:
             return {
-                dayhike_id: (name, climb_m, descent_m)
-                for dayhike_id, name, climb_m, descent_m in db.execute(
-                    f"SELECT id, name, climb_m, descent_m FROM hikes WHERE id IN ({','.join('?' * len(ids))})", ids
+                dayhike_id: (_shown_name(dayhike_id, name, origin), climb_m, descent_m)
+                for dayhike_id, name, origin, climb_m, descent_m in db.execute(
+                    f"SELECT id, name, name_origin, climb_m, descent_m FROM hikes WHERE id IN ({','.join('?' * len(ids))})",
+                    ids,
                 )
             }
 
@@ -734,7 +749,7 @@ class ServingData:
         profile = np.frombuffer(elevation, dtype="<i2").tolist() if elevation else None
         return {
             "id": dayhike_id,
-            "name": name,
+            "name": _shown_name(dayhike_id, name, name_origin),
             "name_origin": name_origin,
             "sac_scale": sac_scale,
             "trailhead": [float(v) for v in self.trailheads[row]],
@@ -838,20 +853,31 @@ class ServingData:
         return round_trip(walk, back), back
 
     def _proposed_name(self, walk: ComposedWalk, labels: dict[int, str]) -> str:
-        """The two trails walked longest, and the named place nearest the start
-        within ``TRAILHEAD_M``: "Summit Line and Lake Loop from Lakeside Inn"."""
+        """The two trails walked longest (in name order, so a longer walk on
+        them keeps the name), and the named hiking place nearest the start
+        within ``TRAILHEAD_M``: "Lake Loop and Summit Line from Summit Hut"."""
+        trails = self._trails(walk, labels) or "Your hike"
+        near = self._places_near_start(walk, TRAILHEAD_M)
+        return f"{trails} from {near[0][1]}" if near else trails
+
+    def _trails(self, walk: ComposedWalk, labels: dict[int, str]) -> str:
+        """The two trails a walk walks longest, by name, joined by "and"; "" with none."""
         main: dict[str, float] = {}
         for relation, metres in walk.relation_m.items():
             if labels.get(relation):
                 main[labels[relation]] = main.get(labels[relation], 0.0) + metres
-        trails = " and ".join(sorted(main, key=lambda label: -main[label])[:2]) or "Your hike"
+        return " and ".join(sorted(sorted(main, key=lambda label: -main[label])[:2]))
+
+    def _places_near_start(self, walk: ComposedWalk, radius_m: float) -> list[tuple[float, str]]:
+        """(metres, name) of the named amenity points within ``radius_m`` of a
+        walk's start that a hiker would steer by, nearest first: no
+        restaurant, cafe or parking (ADR-0022)."""
         lat, lon = float(walk.lat[0]), float(walk.lon[0])
-        near = [
+        return sorted(
             (metres, row[4])
-            for row in self.trailgraph.amenities_near(walk.lat[:1], walk.lon[:1], TRAILHEAD_M)
-            if row[4] and (metres := _haversine_m(lat, lon, row[2], row[3])) <= TRAILHEAD_M
-        ]
-        return f"{trails} from {min(near)[1]}" if near else trails
+            for row in self.trailgraph.amenities_near(walk.lat[:1], walk.lon[:1], radius_m)
+            if row[4] and row[1] not in UNNAMING_KINDS and (metres := _haversine_m(lat, lon, row[2], row[3])) <= radius_m
+        )
 
     def _composed_points(self, lat: np.ndarray, lon: np.ndarray) -> list[dict]:
         """The amenity points a ComposedHike's detail shows, as ``_write_hikes`` picks them."""
@@ -972,7 +998,7 @@ class ServingData:
         listed_rows = [hike[1] for hike in listed]
         summaries = self._summaries(listed_rows, return_to_start)
         lines = self._served_lines([summary["id"] for summary in summaries])
-        measures = self._measures(store, seed_row, np.array(listed_rows, dtype=np.int64), month)
+        measures = scored_measures(store, seed_row, np.array(listed_rows, dtype=np.int64), month)
         dayhikes = {
             hike[1]: {**summary, "line": lines[summary["id"]], "score": hike[0], "measures": scored}
             for hike, summary, scored in zip(listed, summaries, measures)
@@ -1055,7 +1081,7 @@ class ServingData:
             kept[i] = points
         chosen = list(kept)
         listed = []
-        for i, measures in zip(chosen, self._measures(loops, seed, np.array(chosen, dtype=np.int64), month)):
+        for i, measures in zip(chosen, scored_measures(loops, seed, np.array(chosen, dtype=np.int64), month)):
             loop, walk, trip, facts, _ = measured[i]
             climb_m, descent_m = climb_and_descent(trip.lat, trip.lon, trip.ele)
             listed.append((
@@ -1085,19 +1111,18 @@ class ServingData:
             return dict(_in_chunks(db, "SELECT id, line FROM hikes WHERE id IN ({})", ids))
 
     def _loop_name(self, walk: ComposedWalk) -> str:
-        """A SuggestedLoop's name, from where it starts: the named amenity point
+        """A SuggestedLoop's name, from where it starts: the named hiking place
         nearest its start, "from" it within ``TRAILHEAD_M``, "near" it within
-        ``LOOP_NAME_M``, else the start's coordinates."""
-        lat, lon = float(walk.lat[0]), float(walk.lon[0])
-        near = sorted(
-            (metres, row[4])
-            for row in self.trailgraph.amenities_near(walk.lat[:1], walk.lon[:1], LOOP_NAME_M)
-            if row[4] and (metres := _haversine_m(lat, lon, row[2], row[3])) <= LOOP_NAME_M
-        )
-        if not near:
-            return f"Loop from {lat:.4f}, {lon:.4f}"
-        metres, name = near[0]
-        return f"Loop {'from' if metres <= TRAILHEAD_M else 'near'} {name}"
+        ``LOOP_NAME_M``; else "on" the trails it walks longest; else the
+        start's coordinates (ADR-0022)."""
+        near = self._places_near_start(walk, LOOP_NAME_M)
+        if near:
+            metres, name = near[0]
+            return f"Loop {'from' if metres <= TRAILHEAD_M else 'near'} {name}"
+        trails = self._trails(walk, self._labels(list(walk.relation_m)))
+        if trails:
+            return f"Loop on {trails}"
+        return f"Loop from {float(walk.lat[0]):.4f}, {float(walk.lon[0]):.4f}"
 
     def pair(
         self,
@@ -1124,30 +1149,8 @@ class ServingData:
             "a": None if isinstance(a, Route) else a,
             "b": b_id,
             "score": _value(similarity[0]),
-            "measures": self._measures(store, a_row, rows, month)[0],
+            "measures": scored_measures(store, a_row, rows, month)[0],
         }
-
-    def _measures(
-        self, store: SimilarityStore, seed: int | OutsideSeed, rows: np.ndarray, month: int | None
-    ) -> list[dict]:
-        """Per row, every Measure's calibrated ``score``, ``raw`` score and
-        ``score_note`` against the Seed."""
-        measures = {}
-        for measure in MEASURES:
-            raw = measure_scores(store, measure, seed, rows, month=month)
-            key = _calibration_key(measure, month)
-            measures[measure.name] = (raw, calibrate(store, key, raw), random_pair_shares(store, key, raw)[1])
-        return [
-            {
-                name: {
-                    "score": _value(calibrated[i]),
-                    "raw": _value(raw[i]),
-                    "note": score_note(_value(calibrated[i]), _value(tied[i])),
-                }
-                for name, (raw, calibrated, tied) in measures.items()
-            }
-            for i in range(len(rows))
-        ]
 
     def reachable(
         self, origin: Origin, max_hours: float, client: MatrixClient
@@ -1176,6 +1179,55 @@ class ServingData:
             if seconds is not None and math.isfinite(seconds) and 0 <= seconds <= max_hours * 3600:
                 hours[row] = seconds / 3600
         return hours
+
+
+def scored_measures(
+    store: SimilarityStore, seed: int | OutsideSeed, rows: np.ndarray, month: int | None
+) -> list[dict]:
+    """Per row, every Measure's calibrated ``score``, ``raw`` score and
+    ``score_note`` against the Seed."""
+    measures = {}
+    for measure in MEASURES:
+        raw = measure_scores(store, measure, seed, rows, month=month)
+        key = _calibration_key(measure, month)
+        same = _sameness(store, measure, seed, rows, month, raw)
+        measures[measure.name] = (raw, calibrate(store, key, raw), random_pair_shares(store, key, raw)[1], same)
+    return [
+        {
+            name: {
+                "score": _value(calibrated[i]),
+                "raw": _value(raw[i]),
+                "note": score_note(_value(calibrated[i]), _value(tied[i]), same[i]),
+            }
+            for name, (raw, calibrated, tied, same) in measures.items()
+        }
+        for i in range(len(rows))
+    ]
+
+
+def _sameness(
+    store: SimilarityStore, measure, seed: int | OutsideSeed, rows: np.ndarray, month: int | None, raw: np.ndarray
+) -> list[str | None]:
+    """Per row, "identical" when its value of the Measure is the Seed's, else
+    why a raw score of 1 counts two different values as the same, else None."""
+    if measure.kind == "profile":
+        left = seed.profile if isinstance(seed, OutsideSeed) else store.profile[seed]
+        identical = (store.profile[rows] == left).all(axis=-1)
+        reason = "the same shape walked the other way"
+    else:
+        columns = [f"{c}_{month:02d}" if measure.monthly and month is not None else c for c in measure.columns]
+        index = [FACT_COLUMNS.index(c) for c in columns]
+        left = seed.facts[index] if isinstance(seed, OutsideSeed) else store.facts[index, seed]
+        identical = (store.facts[index][:, rows] == np.asarray(left)[:, None]).all(axis=0)
+        if measure.dead_band is not None:
+            reason = "within the dead band"
+        elif measure.cap is not None:
+            reason = f"both {measure.cap:g} or more"
+        elif measure.kind == "ratio":
+            reason = "both at or under the floor"
+        else:
+            reason = "close enough to score the same"
+    return ["identical" if same else reason if one else None for same, one in zip(identical.tolist(), (raw == 1.0).tolist())]
 
 
 # Letters with no Unicode decomposition to a base letter, spelt as a plain keyboard would.
@@ -1211,6 +1263,12 @@ def _in_chunks(db: sqlite3.Connection, query: str, values: list) -> list[tuple]:
         batch = values[start : start + 900]
         rows += db.execute(query.format(",".join("?" * len(batch))), batch).fetchall()
     return rows
+
+
+def _shown_name(dayhike_id: int, name: str, origin: str) -> str:
+    """A DayHike's name as the page shows it: a synthetic ``relation:{id}``
+    label (no name, ref or place in OSM) reads as an unnamed hike."""
+    return f"Unnamed hike (OSM relation {dayhike_id})" if origin == NAME_ORIGIN_SYNTHETIC else name
 
 
 def _value(value: float) -> float | None:
