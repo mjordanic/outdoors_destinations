@@ -210,6 +210,9 @@ CORE_MEASURES = (
     "temperature", "precipitation", "solar_radiation", "waterside", "climb_grade",
 )  # fmt: skip
 DEFAULT_WEIGHTS = {name: 100.0 if name in CORE_MEASURES else 0.0 for name in MEASURE_NAMES}
+# The Measures a Wish can give a value: one fact, a number or yes/no. A mix or
+# a ProfileShape is no single value (CONTEXT.md Wish).
+WISHABLE = tuple(measure.name for measure in MEASURES if measure.kind in ("ratio", "tolerance", "agree"))
 # Calibration rows: every Measure, then each monthly Measure once per QueryMonth.
 CALIBRATION_KEYS = (
     *MEASURE_NAMES,
@@ -369,6 +372,19 @@ class OutsideSeed:
             ),
             twin_rows=np.asarray(twin_rows, dtype=np.int64),
         )
+
+    @classmethod
+    def wished(cls, wish: Mapping[str, float]) -> OutsideSeed:
+        """A Wish as a Seed: each value the fact of its Measure (``WISHABLE``,
+        yes/no as 1/0), in every QueryMonth's column too for a monthly Measure;
+        every other fact missing, and no Twins."""
+        facts = {}
+        for measure in MEASURES:
+            if measure.name in wish:
+                (column,) = measure.columns
+                months = [f"{column}_{month:02d}" for month in range(1, 13)] if measure.monthly else []
+                facts.update(dict.fromkeys([column, *months], float(wish[measure.name])))
+        return cls.of(facts, None)
 
 
 def rank_dayhikes(

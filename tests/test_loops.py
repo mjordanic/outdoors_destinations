@@ -11,7 +11,7 @@ at the loops themselves list every hike in its own row.
 """
 
 import pytest
-from test_trailgraph import FIXTURE, LAKE_LOOP, MEADOW_PATH, _write_rasters
+from test_trailgraph import BRIDGE_PATH, FIXTURE, LAKE_LOOP, MEADOW_PATH, _write_rasters
 
 from dayhike import build_catalog, build_similarity, sample_climate, sample_dem, sample_landcover
 from dayhike.similarity import DEFAULT_WEIGHTS
@@ -105,6 +105,25 @@ def test_a_loop_mostly_on_the_seed_is_no_suggestion(data) -> None:
         results = data.rank(Route.parse(seed["route"]["text"]), DEFAULT_WEIGHTS)
         assert [_segments(data, r) for r in _loops(results)] == [_segments(data, other)]
         assert LAKE_LOOP in [r["id"] for r in results]
+
+
+@pytest.mark.usefixtures("rows_apart")
+def test_a_wish_with_a_length_lists_loops_and_leaves_no_hike_out(data) -> None:
+    results = data.rank({"length": 3_000}, {"length": 100})
+
+    # Both loops, though two thirds of each is the Lake Loop: a Wish walks nowhere.
+    assert [round(loop["length_m"], -2) for loop in _loops(results)] == [3_100, 3_100]
+    assert {r["id"] for r in results} - {None} == set(data.store.ids.tolist())
+    assert _loops(data.rank({"elevation_gain": 300}, {"elevation_gain": 100})) == []  # no length to follow
+
+
+@pytest.mark.usefixtures("rows_apart")
+def test_a_wished_temperature_is_of_the_query_month(data) -> None:
+    # January means: Meadow Path 0.17 °C, Bridge Path -1.10; their June-August means 6.17 and 4.90.
+    wish, weights = {"temperature": 0.17}, {"temperature": 100}
+
+    assert data.rank(wish, weights, month=1)[0]["id"] == MEADOW_PATH
+    assert data.rank(wish, weights)[0]["id"] == BRIDGE_PATH
 
 
 def test_hikes_starting_near_each_other_share_a_row_of_versions(data) -> None:

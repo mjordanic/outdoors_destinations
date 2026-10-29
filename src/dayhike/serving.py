@@ -26,7 +26,7 @@ similarity directory live. It writes a directory a server memory-maps:
 ``ServingData`` opens such a directory without ``Catalog.open``: name search,
 the hikes in a map view, hike detail and Ranking all read the memory-mapped arrays and the SQLite file.
 The Segments in a map view and a ComposedHike's detail read ``trailgraph.sqlite``; a Ranking
-from a ComposedHike scores its facts against every DayHike like any Seed's. Detail, pair and
+from a ComposedHike or a Wish scores its facts against every DayHike like any Seed's. Detail, pair and
 Ranking measure every hike with its way back to the start, or every hike one way (ADR-0019).
 With a TrailGraph a Ranking also searches it for SuggestedLoops near its best DayHikes and
 lists them among them (``dayhike.loops``, ADR-0020).
@@ -116,6 +116,7 @@ from dayhike.trailgraph import (
 
 Progress = Callable[[str], None]
 Reach = Callable[[list[tuple[float, float]]], list[float | None]]  # drive hours to places, None out of reach
+Seed = int | Route | Mapping[str, float]  # a DayHike id, a ComposedHike, or a Wish (Measure name to value)
 
 SERVING_FORMAT = 4
 SERVING_ROOT = "/data"  # where the container finds the export (web/Dockerfile)
@@ -168,6 +169,27 @@ MEASURE_INFO: dict[str, tuple[str, str, str]] = {
     "round_trip": ("trail", "Round trip", "Ends within 50 m of the Trailhead, or not (always, with the way back)."),
     "climb_grade": ("steepness", "Climb grade", "Gain over the length of the stretches that climb; scored by the smaller over the larger (floor 3 %), against random hike pairs."),
     "steepest_km": ("steepness", "Steepest km", "Largest height change over 1 km; scored by the smaller over the larger (floor 50 m), against random hike pairs."),
+}
+
+# The Wish form's input for each Measure that takes a number (``WISHABLE`` but yes/no): unit,
+# lowest, highest, step and default, in the units of the Measure's fact.
+WISH_INPUTS: dict[str, tuple[str | None, float, float, float, float]] = {
+    "length": ("m", 1_000, 40_000, 500, 10_000),
+    "elevation_gain": ("m", 0, 3_000, 50, 600),
+    "difficulty": ("SAC grade", 1, 6, 1, 2),
+    "highest": ("m", 0, 5_000, 50, 1_500),
+    "lowest": ("m", 0, 4_000, 50, 500),
+    "peaks_around": ("peaks", 0, 50, 1, 5),
+    "temperature": ("°C", -20, 30, 1, 18),
+    "precipitation": ("mm", 0, 300, 5, 80),
+    "solar_radiation": ("kJ m⁻² day⁻¹", 0, 25_000, 500, 16_000),
+    "southness": (None, 0, 1, 0.05, 0.5),
+    "water_count": ("sources", 0, 3, 1, 1),
+    "dry_stretch": ("m", 0, 40_000, 500, 5_000),
+    "waterside": ("share", 0, 1, 0.05, 0.5),
+    "tarmac_approach": ("m", 0, 5_000, 100, 0),
+    "climb_grade": ("share", 0, 0.5, 0.01, 0.1),
+    "steepest_km": ("m", 0, 800, 10, 150),
 }
 
 
@@ -902,10 +924,12 @@ class ServingData:
             point[6], point[7] = named[point[6]]
         return [dict(zip(POINT_COLUMNS, point)) for point in points]
 
-    def _seed(self, seed: int | Route, return_to_start: bool) -> tuple[int | OutsideSeed, ComposedWalk | None]:
+    def _seed(self, seed: Seed, return_to_start: bool) -> tuple[int | OutsideSeed, ComposedWalk | None]:
         """A DayHike's store row, or a ComposedHike's facts beside the store
         (with its way back when the DayHikes are; the DayHikes it retraces as its Twins)
-        and its walk."""
+        and its walk, or a Wish's values as facts (it walks nowhere)."""
+        if isinstance(seed, Mapping):
+            return OutsideSeed.wished(seed), None
         if not isinstance(seed, Route):
             return self.row_of(seed), None
         walk = self.trailgraph.walk(seed)
@@ -935,7 +959,7 @@ class ServingData:
 
     def rank(
         self,
-        seed: int | Route,
+        seed: Seed,
         weights: Mapping[str, float],
         *,
         month: int | None = None,
@@ -946,8 +970,9 @@ class ServingData:
     ) -> list[dict]:
         """The ``limit`` hikes most similar to one Seed, with every Measure's score.
 
-        The Seed is a DayHike id or a ComposedHike's Route (the DayHikes it
-        retraces are left out, as a Seed's Twins). Each Measure's ``score`` is
+        The Seed is a DayHike id, a ComposedHike's Route (the DayHikes it
+        retraces are left out, as a Seed's Twins) or a Wish, Measure name to
+        value (nothing is left out). Each Measure's ``score`` is
         its calibrated score (what the weights average), ``raw`` the
         uncalibrated one; both are None where either hike lacks the fact.
         ``return_to_start`` measures the Seed and every hike alike with
@@ -974,7 +999,9 @@ class ServingData:
         loops = []
         if self.trailgraph is not None and LOOP_SEEDS:
             seed_line = (
-                np.array(decode_polyline(self._served_lines([seed])[seed]))
+                None
+                if isinstance(seed, Mapping)  # a Wish walks nowhere
+                else np.array(decode_polyline(self._served_lines([seed])[seed]))
                 if seed_walk is None
                 else np.column_stack([seed_walk.lat, seed_walk.lon])
             )
@@ -1025,7 +1052,7 @@ class ServingData:
         self,
         store: SimilarityStore,
         seed: int | OutsideSeed,
-        seed_line: np.ndarray,
+        seed_line: np.ndarray | None,
         weights: Mapping[str, float],
         month: int | None,
         rows: np.ndarray,
@@ -1037,7 +1064,7 @@ class ServingData:
         ``LOOP_MEASURED`` best guesses of ``find_loops`` measured (with their
         way back when the Seed is) and scored like a DayHike. A loop is left out
         that shares more than ``LOOP_SEED_SHARE`` of its walk with the Seed's
-        line (``seed_line``, (lat, lon) rows) or of the Seed's with it, or that
+        line (``seed_line``, (lat, lon) rows; None for a Wish) or of the Seed's with it, or that
         is a Twin of a DayHike. All of it stops at ``LOOP_BUDGET_S``."""
         deadline = time.monotonic() + LOOP_BUDGET_S
         if not isinstance(seed, OutsideSeed):
@@ -1069,12 +1096,14 @@ class ServingData:
             quantiles=store.quantiles,
         )
         similarity, _ = score_rows(loops, [seed], np.arange(len(measured)), _measure_weights(weights), month=month)
-        seed_points = _even_points(seed_line[:, 0], seed_line[:, 1], TWIN_STEP_M)
+        seed_points = None if seed_line is None else _even_points(seed_line[:, 0], seed_line[:, 1], TWIN_STEP_M)
         kept: dict[int, np.ndarray] = {}
         for i in np.flatnonzero(~np.isnan(similarity)).tolist():
             walk = measured[i][1]
             points = _even_points(walk.lat, walk.lon, TWIN_STEP_M)
-            if max(_share_on(points, seed_points), _share_on(seed_points, points)) > LOOP_SEED_SHARE:
+            if seed_points is not None and (
+                max(_share_on(points, seed_points), _share_on(seed_points, points)) > LOOP_SEED_SHARE
+            ):
                 continue  # it mostly walks the Seed again
             if self._retraced_rows(walk.lat, walk.lon):
                 continue  # a Catalog DayHike stands for it

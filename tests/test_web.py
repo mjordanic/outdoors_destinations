@@ -54,6 +54,25 @@ def test_info_and_measures_describe_every_measure_in_groups(client: TestClient) 
     assert {m["name"] for m in body["measures"] if m["default_weight"] > 0} == set(CORE_MEASURES)
 
 
+def test_measures_say_how_a_wish_value_is_typed_in(client: TestClient) -> None:
+    measures = {m["name"]: m for m in client.get("/api/measures").json()["measures"]}
+
+    assert {name for name, m in measures.items() if m["wish"] is None} == {"profile", "landcover", "surface"}
+    assert measures["hut_along"]["wish"] == {
+        "kind": "yes/no", "unit": None, "min": None, "max": None, "step": None, "default": True,
+    }  # fmt: skip
+    length = measures["length"]["wish"]
+    assert (length["kind"], length["unit"]) == ("number", "m")
+    assert measures["temperature"]["wish"]["unit"] == "°C"
+    for name, measure in measures.items():
+        wish = measure["wish"]
+        if wish is not None and wish["kind"] == "number":
+            assert wish["min"] <= wish["default"] <= wish["max"] and 0 < wish["step"] < wish["max"] - wish["min"], name
+    # A wished value ranks: the default of every Measure that takes one is accepted.
+    defaults = {name: m["wish"]["default"] for name, m in measures.items() if m["wish"] is not None}
+    assert client.post("/api/rank", json={"wish": defaults, "return_to_start": False}).status_code == 200
+
+
 def test_search_and_detail(client: TestClient) -> None:
     hits = client.get("/api/search", params={"q": "ridge"}).json()["results"]
     hike = client.get(f"/api/hikes/{hits[0]['id']}").json()
@@ -107,6 +126,52 @@ def test_rank_returns_scored_results_with_every_measure(client: TestClient) -> N
     assert set(body["results"][0]["measures"]) == set(MEASURE_NAMES)
     assert body["reachable"] is None and body["results"][0]["drive_hours"] is None
     assert set(body["weights"]) == set(CORE_MEASURES)
+
+
+def test_a_wish_ranks_hikes_by_the_values_typed_in(client: TestClient) -> None:
+    # With the way back the Ridge Walk is 20 km with a Hut; the other three are 10 km without one.
+    wish = {"length": 20_000, "hut_along": True}
+
+    body = client.post("/api/rank", json={"wish": wish, "weights": {"length": 100, "hut_along": 50}}).json()
+
+    assert body["seed"] is None and body["composed"] is None and body["wish"] == wish
+    dayhikes = [r for r in body["results"] if r["id"] is not None]
+    assert dayhikes[0]["id"] == RIDGE_WALK_ID  # no hike is left out as the Seed
+    assert dayhikes[0]["measures"]["length"]["raw"] == pytest.approx(1.0)
+    assert dayhikes[0]["measures"]["hut_along"]["note"] == "Identical"
+    assert {r["id"] for r in dayhikes} == {1001, 1002, 1003, 1007}
+    assert dayhikes[1]["measures"]["length"]["raw"] == pytest.approx(0.5)
+
+
+def test_only_the_measures_a_wish_has_a_value_for_weigh(client: TestClient) -> None:
+    wish = {"length": 10_000, "hut_along": False}
+
+    weighted = client.post("/api/rank", json={"wish": wish, "weights": {"length": 60, "elevation_gain": 100}}).json()
+    unweighted = client.post("/api/rank", json={"wish": wish}).json()
+    no_value_weighted = client.post("/api/rank", json={"wish": wish, "weights": {"elevation_gain": 100}})
+
+    assert weighted["weights"] == {"length": 60}
+    assert unweighted["weights"] == {"length": 100, "hut_along": 100}
+    assert no_value_weighted.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"seed": RIDGE_WALK_ID, "wish": {"length": 10_000}},
+        {"seed": RIDGE_WALK_ID, "composed": {"route": "1:104.11"}},
+        {"wish": {}},
+        {"wish": {"nonsense": 1}},
+        {"wish": {"profile": 0.5}},  # a ProfileShape is no single value
+        {"wish": {"landcover": 0.5}},
+        {"wish": {"hut_along": 1}},
+        {"wish": {"length": True}},
+        {"wish": {"length": "far"}},
+    ],
+)
+def test_rank_refuses_anything_but_one_seed_or_a_wish_of_single_values(client: TestClient, body: dict) -> None:
+    assert client.post("/api/rank", json=body).status_code == 422
 
 
 def test_an_excluded_measure_counts_as_weight_zero(client: TestClient) -> None:
