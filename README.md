@@ -482,9 +482,43 @@ equal, or that the Measure counts as equal (a raw score of 1), count their ties
 in full and score 1.0 however many random pairs tie with them (ADR-0023). The
 printed score is the similarity itself, the weighted mean of the calibrated
 Measure scores: a typical random pair scores about 0.5, and 1.0 needs a pair
-that no random pair beats on any weighted Measure, so the best matches stay
-apart instead of all reading 1.000. Ties in order break on the uncalibrated weighted mean,
+that is the same (or counted as the same), or closer than every random pair, on
+every weighted Measure, so the
+best matches stay apart instead of all reading 1.000. Ties in order break on the uncalibrated weighted mean,
 then on DayHike id.
+
+Reading a score, as the web demo explains it beside every score (ADR-0025):
+
+- **What the number means.** A Measure's score is the share of the 100,000
+  random hike pairs that differ more on that fact. 0.9: these two differ less
+  than 90% of random hike pairs. 0.1: they differ more than about 90% of random
+  hike pairs. Random pairs that differ exactly as much (yes/no facts) count half.
+- **The same values score 1.0**, however many random pairs share them. So do
+  values a Measure counts as the same: WaterSide shares less than 0.15 apart,
+  Water sources both 3 or more, values both at or under a `ratio` floor, and
+  yes/no facts that agree. A pair closer than every random pair also scores
+  1.0 without being the same.
+- **Alike hikes can score low on one Measure.** The score ranks a difference
+  against random pairs, not against how big it looks. Where most hikes are
+  close anyway, as on `profile`, a difference that looks small is still bigger
+  than most random pairs have. Two hikes that differ on a yes/no fact score
+  0.5 or less. So 0.1 on one Measure says random hikes are usually even closer
+  on that fact, not that the two are far apart.
+- **Rare shared traits tell more.** A closeness few random pairs reach is
+  stronger evidence than one most pairs reach, which is why the score is a
+  share of random pairs. A rare shared trait (both pass a hut) says more than
+  a common one (both pass none), but today both score 1.0; more credit for
+  rare shared traits is being studied.
+- **Where the facts come from.** OpenStreetMap (the line, SAC grade, surface,
+  peaks, viewpoints, huts, shelters, water sources, restaurants, parking),
+  FABDEM (heights, climb, profile, steepness, slope aspect), ESA WorldCover
+  2021 (land cover, WaterSide), CHELSA V2.1 1981–2010 normals (temperature,
+  precipitation, solar radiation). Each Measure's source is listed by
+  `/api/measures`.
+
+The page's words live in `SCORE_HELP` and `MEASURE_INFO` in
+`dayhike.serving` and reach the page through `/api/measures`, so a change to
+the scoring rule changes them in one place.
 
 Omit `--month` to compare climate as the June–August regime (mean temperature,
 mean monthly precipitation, June–August solar radiation). Pass `--month 7` to
@@ -1552,7 +1586,10 @@ liked hike. An optional starting place and maximum drive (up to 4 h) keeps only
 hikes within that DriveTime, estimated on highways-only tiles as in
 **Highway tiles** above. Measures with no data for a hike (climate and land
 cover do not cover all of Europe yet) show "no data" and drop out of that
-pair's score.
+pair's score. Every score has a short line and a "?" beside it (in the results
+table, in each column heading); hover, focus, click or tap opens what the score
+means, why alike hikes can score low on one measure, the data each measure
+reads and how the scores are made (ADR-0025).
 
 A Hiker with no particular hike in mind presses "No particular hike in mind?
 Describe the one you want" under the search. The weights list then shows only
@@ -1641,7 +1678,8 @@ yes/no Measure; only the Measures with a value weigh (100 each without
 `weights`), and no hike is left out. Exactly one of `seed`, `composed` and
 `wish` (else 422). `GET /api/measures` gives each Measure's `wish` input:
 `kind` (`number` or `yes/no`), `unit`, `min`, `max`, `step` and `default`, or
-null for a Measure that takes no value (profile, land cover, surface). With a TrailGraph a Ranking also lists SuggestedLoops
+null for a Measure that takes no value (profile, land cover, surface), and its
+data `source`; `score_help` holds the score explanation (`SCORE_HELP`). With a TrailGraph a Ranking also lists SuggestedLoops
 (ADR-0020): `id` null, `route` `{"text"}` (what `/api/compose` takes), `line`,
 `name` (from where it starts) and the figures of a DayHike row; with `origin`
 and `max_hours` only loops starting within the drive, each with its

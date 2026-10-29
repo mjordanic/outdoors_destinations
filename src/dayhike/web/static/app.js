@@ -52,6 +52,7 @@ const state = {
   info: null,
   groups: [],
   measures: [],
+  scoreHelp: null, // what a score means, from the server (ADR-0025)
   liked: null,
   wishing: false, // the Hiker describes the hike they want instead of naming a liked one
   kept: {}, // the weights and off ticks of the mode not shown: { seed, wish }
@@ -390,6 +391,116 @@ function scoreColor(score) {
   return `hsl(145, 42%, ${Math.round(90 - 46 * score)}%)`;
 }
 
+// ---------- score help (ADR-0025) ----------
+
+// A small "?" beside a score: hover, focus, click or tap opens what the score means.
+// ``key``: "overall", "measures", or a Measure's name.
+function helpButton(key) {
+  const measure = state.measures.find((m) => m.name === key);
+  const label = measure ? `What the ${measure.label} score means` : `What the ${key === "overall" ? "similarity" : "measure"} score means`;
+  return `<button type="button" class="help" data-help="${escapeHtml(key)}" aria-label="${escapeHtml(label)}" aria-haspopup="dialog" aria-expanded="false" aria-controls="score-help">?</button>`;
+}
+
+function helpHtml(key) {
+  const help = state.scoreHelp;
+  const measure = state.measures.find((m) => m.name === key);
+  const head = measure
+    ? `<h3 id="score-help-title">${escapeHtml(measure.label)}</h3><p>${escapeHtml(measure.description)}</p>
+       <p><strong>Data:</strong> ${escapeHtml(measure.source)}</p><p>${escapeHtml(help.measure)}</p>`
+    : `<h3 id="score-help-title">${key === "overall" ? "Similarity score" : "Measure scores"}</h3>
+       <p>${escapeHtml(key === "overall" ? help.overall : help.measure)}</p>`;
+  const sections = help.sections.map((s) => `<h4>${escapeHtml(s.title)}</h4><p>${escapeHtml(s.text)}</p>`).join("");
+  return `<button type="button" class="help-close" aria-label="Close">×</button>${head}${sections}`;
+}
+
+// One explanation box for every "?": shown while a "?" is hovered or focused, and kept
+// (pinned) after a click or tap until it is closed, Escape is pressed, or the focus leaves it.
+const scoreHelp = {
+  button: null,
+  pinned: false,
+  timer: null,
+  pressed: null, // the "?" under a pressed pointer, whose click toggles the box
+  returning: false, // focus going back to the "?" on close, which must not open it again
+  open(button, pinned) {
+    clearTimeout(this.timer);
+    const box = $("#score-help");
+    if (this.button !== button) {
+      this.button?.setAttribute("aria-expanded", "false");
+      box.innerHTML = helpHtml(button.dataset.help);
+      box.scrollTop = 0;
+      this.button = button;
+      this.pinned = false;
+      button.setAttribute("aria-expanded", "true");
+    }
+    this.pinned ||= pinned;
+    box.hidden = false;
+    this.place();
+    if (pinned) box.focus();
+  },
+  close(returnFocus = false) {
+    clearTimeout(this.timer);
+    if (!this.button) return;
+    const button = this.button;
+    $("#score-help").hidden = true;
+    button.setAttribute("aria-expanded", "false");
+    this.button = null;
+    this.pinned = false;
+    if (returnFocus) {
+      this.returning = true;
+      button.focus(); // focusin runs before focus() returns
+      this.returning = false;
+    }
+  },
+  later() {
+    clearTimeout(this.timer);
+    if (!this.pinned) this.timer = setTimeout(() => this.close(), 200);
+  },
+  // Under the "?" (above it when there is no room below), inside the window.
+  place() {
+    const box = $("#score-help"), rect = this.button.getBoundingClientRect();
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - box.offsetWidth - 8));
+    const below = rect.bottom + 6 + box.offsetHeight <= window.innerHeight || rect.top < box.offsetHeight + 6;
+    box.style.left = `${left + window.scrollX}px`;
+    box.style.top = `${(below ? rect.bottom + 6 : rect.top - box.offsetHeight - 6) + window.scrollY}px`;
+  },
+  // Whether ``node`` is the open "?" or inside the box.
+  owns(node) {
+    return node instanceof Node && (node === this.button || $("#score-help").contains(node));
+  },
+  listen() {
+    document.addEventListener("click", (event) => {
+      if (event.target.closest(".help-close")) { this.close(true); return; }
+      const button = event.target.closest(".help");
+      if (button) {
+        if (button === this.button && this.pinned) this.close(); else this.open(button, true);
+      } else if (this.pinned && !this.owns(event.target)) {
+        this.close();
+      }
+    });
+    document.addEventListener("mouseover", (event) => {
+      const button = event.target.closest(".help");
+      if (button && !this.pinned) this.open(button, false);
+      else if (this.owns(event.target)) clearTimeout(this.timer);
+    });
+    document.addEventListener("mouseout", (event) => {
+      if (this.owns(event.target) && !this.owns(event.relatedTarget)) this.later();
+    });
+    document.addEventListener("focusin", (event) => {
+      const button = event.target.closest?.(".help");
+      if (button && !this.pinned && !this.returning) this.open(button, false);
+    });
+    document.addEventListener("pointerdown", (event) => { this.pressed = event.target.closest(".help"); });
+    document.addEventListener("pointerup", () => { this.pressed = null; });
+    document.addEventListener("focusout", (event) => {
+      if (this.owns(event.target) && !this.owns(event.relatedTarget) && this.pressed !== this.button) this.close();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && this.button) this.close(this.owns(document.activeElement));
+    });
+    window.addEventListener("resize", () => { if (this.button) this.place(); });
+  },
+};
+
 // ---------- detail view (liked hike and clicked result share it) ----------
 
 function pointText(p) {
@@ -456,7 +567,8 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
       : f.round_trip != null && (f.round_trip ? "round trip" : "one way / lollipop"),
   ].filter(Boolean);
   const scoreLine = result
-    ? `<p class="hint">Similarity score ${result.score == null ? "– (no weighted measure has data for both)" : result.score.toFixed(3)}${result.drive_hours != null ? ` · about ${result.drive_hours.toFixed(1)} h drive` : ""}</p>`
+    ? `<p class="hint">Similarity score ${result.score == null ? "– (no weighted measure has data for both)" : result.score.toFixed(3)} ${helpButton("overall")}${result.drive_hours != null ? ` · about ${result.drive_hours.toFixed(1)} h drive` : ""}</p>
+       <p class="hint">${escapeHtml(state.scoreHelp.overall)}</p>`
     : "";
   card.innerHTML = `
     <div class="detail-head">
@@ -497,7 +609,7 @@ function factsTable(hike, compare, result, month, weights, returnToStart) {
   const table = document.createElement("table");
   table.className = "facts";
   const head = compare
-    ? `<tr><th>Measure</th><th>This hike</th><th>${compare.wish ? "You want" : "Liked hike"}</th><th>Score</th></tr>`
+    ? `<tr><th>Measure</th><th>This hike</th><th>${compare.wish ? "You want" : "Liked hike"}</th><th>Score ${helpButton("measures")}</th></tr>`
     : "<tr><th>Measure</th><th>Value</th></tr>";
   table.innerHTML = `<thead>${head}</thead>`;
   for (const group of state.groups) {
@@ -528,7 +640,7 @@ function factsTable(hike, compare, result, month, weights, returnToStart) {
         const { score, note } = result?.measures?.[measure.name] ?? {};
         row.lastElementChild.innerHTML = score == null
           ? '<span class="nodata">no data</span>'
-          : `<span class="bar"><i style="width:${Math.round(score * 100)}%"></i></span>${score.toFixed(2)}${note ? `<small class="note">${escapeHtml(note)}</small>` : ""}`;
+          : `<span class="bar"><i style="width:${Math.round(score * 100)}%"></i></span>${score.toFixed(2)} ${helpButton(measure.name)}${note ? `<small class="note">${escapeHtml(note)}</small>` : ""}`;
         if (weights && !weights[measure.name]) row.lastElementChild.title = "Left out of this score";
       }
       body.appendChild(row);
@@ -1551,9 +1663,9 @@ function renderResults(body) {
     : `No hike matched, out of ${considered}. Try a longer drive or other weights.`;
   const table = $("#results-table");
   const measureHeads = comparedMeasures(body.return_to_start).map((m) =>
-    `<th class="measure${body.weights[m.name] ? "" : " excluded"}" title="${escapeHtml(`${m.label}: ${m.description}`)}">${escapeHtml(m.label)}</th>`).join("");
+    `<th class="measure${body.weights[m.name] ? "" : " excluded"}" title="${escapeHtml(`${m.label}: ${m.description}`)}">${escapeHtml(m.label)} ${helpButton(m.name)}</th>`).join("");
   const figures = body.return_to_start ? "with the way back" : "one way";
-  table.innerHTML = `<thead><tr><th>#</th><th class="name">Hike</th><th>Score</th>${state.query.drive ? "<th>Drive</th>" : ""}<th title="Length, ${figures}">Length${body.return_to_start ? " with way back" : ""}</th><th title="Climb and descent, ${figures}">Up / down</th>${measureHeads}</tr></thead>`;
+  table.innerHTML = `<thead><tr><th>#</th><th class="name">Hike</th><th>Score ${helpButton("overall")}</th>${state.query.drive ? "<th>Drive</th>" : ""}<th title="Length, ${figures}">Length${body.return_to_start ? " with way back" : ""}</th><th title="Climb and descent, ${figures}">Up / down</th>${measureHeads}</tr></thead>`;
   const tbody = document.createElement("tbody");
   state.expanded = null;
   body.results.forEach((result, i) => {
@@ -1677,11 +1789,15 @@ async function start() {
     state.info = info;
     state.groups = measures.groups;
     state.measures = measures.measures;
+    state.scoreHelp = measures.score_help;
   } catch (error) {
     setStatus(`The server is not answering: ${error.message}`, true);
     return;
   }
   $("#count").textContent = state.info.dayhikes.toLocaleString("en");
+  $("#results-scores").innerHTML = `<strong>Score:</strong> ${escapeHtml(state.scoreHelp.overall)}
+    <strong>Measure cells:</strong> ${escapeHtml(state.scoreHelp.measure)} ${helpButton("measures")}`;
+  scoreHelp.listen();
   buildWeights();
   $("#wish-on").hidden = !state.measures.some(wishable);
   $("#wish-on").addEventListener("click", () => {

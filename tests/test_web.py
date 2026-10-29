@@ -73,6 +73,40 @@ def test_measures_say_how_a_wish_value_is_typed_in(client: TestClient) -> None:
     assert client.post("/api/rank", json={"wish": defaults, "return_to_start": False}).status_code == 200
 
 
+ELEVATION_MEASURES = ("elevation_gain", "highest", "lowest", "profile", "southness", "climb_grade", "steepest_km")
+CLIMATE_MEASURES = ("temperature", "precipitation", "solar_radiation")
+LANDCOVER_MEASURES = ("landcover", "waterside")
+
+
+def test_every_measure_names_the_data_its_fact_comes_from(client: TestClient) -> None:
+    sources = {m["name"]: m["source"] for m in client.get("/api/measures").json()["measures"]}
+
+    for name, source in sources.items():
+        if name in ELEVATION_MEASURES:
+            assert "FABDEM" in source, name
+        elif name in CLIMATE_MEASURES:
+            assert "CHELSA" in source, name
+        elif name in LANDCOVER_MEASURES:
+            assert "WorldCover" in source, name
+        else:
+            assert "OpenStreetMap" in source, name
+
+
+def test_the_score_explanation_says_what_a_score_means_and_how_it_is_made(client: TestClient) -> None:
+    help_ = client.get("/api/measures").json()["score_help"]
+    text = " ".join(section["text"] for section in help_["sections"])
+
+    assert help_["overall"] and help_["measure"]
+    assert all(section["title"] and section["text"] for section in help_["sections"])
+    assert "100,000 random hike pairs" in text
+    assert "0.1" in text and "more than about 90% of random hike pairs" in text
+    assert "score 1.0" in text  # equal values (ADR-0023)
+    assert "rare" in text  # a rare shared trait tells more than a common one
+    for source in ("OpenStreetMap", "FABDEM", "WorldCover", "CHELSA"):
+        assert source in text
+    assert "weights" in text
+
+
 def test_search_and_detail(client: TestClient) -> None:
     hits = client.get("/api/search", params={"q": "ridge"}).json()["results"]
     hike = client.get(f"/api/hikes/{hits[0]['id']}").json()
