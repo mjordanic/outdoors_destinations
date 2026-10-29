@@ -299,6 +299,7 @@ def test_a_hike_still_loading_leaves_the_wish_form_open(browser, server) -> None
 
     assert page.locator("#wish-card").is_visible()
     assert not page.locator("#search").is_visible()
+    assert page.locator("#status").inner_text() == ""
 
 
 def test_a_liked_hike_is_measured_again_for_return_to_start_changed_while_wishing(browser, server) -> None:

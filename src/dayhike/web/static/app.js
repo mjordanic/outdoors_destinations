@@ -713,6 +713,7 @@ function setWishing(on) {
     $("#weights-panel").open = true;
     $("#map-pick-on").checked = false;
     pick.close();
+    setStatus("");
   }
   history.replaceState(null, "", on ? wishHash() : state.liked ? likedHash(state.liked) : location.pathname + location.search);
   const liked = state.liked;
