@@ -72,17 +72,21 @@ class Weighted(BaseModel):
         With the way back every hike is a round trip, so Round trip is left out (ADR-0022).
         """
         weights = self.given_weights()
+        dropped = []
         for name in self.excluded:
             if name not in MEASURE_INFO:
                 raise HTTPException(400, f"unknown Measure: {name}")
+            if weights.get(name, 0) > 0:
+                dropped.append(MEASURE_INFO[name][1])
             weights[name] = 0.0
-        if self.return_to_start and weights.get("round_trip", 0) > 0:
+        round_trip = self.return_to_start and weights.get("round_trip", 0) > 0
+        if round_trip:
             weights["round_trip"] = 0.0
-            if not any(weight > 0 for weight in weights.values()):
-                raise HTTPException(
-                    400, "Round trip is left out with Return to start (every hike is then a round trip); "
-                    "give another measure a weight above 0"
-                )
+        if (round_trip or dropped) and not any(weight > 0 for weight in weights.values()):
+            reasons = ["Round trip is left out with Return to start (every hike is then a round trip)"] if round_trip else []
+            if dropped:
+                reasons.append(f"excluded: {', '.join(dropped)}")
+            raise HTTPException(400, f"{'; '.join(reasons)}; give another measure a weight above 0")
         return weights
 
 

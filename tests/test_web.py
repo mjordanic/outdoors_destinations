@@ -155,6 +155,20 @@ def test_only_the_measures_a_wish_has_a_value_for_weigh(client: TestClient) -> N
     assert no_value_weighted.status_code == 400
 
 
+def test_a_wish_left_with_no_weighted_measure_says_why(client: TestClient) -> None:
+    round_trip = client.post("/api/rank", json={"wish": {"round_trip": True}})
+    excluded = client.post("/api/rank", json={"wish": {"length": 10_000}, "excluded": ["length"]})
+    both = client.post(
+        "/api/rank", json={"wish": {"round_trip": True, "hut_along": True}, "excluded": ["hut_along"]}
+    )
+
+    assert round_trip.status_code == 400 and "Round trip is left out with Return to start" in round_trip.json()["detail"]
+    assert excluded.status_code == 400 and "excluded: Length" in excluded.json()["detail"]
+    assert both.status_code == 400
+    assert "Round trip" in both.json()["detail"] and "excluded: Hut along" in both.json()["detail"]
+    assert client.post("/api/rank", json={"wish": {"round_trip": True}, "return_to_start": False}).status_code == 200
+
+
 @pytest.mark.parametrize(
     "body",
     [
