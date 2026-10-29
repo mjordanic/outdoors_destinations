@@ -220,9 +220,9 @@ def score_note(score: float | None, tied: float | None, same: str | None = None)
 # scoring rule changes the words in one place.
 SCORE_HELP = {
     "overall": "The weighted mean of the measure scores: a random pair of hikes scores about 0.5, "
-    "and 1.0 needs the two to be the same on every weighted measure.",
-    "measure": "A measure scores 0 to 1 (×100 in the results table): 1 is the same, "
-    "0.1 a bigger difference than about 90% of random hike pairs have.",
+    "and 1.0 needs the two to be the same, or closer than every random hike pair, on every weighted measure.",
+    "measure": "A measure scores 0 to 1 (×100 in the results table): 1 is the same, or closer "
+    "than every random hike pair, 0.1 a bigger difference than about 90% of random hike pairs have.",
     "sections": (
         {
             "title": "What a measure score means",
@@ -237,7 +237,8 @@ SCORE_HELP = {
             "text": "Two values that are the same score 1.0, however many random pairs share them. So do two "
             "values a measure counts as the same: Waterside shares less than 0.15 apart, Water sources both "
             "3 or more, values both at or under a measure's floor (two walks under 1 km on Length), and "
-            "yes/no facts that agree, both yes or both no.",
+            "yes/no facts that agree, both yes or both no. A pair closer than every random hike pair "
+            "also scores 1.0 without being the same.",
         },
         {
             "title": "Why alike hikes can score low on one measure",

@@ -482,7 +482,8 @@ equal, or that the Measure counts as equal (a raw score of 1), count their ties
 in full and score 1.0 however many random pairs tie with them (ADR-0023). The
 printed score is the similarity itself, the weighted mean of the calibrated
 Measure scores: a typical random pair scores about 0.5, and 1.0 needs a pair
-that is the same (or counted as the same) on every weighted Measure, so the
+that is the same (or counted as the same), or closer than every random pair, on
+every weighted Measure, so the
 best matches stay apart instead of all reading 1.000. Ties in order break on the uncalibrated weighted mean,
 then on DayHike id.
 
@@ -495,7 +496,8 @@ Reading a score, as the web demo explains it beside every score (ADR-0025):
 - **The same values score 1.0**, however many random pairs share them. So do
   values a Measure counts as the same: WaterSide shares less than 0.15 apart,
   Water sources both 3 or more, values both at or under a `ratio` floor, and
-  yes/no facts that agree.
+  yes/no facts that agree. A pair closer than every random pair also scores
+  1.0 without being the same.
 - **Alike hikes can score low on one Measure.** The score ranks a difference
   against random pairs, not against how big it looks. Where most hikes are
   close anyway, as on `profile`, a difference that looks small is still bigger
