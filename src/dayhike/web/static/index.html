@@ -134,7 +134,7 @@
       <p class="hint" id="results-note"></p>
       <p class="stale-note" id="results-stale" hidden>The query changed since this ranking; press Find again to update it.</p>
       <div class="table-wrap"><table id="results-table"></table></div>
-      <p class="hint">Score: the weighted mean of the measure cells under your weights (about 0.5 for a typical pair of hikes; 1.0 when no random pair beats it on any measure). Only the best of hikes that follow the same route is listed. Measure cells: how alike the two hikes are on that measure, as the share of random pairs less alike (×100; 50 is typical, 100 when the two are the same). A dash is “no data”, left out of that pair’s score.</p>
+      <p class="hint"><span id="results-scores"></span> Only the best of hikes that follow the same route is listed. A dash is “no data”, left out of that pair’s score.</p>
     </section>
 
     <article id="selected" class="card" hidden></article>
@@ -156,5 +156,6 @@
   </ul>
   <p class="hint">Climate and land cover are missing for some regions; those measures then show “no data” and drop out of the score. Drive times are estimates, not routes. Check conditions and maps before you go.</p>
 </footer>
+<div id="score-help" class="score-help" role="dialog" aria-labelledby="score-help-title" tabindex="-1" hidden></div>
 </body>
 </html>
