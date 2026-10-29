@@ -231,19 +231,19 @@ def test_rank_matches_rank_dayhikes_and_reports_every_measure(
 @pytest.mark.parametrize(
     ("score", "tied", "note"),
     [
-        # Calibrated 0.52 with no ties: the same 52 as the score.
-        (0.52, 0.0, "Difference smaller than 52% of random hike pairs"),
+        # Calibrated 0.52: the same 52 as the score.
+        (0.52, 0.0, "More alike than 52% of random hike pairs"),
         # 128/1024 shows as 0.13 (half rounding up), so the note says 13, not 12.
-        (0.125, 0.0, "Difference smaller than 13% of random hike pairs"),
-        (0.625, 0.0, "Difference smaller than 63% of random hike pairs"),
-        (0.996, 0.0, "Difference smaller than 100% of random hike pairs"),
-        # Parking at one Trailhead only: 41% of random pairs differ the same, counting half.
-        (0.204, 0.408, "Difference smaller than 20% of random hike pairs (ties count half)"),
-        (0.6, 0.8, "Difference smaller than 60% of random hike pairs (ties count half)"),
-        # Less alike than all but a few random pairs: no "smaller than 0%".
-        (0.004, 0.0, "Difference bigger than almost all random hike pairs"),
-        (0.003, 0.2, "Difference bigger than almost all random hike pairs"),
-        (0.005, 0.0, "Difference smaller than 1% of random hike pairs"),
+        (0.125, 0.0, "More alike than 13% of random hike pairs"),
+        (0.625, 0.1, "More alike than 63% of random hike pairs"),
+        (0.996, 0.0, "More alike than 100% of random hike pairs"),
+        (0.005, 0.0, "More alike than 1% of random hike pairs"),
+        # Highest points 400 m or more apart, like 59% of random pairs: no pair is less alike.
+        (0.0, 0.59, "Nothing in common on this measure, like 59% of random hike pairs"),
+        (0.004, 0.2, "Nothing in common on this measure, like 20% of random hike pairs"),
+        # Less alike than all but a few random pairs, and few tie: no "more alike than 0%".
+        (0.004, 0.0, "Less alike than almost all random hike pairs"),
+        (0.0, 0.004, "Less alike than almost all random hike pairs"),
         (None, None, None),
     ],
 )
@@ -252,16 +252,37 @@ def test_score_note_says_the_score_in_words(score, tied, note) -> None:
 
 
 @pytest.mark.parametrize(
-    ("same", "note"),
+    ("score", "same", "note"),
     [
-        ("identical", "Identical"),
-        ("within the dead band", "Counted as the same (within the dead band)"),
+        # Two dry hikes: 84% of random pairs are as alike on WaterSide, so it tells little.
+        (0.16, "identical", "Identical; 84% of random hike pairs are this alike, so it counts little"),
+        (0.92, "identical", "Identical; 8% of random hike pairs are this alike"),
+        (0.996, "identical", "Identical; fewer than 1% of random hike pairs are this alike"),
+        (0.995, "identical", "Identical; 1% of random hike pairs are this alike"),
+        (0.58, "both 3 or more", "Counted as the same (both 3 or more); 42% of random hike pairs are this alike"),
+        (
+            0.16,
+            "within the dead band",
+            "Counted as the same (within the dead band); 84% of random hike pairs are this alike, so it counts little",
+        ),
     ],
 )
-def test_score_note_says_when_the_two_values_are_the_same(same: str, note: str) -> None:
-    # Two dry hikes tie with most random pairs, counted in full: 1.0, and nothing differs.
-    assert score_note(1.0, 0.844, same) == note
+def test_score_note_says_how_many_random_pairs_are_as_alike_when_the_values_are_the_same(
+    score: float, same: str, note: str
+) -> None:
+    assert score_note(score, 0.8, same) == note
     assert score_note(None, None, same) is None
+
+
+def test_score_note_on_an_osm_flag_counts_the_pairs_where_either_has_one() -> None:
+    pairs = "random hike pairs where either has one"
+    assert score_note(0.95, 0.05, "identical", pairs) == (
+        "Identical; 5% of random hike pairs where either has one are this alike"
+    )
+    assert score_note(0.0, 0.95, None, pairs) == (
+        "Nothing in common on this measure, like 95% of random hike pairs where either has one"
+    )
+    assert score_note(None, None, "not compared", pairs) == "Neither has one mapped: not compared"
 
 
 def test_compare_notes_tell_identical_values_and_values_counted_the_same(data: ServingData) -> None:
@@ -272,6 +293,7 @@ def test_compare_notes_tell_identical_values_and_values_counted_the_same(data: S
     facts[column["waterside_share"], :2] = (0.41, 0.53)
     facts[column["water_count"], :2] = (3, 5)  # both "3 or more"
     facts[column["length_m"], :2] = (4000, 9000)
+    facts[column["shelter_along"], :2] = 0  # neither has one mapped
     profile = np.repeat(data.store.profile[:1], len(facts[0]), 0)
     # Random-pair scores for every Measure, as a Catalog with land cover has them.
     quantiles = np.tile(np.linspace(0, 1, data.store.quantiles.shape[1]), (len(data.store.quantiles), 1))
@@ -279,13 +301,12 @@ def test_compare_notes_tell_identical_values_and_values_counted_the_same(data: S
 
     (notes,) = scored_measures(store, 0, np.array([1]), None)
 
-    assert notes["waterside"]["note"] == "Counted as the same (within the dead band)"
-    assert notes["water_count"]["note"] == "Counted as the same (both 3 or more)"
-    assert notes["highest"]["note"] == notes["round_trip"]["note"] == "Identical"
-    assert notes["length"]["note"].startswith("Difference smaller than")
-    # Equal, or counted as equal, scores 1.0 however many random pairs tie with it.
-    for name in ("waterside", "water_count", "highest", "round_trip"):
-        assert notes[name]["score"] == 1.0
+    assert notes["waterside"]["note"].startswith("Counted as the same (within the dead band); ")
+    assert notes["water_count"]["note"].startswith("Counted as the same (both 3 or more); ")
+    assert notes["highest"]["note"].startswith("Identical; ")
+    assert notes["round_trip"]["note"].startswith("Identical; ")
+    assert notes["length"]["note"].startswith("More alike than")
+    assert notes["shelter_along"] == {"score": None, "raw": None, "note": "Neither has one mapped: not compared"}
 
 
 def test_rank_respects_the_limit_and_the_allowed_rows(data: ServingData) -> None:

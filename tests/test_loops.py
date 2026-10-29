@@ -132,12 +132,15 @@ def test_hikes_starting_near_each_other_share_a_row_of_versions(data) -> None:
     (row,) = data.rank(MEADOW_PATH, DEFAULT_WEIGHTS)
 
     # The best hike leads; the Middle Path and the Lake Loop, though better than
-    # the Connector, lie mostly on it, so the Connector and the Summit Line are its versions.
+    # the Connector, lie mostly on it, so the Connector and the loop on the other
+    # side of the Middle Path (a third the same, and above the Summit Line) are its versions.
     assert row["id"] is None and row["score"] == max(r["score"] for r in apart.values())
-    assert [v["id"] for v in row["versions"]] == [2004, 2002]
+    assert [v["id"] for v in row["versions"]] == [2004, None]
+    assert _segments(data, row["versions"][1]) != _segments(data, row)
     assert row["score"] > apart[2008]["score"] > apart[LAKE_LOOP]["score"] > row["versions"][0]["score"]
     for version in row["versions"]:  # each as it is listed in a row of its own, but for versions
-        assert version == {k: v for k, v in apart[version["id"]].items() if k != "versions"}
+        key = version["id"] if version["id"] is not None else version["route"]["text"]
+        assert version == {k: v for k, v in apart[key].items() if k != "versions"}
 
 
 def _rows_apart(data) -> list[dict]:
@@ -211,14 +214,14 @@ def test_api_ranks_loops_with_their_link_versions_and_drive_hours(data) -> None:
         "/api/rank", json={"seed": MEADOW_PATH, "origin": {"lat": 46.0, "lon": 14.0}, "max_hours": 2}
     ).json()["results"]
 
-    # One row, a loop with two Catalog DayHikes as its versions, each with the hours to its start.
+    # One row, a loop with a Catalog DayHike and the other loop as its versions, each with the hours to its start.
     assert driven["route"]["text"] == plain["route"]["text"]
-    assert [v["id"] for v in driven["versions"]] == [v["id"] for v in plain["versions"]] == [2004, 2002]
+    assert [v["id"] for v in driven["versions"]] == [v["id"] for v in plain["versions"]] == [2004, None]
     assert {r["drive_hours"] for r in (plain, *plain["versions"])} == {None}
     assert {r["drive_hours"] for r in (driven, *driven["versions"])} == {1.0}
     hike = client.post("/api/compose", json={"route": plain["route"]["text"], "name": plain["name"]}).json()
     assert (hike["line"], hike["name"]) == (plain["line"], plain["name"])
-    for version in plain["versions"]:  # drawn on the map as the hike's own page draws it
+    for version in plain["versions"][:1]:  # drawn on the map as the hike's own page draws it
         assert client.get(f"/api/hikes/{version['id']}").json()["line"] == version["line"]
 
 

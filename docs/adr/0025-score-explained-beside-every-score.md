@@ -1,5 +1,5 @@
 ---
-status: accepted (amends ADR-0021, ADR-0022)
+status: accepted (amends ADR-0021, ADR-0022; what the box says amended by ADR-0026)
 ---
 
 # Every score explained beside it, from one place

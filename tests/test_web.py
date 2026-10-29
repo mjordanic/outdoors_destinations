@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from dayhike import build_catalog, build_similarity, web
 from dayhike.serving import ServingData, export_serving
-from dayhike.similarity import CORE_MEASURES, MEASURE_NAMES
+from dayhike.similarity import CORE_MEASURES, FACILITIES_FLAG_COLUMNS, MEASURE_NAMES
 from dayhike.web import RESULTS, create_app
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
@@ -92,16 +92,30 @@ def test_every_measure_names_the_data_its_fact_comes_from(client: TestClient) ->
             assert "OpenStreetMap" in source, name
 
 
+def test_every_osm_flag_says_two_hikes_without_it_are_not_compared(client: TestClient) -> None:
+    descriptions = {m["name"]: m["description"] for m in client.get("/api/measures").json()["measures"]}
+
+    for name in (*FACILITIES_FLAG_COLUMNS, "peak_summited", "viewpoint_along"):
+        assert "two hikes that both lack it are not compared on it" in descriptions[name], name
+    assert "not compared" not in descriptions["round_trip"]
+
+
 def test_the_score_explanation_says_what_a_score_means_and_how_it_is_made(client: TestClient) -> None:
     help_ = client.get("/api/measures").json()["score_help"]
     text = " ".join(section["text"] for section in help_["sections"])
 
     assert help_["overall"] and help_["measure"]
     assert all(section["title"] and section["text"] for section in help_["sections"])
-    assert "100,000 random hike pairs" in text
-    assert "0.1" in text and "more than about 90% of random hike pairs" in text
-    assert "score 1.0" in text  # equal values (ADR-0023)
-    assert "rare" in text  # a rare shared trait tells more than a common one
+    assert "100,000 random pairs" in text
+    # The rarity rank (ADR-0026): the share of random pairs less alike, a rare match counting for more.
+    assert "Share of random hike pairs less alike" in help_["measure"]
+    assert "0.9 means only 1 pair in 10" in help_["measure"]
+    assert "about 0.44" in help_["overall"]
+    assert "0.16 on waterside" in text and "84 %" in text  # two dry hikes: identical, but it tells little
+    assert "not compared" in text and "0.95" in text  # a shared absence; both passing a hut
+    assert "What does 0.1 mean" in " ".join(section["title"] for section in help_["sections"])
+    assert "Kattegat" in text and "0.10" in text
+    assert "count half" not in text and "score 1.0" not in text  # the rules ADR-0026 replaced
     for source in ("OpenStreetMap", "FABDEM", "WorldCover", "CHELSA"):
         assert source in text
     assert "weights" in text
@@ -172,7 +186,9 @@ def test_a_wish_ranks_hikes_by_the_values_typed_in(client: TestClient) -> None:
     dayhikes = [r for r in body["results"] if r["id"] is not None]
     assert dayhikes[0]["id"] == RIDGE_WALK_ID  # no hike is left out as the Seed
     assert dayhikes[0]["measures"]["length"]["raw"] == pytest.approx(1.0)
-    assert dayhikes[0]["measures"]["hut_along"]["note"] == "Identical"
+    note = dayhikes[0]["measures"]["hut_along"]["note"]
+    # A Wish's "yes" is scored as before: against random pairs where either has a Hut.
+    assert note.startswith("Identical; ") and "of random hike pairs where either has one are this alike" in note
     assert {r["id"] for r in dayhikes} == {1001, 1002, 1003, 1007}
     assert dayhikes[1]["measures"]["length"]["raw"] == pytest.approx(0.5)
 
@@ -187,6 +203,19 @@ def test_only_the_measures_a_wish_has_a_value_for_weigh(client: TestClient) -> N
     assert weighted["weights"] == {"length": 60}
     assert unweighted["weights"] == {"length": 100, "hut_along": 100}
     assert no_value_weighted.status_code == 400
+
+
+def test_a_wish_for_no_hut_ranks_the_hikes_without_one_first(client: TestClient) -> None:
+    # A Wish's "no" is the Hiker's answer, not a missing map entry: a hike without a Hut matches it,
+    # scored against every random pair, those where neither has a Hut included.
+    body = client.post("/api/rank", json={"wish": {"hut_along": False}}).json()
+
+    dayhikes = [r for r in body["results"] if r["id"] is not None]
+    assert {r["id"] for r in dayhikes} == {1001, 1002, 1003, 1007}
+    assert dayhikes[-1]["id"] == RIDGE_WALK_ID and dayhikes[-1]["score"] == 0.0
+    assert all(r["score"] > 0 for r in dayhikes[:-1])
+    note = dayhikes[0]["measures"]["hut_along"]["note"]
+    assert note.startswith("Identical; ") and "of random hike pairs are this alike" in note
 
 
 def test_a_wish_left_with_no_weighted_measure_says_why(client: TestClient) -> None:

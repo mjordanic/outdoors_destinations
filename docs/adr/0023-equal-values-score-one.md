@@ -1,5 +1,5 @@
 ---
-status: accepted (amends ADR-0013, ADR-0021, ADR-0022)
+status: superseded by ADR-0026
 ---
 
 # Equal values score 1.0
