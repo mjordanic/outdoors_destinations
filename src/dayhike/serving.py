@@ -203,7 +203,8 @@ def score_note(
     same raw score. ``same`` is "identical" when the two values are, else why
     the Measure counts them as the same (ADR-0022), or "not compared" when
     neither has an OSM flag's feature mapped. ``pairs`` names the random
-    pairs compared: for an OSM flag, those where either has one.
+    pairs compared: for an OSM flag, those where either has one, but every
+    pair for a Wish's "no".
     """
     if same == "not compared":
         return "Neither has one mapped: not compared"
@@ -267,7 +268,9 @@ SCORE_HELP = {
             "nobody mapped it, and most hikes lack these things anyway. The measure then shows a dash and is "
             "left out of their score; the other measures count instead. When both hikes have one, the score "
             "shows how unusual that is: two hikes that both pass a mountain hut score 0.95. A wish for none is "
-            "your answer, not a missing entry, so a hike without one matches it.",
+            "your answer, not a missing entry, so a hike without one matches it, and that counts by how rare "
+            "it is: most random pairs both lack a hut, so a wish for no hut scores a hike without one about "
+            "0.18.",
         },
         {
             "title": "What does 0.1 mean when the hikes look similar?",
@@ -1316,10 +1319,10 @@ def scored_measures(
     measures = {}
     for measure in MEASURES:
         raw = measure_scores(store, measure, seed, rows, month=month)
-        key = _calibration_key(measure, month)
+        key = _calibration_key(measure, month, seed)
         same = _sameness(store, measure, seed, rows, month, raw)
         calibrated = calibrate(store, key, raw, measure_rarity(store, measure, seed, rows, month=month))
-        pairs = "random hike pairs where either has one" if measure.presence else "random hike pairs"
+        pairs = "random hike pairs where either has one" if key == measure.name and measure.presence else "random hike pairs"
         measures[measure.name] = (raw, calibrated, random_pair_shares(store, key, raw)[1], same, pairs)
     return [
         {

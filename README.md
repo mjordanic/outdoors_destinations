@@ -506,7 +506,9 @@ Reading a score, as the web demo explains it beside every score (ADR-0025):
   under a `ratio` floor.
 - **Nothing mapped in common is not evidence.** Two hikes with no hut mapped
   are not compared on it: the cell shows a dash and the other Measures count.
-  A Wish's "no" is the Hiker's answer, so a hike without one matches it.
+  A Wish's "no" is the Hiker's answer, so a hike without one matches it,
+  scored against every random pair (those with none included): most hikes
+  have no hut, so a Wish of "no hut" scores a hike without one about 0.18.
 - **Alike hikes can score low on one Measure.** A low number means what they
   share there is common, or they are further apart on it than most pairs. The
   Kattegat coast walks Kattegatstien and Kattegatkysten (56% and 30% of the way

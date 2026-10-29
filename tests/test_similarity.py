@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from dayhike import Catalog, StaleSimilarity, build_catalog, build_similarity
+from dayhike.serving import scored_measures
 from dayhike.similarity import (
     CALIBRATION_KEYS,
     CALIBRATION_QUANTILES,
@@ -14,6 +15,7 @@ from dayhike.similarity import (
     FACILITIES_FLAG_COLUMNS,
     LANDCOVER_SHARE_COLUMNS,
     MEASURES,
+    OutsideSeed,
     SURFACE_SHARE_COLUMNS,
     TWIN_STEP_M,
     AmenityPoints,
@@ -270,6 +272,24 @@ def test_both_passing_a_hut_scores_the_share_of_compared_pairs_that_differ(tmp_p
     assert no_hut[0] == 0.0 and np.isnan(no_hut[1:]).all()
     assert with_length[1:] == pytest.approx(length[1:])
     assert with_length[0] == pytest.approx(length[0] / 2)
+
+
+def test_a_wish_for_no_hut_scores_a_hutless_hike_by_how_common_having_none_is(tmp_path: Path) -> None:
+    # 10 of 100 hikes pass a hut. Over all random pairs, both hutless 80.9 %, differ 18.2 %, both a hut 0.9 %:
+    # a "no" is the Hiker's answer, so a hutless hike is compared with it, and only the differing pairs are
+    # less alike than one more hike without a hut.
+    store = _calibrated(tmp_path, 100, hut_along=[1] * 10 + [0] * 90)
+    wish = OutsideSeed.wished({"hut_along": 0})
+    rows = np.array([50, 0])
+
+    score, _ = score_rows(store, [wish], rows, {"hut_along": 100})
+    notes = [row["hut_along"]["note"] for row in scored_measures(store, wish, rows, None)]
+
+    assert score == pytest.approx([0.182, 0.0], abs=0.01)
+    assert notes[0] == "Identical; 82% of random hike pairs are this alike, so it counts little"
+    # A wish for a hut is unchanged: random pairs where neither has one are not compared.
+    (yes,), _ = score_rows(store, [OutsideSeed.wished({"hut_along": 1})], np.array([0]), {"hut_along": 100})
+    assert yes == pytest.approx(0.95, abs=0.01)
 
 
 def test_sharing_a_rare_value_scores_above_sharing_a_common_one(tmp_path: Path) -> None:

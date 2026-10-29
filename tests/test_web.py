@@ -186,7 +186,8 @@ def test_a_wish_ranks_hikes_by_the_values_typed_in(client: TestClient) -> None:
     dayhikes = [r for r in body["results"] if r["id"] is not None]
     assert dayhikes[0]["id"] == RIDGE_WALK_ID  # no hike is left out as the Seed
     assert dayhikes[0]["measures"]["length"]["raw"] == pytest.approx(1.0)
-    assert dayhikes[0]["measures"]["hut_along"]["note"].startswith("Identical; ")
+    note = dayhikes[0]["measures"]["hut_along"]["note"]
+    assert note.startswith("Identical; ") and "of random hike pairs are this alike" in note
     assert {r["id"] for r in dayhikes} == {1001, 1002, 1003, 1007}
     assert dayhikes[1]["measures"]["length"]["raw"] == pytest.approx(0.5)
 
@@ -204,14 +205,16 @@ def test_only_the_measures_a_wish_has_a_value_for_weigh(client: TestClient) -> N
 
 
 def test_a_wish_for_no_hut_ranks_the_hikes_without_one_first(client: TestClient) -> None:
-    # A Wish's "no" is the Hiker's answer, not a missing map entry: a hike without a Hut matches it.
+    # A Wish's "no" is the Hiker's answer, not a missing map entry: a hike without a Hut matches it,
+    # scored against every random pair, those where neither has a Hut included.
     body = client.post("/api/rank", json={"wish": {"hut_along": False}}).json()
 
     dayhikes = [r for r in body["results"] if r["id"] is not None]
     assert {r["id"] for r in dayhikes} == {1001, 1002, 1003, 1007}
     assert dayhikes[-1]["id"] == RIDGE_WALK_ID and dayhikes[-1]["score"] == 0.0
     assert all(r["score"] > 0 for r in dayhikes[:-1])
-    assert dayhikes[0]["measures"]["hut_along"]["note"].startswith("Identical; ")
+    note = dayhikes[0]["measures"]["hut_along"]["note"]
+    assert note.startswith("Identical; ") and "of random hike pairs are this alike" in note
 
 
 def test_a_wish_left_with_no_weighted_measure_says_why(client: TestClient) -> None:

@@ -217,7 +217,9 @@ DEFAULT_WEIGHTS = {name: 100.0 if name in CORE_MEASURES else 0.0 for name in MEA
 # The Measures a Wish can give a value: one fact, a number or yes/no. A mix or
 # a ProfileShape is no single value (GLOSSARY.md Wish).
 WISHABLE = tuple(measure.name for measure in MEASURES if measure.kind in ("ratio", "tolerance", "agree"))
-# Calibration rows: every Measure, then each monthly Measure once per QueryMonth.
+# Calibration rows: every Measure, then each monthly Measure once per QueryMonth,
+# then each OSM flag over every random pair, for a Wish's "no" (``EVERY_PAIR``).
+EVERY_PAIR = "+every-pair"
 CALIBRATION_KEYS = (
     *MEASURE_NAMES,
     *(
@@ -226,6 +228,7 @@ CALIBRATION_KEYS = (
         for measure in MEASURES
         if measure.monthly
     ),
+    *(f"{measure.name}{EVERY_PAIR}" for measure in MEASURES if measure.presence),
 )
 
 _FACTS_VERSION = hashlib.sha256(
@@ -372,7 +375,8 @@ class OutsideSeed:
     retraces, whose groups of Twins a Ranking from it leaves out.
     ``stated`` marks a Wish: its yes/no facts are the Hiker's answers, not
     map entries, so a DayHike that lacks an OSM flag's feature is compared
-    with a "no" on it.
+    with a "no" on it, against every random pair, those where neither has
+    one included (``EVERY_PAIR``).
     """
 
     facts: np.ndarray
@@ -530,7 +534,7 @@ def score_rows(
             [
                 calibrate(
                     store,
-                    _calibration_key(measure, month),
+                    _calibration_key(measure, month, seed),
                     raw[:, j],
                     measure_rarity(store, measure, seed, rows, month=month),
                 )
@@ -551,10 +555,12 @@ def measure_scores(
     b: np.ndarray,
     *,
     month: int | None = None,
+    every_pair: bool = False,
 ) -> np.ndarray:
     """Raw scores of one Measure between DayHike rows ``a`` and ``b``.
 
     ``a`` is one row (a Seed), an ``OutsideSeed``, or an array of rows paired with ``b``.
+    ``every_pair`` compares two DayHikes that both lack an OSM flag's feature too.
     """
 
     def seed_column(name: str) -> np.ndarray:
@@ -572,7 +578,7 @@ def measure_scores(
         return np.minimum(np.round(shared, 6), 1.0)
     left, right = seed_column(columns[0]), store.column(columns[0])[b]
     if measure.kind == "agree":
-        stated = isinstance(a, OutsideSeed) and a.stated
+        stated = every_pair or (isinstance(a, OutsideSeed) and a.stated)
         absent = (left == 0) & (right == 0) if measure.presence and not stated else False
         return np.where(np.isnan(left) | np.isnan(right) | absent, np.nan, left == right)
     if measure.kind == "ratio":
@@ -701,7 +707,12 @@ def _measured(measure: Measure, values: np.ndarray) -> np.ndarray:
     return values
 
 
-def _calibration_key(measure: Measure, month: int | None) -> str:
+def _calibration_key(measure: Measure, month: int | None, seed: int | OutsideSeed) -> str:
+    """The Calibration row of a Measure against a Seed: a Wish's "no" on an OSM
+    flag is compared with every random pair (``EVERY_PAIR``)."""
+    stated = isinstance(seed, OutsideSeed) and seed.stated
+    if measure.presence and stated and seed.facts[FACT_COLUMNS.index(measure.columns[0])] == 0:
+        return f"{measure.name}{EVERY_PAIR}"
     return measure.name if month is None or not measure.monthly else f"{measure.name}@{month:02d}"
 
 
@@ -786,7 +797,8 @@ def calibrate_similarity(
     """Recompute the Calibration from the stored facts.
 
     ``CALIBRATION_PAIRS`` random pairs of distinct DayHikes are scored on every
-    ``CALIBRATION_KEYS`` entry; ``CALIBRATION_QUANTILES`` evenly spaced
+    ``CALIBRATION_KEYS`` entry (an ``EVERY_PAIR`` key comparing those that both
+    lack the OSM flag's feature too); ``CALIBRATION_QUANTILES`` evenly spaced
     quantiles of the scored ones are kept per key, and as many of the
     ``measure_rarity`` of those scoring raw 1, after as many of each fact
     column's values over the DayHikes, for the facts one way and with the way
@@ -817,16 +829,23 @@ def calibrate_similarity(
             values=_quantile_rows(facts, at),
         )
         keyed = [
-            (by_name[key.split("@")[0]], int(key.split("@")[1]) if "@" in key else None)
+            (
+                by_name[key.removesuffix(EVERY_PAIR).split("@")[0]],
+                int(key.split("@")[1]) if "@" in key else None,
+                key.endswith(EVERY_PAIR),
+            )
             for key in CALIBRATION_KEYS
         ]
         scores = np.column_stack(
-            [measure_scores(store, measure, left, right, month=month) for measure, month in keyed]
+            [
+                measure_scores(store, measure, left, right, month=month, every_pair=every_pair)
+                for measure, month, every_pair in keyed
+            ]
         ).astype(np.float32)
         rarity = np.column_stack(
             [
                 np.where(scores[:, j] == 1.0, measure_rarity(store, measure, left, right, month=month), np.nan)
-                for j, (measure, month) in enumerate(keyed)
+                for j, (measure, month, _) in enumerate(keyed)
             ]
         )
         np.save(directory / f"quantiles{suffix}.npy", _quantile_rows(scores.T, at))
