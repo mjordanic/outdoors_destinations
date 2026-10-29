@@ -187,7 +187,8 @@ def test_a_wish_ranks_hikes_by_the_values_typed_in(client: TestClient) -> None:
     assert dayhikes[0]["id"] == RIDGE_WALK_ID  # no hike is left out as the Seed
     assert dayhikes[0]["measures"]["length"]["raw"] == pytest.approx(1.0)
     note = dayhikes[0]["measures"]["hut_along"]["note"]
-    assert note.startswith("Identical; ") and "of random hike pairs are this alike" in note
+    # A Wish's "yes" is scored as before: against random pairs where either has a Hut.
+    assert note.startswith("Identical; ") and "of random hike pairs where either has one are this alike" in note
     assert {r["id"] for r in dayhikes} == {1001, 1002, 1003, 1007}
     assert dayhikes[1]["measures"]["length"]["raw"] == pytest.approx(0.5)
 
