@@ -1847,7 +1847,7 @@ CLI: `dayhike ingest`, `dayhike fetch-extracts`, `dayhike fetch-dem`,
 `--month`, `--limit`, `--one-way`), `dayhike compose` (the Route text of a shared link,
 `--name`, `--weight`, `--month`, `--limit`, `--one-way`; reads a serving export; a SuggestedLoop is listed by its link text, and each row's versions indented under it), `dayhike nearby`, `dayhike export-serving`, `dayhike serve`, `dayhike coverage-map`.
 
-Docstrings on those functions use the glossary in `CONTEXT.md`.
+Docstrings on those functions use the glossary in `GLOSSARY.md`.
 Examples: [`01`](notebooks/01_raw_data_and_ingestion.ipynb) ingest,
 [`02`](notebooks/02_catalog.ipynb) Catalog objects,
 [`03`](notebooks/03_ranking.ipynb) ranking,

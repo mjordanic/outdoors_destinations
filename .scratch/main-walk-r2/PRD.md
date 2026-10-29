@@ -153,7 +153,7 @@ as the WaterSource re-ingest did.
 **Stale sweep.** A ticket reviews the whole codebase for parts made obsolete
 by the main walk (ADR-0012) and parking-only access, at least: ingest and
 catalog modules, CLI options, README ingest and access sections, docs and
-ADR cross-references, future-work items now done or moot, CONTEXT.md terms,
+ADR cross-references, future-work items now done or moot, GLOSSARY.md terms,
 notebooks 04a/05/05a text, tests and fixtures, constants and helpers with no
 caller left. It removes or rewrites what is stale and writes a short list of
 what it checked and changed (possibly "nothing") in its commit body. It does

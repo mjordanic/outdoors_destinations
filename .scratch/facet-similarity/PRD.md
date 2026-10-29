@@ -2,7 +2,7 @@
 
 Status: ready-for-agent
 
-Vocabulary in this document is defined in `CONTEXT.md` and used in its glossary
+Vocabulary in this document is defined in `GLOSSARY.md` and used in its glossary
 sense: DayHike, DayHikeGeometry, GeometryStore, Catalog, Trailhead, Seed,
 Ranking, Hiker, Difficulty, ElevationProfile, ProfileShape, LandCover,
 ClimateNormal, QueryMonth, SolarAspect, Hut, Viewpoint, Peak, Shelter,

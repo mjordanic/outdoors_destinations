@@ -22,7 +22,7 @@ accept real PBFs onto gitignored `data/catalog.sqlite`.
 **Complexity:** high
 
 **Prior art:** No code prior art — first feature. Read the PRD Implementation
-and Testing Decisions for `build_catalog`, ADR-0001, ADR-0002, and `CONTEXT.md`.
+and Testing Decisions for `build_catalog`, ADR-0001, ADR-0002, and `GLOSSARY.md`.
 Use DayHike, Trailhead, Catalog, Difficulty, Hiker as names in the public API.
 
 - [x] `uv` project named `dayhike` runs `uv run pytest`

@@ -18,7 +18,7 @@ that both lack a Hut agree on that point.
 **Effort:** high
 
 **Prior art:** PRD "Extraction rules" (Corridor, at the Trailhead),
-"Starting constants" (Facilities row); PRD stories 16, 38–42. `CONTEXT.md`
+"Starting constants" (Facilities row); PRD stories 16, 38–42. `GLOSSARY.md`
 Hut, Shelter, Trailhead, Corridor, AmenityFact (the 20 km Trailhead disk is
 not used here). Ticket 03's Corridor helper. Tests: `test_trailhead_and_amenities`,
 fixture GeometryStore (one Hut, cafe, parking, Shelter). Ticket 01's measure

@@ -163,7 +163,7 @@ inside a long segment is missed.
 
 - Length-weighted shares from the vertex `landcover`, with notebook 05's
   verification still passing.
-- Then for production: the LandCover entry in `CONTEXT.md` says weighted by
+- Then for production: the LandCover entry in `GLOSSARY.md` says weighted by
   length instead of "each GeometryStore vertex counts once", and `sample-landcover`
   and `build-similarity` are rerun to refresh the Catalog fractions and the
   similarity facts. Ranking changes with it.

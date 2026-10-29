@@ -13,7 +13,7 @@ No new ranking behaviour.
 
 - 06-filter-ranking-by-drivetime
 
-**Prior art:** PRD Further Notes, ADRs 0001–0004, `CONTEXT.md`. The CLI from
+**Prior art:** PRD Further Notes, ADRs 0001–0004, `GLOSSARY.md`. The CLI from
 tickets 05–06 is the documented entry point.
 
 - [x] README covers install (`uv sync`), ingest of the committed fixture, rank

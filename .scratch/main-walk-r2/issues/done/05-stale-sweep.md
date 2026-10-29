@@ -20,7 +20,7 @@ Check at least:
   "Round 2" supersedes it. Accepted ADRs are records: add the note, keep the
   history. Check ADR cross-references, and future-work items that are now
   done or moot.
-- **CONTEXT.md.** Terms such as Trailhead's "tagged access point".
+- **GLOSSARY.md.** Terms such as Trailhead's "tagged access point".
 - **Notebooks.** Markdown text in notebooks 04a, 05 and 05a that describes
   the one-pass chain, the "vertex chain" or road access.
 - **Tests.** Tests and fixtures that nothing reads any more.
@@ -45,6 +45,6 @@ dead end), 04 (Real-data checks agree with ingest)
 - [ ] The commit body lists each area above with what changed, or "nothing".
 - [ ] `uv run pytest` passes, including the notebook tests.
 
-Prior art: ADR-0012 (with its "Round 2" note), the `CONTEXT.md` Trailhead
+Prior art: ADR-0012 (with its "Round 2" note), the `GLOSSARY.md` Trailhead
 entry, the README ingest steps, `test_demonstration_notebooks`. Glossary:
 Trailhead, DayHikeGeometry, Leftover, GeometryStore.

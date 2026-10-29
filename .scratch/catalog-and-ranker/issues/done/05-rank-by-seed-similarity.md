@@ -16,7 +16,7 @@ resolution. CLI prints id, name, score. No Origin, no Valhalla.
 **Complexity:** high
 
 **Prior art:** FeatureVectors (03), resolve (04), ADR-0003, PRD stories 16–18 and
-22–24. Public seam `rank_dayhikes`. `CONTEXT.md` Ranking, Seed, FeatureVector.
+22–24. Public seam `rank_dayhikes`. `GLOSSARY.md` Ranking, Seed, FeatureVector.
 
 - [x] `build_catalog` fits a StandardScaler on Catalog FeatureVectors and
       persists it in the same SQLite file

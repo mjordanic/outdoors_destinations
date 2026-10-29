@@ -56,23 +56,23 @@ SPIKE_RISE_M = 10.0  # a vertex at least this far above (or below) both neighbou
 SPIKE_GRADE = 0.25  # ... and this steep on both sides is a DEM spike, not the trail
 STEEPNESS_STEP_M = 50.0  # elevation resampled this often along the walk
 STEEPEST_KM_WINDOW_M = 1_000.0
-CORRIDOR_M = 100.0  # amenity along the DayHike (CONTEXT.md Corridor)
+CORRIDOR_M = 100.0  # amenity along the DayHike (GLOSSARY.md Corridor)
 PEAK_SUMMITED_M = 50.0
 PEAKS_AROUND_M = 2_000.0
-TRAILHEAD_M = 500.0  # amenity at the Trailhead (CONTEXT.md Trailhead)
+TRAILHEAD_M = 500.0  # amenity at the Trailhead (GLOSSARY.md Trailhead)
 SEARCH_STEP_M = 100.0  # line points this far apart find candidate amenities
 WATER_SOURCE_KINDS = ("drinking_water", "spring", "water_tap", "water_point")
 SOLAR_ASPECT_POINTS = 32  # about this many vertices sampled per DayHike
 SOLAR_ASPECT_OFFSET_ARCSEC = 2  # east and north offsets: two FABDEM cells
 SOLAR_ASPECT_MIN_SLOPE_DEG = 5.0  # flatter points face no way
-WATERSIDE_M = 200.0  # open water this close to the line counts (CONTEXT.md WaterSide)
+WATERSIDE_M = 200.0  # open water this close to the line counts (GLOSSARY.md WaterSide)
 WATERSIDE_STEP_M = 200.0  # a WaterSide probe this often along the walk
 WATERSIDE_MIN_SHARE = 0.1  # of the WorldCover cells around a probe that are water
 WATERSIDE_OVERVIEW = 4  # WorldCover read at 4 x its 10 m cells
 WORLDCOVER_WATER = 80  # permanent water bodies: sea, lakes, wide rivers
 TWIN_STEP_M = 50.0  # each walk sampled this often to compare routes
 TWIN_M = 30.0  # a sample this close to the other walk lies on it
-TWIN_SHARE = 0.8  # each walk this much on the other: the same route (CONTEXT.md Twin)
+TWIN_SHARE = 0.8  # each walk this much on the other: the same route (GLOSSARY.md Twin)
 CALIBRATION_QUANTILES = 1_024
 CALIBRATION_PAIRS = 100_000
 CALIBRATION_SEED = 20261024
@@ -211,7 +211,7 @@ CORE_MEASURES = (
 )  # fmt: skip
 DEFAULT_WEIGHTS = {name: 100.0 if name in CORE_MEASURES else 0.0 for name in MEASURE_NAMES}
 # The Measures a Wish can give a value: one fact, a number or yes/no. A mix or
-# a ProfileShape is no single value (CONTEXT.md Wish).
+# a ProfileShape is no single value (GLOSSARY.md Wish).
 WISHABLE = tuple(measure.name for measure in MEASURES if measure.kind in ("ratio", "tolerance", "agree"))
 # Calibration rows: every Measure, then each monthly Measure once per QueryMonth.
 CALIBRATION_KEYS = (

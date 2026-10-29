@@ -11,7 +11,7 @@ with the candidate names. This is the name door for Ranking; it does not rank.
 - 01-ingest-fixture-catalog
 
 **Prior art:** Catalog names from ticket 01. PRD stories 19–21. ADR-0002 (a Seed
-must be a Catalog DayHike). `CONTEXT.md` Seed, DayHike.
+must be a Catalog DayHike). `GLOSSARY.md` Seed, DayHike.
 
 - [x] Exact fixture DayHike name resolves to that DayHike's id
 - [x] A name that matches nothing raises a clear error (not an empty list)

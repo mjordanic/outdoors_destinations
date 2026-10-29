@@ -19,7 +19,7 @@ download tiles and does not add or drop DayHikes.
 **Complexity:** high
 
 **Prior art:** FABDEM sampling (`sample_dem`, DEM tests with a tiny GeoTIFF),
-ADR-0008, ADR-0010, PRD stories 1–12. `CONTEXT.md` LandCover, GeometryStore,
+ADR-0008, ADR-0010, PRD stories 1–12. `GLOSSARY.md` LandCover, GeometryStore,
 FeatureVector, Ranking. WorldCover class codes 10, 20, 30, 60, and 70.
 
 - [x] A fresh ingest creates an empty land-cover class on each vertex and empty
