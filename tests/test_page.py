@@ -181,7 +181,7 @@ def test_a_hike_found_for_a_wish_is_shown_against_what_the_hiker_wants(browser, 
 
     facts = page.locator("#selected table.facts")
     facts.wait_for()
-    assert facts.locator("thead th").all_inner_texts() == ["Measure", "This hike", "You want", "Score"]
+    assert facts.locator("thead th").all_inner_texts() == ["Measure", "This hike", "You want", "Score ?"]
     gain = facts.locator("tr", has=page.locator("td", has_text="Elevation gain"))
     assert gain.locator("td").nth(2).inner_text() == "900 m"
     waterside = facts.locator("tr", has=page.locator("td", has_text="Waterside"))
@@ -315,3 +315,19 @@ def test_a_liked_hike_is_measured_again_for_return_to_start_changed_while_wishin
 
     assert api.ranked[-1]["return_to_start"] is False
     assert page.url.endswith("&oneway")
+
+
+def test_a_feature_neither_hike_has_mapped_shows_a_dash_and_says_it_is_not_compared(browser, server) -> None:
+    # The Valley Path (1002) and the hikes without a Hut: neither has one mapped (ADR-0026).
+    page = open_page(browser, server, Api({}), hash="#hike=1002")
+    page.get_by_text("Chosen: Valley Path").wait_for()
+    page.get_by_label("Hut along weight, 0 to 100").fill("100")
+    page.get_by_role("button", name="Find similar").click()
+
+    not_compared = page.locator('td[title="Neither has one mapped: not compared"]')
+    page.locator("#results-table").locator(not_compared).first.wait_for()
+    assert page.locator("#results-table").locator(not_compared).first.inner_text() == "–"
+    page.locator("#results-table tbody tr", has=not_compared).first.click()
+    hut = page.locator("#selected table.facts tr", has=page.locator("td", has_text="Hut along"))
+    assert hut.locator("td").last.inner_text().startswith("–")
+    assert "Neither has one mapped: not compared" in hut.locator("td").last.inner_text()

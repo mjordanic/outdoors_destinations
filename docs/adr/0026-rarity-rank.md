@@ -1,5 +1,5 @@
 ---
-status: accepted (supersedes ADR-0023; amends ADR-0013, ADR-0016, ADR-0021, ADR-0022)
+status: accepted (supersedes ADR-0023; amends ADR-0013, ADR-0016, ADR-0021, ADR-0022, ADR-0025)
 ---
 
 # Rarity rank: a score is the share of random pairs less alike
@@ -37,6 +37,8 @@ The weights, the weighted mean over the Measures compared, and the 100,000 rando
 | Score 0 otherwise | "Less alike than almost all random hike pairs" |
 
 On the seven OSM flags the pairs are "random hike pairs where either has one". "(ties count half)" is gone (ADR-0021, ADR-0022).
+
+**The explanation beside every score** (ADR-0025) says the new meaning, still from `SCORE_HELP` and `MEASURE_INFO` alone. The line beside the overall score: the average of the measure scores under your weights, each the share of random hike pairs less alike, a typical pair about 0.44, and 0.75 beating 99 random pairs in 100 with the default weights. The line for the measure cells: 0.9 means only 1 pair in 10 is as alike, 0 nothing in common. The box's sections become: how alike, and how telling (with the bits reading); rare shared values tell more; having nothing mapped in common is not evidence; what 0.1 means when the hikes look similar (the Kattegat pair); the overall score; where the facts come from; how the scores are made. "The same values score 1.0" and "Giving rare shared traits more credit is being studied" are gone. Each of the seven OSM flags' help adds that two hikes that both lack it are not compared on it, and a Measure not compared shows a dash with its note on the page.
 
 **Decisions** (captain, all option A of the scout report):
 

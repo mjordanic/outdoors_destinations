@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from dayhike import build_catalog, build_similarity, web
 from dayhike.serving import ServingData, export_serving
-from dayhike.similarity import CORE_MEASURES, MEASURE_NAMES
+from dayhike.similarity import CORE_MEASURES, FACILITIES_FLAG_COLUMNS, MEASURE_NAMES
 from dayhike.web import RESULTS, create_app
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
@@ -92,16 +92,30 @@ def test_every_measure_names_the_data_its_fact_comes_from(client: TestClient) ->
             assert "OpenStreetMap" in source, name
 
 
+def test_every_osm_flag_says_two_hikes_without_it_are_not_compared(client: TestClient) -> None:
+    descriptions = {m["name"]: m["description"] for m in client.get("/api/measures").json()["measures"]}
+
+    for name in (*FACILITIES_FLAG_COLUMNS, "peak_summited", "viewpoint_along"):
+        assert "two hikes that both lack it are not compared on it" in descriptions[name], name
+    assert "not compared" not in descriptions["round_trip"]
+
+
 def test_the_score_explanation_says_what_a_score_means_and_how_it_is_made(client: TestClient) -> None:
     help_ = client.get("/api/measures").json()["score_help"]
     text = " ".join(section["text"] for section in help_["sections"])
 
     assert help_["overall"] and help_["measure"]
     assert all(section["title"] and section["text"] for section in help_["sections"])
-    assert "100,000 random hike pairs" in text
-    assert "0.1" in text and "more than about 90% of random hike pairs" in text
-    assert "score 1.0" in text  # equal values (ADR-0023)
-    assert "rare" in text  # a rare shared trait tells more than a common one
+    assert "100,000 random pairs" in text
+    # The rarity rank (ADR-0026): the share of random pairs less alike, a rare match counting for more.
+    assert "Share of random hike pairs less alike" in help_["measure"]
+    assert "0.9 means only 1 pair in 10" in help_["measure"]
+    assert "about 0.44" in help_["overall"]
+    assert "0.16 on waterside" in text and "84 %" in text  # two dry hikes: identical, but it tells little
+    assert "not compared" in text and "0.95" in text  # a shared absence; both passing a hut
+    assert "What does 0.1 mean" in " ".join(section["title"] for section in help_["sections"])
+    assert "Kattegat" in text and "0.10" in text
+    assert "count half" not in text and "score 1.0" not in text  # the rules ADR-0026 replaced
     for source in ("OpenStreetMap", "FABDEM", "WorldCover", "CHELSA"):
         assert source in text
     assert "weights" in text

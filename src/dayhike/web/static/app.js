@@ -639,7 +639,7 @@ function factsTable(hike, compare, result, month, weights, returnToStart) {
       if (compare) {
         const { score, note } = result?.measures?.[measure.name] ?? {};
         row.lastElementChild.innerHTML = score == null
-          ? '<span class="nodata">no data</span>'
+          ? (note ? `– ${helpButton(measure.name)}<small class="note">${escapeHtml(note)}</small>` : '<span class="nodata">no data</span>')
           : `<span class="bar"><i style="width:${Math.round(score * 100)}%"></i></span>${score.toFixed(2)} ${helpButton(measure.name)}${note ? `<small class="note">${escapeHtml(note)}</small>` : ""}`;
         if (weights && !weights[measure.name]) row.lastElementChild.title = "Left out of this score";
       }
@@ -1684,8 +1684,8 @@ function resultRow(result, number, open) {
   const row = document.createElement("tr");
   row.tabIndex = 0;
   const cells = comparedMeasures(back).map((m) => {
-    const score = result.measures[m.name].score;
-    if (score == null) return '<td class="cell none" title="no data">–</td>';
+    const { score, note } = result.measures[m.name];
+    if (score == null) return `<td class="cell none" title="${escapeHtml(note ?? "no data")}">–</td>`;
     if (!weights[m.name]) {
       return `<td class="cell left-out" title="${escapeHtml(m.label)}: ${score.toFixed(2)}, left out of this ranking">${Math.round(score * 100)}</td>`;
     }

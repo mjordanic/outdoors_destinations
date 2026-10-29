@@ -466,7 +466,8 @@ way instead of with its way back.
 `ratio` is smaller over larger (each raised to the floor first), `tolerance`
 is max(0, 1 − |a − b| / D) with a gap under a dead band counting as 0, `mix`
 is the shared share of fractions, `agree` is 1 when two yes/no facts agree
-(both absent agrees), `profile` is 1 − the mean
+(two DayHikes that both lack an OSM flag's feature are not compared; `round_trip`
+compares both values), `profile` is 1 − the mean
 absolute difference of two ProfileShapes, walked either way. A Measure whose
 fact is missing on either DayHike drops out of that pair and the other weights
 renormalize; a candidate with no weighted Measure scored is left out.
@@ -476,39 +477,41 @@ renormalize; a candidate with no weighted Measure scored is left out.
 Raw Measure scores sit on very different scales: a random pair of DayHikes
 scores 0.6 or more on `profile` nine times in ten, but rarely on `length`.
 Calibration maps each raw score to the share of random pairs (100,000, drawn
-once from the whole Catalog) that score lower on that Measure, ties counting
-half, so every Measure pulls with the weight it is given. Two values that are
-equal, or that the Measure counts as equal (a raw score of 1), count their ties
-in full and score 1.0 however many random pairs tie with them (ADR-0023). The
-printed score is the similarity itself, the weighted mean of the calibrated
-Measure scores: a typical random pair scores about 0.5, and 1.0 needs a pair
-that is the same (or counted as the same), or closer than every random pair, on
-every weighted Measure, so the
-best matches stay apart instead of all reading 1.000. Ties in order break on the uncalibrated weighted mean,
-then on DayHike id.
+once from the whole Catalog) strictly less alike on that Measure, so every
+Measure pulls with the weight it is given. A random pair is less alike when it
+scores lower, or when it scores the same raw 1 on a commoner value: among equal
+pairs the rarer shared value is the closer match (the rarity rank, ADR-0026).
+Ties never count half. On the seven OSM flags (Peak summited, Viewpoint, Hut,
+restaurant or cafe along, Shelter, restaurant or cafe at the Trailhead,
+parking) two DayHikes that both lack the feature are not compared, and the
+Measure drops out of that pair's mean. The printed score is the similarity
+itself, the weighted mean of the calibrated Measure scores: a typical random
+pair scores about 0.44 under the default weights, 0.75 beats 99 random pairs in
+100, and 1.0 needs a pair no random pair is as alike as on every weighted
+Measure, so the best matches stay apart instead of all reading 1.000. Ties in
+order break on the uncalibrated weighted mean, then on DayHike id.
 
 Reading a score, as the web demo explains it beside every score (ADR-0025):
 
-- **What the number means.** A Measure's score is the share of the 100,000
-  random hike pairs that differ more on that fact. 0.9: these two differ less
-  than 90% of random hike pairs. 0.1: they differ more than about 90% of random
-  hike pairs. Random pairs that differ exactly as much (yes/no facts) count half.
-- **The same values score 1.0**, however many random pairs share them. So do
-  values a Measure counts as the same: WaterSide shares less than 0.15 apart,
-  Water sources both 3 or more, values both at or under a `ratio` floor, and
-  yes/no facts that agree. A pair closer than every random pair also scores
-  1.0 without being the same.
-- **Alike hikes can score low on one Measure.** The score ranks a difference
-  against random pairs, not against how big it looks. Where most hikes are
-  close anyway, as on `profile`, a difference that looks small is still bigger
-  than most random pairs have. Two hikes that differ on a yes/no fact score
-  0.5 or less. So 0.1 on one Measure says random hikes are usually even closer
-  on that fact, not that the two are far apart.
-- **Rare shared traits tell more.** A closeness few random pairs reach is
-  stronger evidence than one most pairs reach, which is why the score is a
-  share of random pairs. A rare shared trait (both pass a hut) says more than
-  a common one (both pass none), but today both score 1.0; more credit for
-  rare shared traits is being studied.
+- **What the number means.** A Measure's score s is the share of the 100,000
+  random hike pairs less alike than these two: only 1 − s of them are this
+  alike. 0.9: only 1 pair in 10 is as alike. 0.5: half are, an ordinary match.
+  0: nothing in common on that Measure (one passes a hut and the other not, or
+  highest points 400 m or more apart). In bits, −log₂(1 − s) is the evidence
+  that the hikes are alike: 0.5 is 1 bit, 0.9 about 3, 0.99 about 7.
+- **Rare shared values tell more.** Two hikes that both pass a hut score 0.95
+  on it; two that are both never near water score 0.16 on WaterSide, since 84%
+  of random pairs are as alike there. Values a Measure counts as the same are
+  one value: WaterSide shares under 0.15, Water sources 3 or more, values at or
+  under a `ratio` floor.
+- **Nothing mapped in common is not evidence.** Two hikes with no hut mapped
+  are not compared on it: the cell shows a dash and the other Measures count.
+  A Wish's "no" is the Hiker's answer, so a hike without one matches it.
+- **Alike hikes can score low on one Measure.** A low number means what they
+  share there is common, or they are further apart on it than most pairs. The
+  Kattegat coast walks Kattegatstien and Kattegatkysten (56% and 30% of the way
+  beside water) score 0.10 on WaterSide, as most random pairs are two dry hikes
+  that count as alike; their overall score is still 0.85.
 - **Where the facts come from.** OpenStreetMap (the line, SAC grade, surface,
   peaks, viewpoints, huts, shelters, water sources, restaurants, parking),
   FABDEM (heights, climb, profile, steepness, slope aspect), ESA WorldCover
