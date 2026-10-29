@@ -34,7 +34,6 @@ lists them among them (``dayhike.loops``, ADR-0020).
 
 from __future__ import annotations
 
-import bisect
 import heapq
 import itertools
 import json
@@ -53,7 +52,6 @@ from pathlib import Path
 
 import numpy as np
 import shapely
-from sklearn.neighbors import BallTree
 
 from dayhike.catalog import (
     EARTH_RADIUS_M,

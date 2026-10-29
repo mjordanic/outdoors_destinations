@@ -1678,7 +1678,8 @@ yes/no Measure; only the Measures with a value weigh (100 each without
 `weights`), and no hike is left out. Exactly one of `seed`, `composed` and
 `wish` (else 422). `GET /api/measures` gives each Measure's `wish` input:
 `kind` (`number` or `yes/no`), `unit`, `min`, `max`, `step` and `default`, or
-null for a Measure that takes no value (profile, land cover, surface). With a TrailGraph a Ranking also lists SuggestedLoops
+null for a Measure that takes no value (profile, land cover, surface), and its
+data `source`; `score_help` holds the score explanation (`SCORE_HELP`). With a TrailGraph a Ranking also lists SuggestedLoops
 (ADR-0020): `id` null, `route` `{"text"}` (what `/api/compose` takes), `line`,
 `name` (from where it starts) and the figures of a DayHike row; with `origin`
 and `max_hours` only loops starting within the drive, each with its
