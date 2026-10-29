@@ -95,6 +95,7 @@ from dayhike.similarity import (
     are_twins,
     calibrate,
     climb_and_descent,
+    measure_rarity,
     measure_scores,
     nearest_on_line,
     random_pair_shares,
@@ -135,8 +136,9 @@ SEARCH_SCAN_CAP = 5_000  # occurrences of the scanned word a search looks at, so
 _HIKE_CHUNK = 2_000
 _RASTER_FACTS = ("tree_share", "temperature_c", "southness", "waterside_share")  # read from rasters
 _SIMILARITY_FILES = (
-    "ids.npy", "facts.npy", "profile.npy", "twins.npy", "quantiles.npy",
-    "facts_back.npy", "profile_back.npy", "quantiles_back.npy", "way_back.npy", "meta.json",
+    "ids.npy", "facts.npy", "profile.npy", "twins.npy", "quantiles.npy", "values.npy", "rarity.npy",
+    "facts_back.npy", "profile_back.npy", "quantiles_back.npy", "values_back.npy", "rarity_back.npy",
+    "way_back.npy", "meta.json",
 )  # fmt: skip
 
 # Groups are sections of the weights panel only; scoring knows no groups (ADR-0013).
@@ -192,24 +194,37 @@ WISH_INPUTS: dict[str, tuple[str | None, float, float, float, float]] = {
 }
 
 
-def score_note(score: float | None, tied: float | None, same: str | None = None) -> str | None:
+def score_note(
+    score: float | None, tied: float | None, same: str | None = None, pairs: str = "random hike pairs"
+) -> str | None:
     """A calibrated Measure score in words, with the number the compare table
-    shows for it (two decimals, half rounding up). ``tied`` is the share of
-    random hike pairs scoring the same, each counting half in the score.
-    ``same`` is "identical" when the two values are, else why the Measure
-    counts them as the same (ADR-0022); then no difference is told.
+    shows for it (two decimals, half rounding up): the share of random hike
+    pairs less alike. ``tied`` is the share of random hike pairs scoring the
+    same raw score. ``same`` is "identical" when the two values are, else why
+    the Measure counts them as the same (ADR-0022), or "not compared" when
+    neither has an OSM flag's feature mapped. ``pairs`` names the random
+    pairs compared: for an OSM flag, those where either has one.
     """
+    if same == "not compared":
+        return "Neither has one mapped: not compared"
     if score is None or tied is None:
         return None
-    if same == "identical":
-        return "Identical"
+    percent = _percent(score)
     if same:
-        return f"Counted as the same ({same})"
-    percent = int(Decimal(score).quantize(Decimal("0.01"), ROUND_HALF_UP) * 100)
-    if percent == 0:
-        return "Difference bigger than almost all random hike pairs"
-    note = f"Difference smaller than {percent}% of random hike pairs"
-    return f"{note} (ties count half)" if tied else note
+        alike = 100 - percent
+        told = f"fewer than 1% of {pairs} are" if alike < 1 else f"{alike}% of {pairs} are"
+        note = f"{'Identical' if same == 'identical' else f'Counted as the same ({same})'}; {told} this alike"
+        return f"{note}, so it counts little" if alike >= 50 else note
+    if percent >= 1:
+        return f"More alike than {percent}% of {pairs}"
+    if _percent(tied) >= 1:
+        return f"Nothing in common on this measure, like {_percent(tied)}% of {pairs}"
+    return f"Less alike than almost all {pairs}"
+
+
+def _percent(share: float) -> int:
+    """A share as the compare table shows it, two decimals with half rounding up, times 100."""
+    return int(Decimal(share).quantize(Decimal("0.01"), ROUND_HALF_UP) * 100)
 
 
 # What a score means, said to the Hiker: a short line beside the overall score and
@@ -1162,6 +1177,8 @@ class ServingData:
             ),
             twins=np.arange(len(measured)),
             quantiles=store.quantiles,
+            values=store.values,
+            rarity=store.rarity,
         )
         similarity, _ = score_rows(loops, [seed], np.arange(len(measured)), _measure_weights(weights), month=month)
         seed_points = None if seed_line is None else _even_points(seed_line[:, 0], seed_line[:, 1], TWIN_STEP_M)
@@ -1288,15 +1305,17 @@ def scored_measures(
         raw = measure_scores(store, measure, seed, rows, month=month)
         key = _calibration_key(measure, month)
         same = _sameness(store, measure, seed, rows, month, raw)
-        measures[measure.name] = (raw, calibrate(store, key, raw), random_pair_shares(store, key, raw)[1], same)
+        calibrated = calibrate(store, key, raw, measure_rarity(store, measure, seed, rows, month=month))
+        pairs = "random hike pairs where either has one" if measure.presence else "random hike pairs"
+        measures[measure.name] = (raw, calibrated, random_pair_shares(store, key, raw)[1], same, pairs)
     return [
         {
             name: {
                 "score": _value(calibrated[i]),
                 "raw": _value(raw[i]),
-                "note": score_note(_value(calibrated[i]), _value(tied[i]), same[i]),
+                "note": score_note(_value(calibrated[i]), _value(tied[i]), same[i], pairs),
             }
-            for name, (raw, calibrated, tied, same) in measures.items()
+            for name, (raw, calibrated, tied, same, pairs) in measures.items()
         }
         for i in range(len(rows))
     ]
@@ -1306,7 +1325,8 @@ def _sameness(
     store: SimilarityStore, measure, seed: int | OutsideSeed, rows: np.ndarray, month: int | None, raw: np.ndarray
 ) -> list[str | None]:
     """Per row, "identical" when its value of the Measure is the Seed's, else
-    why a raw score of 1 counts two different values as the same, else None."""
+    why a raw score of 1 counts two different values as the same, else "not
+    compared" when neither has an OSM flag's feature, else None."""
     if measure.kind == "profile":
         left = seed.profile if isinstance(seed, OutsideSeed) else store.profile[seed]
         identical = (store.profile[rows] == left).all(axis=-1)
@@ -1324,7 +1344,11 @@ def _sameness(
             reason = "both at or under the floor"
         else:
             reason = "close enough to score the same"
-    return ["identical" if same else reason if one else None for same, one in zip(identical.tolist(), (raw == 1.0).tolist())]
+    absent = np.isnan(raw) & identical & (store.facts[index[0]][rows] == 0) if measure.presence else np.zeros(len(rows), bool)
+    return [
+        "not compared" if none else "identical" if same else reason if one else None
+        for same, one, none in zip(identical.tolist(), (raw == 1.0).tolist(), absent.tolist())
+    ]
 
 
 # Letters with no Unicode decomposition to a base letter, spelt as a plain keyboard would.

@@ -122,7 +122,8 @@ def test_fixture_pipeline_twice_gives_identical_outputs(two_runs: tuple[Path, Pa
     arrays = sorted(path.name for path in first_store.glob("*.npy"))
     assert arrays == [
         "facts.npy", "facts_back.npy", "ids.npy", "profile.npy", "profile_back.npy",
-        "quantiles.npy", "quantiles_back.npy", "twins.npy", "way_back.npy",
+        "quantiles.npy", "quantiles_back.npy", "rarity.npy", "rarity_back.npy", "twins.npy",
+        "values.npy", "values_back.npy", "way_back.npy",
     ]  # fmt: skip
     for name in arrays:
         assert (first_store / name).read_bytes() == (second_store / name).read_bytes(), name

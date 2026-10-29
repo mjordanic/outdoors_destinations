@@ -7,10 +7,11 @@ query scores its Seeds against every DayHike with numpy, one Measure at a time,
 and nothing is rebuilt per request.
 
 A Measure compares one fact of two DayHikes and gives a score in [0, 1], or
-NaN when either DayHike lacks the fact. Calibration maps each raw score to the
-share of random DayHike pairs that score lower on that Measure (ties count
-half; an equal pair counts them in full and scores 1), so Measures on very
-different raw scales can be weighted against each other.
+NaN when either DayHike lacks the fact or neither has an OSM flag's feature
+mapped. Calibration maps each raw score to the share of random DayHike pairs
+strictly less alike on that Measure: scoring lower, or equal on a commoner
+value (the rarity rank, ADR-0026), so Measures on very different raw scales
+can be weighted against each other.
 
 Every DayHike has a second set of facts, measured with its way back to its
 Trailhead (ADR-0019), with its own Calibration; a query compares Seeds and
@@ -25,7 +26,7 @@ import math
 import sqlite3
 import time
 from collections.abc import Callable, Collection, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -162,10 +163,12 @@ class Measure:
     ``tolerance`` (1 at equal values, 0 once they differ by ``constant``;
     values first capped at ``cap``, and gaps under ``dead_band`` count as
     equal), ``mix`` (shared share of fraction
-    columns), ``agree`` (1 when two yes/no flags agree, both-absent agrees) or
-    ``profile`` (1 - mean abs difference of two ProfileShapes, the better of
-    forward or reversed). A ``monthly`` Measure reads the QueryMonth column of
-    its fact when the query sets one.
+    columns), ``agree`` (1 when two yes/no flags agree) or ``profile`` (1 -
+    mean abs difference of two ProfileShapes, the better of forward or
+    reversed). A ``monthly`` Measure reads the QueryMonth column of its fact
+    when the query sets one. A ``presence`` Measure is an OSM flag: two
+    DayHikes that both lack its feature are not compared on it (NaN), as a
+    missing map entry may only mean nobody mapped it.
     """
 
     name: str
@@ -175,6 +178,7 @@ class Measure:
     cap: float | None = None
     monthly: bool = False
     dead_band: float | None = None
+    presence: bool = False
 
 
 MEASURES = (
@@ -185,8 +189,8 @@ MEASURES = (
     Measure("lowest", "tolerance", ("lowest_m",), 400),
     Measure("profile", "profile", ()),
     Measure("landcover", "mix", LANDCOVER_SHARE_COLUMNS),
-    Measure("peak_summited", "agree", ("peak_summited",)),
-    Measure("viewpoint_along", "agree", ("viewpoint_along",)),
+    Measure("peak_summited", "agree", ("peak_summited",), presence=True),
+    Measure("viewpoint_along", "agree", ("viewpoint_along",), presence=True),
     Measure("peaks_around", "ratio", ("peaks_around",), 1),
     Measure("temperature", "tolerance", ("temperature_c",), 10, monthly=True),
     Measure("precipitation", "ratio", ("precipitation_mm",), 10, monthly=True),
@@ -195,7 +199,7 @@ MEASURES = (
     Measure("water_count", "tolerance", ("water_count",), 3, cap=3),
     Measure("dry_stretch", "ratio", ("dry_stretch_m",), 1_000),
     Measure("waterside", "tolerance", ("waterside_share",), 0.5, dead_band=0.15),
-    *(Measure(flag, "agree", (flag,)) for flag in FACILITIES_FLAG_COLUMNS),
+    *(Measure(flag, "agree", (flag,), presence=True) for flag in FACILITIES_FLAG_COLUMNS),
     Measure("surface", "mix", SURFACE_SHARE_COLUMNS),
     Measure("tarmac_approach", "tolerance", ("tarmac_approach_m",), 2_000),
     Measure("round_trip", "agree", ("round_trip",)),
@@ -242,7 +246,8 @@ _CALIBRATION_VERSION = hashlib.sha256(
         [
             [vars(measure) for measure in MEASURES], CALIBRATION_KEYS,
             CALIBRATION_QUANTILES, CALIBRATION_PAIRS, CALIBRATION_SEED,
-            "equal-scores-one",  # ties of a raw 1 count in full (``calibrate``, ADR-0023)
+            "rarity-rank-strict",  # the share strictly less alike, rarer agreements closer (``calibrate``)
+            "dead-band-one-value",  # a dead band is one value for rarity (``measure_rarity``)
             "mix-rounded",  # equal float32 shares sum to a raw 1 (``measure_scores``)
         ]
     ).encode()
@@ -262,7 +267,11 @@ class SimilarityStore:
     ProfileShape row per DayHike (NaN when missing). ``twins`` gives each
     DayHike the first row of its group of Twins (``twin_groups``; its own row
     when it has none). ``quantiles`` holds ``CALIBRATION_QUANTILES`` sorted
-    random-pair scores per ``CALIBRATION_KEYS`` entry.
+    random-pair scores per ``CALIBRATION_KEYS`` entry, ``rarity`` as many
+    sorted ``measure_rarity`` values of the random pairs scoring raw 1, and
+    ``values`` as many sorted values of each ``FACT_COLUMNS`` entry over the
+    DayHikes, for ``measure_rarity`` (both None in a store built by hand:
+    no agreement is then rarer than another).
 
     ``with_way_back`` is the same DayHikes measured with their way back to the
     Trailhead (ADR-0019): its own facts, ProfileShapes and Calibration, the
@@ -275,6 +284,8 @@ class SimilarityStore:
     twins: np.ndarray
     quantiles: np.ndarray
     catalog_digest: str | None = None
+    values: np.ndarray | None = None
+    rarity: np.ndarray | None = None
     with_way_back: SimilarityStore | None = None
     way_back: np.ndarray | None = None
 
@@ -330,6 +341,8 @@ class SimilarityStore:
             twins=twins,
             quantiles=load("quantiles"),
             catalog_digest=digest,
+            values=load("values"),
+            rarity=load("rarity"),
             with_way_back=cls(
                 ids=ids,
                 facts=load("facts_back"),
@@ -337,6 +350,8 @@ class SimilarityStore:
                 twins=twins,
                 quantiles=load("quantiles_back"),
                 catalog_digest=digest,
+                values=load("values_back"),
+                rarity=load("rarity_back"),
                 way_back=load("way_back"),
             ),
         )
@@ -355,11 +370,15 @@ class OutsideSeed:
     store without joining it: its facts in ``FACT_COLUMNS`` order (NaN
     missing), its ProfileShape, and the store rows of the DayHikes it
     retraces, whose groups of Twins a Ranking from it leaves out.
+    ``stated`` marks a Wish: its yes/no facts are the Hiker's answers, not
+    map entries, so a DayHike that lacks an OSM flag's feature is compared
+    with a "no" on it.
     """
 
     facts: np.ndarray
     profile: np.ndarray
     twin_rows: np.ndarray
+    stated: bool = False
 
     @classmethod
     def of(
@@ -384,7 +403,7 @@ class OutsideSeed:
                 (column,) = measure.columns
                 months = [f"{column}_{month:02d}" for month in range(1, 13)] if measure.monthly else []
                 facts.update(dict.fromkeys([column, *months], float(wish[measure.name])))
-        return cls.of(facts, None)
+        return replace(cls.of(facts, None), stated=True)
 
 
 def rank_dayhikes(
@@ -404,8 +423,9 @@ def rank_dayhikes(
     candidate's similarity to one Seed is the weighted mean of its calibrated
     Measure scores over the Measures both DayHikes have; with several Seeds the
     best Seed counts. Ties break on the same weighted mean of raw scores, then
-    on DayHike id. ``score`` is that similarity: 0.5 is about a typical random
-    pair, 1.0 beats every random pair on every weighted Measure. Of a group of
+    on DayHike id. ``score`` is that similarity: about 0.44 for a typical
+    random pair under the default weights, 1.0 when no random pair is as alike
+    on any weighted Measure. Of a group of
     Twins only the best is kept, and none of a Seed's Twins. Seeds are
     resolved with ``resolve_seed`` and omitted. A candidate with no weighted
     Measure scored is left out. ``allowed_ids`` restricts the candidates (for
@@ -508,7 +528,12 @@ def score_rows(
         )
         calibrated = np.column_stack(
             [
-                calibrate(store, _calibration_key(measure, month), raw[:, j])
+                calibrate(
+                    store,
+                    _calibration_key(measure, month),
+                    raw[:, j],
+                    measure_rarity(store, measure, seed, rows, month=month),
+                )
                 for j, measure in enumerate(measures)
             ]
         )
@@ -533,9 +558,7 @@ def measure_scores(
     """
 
     def seed_column(name: str) -> np.ndarray:
-        if isinstance(a, OutsideSeed):
-            return a.facts[FACT_COLUMNS.index(name)]
-        return store.column(name)[a]
+        return _seed_value(store, a, name)
 
     if measure.kind == "profile":
         left = a.profile if isinstance(a, OutsideSeed) else store.profile[a]
@@ -543,16 +566,15 @@ def measure_scores(
         forward = np.abs(right - left).mean(axis=-1)
         backward = np.abs(right - left[..., ::-1]).mean(axis=-1)
         return 1.0 - np.minimum(forward, backward)
-    columns = [
-        f"{name}_{month:02d}" if measure.monthly and month is not None else name
-        for name in measure.columns
-    ]
+    columns = _columns(measure, month)
     if measure.kind == "mix":
         shared = sum(np.minimum(seed_column(name), store.column(name)[b]) for name in columns)
         return np.minimum(np.round(shared, 6), 1.0)
     left, right = seed_column(columns[0]), store.column(columns[0])[b]
     if measure.kind == "agree":
-        return np.where(np.isnan(left) | np.isnan(right), np.nan, left == right)
+        stated = isinstance(a, OutsideSeed) and a.stated
+        absent = (left == 0) & (right == 0) if measure.presence and not stated else False
+        return np.where(np.isnan(left) | np.isnan(right) | absent, np.nan, left == right)
     if measure.kind == "ratio":
         left = np.maximum(left, measure.constant)
         right = np.maximum(right, measure.constant)
@@ -565,16 +587,53 @@ def measure_scores(
     return np.maximum(0.0, 1.0 - gap / measure.constant)
 
 
-def calibrate(store: SimilarityStore, key: str, scores: np.ndarray) -> np.ndarray:
-    """Share of random pairs that score lower on ``key`` (ties count half).
+def measure_rarity(
+    store: SimilarityStore,
+    measure: Measure,
+    a: int | np.ndarray | OutsideSeed,
+    b: np.ndarray,
+    *,
+    month: int | None = None,
+) -> np.ndarray:
+    """Share of the Catalog's DayHikes whose value of the Measure lies between
+    the values of ``a`` and ``b``, both included: how common what they share is.
 
-    A raw score of 1 (equal, or counted as equal) counts its ties in full, so
-    it calibrates to 1 however many random pairs tie with it (ADR-0023). NaN
-    stays NaN; a key without random-pair scores gives NaN.
+    Values are first floored, capped, and put to 0 below a dead band, so a
+    dead band is one value. NaN where either value is missing, for a Measure
+    of more than one column (``mix``, ``profile``), and in a store without
+    ``values``.
     """
-    quantiles = store.quantiles[CALIBRATION_KEYS.index(key)]
-    below, ties = _below_and_ties(quantiles, scores)
-    return below + np.where(scores == 1.0, ties, ties / 2)
+    if len(measure.columns) != 1 or store.values is None:
+        return np.full(np.shape(b), np.nan)
+    (column,) = _columns(measure, month)
+    values = _measured(measure, np.asarray(store.values[FACT_COLUMNS.index(column)]))
+    values = values[~np.isnan(values)]
+    left = _measured(measure, _seed_value(store, a, column))
+    right = _measured(measure, store.column(column)[b])
+    low, high = np.minimum(left, right), np.maximum(left, right)
+    between = np.searchsorted(values, high, side="right") - np.searchsorted(values, low, side="left")
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(np.isnan(low) | np.isnan(high) | (values.size == 0), np.nan, between / values.size)
+
+
+def calibrate(
+    store: SimilarityStore, key: str, scores: np.ndarray, rarity: np.ndarray | None = None
+) -> np.ndarray:
+    """Share of random pairs strictly less alike than these on ``key``.
+
+    A random pair is less alike when it scores lower, or when both score 1
+    and its shared values are more common (a larger ``measure_rarity``, given
+    as ``rarity``). Every other tie is as alike, so 0 is a pair no random
+    pair is less alike than. NaN stays NaN; a key without random-pair scores
+    gives NaN.
+    """
+    index = CALIBRATION_KEYS.index(key)
+    below, ties = _below_and_ties(store.quantiles[index], scores)
+    if rarity is None or store.rarity is None:
+        return below
+    rarer, as_rare = _below_and_ties(store.rarity[index], rarity)
+    commoner = np.nan_to_num(1.0 - rarer - as_rare)
+    return np.where(scores == 1.0, below + ties * commoner, below)
 
 
 def random_pair_shares(
@@ -582,8 +641,8 @@ def random_pair_shares(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Shares of random pairs that score lower on ``key``, and that score the same.
 
-    The Calibration is the first plus half the second (all of it at a raw
-    score of 1). NaN stays NaN.
+    The Calibration is the first, plus at a raw score of 1 the part of the
+    second whose shared values are commoner. NaN stays NaN.
     """
     return _below_and_ties(store.quantiles[CALIBRATION_KEYS.index(key)], scores)
 
@@ -617,6 +676,29 @@ def _below_and_ties(sorted_values: np.ndarray, scores: np.ndarray) -> tuple[np.n
         np.where(missing, np.nan, below / len(sorted_values)),
         np.where(missing, np.nan, ties / len(sorted_values)),
     )
+
+
+def _columns(measure: Measure, month: int | None) -> list[str]:
+    """The fact columns a Measure reads: a monthly one's QueryMonth columns when one is set."""
+    return [f"{name}_{month:02d}" if measure.monthly and month is not None else name for name in measure.columns]
+
+
+def _seed_value(store: SimilarityStore, a: int | np.ndarray | OutsideSeed, name: str) -> np.ndarray:
+    if isinstance(a, OutsideSeed):
+        return a.facts[FACT_COLUMNS.index(name)]
+    return store.column(name)[a]
+
+
+def _measured(measure: Measure, values: np.ndarray) -> np.ndarray:
+    """Values as the Measure compares them: floored (``ratio``), capped, and 0 below a dead band."""
+    values = np.asarray(values, dtype=float)
+    if measure.kind == "ratio":
+        values = np.maximum(values, measure.constant)
+    if measure.cap is not None:
+        values = np.minimum(values, measure.cap)
+    if measure.dead_band is not None:
+        values = np.where(values < measure.dead_band, 0.0, values)
+    return values
 
 
 def _calibration_key(measure: Measure, month: int | None) -> str:
@@ -705,8 +787,10 @@ def calibrate_similarity(
 
     ``CALIBRATION_PAIRS`` random pairs of distinct DayHikes are scored on every
     ``CALIBRATION_KEYS`` entry; ``CALIBRATION_QUANTILES`` evenly spaced
-    quantiles of the scored ones are kept per key, for the facts one way and
-    with the way back alike. Rerun after a Measure constant changes.
+    quantiles of the scored ones are kept per key, and as many of the
+    ``measure_rarity`` of those scoring raw 1, after as many of each fact
+    column's values over the DayHikes, for the facts one way and with the way
+    back alike. Rerun after a Measure constant changes.
     """
     directory = similarity_dir_for(catalog_path)
     meta = json.loads((directory / "meta.json").read_text())
@@ -723,31 +807,31 @@ def calibrate_similarity(
     by_name = {measure.name: measure for measure in MEASURES}
     at = (np.arange(CALIBRATION_QUANTILES) + 0.5) / CALIBRATION_QUANTILES
     for suffix in ("", "_back"):
+        facts = np.load(directory / f"facts{suffix}.npy")
         store = SimilarityStore(
             ids=ids,
-            facts=np.load(directory / f"facts{suffix}.npy"),
+            facts=facts,
             profile=np.load(directory / f"profile{suffix}.npy"),
             twins=np.load(directory / "twins.npy"),
             quantiles=np.empty((0, 0), dtype=np.float32),
+            values=_quantile_rows(facts, at),
         )
+        keyed = [
+            (by_name[key.split("@")[0]], int(key.split("@")[1]) if "@" in key else None)
+            for key in CALIBRATION_KEYS
+        ]
         scores = np.column_stack(
-            [
-                measure_scores(
-                    store,
-                    by_name[key.split("@")[0]],
-                    left,
-                    right,
-                    month=int(key.split("@")[1]) if "@" in key else None,
-                )
-                for key in CALIBRATION_KEYS
-            ]
+            [measure_scores(store, measure, left, right, month=month) for measure, month in keyed]
         ).astype(np.float32)
-        quantiles = np.full((len(CALIBRATION_KEYS), CALIBRATION_QUANTILES), np.nan, np.float32)
-        for row, column in enumerate(scores.T):
-            scored = column[~np.isnan(column)]
-            if scored.size:
-                quantiles[row] = np.quantile(scored, at, method="inverted_cdf")
-        np.save(directory / f"quantiles{suffix}.npy", quantiles)
+        rarity = np.column_stack(
+            [
+                np.where(scores[:, j] == 1.0, measure_rarity(store, measure, left, right, month=month), np.nan)
+                for j, (measure, month) in enumerate(keyed)
+            ]
+        )
+        np.save(directory / f"quantiles{suffix}.npy", _quantile_rows(scores.T, at))
+        np.save(directory / f"rarity{suffix}.npy", _quantile_rows(rarity.T, at))
+        np.save(directory / f"values{suffix}.npy", store.values)
     meta.update(
         calibration_version=_CALIBRATION_VERSION,
         calibration_keys=CALIBRATION_KEYS,
@@ -756,6 +840,16 @@ def calibrate_similarity(
     )
     (directory / "meta.json").write_text(json.dumps(meta, indent=1))
     return directory
+
+
+def _quantile_rows(rows: np.ndarray, at: np.ndarray) -> np.ndarray:
+    """Quantiles ``at`` of each row's non-NaN values (float32), NaN for a row with none."""
+    quantiles = np.full((len(rows), len(at)), np.nan, np.float32)
+    for index, row in enumerate(rows):
+        scored = row[~np.isnan(row)]
+        if scored.size:
+            quantiles[index] = np.quantile(scored, at, method="inverted_cdf")
+    return quantiles
 
 
 def _build_facts(
