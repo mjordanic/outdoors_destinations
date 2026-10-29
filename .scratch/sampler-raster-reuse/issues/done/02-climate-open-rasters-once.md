@@ -23,7 +23,7 @@ is still raised before any sampling starts.
 **Complexity:** medium
 
 **Prior art:** PRD `.scratch/sampler-raster-reuse/PRD.md` stories 2, 4, 6,
-8–14, 16, 17, 20. `CONTEXT.md` ClimateNormal, QueryMonth, GeometryStore,
+8–14, 16, 17, 20. `GLOSSARY.md` ClimateNormal, QueryMonth, GeometryStore,
 Catalog. ADR-0005, ADR-0008, ADR-0010. Tests in `test_climate` that write
 synthetic constant month GeoTIFFs (`_write_climate_tifs`), the CLI subprocess
 tests for `sample-climate`, and

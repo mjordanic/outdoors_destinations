@@ -7,6 +7,7 @@ from pathlib import Path
 
 from dayhike.catalog import (
     MAX_CAR_SPEED_MS,
+    SNAP_TOLERANCE_M,
     Catalog,
     Origin,
     RankedDayHike,
@@ -58,6 +59,14 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         dest="list_dayhikes",
         help="Print kept DayHikes as id, name, length_m after ingest",
+    )
+    ingest.add_argument(
+        "--snap-tolerance",
+        type=_parse_snap_tolerance,
+        default=SNAP_TOLERANCE_M,
+        metavar="METRES",
+        help="TrailGraph: join a dead-end tip to another way this close, at most 50 "
+        f"(default: {SNAP_TOLERANCE_M})",
     )
     fetch = subparsers.add_parser(
         "fetch-extracts",
@@ -165,6 +174,23 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_CLIMATE_DIR,
         help="Directory of CHELSA GeoTIFFs (default: data/climate)",
     )
+    sample_tg = subparsers.add_parser(
+        "sample-trailgraph",
+        help="Sample local FABDEM, LandCover and climate rasters onto the TrailGraph's vertices",
+    )
+    sample_tg.add_argument(
+        "--catalog",
+        type=Path,
+        default=Path("data/catalog.sqlite"),
+        help="SQLite Catalog path (default: data/catalog.sqlite)",
+    )
+    sample_tg.add_argument("--dem", type=Path, default=DEFAULT_DEM_DIR, help="FABDEM GeoTIFFs (default: data/dem)")
+    sample_tg.add_argument(
+        "--landcover", type=Path, default=DEFAULT_LANDCOVER_DIR, help="WorldCover GeoTIFFs (default: data/landcover)"
+    )
+    sample_tg.add_argument(
+        "--climate", type=Path, default=DEFAULT_CLIMATE_DIR, help="CHELSA GeoTIFFs (default: data/climate)"
+    )
     similarity = subparsers.add_parser(
         "build-similarity",
         help="Build the similarity facts and Calibration next to a Catalog",
@@ -237,7 +263,39 @@ def main(argv: list[str] | None = None) -> int:
         + "). Measures: "
         + ", ".join(MEASURE_NAMES),
     )
+    rank.add_argument(
+        "--one-way",
+        action="store_true",
+        help="Compare every hike one way; by default every hike, the Seeds included, "
+        "is measured with its way back to its start",
+    )
     rank.add_argument("seeds", nargs="+", help="Seed DayHike names")
+    compose = subparsers.add_parser(
+        "compose",
+        help="Compose a hike from TrailGraph Segments and rank DayHikes like it (reads a serving export)",
+    )
+    compose.add_argument("--data", type=Path, default=Path("data/web-serving"), help="Serving export directory")
+    compose.add_argument("--name", default=None, help="Name of the hike (default: proposed from its trails)")
+    compose.add_argument("--month", type=int, default=None, help="QueryMonth 1-12")
+    compose.add_argument(
+        "--limit", type=int, default=10, help="Print the best this many DayHikes like it (default: 10)"
+    )
+    compose.add_argument(
+        "--weight",
+        action="append",
+        type=_parse_weight,
+        metavar="MEASURE=WEIGHT",
+        help="Weight 0-100 of one Measure, repeatable, as for rank",
+    )
+    compose.add_argument(
+        "--one-way",
+        action="store_true",
+        help="Compare every hike one way; by default every hike, the Seed included, "
+        "is measured with its way back to its start",
+    )
+    compose.add_argument(
+        "route", help="The hike as its shared link holds it: start:step,step,... (the text after #compose=)"
+    )
     nearby = subparsers.add_parser(
         "nearby", help="List DayHikes within a max DriveTime of an Origin, nearest first"
     )
@@ -309,8 +367,27 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "ingest":
         return _ingest(
-            args.osm, args.catalog, fresh=args.fresh, list_dayhikes=args.list_dayhikes
+            args.osm,
+            args.catalog,
+            fresh=args.fresh,
+            list_dayhikes=args.list_dayhikes,
+            snap_tolerance_m=args.snap_tolerance,
         )
+    if args.command == "sample-trailgraph":
+        return _sample_trailgraph(args.catalog, args.dem, args.landcover, args.climate)
+    if args.command == "compose":
+        try:
+            return _compose(
+                args.data,
+                args.route,
+                args.name,
+                dict(args.weight) if args.weight else None,
+                args.month,
+                args.limit,
+                return_to_start=not args.one_way,
+            )
+        except ValueError as exc:
+            compose.error(str(exc))
     if args.command == "fetch-extracts":
         return _fetch_extracts(args.dest)
     if args.command == "fetch-dem":
@@ -349,6 +426,7 @@ def main(argv: list[str] | None = None) -> int:
             dict(args.weight) if args.weight else None,
             args.limit,
             args.highways,
+            return_to_start=not args.one_way,
         )
     except ValueError as exc:
         rank.error(str(exc))
@@ -360,12 +438,14 @@ def _ingest(
     *,
     fresh: bool = False,
     list_dayhikes: bool = False,
+    snap_tolerance_m: float = SNAP_TOLERANCE_M,
 ) -> int:
     catalog = build_catalog(
         osm_paths,
         catalog_path,
         progress=lambda message: print(message, file=sys.stderr, flush=True),
         fresh=fresh,
+        snap_tolerance_m=snap_tolerance_m,
     )
     print(catalog.path)
     print(catalog.ingest_report)
@@ -445,6 +525,61 @@ def _sample_climate(catalog_path: Path, raster_dir: Path) -> int:
     if sampled == 0:
         print(f"no vertices sampled: no usable climate rasters cover them in {raster_dir}", file=sys.stderr)
     print(sampled)
+    return 0
+
+
+def _sample_trailgraph(catalog_path: Path, dem_dir: Path, landcover_dir: Path, climate_dir: Path) -> int:
+    from dayhike.trailgraph import sample_trailgraph
+
+    print(
+        sample_trailgraph(
+            catalog_path,
+            dem_dir=dem_dir,
+            landcover_dir=landcover_dir,
+            climate_dir=climate_dir,
+            progress=lambda message: print(message, file=sys.stderr, flush=True),
+        )
+    )
+    return 0
+
+
+def _compose(
+    data: Path,
+    route_text: str,
+    name: str | None,
+    weights: dict[str, float] | None,
+    month: int | None,
+    limit: int,
+    *,
+    return_to_start: bool = True,
+) -> int:
+    from dayhike.serving import ServingData
+    from dayhike.similarity import DEFAULT_WEIGHTS
+    from dayhike.trailgraph import Route
+
+    serving = ServingData(data)
+    if serving.trailgraph is None:
+        print(f"{data}: no TrailGraph in this export; ingest again, then export-serving", file=sys.stderr)
+        return 1
+    route = Route.parse(route_text)
+    hike = serving.compose(route, name, return_to_start)
+    facts = hike["facts"]
+    back = hike["way_back"]
+    print(
+        f"{hike['name']}\t{facts['length_m']:.0f} m\tclimb {hike['climb_m']} m\tdescent {hike['descent_m']} m"
+        f"\thighest {facts['highest_m']}\tround trip {bool(facts['round_trip'])}"
+        + ("" if back is None else f"\tway back {back['m']:.0f} m ({back['kind']})")
+    )
+    for result in serving.rank(
+        route,
+        DEFAULT_WEIGHTS if weights is None else weights,
+        month=month,
+        limit=limit,
+        return_to_start=return_to_start,
+    ):
+        for indent, hike in (("", result), *(("  ", version) for version in result["versions"])):
+            listed = hike["route"]["text"] if hike["id"] is None else hike["id"]  # a SuggestedLoop by its link
+            print(f"{indent}{listed}\t{hike['name']}\t{hike['score']}")
     return 0
 
 
@@ -528,6 +663,17 @@ def _serve(data: Path, host: str, port: int, valhalla_url: str | None, forwarded
     return 0
 
 
+def _parse_snap_tolerance(value: str) -> float:
+    from dayhike.trailgraph import check_snap_tolerance
+
+    try:
+        metres = float(value)
+        check_snap_tolerance(metres)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+    return metres
+
+
 def _parse_weight(value: str) -> tuple[str, float]:
     name, _, weight = value.partition("=")
     try:
@@ -603,11 +749,13 @@ def _rank(
     weights: dict[str, float] | None,
     limit: int | None,
     highways: bool = False,
+    *,
+    return_to_start: bool = True,
 ) -> int:
     catalog = Catalog.open(catalog_path)
     if origin is not None and max_hours is not None:
         ranking = _filter_by_drive_time(
-            rank_dayhikes(catalog, seeds, weights, month=month),
+            rank_dayhikes(catalog, seeds, weights, month=month, return_to_start=return_to_start),
             catalog_path,
             origin,
             max_hours,
@@ -616,7 +764,9 @@ def _rank(
         )
         ranking = Ranking(items=ranking.items[:limit])
     else:
-        ranking = rank_dayhikes(catalog, seeds, weights, month=month, limit=limit)
+        ranking = rank_dayhikes(
+            catalog, seeds, weights, month=month, limit=limit, return_to_start=return_to_start
+        )
     for item in ranking.items:
         line = f"{item.dayhike.id}\t{item.dayhike.name}\t{item.score}"
         if item.drive_time is not None:

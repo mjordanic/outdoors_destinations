@@ -22,7 +22,7 @@ pairs, and records which method the design keeps and why.
 
 **Prior art:** PRD "Measure kinds" (ProfileShape bullet), "Starting
 constants" (Profile row), "Further Notes" (DTW cost); PRD stories 23–26.
-`CONTEXT.md` ElevationProfile, ProfileShape. Notebook 04a's elevation-profile
+`GLOSSARY.md` ElevationProfile, ProfileShape. Notebook 04a's elevation-profile
 section (metres of change from the first point, mean absolute difference
 between two profiles). Ticket 01's measure functions and fact-helper shape.
 

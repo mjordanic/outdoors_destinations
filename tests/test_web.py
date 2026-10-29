@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from dayhike import build_catalog, build_similarity, web
 from dayhike.serving import ServingData, export_serving
-from dayhike.similarity import CORE_MEASURES, MEASURE_NAMES
+from dayhike.similarity import CORE_MEASURES, FACILITIES_FLAG_COLUMNS, MEASURE_NAMES
 from dayhike.web import RESULTS, create_app
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
@@ -52,6 +52,73 @@ def test_info_and_measures_describe_every_measure_in_groups(client: TestClient) 
     assert {m["group"] for m in body["measures"]} == set(body["groups"])
     assert all(m["label"] and m["description"] for m in body["measures"])
     assert {m["name"] for m in body["measures"] if m["default_weight"] > 0} == set(CORE_MEASURES)
+
+
+def test_measures_say_how_a_wish_value_is_typed_in(client: TestClient) -> None:
+    measures = {m["name"]: m for m in client.get("/api/measures").json()["measures"]}
+
+    assert {name for name, m in measures.items() if m["wish"] is None} == {"profile", "landcover", "surface"}
+    assert measures["hut_along"]["wish"] == {
+        "kind": "yes/no", "unit": None, "min": None, "max": None, "step": None, "default": True,
+    }  # fmt: skip
+    length = measures["length"]["wish"]
+    assert (length["kind"], length["unit"]) == ("number", "m")
+    assert measures["temperature"]["wish"]["unit"] == "°C"
+    for name, measure in measures.items():
+        wish = measure["wish"]
+        if wish is not None and wish["kind"] == "number":
+            assert wish["min"] <= wish["default"] <= wish["max"] and 0 < wish["step"] < wish["max"] - wish["min"], name
+    # A wished value ranks: the default of every Measure that takes one is accepted.
+    defaults = {name: m["wish"]["default"] for name, m in measures.items() if m["wish"] is not None}
+    assert client.post("/api/rank", json={"wish": defaults, "return_to_start": False}).status_code == 200
+
+
+ELEVATION_MEASURES = ("elevation_gain", "highest", "lowest", "profile", "southness", "climb_grade", "steepest_km")
+CLIMATE_MEASURES = ("temperature", "precipitation", "solar_radiation")
+LANDCOVER_MEASURES = ("landcover", "waterside")
+
+
+def test_every_measure_names_the_data_its_fact_comes_from(client: TestClient) -> None:
+    sources = {m["name"]: m["source"] for m in client.get("/api/measures").json()["measures"]}
+
+    for name, source in sources.items():
+        if name in ELEVATION_MEASURES:
+            assert "FABDEM" in source, name
+        elif name in CLIMATE_MEASURES:
+            assert "CHELSA" in source, name
+        elif name in LANDCOVER_MEASURES:
+            assert "WorldCover" in source, name
+        else:
+            assert "OpenStreetMap" in source, name
+
+
+def test_every_osm_flag_says_two_hikes_without_it_are_not_compared(client: TestClient) -> None:
+    descriptions = {m["name"]: m["description"] for m in client.get("/api/measures").json()["measures"]}
+
+    for name in (*FACILITIES_FLAG_COLUMNS, "peak_summited", "viewpoint_along"):
+        assert "two hikes that both lack it are not compared on it" in descriptions[name], name
+    assert "not compared" not in descriptions["round_trip"]
+
+
+def test_the_score_explanation_says_what_a_score_means_and_how_it_is_made(client: TestClient) -> None:
+    help_ = client.get("/api/measures").json()["score_help"]
+    text = " ".join(section["text"] for section in help_["sections"])
+
+    assert help_["overall"] and help_["measure"]
+    assert all(section["title"] and section["text"] for section in help_["sections"])
+    assert "100,000 random pairs" in text
+    # The rarity rank (ADR-0026): the share of random pairs less alike, a rare match counting for more.
+    assert "Share of random hike pairs less alike" in help_["measure"]
+    assert "0.9 means only 1 pair in 10" in help_["measure"]
+    assert "about 0.44" in help_["overall"]
+    assert "0.16 on waterside" in text and "84 %" in text  # two dry hikes: identical, but it tells little
+    assert "not compared" in text and "0.95" in text  # a shared absence; both passing a hut
+    assert "What does 0.1 mean" in " ".join(section["title"] for section in help_["sections"])
+    assert "Kattegat" in text and "0.10" in text
+    assert "count half" not in text and "score 1.0" not in text  # the rules ADR-0026 replaced
+    for source in ("OpenStreetMap", "FABDEM", "WorldCover", "CHELSA"):
+        assert source in text
+    assert "weights" in text
 
 
 def test_search_and_detail(client: TestClient) -> None:
@@ -107,6 +174,97 @@ def test_rank_returns_scored_results_with_every_measure(client: TestClient) -> N
     assert set(body["results"][0]["measures"]) == set(MEASURE_NAMES)
     assert body["reachable"] is None and body["results"][0]["drive_hours"] is None
     assert set(body["weights"]) == set(CORE_MEASURES)
+
+
+def test_a_wish_ranks_hikes_by_the_values_typed_in(client: TestClient) -> None:
+    # With the way back the Ridge Walk is 20 km with a Hut; the other three are 10 km without one.
+    wish = {"length": 20_000, "hut_along": True}
+
+    body = client.post("/api/rank", json={"wish": wish, "weights": {"length": 100, "hut_along": 50}}).json()
+
+    assert body["seed"] is None and body["composed"] is None and body["wish"] == wish
+    dayhikes = [r for r in body["results"] if r["id"] is not None]
+    assert dayhikes[0]["id"] == RIDGE_WALK_ID  # no hike is left out as the Seed
+    assert dayhikes[0]["measures"]["length"]["raw"] == pytest.approx(1.0)
+    note = dayhikes[0]["measures"]["hut_along"]["note"]
+    # A Wish's "yes" is scored as before: against random pairs where either has a Hut.
+    assert note.startswith("Identical; ") and "of random hike pairs where either has one are this alike" in note
+    assert {r["id"] for r in dayhikes} == {1001, 1002, 1003, 1007}
+    assert dayhikes[1]["measures"]["length"]["raw"] == pytest.approx(0.5)
+
+
+def test_only_the_measures_a_wish_has_a_value_for_weigh(client: TestClient) -> None:
+    wish = {"length": 10_000, "hut_along": False}
+
+    weighted = client.post("/api/rank", json={"wish": wish, "weights": {"length": 60, "elevation_gain": 100}}).json()
+    unweighted = client.post("/api/rank", json={"wish": wish}).json()
+    no_value_weighted = client.post("/api/rank", json={"wish": wish, "weights": {"elevation_gain": 100}})
+
+    assert weighted["weights"] == {"length": 60}
+    assert unweighted["weights"] == {"length": 100, "hut_along": 100}
+    assert no_value_weighted.status_code == 400
+
+
+def test_a_wish_for_no_hut_ranks_the_hikes_without_one_first(client: TestClient) -> None:
+    # A Wish's "no" is the Hiker's answer, not a missing map entry: a hike without a Hut matches it,
+    # scored against every random pair, those where neither has a Hut included.
+    body = client.post("/api/rank", json={"wish": {"hut_along": False}}).json()
+
+    dayhikes = [r for r in body["results"] if r["id"] is not None]
+    assert {r["id"] for r in dayhikes} == {1001, 1002, 1003, 1007}
+    assert dayhikes[-1]["id"] == RIDGE_WALK_ID and dayhikes[-1]["score"] == 0.0
+    assert all(r["score"] > 0 for r in dayhikes[:-1])
+    note = dayhikes[0]["measures"]["hut_along"]["note"]
+    assert note.startswith("Identical; ") and "of random hike pairs are this alike" in note
+
+
+def test_a_wish_left_with_no_weighted_measure_says_why(client: TestClient) -> None:
+    round_trip = client.post("/api/rank", json={"wish": {"round_trip": True}})
+    excluded = client.post("/api/rank", json={"wish": {"length": 10_000}, "excluded": ["length"]})
+    both = client.post(
+        "/api/rank", json={"wish": {"round_trip": True, "hut_along": True}, "excluded": ["hut_along"]}
+    )
+
+    assert round_trip.status_code == 400 and "Round trip is left out with Return to start" in round_trip.json()["detail"]
+    assert excluded.status_code == 400 and "excluded: Length" in excluded.json()["detail"]
+    assert both.status_code == 400
+    assert "Round trip" in both.json()["detail"] and "excluded: Hut along" in both.json()["detail"]
+    assert client.post("/api/rank", json={"wish": {"round_trip": True}, "return_to_start": False}).status_code == 200
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"seed": RIDGE_WALK_ID, "wish": {"length": 10_000}},
+        {"seed": RIDGE_WALK_ID, "composed": {"route": "1:104.11"}},
+        {"wish": {}},
+        {"wish": {"nonsense": 1}},
+        {"wish": {"profile": 0.5}},  # a ProfileShape is no single value
+        {"wish": {"landcover": 0.5}},
+        {"wish": {"hut_along": 1}},
+        {"wish": {"length": True}},
+        {"wish": {"length": "far"}},
+    ],
+)
+def test_rank_refuses_anything_but_one_seed_or_a_wish_of_single_values(client: TestClient, body: dict) -> None:
+    assert client.post("/api/rank", json=body).status_code == 422
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        '{"wish": {"length": NaN}}',
+        '{"wish": {"length": Infinity}}',
+        '{"wish": {"length": 1e400}}',
+        '{"seed": 1001, "origin": {"lat": 45, "lon": 15}, "max_hours": NaN}',
+    ],
+)
+def test_rank_refuses_a_number_that_is_not_finite(client: TestClient, body: str) -> None:
+    response = client.post("/api/rank", content=body, headers={"content-type": "application/json"})
+
+    assert response.status_code == 422
+    assert response.json()["detail"]
 
 
 def test_an_excluded_measure_counts_as_weight_zero(client: TestClient) -> None:
@@ -183,7 +341,7 @@ def test_drive_filter_keeps_only_reachable_hikes_with_their_hours(
         json={"seed": RIDGE_WALK_ID, "origin": {"lat": 45.1, "lon": 15.1}, "max_hours": 2},
     ).json()
 
-    assert matrix.calls == 1
+    assert matrix.calls == 2  # the Trailheads, then the starts of SuggestedLoops (ADR-0020)
     assert body["reachable"] == 3  # the Seed's Trailhead counts; 1003 is unreachable
     assert sorted(r["id"] for r in body["results"]) == [1002, 1007]
     assert all(r["drive_hours"] == 1.0 for r in body["results"])
@@ -203,7 +361,7 @@ def test_a_stalled_drive_service_gives_503_and_frees_the_ranking(
     assert client.post("/api/rank", json=query).status_code == 503
     response = client.post("/api/rank", json=query)
     assert response.status_code == 200
-    assert matrix.calls == 1
+    assert matrix.calls == 2
 
 
 def test_drive_filter_off_without_a_drive_client(data: ServingData) -> None:
@@ -256,3 +414,33 @@ def test_the_page_and_its_assets_are_served(client: TestClient) -> None:
         assert client.get(f"/{asset}").status_code == 200
     for credit in ("OpenStreetMap", "ESA WorldCover", "CHELSA", "FABDEM", "Copernicus", "Natural Earth", "Valhalla", "Leaflet"):
         assert credit in page.text
+
+
+def test_round_trip_is_left_out_while_every_hike_returns_to_its_start(client: TestClient) -> None:
+    weights = {"length": 100, "round_trip": 100}
+    for path, seed in (("/api/rank", {"seed": RIDGE_WALK_ID}), ("/api/pair", {"a": RIDGE_WALK_ID, "b": 1003})):
+        back = client.post(path, json={**seed, "weights": weights}).json()
+        one_way = client.post(path, json={**seed, "weights": weights, "return_to_start": False}).json()
+        assert back["weights"] == {"length": 100}
+        assert one_way["weights"] == weights
+        only = client.post(path, json={**seed, "weights": {"round_trip": 100}})
+        assert only.status_code == 400 and "Round trip" in only.json()["detail"]
+
+
+def test_a_hike_with_no_name_in_osm_is_shown_as_unnamed(client: TestClient) -> None:
+    shown = "Unnamed hike (OSM relation 1003)"
+
+    assert client.get("/api/hikes/1003").json()["name"] == shown
+    assert [hit["name"] for hit in client.get("/api/search", params={"q": "1003"}).json()["results"]] == [shown]
+    box = client.get("/api/hikes", params={"south": 44, "west": 14, "north": 46, "east": 16}).json()["results"]
+    assert shown in [hike["name"] for hike in box]
+
+
+def test_a_search_hit_says_whether_the_hike_ends_at_its_start(client: TestClient) -> None:
+    hits = client.get("/api/search", params={"q": "al"}).json()["results"] + client.get("/api/search", params={"q": "ps"}).json()["results"]
+
+    assert hits
+    for hit in hits:  # the search lists every hike one way
+        one_way = client.get(f"/api/hikes/{hit['id']}", params={"return_to_start": False}).json()
+        assert hit["round_trip"] == one_way["facts"]["round_trip"]
+        assert hit["length_m"] == one_way["facts"]["length_m"]

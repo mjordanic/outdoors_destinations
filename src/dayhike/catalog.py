@@ -28,6 +28,7 @@ MAX_LENGTH_M = 20_000
 AMENITY_RADIUS_M = 20_000  # great-circle from Trailhead; zero counts are valid
 TRAILHEAD_ACCESS_RADIUS_M = 5_000  # parking near a line end or loop vertex
 GAP_JOIN_M = 50  # member-way ends this close join two pieces with a straight gap
+SNAP_TOLERANCE_M = 20  # a TrailGraph dead-end tip this close to another way joins it (ADR-0018)
 LOOP_SHARE = 0.5  # a piece whose closed loop is at least this share of its length is a loop
 STEM_ACCESS_RADIUS_M = 200  # a loop's dead end ending this close to parking is its stem
 STEM_MIN_LENGTH_M = 1_000  # else a loop's only dead end at least this long is its stem
@@ -356,6 +357,14 @@ def geometry_store_path_for(catalog_path: Path | str) -> Path:
     return path.with_name(f"{path.name}.geometry.sqlite")
 
 
+def trailgraph_path_for(catalog_path: Path | str) -> Path:
+    """Return the TrailGraph path written next to a Catalog SQLite file (ADR-0018)."""
+    path = Path(catalog_path)
+    if path.suffix == ".sqlite":
+        return path.with_name(f"{path.stem}.trailgraph.sqlite")
+    return path.with_name(f"{path.name}.trailgraph.sqlite")
+
+
 def similarity_dir_for(catalog_path: Path | str) -> Path:
     """Return the similarity directory written next to a Catalog."""
     path = Path(catalog_path)
@@ -490,6 +499,7 @@ def build_catalog(
     *,
     progress: Callable[[str], None] | None = None,
     fresh: bool = False,
+    snap_tolerance_m: float = SNAP_TOLERANCE_M,
 ) -> Catalog:
     """Ingest OSM XML or PBF snapshot(s) into a Catalog of DayHikes.
 
@@ -504,10 +514,13 @@ def build_catalog(
     kept with a Seed label (`name`, else `ref`, else `relation:{id}`). Attribution is stored
     with the Catalog. DriveTime is not computed at ingest. Replaces the
     SQLite file if it exists, only after the new file is complete; overlapping
-    snapshots keep one row per OSM id.
+    snapshots keep one row per OSM id. The GeometryStore and the TrailGraph
+    (``snap_tolerance_m``, see ``dayhike.trailgraph``) are written beside it.
     """
     from dayhike.ingest import emit_progress, run_ingest, write_geometry_store
+    from dayhike.trailgraph import check_snap_tolerance, write_trailgraph
 
+    check_snap_tolerance(snap_tolerance_m)
     catalog_path = Path(catalog_path)
     kept, report, work_path = run_ingest(
         _osm_paths(osm_path), catalog_path, progress=progress, fresh=fresh
@@ -518,6 +531,12 @@ def build_catalog(
         work_conn = sqlite3.connect(work_path)
         try:
             write_geometry_store(geometry_store_path_for(catalog_path), kept, work_conn)
+            write_trailgraph(
+                trailgraph_path_for(catalog_path),
+                work_conn,
+                snap_tolerance_m=snap_tolerance_m,
+                progress=progress,
+            )
         finally:
             work_conn.close()
         work_path.unlink()

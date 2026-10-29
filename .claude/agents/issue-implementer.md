@@ -1,1 +1,0 @@
-../../.agents/agents/issue-implementer.md

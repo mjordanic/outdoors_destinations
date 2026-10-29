@@ -20,7 +20,7 @@ SolarAspect is sampled from the local FABDEM tiles with a corrected formula.
 
 **Prior art:** PRD "Extraction rules" (SolarAspect, ClimateNormal),
 "Starting constants" (Weather rows); PRD stories 31–34. ADR-0008 (local
-FABDEM), ADR-0010 (QueryMonth slice). `CONTEXT.md` ClimateNormal, QueryMonth,
+FABDEM), ADR-0010 (QueryMonth slice). `GLOSSARY.md` ClimateNormal, QueryMonth,
 SolarAspect, DEM. Notebook 04's SolarAspect prototype (its formula scores west
 as most south-facing; do not copy it). `sample_elevations` in the DEM module.
 Tests: `test_dem` (tiny synthetic GeoTIFFs), `test_climate`. Ticket 01's

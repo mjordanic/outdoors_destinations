@@ -19,7 +19,7 @@ the line, not only to vertices) that the Water and Facilities Facets reuse.
 **Effort:** high
 
 **Prior art:** PRD "Extraction rules" (Corridor, Peak summited, Peaks around),
-"Starting constants" (Landscape rows); PRD stories 27–30. `CONTEXT.md`
+"Starting constants" (Landscape rows); PRD stories 27–30. `GLOSSARY.md`
 Corridor, LandCover, Peak, Viewpoint. Notebook 04's `corridor_hut_count`
 experiment (BallTree over hut points). Tests: `test_amenity_facts`,
 `test_trailhead_and_amenities` (haversine BallTree distances), the fixture

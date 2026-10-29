@@ -25,7 +25,7 @@ already-open datasets, so the two routes cannot drift.
 **Complexity:** medium
 
 **Prior art:** PRD `.scratch/sampler-raster-reuse/PRD.md` stories 1, 3, 5, 7,
-9–17, 20. `CONTEXT.md` LandCover, GeometryStore, Catalog. ADR-0005, ADR-0008,
+9–17, 20. `GLOSSARY.md` LandCover, GeometryStore, Catalog. ADR-0005, ADR-0008,
 ADR-0010. Tests in `test_landcover` that write synthetic class GeoTIFFs over the
 fixture vertex bbox (`_write_class_tif`) and the CLI subprocess tests for
 `sample-landcover`. Reuse those helpers. The vertex chunk size is a module

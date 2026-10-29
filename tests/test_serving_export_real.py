@@ -127,14 +127,17 @@ def test_export_attribution_lists_osm_worldcover_chelsa_fabdem_valhalla(data: Se
 
 
 @rc.needs_reference
-def test_rankings_from_the_export_equal_golden_rankings(data: ServingData) -> None:
+def test_rankings_from_the_export_equal_golden_rankings(data: ServingData, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The golden rankings are of the Catalog: no SuggestedLoops, each DayHike its own row (ADR-0020).
+    monkeypatch.setattr("dayhike.serving.LOOP_SEEDS", 0)
+    monkeypatch.setattr("dayhike.serving.GROUP_M", 0.0)
     golden: dict[tuple[str, int], list[dict]] = {}
     for row in rc.read_tsv(rc.REFERENCE_DIR / "golden" / "rankings.tsv"):
         golden.setdefault((row["set"], int(row["seed"])), []).append(row)
     sets = rc.golden_weight_sets()
 
     for (name, seed), rows in golden.items():
-        got = data.rank(seed, sets[name], limit=rc.GOLDEN_TOP)
+        got = data.rank(seed, sets[name], limit=rc.GOLDEN_TOP, return_to_start=False)  # captured one way
         assert [hike["id"] for hike in got] == [int(row["dayhike_id"]) for row in rows], (name, seed)
         for hike, row in zip(got, rows):
             assert hike["score"] == pytest.approx(float(row["score"]), abs=1e-6)

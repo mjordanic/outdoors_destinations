@@ -12,7 +12,7 @@ No scaler and no Ranking yet.
 - 02-trailhead-amenity-facts
 
 **Prior art:** AmenityFacts from ticket 02, DayHike length and Difficulty from
-ticket 01. PRD stories 14–15. ADR-0003 (intrinsic features). `CONTEXT.md`
+ticket 01. PRD stories 14–15. ADR-0003 (intrinsic features). `GLOSSARY.md`
 FeatureVector.
 
 - [x] `build_catalog` persists a FeatureVector per DayHike

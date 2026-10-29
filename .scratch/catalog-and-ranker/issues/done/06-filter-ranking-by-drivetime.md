@@ -13,7 +13,7 @@ matrix HTTP client; Docker tiles are optional developer docs only.
 - 05-rank-by-seed-similarity
 
 **Prior art:** Ranking from ticket 05, ADR-0004, PRD stories 25–29. Public seam
-`filter_by_drive_time`. `CONTEXT.md` Origin, DriveTime, Trailhead, Ranking.
+`filter_by_drive_time`. `GLOSSARY.md` Origin, DriveTime, Trailhead, Ranking.
 
 - [x] `filter_by_drive_time` keeps DayHikes with finite DriveTime under max
       hours and preserves similarity order

@@ -2,7 +2,7 @@
 
 Status: ready-for-agent
 
-Vocabulary in this document is defined in `CONTEXT.md`. Terms are used in their
+Vocabulary in this document is defined in `GLOSSARY.md`. Terms are used in their
 glossary sense — DayHike, DayHikeGeometry, GeometryStore, Catalog, FeatureVector,
 LandCover, ClimateNormal, QueryMonth, Seed, Ranking, DriveTime, DEM, SolarAspect —
 and not loosely. Respects ADR-0001 (OSM snapshot), ADR-0003 (k-NN to Seeds),

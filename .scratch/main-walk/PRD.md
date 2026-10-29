@@ -2,7 +2,7 @@
 
 Status: ready-for-agent
 
-Vocabulary in this document is defined in `CONTEXT.md` and used in its glossary
+Vocabulary in this document is defined in `GLOSSARY.md` and used in its glossary
 sense: DayHike, DayHikeGeometry, Leftover, Trailhead, GeometryStore, Catalog,
 DEM, ElevationProfile, ProfileShape, LandCover, ClimateNormal, DryStretch,
 SurfaceMix, TarmacApproach, Hiker. Implements ADR-0012 (DayHikeGeometry is the
@@ -239,7 +239,7 @@ The rules, from ADR-0012:
   report of each run. The ids that left or joined come from comparing the
   re-ingested Catalog with `data/baseline/`. Each id that left is grouped by
   reason: over 20 km, under 1 km, or superroute. ADR-0012, the
-  `CONTEXT.md` entries (DayHike, Trailhead, DayHikeGeometry, Leftover,
+  `GLOSSARY.md` entries (DayHike, Trailhead, DayHikeGeometry, Leftover,
   ElevationProfile) and future-work section 10 are already written.
 
 ## Testing Decisions

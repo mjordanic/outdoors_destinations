@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from dayhike import Catalog, StaleSimilarity, build_catalog, build_similarity
+from dayhike.serving import scored_measures
 from dayhike.similarity import (
     CALIBRATION_KEYS,
     CALIBRATION_QUANTILES,
@@ -14,12 +15,16 @@ from dayhike.similarity import (
     FACILITIES_FLAG_COLUMNS,
     LANDCOVER_SHARE_COLUMNS,
     MEASURES,
+    OutsideSeed,
     SURFACE_SHARE_COLUMNS,
     TWIN_STEP_M,
     AmenityPoints,
     SimilarityStore,
+    _FACTS_VERSION,
     calibrate,
+    random_pair_shares,
     calibrate_similarity,
+    score_rows,
     dem_heights,
     climb_and_descent,
     elevation_gain,
@@ -85,6 +90,12 @@ def test_water_count_is_capped_before_the_tolerance() -> None:
     assert scores == pytest.approx([1.0, 1.0, 1.0, 0.0])
 
 
+def test_waterside_counts_gaps_under_its_dead_band_as_equal() -> None:
+    # A cove or a bridge (gap under 0.15) is no difference; wider gaps keep the tolerance.
+    scores = _scores("waterside", waterside_share=[0.0, 0.107, 0.149, 0.2, 0.5, 0.8])
+    assert scores == pytest.approx([1.0, 1.0, 1.0, 0.6, 0.0, 0.0])
+
+
 def test_mix_is_the_shared_share_and_missing_with_any_share_missing() -> None:
     shares = {
         "paved_share": [0.5, 0.0, 0.5],
@@ -97,9 +108,19 @@ def test_mix_is_the_shared_share_and_missing_with_any_share_missing() -> None:
     assert math.isnan(scores[2])
 
 
-def test_agree_is_one_when_flags_match_including_both_absent() -> None:
-    assert _scores("hut_along", hut_along=[0, 0, 1]) == pytest.approx([1.0, 1.0, 0.0])
+def test_equal_shares_score_a_raw_one_although_float32_sums_fall_short() -> None:
+    # 0.15 + 0.65 + 0.2 sums to 0.99999994 in float32.
+    shares = {"paved_share": 0.0, "gravel_share": 0.15, "natural_share": 0.65, "rock_share": 0.2}
+    scores = _scores("surface", **{name: [share, share] for name, share in shares.items()})
+    assert (scores == 1.0).all()
+
+
+def test_agree_is_one_when_flags_match_and_an_osm_flag_both_lack_is_not_compared() -> None:
     assert _scores("hut_along", hut_along=[1, 1, 0]) == pytest.approx([1.0, 1.0, 0.0])
+    # Neither has a Hut mapped: that may only mean nobody mapped one (Gower's shared absence).
+    assert _scores("hut_along", hut_along=[0, 0, 1]) == pytest.approx([np.nan, np.nan, 0.0], nan_ok=True)
+    # Two one-way walks are real geometry, not a missing map entry.
+    assert _scores("round_trip", round_trip=[0, 0, 1]) == pytest.approx([1.0, 1.0, 0.0])
 
 
 _FRACTION = np.linspace(0.0, 1.0, 64)
@@ -155,11 +176,14 @@ def test_every_measure_is_one_for_itself_symmetric_and_bounded() -> None:
     everyone = np.arange(rows)
     for measure in MEASURES:
         table = np.array([measure_scores(store, measure, a, everyone) for a in everyone])
-        assert np.diag(table) == pytest.approx(1.0), measure.name
-        assert table == pytest.approx(table.T), measure.name
-        assert ((table >= 0) & (table <= 1 + 1e-6)).all(), measure.name
+        # An OSM flag a DayHike lacks is not compared, with itself either.
+        own = np.where(store.column(measure.columns[0]) == 0, np.nan, 1.0) if measure.presence else 1.0
+        assert np.diag(table) == pytest.approx(own, nan_ok=True), measure.name
+        assert table == pytest.approx(table.T, nan_ok=True), measure.name
+        scored = table[~np.isnan(table)]
+        assert ((scored >= 0) & (scored <= 1 + 1e-6)).all(), measure.name
         paired = measure_scores(store, measure, everyone, everyone[::-1])
-        assert paired == pytest.approx(table[everyone, everyone[::-1]]), measure.name
+        assert paired == pytest.approx(table[everyone, everyone[::-1]], nan_ok=True), measure.name
 
 
 def test_monthly_measures_read_the_query_month_column() -> None:
@@ -174,16 +198,126 @@ def test_monthly_measures_read_the_query_month_column() -> None:
     ) == pytest.approx([1.0, 0.5])
 
 
-def test_calibration_is_the_mid_rank_share_of_random_pairs_below() -> None:
+def test_calibration_is_the_share_of_random_pairs_strictly_less_alike() -> None:
     quantiles = np.full((len(CALIBRATION_KEYS), 4), np.nan)
     quantiles[CALIBRATION_KEYS.index("length")] = [0.2, 0.5, 0.5, 0.9]
     store = _store(1, quantiles=quantiles)
     scores = np.array([0.1, 0.2, 0.5, 0.7, 0.95, np.nan])
     calibrated = calibrate(store, "length", scores)
-    assert calibrated[:5] == pytest.approx([0.0, 0.125, 0.5, 0.75, 1.0])
+    # A random pair scoring the same is as alike: ties never count half.
+    assert calibrated[:5] == pytest.approx([0.0, 0.0, 0.25, 0.75, 1.0])
     assert math.isnan(calibrated[5])
     # A key without random-pair scores cannot be calibrated.
     assert np.isnan(calibrate(store, "profile", scores)).all()
+
+
+def _tied_quantiles(**rows) -> np.ndarray:
+    """Random-pair scores of 100 pairs for the given keys, NaN for the others."""
+    quantiles = np.full((len(CALIBRATION_KEYS), 100), np.nan)
+    for key, values in rows.items():
+        quantiles[CALIBRATION_KEYS.index(key)] = np.sort(values)
+    return quantiles
+
+
+def test_values_a_measure_holds_nothing_in_common_score_zero() -> None:
+    # As in the Catalog: 59 of 100 random pairs have highest points 400 m or more apart.
+    quantiles = _tied_quantiles(highest=[*[0.0] * 59, *np.linspace(0.01, 0.99, 41)])
+    store = _store(3, quantiles=quantiles, highest_m=[2_800, 600, 2_000])
+    similarity, _ = score_rows(store, [0], np.arange(3), {"highest": 100})
+    # 2,200 m and 800 m apart: no random pair is less alike than raw 0.
+    assert similarity == pytest.approx([1.0, 0.0, 0.0])
+
+
+def test_random_pair_shares_count_the_pairs_less_alike_and_as_alike() -> None:
+    quantiles = np.full((len(CALIBRATION_KEYS), 4), np.nan)
+    quantiles[CALIBRATION_KEYS.index("length")] = [0.2, 0.5, 0.5, 0.9]
+    store = _store(1, quantiles=quantiles)
+    less_alike, as_alike = random_pair_shares(store, "length", np.array([0.1, 0.5, 0.9, 0.95, np.nan]))
+    assert less_alike[:4] == pytest.approx([0.0, 0.25, 0.75, 1.0])
+    assert as_alike[:4] == pytest.approx([0.0, 0.5, 0.25, 0.0])
+    assert math.isnan(less_alike[4]) and math.isnan(as_alike[4])
+
+
+def _calibrated(tmp_path: Path, rows: int, **columns) -> SimilarityStore:
+    """A similarity directory of ``rows`` DayHikes with only the given fact columns
+    (the same one way and with the way back), calibrated on its random pairs."""
+    catalog_path = tmp_path / "catalog.sqlite"
+    directory = similarity_dir_for(catalog_path)
+    directory.mkdir()
+    store = _store(rows, **columns)
+    arrays = {"ids": store.ids, "facts": store.facts, "profile": store.profile, "twins": store.twins}
+    for name, values in arrays.items():
+        np.save(directory / f"{name}.npy", values)
+        if name in ("facts", "profile"):
+            np.save(directory / f"{name}_back.npy", values)
+    np.save(directory / "way_back.npy", np.zeros((4, rows), dtype=np.float32))
+    (directory / "meta.json").write_text(json.dumps({"facts_version": _FACTS_VERSION}))
+    calibrate_similarity(catalog_path)
+    return SimilarityStore.open_dir(directory)
+
+
+def test_both_passing_a_hut_scores_the_share_of_compared_pairs_that_differ(tmp_path: Path) -> None:
+    # 10 of 100 hikes pass a hut. Random pairs where either has one: 1 - (90 * 89) / (100 * 99) = 19.1 %;
+    # both have one in 0.9 %, so 18.2 / 19.1 = 0.95 of the compared pairs differ.
+    store = _calibrated(tmp_path, 100, hut_along=[1] * 10 + [0] * 90, length_m=np.linspace(5_000, 15_000, 100))
+    rows = np.array([1, 50, 51])
+
+    hut, _ = score_rows(store, [0], rows, {"hut_along": 100})
+    no_hut, _ = score_rows(store, [50], rows, {"hut_along": 100})
+    with_length, _ = score_rows(store, [50], rows, {"hut_along": 100, "length": 100})
+    length, _ = score_rows(store, [50], rows, {"length": 100})
+
+    assert hut == pytest.approx([0.95, 0.0, 0.0], abs=0.01)
+    # Neither has one mapped: not compared, so the Measure drops out of the mean.
+    assert no_hut[0] == 0.0 and np.isnan(no_hut[1:]).all()
+    assert with_length[1:] == pytest.approx(length[1:])
+    assert with_length[0] == pytest.approx(length[0] / 2)
+
+
+def test_a_wish_for_no_hut_scores_a_hutless_hike_by_how_common_having_none_is(tmp_path: Path) -> None:
+    # 10 of 100 hikes pass a hut. Over all random pairs, both hutless 80.9 %, differ 18.2 %, both a hut 0.9 %:
+    # a "no" is the Hiker's answer, so a hutless hike is compared with it, and only the differing pairs are
+    # less alike than one more hike without a hut.
+    store = _calibrated(tmp_path, 100, hut_along=[1] * 10 + [0] * 90)
+    wish = OutsideSeed.wished({"hut_along": 0})
+    rows = np.array([50, 0])
+
+    score, _ = score_rows(store, [wish], rows, {"hut_along": 100})
+    notes = [row["hut_along"]["note"] for row in scored_measures(store, wish, rows, None)]
+
+    assert score == pytest.approx([0.182, 0.0], abs=0.01)
+    assert notes[0] == "Identical; 82% of random hike pairs are this alike, so it counts little"
+    # A wish for a hut is unchanged: random pairs where neither has one are not compared.
+    (yes,), _ = score_rows(store, [OutsideSeed.wished({"hut_along": 1})], np.array([0]), {"hut_along": 100})
+    assert yes == pytest.approx(0.95, abs=0.01)
+
+
+def test_sharing_a_rare_value_scores_above_sharing_a_common_one(tmp_path: Path) -> None:
+    # 30 of 100 hikes are loops. Random pairs: both loops 8.8 %, both one way 48.8 %, differ 42.4 %.
+    store = _calibrated(tmp_path, 100, round_trip=[1] * 30 + [0] * 70)
+
+    loop, _ = score_rows(store, [0], np.array([1, 50]), {"round_trip": 100})
+    one_way, _ = score_rows(store, [50], np.array([51]), {"round_trip": 100})
+
+    # Both loops: fewer pairs share the rarer value, so the differing and both-one-way pairs are less alike.
+    assert loop == pytest.approx([0.424 + 0.488, 0.0], abs=0.01)
+    assert one_way == pytest.approx([0.424], abs=0.01)
+
+
+def test_two_dry_hikes_score_low_on_waterside_and_the_dead_band_is_one_value(tmp_path: Path) -> None:
+    # 82 hikes are dry and 10 touch water for 0.1 of the walk (inside the dead band, so dry for rarity);
+    # 8 walk beside water. Both dry-ish: 92 * 91 / 9,900 = 84.6 % of random pairs, as in the Catalog.
+    shares = [0.0] * 82 + [0.1] * 10 + [0.3, 0.3, 0.5, 0.5, 0.7, 0.7, 0.9, 0.9]
+    store = _calibrated(tmp_path, 100, waterside_share=shares)
+
+    dry, _ = score_rows(store, [0], np.array([1, 82, 92]), {"waterside": 100})
+    wet, _ = score_rows(store, [92], np.array([93]), {"waterside": 100})
+
+    # 84.6 % of random pairs (and the 0.1 % that are two equal waterside hikes) are at least as alike.
+    assert dry[:2] == pytest.approx([0.153, 0.153], abs=0.01)
+    assert dry[1] == dry[0]
+    assert wet == pytest.approx([1.0], abs=0.01)
+    assert dry[2] < dry[0]
 
 
 def test_weighted_mean_renormalizes_over_the_scored_columns() -> None:
@@ -690,6 +824,12 @@ def test_similarity_store_refuses_facts_or_calibration_from_other_code(tmp_path:
     meta_path.write_text(json.dumps({**meta, "calibration_version": "old"}))
     with pytest.raises(StaleSimilarity, match="--calibrate-only"):
         SimilarityStore.open(catalog_path)
+    # Calibrated when ties counted half (the mid-rank), or when equal values scored 1.0
+    # (ADR-0023): refit before scoring.
+    for version in ("8889a2b218a8d639", "562b603875a58264"):
+        meta_path.write_text(json.dumps({**meta, "calibration_version": version}))
+        with pytest.raises(StaleSimilarity, match="--calibrate-only"):
+            SimilarityStore.open(catalog_path)
     calibrate_similarity(catalog_path)
     assert SimilarityStore.open(catalog_path).facts.shape[0] == len(FACT_COLUMNS)
 
@@ -737,7 +877,7 @@ def test_store_refuses_facts_built_before_a_resample_with_the_same_ids(tmp_path:
 def test_calibration_is_identical_when_rerun(tmp_path: Path) -> None:
     catalog_path = _fixture_catalog(tmp_path)
     directory = build_similarity(catalog_path, tmp_path / "dem")
-    first = {name: (directory / name).read_bytes() for name in ("quantiles.npy",)}
+    first = {name: (directory / name).read_bytes() for name in ("quantiles.npy", "rarity.npy", "values.npy")}
 
     calibrate_similarity(catalog_path)
 

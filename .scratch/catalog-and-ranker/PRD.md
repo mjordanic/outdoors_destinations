@@ -2,7 +2,7 @@
 
 Status: ready-for-agent
 
-Vocabulary in this document is defined in `CONTEXT.md`. Terms are used in their
+Vocabulary in this document is defined in `GLOSSARY.md`. Terms are used in their
 glossary sense — DayHike, Trailhead, Catalog, Origin, DriveTime, Hut, Difficulty,
 AmenityFact, Seed, FeatureVector, Ranking, Hiker — and not loosely. Respects
 ADR-0001 (OSM snapshot), ADR-0002 (DayHike is a named route relation in a length

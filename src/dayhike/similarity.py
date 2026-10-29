@@ -7,10 +7,15 @@ query scores its Seeds against every DayHike with numpy, one Measure at a time,
 and nothing is rebuilt per request.
 
 A Measure compares one fact of two DayHikes and gives a score in [0, 1], or
-NaN when either DayHike lacks the fact. Calibration maps each raw score to the
-share of random DayHike pairs that score lower on that Measure (ties count
-half), so Measures on very different raw scales can be weighted against each
-other.
+NaN when either DayHike lacks the fact or neither has an OSM flag's feature
+mapped. Calibration maps each raw score to the share of random DayHike pairs
+strictly less alike on that Measure: scoring lower, or equal on a commoner
+value (the rarity rank, ADR-0026), so Measures on very different raw scales
+can be weighted against each other.
+
+Every DayHike has a second set of facts, measured with its way back to its
+Trailhead (ADR-0019), with its own Calibration; a query compares Seeds and
+candidates in one mode or the other (``SimilarityStore.mode``).
 """
 
 from __future__ import annotations
@@ -21,7 +26,7 @@ import math
 import sqlite3
 import time
 from collections.abc import Callable, Collection, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -30,15 +35,18 @@ from sklearn.neighbors import BallTree
 from dayhike.catalog import (
     EARTH_RADIUS_M,
     GAP_JOIN_M,
+    SAC_SCALE_RANK,
     Catalog,
     RankedDayHike,
     Ranking,
     geometry_store_path_for,
     resolve_seed,
     similarity_dir_for,
+    trailgraph_path_for,
 )
 from dayhike.dem import DEFAULT_DEM_DIR, FABDEM_VERSION, fabdem_tile_id
-from dayhike.landcover import DEFAULT_LANDCOVER_DIR, worldcover_tile_id
+from dayhike.landcover import DEFAULT_LANDCOVER_DIR, _landcover_fractions, worldcover_tile_id
+from dayhike.trailgraph import WAY_BACK_KINDS, ComposedWalk, TrailGraph, WayBack, round_trip, way_back
 
 Progress = Callable[[str], None]
 
@@ -49,23 +57,23 @@ SPIKE_RISE_M = 10.0  # a vertex at least this far above (or below) both neighbou
 SPIKE_GRADE = 0.25  # ... and this steep on both sides is a DEM spike, not the trail
 STEEPNESS_STEP_M = 50.0  # elevation resampled this often along the walk
 STEEPEST_KM_WINDOW_M = 1_000.0
-CORRIDOR_M = 100.0  # amenity along the DayHike (CONTEXT.md Corridor)
+CORRIDOR_M = 100.0  # amenity along the DayHike (GLOSSARY.md Corridor)
 PEAK_SUMMITED_M = 50.0
 PEAKS_AROUND_M = 2_000.0
-TRAILHEAD_M = 500.0  # amenity at the Trailhead (CONTEXT.md Trailhead)
+TRAILHEAD_M = 500.0  # amenity at the Trailhead (GLOSSARY.md Trailhead)
 SEARCH_STEP_M = 100.0  # line points this far apart find candidate amenities
 WATER_SOURCE_KINDS = ("drinking_water", "spring", "water_tap", "water_point")
 SOLAR_ASPECT_POINTS = 32  # about this many vertices sampled per DayHike
 SOLAR_ASPECT_OFFSET_ARCSEC = 2  # east and north offsets: two FABDEM cells
 SOLAR_ASPECT_MIN_SLOPE_DEG = 5.0  # flatter points face no way
-WATERSIDE_M = 200.0  # open water this close to the line counts (CONTEXT.md WaterSide)
+WATERSIDE_M = 200.0  # open water this close to the line counts (GLOSSARY.md WaterSide)
 WATERSIDE_STEP_M = 200.0  # a WaterSide probe this often along the walk
 WATERSIDE_MIN_SHARE = 0.1  # of the WorldCover cells around a probe that are water
 WATERSIDE_OVERVIEW = 4  # WorldCover read at 4 x its 10 m cells
 WORLDCOVER_WATER = 80  # permanent water bodies: sea, lakes, wide rivers
 TWIN_STEP_M = 50.0  # each walk sampled this often to compare routes
 TWIN_M = 30.0  # a sample this close to the other walk lies on it
-TWIN_SHARE = 0.8  # each walk this much on the other: the same route (CONTEXT.md Twin)
+TWIN_SHARE = 0.8  # each walk this much on the other: the same route (GLOSSARY.md Twin)
 CALIBRATION_QUANTILES = 1_024
 CALIBRATION_PAIRS = 100_000
 CALIBRATION_SEED = 20261024
@@ -91,6 +99,9 @@ CLIMATE_NAMES = ("temperature_c", "precipitation_mm", "solar_radiation")
 CLIMATE_MONTH_COLUMNS = tuple(
     f"{name}_{month:02d}" for month in range(1, 13) for name in CLIMATE_NAMES
 )
+# Per DayHike with its way back: the metres back, the climb and descent of the
+# whole walk, and how it gets back (an index into ``WAY_BACK_KINDS``).
+WAY_BACK_COLUMNS = ("back_m", "climb_m", "descent_m", "kind")
 FACT_COLUMNS = (
     "length_m",
     "elevation_gain_m",
@@ -150,11 +161,14 @@ class Measure:
 
     ``kind`` is ``ratio`` (smaller over larger, each raised to ``constant``),
     ``tolerance`` (1 at equal values, 0 once they differ by ``constant``;
-    values first capped at ``cap``), ``mix`` (shared share of fraction
-    columns), ``agree`` (1 when two yes/no flags agree, both-absent agrees) or
-    ``profile`` (1 - mean abs difference of two ProfileShapes, the better of
-    forward or reversed). A ``monthly`` Measure reads the QueryMonth column of
-    its fact when the query sets one.
+    values first capped at ``cap``, and gaps under ``dead_band`` count as
+    equal), ``mix`` (shared share of fraction
+    columns), ``agree`` (1 when two yes/no flags agree) or ``profile`` (1 -
+    mean abs difference of two ProfileShapes, the better of forward or
+    reversed). A ``monthly`` Measure reads the QueryMonth column of its fact
+    when the query sets one. A ``presence`` Measure is an OSM flag: two
+    DayHikes that both lack its feature are not compared on it (NaN), as a
+    missing map entry may only mean nobody mapped it.
     """
 
     name: str
@@ -163,6 +177,8 @@ class Measure:
     constant: float | None = None
     cap: float | None = None
     monthly: bool = False
+    dead_band: float | None = None
+    presence: bool = False
 
 
 MEASURES = (
@@ -173,8 +189,8 @@ MEASURES = (
     Measure("lowest", "tolerance", ("lowest_m",), 400),
     Measure("profile", "profile", ()),
     Measure("landcover", "mix", LANDCOVER_SHARE_COLUMNS),
-    Measure("peak_summited", "agree", ("peak_summited",)),
-    Measure("viewpoint_along", "agree", ("viewpoint_along",)),
+    Measure("peak_summited", "agree", ("peak_summited",), presence=True),
+    Measure("viewpoint_along", "agree", ("viewpoint_along",), presence=True),
     Measure("peaks_around", "ratio", ("peaks_around",), 1),
     Measure("temperature", "tolerance", ("temperature_c",), 10, monthly=True),
     Measure("precipitation", "ratio", ("precipitation_mm",), 10, monthly=True),
@@ -182,8 +198,8 @@ MEASURES = (
     Measure("southness", "tolerance", ("southness",), 1),
     Measure("water_count", "tolerance", ("water_count",), 3, cap=3),
     Measure("dry_stretch", "ratio", ("dry_stretch_m",), 1_000),
-    Measure("waterside", "tolerance", ("waterside_share",), 0.5),
-    *(Measure(flag, "agree", (flag,)) for flag in FACILITIES_FLAG_COLUMNS),
+    Measure("waterside", "tolerance", ("waterside_share",), 0.5, dead_band=0.15),
+    *(Measure(flag, "agree", (flag,), presence=True) for flag in FACILITIES_FLAG_COLUMNS),
     Measure("surface", "mix", SURFACE_SHARE_COLUMNS),
     Measure("tarmac_approach", "tolerance", ("tarmac_approach_m",), 2_000),
     Measure("round_trip", "agree", ("round_trip",)),
@@ -198,7 +214,12 @@ CORE_MEASURES = (
     "temperature", "precipitation", "solar_radiation", "waterside", "climb_grade",
 )  # fmt: skip
 DEFAULT_WEIGHTS = {name: 100.0 if name in CORE_MEASURES else 0.0 for name in MEASURE_NAMES}
-# Calibration rows: every Measure, then each monthly Measure once per QueryMonth.
+# The Measures a Wish can give a value: one fact, a number or yes/no. A mix or
+# a ProfileShape is no single value (GLOSSARY.md Wish).
+WISHABLE = tuple(measure.name for measure in MEASURES if measure.kind in ("ratio", "tolerance", "agree"))
+# Calibration rows: every Measure, then each monthly Measure once per QueryMonth,
+# then each OSM flag over every random pair, for a Wish's "no" (``EVERY_PAIR``).
+EVERY_PAIR = "+every-pair"
 CALIBRATION_KEYS = (
     *MEASURE_NAMES,
     *(
@@ -207,6 +228,7 @@ CALIBRATION_KEYS = (
         for measure in MEASURES
         if measure.monthly
     ),
+    *(f"{measure.name}{EVERY_PAIR}" for measure in MEASURES if measure.presence),
 )
 
 _FACTS_VERSION = hashlib.sha256(
@@ -218,7 +240,7 @@ _FACTS_VERSION = hashlib.sha256(
             SOLAR_ASPECT_OFFSET_ARCSEC, SOLAR_ASPECT_MIN_SLOPE_DEG, WATERSIDE_M,
             WATERSIDE_STEP_M, WATERSIDE_MIN_SHARE, WATERSIDE_OVERVIEW, WORLDCOVER_WATER,
             TWIN_STEP_M, TWIN_M, TWIN_SHARE, sorted(_SURFACE_TAG_CLASS.items()), sorted(_ROAD_HIGHWAYS),
-            sorted(_TRACKTYPE_CLASS.items()),
+            sorted(_TRACKTYPE_CLASS.items()), GAP_JOIN_M, WAY_BACK_KINDS, WAY_BACK_COLUMNS,
         ]
     ).encode()
 ).hexdigest()[:16]  # fmt: skip
@@ -227,6 +249,9 @@ _CALIBRATION_VERSION = hashlib.sha256(
         [
             [vars(measure) for measure in MEASURES], CALIBRATION_KEYS,
             CALIBRATION_QUANTILES, CALIBRATION_PAIRS, CALIBRATION_SEED,
+            "rarity-rank-strict",  # the share strictly less alike, rarer agreements closer (``calibrate``)
+            "dead-band-one-value",  # a dead band is one value for rarity (``measure_rarity``)
+            "mix-rounded",  # equal float32 shares sum to a raw 1 (``measure_scores``)
         ]
     ).encode()
 ).hexdigest()[:16]  # fmt: skip
@@ -245,7 +270,15 @@ class SimilarityStore:
     ProfileShape row per DayHike (NaN when missing). ``twins`` gives each
     DayHike the first row of its group of Twins (``twin_groups``; its own row
     when it has none). ``quantiles`` holds ``CALIBRATION_QUANTILES`` sorted
-    random-pair scores per ``CALIBRATION_KEYS`` entry.
+    random-pair scores per ``CALIBRATION_KEYS`` entry, ``rarity`` as many
+    sorted ``measure_rarity`` values of the random pairs scoring raw 1, and
+    ``values`` as many sorted values of each ``FACT_COLUMNS`` entry over the
+    DayHikes, for ``measure_rarity`` (both None in a store built by hand:
+    no agreement is then rarer than another).
+
+    ``with_way_back`` is the same DayHikes measured with their way back to the
+    Trailhead (ADR-0019): its own facts, ProfileShapes and Calibration, the
+    same Twins, and ``way_back`` (``WAY_BACK_COLUMNS`` x DayHikes).
     """
 
     ids: np.ndarray
@@ -254,6 +287,10 @@ class SimilarityStore:
     twins: np.ndarray
     quantiles: np.ndarray
     catalog_digest: str | None = None
+    values: np.ndarray | None = None
+    rarity: np.ndarray | None = None
+    with_way_back: SimilarityStore | None = None
+    way_back: np.ndarray | None = None
 
     @classmethod
     def open(cls, catalog_path: Path | str) -> SimilarityStore:
@@ -299,17 +336,78 @@ class SimilarityStore:
         def load(name: str) -> np.ndarray:
             return np.load(directory / f"{name}.npy", mmap_mode="r")
 
+        ids, twins, digest = load("ids"), load("twins"), meta.get("catalog_digest")
         return cls(
-            ids=load("ids"),
+            ids=ids,
             facts=load("facts"),
             profile=load("profile"),
-            twins=load("twins"),
+            twins=twins,
             quantiles=load("quantiles"),
-            catalog_digest=meta.get("catalog_digest"),
+            catalog_digest=digest,
+            values=load("values"),
+            rarity=load("rarity"),
+            with_way_back=cls(
+                ids=ids,
+                facts=load("facts_back"),
+                profile=load("profile_back"),
+                twins=twins,
+                quantiles=load("quantiles_back"),
+                catalog_digest=digest,
+                values=load("values_back"),
+                rarity=load("rarity_back"),
+                way_back=load("way_back"),
+            ),
         )
 
     def column(self, name: str) -> np.ndarray:
         return self.facts[FACT_COLUMNS.index(name)]
+
+    def mode(self, return_to_start: bool) -> SimilarityStore:
+        """The DayHikes measured with their way back to the start, or one way."""
+        return self.with_way_back if return_to_start else self
+
+
+@dataclass(frozen=True, eq=False)
+class OutsideSeed:
+    """A Seed that is no Catalog DayHike (a ComposedHike), scored beside a
+    store without joining it: its facts in ``FACT_COLUMNS`` order (NaN
+    missing), its ProfileShape, and the store rows of the DayHikes it
+    retraces, whose groups of Twins a Ranking from it leaves out.
+    ``stated`` marks a Wish: its yes/no facts are the Hiker's answers, not
+    map entries, so a DayHike that lacks an OSM flag's feature is compared
+    with a "no" on it, against every random pair, those where neither has
+    one included (``EVERY_PAIR``).
+    """
+
+    facts: np.ndarray
+    profile: np.ndarray
+    twin_rows: np.ndarray
+    stated: bool = False
+
+    @classmethod
+    def of(
+        cls, facts: Mapping[str, float], profile: np.ndarray | None, twin_rows: Sequence[int] = ()
+    ) -> OutsideSeed:
+        return cls(
+            facts=np.array([facts.get(name, math.nan) for name in FACT_COLUMNS], dtype=np.float32),
+            profile=np.asarray(
+                np.full(PROFILE_POINTS, np.nan) if profile is None else profile, dtype=np.float32
+            ),
+            twin_rows=np.asarray(twin_rows, dtype=np.int64),
+        )
+
+    @classmethod
+    def wished(cls, wish: Mapping[str, float]) -> OutsideSeed:
+        """A Wish as a Seed: each value the fact of its Measure (``WISHABLE``,
+        yes/no as 1/0), in every QueryMonth's column too for a monthly Measure;
+        every other fact missing, and no Twins."""
+        facts = {}
+        for measure in MEASURES:
+            if measure.name in wish:
+                (column,) = measure.columns
+                months = [f"{column}_{month:02d}" for month in range(1, 13)] if measure.monthly else []
+                facts.update(dict.fromkeys([column, *months], float(wish[measure.name])))
+        return replace(cls.of(facts, None), stated=True)
 
 
 def rank_dayhikes(
@@ -320,6 +418,7 @@ def rank_dayhikes(
     month: int | None = None,
     allowed_ids: Collection[int] | None = None,
     limit: int | None = None,
+    return_to_start: bool = True,
 ) -> Ranking:
     """Rank Catalog DayHikes by Measure similarity to named Seeds.
 
@@ -328,19 +427,22 @@ def rank_dayhikes(
     candidate's similarity to one Seed is the weighted mean of its calibrated
     Measure scores over the Measures both DayHikes have; with several Seeds the
     best Seed counts. Ties break on the same weighted mean of raw scores, then
-    on DayHike id. ``score`` is that similarity: 0.5 is about a typical random
-    pair, 1.0 beats every random pair on every weighted Measure. Of a group of
+    on DayHike id. ``score`` is that similarity: about 0.44 for a typical
+    random pair under the default weights, 1.0 when no random pair is as alike
+    on any weighted Measure. Of a group of
     Twins only the best is kept, and none of a Seed's Twins. Seeds are
     resolved with ``resolve_seed`` and omitted. A candidate with no weighted
     Measure scored is left out. ``allowed_ids`` restricts the candidates (for
     an upstream filter such as DriveTime). ``limit`` keeps only the best that
     many items (every candidate is still scored). QueryMonth selects that
-    month's climate in the monthly Measures.
+    month's climate in the monthly Measures. ``return_to_start`` measures
+    Seeds and candidates alike with their way back to the start (ADR-0019),
+    else one way.
     """
     chosen = _measure_weights(weights)
     _check_month(month)
     seed_ids = sorted({resolve_seed(catalog, name) for name in seeds})
-    store = catalog.similarity
+    store = catalog.similarity.mode(return_to_start)
     rows, scores = rank_rows(
         store,
         np.searchsorted(store.ids, seed_ids),
@@ -359,7 +461,7 @@ def rank_dayhikes(
 
 def rank_rows(
     store: SimilarityStore,
-    seed_rows: Sequence[int] | np.ndarray,
+    seed_rows: Sequence[int | OutsideSeed] | np.ndarray,
     weights: Mapping[str, float] | None = None,
     *,
     month: int | None = None,
@@ -369,16 +471,19 @@ def rank_rows(
     """``rank_dayhikes`` on store rows: the ranked rows and their scores.
 
     Seeds are store rows, not names, so a caller that already knows the
-    DayHike (a web page that picked it from a list) needs no Catalog.
+    DayHike (a web page that picked it from a list) needs no Catalog. A Seed
+    may also be an ``OutsideSeed``; the DayHikes it retraces count as its Twins.
     """
     chosen = _measure_weights(weights)
     _check_climate(store, month)
-    seed_rows = np.asarray(seed_rows, dtype=np.int64)
+    seeds = list(seed_rows)
+    inside = np.array([seed for seed in seeds if not isinstance(seed, OutsideSeed)], dtype=np.int64)
+    twin_rows = np.concatenate([inside, *(seed.twin_rows for seed in seeds if isinstance(seed, OutsideSeed))])
     rows = np.arange(len(store.ids))
     if allowed_ids is not None:
         rows = rows[np.isin(store.ids, np.fromiter(allowed_ids, dtype=np.int64))]
-    rows = rows[~np.isin(rows, seed_rows)]
-    similarity, raw = score_rows(store, seed_rows, rows, chosen, month=month)
+    rows = rows[~np.isin(rows, inside)]
+    similarity, raw = score_rows(store, seeds, rows, chosen, month=month)
     scored = ~np.isnan(similarity)
     rows, similarity, raw = rows[scored], similarity[scored], raw[scored]
     order = np.lexsort((store.ids[rows], -raw, -similarity))
@@ -386,7 +491,7 @@ def rank_rows(
     group = store.twins[rows]
     _, first = np.unique(group, return_index=True)
     keep = np.sort(first)
-    keep = keep[~np.isin(group[keep], store.twins[seed_rows])][:limit]
+    keep = keep[~np.isin(group[keep], store.twins[twin_rows])][:limit]
     return rows[keep], similarity[keep]
 
 
@@ -405,7 +510,7 @@ def _check_month(month: int | None) -> None:
 
 def score_rows(
     store: SimilarityStore,
-    seed_rows: Sequence[int],
+    seed_rows: Sequence[int | OutsideSeed],
     rows: np.ndarray,
     weights: Mapping[str, float],
     *,
@@ -427,7 +532,12 @@ def score_rows(
         )
         calibrated = np.column_stack(
             [
-                calibrate(store, _calibration_key(measure, month), raw[:, j])
+                calibrate(
+                    store,
+                    _calibration_key(measure, month, seed),
+                    raw[:, j],
+                    measure_rarity(store, measure, seed, rows, month=month),
+                )
                 for j, measure in enumerate(measures)
             ]
         )
@@ -441,48 +551,106 @@ def score_rows(
 def measure_scores(
     store: SimilarityStore,
     measure: Measure,
-    a: int | np.ndarray,
+    a: int | np.ndarray | OutsideSeed,
     b: np.ndarray,
     *,
     month: int | None = None,
+    every_pair: bool = False,
 ) -> np.ndarray:
     """Raw scores of one Measure between DayHike rows ``a`` and ``b``.
 
-    ``a`` is one row (a Seed) or an array of rows paired with ``b``.
+    ``a`` is one row (a Seed), an ``OutsideSeed``, or an array of rows paired with ``b``.
+    ``every_pair`` compares two DayHikes that both lack an OSM flag's feature too.
     """
+
+    def seed_column(name: str) -> np.ndarray:
+        return _seed_value(store, a, name)
+
     if measure.kind == "profile":
-        left, right = store.profile[a], store.profile[b]
+        left = a.profile if isinstance(a, OutsideSeed) else store.profile[a]
+        right = store.profile[b]
         forward = np.abs(right - left).mean(axis=-1)
         backward = np.abs(right - left[..., ::-1]).mean(axis=-1)
         return 1.0 - np.minimum(forward, backward)
-    columns = [
-        f"{name}_{month:02d}" if measure.monthly and month is not None else name
-        for name in measure.columns
-    ]
+    columns = _columns(measure, month)
     if measure.kind == "mix":
-        shared = sum(
-            np.minimum(store.column(name)[a], store.column(name)[b]) for name in columns
-        )
-        return np.minimum(shared, 1.0)
-    left, right = store.column(columns[0])[a], store.column(columns[0])[b]
+        shared = sum(np.minimum(seed_column(name), store.column(name)[b]) for name in columns)
+        return np.minimum(np.round(shared, 6), 1.0)
+    left, right = seed_column(columns[0]), store.column(columns[0])[b]
     if measure.kind == "agree":
-        return np.where(np.isnan(left) | np.isnan(right), np.nan, left == right)
+        stated = every_pair or (isinstance(a, OutsideSeed) and a.stated)
+        absent = (left == 0) & (right == 0) if measure.presence and not stated else False
+        return np.where(np.isnan(left) | np.isnan(right) | absent, np.nan, left == right)
     if measure.kind == "ratio":
         left = np.maximum(left, measure.constant)
         right = np.maximum(right, measure.constant)
         return np.minimum(left, right) / np.maximum(left, right)
     if measure.cap is not None:
         left, right = np.minimum(left, measure.cap), np.minimum(right, measure.cap)
-    return np.maximum(0.0, 1.0 - np.abs(left - right) / measure.constant)
+    gap = np.abs(left - right)
+    if measure.dead_band is not None:
+        gap = np.where(gap < measure.dead_band, 0.0, gap)
+    return np.maximum(0.0, 1.0 - gap / measure.constant)
 
 
-def calibrate(store: SimilarityStore, key: str, scores: np.ndarray) -> np.ndarray:
-    """Share of random pairs that score lower on ``key`` (ties count half).
+def measure_rarity(
+    store: SimilarityStore,
+    measure: Measure,
+    a: int | np.ndarray | OutsideSeed,
+    b: np.ndarray,
+    *,
+    month: int | None = None,
+) -> np.ndarray:
+    """Share of the Catalog's DayHikes whose value of the Measure lies between
+    the values of ``a`` and ``b``, both included: how common what they share is.
 
-    NaN stays NaN; a key without random-pair scores gives NaN.
+    Values are first floored, capped, and put to 0 below a dead band, so a
+    dead band is one value. NaN where either value is missing, for a Measure
+    of more than one column (``mix``, ``profile``), and in a store without
+    ``values``.
     """
-    quantiles = store.quantiles[CALIBRATION_KEYS.index(key)]
-    return _mid_rank(quantiles, scores)
+    if len(measure.columns) != 1 or store.values is None:
+        return np.full(np.shape(b), np.nan)
+    (column,) = _columns(measure, month)
+    values = _measured(measure, np.asarray(store.values[FACT_COLUMNS.index(column)]))
+    values = values[~np.isnan(values)]
+    left = _measured(measure, _seed_value(store, a, column))
+    right = _measured(measure, store.column(column)[b])
+    low, high = np.minimum(left, right), np.maximum(left, right)
+    between = np.searchsorted(values, high, side="right") - np.searchsorted(values, low, side="left")
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(np.isnan(low) | np.isnan(high) | (values.size == 0), np.nan, between / values.size)
+
+
+def calibrate(
+    store: SimilarityStore, key: str, scores: np.ndarray, rarity: np.ndarray | None = None
+) -> np.ndarray:
+    """Share of random pairs strictly less alike than these on ``key``.
+
+    A random pair is less alike when it scores lower, or when both score 1
+    and its shared values are more common (a larger ``measure_rarity``, given
+    as ``rarity``). Every other tie is as alike, so 0 is a pair no random
+    pair is less alike than. NaN stays NaN; a key without random-pair scores
+    gives NaN.
+    """
+    index = CALIBRATION_KEYS.index(key)
+    below, ties = _below_and_ties(store.quantiles[index], scores)
+    if rarity is None or store.rarity is None:
+        return below
+    rarer, as_rare = _below_and_ties(store.rarity[index], rarity)
+    commoner = np.nan_to_num(1.0 - rarer - as_rare)
+    return np.where(scores == 1.0, below + ties * commoner, below)
+
+
+def random_pair_shares(
+    store: SimilarityStore, key: str, scores: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Shares of random pairs that score lower on ``key``, and that score the same.
+
+    The Calibration is the first, plus at a raw score of 1 the part of the
+    second whose shared values are commoner. NaN stays NaN.
+    """
+    return _below_and_ties(store.quantiles[CALIBRATION_KEYS.index(key)], scores)
 
 
 def weighted_mean(scores: np.ndarray, weights: np.ndarray) -> np.ndarray:
@@ -496,23 +664,55 @@ def weighted_mean(scores: np.ndarray, weights: np.ndarray) -> np.ndarray:
         return np.where(total > 0, np.where(present, scores, 0.0) @ weights / total, np.nan)
 
 
-def _mid_rank(sorted_values: np.ndarray, scores: np.ndarray) -> np.ndarray:
-    """Share of ``sorted_values`` below each score, ties counting half.
+def _below_and_ties(sorted_values: np.ndarray, scores: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Shares of ``sorted_values`` below each score and equal to it; NaN for a NaN score.
 
     One search over the distinct values: ``below`` counts the values under
     each score and ``ties`` those equal to it.
     """
     if sorted_values.size == 0 or np.isnan(sorted_values).all():
-        return np.full(np.shape(scores), np.nan)
+        return np.full(np.shape(scores), np.nan), np.full(np.shape(scores), np.nan)
     distinct, first, count = np.unique(sorted_values, return_index=True, return_counts=True)
     at = np.searchsorted(distinct, scores, side="left")
     below = np.append(first, len(sorted_values))[at]
     nearest = np.minimum(at, len(distinct) - 1)
     ties = np.where(distinct[nearest] == scores, count[nearest], 0)
-    return np.where(np.isnan(scores), np.nan, (below + ties / 2) / len(sorted_values))
+    missing = np.isnan(scores)
+    return (
+        np.where(missing, np.nan, below / len(sorted_values)),
+        np.where(missing, np.nan, ties / len(sorted_values)),
+    )
 
 
-def _calibration_key(measure: Measure, month: int | None) -> str:
+def _columns(measure: Measure, month: int | None) -> list[str]:
+    """The fact columns a Measure reads: a monthly one's QueryMonth columns when one is set."""
+    return [f"{name}_{month:02d}" if measure.monthly and month is not None else name for name in measure.columns]
+
+
+def _seed_value(store: SimilarityStore, a: int | np.ndarray | OutsideSeed, name: str) -> np.ndarray:
+    if isinstance(a, OutsideSeed):
+        return a.facts[FACT_COLUMNS.index(name)]
+    return store.column(name)[a]
+
+
+def _measured(measure: Measure, values: np.ndarray) -> np.ndarray:
+    """Values as the Measure compares them: floored (``ratio``), capped, and 0 below a dead band."""
+    values = np.asarray(values, dtype=float)
+    if measure.kind == "ratio":
+        values = np.maximum(values, measure.constant)
+    if measure.cap is not None:
+        values = np.minimum(values, measure.cap)
+    if measure.dead_band is not None:
+        values = np.where(values < measure.dead_band, 0.0, values)
+    return values
+
+
+def _calibration_key(measure: Measure, month: int | None, seed: int | OutsideSeed) -> str:
+    """The Calibration row of a Measure against a Seed: a Wish's "no" on an OSM
+    flag is compared with every random pair (``EVERY_PAIR``)."""
+    stated = isinstance(seed, OutsideSeed) and seed.stated
+    if measure.presence and stated and seed.facts[FACT_COLUMNS.index(measure.columns[0])] == 0:
+        return f"{measure.name}{EVERY_PAIR}"
     return measure.name if month is None or not measure.monthly else f"{measure.name}@{month:02d}"
 
 
@@ -538,27 +738,26 @@ def build_similarity(
     landcover_dir: Path | str = DEFAULT_LANDCOVER_DIR,
     progress: Progress | None = None,
 ) -> Path:
-    """Write the facts, Twins and Calibration of every Catalog DayHike.
+    """Write the facts, Twins and Calibration of every Catalog DayHike, one
+    way and with its way back.
 
     Reads the Catalog and its GeometryStore (read-only), FABDEM tiles in
     ``dem_dir`` for SolarAspect and WorldCover tiles in ``landcover_dir`` for
-    WaterSide, then calibrates (``calibrate_similarity``). Run it after ingest
-    and every sample step; it replaces the directory.
+    WaterSide, and the TrailGraph for each way back (its per-vertex samples,
+    so after ``sample_trailgraph``), then calibrates (``calibrate_similarity``).
+    Run it after ingest and every sample step; it replaces the directory.
     """
     started = time.monotonic()
     catalog_path = Path(catalog_path)
     directory = similarity_dir_for(catalog_path)
     digest = catalog_digest(catalog_path)
-    ids, facts, profile, twins = _build_facts(
-        catalog_path, Path(dem_dir), Path(landcover_dir), progress
-    )
+    arrays = _build_facts(catalog_path, Path(dem_dir), Path(landcover_dir), progress)
     directory.mkdir(exist_ok=True)
     for path in directory.glob("*"):
         path.unlink()
-    np.save(directory / "ids.npy", ids)
-    np.save(directory / "facts.npy", facts)
-    np.save(directory / "profile.npy", profile)
-    np.save(directory / "twins.npy", twins)
+    for name, values in arrays.items():
+        np.save(directory / f"{name}.npy", values)
+    ids = arrays["ids"]
     (directory / "meta.json").write_text(
         json.dumps(
             {
@@ -598,9 +797,12 @@ def calibrate_similarity(
     """Recompute the Calibration from the stored facts.
 
     ``CALIBRATION_PAIRS`` random pairs of distinct DayHikes are scored on every
-    ``CALIBRATION_KEYS`` entry; ``CALIBRATION_QUANTILES`` evenly spaced
-    quantiles of the scored ones are kept per key. Rerun after a Measure
-    constant changes.
+    ``CALIBRATION_KEYS`` entry (an ``EVERY_PAIR`` key comparing those that both
+    lack the OSM flag's feature too); ``CALIBRATION_QUANTILES`` evenly spaced
+    quantiles of the scored ones are kept per key, and as many of the
+    ``measure_rarity`` of those scoring raw 1, after as many of each fact
+    column's values over the DayHikes, for the facts one way and with the way
+    back alike. Rerun after a Measure constant changes.
     """
     directory = similarity_dir_for(catalog_path)
     meta = json.loads((directory / "meta.json").read_text())
@@ -610,37 +812,45 @@ def calibrate_similarity(
         progress("similarity: calibration")
     started = time.monotonic()
     ids = np.load(directory / "ids.npy")
-    store = SimilarityStore(
-        ids=ids,
-        facts=np.load(directory / "facts.npy"),
-        profile=np.load(directory / "profile.npy"),
-        twins=np.load(directory / "twins.npy"),
-        quantiles=np.empty((0, 0), dtype=np.float32),
-    )
     rng = np.random.default_rng(CALIBRATION_SEED)
     left, right = rng.integers(0, len(ids), size=(2, CALIBRATION_PAIRS))
     distinct = left != right
     left, right = left[distinct], right[distinct]
     by_name = {measure.name: measure for measure in MEASURES}
-    scores = np.column_stack(
-        [
-            measure_scores(
-                store,
-                by_name[key.split("@")[0]],
-                left,
-                right,
-                month=int(key.split("@")[1]) if "@" in key else None,
+    at = (np.arange(CALIBRATION_QUANTILES) + 0.5) / CALIBRATION_QUANTILES
+    for suffix in ("", "_back"):
+        facts = np.load(directory / f"facts{suffix}.npy")
+        store = SimilarityStore(
+            ids=ids,
+            facts=facts,
+            profile=np.load(directory / f"profile{suffix}.npy"),
+            twins=np.load(directory / "twins.npy"),
+            quantiles=np.empty((0, 0), dtype=np.float32),
+            values=_quantile_rows(facts, at),
+        )
+        keyed = [
+            (
+                by_name[key.removesuffix(EVERY_PAIR).split("@")[0]],
+                int(key.split("@")[1]) if "@" in key else None,
+                key.endswith(EVERY_PAIR),
             )
             for key in CALIBRATION_KEYS
         ]
-    ).astype(np.float32)
-    at = (np.arange(CALIBRATION_QUANTILES) + 0.5) / CALIBRATION_QUANTILES
-    quantiles = np.full((len(CALIBRATION_KEYS), CALIBRATION_QUANTILES), np.nan, np.float32)
-    for row, column in enumerate(scores.T):
-        scored = column[~np.isnan(column)]
-        if scored.size:
-            quantiles[row] = np.quantile(scored, at, method="inverted_cdf")
-    np.save(directory / "quantiles.npy", quantiles)
+        scores = np.column_stack(
+            [
+                measure_scores(store, measure, left, right, month=month, every_pair=every_pair)
+                for measure, month, every_pair in keyed
+            ]
+        ).astype(np.float32)
+        rarity = np.column_stack(
+            [
+                np.where(scores[:, j] == 1.0, measure_rarity(store, measure, left, right, month=month), np.nan)
+                for j, (measure, month, _) in enumerate(keyed)
+            ]
+        )
+        np.save(directory / f"quantiles{suffix}.npy", _quantile_rows(scores.T, at))
+        np.save(directory / f"rarity{suffix}.npy", _quantile_rows(rarity.T, at))
+        np.save(directory / f"values{suffix}.npy", store.values)
     meta.update(
         calibration_version=_CALIBRATION_VERSION,
         calibration_keys=CALIBRATION_KEYS,
@@ -651,10 +861,22 @@ def calibrate_similarity(
     return directory
 
 
+def _quantile_rows(rows: np.ndarray, at: np.ndarray) -> np.ndarray:
+    """Quantiles ``at`` of each row's non-NaN values (float32), NaN for a row with none."""
+    quantiles = np.full((len(rows), len(at)), np.nan, np.float32)
+    for index, row in enumerate(rows):
+        scored = row[~np.isnan(row)]
+        if scored.size:
+            quantiles[index] = np.quantile(scored, at, method="inverted_cdf")
+    return quantiles
+
+
 def _build_facts(
     catalog_path: Path, dem_dir: Path, landcover_dir: Path, progress: Progress | None
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Ids, facts (``FACT_COLUMNS`` x DayHikes, float32), ProfileShapes and Twins."""
+) -> dict[str, np.ndarray]:
+    """Ids, facts (``FACT_COLUMNS`` x DayHikes, float32), ProfileShapes and
+    Twins; the facts and ProfileShapes with the way back (``_back``) and
+    ``way_back`` (``WAY_BACK_COLUMNS`` x DayHikes)."""
     column = {name: index for index, name in enumerate(FACT_COLUMNS)}
     catalog = sqlite3.connect(f"file:{catalog_path}?mode=ro", uri=True)
     try:
@@ -693,6 +915,8 @@ def _build_facts(
         for index, name in enumerate(CLIMATE_NAMES):
             facts[column[f"{name}_{month:02d}"], month_rows[at]] = months[at, 2 + index]
 
+    graph_path = trailgraph_path_for(catalog_path)
+    graph = TrailGraph(graph_path) if graph_path.is_file() else None
     geo = sqlite3.connect(f"file:{geometry_store_path_for(catalog_path)}?mode=ro", uri=True)
     try:
         kinds, amenity_points = _amenities(geo)
@@ -711,53 +935,121 @@ def _build_facts(
                 trailheads, r=TRAILHEAD_M / EARTH_RADIUS_M, count_only=True
             )
             facts[column[name]] = near > 0
-        probes: list[np.ndarray] = []
-        probe_rows: list[np.ndarray] = []
-        water_probes: list[np.ndarray] = []
-        water_rows: list[np.ndarray] = []
+        back_facts, back_profile = facts.copy(), profile.copy()
+        back_rows = np.zeros((len(WAY_BACK_COLUMNS), n), dtype=np.float32)
+        back_rows[1:3] = np.nan
+        has_landcover = "landcover" in {row[1] for row in geo.execute("PRAGMA table_info(vertices)")}
+        probes: dict[str, list[np.ndarray]] = {"": [], "_back": []}
+        probe_rows: dict[str, list[np.ndarray]] = {"": [], "_back": []}
+        water_probes: dict[str, list[np.ndarray]] = {"": [], "_back": []}
+        water_rows: dict[str, list[np.ndarray]] = {"": [], "_back": []}
         routes: list[np.ndarray | None] = [None] * n
         for start in range(0, n, _HIKE_CHUNK):
             chunk = ids[start : start + _HIKE_CHUNK]
-            walks = _walks(geo, int(chunk[0]), int(chunk[-1]))
+            walks = _walks(geo, int(chunk[0]), int(chunk[-1]), has_landcover)
             for row, dayhike_id in enumerate(chunk, start=start):
                 walk = walks.get(int(dayhike_id))
                 if walk is None:
-                    facts[column["round_trip"], row] = 0.0
-                    for name in ("peak_summited", "viewpoint_along", "peaks_around"):
-                        facts[column[name], row] = 0.0
-                    for name in FACILITIES_FLAG_COLUMNS[:3]:
-                        facts[column[name], row] = 0.0
+                    for target in (facts, back_facts):
+                        target[column["round_trip"], row] = 0.0
+                        for name in ("peak_summited", "viewpoint_along", "peaks_around"):
+                            target[column[name], row] = 0.0
+                        for name in FACILITIES_FLAG_COLUMNS[:3]:
+                            target[column[name], row] = 0.0
                     continue
-                lat, lon, ele, ways = walk
-                for name, value in walk_facts(lat, lon, ele, ways, along, peaks).items():
-                    facts[column[name], row] = value
-                shape = profile_shape(lat, lon, ele)
-                if shape is not None:
-                    profile[row] = shape
-                chosen = solar_aspect_points(len(lat))
-                probes.append(np.column_stack([lat[chosen], lon[chosen]]))
-                probe_rows.append(np.full(chosen.size, row))
+                lat, lon, ele, ways, codes = walk
+                one_way = ComposedWalk(
+                    None, None, None, None, lat, lon, ele, codes,
+                    np.full(len(lat), -1), np.full(len(lat), np.nan), ways, None, {},
+                )  # fmt: skip
+                back = way_back(lat, lon, graph)
+                trip = round_trip(one_way, back)
+                for suffix, measured, target, shapes in (
+                    ("", one_way, facts, profile),
+                    ("_back", trip, back_facts, back_profile),
+                ):
+                    for name, value in walk_facts(
+                        measured.lat, measured.lon, measured.ele, measured.walked, along, peaks
+                    ).items():
+                        target[column[name], row] = value
+                    shape = profile_shape(measured.lat, measured.lon, measured.ele)
+                    if shape is not None:
+                        shapes[row] = shape
+                    chosen = solar_aspect_points(len(measured.lat))
+                    probes[suffix].append(np.column_stack([measured.lat[chosen], measured.lon[chosen]]))
+                    probe_rows[suffix].append(np.full(chosen.size, row))
+                    if len(measured.lat) >= 2:
+                        water_probes[suffix].append(_even_points(measured.lat, measured.lon, WATERSIDE_STEP_M))
+                        water_rows[suffix].append(np.full(len(water_probes[suffix][-1]), row))
                 if len(lat) >= 2:
-                    water_probes.append(_even_points(lat, lon, WATERSIDE_STEP_M))
-                    water_rows.append(np.full(len(water_probes[-1]), row))
                     routes[row] = _even_points(lat, lon, TWIN_STEP_M).astype(np.float32)
+                _add_way_back(back_facts[:, row], len(lat), back, trip, graph, has_landcover)
+                back_rows[:, row] = (
+                    back.metres, *climb_and_descent(trip.lat, trip.lon, trip.ele), WAY_BACK_KINDS.index(back.kind)
+                )
             if progress is not None:
                 progress(f"similarity facts: {min(start + _HIKE_CHUNK, n)}/{n} DayHikes")
     finally:
         geo.close()
-    if progress is not None:
-        progress("similarity facts: SolarAspect")
-    points = np.concatenate(probes) if probes else np.empty((0, 2))
-    owners = np.concatenate(probe_rows) if probe_rows else np.empty(0, dtype=int)
-    facts[column["southness"]] = solar_aspect_southness(dem_dir, points, owners, n)
-    if progress is not None:
-        progress("similarity facts: WaterSide")
-    points = np.concatenate(water_probes) if water_probes else np.empty((0, 2))
-    owners = np.concatenate(water_rows) if water_rows else np.empty(0, dtype=int)
-    facts[column["waterside_share"]] = waterside_share(landcover_dir, points, owners, n)
+    for suffix, target in (("", facts), ("_back", back_facts)):
+        if progress is not None:
+            progress(f"similarity facts{suffix}: SolarAspect")
+        points = np.concatenate(probes[suffix]) if probes[suffix] else np.empty((0, 2))
+        owners = np.concatenate(probe_rows[suffix]) if probe_rows[suffix] else np.empty(0, dtype=int)
+        target[column["southness"]] = solar_aspect_southness(dem_dir, points, owners, n)
+        if progress is not None:
+            progress(f"similarity facts{suffix}: WaterSide")
+        points = np.concatenate(water_probes[suffix]) if water_probes[suffix] else np.empty((0, 2))
+        owners = np.concatenate(water_rows[suffix]) if water_rows[suffix] else np.empty(0, dtype=int)
+        target[column["waterside_share"]] = waterside_share(landcover_dir, points, owners, n)
     if progress is not None:
         progress("similarity facts: Twins")
-    return ids, facts, profile, twin_groups(routes)
+    return {
+        "ids": ids,
+        "facts": facts,
+        "profile": profile,
+        "twins": twin_groups(routes),
+        "facts_back": back_facts,
+        "profile_back": back_profile,
+        "way_back": back_rows,
+    }
+
+
+def _add_way_back(
+    facts: np.ndarray, one_way: int, back: WayBack, trip: ComposedWalk, graph: TrailGraph | None, has_landcover: bool
+) -> None:
+    """Bring the Catalog's own facts of one DayHike (its column of ``facts``)
+    to the walk with its way back: ``trip``, whose first ``one_way`` vertices
+    are the DayHike's. Length adds the metres back; highest, lowest and
+    Difficulty take the way back's too; LandCover counts every vertex of the
+    trip (when the GeometryStore has its classes); climate averages the
+    vertices back with the DayHike's, weighted by the vertex count.
+    """
+    column = {name: index for index, name in enumerate(FACT_COLUMNS)}
+    facts[column["length_m"]] += back.metres
+    tail = trip.ele[one_way:]
+    tail = tail[np.isfinite(tail)]
+    if tail.size:
+        facts[column["highest_m"]] = np.fmax(facts[column["highest_m"]], tail.max())
+        facts[column["lowest_m"]] = np.fmin(facts[column["lowest_m"]], tail.min())
+    if back.walk is not None and back.walk.sac_scale is not None:
+        facts[column["difficulty_rank"]] = np.fmax(facts[column["difficulty_rank"]], SAC_SCALE_RANK[back.walk.sac_scale])
+    codes = trip.landcover[trip.landcover > 0]
+    if has_landcover and codes.size:
+        fractions = list(_landcover_fractions(codes.tolist()))
+        fractions.append(max(1.0 - sum(fractions), 0.0))
+        facts[[column[name] for name in LANDCOVER_SHARE_COLUMNS]] = fractions
+    cells = trip.climate_cell[one_way:]
+    cells = cells[cells >= 0]
+    if graph is None or not cells.size:
+        return
+    climate = graph._climate(cells)  # (cells, 12, 3)
+    months = [f"{name}_{month:02d}" for month in range(1, 13) for name in CLIMATE_NAMES]
+    tails = [*climate.reshape(len(cells), -1).T, climate[:, 5:8, 0].mean(axis=1), climate[:, :, 1].mean(axis=1), climate[:, 5:8, 2].mean(axis=1)]
+    for name, values in zip([*months, *CLIMATE_NAMES], tails):
+        own = facts[column[name]]
+        weight = 0 if np.isnan(own) else one_way
+        facts[column[name]] = ((own * weight if weight else 0.0) + values.sum()) / (weight + len(values))
 
 
 def _amenities(geo: sqlite3.Connection) -> tuple[np.ndarray, np.ndarray]:
@@ -801,14 +1093,15 @@ class AmenityPoints:
 
 
 def _walks(
-    geo: sqlite3.Connection, first_id: int, last_id: int
-) -> dict[int, tuple[np.ndarray, np.ndarray, np.ndarray, list[tuple[float, str | None]]]]:
-    """DayHikeGeometry (lat, lon, ele) and walked ways for DayHikes in an id range.
+    geo: sqlite3.Connection, first_id: int, last_id: int, has_landcover: bool = False
+) -> dict[int, tuple[np.ndarray, np.ndarray, np.ndarray, list[tuple[float, str | None]], np.ndarray]]:
+    """DayHikeGeometry (lat, lon, ele), walked ways and per-vertex WorldCover
+    class (0 missing, and without ``has_landcover``) for DayHikes in an id range.
 
     Ways are (walked metres, surface class) in walk order; Leftovers are out.
     """
     vertices = geo.execute(
-        "SELECT dayhike_id, latitude, longitude, ele FROM vertices "
+        f"SELECT dayhike_id, latitude, longitude, ele, {'landcover' if has_landcover else 'NULL'} FROM vertices "
         "WHERE dayhike_id BETWEEN ? AND ? ORDER BY dayhike_id, seq",
         (first_id, last_id),
     ).fetchall()
@@ -824,7 +1117,7 @@ def _walks(
     if not vertices:
         return {}
     table = np.array(
-        [(i, lat, lon, math.nan if ele is None else ele) for i, lat, lon, ele in vertices],
+        [(i, lat, lon, math.nan if ele is None else ele, code or 0) for i, lat, lon, ele, code in vertices],
         dtype=float,
     )
     hike_ids, starts = np.unique(table[:, 0], return_index=True)
@@ -835,6 +1128,7 @@ def _walks(
             table[start:end, 2],
             table[start:end, 3],
             ways.get(int(dayhike_id), []),
+            table[start:end, 4].astype(np.int64),
         )
         for dayhike_id, start, end in zip(hike_ids, starts, ends)
     }
@@ -1171,8 +1465,20 @@ def solar_aspect_southness(
     component) / 2. Points flatter than ``SOLAR_ASPECT_MIN_SLOPE_DEG`` or
     without a height are left out; a DayHike with none left is NaN.
     """
+    southness = slope_southness(dem_dir, points[:, 0], points[:, 1])
+    sloped = ~np.isnan(southness)
+    count = np.bincount(owners[sloped], minlength=n)
+    total = np.bincount(owners[sloped], weights=southness[sloped], minlength=n)
+    with np.errstate(invalid="ignore"):
+        return np.where(count > 0, total / count, np.nan)
+
+
+def slope_southness(dem_dir: Path | str, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
+    """Southness of the slope at each point (see ``solar_aspect_southness``),
+    NaN where it is flatter than ``SOLAR_ASPECT_MIN_SLOPE_DEG`` or has no height.
+    """
     offset = SOLAR_ASPECT_OFFSET_ARCSEC / 3600
-    lat, lon = points[:, 0], points[:, 1]
+    lat, lon = np.asarray(lat, dtype=float), np.asarray(lon, dtype=float)
     here, east, north = dem_heights(
         dem_dir,
         np.concatenate([lat, lat, lat + offset]),
@@ -1183,14 +1489,11 @@ def solar_aspect_southness(
     rise_east = (east - here) / east_m
     rise_north = (north - here) / north_m
     grade = np.hypot(rise_east, rise_north)
-    sloped = np.degrees(np.arctan(grade)) >= SOLAR_ASPECT_MIN_SLOPE_DEG
-    # Downslope points against the gradient; its north component is
-    # -rise_north / grade, so a slope rising northward faces south.
-    southness = (1 + rise_north[sloped] / grade[sloped]) / 2
-    count = np.bincount(owners[sloped], minlength=n)
-    total = np.bincount(owners[sloped], weights=southness, minlength=n)
-    with np.errstate(invalid="ignore"):
-        return np.where(count > 0, total / count, np.nan)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        sloped = np.degrees(np.arctan(grade)) >= SOLAR_ASPECT_MIN_SLOPE_DEG
+        # Downslope points against the gradient; its north component is
+        # -rise_north / grade, so a slope rising northward faces south.
+        return np.where(sloped, (1 + rise_north / grade) / 2, np.nan)
 
 
 def waterside_share(
@@ -1206,8 +1509,6 @@ def waterside_share(
     wide rivers. Points without a tile are left out; a DayHike with none left
     is NaN.
     """
-    import rasterio
-
     beside = np.full(len(points), np.nan)
     lat, lon = points[:, 0], points[:, 1]
     corners = np.column_stack([np.floor(lat / 3), np.floor(lon / 3)]).astype(int) * 3
@@ -1215,11 +1516,41 @@ def waterside_share(
     order = np.argsort(tiles.ravel(), kind="stable")
     bounds = np.searchsorted(tiles.ravel()[order], np.arange(len(unique) + 1))
     for tile, (south, west) in enumerate(unique):
+        water = WaterTile.open(landcover_dir, south, west)
+        if water is None:
+            continue
+        at = order[bounds[tile] : bounds[tile + 1]]
+        rows, cols = water.cells(lat[at], lon[at])
+        beside[at] = water.beside(rows, cols, lat[at])
+    known = ~np.isnan(beside)
+    count = np.bincount(owners[known], minlength=n)
+    total = np.bincount(owners[known], weights=beside[known], minlength=n)
+    with np.errstate(invalid="ignore"):
+        return np.where(count > 0, total / count, np.nan)
+
+
+@dataclass(frozen=True)
+class WaterTile:
+    """One WorldCover tile read at ``WATERSIDE_OVERVIEW`` times its cells, for WaterSide.
+
+    ``summed`` is the summed-area table of its permanent-water cells, so the
+    water cells in any window are four reads.
+    """
+
+    transform: object  # rasterio Affine of the overview grid
+    height: int
+    width: int
+    summed: np.ndarray
+
+    @classmethod
+    def open(cls, landcover_dir: Path | str, south: int, west: int) -> WaterTile | None:
+        """The tile whose southwest corner is (south, west), or None without one."""
+        import rasterio
+
         tile_id = worldcover_tile_id(south, west)
         path = Path(landcover_dir) / f"ESA_WorldCover_10m_2021_v200_{tile_id}_Map.tif"
         if not path.is_file():
-            continue
-        at = order[bounds[tile] : bounds[tile + 1]]
+            return None
         with rasterio.open(path) as dataset:
             height = dataset.height // WATERSIDE_OVERVIEW
             width = dataset.width // WATERSIDE_OVERVIEW
@@ -1227,24 +1558,33 @@ def waterside_share(
             transform = dataset.transform @ rasterio.Affine.scale(
                 dataset.width / width, dataset.height / height
             )
-        rows, cols = rasterio.transform.rowcol(transform, lon[at], lat[at])
-        rows = np.clip(np.asarray(rows), 0, height - 1)
-        cols = np.clip(np.asarray(cols), 0, width - 1)
-        cell_m = math.radians(abs(transform.e)) * EARTH_RADIUS_M
-        reach_rows = round(WATERSIDE_M / cell_m)
-        reach_cols = np.round(WATERSIDE_M / (cell_m * np.cos(np.radians(lat[at])))).astype(int)
-        # Water cells in any window: four reads of the summed-area table.
         summed = np.zeros((height + 1, width + 1), dtype=np.int32)
         summed[1:, 1:] = water.cumsum(axis=0, dtype=np.int32).cumsum(axis=1, dtype=np.int32)
-        top, bottom = np.maximum(rows - reach_rows, 0), np.minimum(rows + reach_rows + 1, height)
-        left, right = np.maximum(cols - reach_cols, 0), np.minimum(cols + reach_cols + 1, width)
+        return cls(transform, height, width, summed)
+
+    def cells(self, lat: np.ndarray, lon: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """The overview row and column of each point (clipped to the grid)."""
+        import rasterio
+
+        rows, cols = rasterio.transform.rowcol(self.transform, lon, lat)
+        return (
+            np.clip(np.atleast_1d(np.asarray(rows)), 0, self.height - 1),
+            np.clip(np.atleast_1d(np.asarray(cols)), 0, self.width - 1),
+        )
+
+    def beside(self, rows: np.ndarray, cols: np.ndarray, lat: np.ndarray) -> np.ndarray:
+        """Whether each cell is beside open water, seen from a point at ``lat``:
+        at least ``WATERSIDE_MIN_SHARE`` of the cells within ``WATERSIDE_M``
+        (a square cut at the tile edge) are water.
+        """
+        cell_m = math.radians(abs(self.transform.e)) * EARTH_RADIUS_M
+        reach_rows = round(WATERSIDE_M / cell_m)
+        reach_cols = np.round(WATERSIDE_M / (cell_m * np.cos(np.radians(lat)))).astype(int)
+        top, bottom = np.maximum(rows - reach_rows, 0), np.minimum(rows + reach_rows + 1, self.height)
+        left, right = np.maximum(cols - reach_cols, 0), np.minimum(cols + reach_cols + 1, self.width)
+        summed = self.summed
         count = summed[bottom, right] - summed[top, right] - summed[bottom, left] + summed[top, left]
-        beside[at] = count >= WATERSIDE_MIN_SHARE * (bottom - top) * (right - left)
-    known = ~np.isnan(beside)
-    count = np.bincount(owners[known], minlength=n)
-    total = np.bincount(owners[known], weights=beside[known], minlength=n)
-    with np.errstate(invalid="ignore"):
-        return np.where(count > 0, total / count, np.nan)
+        return count >= WATERSIDE_MIN_SHARE * (bottom - top) * (right - left)
 
 
 def twin_groups(routes: Sequence[np.ndarray | None]) -> np.ndarray:
@@ -1273,19 +1613,27 @@ def twin_groups(routes: Sequence[np.ndarray | None]) -> np.ndarray:
     reach = np.maximum(TWIN_M, (1 - TWIN_SHARE) * length / TWIN_SHARE) / EARTH_RADIUS_M
     near = BallTree(centre, metric="haversine").query_radius(centre, r=reach)
 
-    def share_on(a: np.ndarray, b: np.ndarray) -> float:
-        distance, _ = nearest_on_line(b[:, 0], b[:, 1], a[:, 0], a[:, 1])
-        return float((distance <= TWIN_M).mean())
-
     for i, others in enumerate(near):
         for j in others[others > i]:
             if min(length[i], length[j]) < TWIN_SHARE * max(length[i], length[j]):
                 continue
-            a, b = routes[have[i]], routes[have[j]]
-            if share_on(a, b) >= TWIN_SHARE and share_on(b, a) >= TWIN_SHARE:
+            if are_twins(routes[have[i]], routes[have[j]]):
                 first, second = sorted((root(have[i]), root(have[j])))
                 parent[second] = first
     return np.array([root(row) for row in range(len(routes))])
+
+
+def are_twins(a: np.ndarray, b: np.ndarray) -> bool:
+    """Whether two walks, as (lat, lon) rows every ``TWIN_STEP_M``, are Twins:
+    at least ``TWIN_SHARE`` of each one's points lie within ``TWIN_M`` of the
+    other's line.
+    """
+
+    def share_on(a: np.ndarray, b: np.ndarray) -> float:
+        distance, _ = nearest_on_line(b[:, 0], b[:, 1], a[:, 0], a[:, 1])
+        return float((distance <= TWIN_M).mean())
+
+    return share_on(a, b) >= TWIN_SHARE and share_on(b, a) >= TWIN_SHARE
 
 
 def dem_heights(dem_dir: Path | str, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:

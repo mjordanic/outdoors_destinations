@@ -163,7 +163,7 @@ inside a long segment is missed.
 
 - Length-weighted shares from the vertex `landcover`, with notebook 05's
   verification still passing.
-- Then for production: the LandCover entry in `CONTEXT.md` says weighted by
+- Then for production: the LandCover entry in `GLOSSARY.md` says weighted by
   length instead of "each GeometryStore vertex counts once", and `sample-landcover`
   and `build-similarity` are rerun to refresh the Catalog fractions and the
   similarity facts. Ranking changes with it.
@@ -211,6 +211,11 @@ lengths, so a 5 km line and a 5 km RoundTrip look equally long. The
 - Whether the Catalog length band (1–20 km) and the `length` Measure read that walked length
   or keep the one-way length.
 
+ADR-0019 takes up the comparison: with ReturnToStart (on by default) every hike
+is measured with its WayBack, the shortest walk back to its Trailhead. The
+Catalog keeps the one-way length and the 1–20 km band; a line left as is near a
+bus stop (a shuttle) is still open.
+
 ---
 
 ## 12. Elevation gain on cliff-side and gorge routes
@@ -237,3 +242,21 @@ it also cuts real mountain gain by about 10 %.
 - A better DEM in steep valleys (lidar where a country publishes it), or a
   rule that recognises a canal or cliff-side path (OSM `waterway=canal` along
   the route, a levada name) and smooths only there.
+
+---
+
+## 13. Suggested lines (A to B)
+
+### Why it's parked
+
+ADR-0020 suggests loops composed from the TrailGraph. Composed lines, which
+start and end at different Junctions, are 10^3 to 10^5 times more numerous
+than loops on the marked network, and with ReturnToStart a line's WayBack is
+usually its retrace, so most would compare like a shorter out-and-back.
+
+### What would have to be true to start
+
+- A beam that ends anywhere the length band allows and scores the walk with
+  its WayBack as it grows, within the same per-request budget as loops.
+- A rule for which of the near-copies of one line to keep, since a line
+  can end at any Junction along its last Segments.

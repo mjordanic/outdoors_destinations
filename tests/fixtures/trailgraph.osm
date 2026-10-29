@@ -1,0 +1,230 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="dayhike-fixture">
+  <!-- A small marked network for the TrailGraph. Comments give each node's
+       (east, north) metres from A at 46.05, 14.05.
+
+       Lake Loop (2001): a 4 km RoundTrip A - B - C - K - A, parking by A.
+       Summit Line (2002): A - D - P, 2.7 km up to Grey Peak; D is a Junction
+         because the Spur Zuweg (2003, 500 m, too short for a DayHike) leaves it.
+       Connector (2004): F - M; F is a dead end 12 m from G on the Lake Loop
+         with no node in common: the snap joins F to G with a gap Segment.
+       Cross Trail (2005): crosses the Spur at (-1000, 850) with no node there:
+         the TrailGraph puts a node at the crossing.
+       Bridge Path (2006): a bridge over the Summit Line: never joined to it.
+       Meadow Path (2007): passes 15 m from the Lake Loop at Z2 with no
+         connection near it: a Link Z2 - S1 is offered, not walked. -->
+  <node id="1" lat="46.0500000000" lon="14.0500000000" version="1"><!-- A (0, 0) -->
+    <tag k="ele" v="600"/>
+  </node>
+  <node id="2" lat="46.0500000000" lon="14.0564789788" version="1"><!-- S1 (500, 0) -->
+    <tag k="ele" v="610"/>
+  </node>
+  <node id="3" lat="46.0500000000" lon="14.0629579576" version="1"><!-- B (1000, 0) -->
+    <tag k="ele" v="620"/>
+  </node>
+  <node id="4" lat="46.0544966080" lon="14.0629579576" version="1"><!-- G (1000, 500) -->
+    <tag k="ele" v="660"/>
+  </node>
+  <node id="5" lat="46.0589932161" lon="14.0629579576" version="1"><!-- C (1000, 1000) -->
+    <tag k="ele" v="700"/>
+  </node>
+  <node id="6" lat="46.0589932161" lon="14.0564789788" version="1"><!-- H (500, 1000) -->
+    <tag k="ele" v="690"/>
+  </node>
+  <node id="7" lat="46.0589932161" lon="14.0500000000" version="1"><!-- K (0, 1000) -->
+    <tag k="ele" v="680"/>
+  </node>
+  <node id="8" lat="46.0544966080" lon="14.0500000000" version="1"><!-- W (0, 500) -->
+    <tag k="ele" v="640"/>
+  </node>
+  <node id="10" lat="46.0526979648" lon="14.0435210212" version="1"><!-- Q1 (-500, 300) -->
+    <tag k="ele" v="750"/>
+  </node>
+  <node id="11" lat="46.0553959296" lon="14.0370420424" version="1"><!-- D (-1000, 600) -->
+    <tag k="ele" v="900"/>
+  </node>
+  <node id="12" lat="46.0607918593" lon="14.0305630635" version="1"><!-- Q2 (-1500, 1200) -->
+    <tag k="ele" v="1250"/>
+  </node>
+  <node id="13" lat="46.0661877889" lon="14.0240840847" version="1"><!-- P (-2000, 1800) -->
+    <tag k="ele" v="1640"/>
+  </node>
+  <node id="14" lat="46.0598925377" lon="14.0370420424" version="1"><!-- E (-1000, 1100) -->
+    <tag k="ele" v="980"/>
+  </node>
+  <node id="20" lat="46.0544966080" lon="14.0631134531" version="1"><!-- F (1012, 500) -->
+    <tag k="ele" v="662"/>
+  </node>
+  <node id="21" lat="46.0544966080" lon="14.0733243238" version="1"><!-- F2 (1800, 500) -->
+    <tag k="ele" v="700"/>
+  </node>
+  <node id="22" lat="46.0544966080" lon="14.0836906899" version="1"><!-- M (2600, 500) -->
+    <tag k="ele" v="720"/>
+  </node>
+  <node id="30" lat="46.0576442337" lon="14.0350983487" version="1"><!-- X1 (-1150, 850) -->
+    <tag k="ele" v="950"/>
+  </node>
+  <node id="31" lat="46.0576442337" lon="14.0487042042" version="1"><!-- X2 (-100, 850) -->
+    <tag k="ele" v="700"/>
+  </node>
+  <node id="40" lat="46.0634898241" lon="14.0201966974" version="1"><!-- Y1 (-2300, 1500) -->
+    <tag k="ele" v="1300"/>
+  </node>
+  <node id="41" lat="46.0634898241" lon="14.0344504508" version="1"><!-- Y2 (-1200, 1500) -->
+    <tag k="ele" v="1350"/>
+  </node>
+  <node id="50" lat="46.0437047488" lon="14.0525915915" version="1"><!-- Z1 (200, -700) -->
+    <tag k="ele" v="560"/>
+  </node>
+  <node id="51" lat="46.0498651018" lon="14.0564789788" version="1"><!-- Z2 (500, -15) -->
+    <tag k="ele" v="605"/>
+  </node>
+  <node id="52" lat="46.0437047488" lon="14.0603663661" version="1"><!-- Z3 (800, -700) -->
+    <tag k="ele" v="570"/>
+  </node>
+  <node id="90" lat="46.0502697965" lon="14.0500000000" version="1"><!-- (0, 30) -->
+    <tag k="amenity" v="parking"/>
+  </node>
+  <node id="91" lat="46.0503597286" lon="14.0502591592" version="1"><!-- (20, 40) -->
+    <tag k="amenity" v="restaurant"/>
+    <tag k="name" v="Lakeside Inn"/>
+  </node>
+  <node id="92" lat="46.0500449661" lon="14.0500647898" version="1"><!-- (5, 5) -->
+    <tag k="amenity" v="drinking_water"/>
+  </node>
+  <node id="93" lat="46.0526979648" lon="14.0630875372" version="1"><!-- (1010, 300) -->
+    <tag k="natural" v="spring"/>
+    <tag k="name" v="Cold Spring"/>
+  </node>
+  <node id="94" lat="46.0590381821" lon="14.0629579576" version="1"><!-- (1000, 1005) -->
+    <tag k="amenity" v="shelter"/>
+  </node>
+  <node id="95" lat="46.0662777211" lon="14.0240840847" version="1"><!-- (-2000, 1810) -->
+    <tag k="natural" v="peak"/>
+    <tag k="name" v="Grey Peak"/>
+    <tag k="ele" v="1650"/>
+  </node>
+  <node id="96" lat="46.0660978567" lon="14.0243432439" version="1"><!-- (-1980, 1790) -->
+    <tag k="tourism" v="alpine_hut"/>
+    <tag k="name" v="Summit Hut"/>
+  </node>
+  <node id="97" lat="46.0599375037" lon="14.0370420424" version="1"><!-- (-1000, 1105) -->
+    <tag k="tourism" v="viewpoint"/>
+    <tag k="name" v="Spur View"/>
+  </node>
+  <node id="98" lat="46.0733823618" lon="14.0163093101" version="1"><!-- (-2600, 2600) -->
+    <tag k="natural" v="peak"/>
+    <tag k="name" v="Far Peak"/>
+    <tag k="ele" v="1900"/>
+  </node>
+  <way id="101" version="1">
+    <nd ref="1"/>
+    <nd ref="2"/>
+    <nd ref="3"/>
+    <tag k="highway" v="track"/>
+    <tag k="tracktype" v="grade2"/>
+  </way>
+  <way id="102" version="1">
+    <nd ref="3"/>
+    <nd ref="4"/>
+    <nd ref="5"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="103" version="1">
+    <nd ref="5"/>
+    <nd ref="6"/>
+    <nd ref="7"/>
+    <nd ref="8"/>
+    <nd ref="1"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="104" version="1">
+    <nd ref="1"/>
+    <nd ref="10"/>
+    <nd ref="11"/>
+    <tag k="highway" v="path"/>
+    <tag k="sac_scale" v="mountain_hiking"/>
+  </way>
+  <way id="105" version="1">
+    <nd ref="11"/>
+    <nd ref="12"/>
+    <nd ref="13"/>
+    <tag k="highway" v="path"/>
+    <tag k="sac_scale" v="demanding_mountain_hiking"/>
+  </way>
+  <way id="106" version="1">
+    <nd ref="11"/>
+    <nd ref="14"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="107" version="1">
+    <nd ref="20"/>
+    <nd ref="21"/>
+    <nd ref="22"/>
+    <tag k="highway" v="track"/>
+  </way>
+  <way id="108" version="1">
+    <nd ref="30"/>
+    <nd ref="31"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="109" version="1">
+    <nd ref="40"/>
+    <nd ref="41"/>
+    <tag k="highway" v="path"/>
+    <tag k="bridge" v="yes"/>
+    <tag k="layer" v="1"/>
+  </way>
+  <way id="110" version="1">
+    <nd ref="50"/>
+    <nd ref="51"/>
+    <nd ref="52"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <relation id="2001" version="1">
+    <member type="way" ref="101" role=""/>
+    <member type="way" ref="102" role=""/>
+    <member type="way" ref="103" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Lake Loop"/>
+    <tag k="roundtrip" v="yes"/>
+  </relation>
+  <relation id="2002" version="1">
+    <member type="way" ref="104" role=""/>
+    <member type="way" ref="105" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Summit Line"/>
+  </relation>
+  <relation id="2003" version="1">
+    <member type="way" ref="106" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Spur Zuweg"/>
+  </relation>
+  <relation id="2004" version="1">
+    <member type="way" ref="107" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Connector"/>
+  </relation>
+  <relation id="2005" version="1">
+    <member type="way" ref="108" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Cross Trail"/>
+  </relation>
+  <relation id="2006" version="1">
+    <member type="way" ref="109" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Bridge Path"/>
+  </relation>
+  <relation id="2007" version="1">
+    <member type="way" ref="110" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Meadow Path"/>
+  </relation>
+</osm>

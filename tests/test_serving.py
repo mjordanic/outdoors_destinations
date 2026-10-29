@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import sqlite3
 from pathlib import Path
@@ -17,6 +18,8 @@ from dayhike.serving import (
     decode_polyline,
     encode_polyline,
     export_serving,
+    score_note,
+    scored_measures,
     simplify_line,
 )
 from dayhike.similarity import FACT_COLUMNS, MEASURE_NAMES
@@ -47,7 +50,8 @@ def data(export: Path) -> ServingData:
 def test_export_writes_a_complete_directory(export: Path) -> None:
     meta = json.loads((export / "meta.json").read_text())
 
-    assert meta["format"] == 3
+    assert meta["format"] == 4
+    assert meta["compose"] is True
     assert meta["dayhikes"] == 4
     assert meta["attribution"]["osm"] == "© OpenStreetMap contributors"
     assert meta["drive_time"] is False
@@ -59,7 +63,7 @@ def test_export_writes_a_complete_directory(export: Path) -> None:
 def test_export_keeps_the_route_the_true_metre_profile_and_the_measured_points(
     data: ServingData,
 ) -> None:
-    ridge = data.detail(RIDGE_WALK_ID)
+    ridge = data.detail(RIDGE_WALK_ID, return_to_start=False)
 
     line = decode_polyline(ridge["line"])
     assert line[0] == pytest.approx(tuple(ridge["trailhead"]), abs=1e-5)
@@ -220,13 +224,108 @@ def test_rank_matches_rank_dayhikes_and_reports_every_measure(
     for result in results:
         assert set(result["measures"]) == set(MEASURE_NAMES)
     assert results[0]["measures"]["length"]["raw"] == pytest.approx(0.5)
-    assert results[0]["measures"]["elevation_gain"] == {"score": None, "raw": None}
+    assert "random hike pair" in results[0]["measures"]["length"]["note"]
+    assert results[0]["measures"]["elevation_gain"] == {"score": None, "raw": None, "note": None}
+
+
+@pytest.mark.parametrize(
+    ("score", "tied", "note"),
+    [
+        # Calibrated 0.52: the same 52 as the score.
+        (0.52, 0.0, "More alike than 52% of random hike pairs"),
+        # 128/1024 shows as 0.13 (half rounding up), so the note says 13, not 12.
+        (0.125, 0.0, "More alike than 13% of random hike pairs"),
+        (0.625, 0.1, "More alike than 63% of random hike pairs"),
+        (0.996, 0.0, "More alike than 100% of random hike pairs"),
+        (0.005, 0.0, "More alike than 1% of random hike pairs"),
+        # Highest points 400 m or more apart, like 59% of random pairs: no pair is less alike.
+        (0.0, 0.59, "Nothing in common on this measure, like 59% of random hike pairs"),
+        (0.004, 0.2, "Nothing in common on this measure, like 20% of random hike pairs"),
+        # Less alike than all but a few random pairs, and few tie: no "more alike than 0%".
+        (0.004, 0.0, "Less alike than almost all random hike pairs"),
+        (0.0, 0.004, "Less alike than almost all random hike pairs"),
+        (None, None, None),
+    ],
+)
+def test_score_note_says_the_score_in_words(score, tied, note) -> None:
+    assert score_note(score, tied) == note
+
+
+@pytest.mark.parametrize(
+    ("score", "same", "note"),
+    [
+        # Two dry hikes: 84% of random pairs are as alike on WaterSide, so it tells little.
+        (0.16, "identical", "Identical; 84% of random hike pairs are this alike, so it counts little"),
+        (0.92, "identical", "Identical; 8% of random hike pairs are this alike"),
+        (0.996, "identical", "Identical; fewer than 1% of random hike pairs are this alike"),
+        (0.995, "identical", "Identical; 1% of random hike pairs are this alike"),
+        (0.58, "both 3 or more", "Counted as the same (both 3 or more); 42% of random hike pairs are this alike"),
+        (
+            0.16,
+            "within the dead band",
+            "Counted as the same (within the dead band); 84% of random hike pairs are this alike, so it counts little",
+        ),
+    ],
+)
+def test_score_note_says_how_many_random_pairs_are_as_alike_when_the_values_are_the_same(
+    score: float, same: str, note: str
+) -> None:
+    assert score_note(score, 0.8, same) == note
+    assert score_note(None, None, same) is None
+
+
+def test_score_note_on_an_osm_flag_counts_the_pairs_where_either_has_one() -> None:
+    pairs = "random hike pairs where either has one"
+    assert score_note(0.95, 0.05, "identical", pairs) == (
+        "Identical; 5% of random hike pairs where either has one are this alike"
+    )
+    assert score_note(0.0, 0.95, None, pairs) == (
+        "Nothing in common on this measure, like 95% of random hike pairs where either has one"
+    )
+    assert score_note(None, None, "not compared", pairs) == "Neither has one mapped: not compared"
+
+
+def test_compare_notes_tell_identical_values_and_values_counted_the_same(data: ServingData) -> None:
+    facts = np.array(data.store.facts)
+    column = {name: index for index, name in enumerate(FACT_COLUMNS)}
+    facts[:, 1] = facts[:, 0]
+    # Both beside a lake for about half the walk: inside WaterSide's dead band, not equal.
+    facts[column["waterside_share"], :2] = (0.41, 0.53)
+    facts[column["water_count"], :2] = (3, 5)  # both "3 or more"
+    facts[column["length_m"], :2] = (4000, 9000)
+    facts[column["shelter_along"], :2] = 0  # neither has one mapped
+    profile = np.repeat(data.store.profile[:1], len(facts[0]), 0)
+    # Random-pair scores for every Measure, as a Catalog with land cover has them.
+    quantiles = np.tile(np.linspace(0, 1, data.store.quantiles.shape[1]), (len(data.store.quantiles), 1))
+    store = dataclasses.replace(data.store, facts=facts, profile=profile, quantiles=quantiles)
+
+    (notes,) = scored_measures(store, 0, np.array([1]), None)
+
+    assert notes["waterside"]["note"].startswith("Counted as the same (within the dead band); ")
+    assert notes["water_count"]["note"].startswith("Counted as the same (both 3 or more); ")
+    assert notes["highest"]["note"].startswith("Identical; ")
+    assert notes["round_trip"]["note"].startswith("Identical; ")
+    assert notes["length"]["note"].startswith("More alike than")
+    assert notes["shelter_along"] == {"score": None, "raw": None, "note": "Neither has one mapped: not compared"}
 
 
 def test_rank_respects_the_limit_and_the_allowed_rows(data: ServingData) -> None:
     assert len(data.rank(RIDGE_WALK_ID, {"length": 100}, limit=2)) == 2
     allowed = np.array([data.row_of(1003)])
     assert [r["id"] for r in data.rank(RIDGE_WALK_ID, {"length": 100}, allowed_rows=allowed)] == [1003]
+
+
+def test_rank_fills_its_rows_from_further_down_when_the_best_hikes_share_an_area(
+    data: ServingData, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 1002 and 1003 start 14 km apart, 1007 farther; no SuggestedLoops read more of the Catalog.
+    monkeypatch.setattr(serving, "GROUP_M", 20_000.0)
+    monkeypatch.setattr(serving, "LOOP_SEEDS", 0)
+
+    results = data.rank(RIDGE_WALK_ID, {"length": 100}, limit=2)
+
+    assert [(r["id"], [v["id"] for v in r["versions"]]) for r in results] == [(1002, [1003]), (1007, [])]
+    assert [len(data.rank(RIDGE_WALK_ID, {"length": 100}, limit=limit)) for limit in (1, 3)] == [1, 2]
 
 
 def test_reachable_asks_only_trailheads_within_straight_line_reach(data: ServingData) -> None:
