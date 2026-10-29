@@ -27,7 +27,7 @@ tickets extend with one section per Facet.
 **Prior art:** PRD sections "Combining", "Measure kinds", "Starting constants",
 "Region and loading", "Similarity facts table", "Notebooks"; PRD stories 1–22,
 46–50, 53–58. ADR-0011 (proposed), ADR-0003 (multi-Seed max), ADR-0006.
-`CONTEXT.md` Facet, FacetScore, FacetWeights, Difficulty. Notebook 04a
+`GLOSSARY.md` Facet, FacetScore, FacetWeights, Difficulty. Notebook 04a
 (GeometryStore as GeoPandas, fixture fallback under `PYTEST_CURRENT_TEST`,
 `show_fig`-style figure display). Tests: `test_geometry_store`
 (fixture-built GeometryStore), `test_rank_dayhikes`,

@@ -81,7 +81,7 @@
 - 06: trail_facts reuses private catalog._extend_node_chain; promote to public if later tickets need it
 - 06: 05a ranking demo still weights only effort, altitude, profile (landscape and trail not added); ticket 08 should reset weights
 - 07: ticket 08 ranking demo can add weather_score to FACET_SCORES; weather_score binds QUERY_MONTH at definition time, so re-run that cell after changing it
-- 07: CONTEXT.md says SolarAspect is not ClimateNormal, yet the Weather Facet groups them; consider a glossary/ADR-0011 line
+- 07: GLOSSARY.md says SolarAspect is not ClimateNormal, yet the Weather Facet groups them; consider a glossary/ADR-0011 line
 - 07: southness on mostly flat walks rests on few sloped points; consider a minimum sloped-point count if noisy in Ranking
 - 07: notebook 04 SolarAspect prototype still has the old west-as-south formula (out of scope per PRD)
 - 04: water_facts takes about 40 s for the region; no water on 71% of hikes, so capped count is 1.00 for most random pairs

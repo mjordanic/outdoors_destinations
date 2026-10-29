@@ -80,21 +80,9 @@ Five canonical triage roles, default strings, recorded as `Status:` lines in eac
 
 ### Domain docs
 
-Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
-
-### Implementation orchestrator (project-local)
-
-`/implement-issues` drives dependency-ordered, unattended implementation of
-`ready-for-agent` issues in a `.scratch/<feature>/` folder. Canonical files:
-`.agents/skills/implement-issues/` and `.agents/agents/{wave-runner,issue-implementer}.md`.
-Cursor also loads `.cursor/skills/implement-issues` and `.cursor/agents/`.
-
-Each issue is implemented by reading `/implement` (`.agents/skills/implement/SKILL.md`).
-Default implementer model is `grok`. Isolation for `cap > 1` without a GitHub remote
-is `worktree`, not `cloud`.
+Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
 
 ## Agent skills (copied from krovlab / mattpocock)
 
 Engineering skills live under `.agents/skills/` and are committed in this repo:
-`to-spec`, `to-tickets`, `grill-with-docs`, `grilling`, `domain-modeling`, `tdd`,
-`code-review`, `setup-matt-pocock-skills`, `implement`, `implement-issues`.
+`tdd`, `diagnosing-bugs`, `codebase-design`, `domain-modeling`, `prototype`.

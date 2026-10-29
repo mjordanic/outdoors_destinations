@@ -2,7 +2,7 @@
 
 Status: ready-for-agent
 
-Vocabulary in this document is defined in `CONTEXT.md`: GeometryStore, Catalog,
+Vocabulary in this document is defined in `GLOSSARY.md`: GeometryStore, Catalog,
 DayHikeGeometry, LandCover, ClimateNormal, DEM. Respects ADR-0008 (local rasters
 sampled after ingest), ADR-0010 (the climate slice stays in the Catalog), and
 ADR-0005 (large extracts must stay workable). Origin: code review of the

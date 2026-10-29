@@ -13,7 +13,7 @@ Catalog. Amenities are features of the Trailhead, not a second Catalog key.
 
 **Prior art:** Ticket 01's fixture Catalog and `build_catalog` seam. Extend the
 same fixture with a Hut, cafe, parking, and water near one Trailhead and not
-the other. PRD stories 9–13. `CONTEXT.md` AmenityFact, Hut, Trailhead.
+the other. PRD stories 9–13. `GLOSSARY.md` AmenityFact, Hut, Trailhead.
 
 - [x] The ingest fixture places amenities so one in-band DayHike has nearby
       Hut, cafe, parking, and water, and the other has none of them in 1 km

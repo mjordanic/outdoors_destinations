@@ -19,7 +19,7 @@ mountain hikes look drier than they are.
 **Effort:** high
 
 **Prior art:** PRD "Extraction rules" (water points, DryStretch), "Starting
-constants" (Water rows); PRD stories 35–37. `CONTEXT.md` Corridor,
+constants" (Water rows); PRD stories 35–37. `GLOSSARY.md` Corridor,
 DryStretch. Ticket 03's Corridor helper. Fixture GeometryStore (one
 drinking-water point). Ticket 01's measure functions and fact-helper shape.
 

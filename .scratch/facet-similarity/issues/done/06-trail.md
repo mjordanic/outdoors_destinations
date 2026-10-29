@@ -20,7 +20,7 @@ untagged ways still count.
 
 **Prior art:** PRD "Extraction rules" (SurfaceMix classes and fallbacks,
 TarmacApproach), "Starting constants" (Trail rows); PRD stories 43–45.
-`CONTEXT.md` SurfaceMix, TarmacApproach, Trailhead. Notebook 04a's way-tag
+`GLOSSARY.md` SurfaceMix, TarmacApproach, Trailhead. Notebook 04a's way-tag
 counts and length-weighted trail character (`way_frame`). Fixture OSM files
 under the tests fixtures folder (the main fixture has only `highway=path`
 ways, so a small new fixture is needed). Tests: `test_geometry_store`,

@@ -21,7 +21,7 @@ ranks. DriveTime stays a filter after Ranking.
 **Complexity:** high
 
 **Prior art:** FABDEM sampling, `rank_dayhikes`, ADR-0003, ADR-0010, PRD
-stories 13–24. `CONTEXT.md` ClimateNormal, QueryMonth, FeatureVector, Ranking,
+stories 13–24. `GLOSSARY.md` ClimateNormal, QueryMonth, FeatureVector, Ranking,
 Seed. WorldClim units: °C, mm, kJ m⁻² day⁻¹.
 
 - [x] Covered vertices gain twelve GeometryStore climate rows; uncovered
