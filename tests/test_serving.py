@@ -237,8 +237,8 @@ def test_rank_matches_rank_dayhikes_and_reports_every_measure(
         (0.125, 0.0, "Difference smaller than 13% of random hike pairs"),
         (0.625, 0.0, "Difference smaller than 63% of random hike pairs"),
         (0.996, 0.0, "Difference smaller than 100% of random hike pairs"),
-        # A WaterSide pair inside the dead band: the score's own 58.
-        (0.578, 0.844, "Difference smaller than 58% of random hike pairs (ties count half)"),
+        # Parking at one Trailhead only: 41% of random pairs differ the same, counting half.
+        (0.204, 0.408, "Difference smaller than 20% of random hike pairs (ties count half)"),
         (0.6, 0.8, "Difference smaller than 60% of random hike pairs (ties count half)"),
         # Less alike than all but a few random pairs: no "smaller than 0%".
         (0.004, 0.0, "Difference bigger than almost all random hike pairs"),
@@ -259,8 +259,8 @@ def test_score_note_says_the_score_in_words(score, tied, note) -> None:
     ],
 )
 def test_score_note_says_when_the_two_values_are_the_same(same: str, note: str) -> None:
-    # Two dry hikes tie with most random pairs: 0.58, yet nothing differs.
-    assert score_note(0.578, 0.844, same) == note
+    # Two dry hikes tie with most random pairs, counted in full: 1.0, and nothing differs.
+    assert score_note(1.0, 0.844, same) == note
     assert score_note(None, None, same) is None
 
 
@@ -283,6 +283,9 @@ def test_compare_notes_tell_identical_values_and_values_counted_the_same(data: S
     assert notes["water_count"]["note"] == "Counted as the same (both 3 or more)"
     assert notes["highest"]["note"] == notes["round_trip"]["note"] == "Identical"
     assert notes["length"]["note"].startswith("Difference smaller than")
+    # Equal, or counted as equal, scores 1.0 however many random pairs tie with it.
+    for name in ("waterside", "water_count", "highest", "round_trip"):
+        assert notes[name]["score"] == 1.0
 
 
 def test_rank_respects_the_limit_and_the_allowed_rows(data: ServingData) -> None:
