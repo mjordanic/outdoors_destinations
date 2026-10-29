@@ -419,6 +419,7 @@ const scoreHelp = {
   button: null,
   pinned: false,
   timer: null,
+  pressed: null, // the "?" under a pressed pointer, whose click toggles the box
   returning: false, // focus going back to the "?" on close, which must not open it again
   open(button, pinned) {
     clearTimeout(this.timer);
@@ -488,8 +489,10 @@ const scoreHelp = {
       const button = event.target.closest?.(".help");
       if (button && !this.pinned && !this.returning) this.open(button, false);
     });
+    document.addEventListener("pointerdown", (event) => { this.pressed = event.target.closest(".help"); });
+    document.addEventListener("pointerup", () => { this.pressed = null; });
     document.addEventListener("focusout", (event) => {
-      if (this.owns(event.target) && !this.owns(event.relatedTarget)) this.close();
+      if (this.owns(event.target) && !this.owns(event.relatedTarget) && this.pressed !== this.button) this.close();
     });
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape" && this.button) this.close(this.owns(document.activeElement));
