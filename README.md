@@ -1554,6 +1554,18 @@ hikes within that DriveTime, estimated on highways-only tiles as in
 cover do not cover all of Europe yet) show "no data" and drop out of that
 pair's score.
 
+A Hiker with no particular hike in mind presses "No particular hike in mind?
+Describe the one you want" under the search. The weights list then shows only
+the Measures `/api/measures` marks wishable, each with a value to ask for in its
+unit and range (a yes/no Measure as a tick box) beside its weight; a Measure
+weighted 0 or ticked off asks nothing. "Find hikes" ranks with that wish
+instead of a Seed, the drive filter, month and Return to start work as before,
+and a result opens with what the Hiker asked for in place of the liked hike.
+The address, `#wish=elevation_gain:800:100,hut_along:1:50` (Measure, value,
+weight), keeps the form for a reload or a shared link. "Back to a hike you
+liked" returns to the search. A server whose Measures are not wishable shows
+no such button.
+
 It answers from a serving export, not from the Catalog: `dayhike
 export-serving` writes it once where the data lives, and `dayhike serve` (a
 FastAPI app, extra `web`) memory-maps it. No `Catalog.open` runs in the server.
@@ -1678,7 +1690,8 @@ OSM fixture and small synthetic rasters. Among them,
 `build-similarity` twice in two directories and requires identical tables and
 `.npy` bytes, no work files left behind, and the schema in
 `tests/rebuild_checks.py`. `tests/test_rebuild_checks.py` shows the comparison
-helpers catch what they must.
+helpers catch what they must. `tests/test_page.py` drives the web page in
+headless Chromium; it is skipped until `uv run playwright install chromium`.
 
 **Slow** (marker `real_data`, skipped unless `DAYHIKE_REAL_DATA=1`): checks
 on a real Europe data directory.

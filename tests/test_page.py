@@ -1,0 +1,257 @@
+"""The page in a headless browser, over the real app on the test catalog.
+
+The wish half of the API (wishable Measures in ``/api/measures``, a ``wish`` in
+``/api/rank``) is stubbed at the network: the page is tested against that contract.
+Needs Chromium for Playwright: ``uv run playwright install chromium``.
+"""
+
+import json
+import socket
+import threading
+import time
+from collections.abc import Iterator
+from pathlib import Path
+
+import pytest
+import uvicorn
+
+from dayhike import build_catalog, build_similarity
+from dayhike.serving import ServingData, export_serving
+from dayhike.web import create_app
+
+sync_api = pytest.importorskip("playwright.sync_api")
+
+FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
+RIDGE_WALK_ID = 1001
+# What the engine adds to /api/measures for the Measures a Hiker can wish for.
+WISHABLE = {
+    "elevation_gain": {"wishable": True, "unit": "m", "min": 0, "max": 3000, "step": 50, "default": 600},
+    "highest": {"wishable": True, "unit": "m", "min": 0, "max": 4800, "step": 50, "default": 1500},
+    "hut_along": {"wishable": True, "unit": None, "min": 0, "max": 1, "step": 1, "default": True},
+    "waterside": {"wishable": True, "unit": "%", "min": 0, "max": 100, "step": 5, "default": 0},
+    "round_trip": {"wishable": True, "unit": None, "min": 0, "max": 1, "step": 1, "default": True},
+}
+
+
+# Leaflet comes from a CDN the tests do not reach: a stand-in whose every property and call is itself.
+FAKE_LEAFLET = """
+const fake = new Proxy(function () {}, {
+  get: (target, key) => (key === Symbol.toPrimitive ? () => "" : fake),
+  apply: () => fake,
+});
+window.L = fake;
+"""
+
+
+class Matrix:
+    """DriveTime of 1 h to every Trailhead."""
+
+    def sources_to_targets(self, origin, trailheads):
+        return [3600.0 for _ in trailheads]
+
+
+@pytest.fixture(scope="module")
+def server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    directory = tmp_path_factory.mktemp("page")
+    path = directory / "catalog.sqlite"
+    build_catalog(FIXTURE, path)
+    build_similarity(path, directory / "dem")
+    app = create_app(ServingData(export_serving(path, directory / "web-serving")), lambda max_hours: Matrix())
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    running = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
+    thread = threading.Thread(target=running.run, daemon=True)
+    thread.start()
+    while not running.started:
+        time.sleep(0.05)
+    yield f"http://127.0.0.1:{port}"
+    running.should_exit = True
+    thread.join()
+
+
+@pytest.fixture(scope="module")
+def browser() -> Iterator["sync_api.Browser"]:
+    with sync_api.sync_playwright() as playwright:
+        try:
+            launched = playwright.chromium.launch()
+        except sync_api.Error as error:
+            pytest.skip(f"no Chromium for Playwright (uv run playwright install chromium): {error}")
+        yield launched
+        launched.close()
+
+
+class Api:
+    """The page's requests to the wish contract; every other request goes to the real app."""
+
+    def __init__(self, wishable: dict) -> None:
+        self.wishable = wishable
+        self.ranked: list[dict] = []
+
+    def measures(self, route) -> None:
+        body = route.fetch().json()
+        for measure in body["measures"]:
+            measure.update(self.wishable.get(measure["name"], {}))
+        route.fulfill(json=body)
+
+    def rank(self, route) -> None:
+        asked = json.loads(route.request.post_data)
+        self.ranked.append(asked)
+        if "wish" not in asked:
+            route.continue_()
+            return
+        # The real Ranking from a Seed has the shape a wish Ranking answers with.
+        seeded = {key: value for key, value in asked.items() if key != "wish"}
+        body = route.fetch(post_data=json.dumps({**seeded, "seed": RIDGE_WALK_ID})).json()
+        route.fulfill(json={**body, "seed": None, "wish": asked["wish"]})
+
+
+def open_page(browser, server: str, api: Api, *, width: int = 1280, hash: str = ""):
+    page = browser.new_page(viewport={"width": width, "height": 900})
+    page.set_default_timeout(5000)
+    page.add_init_script(FAKE_LEAFLET)
+    page.route(lambda url: not url.startswith(server), lambda route: route.abort())  # no tiles, no CDN
+    page.route(f"{server}/api/measures", api.measures)
+    page.route(f"{server}/api/rank", api.rank)
+    page.goto(f"{server}/{hash}")
+    page.wait_for_selector(".weight", state="attached")
+    return page
+
+
+def test_a_hiker_with_no_hike_in_mind_gets_a_wish_form_of_the_wishable_measures(browser, server) -> None:
+    page = open_page(browser, server, Api(WISHABLE))
+
+    page.get_by_role("button", name="No particular hike in mind?").click()
+
+    rows = page.locator(".weight:visible")
+    assert sorted(rows.evaluate_all("rows => rows.map(r => r.dataset.measure)")) == sorted(WISHABLE)
+    gain = page.get_by_label("Elevation gain you want, in m")
+    assert gain.get_attribute("type") == "number"
+    assert (gain.get_attribute("min"), gain.get_attribute("max"), gain.get_attribute("step")) == ("0", "3000", "50")
+    assert gain.input_value() == "600"
+    hut = page.get_by_label("Hut along you want")
+    assert hut.get_attribute("type") == "checkbox" and hut.is_checked()
+    assert page.get_by_label("Elevation gain weight, 0 to 100").is_visible()
+    assert not page.locator("#search").is_visible()
+
+    page.get_by_role("button", name="Back to a hike you liked").click()
+
+    assert page.locator("#search").is_visible()
+    assert page.locator(".weight:visible").count() > len(WISHABLE)
+    assert not gain.is_visible()
+
+
+def test_finding_hikes_for_a_wish_asks_the_ranking_for_it_and_lists_the_results(browser, server) -> None:
+    api = Api(WISHABLE)
+    page = open_page(browser, server, api)
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    page.get_by_label("Elevation gain you want, in m").fill("900")
+    page.get_by_label("Elevation gain weight, 0 to 100").fill("80")
+    page.get_by_label("Hut along you want").uncheck()
+    page.get_by_label("Hut along weight, 0 to 100").fill("40")
+    page.get_by_label("Leave Highest point out").check()
+    page.get_by_label("Waterside weight, 0 to 100").fill("0")
+    page.get_by_label("Only hikes within a drive").check()
+    page.get_by_label("From").fill("45.1, 15.1")
+
+    page.get_by_role("button", name="Find hikes").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+
+    asked = api.ranked[-1]
+    assert "seed" not in asked and "composed" not in asked
+    assert asked["wish"] == {"elevation_gain": 900, "hut_along": False}
+    assert asked["weights"]["elevation_gain"] == 80 and asked["weights"]["hut_along"] == 40
+    assert "highest" in asked["excluded"] and "profile" in asked["excluded"]
+    assert asked["origin"] == {"lat": 45.1, "lon": 15.1} and asked["max_hours"] == 2
+    assert asked["return_to_start"] is True
+    assert "hike you want" in page.locator("#results-note").inner_text()
+    assert page.locator("#results-table tbody tr").count() > 0
+
+
+def test_a_hike_found_for_a_wish_is_shown_against_what_the_hiker_wants(browser, server) -> None:
+    page = open_page(browser, server, Api(WISHABLE))
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    page.get_by_label("Elevation gain you want, in m").fill("900")
+    page.get_by_label("Elevation gain weight, 0 to 100").fill("80")
+    page.get_by_label("Hut along weight, 0 to 100").fill("40")
+    page.get_by_label("Waterside weight, 0 to 100").fill("0")
+    page.get_by_role("button", name="Find hikes").click()
+
+    page.locator("#results-table tbody tr").first.click()
+
+    facts = page.locator("#selected table.facts")
+    facts.wait_for()
+    assert facts.locator("thead th").all_inner_texts() == ["Measure", "This hike", "You want", "Score"]
+    gain = facts.locator("tr", has=page.locator("td", has_text="Elevation gain"))
+    assert gain.locator("td").nth(2).inner_text() == "900 m"
+    waterside = facts.locator("tr", has=page.locator("td", has_text="Waterside"))
+    assert waterside.locator("td").nth(2).inner_text() == "left out"
+
+
+def test_a_wish_survives_a_reload_and_opens_from_its_link(browser, server) -> None:
+    page = open_page(browser, server, Api(WISHABLE))
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    page.get_by_label("Elevation gain you want, in m").fill("900")
+    page.get_by_label("Elevation gain weight, 0 to 100").fill("80")
+    page.get_by_label("Hut along you want").uncheck()
+    page.get_by_label("Hut along weight, 0 to 100").fill("40")
+    page.get_by_label("Highest point weight, 0 to 100").fill("0")
+    page.get_by_label("Return to start").uncheck()
+
+    page.reload()
+    page.wait_for_selector(".weight", state="attached")
+
+    assert page.get_by_label("Elevation gain you want, in m").input_value() == "900"
+    assert page.get_by_label("Elevation gain weight, 0 to 100").input_value() == "80"
+    assert not page.get_by_label("Hut along you want").is_checked()
+    assert page.get_by_label("Hut along weight, 0 to 100").input_value() == "40"
+    assert page.get_by_label("Highest point weight, 0 to 100").input_value() == "0"
+    assert not page.get_by_label("Return to start").is_checked()
+    assert not page.locator("#search").is_visible()
+
+    shared = open_page(browser, server, Api(WISHABLE), hash="#wish=highest:2200:100")
+
+    assert shared.get_by_label("Highest point you want, in m").input_value() == "2200"
+    assert shared.get_by_label("Highest point weight, 0 to 100").input_value() == "100"
+    assert shared.get_by_label("Elevation gain weight, 0 to 100").input_value() == "0"
+    assert shared.get_by_role("button", name="Find hikes").is_enabled()
+
+
+def test_a_server_without_wishes_offers_no_wish_form(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash="#wish=highest:2200:100")
+
+    assert not page.get_by_role("button", name="No particular hike in mind?").is_visible()
+    assert page.locator("#search").is_visible()
+
+
+def test_the_wish_form_fits_a_phone(browser, server) -> None:
+    page = open_page(browser, server, Api(WISHABLE), width=375)
+
+    page.get_by_role("button", name="No particular hike in mind?").click()
+
+    assert page.get_by_label("Elevation gain you want, in m").is_visible()
+    assert page.evaluate("document.documentElement.scrollWidth") <= 375
+
+
+def test_a_round_trip_wish_is_off_while_every_hike_returns_to_its_start(browser, server) -> None:
+    page = open_page(browser, server, Api(WISHABLE))
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    round_trip = page.get_by_label("Round trip you want")
+
+    assert round_trip.is_disabled()
+    assert page.get_by_text("Left out with Return to start").is_visible()
+
+    page.get_by_label("Return to start").uncheck()
+
+    assert round_trip.is_enabled()
+
+
+def test_changing_the_month_keeps_the_wish_form_in_front_of_a_liked_hike(browser, server) -> None:
+    page = open_page(browser, server, Api(WISHABLE), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_role("button", name="No particular hike in mind?").click()
+
+    page.get_by_label("Weather month").select_option("Jul")
+
+    assert not page.locator("#liked").is_visible()
+    assert page.locator("#wish-card").is_visible()
