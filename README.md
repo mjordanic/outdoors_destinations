@@ -1622,7 +1622,13 @@ and their steps in this export (null where an older link now cuts a Segment);
 a step whose way is gone, whose node is off the way, or whose way no longer
 leads there is refused with a message saying which. `"composed": {"route"}` stands in place of
 `seed` (rank) or `a` (pair). The DayHikes a composed Seed retraces (its Twins)
-are not listed. With a TrailGraph a Ranking also lists SuggestedLoops
+are not listed. `"wish": {measure: value}` stands in place of `seed` on rank
+(ADR-0024): a value in the units of the Measure's fact, true or false for a
+yes/no Measure; only the Measures with a value weigh (100 each without
+`weights`), and no hike is left out. Exactly one of `seed`, `composed` and
+`wish` (else 422). `GET /api/measures` gives each Measure's `wish` input:
+`kind` (`number` or `yes/no`), `unit`, `min`, `max`, `step` and `default`, or
+null for a Measure that takes no value (profile, land cover, surface). With a TrailGraph a Ranking also lists SuggestedLoops
 (ADR-0020): `id` null, `route` `{"text"}` (what `/api/compose` takes), `line`,
 `name` (from where it starts) and the figures of a DayHike row; with `origin`
 and `max_hours` only loops starting within the drive, each with its

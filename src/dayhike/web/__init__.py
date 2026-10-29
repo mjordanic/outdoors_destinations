@@ -6,12 +6,15 @@ optional highways-only DriveTime pre-filter. Every client gets a request budget 
 runs at a time per instance, so a small container holds its memory. When the export has a TrailGraph,
 it also serves the Segments in a map view and the detail of a ComposedHike, which can then be the
 Seed of a Ranking or of a pair, and a Ranking lists SuggestedLoops beside the DayHikes (ADR-0020).
+A Ranking may start from a Wish instead of a Seed, and the Measure list says how each Measure takes
+a Wish value (ADR-0024).
 Detail, compose, pair and Ranking measure every hike with its way back to the start unless
 ``return_to_start`` is false (ADR-0019).
 """
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 import unicodedata
@@ -21,13 +24,15 @@ from collections.abc import Callable
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from dayhike.catalog import MatrixClient, Origin
-from dayhike.serving import MEASURE_GROUPS, MEASURE_INFO, ServingData
-from dayhike.similarity import DEFAULT_WEIGHTS, MEASURES
+from dayhike.serving import MEASURE_GROUPS, MEASURE_INFO, WISH_INPUTS, ServingData
+from dayhike.similarity import DEFAULT_WEIGHTS, MEASURES, WISHABLE, Measure
 from dayhike.trailgraph import Route, RouteError
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -45,6 +50,7 @@ RANK_WAIT_S = 30.0  # a Ranking waits this long for the one running before it
 VALHALLA_TIMEOUT_S = 50.0  # socket timeout for Valhalla calls, under Cloud Run's 60 s request timeout
 
 DriveClientFactory = Callable[[float], MatrixClient]
+MEASURE_KINDS = {measure.name: measure.kind for measure in MEASURES}
 
 
 class Place(BaseModel):
@@ -58,23 +64,31 @@ class Weighted(BaseModel):
     month: int | None = Field(default=None, ge=1, le=12)
     return_to_start: bool = True  # every hike with its way back, or every hike one way
 
+    def given_weights(self) -> dict[str, float]:
+        """The weights asked for; None is the default weights."""
+        return dict(DEFAULT_WEIGHTS if self.weights is None else self.weights)
+
     def measure_weights(self) -> dict[str, float]:
-        """The weights with every excluded Measure at 0; None is the default weights.
+        """The weights given with every excluded Measure at 0.
 
         With the way back every hike is a round trip, so Round trip is left out (ADR-0022).
         """
-        weights = dict(DEFAULT_WEIGHTS if self.weights is None else self.weights)
+        weights = self.given_weights()
+        dropped = []
         for name in self.excluded:
             if name not in MEASURE_INFO:
                 raise HTTPException(400, f"unknown Measure: {name}")
+            if weights.get(name, 0) > 0:
+                dropped.append(MEASURE_INFO[name][1])
             weights[name] = 0.0
-        if self.return_to_start and weights.get("round_trip", 0) > 0:
+        round_trip = self.return_to_start and weights.get("round_trip", 0) > 0
+        if round_trip:
             weights["round_trip"] = 0.0
-            if not any(weight > 0 for weight in weights.values()):
-                raise HTTPException(
-                    400, "Round trip is left out with Return to start (every hike is then a round trip); "
-                    "give another measure a weight above 0"
-                )
+        if (round_trip or dropped) and not any(weight > 0 for weight in weights.values()):
+            reasons = ["Round trip is left out with Return to start (every hike is then a round trip)"] if round_trip else []
+            if dropped:
+                reasons.append(f"excluded: {', '.join(dropped)}")
+            raise HTTPException(400, f"{'; '.join(reasons)}; give another measure a weight above 0")
         return weights
 
 
@@ -109,14 +123,56 @@ class ComposeRequest(Composed):
 class RankRequest(Weighted):
     seed: int | None = None
     composed: Composed | None = None
+    wish: dict[str, bool | float] | None = None  # Measure name to value, yes/no as true/false
     origin: Place | None = None
     max_hours: float | None = Field(default=None, gt=0, le=MAX_DRIVE_HOURS)
+
+    @field_validator("wish")
+    @classmethod
+    def _wish(cls, wish: dict[str, bool | float] | None) -> dict[str, bool | float] | None:
+        if wish is None:
+            return None
+        if not wish:
+            raise ValueError("a wish needs a value for at least one measure")
+        for name, value in wish.items():
+            if name not in WISHABLE:
+                raise ValueError(f"{name} takes no wish value")
+            if (MEASURE_KINDS[name] == "agree") != isinstance(value, bool):
+                raise ValueError(f"{name} takes {'true or false' if MEASURE_KINDS[name] == 'agree' else 'a number'}")
+            if not math.isfinite(value):
+                raise ValueError(f"{name} takes a finite number")
+        return wish
+
+    @model_validator(mode="after")
+    def _one_seed(self) -> RankRequest:
+        if sum(given is not None for given in (self.seed, self.composed, self.wish)) != 1:
+            raise ValueError("give one of a DayHike, a composed hike or a wish")
+        return self
+
+    def given_weights(self) -> dict[str, float]:
+        """With a Wish only the Measures it has a value for weigh: the weights given
+        with every other Measure at 0, else 100 each."""
+        if self.wish is None:
+            return super().given_weights()
+        if self.weights is None:
+            return dict.fromkeys(self.wish, 100.0)
+        return {name: weight if name in self.wish else 0.0 for name, weight in self.weights.items()}
 
 
 class PairRequest(Weighted):
     a: int | None = None
     composed: Composed | None = None
     b: int
+
+
+def wish_input(measure: Measure) -> dict | None:
+    """How the page takes a Wish value for a Measure: a number in a range, or yes/no; None takes none."""
+    if measure.name not in WISHABLE:
+        return None
+    if measure.kind == "agree":
+        return {"kind": "yes/no", "unit": None, "min": None, "max": None, "step": None, "default": True}
+    unit, low, high, step, default = WISH_INPUTS[measure.name]
+    return {"kind": "number", "unit": unit, "min": low, "max": high, "step": step, "default": default}
 
 
 class RateLimiter:
@@ -169,6 +225,7 @@ def create_app(
             "columns": list(measure.columns),
             "monthly": measure.monthly,
             "default_weight": DEFAULT_WEIGHTS[measure.name],
+            "wish": wish_input(measure),
         }
         for measure in MEASURES
     ]
@@ -197,6 +254,12 @@ def create_app(
         # OSM tile and Nominatim policies ask for a Referer; send the origin only.
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         return response
+
+    # A refusal leaves out the input it refuses: a NaN or Infinity in the body cannot be written back as JSON.
+    @app.exception_handler(RequestValidationError)
+    async def refuse(request: Request, error: RequestValidationError) -> JSONResponse:
+        errors = [{key: value for key, value in e.items() if key != "input"} for e in error.errors()]
+        return JSONResponse({"detail": jsonable_encoder(errors)}, status_code=422)
 
     # Reads answer HEAD too (health checks); otherwise HEAD falls through to the page mount's 404.
     @app.api_route("/api/health", methods=["GET", "HEAD"])
@@ -292,7 +355,7 @@ def create_app(
             raise HTTPException(400, "give both origin and max_hours, or neither")
         if body.origin is not None and drive_client is None:
             raise HTTPException(400, "the drive-time filter is not available on this server")
-        seed = seed_of(body.seed, body.composed)
+        seed = seed_of(body.seed, body.composed) if body.wish is None else body.wish
         if not one_ranking.acquire(timeout=RANK_WAIT_S):
             raise HTTPException(503, "busy; try again in a moment")
         try:
@@ -326,6 +389,7 @@ def create_app(
         return {
             "seed": body.seed,
             "composed": None if body.composed is None else body.composed.model_dump(),
+            "wish": body.wish,
             "month": body.month,
             "return_to_start": body.return_to_start,
             "weights": {name: weight for name, weight in weights.items() if weight > 0},
