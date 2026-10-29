@@ -284,3 +284,33 @@ def test_resetting_a_wish_asks_nothing_again(browser, server) -> None:
 
     assert page.get_by_label("Highest point weight, 0 to 100").input_value() == "0"
     assert page.get_by_label("Highest point you want, in m").input_value() == "1500"
+
+
+def test_a_hike_still_loading_leaves_the_wish_form_open(browser, server) -> None:
+    page = open_page(browser, server, Api(WISHABLE))
+    held = []
+    page.route(f"{server}/api/hikes/*", lambda route: held.append(route))
+    page.evaluate(f"location.hash = '#hike={RIDGE_WALK_ID}'")
+    page.wait_for_function("() => document.querySelector('#status').textContent.includes('Loading')")
+    page.get_by_role("button", name="No particular hike in mind?").click()
+
+    with page.expect_response(f"{server}/api/hikes/*"):
+        held[0].continue_()
+
+    assert page.locator("#wish-card").is_visible()
+    assert not page.locator("#search").is_visible()
+
+
+def test_a_liked_hike_is_measured_again_for_return_to_start_changed_while_wishing(browser, server) -> None:
+    api = Api(WISHABLE)
+    page = open_page(browser, server, api, hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    page.get_by_label("Return to start").uncheck()
+    page.get_by_role("button", name="Back to a hike you liked").click()
+
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+
+    assert api.ranked[-1]["return_to_start"] is False
+    assert page.url.endswith("&oneway")

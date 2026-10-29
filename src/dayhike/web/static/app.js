@@ -715,6 +715,12 @@ function setWishing(on) {
     pick.close();
   }
   history.replaceState(null, "", on ? wishHash() : state.liked ? likedHash(state.liked) : location.pathname + location.search);
+  const liked = state.liked;
+  if (!on && liked && (liked.way_back != null) !== returnToStart()) {
+    $("#find").disabled = true;
+    if (liked.route) chooseComposed(liked.route.text, liked.name_origin === "hiker" ? liked.name : null);
+    else choose(liked.id);
+  }
 }
 
 // ---------- search ----------
@@ -1677,7 +1683,10 @@ async function start() {
   $("#count").textContent = state.info.dayhikes.toLocaleString("en");
   buildWeights();
   $("#wish-on").hidden = !state.measures.some(wishable);
-  $("#wish-on").addEventListener("click", () => setWishing(true));
+  $("#wish-on").addEventListener("click", () => {
+    chosen++; // drops a hike still loading
+    setWishing(true);
+  });
   $("#wish-off").addEventListener("click", () => setWishing(false));
   if (!state.info.drive_time) {
     $("#drive-on").disabled = true;
