@@ -158,3 +158,13 @@ svg text { font-size: 11px; fill: var(--muted); }
 summary.panel-title { cursor: pointer; }
 .facts td:first-child, .facts thead th:first-child { width: 190px; }
 .facts thead th { color: var(--muted); font-weight: 600; }
+.mode-switch { margin-top: 8px; width: 100%; text-align: left; }
+.weight .wish-value { display: none; }
+.wishing .weight { grid-template-columns: minmax(0, 1fr) 96px 52px 36px; }
+.wishing .weight .wish-value { display: flex; gap: 3px; align-items: center; font-size: 0.85rem; }
+.wishing .weight .wish-value input[type="number"] { min-width: 0; }
+.wishing .weight .unit { color: var(--muted); font-size: 0.78rem; }
+.wishing .weight.unwishable, .wishing .weights-group.unwishable { display: none; }
+.wishing .weight.unused .wish-value { visibility: hidden; }
+.wish-head { display: grid; grid-template-columns: minmax(0, 1fr) 96px 52px 36px; gap: 6px; font-size: 0.75rem; color: var(--muted); margin-top: 6px; }
+.wish-head[hidden] { display: none; }

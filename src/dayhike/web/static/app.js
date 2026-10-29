@@ -53,6 +53,8 @@ const state = {
   groups: [],
   measures: [],
   liked: null,
+  wishing: false, // the Hiker describes the hike they want instead of naming a liked one
+  kept: {}, // the weights and off ticks of the mode not shown: { seed, wish }
   query: null, // the weights, month and return to start of the last Ranking
   results: [],
   expanded: null, // the result row whose versions (var 1, 2, 3) are shown
@@ -212,6 +214,11 @@ function likedSeed(liked, key) {
 function routeHash(hike) {
   const name = hike.name_origin === "hiker" ? `&name=${encodeURIComponent(hike.name)}` : "";
   return `#compose=${hike.route.text}${name}`;
+}
+
+// The address of the page showing ``hike`` as the liked one.
+function likedHash(hike) {
+  return `${hike.route ? routeHash(hike) : `#hike=${hike.id}`}${modeHash()}`;
 }
 
 // Whether every hike is measured with its way back to its start; an address ends in
@@ -466,7 +473,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     <div class="legend">${LEGEND.map(([label, color]) => `<span style="--c:${color}">${label}</span>`).join("")}</div>
     <div class="slot-elevation"></div>
     <div class="charts"></div>
-    <h3>${compare ? "Every measure: this hike against the liked one" : "The facts behind every measure"}</h3>
+    <h3>${compare ? `Every measure: this hike against the ${compare.wish ? "one you want" : "liked one"}` : "The facts behind every measure"}</h3>
     <div class="table-wrap"><table class="facts"></table></div>`;
   card.querySelector(".edit-composed")?.addEventListener("click", () => editComposed(hike));
   const { map, hover } = drawMap(card.querySelector(".map"), hike);
@@ -490,7 +497,7 @@ function factsTable(hike, compare, result, month, weights, returnToStart) {
   const table = document.createElement("table");
   table.className = "facts";
   const head = compare
-    ? "<tr><th>Measure</th><th>This hike</th><th>Liked hike</th><th>Score</th></tr>"
+    ? `<tr><th>Measure</th><th>This hike</th><th>${compare.wish ? "You want" : "Liked hike"}</th><th>Score</th></tr>`
     : "<tr><th>Measure</th><th>Value</th></tr>";
   table.innerHTML = `<thead>${head}</thead>`;
   for (const group of state.groups) {
@@ -506,7 +513,10 @@ function factsTable(hike, compare, result, month, weights, returnToStart) {
       row.innerHTML = cells.join("");
       values.forEach((h, i) => {
         const cell = row.children[i + 1];
-        if (measure.name === "profile") {
+        if (h.wish) {
+          const wanted = h.wish[measure.name];
+          cell.innerHTML = wanted == null ? '<span class="nodata">left out</span>' : escapeHtml(wishText(measure, wanted));
+        } else if (measure.name === "profile") {
           const line = sparkline(h.profile_shape);
           if (line) cell.appendChild(line); else cell.innerHTML = '<span class="nodata">no data</span>';
         } else {
@@ -537,24 +547,31 @@ function buildWeights() {
     const set = document.createElement("fieldset");
     set.className = "weights-group";
     set.innerHTML = `<legend>${escapeHtml(group)}</legend>`;
-    for (const measure of state.measures.filter((m) => m.group === group)) {
+    const measures = state.measures.filter((m) => m.group === group);
+    set.classList.toggle("unwishable", !measures.some(wishable));
+    for (const measure of measures) {
       const row = document.createElement("div");
-      row.className = "weight";
+      row.className = wishable(measure) ? "weight" : "weight unwishable";
       row.dataset.measure = measure.name;
       const id = `w-${measure.name}`;
       row.innerHTML = `
         <label class="name" for="${id}" title="${escapeHtml(measure.description)}">${escapeHtml(measure.label)}</label>
+        ${wishable(measure) ? wishInput(measure) : ""}
         <input id="${id}" type="number" min="0" max="100" step="1" value="${measure.default_weight}" inputmode="numeric" aria-label="${escapeHtml(measure.label)} weight, 0 to 100">
         <label class="off"><input type="checkbox" aria-label="Leave ${escapeHtml(measure.label)} out"> off</label>`;
       if (measure.name === "round_trip") {
         row.insertAdjacentHTML("beforeend", '<p class="hint weight-note">Left out with Return to start: every hike is then a round trip.</p>');
       }
-      const [number, off] = row.querySelectorAll("input");
+      const [number, off] = row.querySelectorAll("input:not(.wish)");
       off.addEventListener("change", () => {
         number.disabled = off.checked || row.classList.contains("unused");
         row.classList.toggle("excluded", off.checked);
       });
       number.addEventListener("input", () => number.setCustomValidity(""));
+      // Asking a value of a Measure left at 0 asks it in full.
+      row.querySelector("input.wish")?.addEventListener("input", () => {
+        if (!off.checked && Number(number.value) === 0) number.value = 100;
+      });
       set.appendChild(row);
     }
     host.appendChild(set);
@@ -566,7 +583,7 @@ function buildWeights() {
 function syncRoundTrip() {
   const row = document.querySelector('.weight[data-measure="round_trip"]');
   if (!row) return;
-  const [number, off] = row.querySelectorAll("input");
+  const [number, off] = row.querySelectorAll("input:not(.wish)");
   row.classList.toggle("unused", returnToStart());
   number.disabled = returnToStart() || off.checked;
   off.disabled = returnToStart();
@@ -575,8 +592,11 @@ function syncRoundTrip() {
 function readWeights() {
   const weights = {}, excluded = [];
   for (const row of document.querySelectorAll(".weight")) {
-    const [number, off] = row.querySelectorAll("input");
-    if (off.checked || row.classList.contains("unused")) { excluded.push(row.dataset.measure); continue; }
+    const [number, off] = row.querySelectorAll("input:not(.wish)");
+    if (off.checked || row.classList.contains("unused") || (state.wishing && row.classList.contains("unwishable"))) {
+      excluded.push(row.dataset.measure);
+      continue;
+    }
     const value = Number(number.value);
     if (number.value === "" || !Number.isFinite(value) || value < 0 || value > 100) {
       number.setCustomValidity("0 to 100");
@@ -587,6 +607,121 @@ function readWeights() {
   }
   if (!Object.values(weights).some((w) => w > 0)) throw new Error("Give at least one measure a weight above 0.");
   return { weights, excluded };
+}
+
+// ---------- the hike you want (no Seed) ----------
+
+// A Measure the Hiker can ask a value of: its "wish" input (ADR-0024); a server without wishes gives none.
+const wishable = (measure) => measure.wish != null;
+const yesNo = (measure) => measure.wish.kind === "yes/no";
+
+// The value input of a weight row: a yes/no toggle, or a number in the Measure's unit and range.
+function wishInput(measure) {
+  const label = escapeHtml(measure.label), wish = measure.wish;
+  if (yesNo(measure)) {
+    return `<label class="wish-value"><input class="wish" type="checkbox"${wish.default ? " checked" : ""} aria-label="${label} you want"> yes</label>`;
+  }
+  const range = ["min", "max", "step"].filter((key) => wish[key] != null).map((key) => ` ${key}="${escapeHtml(wish[key])}"`).join("");
+  const unit = wish.unit ? escapeHtml(wish.unit) : "";
+  return `<span class="wish-value"><input class="wish" type="number"${range} value="${escapeHtml(wish.default)}" inputmode="decimal"
+    aria-label="${label} you want${unit ? `, in ${unit}` : ""}">${unit ? `<span class="unit">${unit}</span>` : ""}</span>`;
+}
+
+// What the Hiker wants of each Measure they weight (a measure weighted 0 or left out asks nothing).
+function readWish(weights) {
+  const wish = {};
+  for (const measure of state.measures.filter(wishable)) {
+    if (!(weights[measure.name] > 0)) continue;
+    const input = document.querySelector(`.weight[data-measure="${measure.name}"] input.wish`);
+    if (yesNo(measure)) { wish[measure.name] = input.checked; continue; }
+    const value = Number(input.value), { min, max, unit } = measure.wish;
+    if (input.value === "" || !Number.isFinite(value) || value < (min ?? -Infinity) || value > (max ?? Infinity)) {
+      const range = `${min} to ${max}${unit ? ` ${unit}` : ""}`;
+      input.setCustomValidity(range);
+      input.reportValidity();
+      throw new Error(`${measure.label}: you want a value from ${range}.`);
+    }
+    wish[measure.name] = value;
+  }
+  return wish;
+}
+
+function wishText(measure, value) {
+  if (typeof value === "boolean") return fmt.yes(value);
+  return `${value.toLocaleString("en")}${measure.wish?.unit ? ` ${measure.wish.unit}` : ""}`;
+}
+
+// The wish as an address: "#wish=elevation_gain:800:100,hut_along:1:50", each Measure the Hiker
+// weights with its value and weight, as typed.
+function wishHash() {
+  const parts = [];
+  for (const row of document.querySelectorAll(".weight:not(.unwishable)")) {
+    const [value, number, off] = row.querySelectorAll("input");
+    if (off.checked || !(Number(number.value) > 0)) continue;
+    parts.push(`${row.dataset.measure}:${value.type === "checkbox" ? Number(value.checked) : value.value}:${number.value}`);
+  }
+  return `#wish=${parts.join(",")}${modeHash()}`;
+}
+
+// Fills the form from a wish address: every wishable Measure it does not name weighs 0.
+function applyWish(text) {
+  const asked = new Map(text.split(",").filter(Boolean).map((part) => [part.split(":")[0], part.split(":")]));
+  for (const row of document.querySelectorAll(".weight:not(.unwishable)")) {
+    const [value, number, off] = row.querySelectorAll("input");
+    const [, wanted, weight] = asked.get(row.dataset.measure) ?? [];
+    off.checked = false;
+    row.classList.remove("excluded");
+    number.value = weight ?? 0;
+    if (wanted == null) continue;
+    if (value.type === "checkbox") value.checked = wanted === "1";
+    else value.value = wanted;
+  }
+  syncRoundTrip();
+}
+
+// Each mode keeps its own weights: a wish starts asking nothing, and a liked hike's weights
+// are as they were when the Hiker comes back.
+function swapWeights(on) {
+  const rows = [...document.querySelectorAll(".weight")].map((row) => row.querySelectorAll("input:not(.wish)"));
+  state.kept[on ? "seed" : "wish"] = rows.map(([number, off]) => [number.value, off.checked]);
+  const back = state.kept[on ? "wish" : "seed"] ?? rows.map(() => ["0", false]);
+  rows.forEach(([number, off], i) => {
+    [number.value, off.checked] = back[i];
+    off.dispatchEvent(new Event("change"));
+  });
+  syncRoundTrip();
+}
+
+// The page asks for a hike the Hiker describes (on), or for hikes like a Seed (off).
+function setWishing(on) {
+  if (on !== state.wishing) swapWeights(on);
+  state.wishing = on;
+  document.body.classList.toggle("wishing", on);
+  $("#seed-pick").hidden = on;
+  $("#wish-intro").hidden = !on;
+  $("#weights-title").textContent = on ? "2. What you want, and how much it matters" : "2. What “similar” means";
+  $("#weights-hint").hidden = on;
+  $("#wish-head").hidden = !on;
+  $("#pair-panel").hidden = on;
+  $("#liked").hidden = on;
+  $("#wish-card").hidden = !on;
+  $("#results").hidden = $("#selected").hidden = true;
+  $("#find").textContent = on ? "Find hikes" : "Find similar";
+  $("#find").disabled = !on && !state.liked;
+  $("#return-bar").hidden = !on && !state.liked;
+  if (on) {
+    $("#weights-panel").open = true;
+    $("#map-pick-on").checked = false;
+    pick.close();
+    setStatus("");
+  }
+  history.replaceState(null, "", on ? wishHash() : state.liked ? likedHash(state.liked) : location.pathname + location.search);
+  const liked = state.liked;
+  if (!on && liked && (liked.way_back != null) !== returnToStart()) {
+    $("#find").disabled = true;
+    if (liked.route) chooseComposed(liked.route.text, liked.name_origin === "hiker" ? liked.name : null);
+    else choose(liked.id);
+  }
 }
 
 // ---------- search ----------
@@ -670,6 +805,7 @@ async function choose(id, { fromLink = false } = {}) {
     const hike = await api(`/api/hikes/${id}?return_to_start=${returnToStart()}`);
     if (request !== chosen) return;
     state.liked = hike;
+    if (state.wishing) setWishing(false);
     $("#search").value = hike.name;
     $("#liked-name").textContent = `Chosen: ${hike.name}, ${lengthText(hike)}`;
     $("#find").disabled = false;
@@ -723,6 +859,7 @@ async function chooseComposed(route, name, from = null) {
     });
     if (request !== chosen) return;
     state.liked = hike;
+    if (state.wishing) setWishing(false);
     $("#search").value = "";
     $("#liked-name").textContent = `Chosen: ${hike.name}, ${lengthText(hike)}`;
     $("#compose-name").value = hike.name;
@@ -1322,15 +1459,25 @@ function useMyLocation() {
 
 // ---------- ranking ----------
 
+// What a Ranking is like: the liked hike, or the wish while the Hiker describes the hike they want.
+function rankBasis() {
+  return state.wishing ? "wish" : state.liked;
+}
+
 async function findSimilar() {
-  if (!state.liked) return;
-  const liked = state.liked;
+  const liked = rankBasis();
+  if (!liked) return;
   let query;
   try {
-    query = {
-      ...likedSeed(liked, "seed"), ...readWeights(), month: Number($("#month").value) || null,
-      return_to_start: liked.way_back != null,
-    };
+    const month = Number($("#month").value) || null;
+    if (state.wishing) {
+      // Only the Measures given a value weigh (ADR-0024).
+      const { weights: all } = readWeights(), wish = readWish(all);
+      const weights = Object.fromEntries(Object.keys(wish).map((name) => [name, all[name]]));
+      query = { wish, weights, month, return_to_start: returnToStart() };
+    } else {
+      query = { ...likedSeed(liked, "seed"), ...readWeights(), month, return_to_start: liked.way_back != null };
+    }
     if ($("#drive-on").checked) {
       const typed = parseLatLon($("#origin").value);
       const warning = typed && swappedWarning(typed);
@@ -1357,15 +1504,16 @@ async function findSimilar() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(query),
     });
-    if (request !== ranked || liked !== state.liked) return;
+    if (request !== ranked || liked !== rankBasis()) return;
     state.query = {
       weights: body.weights, month: body.month, drive: Boolean(query.origin), return_to_start: body.return_to_start,
+      wish: query.wish ?? null,
     };
     state.results = body.results;
     renderResults(body);
     setStatus(`Done in ${(body.elapsed_ms / 1000).toFixed(1)} s.`);
   } catch (error) {
-    if (request !== ranked || liked !== state.liked) return;
+    if (request !== ranked || liked !== rankBasis()) return;
     markStale();
     setStatus(error.message, true);
   } finally {
@@ -1396,8 +1544,10 @@ function renderResults(body) {
   const versions = body.results.some((result) => result.versions.length)
     ? " Hikes starting within 10 km of a better one are its versions: click a row with versions to list the others (var 2, 3) under it and see each on the map."
     : "";
+  $("#wish-card").hidden = true;
+  $("#results-title").textContent = state.query.wish ? "Hikes closest to the one you want" : "Most similar hikes";
   $("#results-note").textContent = body.results.length
-    ? `Like “${state.liked.name}”, out of ${considered}${state.info.compose ? " and loops composed near the best of them" : ""}, ${mode}. Click a row to see it.${composed}${versions}`
+    ? `${state.query.wish ? "Closest to the hike you want" : `Like “${state.liked.name}”`}, out of ${considered}${state.info.compose ? " and loops composed near the best of them" : ""}, ${mode}. Click a row to see it.${composed}${versions}`
     : `No hike matched, out of ${considered}. Try a longer drive or other weights.`;
   const table = $("#results-table");
   const measureHeads = comparedMeasures(body.return_to_start).map((m) =>
@@ -1484,7 +1634,7 @@ function reopenSelected(selected) {
 
 // Show result ``index`` (its version ``version`` when it has several) against the liked hike.
 async function showResult(index, version = 0) {
-  const { results, liked } = state;
+  const { results } = state, liked = rankBasis();
   const versions = results[index].versions?.length ? [results[index], ...results[index].versions] : null;
   if (versions && state.expanded !== index) expandVersions(index);
   const result = versions ? versions[version] : results[index];
@@ -1501,16 +1651,16 @@ async function showResult(index, version = 0) {
         body: JSON.stringify({ route: result.route.text, name: result.name, return_to_start: state.query.return_to_start }),
       })
       : await api(`/api/hikes/${result.id}?return_to_start=${state.query.return_to_start}`);
-    if (request !== shown || results !== state.results || liked !== state.liked) return;
+    if (request !== shown || results !== state.results || liked !== rankBasis()) return;
     const card = $("#selected");
     state.selected = { key: resultKey(result) };
     const which = versions ? `, var ${version + 1} of ${versions.length}` : "";
-    const role = `Similar hike #${index + 1}${result.route ? ", composed from trail segments" : ""}${which}`;
-    renderDetail(card, hike, { role, compare: state.liked, result });
+    const role = `${state.query.wish ? "Hike" : "Similar hike"} #${index + 1}${result.route ? ", composed from trail segments" : ""}${which}`;
+    renderDetail(card, hike, { role, compare: state.query.wish ? { wish: state.query.wish } : state.liked, result });
     card.scrollIntoView({ behavior: "smooth", block: "start" });
     setStatus("");
   } catch (error) {
-    if (request === shown && results === state.results && liked === state.liked) setStatus(error.message, true);
+    if (request === shown && results === state.results && liked === rankBasis()) setStatus(error.message, true);
   }
 }
 
@@ -1533,6 +1683,12 @@ async function start() {
   }
   $("#count").textContent = state.info.dayhikes.toLocaleString("en");
   buildWeights();
+  $("#wish-on").hidden = !state.measures.some(wishable);
+  $("#wish-on").addEventListener("click", () => {
+    chosen++; // drops a hike still loading
+    setWishing(true);
+  });
+  $("#wish-off").addEventListener("click", () => setWishing(false));
   if (!state.info.drive_time) {
     $("#drive-on").disabled = true;
     $("#drive-off").hidden = false;
@@ -1546,9 +1702,17 @@ async function start() {
   $("#compose-done").addEventListener("click", () => compose.done());
   $("#compose-name").addEventListener("input", (event) => { compose.named = event.target.value.trim() !== ""; });
   nameSearch($("#pair-search"), $("#pair-suggestions"), comparePair);
-  $("#reset-weights").addEventListener("click", () => { buildWeights(); markStale(); });
+  const wishToHash = () => { if (state.wishing) history.replaceState(null, "", wishHash()); };
+  $("#reset-weights").addEventListener("click", () => {
+    buildWeights();
+    if (state.wishing) applyWish(""); // a wish asks nothing until the Hiker sets it
+    markStale();
+    wishToHash();
+  });
   $("#weights").addEventListener("input", markStale);
   $("#weights").addEventListener("change", markStale);
+  // The address keeps the wish as it is typed, so a reload or a shared link opens it again.
+  $("#weights").addEventListener("input", wishToHash);
   $("#drive-on").addEventListener("change", (event) => { $("#drive").hidden = !event.target.checked; markStale(); });
   $("#origin").addEventListener("input", () => { state.origin = null; $("#origin-found").textContent = ""; markStale(); });
   $("#hours").addEventListener("input", markStale);
@@ -1556,7 +1720,7 @@ async function start() {
   $("#origin-find").addEventListener("click", findPlace);
   $("#origin-here").addEventListener("click", useMyLocation);
   $("#month").addEventListener("change", () => {
-    if (state.liked) renderDetail($("#liked"), state.liked, { role: state.liked.route ? "Your hike" : "Liked hike" });
+    if (state.liked && !state.wishing) renderDetail($("#liked"), state.liked, { role: state.liked.route ? "Your hike" : "Liked hike" });
     markStale();
   });
   $("#find").addEventListener("click", findSimilar);
@@ -1566,12 +1730,15 @@ async function start() {
     syncRoundTrip();
     if (compose.on) compose.readout();
     const liked = state.liked;
-    if (!liked) return;
+    if (!liked && !state.wishing) return;
     const shown = !$("#results").hidden;
     const selected = $("#selected").hidden ? null : state.selected;
-    if (liked.route) await chooseComposed(liked.route.text, liked.name_origin === "hiker" ? liked.name : null);
-    else await choose(liked.id);
-    if (state.liked === liked) return;
+    if (state.wishing) history.replaceState(null, "", wishHash());
+    else {
+      if (liked.route) await chooseComposed(liked.route.text, liked.name_origin === "hiker" ? liked.name : null);
+      else await choose(liked.id);
+      if (state.liked === liked) return;
+    }
     if (shown) await findSimilar();
     if (selected && (!shown || !$("#results").hidden)) reopenSelected(selected);
   });
@@ -1588,6 +1755,13 @@ async function start() {
       let name = null;
       try { name = drawn[2] ? decodeURIComponent(drawn[2]) : null; } catch { /* a broken name: propose one */ }
       chooseComposed(drawn[1], name?.slice(0, NAME_LENGTH), "link"); // a hand-made long name is cut, not refused
+    }
+    const wished = hash.match(/^#wish=([\w:.,-]*)$/);
+    if (wished && state.measures.some(wishable)) {
+      chosen++; // drops a hike still loading
+      setWishing(true);
+      applyWish(wished[1]);
+      history.replaceState(null, "", wishHash());
     } else if (!linked && !drawn && /^#(hike|compose)=/.test(hash)) {
       chosen++; // drops a hike still loading
       brokenLink(new Error(`not a hike link: ${hash}`));

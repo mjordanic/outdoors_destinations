@@ -27,26 +27,35 @@
 <main class="layout">
   <aside class="controls" aria-label="Query">
     <section class="panel">
-      <label class="panel-title" for="search">1. A hike you liked</label>
-      <div class="search">
-        <input id="search" type="search" autocomplete="off" spellcheck="false"
-               placeholder="Type a hike name, e.g. Triglav" aria-controls="suggestions" aria-expanded="false" maxlength="100"
-               role="combobox" aria-autocomplete="list">
-        <ul id="suggestions" class="suggestions" role="listbox" hidden></ul>
+      <div id="seed-pick">
+        <label class="panel-title" for="search">1. A hike you liked</label>
+        <div class="search">
+          <input id="search" type="search" autocomplete="off" spellcheck="false"
+                 placeholder="Type a hike name, e.g. Triglav" aria-controls="suggestions" aria-expanded="false" maxlength="100"
+                 role="combobox" aria-autocomplete="list">
+          <ul id="suggestions" class="suggestions" role="listbox" hidden></ul>
+        </div>
+        <label class="check"><input type="checkbox" id="map-pick-on" autocomplete="off"> Select hike on map</label>
+        <p id="liked-name" class="hint">No hike chosen yet.</p>
+        <button type="button" id="wish-on" class="secondary mode-switch" hidden>No particular hike in mind? Describe the one you want</button>
       </div>
-      <label class="check"><input type="checkbox" id="map-pick-on" autocomplete="off"> Select hike on map</label>
-      <p id="liked-name" class="hint">No hike chosen yet.</p>
+      <div id="wish-intro" hidden>
+        <h2 class="panel-title">1. The hike you want</h2>
+        <p class="hint">Below, set the value you want of each measure that matters to you; it then weighs 100, which you can change. A measure at weight 0 or <em>off</em> is left out.</p>
+        <button type="button" id="wish-off" class="secondary mode-switch">Back to a hike you liked</button>
+      </div>
     </section>
 
     <details class="panel" id="weights-panel" open>
-      <summary class="panel-title">2. What “similar” means</summary>
-      <p class="hint">Weight each measure 0–100; only the ratios matter. Tick <em>off</em> to leave a measure out.</p>
+      <summary class="panel-title"><span id="weights-title">2. What “similar” means</span></summary>
+      <p class="hint" id="weights-hint">Weight each measure 0–100; only the ratios matter. Tick <em>off</em> to leave a measure out.</p>
       <div class="row">
         <label for="month">Weather month</label>
         <select id="month">
           <option value="">Summer (Jun–Aug)</option>
         </select>
       </div>
+      <div class="wish-head" id="wish-head" hidden aria-hidden="true"><span>Measure</span><span>You want</span><span>Weight</span><span></span></div>
       <div id="weights"></div>
       <div class="row buttons">
         <button type="button" id="reset-weights" class="secondary">Reset weights</button>
@@ -82,7 +91,7 @@
     <button type="button" id="find" class="primary" disabled>Find similar</button>
     <p id="status" class="status" role="status" aria-live="polite"></p>
 
-    <section class="panel">
+    <section class="panel" id="pair-panel">
       <label class="panel-title" for="pair-search">4. Check any pair (optional)</label>
       <p class="hint">Score the liked hike against any other one, with the weights and month above.</p>
       <div class="search">
@@ -116,10 +125,14 @@
       <p>Search for a hike on the left, or select one on the map. Its route, elevation, water, huts, landscape and weather appear here — everything the similarity looks at.</p>
     </article>
 
+    <article id="wish-card" class="card empty" hidden>
+      <p>Set what you want of each measure, and how much it matters, then press Find hikes. The hikes closest to what you want are listed here, with a score for each measure.</p>
+    </article>
+
     <section id="results" class="card" hidden>
-      <h2>Most similar hikes</h2>
+      <h2 id="results-title">Most similar hikes</h2>
       <p class="hint" id="results-note"></p>
-      <p class="stale-note" id="results-stale" hidden>The query changed since this ranking; press Find similar to update it.</p>
+      <p class="stale-note" id="results-stale" hidden>The query changed since this ranking; press Find again to update it.</p>
       <div class="table-wrap"><table id="results-table"></table></div>
       <p class="hint">Score: the weighted mean of the measure cells under your weights (about 0.5 for a typical pair of hikes; 1.0 when no random pair beats it on any measure). Only the best of hikes that follow the same route is listed. Measure cells: how alike the two hikes are on that measure, as the share of random pairs less alike (×100; 50 is typical, 100 when the two are the same). A dash is “no data”, left out of that pair’s score.</p>
     </section>
