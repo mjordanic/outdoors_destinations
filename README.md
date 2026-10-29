@@ -486,7 +486,7 @@ that is the same (or counted as the same) on every weighted Measure, so the
 best matches stay apart instead of all reading 1.000. Ties in order break on the uncalibrated weighted mean,
 then on DayHike id.
 
-Reading a score, as the web demo explains it beside every score (ADR-0024):
+Reading a score, as the web demo explains it beside every score (ADR-0025):
 
 - **What the number means.** A Measure's score is the share of the 100,000
   random hike pairs that differ more on that fact. 0.9: these two differ less
@@ -1587,7 +1587,7 @@ cover do not cover all of Europe yet) show "no data" and drop out of that
 pair's score. Every score has a short line and a "?" beside it (in the results
 table, in each column heading); hover, focus, click or tap opens what the score
 means, why alike hikes can score low on one measure, the data each measure
-reads and how the scores are made (ADR-0024).
+reads and how the scores are made (ADR-0025).
 
 A Hiker with no particular hike in mind presses "No particular hike in mind?
 Describe the one you want" under the search. The weights list then shows only

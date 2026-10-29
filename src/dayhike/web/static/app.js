@@ -52,7 +52,7 @@ const state = {
   info: null,
   groups: [],
   measures: [],
-  scoreHelp: null, // what a score means, from the server (ADR-0024)
+  scoreHelp: null, // what a score means, from the server (ADR-0025)
   liked: null,
   wishing: false, // the Hiker describes the hike they want instead of naming a liked one
   kept: {}, // the weights and off ticks of the mode not shown: { seed, wish }
@@ -391,7 +391,7 @@ function scoreColor(score) {
   return `hsl(145, 42%, ${Math.round(90 - 46 * score)}%)`;
 }
 
-// ---------- score help (ADR-0024) ----------
+// ---------- score help (ADR-0025) ----------
 
 // A small "?" beside a score: hover, focus, click or tap opens what the score means.
 // ``key``: "overall", "measures", or a Measure's name.

@@ -169,7 +169,7 @@ summary.panel-title { cursor: pointer; }
 .wish-head { display: grid; grid-template-columns: minmax(0, 1fr) 96px 52px 36px; gap: 6px; font-size: 0.75rem; color: var(--muted); margin-top: 6px; }
 .wish-head[hidden] { display: none; }
 
-/* The "?" beside a score and the explanation it opens (ADR-0024). */
+/* The "?" beside a score and the explanation it opens (ADR-0025). */
 button.help {
   display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0;
   border-radius: 50%; border: 1px solid var(--green); background: #fff; color: var(--green-dark);

@@ -215,7 +215,7 @@ def score_note(score: float | None, tied: float | None, same: str | None = None)
 
 
 # What a score means, said to the Hiker: a short line beside the overall score and
-# beside the Measure scores, and the fuller sections behind the page's "?" (ADR-0024).
+# beside the Measure scores, and the fuller sections behind the page's "?" (ADR-0025).
 # Every explanation of the score lives here and in MEASURE_INFO, so a change of the
 # scoring rule changes the words in one place.
 SCORE_HELP = {
