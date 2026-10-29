@@ -188,6 +188,22 @@ def test_rank_refuses_anything_but_one_seed_or_a_wish_of_single_values(client: T
     assert client.post("/api/rank", json=body).status_code == 422
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        '{"wish": {"length": NaN}}',
+        '{"wish": {"length": Infinity}}',
+        '{"wish": {"length": 1e400}}',
+        '{"seed": 1001, "origin": {"lat": 45, "lon": 15}, "max_hours": NaN}',
+    ],
+)
+def test_rank_refuses_a_number_that_is_not_finite(client: TestClient, body: str) -> None:
+    response = client.post("/api/rank", content=body, headers={"content-type": "application/json"})
+
+    assert response.status_code == 422
+    assert response.json()["detail"]
+
+
 def test_an_excluded_measure_counts_as_weight_zero(client: TestClient) -> None:
     only_length = client.post(
         "/api/rank", json={"seed": RIDGE_WALK_ID, "weights": {"length": 100}}

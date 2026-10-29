@@ -24,6 +24,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -252,6 +254,12 @@ def create_app(
         # OSM tile and Nominatim policies ask for a Referer; send the origin only.
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         return response
+
+    # A refusal leaves out the input it refuses: a NaN or Infinity in the body cannot be written back as JSON.
+    @app.exception_handler(RequestValidationError)
+    async def refuse(request: Request, error: RequestValidationError) -> JSONResponse:
+        errors = [{key: value for key, value in e.items() if key != "input"} for e in error.errors()]
+        return JSONResponse({"detail": jsonable_encoder(errors)}, status_code=422)
 
     # Reads answer HEAD too (health checks); otherwise HEAD falls through to the page mount's 404.
     @app.api_route("/api/health", methods=["GET", "HEAD"])
