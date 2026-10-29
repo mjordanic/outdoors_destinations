@@ -270,7 +270,7 @@ SCORE_HELP = {
             "shows how unusual that is: two hikes that both pass a mountain hut score 0.95. A wish for none is "
             "your answer, not a missing entry, so a hike without one matches it, and that counts by how rare "
             "it is: most random pairs both lack a hut, so a wish for no hut scores a hike without one about "
-            "0.18.",
+            "0.16.",
         },
         {
             "title": "What does 0.1 mean when the hikes look similar?",
