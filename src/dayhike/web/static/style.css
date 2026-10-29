@@ -165,5 +165,6 @@ summary.panel-title { cursor: pointer; }
 .wishing .weight .wish-value input[type="number"] { min-width: 0; }
 .wishing .weight .unit { color: var(--muted); font-size: 0.78rem; }
 .wishing .weight.unwishable, .wishing .weights-group.unwishable { display: none; }
+.wishing .weight.unused .wish-value { visibility: hidden; }
 .wish-head { display: grid; grid-template-columns: minmax(0, 1fr) 96px 52px 36px; gap: 6px; font-size: 0.75rem; color: var(--muted); margin-top: 6px; }
 .wish-head[hidden] { display: none; }

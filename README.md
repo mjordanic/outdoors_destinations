@@ -1557,8 +1557,9 @@ pair's score.
 A Hiker with no particular hike in mind presses "No particular hike in mind?
 Describe the one you want" under the search. The weights list then shows only
 the Measures `/api/measures` marks wishable, each with a value to ask for in its
-unit and range (a yes/no Measure as a tick box) beside its weight; a Measure
-weighted 0 or ticked off asks nothing. "Find hikes" ranks with that wish
+unit and range (a yes/no Measure as a tick box) beside its weight. The form starts asking nothing: every weight is 0, and setting
+a value weighs that Measure 100; a Measure weighted 0 or ticked off asks nothing.
+The liked-hike weights are kept for when the Hiker goes back. "Find hikes" ranks with that wish
 instead of a Seed, the drive filter, month and Return to start work as before,
 and a result opens with what the Hiker asked for in place of the liked hike.
 The address, `#wish=elevation_gain:800:100,hut_along:1:50` (Measure, value,

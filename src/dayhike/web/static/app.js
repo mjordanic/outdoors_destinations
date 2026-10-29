@@ -54,6 +54,7 @@ const state = {
   measures: [],
   liked: null,
   wishing: false, // the Hiker describes the hike they want instead of naming a liked one
+  kept: {}, // the weights and off ticks of the mode not shown: { seed, wish }
   query: null, // the weights, month and return to start of the last Ranking
   results: [],
   expanded: null, // the result row whose versions (var 1, 2, 3) are shown
@@ -567,6 +568,10 @@ function buildWeights() {
         row.classList.toggle("excluded", off.checked);
       });
       number.addEventListener("input", () => number.setCustomValidity(""));
+      // Asking a value of a Measure left at 0 asks it in full.
+      row.querySelector("input.wish")?.addEventListener("input", () => {
+        if (!off.checked && Number(number.value) === 0) number.value = 100;
+      });
       set.appendChild(row);
     }
     host.appendChild(set);
@@ -582,8 +587,6 @@ function syncRoundTrip() {
   row.classList.toggle("unused", returnToStart());
   number.disabled = returnToStart() || off.checked;
   off.disabled = returnToStart();
-  const wish = row.querySelector("input.wish");
-  if (wish) wish.disabled = returnToStart();
 }
 
 function readWeights() {
@@ -608,19 +611,19 @@ function readWeights() {
 
 // ---------- the hike you want (no Seed) ----------
 
-// A Measure the Hiker can ask a value of; a server without wishes lists none.
-const wishable = (measure) => measure.wishable === true;
-const yesNo = (measure) => measure.kind === "agree";
+// A Measure the Hiker can ask a value of: its "wish" input (ADR-0024); a server without wishes gives none.
+const wishable = (measure) => measure.wish != null;
+const yesNo = (measure) => measure.wish.kind === "yes/no";
 
 // The value input of a weight row: a yes/no toggle, or a number in the Measure's unit and range.
 function wishInput(measure) {
-  const label = escapeHtml(measure.label);
+  const label = escapeHtml(measure.label), wish = measure.wish;
   if (yesNo(measure)) {
-    return `<label class="wish-value"><input class="wish" type="checkbox"${measure.default ? " checked" : ""} aria-label="${label} you want"> yes</label>`;
+    return `<label class="wish-value"><input class="wish" type="checkbox"${wish.default ? " checked" : ""} aria-label="${label} you want"> yes</label>`;
   }
-  const range = ["min", "max", "step"].filter((key) => measure[key] != null).map((key) => ` ${key}="${escapeHtml(measure[key])}"`).join("");
-  const unit = measure.unit ? escapeHtml(measure.unit) : "";
-  return `<span class="wish-value"><input class="wish" type="number"${range} value="${escapeHtml(measure.default)}" inputmode="decimal"
+  const range = ["min", "max", "step"].filter((key) => wish[key] != null).map((key) => ` ${key}="${escapeHtml(wish[key])}"`).join("");
+  const unit = wish.unit ? escapeHtml(wish.unit) : "";
+  return `<span class="wish-value"><input class="wish" type="number"${range} value="${escapeHtml(wish.default)}" inputmode="decimal"
     aria-label="${label} you want${unit ? `, in ${unit}` : ""}">${unit ? `<span class="unit">${unit}</span>` : ""}</span>`;
 }
 
@@ -631,9 +634,9 @@ function readWish(weights) {
     if (!(weights[measure.name] > 0)) continue;
     const input = document.querySelector(`.weight[data-measure="${measure.name}"] input.wish`);
     if (yesNo(measure)) { wish[measure.name] = input.checked; continue; }
-    const value = Number(input.value);
-    if (input.value === "" || !Number.isFinite(value) || value < (measure.min ?? -Infinity) || value > (measure.max ?? Infinity)) {
-      const range = `${measure.min} to ${measure.max}${measure.unit ? ` ${measure.unit}` : ""}`;
+    const value = Number(input.value), { min, max, unit } = measure.wish;
+    if (input.value === "" || !Number.isFinite(value) || value < (min ?? -Infinity) || value > (max ?? Infinity)) {
+      const range = `${min} to ${max}${unit ? ` ${unit}` : ""}`;
       input.setCustomValidity(range);
       input.reportValidity();
       throw new Error(`${measure.label}: you want a value from ${range}.`);
@@ -645,7 +648,7 @@ function readWish(weights) {
 
 function wishText(measure, value) {
   if (typeof value === "boolean") return fmt.yes(value);
-  return `${value.toLocaleString("en")}${measure.unit ? ` ${measure.unit}` : ""}`;
+  return `${value.toLocaleString("en")}${measure.wish?.unit ? ` ${measure.wish.unit}` : ""}`;
 }
 
 // The wish as an address: "#wish=elevation_gain:800:100,hut_along:1:50", each Measure the Hiker
@@ -676,8 +679,22 @@ function applyWish(text) {
   syncRoundTrip();
 }
 
+// Each mode keeps its own weights: a wish starts asking nothing, and a liked hike's weights
+// are as they were when the Hiker comes back.
+function swapWeights(on) {
+  const rows = [...document.querySelectorAll(".weight")].map((row) => row.querySelectorAll("input:not(.wish)"));
+  state.kept[on ? "seed" : "wish"] = rows.map(([number, off]) => [number.value, off.checked]);
+  const back = state.kept[on ? "wish" : "seed"] ?? rows.map(() => ["0", false]);
+  rows.forEach(([number, off], i) => {
+    [number.value, off.checked] = back[i];
+    off.dispatchEvent(new Event("change"));
+  });
+  syncRoundTrip();
+}
+
 // The page asks for a hike the Hiker describes (on), or for hikes like a Seed (off).
 function setWishing(on) {
+  if (on !== state.wishing) swapWeights(on);
   state.wishing = on;
   document.body.classList.toggle("wishing", on);
   $("#seed-pick").hidden = on;
@@ -1447,8 +1464,10 @@ async function findSimilar() {
   try {
     const month = Number($("#month").value) || null;
     if (state.wishing) {
-      const { weights, excluded } = readWeights();
-      query = { wish: readWish(weights), weights, excluded, month, return_to_start: returnToStart() };
+      // Only the Measures given a value weigh (ADR-0024).
+      const { weights: all } = readWeights(), wish = readWish(all);
+      const weights = Object.fromEntries(Object.keys(wish).map((name) => [name, all[name]]));
+      query = { wish, weights, month, return_to_start: returnToStart() };
     } else {
       query = { ...likedSeed(liked, "seed"), ...readWeights(), month, return_to_start: liked.way_back != null };
     }
@@ -1674,7 +1693,12 @@ async function start() {
   $("#compose-name").addEventListener("input", (event) => { compose.named = event.target.value.trim() !== ""; });
   nameSearch($("#pair-search"), $("#pair-suggestions"), comparePair);
   const wishToHash = () => { if (state.wishing) history.replaceState(null, "", wishHash()); };
-  $("#reset-weights").addEventListener("click", () => { buildWeights(); markStale(); wishToHash(); });
+  $("#reset-weights").addEventListener("click", () => {
+    buildWeights();
+    if (state.wishing) applyWish(""); // a wish asks nothing until the Hiker sets it
+    markStale();
+    wishToHash();
+  });
   $("#weights").addEventListener("input", markStale);
   $("#weights").addEventListener("change", markStale);
   // The address keeps the wish as it is typed, so a reload or a shared link opens it again.
@@ -1725,8 +1749,9 @@ async function start() {
     const wished = hash.match(/^#wish=([\w:.,-]*)$/);
     if (wished && state.measures.some(wishable)) {
       chosen++; // drops a hike still loading
-      applyWish(wished[1]);
       setWishing(true);
+      applyWish(wished[1]);
+      history.replaceState(null, "", wishHash());
     } else if (!linked && !drawn && /^#(hike|compose)=/.test(hash)) {
       chosen++; // drops a hike still loading
       brokenLink(new Error(`not a hike link: ${hash}`));

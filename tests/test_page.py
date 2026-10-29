@@ -23,13 +23,14 @@ sync_api = pytest.importorskip("playwright.sync_api")
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
 RIDGE_WALK_ID = 1001
-# What the engine adds to /api/measures for the Measures a Hiker can wish for.
+YES_NO = {"kind": "yes/no", "unit": None, "min": None, "max": None, "step": None, "default": True}
+# The "wish" input /api/measures gives the Measures a Hiker can wish for (ADR-0024); every other is null.
 WISHABLE = {
-    "elevation_gain": {"wishable": True, "unit": "m", "min": 0, "max": 3000, "step": 50, "default": 600},
-    "highest": {"wishable": True, "unit": "m", "min": 0, "max": 4800, "step": 50, "default": 1500},
-    "hut_along": {"wishable": True, "unit": None, "min": 0, "max": 1, "step": 1, "default": True},
-    "waterside": {"wishable": True, "unit": "%", "min": 0, "max": 100, "step": 5, "default": 0},
-    "round_trip": {"wishable": True, "unit": None, "min": 0, "max": 1, "step": 1, "default": True},
+    "elevation_gain": {"kind": "number", "unit": "m", "min": 0, "max": 3000, "step": 50, "default": 600},
+    "highest": {"kind": "number", "unit": "m", "min": 0, "max": 5000, "step": 50, "default": 1500},
+    "hut_along": YES_NO,
+    "waterside": {"kind": "number", "unit": "share", "min": 0, "max": 1, "step": 0.05, "default": 0.5},
+    "round_trip": YES_NO,
 }
 
 
@@ -91,7 +92,7 @@ class Api:
     def measures(self, route) -> None:
         body = route.fetch().json()
         for measure in body["measures"]:
-            measure.update(self.wishable.get(measure["name"], {}))
+            measure["wish"] = self.wishable.get(measure["name"])
         route.fulfill(json=body)
 
     def rank(self, route) -> None:
@@ -160,8 +161,7 @@ def test_finding_hikes_for_a_wish_asks_the_ranking_for_it_and_lists_the_results(
     asked = api.ranked[-1]
     assert "seed" not in asked and "composed" not in asked
     assert asked["wish"] == {"elevation_gain": 900, "hut_along": False}
-    assert asked["weights"]["elevation_gain"] == 80 and asked["weights"]["hut_along"] == 40
-    assert "highest" in asked["excluded"] and "profile" in asked["excluded"]
+    assert asked["weights"] == {"elevation_gain": 80, "hut_along": 40}
     assert asked["origin"] == {"lat": 45.1, "lon": 15.1} and asked["max_hours"] == 2
     assert asked["return_to_start"] is True
     assert "hike you want" in page.locator("#results-note").inner_text()
@@ -238,12 +238,12 @@ def test_a_round_trip_wish_is_off_while_every_hike_returns_to_its_start(browser,
     page.get_by_role("button", name="No particular hike in mind?").click()
     round_trip = page.get_by_label("Round trip you want")
 
-    assert round_trip.is_disabled()
+    assert not round_trip.is_visible()
     assert page.get_by_text("Left out with Return to start").is_visible()
 
     page.get_by_label("Return to start").uncheck()
 
-    assert round_trip.is_enabled()
+    assert round_trip.is_visible() and round_trip.is_enabled()
 
 
 def test_changing_the_month_keeps_the_wish_form_in_front_of_a_liked_hike(browser, server) -> None:
@@ -255,3 +255,32 @@ def test_changing_the_month_keeps_the_wish_form_in_front_of_a_liked_hike(browser
 
     assert not page.locator("#liked").is_visible()
     assert page.locator("#wish-card").is_visible()
+
+
+def test_a_wish_asks_only_what_the_hiker_sets_and_leaves_the_liked_hike_weights_alone(browser, server) -> None:
+    page = open_page(browser, server, Api(WISHABLE))
+    page.get_by_label("Elevation gain weight, 0 to 100").fill("70")
+    page.get_by_role("button", name="No particular hike in mind?").click()
+
+    weights = page.locator(".weight:visible input[aria-label$='weight, 0 to 100']")
+    assert set(weights.evaluate_all("inputs => inputs.map(i => i.value)")) == {"0"}
+    page.get_by_label("Highest point you want, in m").fill("2000")
+    page.get_by_label("Hut along you want").uncheck()
+    assert page.get_by_label("Highest point weight, 0 to 100").input_value() == "100"
+    assert page.get_by_label("Hut along weight, 0 to 100").input_value() == "100"
+
+    page.get_by_role("button", name="Back to a hike you liked").click()
+
+    assert page.get_by_label("Elevation gain weight, 0 to 100").input_value() == "70"
+    assert page.get_by_label("Length weight, 0 to 100").input_value() == "100"
+
+
+def test_resetting_a_wish_asks_nothing_again(browser, server) -> None:
+    page = open_page(browser, server, Api(WISHABLE))
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    page.get_by_label("Highest point you want, in m").fill("2000")
+
+    page.get_by_role("button", name="Reset weights").click()
+
+    assert page.get_by_label("Highest point weight, 0 to 100").input_value() == "0"
+    assert page.get_by_label("Highest point you want, in m").input_value() == "1500"
