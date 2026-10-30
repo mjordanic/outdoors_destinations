@@ -14,9 +14,10 @@ Detail, compose, pair and Ranking measure every hike with its way back to the st
 A browser keeps the API reads an hour and then revalidates them by an ETag of the export, the code
 and the drive-time settings; the page always revalidates, so a redeploy shows at once. Responses are
 gzipped for a browser that takes it.
-The site's pages (the demo, About, Support, Credits) are served with two optional settings filled in:
-a GoatCounter code adds the cookieless analytics tag, and a Ko-fi handle the tip link. Unset, a page
-loads no analytics and links no tip jar.
+The site's pages (the demo, About, Support, Credits, Privacy, Terms) are served with two optional
+settings filled in: a GoatCounter code adds the cookieless analytics tag, and a Ko-fi handle the tip
+link; the privacy page names each only once it is set. Unset, a page loads no analytics and links no
+tip jar.
 """
 
 from __future__ import annotations
@@ -70,7 +71,7 @@ BUILD = hashlib.sha256(
     )
 ).hexdigest()
 
-PAGES = ("index", "about", "support", "credits")  # the site's pages, served with its settings filled in
+PAGES = ("index", "about", "support", "credits", "privacy", "terms")  # the site's pages, served with its settings filled in
 PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")  # a GoatCounter code or Ko-fi handle
 
 DriveClientFactory = Callable[[float], MatrixClient]
@@ -203,7 +204,11 @@ def wish_input(measure: Measure) -> dict | None:
 def site_pages(goatcounter: str | None, kofi: str | None, place_search: bool = False) -> dict[str, str]:
     """Each page's HTML with the GoatCounter tag where a code is set, and the Ko-fi link where a handle is.
 
-    With ``place_search`` (the export has GeoNames places) the place-search credit names GeoNames, not Nominatim.
+    With ``place_search`` (the export has GeoNames places) the place-search credit names GeoNames, not Nominatim,
+    and the privacy page no longer lists Nominatim as a recipient.
+
+    Text between ``<!--if-goatcounter-->`` and ``<!--/if-goatcounter-->`` (or ``kofi``) is kept only
+    when that setting is set.
 
     The tag loads the self-hosted ``count.js``, which counts at ``https://<code>.goatcounter.com/count``.
     """
@@ -217,6 +222,9 @@ def site_pages(goatcounter: str | None, kofi: str | None, place_search: bool = F
     pages = {}
     for name in PAGES:
         html = (STATIC_DIR / f"{name}.html").read_text(encoding="utf-8").replace("<!--analytics-->", analytics)
+        for setting, value in (("goatcounter", goatcounter), ("kofi", kofi)):  # text true only once it is set
+            block = rf"<!--if-{setting}-->(.*?)<!--/if-{setting}-->"
+            html = re.sub(block, (lambda m: m[1]) if value is not None else "", html, flags=re.S)
         if kofi is not None:
             tip = (
                 f'<p class="tip"><a href="https://ko-fi.com/{kofi}">Leave a tip on Ko-fi</a></p>\n'
@@ -229,6 +237,7 @@ def site_pages(goatcounter: str | None, kofi: str | None, place_search: bool = F
                 ' (geonames.org), <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</span>'
             )
             html = re.sub(r'<span id="place-credit">.*?</span>', credit, html, flags=re.S)
+            html = re.sub(r'\s*<span id="place-recipient">.*?</span>', "", html, flags=re.S)  # no Nominatim
         pages[name] = html
     return pages
 

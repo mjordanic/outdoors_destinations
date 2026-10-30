@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Privacy · GoFindMeAHike</title>
+  <meta name="description" content="What personal data GoFindMeAHike processes, who receives it, and your rights.">
+  <link rel="icon" href="mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <!--analytics-->
+</head>
+<body>
+<header class="top">
+  <a class="home" href="/" tabindex="-1" aria-hidden="true"><img class="mark" src="mark.svg" alt="" width="44" height="44"></a>
+  <div class="brand">
+    <h1><a class="home" href="/">GoFindMeAHike</a></h1>
+    <p class="tagline">Pick a hike you liked; find the ones most like it, across Europe.</p>
+  </div>
+</header>
+
+<main class="page card">
+  <h2>Privacy</h2>
+  <p>GoFindMeAHike has no accounts and asks you for nothing. It still handles a little personal data, as every website does: your IP address reaches the servers your browser talks to. This page says what is processed, why, who receives it and what your rights are (GDPR Art. 13).</p>
+
+  <h3>Who is responsible</h3>
+  <p>The controller is Mislav Jordanic, Zagreb, Croatia — <a href="mailto:mislav.jordanic@gmail.com">mislav.jordanic@gmail.com</a>. Write to that address for any question or request about your data.</p>
+
+  <h3>What is processed, and why</h3>
+  <ul>
+    <li><strong>Request logs.</strong> The hosting platform logs each request: your IP address, your browser's user agent, the referring page, the time and the address requested (which includes what you type into the hike search and the map area you look at). They are kept for 30 days and then deleted.</li>
+    <li><strong>The app's access log.</strong> The app writes a line per request (the request and the address the connection comes from) into the same logs, kept the same 30 days.</li>
+    <li><strong>The rate limit.</strong> To stop one client from using up the server, the app counts requests per IP address in memory for about a minute. It is never written anywhere.</li>
+    <li><strong>Your starting point.</strong> A place or position you give for the drive-time filter (typed in, or from "Use my location" when you allow it) is sent to the server with that search, used to work out drive times, and not stored. It is not in the request logs.</li>
+    <!--if-goatcounter--><li><strong>Visit counts.</strong> GoatCounter counts page views and the "Find" button without cookies. It receives the page address, the referring page, your user agent, screen size and IP address; it does not keep the IP address, and it stores its data in the EU (Finland and Germany). See <a href="https://www.goatcounter.com/privacy">GoatCounter's privacy policy</a>.</li><!--/if-goatcounter-->
+  </ul>
+  <p>The purpose is to run the site, keep it secure and see how much it is used. The legal basis is legitimate interest (GDPR Art. 6(1)(f)). The site makes no automated decisions about you and builds no profiles.</p>
+
+  <h3>Who receives it</h3>
+  <ul>
+    <!-- The hosting provider: one item, so a change of host (or a CDN in front) changes only this line. -->
+    <li id="host-recipient"><strong>Google Cloud</strong> (Google Cloud Run, region europe-west1, Belgium) hosts the site and keeps the request logs, as a processor under its <a href="https://cloud.google.com/terms/data-processing-addendum">Cloud Data Processing Addendum</a>.</li>
+    <li><strong>The OpenStreetMap Foundation</strong> (UK) serves the map tiles, so your browser sends it your IP address and the map area you look at (<a href="https://osmfoundation.org/wiki/Privacy_Policy">its privacy policy</a>). <!-- Place search: Nominatim until the export carries GeoNames places (/api/info place_search);
+         then place names are looked up on this site's own server and this sentence goes. -->
+      <span id="place-recipient">When you search for a place by name, your browser sends the name and your IP address to its <a href="https://nominatim.org/">Nominatim</a> service.</span></li>
+    <!--if-kofi--><li><strong>Ko-fi</strong> receives your data only after you click the tip link and leave this site; its own privacy policy then applies. This site sends it nothing and handles no payments.</li><!--/if-kofi-->
+    <li><strong>GitHub</strong> receives your data only when you follow a link to the code; its own privacy policy then applies.</li>
+  </ul>
+
+  <h3>Transfers outside the EU</h3>
+  <p>The site and its logs are hosted in the EU. Google may still process data outside the EU; its Data Processing Addendum covers such transfers with the EU standard contractual clauses, and Google is certified under the EU–US Data Privacy Framework. The OpenStreetMap Foundation is in the United Kingdom, which the EU recognises as giving adequate protection.</p>
+
+  <h3>Your rights</h3>
+  <p>You can ask for access to your data, its correction or erasure, a restriction of its processing, and you can object to processing based on legitimate interest. Write to the address above. The site cannot tell who you are from a log line, so it may need you to say when you visited and from which IP address.</p>
+  <p>You can complain to the Croatian data protection authority, <a href="https://azop.hr/">AZOP</a> (Agencija za zaštitu osobnih podataka), or to the authority where you live.</p>
+
+  <h3>No cookies, no consent banner</h3>
+  <p>The site sets no cookies and stores nothing in your browser: no cookies, no localStorage, no tracking. That is why there is no consent banner.<!--if-goatcounter--> The one exception is your own choice: opening a page with <code>#toggle-goatcounter</code> at the end of its address makes the GoatCounter script remember, in your browser's localStorage, that your visits should not be counted; opening it again removes that note.<!--/if-goatcounter--></p>
+</main>
+
+<footer class="credits">
+  <nav class="site-nav" aria-label="Site">
+    <a href="/">Find hikes</a> · <a href="about.html">About</a> · <a href="support.html">Support</a> · <a href="credits.html">Data and credits</a> · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms and safety</a>
+  </nav>
+</footer>
+</body>
+</html>
