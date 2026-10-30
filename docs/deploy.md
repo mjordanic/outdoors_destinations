@@ -85,7 +85,7 @@ EOF
 gcloud artifacts repositories set-cleanup-policies dayhike --location=europe-west1 \
   --policy=/tmp/ar-cleanup.json --dry-run      # then again with --no-dry-run
 
-# the image is about 0.9 GB compressed, so the push takes a couple of minutes
+# the image is 1 to 2.4 GB compressed, so the push takes a couple of minutes
 IMAGE=europe-west1-docker.pkg.dev/PROJECT/dayhike/web:$(git rev-parse --short HEAD)
 docker buildx build --platform linux/amd64 -f web/Dockerfile \
   --build-context serving=data/web-serving -t "$IMAGE" --push .
@@ -147,8 +147,9 @@ in `503` and frees the slot), and caps the drive filter at 4 hours. With
 around the clock: about 5.3 million vCPU-seconds and 10.5 million GiB-seconds a
 month, roughly **$150 per month at list price** after the free tier (verify the
 europe-west1 rates). Normal demo traffic stays inside the free tier
-(180,000 vCPU-seconds and 360,000 GiB-seconds a month); the image in Artifact
-Registry costs about $0.10 to $0.20 a month.
+(180,000 vCPU-seconds and 360,000 GiB-seconds a month); the images in Artifact
+Registry cost about $0.25 to $0.70 a month: the cleanup policy keeps three
+pushes, 3 to 7 GB, at about $0.10 per GB-month past the 0.5 GB free tier.
 
 ## 5. Budget, spend cap and capacity alert
 
