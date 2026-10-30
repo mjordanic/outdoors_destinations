@@ -665,6 +665,7 @@ def test_place_search_answers_from_the_export_and_is_credited(tmp_path: Path, ma
     assert placed.head("/api/place", params={"q": "zag"}).status_code == 200
     privacy = placed.get("/privacy.html").text
     assert "nominatim.org" not in privacy  # place names are looked up on this server
+    assert "the place search" in privacy  # a typed place name is in the request URL, so in the logs
     assert "OpenStreetMap Foundation</strong> (UK) serves the map tiles" in privacy
 
 
