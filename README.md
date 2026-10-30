@@ -1971,7 +1971,8 @@ climate has been sampled.
 
 Natural Earth (https://www.naturalearthdata.com/, public domain): country
 shapes of the coverage map. Valhalla (MIT, https://github.com/valhalla/valhalla)
-computes DriveTime. The demo page uses Leaflet (BSD-2-Clause) and the server
+computes DriveTime. The demo page uses Leaflet 1.9.4 (BSD-2-Clause), served from
+`src/dayhike/web/static/vendor/leaflet/` with its licence, and the server
 FastAPI (MIT) and Uvicorn (BSD-3-Clause).
 
 ## What is gitignored under `data/`
