@@ -142,7 +142,7 @@ call on your machine.
 | `data/catalog.snaps.npz` | Where Trailheads snap onto the highway tiles (`--highways` cache, a few MB) | **gitignored** |
 | `data/valhalla/mjolnir.drive-time.json` | Valhalla flags: no walk/bike/driveways | yes |
 | `data/valhalla/*.osm.pbf` | Road extract for tiles | **gitignored** |
-| `data/dem/` | FABDEM 1° GeoTIFFs for elevation | **gitignored** |
+| `data/dem/` | FABDEM (or Copernicus GLO-30) 1° GeoTIFFs for elevation | **gitignored** |
 | `data/landcover/` | ESA WorldCover 2021 map GeoTIFFs | **gitignored** |
 | `data/climate/` | CHELSA V2.1 monthly GeoTIFFs | **gitignored** |
 
@@ -1032,6 +1032,28 @@ uv run dayhike fetch-dem --bounds 32.6,-31.3,71.2,46.4
 `--dest` overrides `data/dem/`. FABDEM V1-2 is University of Bristol data,
 CC BY-NC-SA 4.0 (non-commercial).
 
+**Copernicus GLO-30 instead (ADR-0027):** `--source copernicus` downloads the
+Copernicus DEM GLO-30 1° Cloud Optimized GeoTIFFs from the AWS open bucket
+(`https://copernicus-dem-30m.s3.amazonaws.com/`, no account), about 26 MB a
+tile. It is free for commercial use, but it maps the surface: tree tops and
+roofs are in it, so forest walks climb a little more (ADR-0027 has the
+numbers). Tiles GLO-30 Public leaves out (Armenia, Azerbaijan and their
+borders) are not asked for; sea tiles are not in the bucket. Keep one source
+per directory: every DEM step reads the source from the tile names in its
+`--dem` directory and refuses a directory that holds both.
+
+```bash
+uv run dayhike fetch-dem --source copernicus --dest data/dem-copernicus
+uv run dayhike sample-dem --dem data/dem-copernicus
+uv run dayhike sample-trailgraph --dem data/dem-copernicus
+uv run dayhike build-similarity --dem data/dem-copernicus
+```
+
+A Copernicus `sample-dem` writes its attribution into GeometryStore
+`geometry_meta` (`copernicus_attribution`; a FABDEM run removes it). The
+serving export carries it, and the page then names Copernicus GLO-30 in the
+Measure sources, the score help and the footer instead of FABDEM.
+
 **Store and update SQLite:** `dayhike sample-dem` reads those GeoTIFFs and:
 
 1. Writes sampled metres onto GeometryStore `vertices.ele` for vertices that
@@ -1052,7 +1074,7 @@ uv run dayhike sample-dem
 After this, rerun `dayhike build-similarity`: elevation gain, ProfileShape,
 ClimbGrade and SteepestKm come from these heights. SolarAspect (which way the
 geometry faces the sun) is **not** a Catalog column; `build-similarity` reads
-it from the same FABDEM tiles as the `southness` fact (1 south, 0 north).
+it from the same DEM tiles as the `southness` fact (1 south, 0 north).
 
 Python:
 
@@ -1062,6 +1084,12 @@ from dayhike.dem import DEFAULT_DEM_BOUNDS, DEFAULT_DEM_DIR
 
 fetch_fabdem(DEFAULT_DEM_DIR, DEFAULT_DEM_BOUNDS)
 sample_dem("data/catalog.sqlite", DEFAULT_DEM_DIR)
+
+# Copernicus GLO-30 instead:
+from dayhike import fetch_dem
+from dayhike.dem import COPERNICUS
+
+fetch_dem("data/dem-copernicus", DEFAULT_DEM_BOUNDS, source=COPERNICUS)
 ```
 
 ### LandCover and ClimateNormal
@@ -1900,7 +1928,7 @@ The same seams the CLI wraps:
 - `trailgraph_path_for` / `dayhike.trailgraph.write_trailgraph` / `sample_trailgraph` — the TrailGraph sidecar, written at ingest and sampled from the rasters
 - `dayhike.trailgraph.TrailGraph` / `Route` — open a TrailGraph (or its serving copy) and compute the facts of a ComposedHike
 - `dayhike.loops.find_loops` — the beam search for SuggestedLoops near given Trailheads (`ServingData.rank` measures and lists them)
-- `fetch_fabdem` / `sample_dem` — local FABDEM tiles → GeometryStore vertices and Catalog elevation
+- `fetch_fabdem` / `fetch_dem` / `sample_dem` — local FABDEM (or Copernicus GLO-30, `source=COPERNICUS`) tiles → GeometryStore vertices and Catalog elevation
 - `fetch_worldcover` / `sample_landcover` — local WorldCover tiles → GeometryStore classes and Catalog fractions
 - `fetch_chelsa` / `sample_climate` — local CHELSA rasters → Catalog hike-level monthly means
 - `filter_by_drive_time` — Ranking filtered by DriveTime from Origin
@@ -1984,6 +2012,16 @@ or by delegation do not incur any liability for any use of the Copernicus
 WorldDEM-30. The elevation values derived from it (heights, gain, profiles,
 ProfileShape, ClimbGrade, SteepestKm, SolarAspect) are adapted material: the
 web demo shares them under CC BY-NC-SA 4.0 and only non-commercially.
+
+Copernicus DEM GLO-30 (the alternative, ADR-0027): produced using Copernicus
+WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018
+provided under COPERNICUS by the European Union and ESA; all rights reserved.
+The organisations in charge of the Copernicus programme by law or by
+delegation do not incur any liability for any use of the Copernicus
+WorldDEM-30. https://doi.org/10.5270/ESA-c5d3d65, from AWS Open Data
+(https://registry.opendata.aws/copernicus-dem/), free of charge including
+commercial use under the Copernicus DEM licence. Written into GeometryStore
+`geometry_meta` when a Catalog has been sampled from it.
 
 ESA WorldCover 2021: © ESA WorldCover project 2021 / Contains modified
 Copernicus Sentinel data (2021) processed by ESA WorldCover consortium.

@@ -41,7 +41,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from dayhike.catalog import MatrixClient, Origin
-from dayhike.serving import GEONAMES_ATTRIBUTION, MEASURE_GROUPS, MEASURE_INFO, SCORE_HELP, WISH_INPUTS, ServingData
+from dayhike.serving import GEONAMES_ATTRIBUTION, MEASURE_GROUPS, MEASURE_INFO, SCORE_HELP, WISH_INPUTS, ServingData, name_dem
 from dayhike.similarity import DEFAULT_WEIGHTS, MEASURES, WISHABLE, Measure
 from dayhike.trailgraph import Route, RouteError
 
@@ -281,14 +281,15 @@ def create_app(
     # The API reads change only with the export (its meta.json holds facts_version, places.sqlite may come later), the code and the settings.
     settings = f"{BUILD} {drive_client is not None} {MAX_DRIVE_HOURS} {RESULTS} {data.places is not None}".encode()
     etag = f'W/"{hashlib.sha256((data.directory / "meta.json").read_bytes() + settings).hexdigest()[:16]}"'
+    attribution = data.meta["attribution"]
     measures = [
         {
             "name": measure.name,
             "kind": measure.kind,
             "group": MEASURE_INFO[measure.name][0],
             "label": MEASURE_INFO[measure.name][1],
-            "description": MEASURE_INFO[measure.name][2],
-            "source": MEASURE_INFO[measure.name][3],
+            "description": name_dem(MEASURE_INFO[measure.name][2], attribution),
+            "source": name_dem(MEASURE_INFO[measure.name][3], attribution),
             "columns": list(measure.columns),
             "monthly": measure.monthly,
             "default_weight": DEFAULT_WEIGHTS[measure.name],
@@ -359,9 +360,14 @@ def create_app(
             "results": RESULTS,
         }
 
+    score_help = {
+        **SCORE_HELP,
+        "sections": [{**section, "text": name_dem(section["text"], attribution)} for section in SCORE_HELP["sections"]],
+    }
+
     @app.api_route("/api/measures", methods=["GET", "HEAD"])
     def measure_list() -> dict:
-        return {"groups": list(MEASURE_GROUPS), "measures": measures, "score_help": SCORE_HELP}
+        return {"groups": list(MEASURE_GROUPS), "measures": measures, "score_help": score_help}
 
     @app.api_route("/api/search", methods=["GET", "HEAD"])
     def search(q: str = Query(max_length=100), limit: int = Query(20, ge=1, le=50)) -> dict:

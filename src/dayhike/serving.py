@@ -324,6 +324,20 @@ SCORE_HELP = {
 }
 
 
+def name_dem(text: str, attribution: Mapping[str, str]) -> str:
+    """``text`` naming the elevation map an export was sampled from (ADR-0027).
+
+    MEASURE_INFO and SCORE_HELP name FABDEM, the default. An export sampled
+    from Copernicus GLO-30 carries its attribution, and the texts name it.
+    """
+    if "copernicus" not in attribution:
+        return text
+    return text.replace(
+        "FABDEM, a 30 m elevation map with forests and buildings removed",
+        "Copernicus GLO-30, a 30 m elevation map of the surface, tree tops and roofs included",
+    ).replace("FABDEM", "Copernicus GLO-30")
+
+
 MEASURE_GROUPS = ("effort", "altitude", "profile", "landscape", "weather", "water", "facilities", "trail", "steepness")
 POINT_COLUMNS = ("kind", "where", "lat", "lon", "along_m", "off_m", "name", "ele")
 

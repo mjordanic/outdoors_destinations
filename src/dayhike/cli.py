@@ -15,7 +15,7 @@ from dayhike.catalog import (
     build_catalog,
     filter_by_drive_time,
 )
-from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS, DEFAULT_DEM_DIR, fetch_fabdem, sample_dem
+from dayhike.dem import DEM_SOURCES, Bounds, DEFAULT_DEM_BOUNDS, DEFAULT_DEM_DIR, fetch_dem, sample_dem
 from dayhike.landcover import DEFAULT_LANDCOVER_DIR, fetch_worldcover, sample_landcover
 from dayhike.climate import DEFAULT_CLIMATE_DIR, fetch_chelsa, sample_climate
 from dayhike.extracts import fetch_geofabrik_extracts
@@ -80,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     fetch_dem = subparsers.add_parser(
         "fetch-dem",
-        help="Download FABDEM GeoTIFFs covering Alps+Dinarides into data/dem",
+        help="Download FABDEM (or Copernicus GLO-30) GeoTIFFs covering Alps+Dinarides into data/dem",
     )
     fetch_dem.add_argument(
         "--dest",
@@ -93,6 +93,13 @@ def main(argv: list[str] | None = None) -> int:
         type=_parse_bounds,
         default=DEFAULT_DEM_BOUNDS,
         help="south,west,north,east in WGS84 (default: PRD extract bbox)",
+    )
+    fetch_dem.add_argument(
+        "--source",
+        choices=list(DEM_SOURCES),
+        default="fabdem",
+        help="Elevation map: fabdem, bare earth, non-commercial (default); or copernicus, "
+        "GLO-30 with tree tops and roofs, commercial use allowed. Keep one per directory",
     )
     fetch_lc = subparsers.add_parser(
         "fetch-landcover",
@@ -128,7 +135,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     sample = subparsers.add_parser(
         "sample-dem",
-        help="Sample local FABDEM onto GeometryStore vertices and Catalog elevation",
+        help="Sample local FABDEM (or Copernicus GLO-30) onto GeometryStore vertices and Catalog elevation",
     )
     sample.add_argument(
         "--catalog",
@@ -140,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
         "--dem",
         type=Path,
         default=DEFAULT_DEM_DIR,
-        help="Directory of FABDEM GeoTIFFs (default: data/dem)",
+        help="Directory of FABDEM or Copernicus GLO-30 GeoTIFFs (default: data/dem)",
     )
     sample_lc = subparsers.add_parser(
         "sample-landcover",
@@ -176,7 +183,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     sample_tg = subparsers.add_parser(
         "sample-trailgraph",
-        help="Sample local FABDEM, LandCover and climate rasters onto the TrailGraph's vertices",
+        help="Sample local DEM, LandCover and climate rasters onto the TrailGraph's vertices",
     )
     sample_tg.add_argument(
         "--catalog",
@@ -184,7 +191,7 @@ def main(argv: list[str] | None = None) -> int:
         default=Path("data/catalog.sqlite"),
         help="SQLite Catalog path (default: data/catalog.sqlite)",
     )
-    sample_tg.add_argument("--dem", type=Path, default=DEFAULT_DEM_DIR, help="FABDEM GeoTIFFs (default: data/dem)")
+    sample_tg.add_argument("--dem", type=Path, default=DEFAULT_DEM_DIR, help="FABDEM or Copernicus GLO-30 GeoTIFFs (default: data/dem)")
     sample_tg.add_argument(
         "--landcover", type=Path, default=DEFAULT_LANDCOVER_DIR, help="WorldCover GeoTIFFs (default: data/landcover)"
     )
@@ -205,7 +212,7 @@ def main(argv: list[str] | None = None) -> int:
         "--dem",
         type=Path,
         default=DEFAULT_DEM_DIR,
-        help="Directory of FABDEM GeoTIFFs for SolarAspect (default: data/dem)",
+        help="Directory of FABDEM or Copernicus GLO-30 GeoTIFFs for SolarAspect (default: data/dem)",
     )
     similarity.add_argument(
         "--landcover",
@@ -419,7 +426,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "fetch-extracts":
         return _fetch_extracts(args.dest)
     if args.command == "fetch-dem":
-        return _fetch_dem(args.dest, args.bounds)
+        return _fetch_dem(args.dest, args.bounds, args.source)
     if args.command == "fetch-landcover":
         return _fetch_landcover(args.dest, args.bounds)
     if args.command == "fetch-climate":
@@ -489,10 +496,11 @@ def _fetch_extracts(dest: Path) -> int:
     return 0
 
 
-def _fetch_dem(dest: Path, bounds: Bounds) -> int:
-    paths = fetch_fabdem(
+def _fetch_dem(dest: Path, bounds: Bounds, source: str) -> int:
+    paths = fetch_dem(
         dest,
         bounds,
+        source=DEM_SOURCES[source],
         progress=lambda message: print(message, file=sys.stderr, flush=True),
     )
     for path in paths:

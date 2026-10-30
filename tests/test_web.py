@@ -93,6 +93,32 @@ def test_every_measure_names_the_data_its_fact_comes_from(client: TestClient) ->
             assert "OpenStreetMap" in source, name
 
 
+def test_an_export_sampled_from_copernicus_names_it_and_not_fabdem(tmp_path: Path) -> None:
+    from test_dem import _write_constant_tif
+
+    from dayhike import sample_dem
+
+    path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, path)
+    dem = tmp_path / "dem"
+    dem.mkdir()
+    _write_constant_tif(
+        dem / "Copernicus_DSM_COG_10_N45_00_E015_00_DEM.tif", west=14.99, south=44.99, east=16.01, north=46.01, z=900.0
+    )
+    sample_dem(path, dem)
+    build_similarity(path, dem)
+    client = TestClient(create_app(ServingData(export_serving(path, tmp_path / "web-serving")), None))
+
+    assert "Airbus" in client.get("/api/info").json()["attribution"]["copernicus"]
+    body = client.get("/api/measures").json()
+    sources = {m["name"]: m["source"] for m in body["measures"]}
+    help_text = " ".join(section["text"] for section in body["score_help"]["sections"])
+    for name in ELEVATION_MEASURES:
+        assert "Copernicus GLO-30" in sources[name] and "FABDEM" not in sources[name], name
+    assert "Copernicus GLO-30" in help_text and "FABDEM" not in help_text
+    assert "FABDEM" not in str(body["measures"])
+
+
 def test_every_osm_flag_says_two_hikes_without_it_are_not_compared(client: TestClient) -> None:
     descriptions = {m["name"]: m["description"] for m in client.get("/api/measures").json()["measures"]}
 
