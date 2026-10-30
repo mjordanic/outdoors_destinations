@@ -433,3 +433,68 @@ def test_the_credits_page_names_geonames_for_place_search_when_the_export_has_pl
     assert "GeoNames" in credit.inner_text()
     assert "Nominatim" not in credit.inner_text()
     assert credit.get_by_role("link", name="CC BY 4.0").get_attribute("href") == "https://creativecommons.org/licenses/by/4.0/"
+
+
+def test_the_logo_and_loading_show_at_once_then_waking_the_server_until_it_answers(browser, server) -> None:
+    page = browser.new_page()
+    page.route(lambda url: not url.startswith(server), lambda route: route.abort())  # no tiles
+    held = []
+    page.route(f"{server}/api/info", lambda route: held.append(route))  # a server waking from zero
+    page.goto(server)
+    loading = page.locator("#loading")
+
+    assert loading.is_visible()
+    assert loading.locator("svg").is_visible()
+    assert "Loading" in loading.inner_text()
+    page.get_by_text("Waking the server").wait_for()
+
+    held[0].continue_()
+    loading.wait_for(state="hidden")
+    page.wait_for_selector(".weight", state="attached")
+
+
+def test_a_server_that_turns_the_page_away_says_the_site_is_paused(browser, server) -> None:
+    page = browser.new_page()
+    page.route(lambda url: not url.startswith(server), lambda route: route.abort())  # no tiles
+    page.route(f"{server}/api/info", lambda route: route.fulfill(status=403, body="Forbidden"))
+    page.goto(server)
+
+    page.get_by_text("GoFindMeAHike is paused for now").wait_for()
+    assert page.locator("#loading").is_visible()
+
+
+def test_a_server_that_does_not_answer_says_it_is_down_and_offers_to_try_again(browser, server) -> None:
+    page = browser.new_page()
+    page.route(lambda url: not url.startswith(server), lambda route: route.abort())  # no tiles
+    page.route(f"{server}/api/**", lambda route: route.abort("connectionrefused"))
+    page.goto(server)
+
+    page.get_by_text("The server is not answering").wait_for()
+    page.unroute(f"{server}/api/**")
+    page.get_by_role("button", name="Try again").click()
+
+    page.locator("#loading").wait_for(state="hidden")
+    page.wait_for_selector(".weight", state="attached")
+
+
+def test_a_page_naming_another_api_base_asks_that_server(browser, server) -> None:
+    api_base = "https://api.gofindmeahike.example"
+    page = browser.new_page()
+    asked: list[str] = []
+
+    def proxy(route) -> None:  # the API on another origin, which lets the page's origin read it (CORS)
+        asked.append(route.request.url)
+        answer = route.fetch(url=route.request.url.replace(api_base, server))
+        route.fulfill(response=answer, headers={**answer.headers, "access-control-allow-origin": server})
+
+    def shell(route) -> None:
+        html = route.fetch().text().replace('<meta name="api-base" content="">', f'<meta name="api-base" content="{api_base}/">')
+        route.fulfill(body=html, content_type="text/html")
+
+    page.route(lambda url: not url.startswith((server, api_base)), lambda route: route.abort())  # no tiles
+    page.route(f"{api_base}/**", proxy)
+    page.route(f"{server}/", shell)
+    page.goto(server)
+    page.wait_for_selector(".weight", state="attached")
+
+    assert f"{api_base}/api/info" in asked and f"{api_base}/api/measures" in asked

@@ -1644,6 +1644,15 @@ the Support page's tip link. Unset, no page loads analytics and the Support page
 says the tip link is not set up yet. A code or handle other than letters,
 digits, `-` and `_` is refused at start.
 
+The page opens behind a loading screen, the logo and "Loading…", which says
+"Waking the server" when the first answer is slow (a start from zero), and that
+the site is paused (the server turns the page away) or the server is down, with
+a Try again button. The page asks the API at its own origin, or at the one its
+`<meta name="api-base">` names: a loading shell on a static host
+(docs/deploy.md, section 8). `dayhike serve --cors-origin https://HOST`
+(repeatable; container: `DAYHIKE_CORS_ORIGINS`, space-separated) lets such a
+page call the API; unset, no other origin may.
+
 What the export holds (`src/dayhike/serving.py`): a copy of
 `catalog.similarity/`, Trailheads as a numpy array, and `hikes.sqlite` with per
 DayHike its name, DayHikeGeometry simplified at 10 m (encoded polyline), its

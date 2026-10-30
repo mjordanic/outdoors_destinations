@@ -5,16 +5,43 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>GoFindMeAHike</title>
   <meta name="description" content="Pick a day hike you liked and find similar ones across Europe, from OpenStreetMap data.">
+  <!-- The API's origin; empty is this page's own. A loading shell on a static host names the server (docs/deploy.md). -->
+  <meta name="api-base" content="">
   <link rel="icon" href="mark.svg" type="image/svg+xml">
+  <style>
+    /* Inline, so the loading screen shows before anything else loads. */
+    .loading { position: fixed; inset: 0; z-index: 10000; display: flex; flex-direction: column; align-items: center;
+      justify-content: center; gap: 0.6rem; padding: 1.5rem; background: #f7f8f6; color: #1f2a24; text-align: center;
+      font: 1rem/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .loading[hidden] { display: none; }
+    .loading-name { margin: 0; font-size: 1.5rem; font-weight: 700; }
+    .loading-text { margin: 0; max-width: 32rem; }
+    .loading-text.error { color: #b42318; }
+    .loading button { font: inherit; padding: 0.4rem 1rem; }
+  </style>
   <link rel="stylesheet" href="vendor/leaflet/leaflet.css"
         integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
   <link rel="stylesheet" href="style.css">
-  <script src="vendor/leaflet/leaflet.js"
+  <script src="vendor/leaflet/leaflet.js" defer
           integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <script src="app.js" defer></script>
   <!--analytics-->
 </head>
 <body>
+<div id="loading" class="loading" role="status" aria-live="polite">
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="96" height="96" aria-hidden="true">
+    <circle cx="32" cy="32" r="31" fill="#e8f1ea"/>
+    <circle cx="46" cy="17" r="5" fill="#e9b949"/>
+    <path d="M4 50 L24 18 L33 32 L40 23 L60 50 Z" fill="#2f7d4f"/>
+    <path d="M24 18 L30.2 28 L27 26.5 L24 29 L21 26 L18.6 27.4 Z" fill="#ffffff"/>
+    <path d="M40 23 L45 30 L42.5 29 L40 31 L37.6 29.4 L36.4 28.2 Z" fill="#ffffff"/>
+    <path d="M14 50 C20 44 30 46 28 40 C26 35 33 34 34 31" fill="none" stroke="#f6e7c1" stroke-width="2.4" stroke-linecap="round" stroke-dasharray="0.1 4.2"/>
+    <path d="M4 50 H60 A31 31 0 0 1 4 50 Z" fill="#245f3c"/>
+  </svg>
+  <p class="loading-name">GoFindMeAHike</p>
+  <p class="loading-text" id="loading-text">Loading…</p>
+  <button type="button" id="loading-retry" hidden onclick="location.reload()">Try again</button>
+</div>
 <header class="top">
   <a class="home" href="/" tabindex="-1" aria-hidden="true"><img class="mark" src="mark.svg" alt="" width="44" height="44"></a>
   <div class="brand">

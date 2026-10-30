@@ -637,3 +637,27 @@ def test_an_export_without_places_says_so(client: TestClient) -> None:
     assert info["place_search"] is False and "geonames" not in info["attribution"]
     assert "Place search: <a href=\"https://nominatim.org/\">Nominatim</a>" in client.get("/credits.html").text
     assert client.get("/api/place", params={"q": "zag"}).status_code == 404
+
+
+SHELL = "https://gofindmeahike.example"  # a loading shell on a static host, calling the API from its own origin
+PREFLIGHT = {"Origin": SHELL, "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "content-type"}
+
+
+def test_no_other_site_may_call_the_api_while_no_cors_origin_is_set(data: ServingData) -> None:
+    for client in (TestClient(create_app(data)), TestClient(create_app(data, cors_origins=("https://other.example",)))):
+        assert "access-control-allow-origin" not in client.get("/api/info", headers={"Origin": SHELL}).headers
+        assert "access-control-allow-origin" not in client.options("/api/rank", headers=PREFLIGHT).headers
+
+
+def test_a_cors_preflight_from_the_shell_does_not_use_up_the_ranking_budget(data: ServingData) -> None:
+    client = TestClient(create_app(data, rank_rate=1, cors_origins=(SHELL,)))
+
+    for _ in range(3):
+        answered = client.options("/api/rank", headers=PREFLIGHT)
+        assert answered.status_code == 200
+        assert answered.headers["access-control-allow-origin"] == SHELL
+    ranked = client.post("/api/rank", json={"seed": RIDGE_WALK_ID}, headers={"Origin": SHELL})
+    refused = client.post("/api/rank", json={"seed": RIDGE_WALK_ID}, headers={"Origin": SHELL})
+
+    assert ranked.status_code == 200 and ranked.headers["access-control-allow-origin"] == SHELL
+    assert refused.status_code == 429 and refused.headers["access-control-allow-origin"] == SHELL  # the shell reads why
