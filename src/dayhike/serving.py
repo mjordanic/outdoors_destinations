@@ -131,6 +131,8 @@ SERVING_FORMAT = 4
 SERVING_ROOT = "/data"  # where the container finds the export (web/Dockerfile)
 LINE_TOLERANCE_M = 10.0
 ELEVATION_POINTS = 128
+DRAWN_SMOOTH_M = 90.0  # a Copernicus GLO-30 ElevationProfile is drawn smoothed over this (ADR-0030) ...
+DRAWN_STEP_M = 10.0  # ... resampled this often first
 LOOP_MEASURED = 40  # the SuggestedLoops guessed best that a Ranking measures exactly
 LOOP_BUDGET_S = 5.0  # the most a Ranking spends on SuggestedLoops
 LOOP_SEED_SHARE = 0.5  # a loop sharing more of its walk with the Seed, or of the Seed's, is no suggestion
@@ -342,6 +344,31 @@ MEASURE_GROUPS = ("effort", "altitude", "profile", "landscape", "weather", "wate
 POINT_COLUMNS = ("kind", "where", "lat", "lon", "along_m", "off_m", "name", "ele")
 
 
+def drawn_profile(
+    lat: np.ndarray, lon: np.ndarray, ele: np.ndarray, *, smooth: bool
+) -> np.ndarray | None:
+    """The ElevationProfile the page draws: metres at ``ELEVATION_POINTS``
+    equal steps, None with fewer than two heights.
+
+    ``smooth``, for a Copernicus GLO-30 export, first resamples the walk every
+    ``DRAWN_STEP_M`` and fits a Savitzky-Golay quadratic over
+    ``DRAWN_SMOOTH_M``, so what is left of the tree tops does not jag the line
+    while climbs, tops and dips keep their shape. It is drawn only: climb,
+    descent and the facts read the heights as sampled.
+    """
+    window = round(DRAWN_SMOOTH_M / DRAWN_STEP_M) // 2 * 2 + 1  # odd, in steps
+    points = round(float(_step_m(np.asarray(lat, float), np.asarray(lon, float)).sum()) / DRAWN_STEP_M) + 1
+    if not smooth or points < window:
+        return _resample(lat, lon, ele, points=ELEVATION_POINTS)
+    from scipy.signal import savgol_filter
+
+    dense = _resample(lat, lon, ele, points=points)
+    if dense is None:
+        return None
+    dense = savgol_filter(dense, window, 2, mode="interp")
+    return np.interp(np.linspace(0, points - 1, ELEVATION_POINTS), np.arange(points), dense)
+
+
 class ServingExportError(ValueError):
     """The inputs of a serving export do not fit together."""
 
@@ -466,7 +493,7 @@ def _write_hikes(
                     kept_lat, kept_lon = simplify_line(lat, lon, LINE_TOLERANCE_M)
                     line = encode_polyline(kept_lat, kept_lon)
                     boxes.append((dayhike_id, kept_lat.min(), kept_lat.max(), kept_lon.min(), kept_lon.max()))
-                    profile = _resample(lat, lon, ele, points=ELEVATION_POINTS)
+                    profile = drawn_profile(lat, lon, ele, smooth="copernicus" in sources)
                     if profile is not None:
                         elevation = np.round(profile).astype("<i2").tobytes()
                         climb_m, descent_m = (round(v) for v in climb_and_descent(lat, lon, ele))
@@ -1061,7 +1088,7 @@ class ServingData:
         line = elevation = climb_m = descent_m = None
         if len(lat) >= 2:
             line = encode_polyline(*simplify_line(lat, lon, LINE_TOLERANCE_M))
-            profile = _resample(lat, lon, ele, points=ELEVATION_POINTS)
+            profile = drawn_profile(lat, lon, ele, smooth="copernicus" in self.meta["attribution"])
             if profile is not None:
                 elevation = {"step_m": walk_m / (ELEVATION_POINTS - 1), "metres": np.round(profile).astype(int).tolist()}
                 climb_m, descent_m = (_round(v) for v in climb_and_descent(trip.lat, trip.lon, trip.ele))

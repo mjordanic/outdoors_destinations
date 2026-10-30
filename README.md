@@ -1036,14 +1036,22 @@ CC BY-NC-SA 4.0 (non-commercial).
 Copernicus DEM GLO-30 1° Cloud Optimized GeoTIFFs from the AWS open bucket
 (`https://copernicus-dem-30m.s3.amazonaws.com/`, no account), about 26 MB a
 tile. It is free for commercial use, but it maps the surface: tree tops and
-roofs are in it, so forest walks climb a little more (ADR-0030 has the
-numbers). Tiles GLO-30 Public leaves out (Armenia, Azerbaijan and their
-borders) are not asked for; sea tiles are not in the bucket. Keep one source
-per directory: every DEM step reads the source from the tile names in its
+roofs are in it. So `sample-dem` and `sample-trailgraph` read the ground
+under trees from it: a point with WorldCover tree cover within 75 m is lowered
+toward its canopy floor (the plane through the GLO-30 cells within 75 m, plus
+the 35th percentile of their heights above it) by the share of tree cover
+there; open ground reads as it is. Both steps therefore need the WorldCover
+tiles (`fetch-landcover`, `--landcover`) and refuse to run without them. The
+page draws a Copernicus ElevationProfile smoothed over 90 m; climb, descent
+and every fact read the heights as sampled. ADR-0030 has the numbers.
+Tiles GLO-30 Public leaves out (Armenia, Azerbaijan and their borders) are
+not asked for; sea tiles are not in the bucket. Keep one source per
+directory: every DEM step reads the source from the tile names in its
 `--dem` directory and refuses a directory that holds both.
 
 ```bash
 uv run dayhike fetch-dem --source copernicus --dest data/dem-copernicus
+uv run dayhike fetch-landcover
 uv run dayhike sample-dem --dem data/dem-copernicus
 uv run dayhike sample-trailgraph --dem data/dem-copernicus
 uv run dayhike build-similarity --dem data/dem-copernicus
@@ -1070,7 +1078,8 @@ still FABDEM, and its credit and the non-commercial limit still apply.
 
 It does not add or drop DayHikes, does not change amenities, and does not
 download tiles. `--catalog` defaults to `data/catalog.sqlite`; `--dem`
-defaults to `data/dem/`.
+defaults to `data/dem/`; `--landcover` (read for Copernicus GLO-30 only)
+defaults to `data/landcover/`.
 
 ```bash
 uv run dayhike sample-dem

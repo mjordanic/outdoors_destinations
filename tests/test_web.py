@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from dayhike import build_catalog, build_similarity, web
+from dayhike import build_catalog, build_similarity, serving, web
 from dayhike.serving import ServingData, export_places, export_serving
 from dayhike.similarity import CORE_MEASURES, FACILITIES_FLAG_COLUMNS, MEASURE_NAMES
 from dayhike.web import RESULTS, create_app
@@ -93,8 +93,8 @@ def test_every_measure_names_the_data_its_fact_comes_from(client: TestClient) ->
             assert "OpenStreetMap" in source, name
 
 
-def test_an_export_sampled_from_copernicus_names_it_and_not_fabdem(tmp_path: Path) -> None:
-    from test_dem import _write_constant_tif
+def test_an_export_sampled_from_copernicus_names_it_and_not_fabdem(tmp_path: Path, monkeypatch) -> None:
+    from test_dem import _write_constant_tif, _write_grassland
 
     from dayhike import sample_dem
 
@@ -105,8 +105,11 @@ def test_an_export_sampled_from_copernicus_names_it_and_not_fabdem(tmp_path: Pat
     _write_constant_tif(
         dem / "Copernicus_DSM_COG_10_N45_00_E015_00_DEM.tif", west=14.99, south=44.99, east=16.01, north=46.01, z=900.0
     )
-    sample_dem(path, dem)
+    sample_dem(path, dem, landcover_dir=_write_grassland(tmp_path))
     build_similarity(path, dem)
+    smoothed = []
+    drawn = serving.drawn_profile
+    monkeypatch.setattr(serving, "drawn_profile", lambda *walk, smooth: smoothed.append(smooth) or drawn(*walk, smooth=smooth))
     client = TestClient(create_app(ServingData(export_serving(path, tmp_path / "web-serving")), None))
 
     attribution = client.get("/api/info").json()["attribution"]
@@ -118,6 +121,7 @@ def test_an_export_sampled_from_copernicus_names_it_and_not_fabdem(tmp_path: Pat
         assert "Copernicus GLO-30" in sources[name] and "FABDEM" not in sources[name], name
     assert "Copernicus GLO-30" in help_text and "FABDEM" not in help_text
     assert "FABDEM" not in str(body["measures"])
+    assert smoothed and all(smoothed)  # its ElevationProfiles are drawn smoothed (ADR-0030)
     # The credits page and the home footer credit the map in use, with its licence notice.
     credits = client.get("/credits.html").text
     footer = client.get("/").text.split("<footer", 1)[1]

@@ -860,7 +860,8 @@ def sample_trailgraph(
     ``sample-climate`` and ``build-similarity`` read the same rasters, so a
     ComposedHike that walks a DayHike's own vertices gets its facts:
 
-    - ``ele``: the DEM (FABDEM, or Copernicus GLO-30) where a tile covers
+    - ``ele``: the DEM (FABDEM, or Copernicus GLO-30, which needs the
+      WorldCover tiles to read the ground under trees) where a tile covers
       the vertex, else its OSM ``ele``;
     - ``landcover``: the WorldCover class (0 uncovered);
     - ``climate_cell``: the CHELSA cell, when all 36 rasters have a value
@@ -874,7 +875,7 @@ def sample_trailgraph(
     after every sample step. Returns the number of vertices.
     """
     from dayhike.climate import _climate_rasters
-    from dayhike.dem import dem_source_of, sample_elevations
+    from dayhike.dem import COPERNICUS, dem_source_of, require_worldcover, sample_elevations
     from dayhike.landcover import _raster_paths, sample_landcover_classes
     from dayhike.similarity import slope_southness
 
@@ -882,7 +883,10 @@ def sample_trailgraph(
     if not path.is_file():
         raise FileNotFoundError(path)
     dem_dir, landcover_dir, climate_dir = Path(dem_dir), Path(landcover_dir), Path(climate_dir)
-    has_dem = dem_source_of(dem_dir) is not None
+    source = dem_source_of(dem_dir)
+    has_dem = source is not None
+    if source is COPERNICUS:
+        require_worldcover(landcover_dir)
     has_landcover = bool(_raster_paths(landcover_dir)) if landcover_dir.is_dir() else False
     rasters = _climate_rasters(climate_dir) if climate_dir.is_dir() else []
     grid = _climate_grid(rasters) if rasters else None
@@ -906,7 +910,7 @@ def sample_trailgraph(
             southness = np.concatenate([_blob(row[5], "<f4", len(c), np.nan) for row, c in zip(chunk, coords)])
             points = list(zip(lat.tolist(), lon.tolist()))
             if has_dem:
-                heights = sample_elevations(dem_dir, points)
+                heights = sample_elevations(dem_dir, points, landcover_dir)
                 ele = np.array([e if h is None else h for e, h in zip(ele.tolist(), heights)], dtype=float)
                 southness = slope_southness(dem_dir, lat, lon)
             if has_landcover:

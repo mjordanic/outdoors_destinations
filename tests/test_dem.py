@@ -276,6 +276,89 @@ def test_a_fabdem_point_outside_the_tiles_grid_stays_uncovered(tmp_path: Path) -
     assert samples == [pytest.approx(1500.0), None, None]
 
 
+CELL = 1 / 3600  # a GLO-30 cell, in degrees
+CANOPY_LAT = 45.5 - CELL / 2  # the centres of one row of cells
+
+
+def _east_m(lon: np.ndarray) -> np.ndarray:
+    """Metres east of 15.5, where forest gives way to open land."""
+    return (lon - 15.5) * 111_195 * math.cos(math.radians(45.5))
+
+
+def _ground(lon: np.ndarray) -> np.ndarray:
+    """A 40 m hill and a 30 m dip in the forest west of 15.5; flat land east of it."""
+    x = _east_m(lon)
+    return 500 + 40 * np.exp(-(((x + 700) / 200) ** 2)) - 30 * np.exp(-(((x + 300) / 200) ** 2))
+
+
+def _write_canopy_tiles(root: Path, dem_file: str) -> tuple[Path, Path]:
+    """GLO-30-like cells of the ground with 18 m tree tops on half of them, in
+    2 x 2 cell clumps. WorldCover maps forest west of 15.5 and grassland east
+    of it, where the same clumps stand for rocks and roofs."""
+    import rasterio
+    from rasterio.transform import from_origin
+
+    from test_landcover import _write_class_tif
+
+    dem, landcover = root / "dem", root / "landcover"
+    dem.mkdir()
+    landcover.mkdir()
+    rows, cols = np.mgrid[0:72, 0:216]
+    heights = _ground(15.47 + (cols + 0.5) * CELL) + np.where((rows // 2 + cols // 2) % 2 == 0, 18.0, 0.0)
+    with rasterio.open(
+        dem / dem_file, "w", driver="GTiff", height=72, width=216, count=1, dtype="float32",
+        crs="EPSG:4326", transform=from_origin(15.47, 45.51, CELL, CELL),
+    ) as dataset:
+        dataset.write(heights.astype("float32"), 1)
+    codes = np.where(np.arange(720) < 360, 10, 30)[None, :].repeat(240, axis=0)
+    _write_class_tif(
+        landcover / "ESA_WorldCover_10m_2021_v200_N45E015_Map.tif",
+        west=15.47, south=45.49, east=15.53, north=45.51, codes=codes,
+    )
+    return dem, landcover
+
+
+def _canopy_walk() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """One point per cell along the row, from 1.2 km into the forest to 1.2 km into the open."""
+    lon = 15.47 + (np.arange(216) + 0.5) * CELL
+    lon = lon[np.abs(_east_m(lon)) <= 1_200]
+    return np.full(len(lon), CANOPY_LAT), lon, _east_m(lon)
+
+
+def test_copernicus_under_trees_reads_the_ground_below_the_canopy(tmp_path: Path) -> None:
+    from dayhike.similarity import elevation_gain
+
+    dem, landcover = _write_canopy_tiles(tmp_path, "Copernicus_DSM_COG_10_N45_00_E015_00_DEM.tif")
+    lat, lon, x = _canopy_walk()
+    points = list(zip(lat.tolist(), lon.tolist()))
+
+    raw = np.array(sample_elevations(dem, points))
+    floor = np.array(sample_elevations(dem, points, landcover_dir=landcover))
+
+    forest, open_land = x < -150, x > 150
+    ground = _ground(lon)
+    # The hill and the dip stay; the tree tops go.
+    assert np.abs(raw[forest] - ground[forest]).max() == pytest.approx(18.0, abs=0.01)
+    assert np.abs(floor[forest] - ground[forest]).max() < 4.0
+    assert elevation_gain(lat[forest], lon[forest], raw[forest]) > elevation_gain(
+        lat[forest], lon[forest], ground[forest]
+    ) + 100
+    assert elevation_gain(lat[forest], lon[forest], floor[forest]) == pytest.approx(
+        elevation_gain(lat[forest], lon[forest], ground[forest]), abs=5.0
+    )
+    # Open land keeps every reading as it was, rocks and roofs included.
+    assert floor[open_land].tolist() == raw[open_land].tolist()
+    assert (floor <= raw + 4.0).all()
+
+
+def test_fabdem_under_trees_is_read_as_it_is(tmp_path: Path) -> None:
+    dem, landcover = _write_canopy_tiles(tmp_path, "N45E015_FABDEM_V1-2.tif")
+    lat, lon, _ = _canopy_walk()
+    points = list(zip(lat.tolist(), lon.tolist()))
+
+    assert sample_elevations(dem, points, landcover_dir=landcover) == sample_elevations(dem, points)
+
+
 def test_a_dem_directory_holds_one_source(tmp_path: Path) -> None:
     for name in ("N45E015_FABDEM_V1-2.tif", "Copernicus_DSM_COG_10_N45_00_E015_00_DEM.tif"):
         _write_constant_tif(tmp_path / name, west=14.99, south=44.99, east=16.01, north=46.01, z=1.0)
@@ -324,6 +407,19 @@ def _geometry_meta(catalog_path: Path) -> dict[str, str]:
         connection.close()
 
 
+def _write_grassland(root: Path) -> Path:
+    """A WorldCover tile of grassland over the fixture's hikes."""
+    from test_landcover import _write_class_tif
+
+    landcover = root / "landcover"
+    landcover.mkdir()
+    _write_class_tif(
+        landcover / "ESA_WorldCover_10m_2021_v200_N45E015_Map.tif",
+        west=14.99, south=44.99, east=16.01, north=46.01, codes=np.full((8, 8), 30),
+    )
+    return landcover
+
+
 def test_sample_dem_from_copernicus_records_its_attribution(tmp_path: Path) -> None:
     catalog_path = tmp_path / "catalog.sqlite"
     build_catalog(FIXTURE, catalog_path)
@@ -334,7 +430,7 @@ def test_sample_dem_from_copernicus_records_its_attribution(tmp_path: Path) -> N
     _write_constant_tif(copernicus / "Copernicus_DSM_COG_10_N45_00_E015_00_DEM.tif", **box, z=1410.0)
     _write_constant_tif(fabdem / "N45E015_FABDEM_V1-2.tif", **box, z=1400.0)
 
-    assert sample_dem(catalog_path, copernicus) > 0
+    assert sample_dem(catalog_path, copernicus, landcover_dir=_write_grassland(tmp_path)) > 0
 
     valley = next(hike for hike in Catalog.open(catalog_path).dayhikes if hike.name == "Valley Path")
     assert valley.feature_vector.elevation_min_m == pytest.approx(1410.0)
@@ -346,6 +442,67 @@ def test_sample_dem_from_copernicus_records_its_attribution(tmp_path: Path) -> N
     sample_dem(catalog_path, fabdem)
 
     assert "copernicus_attribution" not in _geometry_meta(catalog_path)
+
+
+def test_sample_dem_from_copernicus_needs_worldcover_for_the_canopy(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from dayhike.cli import main
+
+    catalog_path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, catalog_path)
+    copernicus = tmp_path / "copernicus"
+    copernicus.mkdir()
+    _write_constant_tif(
+        copernicus / "Copernicus_DSM_COG_10_N45_00_E015_00_DEM.tif",
+        west=14.99, south=44.99, east=16.01, north=46.01, z=1410.0,
+    )
+
+    for landcover_dir in (None, tmp_path / "no-landcover"):
+        with pytest.raises(ValueError, match="WorldCover"):
+            sample_dem(catalog_path, copernicus, landcover_dir=landcover_dir)
+    with pytest.raises(SystemExit):
+        main(["sample-dem", "--catalog", str(catalog_path), "--dem", str(copernicus), "--landcover", str(tmp_path)])
+    assert "needs WorldCover tiles" in capsys.readouterr().err
+
+
+def test_sample_dem_writes_the_copernicus_canopy_floor(tmp_path: Path) -> None:
+    import rasterio
+    from rasterio.transform import from_origin
+
+    from test_landcover import _write_class_tif
+
+    catalog_path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, catalog_path)
+    copernicus, landcover = tmp_path / "copernicus", tmp_path / "landcover"
+    copernicus.mkdir()
+    landcover.mkdir()
+    # The Ridge Walk runs north along 15.0 from 45.0; a forest of 2 x 2 cell clumps 18 m tall.
+    rows, cols = np.mgrid[0:396, 0:72]
+    heights = 1400.0 + np.where((rows // 2 + cols // 2) % 2 == 0, 18.0, 0.0)
+    with rasterio.open(
+        copernicus / "Copernicus_DSM_COG_10_N45_00_E015_00_DEM.tif", "w", driver="GTiff", height=396,
+        width=72, count=1, dtype="float32", crs="EPSG:4326", transform=from_origin(14.99, 45.1, CELL, CELL),
+    ) as dataset:
+        dataset.write(heights.astype("float32"), 1)
+    _write_class_tif(
+        landcover / "ESA_WorldCover_10m_2021_v200_N45E015_Map.tif",
+        west=14.99, south=44.99, east=15.02, north=45.11, codes=np.full((1440, 360), 10),
+    )
+
+    assert sample_dem(catalog_path, copernicus, landcover_dir=landcover) > 0
+
+    connection = sqlite3.connect(geometry_store_path_for(catalog_path))
+    try:
+        rows = connection.execute(
+            "SELECT v.latitude, v.longitude, v.ele FROM vertices v JOIN dayhikes d ON d.id = v.dayhike_id "
+            "WHERE d.name = 'Ridge Walk' ORDER BY v.seq"
+        ).fetchall()
+    finally:
+        connection.close()
+    points = [(lat, lon) for lat, lon, _ in rows]
+    assert [ele for _, _, ele in rows] == sample_elevations(copernicus, points, landcover_dir=landcover)
+    assert all(ele == pytest.approx(1400.0, abs=3.0) for _, _, ele in rows)  # the ground, not the tree tops
 
 
 def test_sample_dem_without_rasters_keeps_osm_ele(tmp_path: Path) -> None:
