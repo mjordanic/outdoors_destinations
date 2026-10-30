@@ -10,10 +10,14 @@ A Ranking may start from a Wish instead of a Seed, and the Measure list says how
 a Wish value (ADR-0024).
 Detail, compose, pair and Ranking measure every hike with its way back to the start unless
 ``return_to_start`` is false (ADR-0019).
+A browser keeps the API reads an hour and then revalidates them by an ETag of the export, the code
+and the drive-time settings; the page always revalidates, so a redeploy shows at once. Responses are
+gzipped for a browser that takes it.
 """
 
 from __future__ import annotations
 
+import hashlib
 import math
 import threading
 import time
@@ -26,7 +30,8 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -48,6 +53,17 @@ API_RATE = 300
 RATE_WINDOW_S = 60.0
 RANK_WAIT_S = 30.0  # a Ranking waits this long for the one running before it
 VALHALLA_TIMEOUT_S = 50.0  # socket timeout for Valhalla calls, under Cloud Run's 60 s request timeout
+# The API reads a browser keeps API_MAX_AGE_S seconds; after that the ETag revalidates them.
+CACHED_READS = ("/api/info", "/api/measures", "/api/search", "/api/hikes", "/api/segments")
+API_MAX_AGE_S = 3600
+# The code this app runs: a redeploy that changes it changes the ETag of the API reads.
+BUILD = hashlib.sha256(
+    b"".join(
+        path.read_bytes()
+        for path in sorted(Path(__file__).parent.parent.rglob("*"))
+        if path.is_file() and "__pycache__" not in path.parts
+    )
+).hexdigest()
 
 DriveClientFactory = Callable[[float], MatrixClient]
 MEASURE_KINDS = {measure.name: measure.kind for measure in MEASURES}
@@ -215,6 +231,9 @@ def create_app(
     app = FastAPI(title="GoFindMeAHike", docs_url="/api/docs", openapi_url="/api/openapi.json")
     limiters = {"rank": RateLimiter(rank_rate, RATE_WINDOW_S), "api": RateLimiter(api_rate, RATE_WINDOW_S)}
     one_ranking = threading.Semaphore(1)
+    # The API reads change only with the export (its meta.json holds facts_version), the code and the settings.
+    settings = f"{BUILD} {drive_client is not None} {MAX_DRIVE_HOURS} {RESULTS}".encode()
+    etag = f'W/"{hashlib.sha256((data.directory / "meta.json").read_bytes() + settings).hexdigest()[:16]}"'
     measures = [
         {
             "name": measure.name,
@@ -248,13 +267,22 @@ def create_app(
                     status_code=429,
                     headers={"Retry-After": str(int(RATE_WINDOW_S))},
                 )
+        cached = request.method in ("GET", "HEAD") and (path in CACHED_READS or path.startswith("/api/hikes/"))
         response = await call_next(request)
+        if cached and response.status_code == 200:
+            headers = {"Cache-Control": f"public, max-age={API_MAX_AGE_S}", "ETag": etag}
+            if etag in (tag.strip() for tag in request.headers.get("if-none-match", "").split(",")):
+                response = Response(status_code=304, headers=headers)
+            else:
+                response.headers.update(headers)
         if not path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-cache"  # revalidate (ETag): a redeploy shows at once
         response.headers["X-Content-Type-Options"] = "nosniff"
         # OSM tile and Nominatim policies ask for a Referer; send the origin only.
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         return response
+
+    app.add_middleware(GZipMiddleware)  # outermost: API JSON and the page, for a browser that takes gzip
 
     # A refusal leaves out the input it refuses: a NaN or Infinity in the body cannot be written back as JSON.
     @app.exception_handler(RequestValidationError)
