@@ -174,7 +174,7 @@ def test_rank_returns_scored_results_with_every_measure(client: TestClient) -> N
     assert set(body["results"][0]["measures"]) == set(MEASURE_NAMES)
     assert body["reachable"] is None and body["results"][0]["drive_hours"] is None
     assert set(body["weights"]) == set(CORE_MEASURES)
-    assert body["loops"] is False  # SuggestedLoops only on request (ADR-0027)
+    assert body["loops"] is False  # SuggestedLoops only on request (ADR-0028)
 
 
 def test_a_wish_ranks_hikes_by_the_values_typed_in(client: TestClient) -> None:
@@ -343,7 +343,7 @@ def test_drive_filter_keeps_only_reachable_hikes_with_their_hours(
         json={"seed": RIDGE_WALK_ID, "origin": {"lat": 45.1, "lon": 15.1}, "max_hours": 2},
     ).json()
 
-    assert matrix.calls == 1  # the Trailheads; the starts of SuggestedLoops only on request (ADR-0027)
+    assert matrix.calls == 1  # the Trailheads; the starts of SuggestedLoops only on request (ADR-0028)
     assert body["reachable"] == 3  # the Seed's Trailhead counts; 1003 is unreachable
     assert sorted(r["id"] for r in body["results"]) == [1002, 1007]
     assert all(r["drive_hours"] == 1.0 for r in body["results"])

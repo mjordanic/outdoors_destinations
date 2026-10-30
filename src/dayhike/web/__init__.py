@@ -126,7 +126,7 @@ class RankRequest(Weighted):
     wish: dict[str, bool | float] | None = None  # Measure name to value, yes/no as true/false
     origin: Place | None = None
     max_hours: float | None = Field(default=None, gt=0, le=MAX_DRIVE_HOURS)
-    loops: bool = False  # SuggestedLoops too, only on request (ADR-0027)
+    loops: bool = False  # SuggestedLoops too, only on request (ADR-0028)
 
     @field_validator("wish")
     @classmethod

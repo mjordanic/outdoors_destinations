@@ -1079,7 +1079,7 @@ class ServingData:
         its way back (and the figures listed are of that walk), else one way.
         Each hike has its served ``line``.
 
-        With a TrailGraph and ``loops`` (asked for: ADR-0027) the hikes are
+        With a TrailGraph and ``loops`` (asked for: ADR-0028) the hikes are
         DayHikes and SuggestedLoops (ADR-0020), ranked together: a loop has
         ``id`` None, its ``route``, a name from where it starts, and
         ``drive_hours`` to its start from ``reach`` (None without it), which

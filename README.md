@@ -1574,7 +1574,7 @@ an "off" tick per Measure, and list the 10 most similar hikes with their score,
 length, climb and descent, and per-Measure scores. With a TrailGraph a button
 under the list, "Suggest loops near these hikes (takes a few seconds)", ranks
 the same query again with SuggestedLoops mixed in (ADR-0020, only on request
-since ADR-0027): loops drawn on the marked network near the
+since ADR-0028): loops drawn on the marked network near the
 best Catalog results, found as the query runs, named after a hiking place near
 where they start, else by the trails they walk (ADR-0022), marked "composed" and
 drawn dashed green on the "Select hike on map" map. Each opens like a composed hike, with its
@@ -1687,7 +1687,7 @@ yes/no Measure; only the Measures with a value weigh (100 each without
 `kind` (`number` or `yes/no`), `unit`, `min`, `max`, `step` and `default`, or
 null for a Measure that takes no value (profile, land cover, surface), and its
 data `source`; `score_help` holds the score explanation (`SCORE_HELP`). With a TrailGraph and `"loops": true` (default false,
-echoed as `loops`; ADR-0027) a Ranking also lists SuggestedLoops
+echoed as `loops`; ADR-0028) a Ranking also lists SuggestedLoops
 (ADR-0020): `id` null, `route` `{"text"}` (what `/api/compose` takes), `line`,
 `name` (from where it starts) and the figures of a DayHike row; with `origin`
 and `max_hours` only loops starting within the drive, each with its
@@ -1707,7 +1707,7 @@ limited to 2 GiB and 1 CPU like Cloud Run (`web/smoke.py`):
 | Container start to first answer | 3 s (both processes); 215 MiB |
 | Search / hike detail | 6–10 ms / 3–5 ms |
 | Ranking, one Seed, 3 / 27 Measures | 0.3 s / not yet re-measured (27 Measures); 3 Measures 0.07 s on the Mac without the 1-CPU cap |
-| Ranking with SuggestedLoops (`"loops": true`, ADR-0027) | about 3.3 s on average, against about 0.35 s without (hosting study); not yet re-measured with `web/smoke.py` |
+| Ranking with SuggestedLoops (`"loops": true`, ADR-0028) | about 3.3 s on average, against about 0.35 s without (hosting study); not yet re-measured with `web/smoke.py` |
 | Ranking within 2 h / 4 h drive (Ljubljana, Munich) | 2.7 s / 12 s; 4 h from Paris 14 s, Berlin 8 s, Prague 8 s, Rome 3 s, Oslo 3 s |
 | Container memory peak (cgroup, after those queries) | 1.5 GB of the 2 GiB: Valhalla 1.0–1.3 GB resident (0.46 GB its own, the rest the mapped tiles), the app 0.96 GB resident (0.82 GB its own) |
 
