@@ -73,7 +73,7 @@ gcloud services enable run.googleapis.com artifactregistry.googleapis.com billin
 gcloud artifacts repositories create dayhike --repository-format=docker --location=europe-west1
 gcloud auth configure-docker europe-west1-docker.pkg.dev   # edits ~/.docker/config.json
 
-# cleanup policy: keep the last 9 versions (3 pushes), delete anything older than 30 days
+# cleanup policy: keep the last 9 versions (3 pushes), delete the rest once older than 30 days
 cat > /tmp/ar-cleanup.json <<'EOF'
 [
   {"name": "keep-recent-releases", "action": {"type": "Keep"},
@@ -103,7 +103,8 @@ three versions per tag: an image index (the tagged one), the `linux/amd64`
 image and an attestation. Cloud Run runs the untagged `linux/amd64` digest.
 Cleanup never deletes an image that a kept index references, but it deletes the
 children once their index goes. So `keepCount` counts versions, not tags: 9
-keeps the last three pushes. Keep it a multiple of three.
+keeps at least the last three pushes, plus every push from the last 30 days
+(the Delete rule only matches versions older than that). Keep it a multiple of three.
 Rolling back (section 7) only works to an image that is still kept. The
 policy runs in a daily background job. `--dry-run` deletes nothing, but its
 would-be deletions show only in the Data Access audit logs, which are off
@@ -148,8 +149,10 @@ around the clock: about 5.3 million vCPU-seconds and 10.5 million GiB-seconds a
 month, roughly **$150 per month at list price** after the free tier (verify the
 europe-west1 rates). Normal demo traffic stays inside the free tier
 (180,000 vCPU-seconds and 360,000 GiB-seconds a month); the images in Artifact
-Registry cost about $0.25 to $0.70 a month: the cleanup policy keeps three
-pushes, 3 to 7 GB, at about $0.10 per GB-month past the 0.5 GB free tier.
+Registry cost about $0.10 per GB-month past the 0.5 GB free tier. The cleanup
+policy keeps at least the last three pushes plus every push from the last 30
+days, 1 to 2.4 GB each: about $0.25 to $0.70 a month for three pushes, plus
+$0.10 to $0.24 for each further push in the last 30 days.
 
 ## 5. Budget, spend cap and capacity alert
 
