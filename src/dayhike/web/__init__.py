@@ -13,12 +13,16 @@ Detail, compose, pair and Ranking measure every hike with its way back to the st
 A browser keeps the API reads an hour and then revalidates them by an ETag of the export, the code
 and the drive-time settings; the page always revalidates, so a redeploy shows at once. Responses are
 gzipped for a browser that takes it.
+The site's pages (the demo, About, Support, Credits) are served with two optional settings filled in:
+a GoatCounter code adds the cookieless analytics tag, and a Ko-fi handle the tip link. Unset, a page
+loads no analytics and links no tip jar.
 """
 
 from __future__ import annotations
 
 import hashlib
 import math
+import re
 import threading
 import time
 import unicodedata
@@ -31,7 +35,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -64,6 +68,9 @@ BUILD = hashlib.sha256(
         if path.is_file() and "__pycache__" not in path.parts
     )
 ).hexdigest()
+
+PAGES = ("index", "about", "support", "credits")  # the site's pages, served with its settings filled in
+PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")  # a GoatCounter code or Ko-fi handle
 
 DriveClientFactory = Callable[[float], MatrixClient]
 MEASURE_KINDS = {measure.name: measure.kind for measure in MEASURES}
@@ -192,6 +199,31 @@ def wish_input(measure: Measure) -> dict | None:
     return {"kind": "number", "unit": unit, "min": low, "max": high, "step": step, "default": default}
 
 
+def site_pages(goatcounter: str | None, kofi: str | None) -> dict[str, str]:
+    """Each page's HTML with the GoatCounter tag where a code is set, and the Ko-fi link where a handle is.
+
+    The tag loads the self-hosted ``count.js``, which counts at ``https://<code>.goatcounter.com/count``.
+    """
+    for setting, value in (("GoatCounter code", goatcounter), ("Ko-fi handle", kofi)):
+        if value is not None and not PLAIN_NAME.fullmatch(value):
+            raise ValueError(f"a {setting} is letters, digits, - and _, not {value!r}")
+    analytics = "" if goatcounter is None else (
+        f'<script data-goatcounter="https://{goatcounter}.goatcounter.com/count"'
+        ' async src="vendor/goatcounter/count.js"></script>'
+    )
+    pages = {}
+    for name in PAGES:
+        html = (STATIC_DIR / f"{name}.html").read_text(encoding="utf-8").replace("<!--analytics-->", analytics)
+        if kofi is not None:
+            tip = (
+                f'<p class="tip"><a href="https://ko-fi.com/{kofi}">Leave a tip on Ko-fi</a></p>\n'
+                '  <p class="hint">The link opens Ko-fi, which takes the tip; this site handles no payments.</p>'
+            )
+            html = re.sub(r"<!--ko-fi-->.*?<!--/ko-fi-->", tip, html, flags=re.S)
+        pages[name] = html
+    return pages
+
+
 class RateLimiter:
     """At most ``limit`` requests per ``window_s`` seconds per client key."""
 
@@ -221,6 +253,8 @@ def create_app(
     forwarded_hops: int = 0,
     rank_rate: int = RANK_RATE,
     api_rate: int = API_RATE,
+    goatcounter: str | None = None,
+    kofi: str | None = None,
 ) -> FastAPI:
     """The app over one serving export.
 
@@ -228,7 +262,10 @@ def create_app(
     turns the drive-time filter off. ``forwarded_hops`` is how many proxies
     append to ``X-Forwarded-For`` in front of the app (1 on Cloud Run): the
     client is that many entries from the end. 0 uses the socket peer.
+    ``goatcounter`` and ``kofi`` fill in the pages (``site_pages``); a value that
+    is not a plain name is a ValueError.
     """
+    pages = site_pages(goatcounter, kofi)
     app = FastAPI(title="GoFindMeAHike", docs_url="/api/docs", openapi_url="/api/openapi.json")
     limiters = {"rank": RateLimiter(rank_rate, RATE_WINDOW_S), "api": RateLimiter(api_rate, RATE_WINDOW_S)}
     one_ranking = threading.Semaphore(1)
@@ -446,6 +483,25 @@ def create_app(
             "return_to_start": body.return_to_start,
             "weights": {name: w for name, w in weights.items() if w > 0},
         }
+
+    page_etags = {name: f'"{hashlib.sha256(html.encode()).hexdigest()[:16]}"' for name, html in pages.items()}
+
+    def site_page(name: str, request: Request) -> Response:
+        """A page with its ETag, like the static files: the browser revalidates it every time."""
+        if name not in pages:
+            raise HTTPException(404, "Not Found")
+        etag = page_etags[name]
+        if etag in (tag.strip() for tag in request.headers.get("if-none-match", "").split(",")):
+            return Response(status_code=304, headers={"ETag": etag})
+        return HTMLResponse(pages[name], headers={"ETag": etag})
+
+    @app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
+    def home(request: Request) -> Response:
+        return site_page("index", request)
+
+    @app.api_route("/{name}.html", methods=["GET", "HEAD"], include_in_schema=False)
+    def page(name: str, request: Request) -> Response:
+        return site_page(name, request)
 
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="page")
     return app

@@ -65,6 +65,7 @@ from dayhike.catalog import (
     straight_line_distances_m,
     trailgraph_path_for,
 )
+from dayhike.dem import FABDEM_ATTRIBUTION
 from dayhike.loops import LOOP_SEEDS, LoopTarget, find_loops
 from dayhike.similarity import (
     ALONG_KINDS,
@@ -380,7 +381,7 @@ def export_serving(
         "facts_version": json.loads((similarity / "meta.json").read_text())["facts_version"],
         "line_tolerance_m": LINE_TOLERANCE_M,
         "elevation_points": ELEVATION_POINTS,
-        "attribution": {"osm": attribution, **sources},
+        "attribution": {"osm": attribution, "fabdem": FABDEM_ATTRIBUTION, **sources},
         "drive_time": (out / "valhalla" / "valhalla.json").is_file() and (out / "snaps.npz").is_file(),
         "compose": compose,
         "export_seconds": round(time.monotonic() - started, 1),

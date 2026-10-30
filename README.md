@@ -133,7 +133,7 @@ call on your machine.
 | `data/osm/` | Geofabrik / osmium extracts you download | gitignored |
 | `data/valhalla/` | Road PBF + Valhalla routing tiles Docker builds | gitignored |
 | `data/web-serving/` | Serving export for the web demo (`export-serving`) | **gitignored** |
-| `src/dayhike/web/static/` | The demo page, its script, the logo and the coverage map | yes |
+| `src/dayhike/web/static/` | The demo page, its script, the About, Support and credits pages, the logo and the coverage map | yes |
 | `web/` | Dockerfile, local compose file and smoke script of the demo | yes |
 | `data/valhalla/compose.yaml` | How to run Valhalla | yes |
 | `data/valhalla/prepare-roads.sh` | osmium filter: car roads only, no buildings | yes |
@@ -1630,6 +1630,16 @@ uv run python web/smoke.py --data data/web-serving --valhalla-url http://127.0.0
 DAYHIKE_SERVING="$PWD/data/web-serving" docker compose -f web/compose.yaml up --build
 ```
 
+Beside the demo the site has About, Support and Data and credits pages
+(`about.html`, `support.html`, `credits.html`), with the logo home and the same
+footer links on every page; the demo's footer is a short credit line, and the
+full credits are on `credits.html`. The server fills in two optional settings:
+`dayhike serve --goatcounter CODE` (container: `DAYHIKE_GOATCOUNTER`) adds the
+cookieless GoatCounter tag to every page, and `--kofi HANDLE` (`DAYHIKE_KOFI`)
+the Support page's tip link. Unset, no page loads analytics and the Support page
+says the tip link is not set up yet. A code or handle other than letters,
+digits, `-` and `_` is refused at start.
+
 What the export holds (`src/dayhike/serving.py`): a copy of
 `catalog.similarity/`, Trailheads as a numpy array, and `hikes.sqlite` with per
 DayHike its name, DayHikeGeometry simplified at 10 m (encoded polyline), its
@@ -1928,9 +1938,10 @@ notebook to see its tables and figures.
 
 ## Attribution
 
-The web demo's footer carries the same credits. The code is under the MIT
-licence ([LICENSE](LICENSE)); [DATA-LICENSES.md](DATA-LICENSES.md) lists the
-licences of the data, which MIT does not cover.
+The web demo's Data and credits page (`credits.html`) carries the same credits.
+The code is under the MIT licence ([LICENSE](LICENSE));
+[DATA-LICENSES.md](DATA-LICENSES.md) lists the licences of the data, which MIT
+does not cover.
 
 OpenStreetMap data is © OpenStreetMap contributors, licensed under the Open
 Database License (ODbL, https://opendatacommons.org/licenses/odbl/; see
@@ -1948,8 +1959,9 @@ used under the OSM Foundation's usage policies.
 FABDEM V1-2: Hawker, L., Uhe, P., Paulo, L., Sosa, J., Savage, J., Sampson, C.
 and Neal, J., 2022. A 30 m global map of elevation with forests and buildings
 removed. Environmental Research Letters 17 (2): 024016,
-https://doi.org/10.1088/1748-9326/ac4d4f. University of Bristol,
-CC BY-NC-SA 4.0 (non-commercial, share-alike). FABDEM is produced using
+https://doi.org/10.1088/1748-9326/ac4d4f. University of Bristol, dataset
+https://doi.org/10.5523/bris.s5hqmjcdj8yo2ibzi9b4ew3sn, CC BY-NC-SA 4.0
+(non-commercial, share-alike). FABDEM is produced using
 Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space
 GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all
 rights reserved. The organizations in charge of the Copernicus program by law
@@ -1976,7 +1988,9 @@ climate has been sampled.
 Natural Earth (https://www.naturalearthdata.com/, public domain): country
 shapes of the coverage map. Valhalla (MIT, https://github.com/valhalla/valhalla)
 computes DriveTime. The demo page uses Leaflet 1.9.4 (BSD-2-Clause), served from
-`src/dayhike/web/static/vendor/leaflet/` with its licence, and the server
+`src/dayhike/web/static/vendor/leaflet/` with its licence, and, when analytics
+are on, GoatCounter's `count.js` v2.7.0 (ISC), served from
+`src/dayhike/web/static/vendor/goatcounter/` with its licence; the server runs
 FastAPI (MIT) and Uvicorn (BSD-3-Clause).
 
 ## What is gitignored under `data/`

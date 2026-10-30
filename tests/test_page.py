@@ -380,3 +380,30 @@ def test_a_server_that_cannot_compose_offers_no_loops(browser, server) -> None:
     page.locator("#results-table tbody tr").first.wait_for()
 
     assert not page.get_by_role("button", name="Suggest loops near these hikes (takes a few seconds)").is_visible()
+
+
+def test_no_page_asks_for_analytics_while_no_goatcounter_code_is_set(browser, server) -> None:
+    page = browser.new_page()
+    asked: list[str] = []
+    page.on("request", lambda request: asked.append(request.url))
+    page.route(lambda url: not url.startswith(server), lambda route: route.abort())  # no tiles
+    for path in ("/", "/about.html", "/support.html", "/credits.html"):
+        page.goto(f"{server}{path}")
+        page.wait_for_load_state("load")
+        assert page.evaluate("typeof window.goatcounter") == "undefined", path
+
+    assert asked
+    assert not [url for url in asked if "goatcounter" in url or "zgo.at" in url]
+
+
+def test_finding_hikes_is_counted_as_an_event_when_analytics_are_on(browser, server) -> None:
+    page = browser.new_page()
+    page.add_init_script("window.goatcounter = { counted: [], count(vars) { this.counted.push(vars); } };")
+    page.route(lambda url: not url.startswith(server), lambda route: route.abort())  # no tiles
+    page.goto(f"{server}/#hike=1002")
+    page.get_by_text("Chosen: Valley Path").wait_for()
+
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+
+    assert page.evaluate("window.goatcounter.counted") == [{"path": "find", "event": True}]

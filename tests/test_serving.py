@@ -54,6 +54,8 @@ def test_export_writes_a_complete_directory(export: Path) -> None:
     assert meta["compose"] is True
     assert meta["dayhikes"] == 4
     assert meta["attribution"]["osm"] == "© OpenStreetMap contributors"
+    assert "FABDEM" in meta["attribution"]["fabdem"]
+    assert "https://doi.org/10.5523/bris.s5hqmjcdj8yo2ibzi9b4ew3sn" in meta["attribution"]["fabdem"]
     assert meta["drive_time"] is False
     for name in ("ids.npy", "facts.npy", "profile.npy", "twins.npy", "quantiles.npy", "meta.json"):
         assert (export / "similarity" / name).is_file()

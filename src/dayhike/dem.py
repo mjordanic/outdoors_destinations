@@ -17,6 +17,13 @@ from dayhike.catalog import geometry_store_path_for, remove_similarity
 
 FABDEM_VERSION = "V1-2"
 FABDEM_DATASET = "https://huggingface.co/datasets/pavelzaitsau/fabdem-v12/resolve/main/tiles"
+FABDEM_ATTRIBUTION = (
+    "FABDEM V1-2: Hawker, L., Uhe, P., Paulo, L., Sosa, J., Savage, J., Sampson, C., Neal, J., 2022. "
+    "A 30 m global map of elevation with forests and buildings removed. Environmental Research Letters 17, "
+    "024016. University of Bristol, https://doi.org/10.5523/bris.s5hqmjcdj8yo2ibzi9b4ew3sn (CC BY-NC-SA 4.0). "
+    "Produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 "
+    "provided under COPERNICUS by the European Union and ESA; all rights reserved."
+)
 Progress = Callable[[str], None]
 Retrieve = Callable[[str, str], None]
 

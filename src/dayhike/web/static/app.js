@@ -1608,6 +1608,8 @@ async function findSimilar() {
     setStatus(error.message, true);
     return;
   }
+  // A GoatCounter event when the server set analytics up; without them there is no goatcounter.
+  window.goatcounter?.count?.({ path: "find", event: true });
   await rank(query, liked);
 }
 

@@ -189,3 +189,11 @@ button.help:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 .score-help h4 { margin: 10px 0 2px; font-size: 0.84rem; }
 .score-help p { margin: 4px 0; }
 .score-help .help-close { position: absolute; top: 6px; right: 6px; padding: 0 6px; border: none; font-size: 1.1rem; line-height: 1.2; }
+
+.page { max-width: 900px; margin: 16px auto; }
+.page p, .page li { max-width: 75ch; }
+.page ul { padding-left: 18px; }
+.page li { margin: 6px 0; }
+.tip { font-size: 1.05rem; font-weight: 600; }
+.site-nav { margin-top: 10px; }
+.page + .credits { max-width: 900px; }
