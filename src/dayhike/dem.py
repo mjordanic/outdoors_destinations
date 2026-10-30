@@ -324,7 +324,7 @@ def _canopy_floor(dataset, lon: np.ndarray, lat: np.ndarray) -> np.ndarray:
     least-squares plane plus tree tops: the floor is the plane at the point
     plus the ``CANOPY_PERCENTILE`` of the cells' heights above the plane, so a
     slope stays and the canopy goes. Near the grid's edge the edge cells count
-    again.
+    again, at their own place, so the plane keeps the slope there too.
     """
     from rasterio.transform import rowcol
     from rasterio.windows import Window
@@ -337,11 +337,12 @@ def _canopy_floor(dataset, lon: np.ndarray, lat: np.ndarray) -> np.ndarray:
     down, right = (offset.ravel() for offset in np.mgrid[-reach_y : reach_y + 1, -reach_x : reach_x + 1])
     within = np.hypot(down * cell_y, right * cell_x) <= CANOPY_RADIUS_M
     down, right = down[within], right[within]
-    north, east = -down * cell_y, right * cell_x
     rows, cols = (np.asarray(v) for v in rowcol(dataset.transform, lon, lat))
     rows = np.clip(rows, 0, dataset.height - 1)
     cols = np.clip(cols, 0, dataset.width - 1)
-    heights = np.empty((len(rows), len(down)))
+    cell_rows = np.clip(rows[:, None] + down, 0, dataset.height - 1)
+    cell_cols = np.clip(cols[:, None] + right, 0, dataset.width - 1)
+    heights = np.empty(cell_rows.shape)
     # One read per block of cells the points fall in.
     blocks = rows // _CANOPY_BLOCK * (dataset.width // _CANOPY_BLOCK + 1) + cols // _CANOPY_BLOCK
     for block in np.unique(blocks):
@@ -351,17 +352,14 @@ def _canopy_floor(dataset, lon: np.ndarray, lat: np.ndarray) -> np.ndarray:
         left = max(int(cols[at].min()) - reach_x, 0)
         width = min(int(cols[at].max()) + reach_x + 1, dataset.width) - left
         grid = dataset.read(1, window=Window(left, top, width, bottom - top)).astype(float)
-        heights[at] = grid[
-            np.clip(rows[at, None] + down, 0, dataset.height - 1) - top,
-            np.clip(cols[at, None] + right, 0, dataset.width - 1) - left,
-        ]
-    # The window is symmetric: the plane at the point is the mean height.
-    mean = heights.mean(axis=1)
-    above = heights - mean[:, None]
-    for axis in (east, north):
-        if axis @ axis > 0:  # a window one cell wide has no slope that way
-            above -= np.outer(heights @ axis / (axis @ axis), axis)
-    return mean + np.percentile(above, CANOPY_PERCENTILE, axis=1)
+        heights[at] = grid[cell_rows[at] - top, cell_cols[at] - left]
+    north = -(cell_rows - rows[:, None]) * cell_y
+    east = (cell_cols - cols[:, None]) * cell_x
+    # pinv: a window one cell wide has no slope that way.
+    plane = np.stack([np.ones_like(east), east, north], axis=2)
+    fit = (np.linalg.pinv(plane) @ heights[:, :, None])[:, :, 0]
+    above = heights - (plane @ fit[:, :, None])[:, :, 0]
+    return fit[:, 0] + np.percentile(above, CANOPY_PERCENTILE, axis=1)
 
 
 def sample_dem(

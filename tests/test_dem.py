@@ -359,6 +359,36 @@ def test_fabdem_under_trees_is_read_as_it_is(tmp_path: Path) -> None:
     assert sample_elevations(dem, points, landcover_dir=landcover) == sample_elevations(dem, points)
 
 
+def test_copernicus_forest_at_the_grid_edge_keeps_the_slope(tmp_path: Path) -> None:
+    import rasterio
+    from rasterio.transform import from_origin
+
+    from test_landcover import _write_class_tif
+
+    dem, landcover = tmp_path / "dem", tmp_path / "landcover"
+    dem.mkdir()
+    landcover.mkdir()
+    # A 50 % slope rising to the north-east, under forest with no tree tops.
+    rows, cols = np.mgrid[0:40, 0:40]
+    heights = 800 + 0.5 * 30.9 * (cols - rows)
+    with rasterio.open(
+        dem / "Copernicus_DSM_COG_10_N45_00_E015_00_DEM.tif", "w", driver="GTiff", height=40, width=40,
+        count=1, dtype="float32", crs="EPSG:4326", transform=from_origin(15.0, 46.0, CELL, CELL),
+    ) as dataset:
+        dataset.write(heights.astype("float32"), 1)
+    _write_class_tif(
+        landcover / "ESA_WorldCover_10m_2021_v200_N45E015_Map.tif",
+        west=15.0, south=45.98, east=15.02, north=46.0, codes=np.full((240, 240), 10),
+    )
+    centre = (np.arange(40) + 0.5) * CELL
+    points = [(46.0 - centre[r], 15.0 + centre[c]) for r, c in [(0, 0), (0, 20), (20, 0), (39, 39), (39, 20), (20, 39)]]
+
+    raw = sample_elevations(dem, points)
+    floor = sample_elevations(dem, points, landcover_dir=landcover)
+
+    assert floor == pytest.approx(raw, abs=0.01)
+
+
 def test_a_dem_directory_holds_one_source(tmp_path: Path) -> None:
     for name in ("N45E015_FABDEM_V1-2.tif", "Copernicus_DSM_COG_10_N45_00_E015_00_DEM.tif"):
         _write_constant_tif(tmp_path / name, west=14.99, south=44.99, east=16.01, north=46.01, z=1.0)
