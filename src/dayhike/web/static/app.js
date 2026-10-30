@@ -1636,7 +1636,7 @@ async function rank(query, liked, stale = false) {
     setStatus(`Done in ${(body.elapsed_ms / 1000).toFixed(1)} s.`);
   } catch (error) {
     if (request !== ranked || liked !== rankBasis()) return;
-    markStale();
+    if (!query.loops || stale) markStale();
     setStatus(error.message, true);
   } finally {
     if (request === ranked) $("#find").disabled = $("#suggest-loops").disabled = false;
