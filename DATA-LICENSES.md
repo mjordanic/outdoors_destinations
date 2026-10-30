@@ -13,4 +13,5 @@ builds from those inputs, keep the licences of their sources:
 | Natural Earth | Public domain | Country shapes of the coverage map. |
 
 The full citations and notices are in the README's
-[Attribution](README.md#attribution) section and in the web page's footer.
+[Attribution](README.md#attribution) section and on the web demo's Data and
+credits page (`credits.html`).

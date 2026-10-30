@@ -1938,9 +1938,10 @@ notebook to see its tables and figures.
 
 ## Attribution
 
-The web demo's footer carries the same credits. The code is under the MIT
-licence ([LICENSE](LICENSE)); [DATA-LICENSES.md](DATA-LICENSES.md) lists the
-licences of the data, which MIT does not cover.
+The web demo's Data and credits page (`credits.html`) carries the same credits.
+The code is under the MIT licence ([LICENSE](LICENSE));
+[DATA-LICENSES.md](DATA-LICENSES.md) lists the licences of the data, which MIT
+does not cover.
 
 OpenStreetMap data is © OpenStreetMap contributors, licensed under the Open
 Database License (ODbL, https://opendatacommons.org/licenses/odbl/; see
@@ -1958,8 +1959,9 @@ used under the OSM Foundation's usage policies.
 FABDEM V1-2: Hawker, L., Uhe, P., Paulo, L., Sosa, J., Savage, J., Sampson, C.
 and Neal, J., 2022. A 30 m global map of elevation with forests and buildings
 removed. Environmental Research Letters 17 (2): 024016,
-https://doi.org/10.1088/1748-9326/ac4d4f. University of Bristol,
-CC BY-NC-SA 4.0 (non-commercial, share-alike). FABDEM is produced using
+https://doi.org/10.1088/1748-9326/ac4d4f. University of Bristol, dataset
+https://doi.org/10.5523/bris.s5hqmjcdj8yo2ibzi9b4ew3sn, CC BY-NC-SA 4.0
+(non-commercial, share-alike). FABDEM is produced using
 Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space
 GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all
 rights reserved. The organizations in charge of the Copernicus program by law
