@@ -262,13 +262,15 @@ def sample_elevations(
             half_x, half_y = dataset.res[0] / 2, dataset.res[1] / 2
             # A GLO-30 grid stops half a cell short of its tile's east and south
             # edges, and outside it a read gives 0, not nodata: read the edge cell.
-            coords = [
-                (
-                    min(max(points[index][1], box.left + half_x), box.right - half_x),
-                    min(max(points[index][0], box.bottom + half_y), box.top - half_y),
-                )
-                for index in indices
-            ]
+            coords = [(points[index][1], points[index][0]) for index in indices]
+            if source is COPERNICUS:
+                coords = [
+                    (
+                        min(max(lon, box.left + half_x), box.right - half_x),
+                        min(max(lat, box.bottom + half_y), box.top - half_y),
+                    )
+                    for lon, lat in coords
+                ]
             for index, sample in zip(indices, dataset.sample(coords), strict=True):
                 value = float(sample[0])
                 if not math.isfinite(value):

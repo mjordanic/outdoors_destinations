@@ -252,6 +252,30 @@ def test_a_point_the_tiles_grid_misses_reads_its_edge_cell_not_sea_level(tmp_pat
     assert samples == [pytest.approx(1500.0), pytest.approx(1600.0), pytest.approx(1700.0)]
 
 
+def test_a_fabdem_point_outside_the_tiles_grid_stays_uncovered(tmp_path: Path) -> None:
+    import rasterio
+    from rasterio.transform import from_origin
+
+    cell = 1 / 3600
+    with rasterio.open(
+        tmp_path / "N45E015_FABDEM_V1-2.tif",
+        "w",
+        driver="GTiff",
+        height=3600,
+        width=3600,
+        count=1,
+        dtype="float32",
+        crs="EPSG:4326",
+        transform=from_origin(15 - cell / 2, 46 + cell / 2, cell, cell),
+        nodata=-9999.0,
+    ) as dataset:
+        dataset.write(np.full((3600, 3600), 1500.0, dtype="float32"), 1)
+
+    samples = sample_elevations(tmp_path, [(45.5, 15.5), (45.5, 15.99995), (45.00003, 15.5)])
+
+    assert samples == [pytest.approx(1500.0), None, None]
+
+
 def test_a_dem_directory_holds_one_source(tmp_path: Path) -> None:
     for name in ("N45E015_FABDEM_V1-2.tif", "Copernicus_DSM_COG_10_N45_00_E015_00_DEM.tif"):
         _write_constant_tif(tmp_path / name, west=14.99, south=44.99, east=16.01, north=46.01, z=1.0)
