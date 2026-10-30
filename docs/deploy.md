@@ -28,7 +28,7 @@ uv run dayhike export-serving --catalog data/catalog.sqlite --out data/web-servi
 ```
 
 `--snaps` is optional (it starts from an existing snap cache). `--geonames`
-writes `places.sqlite` for the page's "Find place" (ADR-0028); the file is
+writes `places.sqlite` for the page's "Find place" (ADR-0029); the file is
 downloaded there when missing, so delete it before a refresh to fetch the
 current GeoNames list. An export written without it falls back to public
 Nominatim. To add place search to an export already built, without exporting

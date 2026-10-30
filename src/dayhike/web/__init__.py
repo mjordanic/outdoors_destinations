@@ -1,7 +1,7 @@
 """The public read-only web demo: a JSON API over a serving export, and the page.
 
 ``create_app`` serves ``ServingData`` (``dayhike.serving``): name search, place
-search when the export has GeoNames places (ADR-0028), the hikes in a map view,
+search when the export has GeoNames places (ADR-0029), the hikes in a map view,
 hike detail, the Measure list, the score of any two hikes, and Ranking with an
 optional highways-only DriveTime pre-filter. Every client gets a request budget per minute, and one Ranking
 runs at a time per instance, so a small container holds its memory. When the export has a TrailGraph,
