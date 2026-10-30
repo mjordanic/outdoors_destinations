@@ -1678,8 +1678,8 @@ the Support page's tip link. Unset, no page loads analytics and the Support page
 says the tip link is not set up yet. The privacy page names GoatCounter and
 Ko-fi only once each is set. No page sets a cookie or writes browser storage
 (GoatCounter's script writes localStorage only when a visitor opens a page with
-`#toggle-goatcounter` to stop counting their own visits). A code or handle other than letters,
-digits, `-` and `_` is refused at start.
+`#toggle-goatcounter` to stop counting their own visits). A code or handle
+other than letters, digits, `-` and `_` is refused at start.
 
 The page opens behind a loading screen, the logo and "Loading…", which says
 "Waking the server" when the first answer is slow (a start from zero), and that
