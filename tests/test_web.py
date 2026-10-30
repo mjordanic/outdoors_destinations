@@ -513,11 +513,13 @@ def test_the_support_page_links_no_tip_jar_until_a_ko_fi_handle_is_set(data: Ser
     assert "ko-fi.com" not in unset
     assert "not set up yet" in unset
     assert "only cover hosting" in unset
+    assert "The link opens Ko-fi" not in unset
 
     support = TestClient(create_app(data, kofi="gofindmeahike")).get("/support.html").text
     assert '<a href="https://ko-fi.com/gofindmeahike">' in support
     assert support.count("ko-fi.com") == 1  # a plain link: no widget script
     assert "not set up yet" not in support
+    assert "The link opens Ko-fi, which takes the tip" in support
 
 
 def test_the_credits_page_credits_every_source_with_the_fabdem_dataset(client: TestClient) -> None:

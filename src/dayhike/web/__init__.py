@@ -215,7 +215,10 @@ def site_pages(goatcounter: str | None, kofi: str | None) -> dict[str, str]:
     for name in PAGES:
         html = (STATIC_DIR / f"{name}.html").read_text(encoding="utf-8").replace("<!--analytics-->", analytics)
         if kofi is not None:
-            tip = f'<p class="tip"><a href="https://ko-fi.com/{kofi}">Leave a tip on Ko-fi</a></p>'
+            tip = (
+                f'<p class="tip"><a href="https://ko-fi.com/{kofi}">Leave a tip on Ko-fi</a></p>\n'
+                '  <p class="hint">The link opens Ko-fi, which takes the tip; this site handles no payments.</p>'
+            )
             html = re.sub(r"<!--ko-fi-->.*?<!--/ko-fi-->", tip, html, flags=re.S)
         pages[name] = html
     return pages

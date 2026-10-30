@@ -127,11 +127,11 @@ If an alert fires and the traffic is abuse, close the public access at once:
 
 ## 6. Before the page goes public
 
-- **ODbL offer.** The footer says the hike data is a derivative database of
-  OpenStreetMap, offered under the ODbL, and links the code that builds it.
-  The repository is public, with the code under MIT (`LICENSE`) and the data
-  licences in `DATA-LICENSES.md`; keep it public, or change the footer to
-  offer the export another way (for example a download of `hikes.sqlite`).
+- **ODbL offer.** The Data and credits page (`credits.html`) says the hike
+  data is a derivative database of OpenStreetMap, offered under the ODbL, and
+  links the code that builds it. The repository is public, with the code under
+  MIT (`LICENSE`) and the data licences in `DATA-LICENSES.md`; keep it public,
+  or change that page to offer the export another way (for example a download of `hikes.sqlite`).
 - **Tile and place-search policies.** The map uses `tile.openstreetmap.org` and
   the origin search uses Nominatim, both run by the OSM Foundation for
   low-volume use under their usage policies. If traffic grows, switch to a
