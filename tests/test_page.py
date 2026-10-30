@@ -34,16 +34,6 @@ WISHABLE = {
 }
 
 
-# Leaflet comes from a CDN the tests do not reach: a stand-in whose every property and call is itself.
-FAKE_LEAFLET = """
-const fake = new Proxy(function () {}, {
-  get: (target, key) => (key === Symbol.toPrimitive ? () => "" : fake),
-  apply: () => fake,
-});
-window.L = fake;
-"""
-
-
 class Matrix:
     """DriveTime of 1 h to every Trailhead."""
 
@@ -110,8 +100,7 @@ class Api:
 def open_page(browser, server: str, api: Api, *, width: int = 1280, hash: str = ""):
     page = browser.new_page(viewport={"width": width, "height": 900})
     page.set_default_timeout(5000)
-    page.add_init_script(FAKE_LEAFLET)
-    page.route(lambda url: not url.startswith(server), lambda route: route.abort())  # no tiles, no CDN
+    page.route(lambda url: not url.startswith(server), lambda route: route.abort())  # no tiles
     page.route(f"{server}/api/measures", api.measures)
     page.route(f"{server}/api/rank", api.rank)
     page.goto(f"{server}/{hash}")
@@ -344,3 +333,17 @@ def test_the_logo_takes_a_hiker_home_to_a_fresh_page(browser, server) -> None:
     assert page.url == f"{server}/"
     assert page.title() == "GoFindMeAHike"
     assert page.locator("#liked-name").inner_text() == "No hike chosen yet."
+
+
+def test_the_page_runs_leaflet_1_9_4_from_its_own_server_and_asks_unpkg_for_nothing(browser, server) -> None:
+    page = browser.new_page()
+    asked: list[str] = []
+    page.on("request", lambda request: asked.append(request.url))
+    page.route(lambda url: not url.startswith(server), lambda route: route.abort())  # no tiles
+    page.goto(server)
+    page.wait_for_load_state("load")
+
+    assert page.evaluate("window.L && L.version") == "1.9.4"
+    assert f"{server}/vendor/leaflet/leaflet.js" in asked
+    assert f"{server}/vendor/leaflet/leaflet.css" in asked
+    assert not [url for url in asked if "unpkg.com" in url]
