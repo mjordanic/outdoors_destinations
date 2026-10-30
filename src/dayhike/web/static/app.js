@@ -1801,16 +1801,21 @@ async function showResult(index, version = 0) {
 
 // ---------- start ----------
 
-// Whether a server that did not answer the page turned it away (paused) rather than being down.
-// Cloud Run with its public access closed answers 403, which a page on another origin cannot read
-// (no CORS headers): there an opaque answer to a no-cors request says the server is up.
-async function paused(error) {
-  if (error.status) return error.status === 401 || error.status === 403;
+// What to tell the hiker when the server did not answer the page: paused, paused or busy, or down.
+// Cloud Run with its public access closed answers 403. A page on another origin cannot read an
+// answer without CORS headers (that 403, but also a 429 or 503 from Cloud Run's front end): there
+// an opaque answer to a no-cors request says only that something is up.
+async function notAnswering(error) {
+  if (error.status === 401 || error.status === 403) {
+    return "GoFindMeAHike is paused for now: its owner has switched the server off. Please try again later.";
+  }
+  const down = `The server is not answering${error.status ? ` (${error.message})` : ""}. Please try again in a few minutes.`;
+  if (error.status) return down;
   try {
     await fetch(`${API_BASE}/api/health`, { mode: "no-cors", cache: "no-store" });
-    return true;
+    return "GoFindMeAHike is paused or busy. Please try again later.";
   } catch {
-    return false;
+    return down;
   }
 }
 
@@ -1832,9 +1837,7 @@ async function start() {
     state.scoreHelp = measures.score_help;
   } catch (error) {
     clearTimeout(waking);
-    loading.textContent = await paused(error)
-      ? "GoFindMeAHike is paused for now: its owner has switched the server off. Please try again later."
-      : `The server is not answering${error.status ? ` (${error.message})` : ""}. Please try again in a few minutes.`;
+    loading.textContent = await notAnswering(error);
     loading.classList.add("error");
     $("#loading-retry").hidden = false;
     return;

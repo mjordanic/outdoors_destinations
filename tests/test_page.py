@@ -463,6 +463,22 @@ def test_a_server_that_turns_the_page_away_says_the_site_is_paused(browser, serv
     assert page.locator("#loading").is_visible()
 
 
+def test_an_api_on_another_origin_whose_answer_the_page_cannot_read_says_paused_or_busy(browser, server) -> None:
+    shell_origin = server.replace("127.0.0.1", "localhost")  # another origin, which the API lets in no CORS for
+    page = browser.new_context(permissions=["local-network-access"]).new_page()
+
+    def shell(route) -> None:
+        html = route.fetch().text().replace('<meta name="api-base" content="">', f'<meta name="api-base" content="{server}">')
+        route.fulfill(body=html, content_type="text/html")
+
+    page.route(lambda url: not url.startswith((server, shell_origin)), lambda route: route.abort())  # no tiles
+    page.route(f"{shell_origin}/", shell)
+    page.goto(shell_origin)
+
+    page.get_by_text("GoFindMeAHike is paused or busy").wait_for()
+    assert not page.get_by_text("its owner has switched the server off").is_visible()
+
+
 def test_a_server_that_does_not_answer_says_it_is_down_and_offers_to_try_again(browser, server) -> None:
     page = browser.new_page()
     page.route(lambda url: not url.startswith(server), lambda route: route.abort())  # no tiles

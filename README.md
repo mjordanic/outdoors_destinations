@@ -1646,7 +1646,8 @@ digits, `-` and `_` is refused at start.
 
 The page opens behind a loading screen, the logo and "Loading…", which says
 "Waking the server" when the first answer is slow (a start from zero), and that
-the site is paused (the server turns the page away) or the server is down, with
+the site is paused (the server turns the page away), paused or busy (an answer
+the page cannot read, across origins) or the server is down, with
 a Try again button. The page asks the API at its own origin, or at the one its
 `<meta name="api-base">` names: a loading shell on a static host
 (docs/deploy.md, section 8). `dayhike serve --cors-origin https://HOST`

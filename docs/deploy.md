@@ -170,10 +170,12 @@ Cloud Run. What is built for it:
 - `dayhike serve --cors-origin` (`DAYHIKE_CORS_ORIGINS`) lets the shell's
   origins call the API. CORS sits outside the rate limit: a preflight uses none
   of a client's budget, and a `429` is readable by the shell.
-- The loading screen says the site is paused when the server turns the page
-  away: Cloud Run with public access closed (section 5) answers `403`, which
-  the shell cannot read across origins, so the page asks `/api/health` once in
-  `no-cors` mode; any answer means the server is up. No answer says it is down.
+- The loading screen says the site is paused when the server answers `401` or
+  `403` (Cloud Run with public access closed, section 5). Across origins the
+  shell cannot read an answer without CORS headers (that `403`, or a `429` or
+  `503` from Cloud Run's front end), so the page asks `/api/health` once in
+  `no-cors` mode: any answer says the site is paused or busy, no answer that
+  the server is down.
 
 The steps, once there is a domain and a host account:
 
