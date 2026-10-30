@@ -80,6 +80,9 @@ PAGES = ("index", "about", "support", "credits", "privacy", "terms")  # the site
 # FABDEM's between <!--elevation--> and <!--/elevation--> on each page that names it.
 COPERNICUS_CREDITS = {
     "index": 'Copernicus GLO-30 (<a href="https://doi.org/10.5270/ESA-c5d3d65">© DLR, Airbus; Copernicus DEM licence</a>)',
+    "terms": "The elevation profiles and the values derived from elevation (heights, gain, profile shape, steepness, "
+    'slope aspect) are computed from Copernicus DEM GLO-30, offered under the <a href="https://docs.sentinel-hub.com/'
+    'api/latest/static/files/data/dem/resources/license/License-COPDEM-30.pdf">Copernicus DEM licence</a>.',
     "credits": 'Copernicus DEM GLO-30, <a href="https://doi.org/10.5270/ESA-c5d3d65">doi:10.5270/ESA-c5d3d65</a>, '
     'from <a href="https://registry.opendata.aws/copernicus-dem/">AWS Open Data</a>, under the '
     '<a href="https://docs.sentinel-hub.com/api/latest/static/files/data/dem/resources/license/License-COPDEM-30.pdf">'
@@ -225,11 +228,11 @@ def site_pages(
     """Each page's HTML with the GoatCounter tag where a code is set, and the Ko-fi link where a handle is.
 
     With ``place_search`` (the export has GeoNames places) the place-search credit names GeoNames, not Nominatim,
-    and the privacy page no longer lists Nominatim as a recipient.
+    and the privacy page keeps its ``places`` text, not its ``nominatim`` text.
     With ``copernicus`` (an export sampled from Copernicus GLO-30), the pages credit it instead of FABDEM.
 
-    Text between ``<!--if-goatcounter-->`` and ``<!--/if-goatcounter-->`` (or ``kofi``) is kept only
-    when that setting is set.
+    Text between ``<!--if-goatcounter-->`` and ``<!--/if-goatcounter-->`` (or ``kofi``, ``places``,
+    ``nominatim``) is kept only when that setting is on.
 
     The tag loads the self-hosted ``count.js``, which counts at ``https://<code>.goatcounter.com/count``.
     """
@@ -243,9 +246,15 @@ def site_pages(
     pages = {}
     for name in PAGES:
         html = (STATIC_DIR / f"{name}.html").read_text(encoding="utf-8").replace("<!--analytics-->", analytics)
-        for setting, value in (("goatcounter", goatcounter), ("kofi", kofi)):  # text true only once it is set
+        settings = {
+            "goatcounter": goatcounter is not None,
+            "kofi": kofi is not None,
+            "places": place_search,
+            "nominatim": not place_search,
+        }
+        for setting, on in settings.items():  # text true only once it is set
             block = rf"<!--if-{setting}-->(.*?)<!--/if-{setting}-->"
-            html = re.sub(block, (lambda m: m[1]) if value is not None else "", html, flags=re.S)
+            html = re.sub(block, (lambda m: m[1]) if on else "", html, flags=re.S)
         if kofi is not None:
             tip = (
                 f'<p class="tip"><a href="https://ko-fi.com/{kofi}">Leave a tip on Ko-fi</a></p>\n'
@@ -258,7 +267,6 @@ def site_pages(
                 ' (geonames.org), <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</span>'
             )
             html = re.sub(r'<span id="place-credit">.*?</span>', credit, html, flags=re.S)
-            html = re.sub(r'\s*<span id="place-recipient">.*?</span>', "", html, flags=re.S)  # no Nominatim
         if copernicus and name in COPERNICUS_CREDITS:
             html = re.sub(r"<!--elevation-->.*?<!--/elevation-->", COPERNICUS_CREDITS[name], html, flags=re.S)
         pages[name] = html

@@ -123,6 +123,8 @@ def test_an_export_sampled_from_copernicus_names_it_and_not_fabdem(tmp_path: Pat
     footer = client.get("/").text.split("<footer", 1)[1]
     for page in (credits, footer):
         assert "GLO-30" in page and "FABDEM" not in page and "CC BY-NC-SA" not in page
+    terms = client.get("/terms.html").text
+    assert "Copernicus DEM licence" in terms and "FABDEM" not in terms and "CC BY-NC-SA" not in terms
     assert "© Airbus Defence and Space GmbH 2014-2018" in credits and "do not incur any liability" in credits
     assert 'href="https://doi.org/10.5270/ESA-c5d3d65"' in credits
 
@@ -700,6 +702,7 @@ def test_place_search_answers_from_the_export_and_is_credited(tmp_path: Path, ma
     privacy = placed.get("/privacy.html").text
     assert "nominatim.org" not in privacy  # place names are looked up on this server
     assert "the place search" in privacy  # a typed place name is in the request URL, so in the logs
+    assert "looked up on this site's server" in privacy and "recipients below" not in privacy
     assert "OpenStreetMap Foundation</strong> (UK) serves the map tiles" in privacy
 
 
@@ -723,6 +726,9 @@ def test_an_export_without_places_says_so(client: TestClient) -> None:
     assert info["place_search"] is False and "geonames" not in info["attribution"]
     assert "Place search: <a href=\"https://nominatim.org/\">Nominatim</a>" in client.get("/credits.html").text
     assert client.get("/api/place", params={"q": "zag"}).status_code == 404
+    privacy = client.get("/privacy.html").text
+    assert "sends the name and your IP address to the OpenStreetMap Foundation's" in privacy
+    assert "looked up with Nominatim" in privacy and "the place search" not in privacy
 
 
 SHELL = "https://gofindmeahike.example"  # a loading shell on a static host, calling the API from its own origin
