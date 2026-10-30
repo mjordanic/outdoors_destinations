@@ -25,6 +25,7 @@ data/catalog.sqlite
 data/*.snaps.npz
 data/baseline/
 data/web-serving/
+data/geonames/
 *.geometry.sqlite
 *.trailgraph.sqlite
 *.sqlite-wal

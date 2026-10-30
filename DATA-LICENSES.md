@@ -10,6 +10,7 @@ builds from those inputs, keep the licences of their sources:
 | FABDEM V1-2 | [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) | Every elevation-derived value (heights, gain, profiles, ProfileShape, ClimbGrade, SteepestKm, SolarAspect) is adapted material, shared under CC BY-NC-SA 4.0 and only non-commercially. If FABDEM is swapped for the Copernicus DEM, this row becomes the Copernicus DEM notice. |
 | ESA WorldCover 2021 | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | Land-cover shares and the waterside share per hike. |
 | CHELSA V2.1 | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | Per-hike monthly climate averages. |
+| GeoNames `cities1000` | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | The towns of the web demo's place search ("Find place"), served from `places.sqlite` in the serving export. |
 | Natural Earth | Public domain | Country shapes of the coverage map. |
 
 The full citations and notices are in the README's

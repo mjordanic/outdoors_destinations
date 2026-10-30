@@ -133,6 +133,7 @@ call on your machine.
 | `data/osm/` | Geofabrik / osmium extracts you download | gitignored |
 | `data/valhalla/` | Road PBF + Valhalla routing tiles Docker builds | gitignored |
 | `data/web-serving/` | Serving export for the web demo (`export-serving`) | **gitignored** |
+| `data/geonames/` | GeoNames `cities1000.zip` for the demo's place search | gitignored |
 | `src/dayhike/web/static/` | The demo page, its script, the About, Support and credits pages, the logo and the coverage map | yes |
 | `web/` | Dockerfile, local compose file and smoke script of the demo | yes |
 | `data/valhalla/compose.yaml` | How to run Valhalla | yes |
@@ -1590,7 +1591,9 @@ is left out (every hike is then a round trip; ADR-0022). Turning it changes the
 liked hike's figures and ranks again, and an address ends in `&oneway` when
 it is off. Clicking a result shows it the same way, next to the
 liked hike. An optional starting place and maximum drive (up to 4 h) keeps only
-hikes within that DriveTime, estimated on highways-only tiles as in
+hikes within that DriveTime (the start is typed as "lat, lon", taken from the
+browser, or found by "Find place" among the GeoNames towns in the export,
+ADR-0029), estimated on highways-only tiles as in
 **Highway tiles** above. Measures with no data for a hike (climate and land
 cover do not cover all of Europe yet) show "no data" and drop out of that
 pair's score. Every score has a short line and a "?" beside it (in the results
@@ -1619,7 +1622,8 @@ FastAPI app, extra `web`) memory-maps it. No `Catalog.open` runs in the server.
 # needs the similarity facts (step 9) and, for drive time, the highway tiles
 # served by Valhalla on 8002 (docs/deploy.md, step 1)
 uv run dayhike export-serving --catalog data/catalog.sqlite --out data/web-serving \
-  --valhalla-tiles data/valhalla/highways-eu --valhalla-url http://127.0.0.1:8002
+  --valhalla-tiles data/valhalla/highways-eu --valhalla-url http://127.0.0.1:8002 \
+  --geonames data/geonames/cities1000.zip
 
 uv sync --extra web
 uv run dayhike serve --data data/web-serving --valhalla-url http://127.0.0.1:8002
@@ -1654,7 +1658,12 @@ metres each climbs either way, the Junctions, amenity points and sampled
 values, with the OSM node and way ids a shared link names (export format 4; `dayhike serve` refuses an
 older export, so rerun `export-serving` once). With `--valhalla-tiles` it also links the
 tile extract and writes a `valhalla.json` that serves it inside the container;
-with `--valhalla-url` it snaps every Trailhead once (`snaps.npz`). Rerun it
+with `--valhalla-url` it snaps every Trailhead once (`snaps.npz`). With
+`--geonames` (GeoNames `cities1000.zip`, downloaded there when missing) it
+writes `places.sqlite`, the towns of 1,000 people or more within 2° of the
+Trailheads' box for "Find place"; `dayhike export-places --out
+data/web-serving` adds it beside an existing export, which needs no other
+change (ADR-0029). Rerun it
 after any rebuild; `meta.json` is written last, so a half-written export never
 opens.
 
@@ -1669,7 +1678,10 @@ and encoded line; when the box holds more than 100, none are listed and
 `too_many` is true, so the page asks to zoom in),
 `GET /api/measures`, `GET /api/info`
 (with the Trailheads' box, `coverage`, for the page's swapped "lat, lon"
-warning), `POST /api/rank` with `{"seed": id, "weights": {measure: 0-100},
+warning, and `place_search`, true when the export has `places.sqlite`),
+`GET /api/place?q=&limit=` (GeoNames places with a name starting with the
+query, folded like search: the place named exactly that, then one with it as an
+alternate name, then the most populous; 404 without `places.sqlite`), `POST /api/rank` with `{"seed": id, "weights": {measure: 0-100},
 "excluded": [measure], "month": 1-12, "origin": {"lat", "lon"}, "max_hours":
 0-4}`, and `POST /api/pair` with `{"a": id, "b": id}` plus the same weights,
 excluded and month, giving the score a Ranking would show for `b` with `a` as
@@ -1952,9 +1964,12 @@ Catalog, the GeometryStore and the web demo's serving export are derivative
 databases of OpenStreetMap: when one is used publicly (the web demo does), it
 is offered under the ODbL, together with this code as the method that makes
 it. The demo's base map is OpenStreetMap's own tiles
-(https://operations.osmfoundation.org/policies/tiles/) and its place search is
-Nominatim (https://operations.osmfoundation.org/policies/nominatim/), both
-used under the OSM Foundation's usage policies.
+(https://operations.osmfoundation.org/policies/tiles/), used under the OSM
+Foundation's tile usage policy. Its place search reads the GeoNames
+`cities1000` towns (GeoNames, https://www.geonames.org/, CC BY 4.0) when the
+export has `places.sqlite`, and Nominatim
+(https://operations.osmfoundation.org/policies/nominatim/, under the OSM
+Foundation's usage policy) otherwise.
 
 FABDEM V1-2: Hawker, L., Uhe, P., Paulo, L., Sosa, J., Savage, J., Sampson, C.
 and Neal, J., 2022. A 30 m global map of elevation with forests and buildings

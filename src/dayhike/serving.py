@@ -21,10 +21,15 @@ similarity directory live. It writes a directory a server memory-maps:
   snap file or a Valhalla URL is given.
 - ``valhalla/``: the highways-only tile extract and a ``valhalla.json`` that
   serves it from ``SERVING_ROOT`` inside the container, when given.
+- ``places.sqlite``: GeoNames towns of 1,000 people or more within
+  ``PLACE_MARGIN_DEG`` of the Trailheads' box, each under every folded name it
+  has, for the page's place search, when a GeoNames ``cities1000`` file is
+  given. ``export_places`` writes it beside an existing export too: it reads
+  only ``trailheads.npy``, and an export without it still opens.
 - ``meta.json``: written last, so a directory without it is incomplete.
 
 ``ServingData`` opens such a directory without ``Catalog.open``: name search,
-the hikes in a map view, hike detail and Ranking all read the memory-mapped arrays and the SQLite file.
+place search, the hikes in a map view, hike detail and Ranking all read the memory-mapped arrays and the SQLite file.
 The Segments in a map view and a ComposedHike's detail read ``trailgraph.sqlite``; a Ranking
 from a ComposedHike or a Wish scores its facts against every DayHike like any Seed's. Detail, pair and
 Ranking measure every hike with its way back to the start, or every hike one way (ADR-0019).
@@ -44,11 +49,13 @@ import shutil
 import sqlite3
 import time
 import unicodedata
+import zipfile
 import zlib
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
+from urllib.request import urlretrieve as default_urlretrieve
 
 import numpy as np
 import shapely
@@ -66,6 +73,7 @@ from dayhike.catalog import (
     trailgraph_path_for,
 )
 from dayhike.dem import FABDEM_ATTRIBUTION
+from dayhike.extracts import UrlRetrieve
 from dayhike.loops import LOOP_SEEDS, LoopTarget, find_loops
 from dayhike.similarity import (
     ALONG_KINDS,
@@ -134,6 +142,9 @@ UNNAMING_KINDS = ("restaurant_cafe", "parking")  # amenity points that name no h
 TRAILHEAD_NEAREST = 3  # parking and restaurant/cafe points kept per Trailhead
 VALHALLA_CACHE_BYTES = 256 * 1024 * 1024  # mjolnir.max_cache_size; the build default is 1 GB
 SEARCH_SCAN_CAP = 5_000  # occurrences of the scanned word a search looks at, so short queries stay fast
+GEONAMES_URL = "https://download.geonames.org/export/dump/cities1000.zip"
+GEONAMES_ATTRIBUTION = "GeoNames (geonames.org), CC BY 4.0"
+PLACE_MARGIN_DEG = 2.0  # places this far outside the Trailheads' box are kept: a start a drive away
 _HIKE_CHUNK = 2_000
 _RASTER_FACTS = ("tree_share", "temperature_c", "southness", "waterside_share")  # read from rasters
 _SIMILARITY_FILES = (
@@ -328,6 +339,7 @@ def export_serving(
     valhalla_dir: Path | str | None = None,
     snaps_path: Path | str | None = None,
     valhalla_url: str | None = None,
+    geonames_path: Path | str | None = None,
     progress: Progress | None = None,
 ) -> Path:
     """Write the serving export of a Catalog into ``out_dir`` (see the module doc).
@@ -337,7 +349,8 @@ def export_serving(
     and the ``valhalla.json`` that built it; the tar is hard-linked when it
     can be (same disk), else copied. ``snaps_path`` seeds ``snaps.npz`` from an
     existing snap cache; with ``valhalla_url`` every Trailhead not in it is
-    snapped now, so a server never has to.
+    snapped now, so a server never has to. ``geonames_path`` is GeoNames'
+    ``cities1000`` file (zip or txt) for ``places.sqlite``.
     """
     started = time.monotonic()
     catalog_path, out = Path(catalog_path), Path(out_dir)
@@ -375,6 +388,10 @@ def export_serving(
         _write_snaps(out / "snaps.npz", trailheads, snaps_path, valhalla_url, progress)
     else:
         (out / "snaps.npz").unlink(missing_ok=True)
+    if geonames_path is not None:
+        export_places(geonames_path, out)
+    else:
+        (out / "places.sqlite").unlink(missing_ok=True)
     meta = {
         "format": SERVING_FORMAT,
         "dayhikes": len(ids),
@@ -731,6 +748,75 @@ def _write_snaps(
     snaps.of(places)
 
 
+def fetch_geonames(path: Path | str, urlretrieve: UrlRetrieve = default_urlretrieve) -> Path:
+    """GeoNames' ``cities1000.zip`` at ``path``, downloaded first when it is not there."""
+    path = Path(path)
+    if not path.is_file():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        partial = path.with_name(f"{path.name}.partial")  # a cut download is not taken for the file
+        urlretrieve(GEONAMES_URL, str(partial))
+        os.replace(partial, path)
+    return path
+
+
+def export_places(geonames_path: Path | str, out_dir: Path | str) -> Path:
+    """Write ``places.sqlite`` into the export ``out_dir`` from a GeoNames cities file (zip or txt).
+
+    Keeps the places within ``PLACE_MARGIN_DEG`` of the box of ``trailheads.npy``,
+    each with its name, country, population and position, and an index of every
+    name folded like ``_fold``, marked whether it is only an alternate name (not
+    its name or ASCII name). Written to a temporary file first, so a server
+    never opens half of one.
+    """
+    geonames_path, out = Path(geonames_path), Path(out_dir)
+    trailheads = np.load(out / "trailheads.npy")
+    (south, west), (north, east) = trailheads.min(axis=0) - PLACE_MARGIN_DEG, trailheads.max(axis=0) + PLACE_MARGIN_DEG
+    path, partial = out / "places.sqlite", out / "places.sqlite.partial"
+    partial.unlink(missing_ok=True)
+    db = sqlite3.connect(partial)
+    try:
+        db.execute(
+            "CREATE TABLE places (id INTEGER PRIMARY KEY, name TEXT, country TEXT, population INTEGER, lat REAL, lon REAL)"
+        )
+        db.execute(
+            "CREATE TABLE place_names (name TEXT, place INTEGER, alternate INTEGER, PRIMARY KEY (name, place)) "
+            "WITHOUT ROWID"
+        )
+        for line in _geonames_lines(geonames_path):
+            # geonameid, name, asciiname, alternatenames, latitude, longitude, ... country code (8), ... population (14)
+            fields = line.rstrip("\n").split("\t")
+            lat, lon = float(fields[4]), float(fields[5])
+            if not (south <= lat <= north and west <= lon <= east):
+                continue
+            place = int(fields[0])
+            db.execute(
+                "INSERT INTO places VALUES (?, ?, ?, ?, ?, ?)",
+                (place, fields[1], fields[8], int(fields[14] or 0), lat, lon),
+            )
+            own = {_fold(name).strip() for name in fields[1:3]}
+            names = (own | {_fold(name).strip() for name in fields[3].split(",")}) - {""}
+            db.executemany(
+                "INSERT INTO place_names VALUES (?, ?, ?)", [(name, place, name not in own) for name in names]
+            )
+        db.commit()
+    finally:
+        db.close()
+    os.replace(partial, path)
+    return path
+
+
+def _geonames_lines(path: Path) -> Iterator[str]:
+    if path.suffix != ".zip":
+        with path.open(encoding="utf-8") as lines:
+            yield from lines
+        return
+    with zipfile.ZipFile(path) as archive:
+        name = next(name for name in archive.namelist() if name.endswith(".txt"))
+        with archive.open(name) as raw:
+            for line in raw:
+                yield line.decode("utf-8")
+
+
 class ServingData:
     """A serving export, opened read-only and memory-mapped."""
 
@@ -755,6 +841,8 @@ class ServingData:
         # One string of every folded name between newlines: str.find walks it in C.
         self._haystack = "\n" + "\n".join(self._folded) + "\n"
         self._starts = np.cumsum([1] + [len(name) + 1 for name in self._folded[:-1]])
+        places = self.directory / "places.sqlite"
+        self.places = f"file:{places}?mode=ro&immutable=1" if places.is_file() else None
 
     def _db(self) -> sqlite3.Connection:
         return sqlite3.connect(self._db_uri, uri=True)
@@ -793,6 +881,26 @@ class ServingData:
             found.sort(key=lambda row: (_relevance(self._folded[row], needle, words), len(self._folded[row]), row))
             rows += found
         return self._summaries(rows[:limit])
+
+    def find_place(self, query: str, limit: int = 5) -> list[dict]:
+        """Places with a name starting with the query, folded like ``search``.
+
+        A place named exactly the query comes first, then one with it as an
+        alternate name (Wien is Vienna), then the most populous: so Krk is the
+        town of Krk before Kraków, whose alternate names include Krk.
+        """
+        needle = _fold(query).strip()
+        if self.places is None or not needle:
+            return []
+        with sqlite3.connect(self.places, uri=True) as db:
+            rows = db.execute(
+                "SELECT p.name, p.country, p.lat, p.lon, p.population FROM place_names n "
+                "JOIN places p ON p.id = n.place WHERE n.name >= ? AND n.name < ? "
+                "GROUP BY p.id ORDER BY MIN(CASE WHEN n.name = ? THEN n.alternate ELSE 2 END), "
+                "p.population DESC, p.id LIMIT ?",
+                (needle, needle + "\U0010ffff", needle, limit),
+            ).fetchall()
+        return [dict(zip(("name", "country", "lat", "lon", "population"), row)) for row in rows]
 
     def _rows_containing(self, word: str) -> list[int]:
         """Rows whose name holds ``word``, in id order, from its first SEARCH_SCAN_CAP occurrences."""

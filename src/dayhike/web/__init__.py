@@ -1,7 +1,8 @@
 """The public read-only web demo: a JSON API over a serving export, and the page.
 
-``create_app`` serves ``ServingData`` (``dayhike.serving``): name search, the
-hikes in a map view, hike detail, the Measure list, the score of any two hikes, and Ranking with an
+``create_app`` serves ``ServingData`` (``dayhike.serving``): name search, place
+search when the export has GeoNames places (ADR-0029), the hikes in a map view,
+hike detail, the Measure list, the score of any two hikes, and Ranking with an
 optional highways-only DriveTime pre-filter. Every client gets a request budget per minute, and one Ranking
 runs at a time per instance, so a small container holds its memory. When the export has a TrailGraph,
 it also serves the Segments in a map view and the detail of a ComposedHike, which can then be the
@@ -40,7 +41,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from dayhike.catalog import MatrixClient, Origin
-from dayhike.serving import MEASURE_GROUPS, MEASURE_INFO, SCORE_HELP, WISH_INPUTS, ServingData
+from dayhike.serving import GEONAMES_ATTRIBUTION, MEASURE_GROUPS, MEASURE_INFO, SCORE_HELP, WISH_INPUTS, ServingData
 from dayhike.similarity import DEFAULT_WEIGHTS, MEASURES, WISHABLE, Measure
 from dayhike.trailgraph import Route, RouteError
 
@@ -199,8 +200,10 @@ def wish_input(measure: Measure) -> dict | None:
     return {"kind": "number", "unit": unit, "min": low, "max": high, "step": step, "default": default}
 
 
-def site_pages(goatcounter: str | None, kofi: str | None) -> dict[str, str]:
+def site_pages(goatcounter: str | None, kofi: str | None, place_search: bool = False) -> dict[str, str]:
     """Each page's HTML with the GoatCounter tag where a code is set, and the Ko-fi link where a handle is.
+
+    With ``place_search`` (the export has GeoNames places) the place-search credit names GeoNames, not Nominatim.
 
     The tag loads the self-hosted ``count.js``, which counts at ``https://<code>.goatcounter.com/count``.
     """
@@ -220,6 +223,12 @@ def site_pages(goatcounter: str | None, kofi: str | None) -> dict[str, str]:
                 '  <p class="hint">The link opens Ko-fi, which takes the tip; this site handles no payments.</p>'
             )
             html = re.sub(r"<!--ko-fi-->.*?<!--/ko-fi-->", tip, html, flags=re.S)
+        if place_search:
+            credit = (
+                '<span id="place-credit">Place search: towns from <a href="https://www.geonames.org/">GeoNames</a>'
+                ' (geonames.org), <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</span>'
+            )
+            html = re.sub(r'<span id="place-credit">.*?</span>', credit, html, flags=re.S)
         pages[name] = html
     return pages
 
@@ -265,12 +274,12 @@ def create_app(
     ``goatcounter`` and ``kofi`` fill in the pages (``site_pages``); a value that
     is not a plain name is a ValueError.
     """
-    pages = site_pages(goatcounter, kofi)
+    pages = site_pages(goatcounter, kofi, data.places is not None)
     app = FastAPI(title="GoFindMeAHike", docs_url="/api/docs", openapi_url="/api/openapi.json")
     limiters = {"rank": RateLimiter(rank_rate, RATE_WINDOW_S), "api": RateLimiter(api_rate, RATE_WINDOW_S)}
     one_ranking = threading.Semaphore(1)
-    # The API reads change only with the export (its meta.json holds facts_version), the code and the settings.
-    settings = f"{BUILD} {drive_client is not None} {MAX_DRIVE_HOURS} {RESULTS}".encode()
+    # The API reads change only with the export (its meta.json holds facts_version, places.sqlite may come later), the code and the settings.
+    settings = f"{BUILD} {drive_client is not None} {MAX_DRIVE_HOURS} {RESULTS} {data.places is not None}".encode()
     etag = f'W/"{hashlib.sha256((data.directory / "meta.json").read_bytes() + settings).hexdigest()[:16]}"'
     measures = [
         {
@@ -342,7 +351,8 @@ def create_app(
         return {
             "dayhikes": data.meta["dayhikes"],
             "coverage": coverage,
-            "attribution": data.meta["attribution"],
+            "attribution": data.meta["attribution"] | ({"geonames": GEONAMES_ATTRIBUTION} if data.places else {}),
+            "place_search": data.places is not None,
             "drive_time": drive_client is not None,
             "compose": data.trailgraph is not None,
             "max_drive_hours": MAX_DRIVE_HOURS,
@@ -356,6 +366,13 @@ def create_app(
     @app.api_route("/api/search", methods=["GET", "HEAD"])
     def search(q: str = Query(max_length=100), limit: int = Query(20, ge=1, le=50)) -> dict:
         return {"results": data.search(q, limit)}
+
+    # The page's "Find place": a start for the drive filter, without asking Nominatim.
+    @app.api_route("/api/place", methods=["GET", "HEAD"])
+    def place(q: str = Query(max_length=100), limit: int = Query(5, ge=1, le=20)) -> dict:
+        if data.places is None:
+            raise HTTPException(404, "no place search in this export")
+        return {"results": data.find_place(q, limit)}
 
     @app.api_route("/api/hikes", methods=["GET", "HEAD"])
     def hikes_in_box(

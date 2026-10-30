@@ -330,6 +330,21 @@ def main(argv: list[str] | None = None) -> int:
     export.add_argument(
         "--valhalla-url", help="Running highways-only Valhalla: snap every Trailhead now"
     )
+    export.add_argument(
+        "--geonames",
+        type=Path,
+        help="GeoNames cities1000.zip for the page's place search; downloaded there when missing",
+    )
+    places = subparsers.add_parser(
+        "export-places", help="Add GeoNames place search beside an existing serving export"
+    )
+    places.add_argument(
+        "--geonames",
+        type=Path,
+        default=Path("data/geonames/cities1000.zip"),
+        help="GeoNames cities1000.zip; downloaded there when missing",
+    )
+    places.add_argument("--out", type=Path, default=Path("data/web-serving"))
     serve = subparsers.add_parser("serve", help="Serve the web demo from a serving export")
     serve.add_argument("--data", type=Path, default=Path("data/web-serving"))
     serve.add_argument("--host", default="127.0.0.1")
@@ -360,7 +375,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     if args.command == "export-serving":
-        return _export_serving(args.catalog, args.out, args.valhalla_tiles, args.snaps, args.valhalla_url)
+        return _export_serving(
+            args.catalog, args.out, args.valhalla_tiles, args.snaps, args.valhalla_url, args.geonames
+        )
+    if args.command == "export-places":
+        from dayhike.serving import export_places, fetch_geonames
+
+        print(export_places(fetch_geonames(args.geonames), args.out))
+        return 0
     if args.command == "serve":
         return _serve(
             args.data, args.host, args.port, args.valhalla_url, args.forwarded_hops, args.goatcounter, args.kofi
@@ -617,8 +639,9 @@ def _export_serving(
     valhalla_tiles: Path | None,
     snaps: Path | None,
     valhalla_url: str | None,
+    geonames: Path | None,
 ) -> int:
-    from dayhike.serving import ServingExportError, export_serving
+    from dayhike.serving import ServingExportError, export_serving, fetch_geonames
 
     def progress(message: str) -> None:
         print(message, file=sys.stderr, flush=True)
@@ -631,6 +654,7 @@ def _export_serving(
                 valhalla_dir=valhalla_tiles,
                 snaps_path=snaps,
                 valhalla_url=valhalla_url,
+                geonames_path=geonames and fetch_geonames(geonames),
                 progress=progress,
             )
         )

@@ -47,7 +47,9 @@ def server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     path = directory / "catalog.sqlite"
     build_catalog(FIXTURE, path)
     build_similarity(path, directory / "dem")
-    app = create_app(ServingData(export_serving(path, directory / "web-serving")), lambda max_hours: Matrix())
+    cities = Path(__file__).parent / "fixtures" / "cities1000.txt"
+    export = export_serving(path, directory / "web-serving", geonames_path=cities)
+    app = create_app(ServingData(export), lambda max_hours: Matrix())
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
@@ -407,3 +409,27 @@ def test_finding_hikes_is_counted_as_an_event_when_analytics_are_on(browser, ser
     page.locator("#results-table tbody tr").first.wait_for()
 
     assert page.evaluate("window.goatcounter.counted") == [{"path": "find", "event": True}]
+
+
+def test_finding_a_place_asks_the_export_not_nominatim(browser, server) -> None:
+    page = open_page(browser, server, Api(WISHABLE))
+    asked = []
+    page.on("request", lambda request: asked.append(request.url))
+    page.get_by_label("Only hikes within a drive").check()
+
+    page.get_by_label("From").fill("agram")
+    page.get_by_role("button", name="Find place").click()
+    page.get_by_text("Start: Zagreb, HR (45.8144, 15.9780)").wait_for()
+
+    assert [url for url in asked if "place" in url] == [f"{server}/api/place?limit=1&q=agram"]
+
+
+def test_the_credits_page_names_geonames_for_place_search_when_the_export_has_places(browser, server) -> None:
+    page = browser.new_page()
+    page.route(lambda url: not url.startswith(server), lambda route: route.abort())  # no tiles
+    page.goto(f"{server}/credits.html")
+    credit = page.locator("#place-credit")
+
+    assert "GeoNames" in credit.inner_text()
+    assert "Nominatim" not in credit.inner_text()
+    assert credit.get_by_role("link", name="CC BY 4.0").get_attribute("href") == "https://creativecommons.org/licenses/by/4.0/"

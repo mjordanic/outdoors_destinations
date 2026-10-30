@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from dayhike import build_catalog, build_similarity, web
-from dayhike.serving import ServingData, export_serving
+from dayhike.serving import ServingData, export_places, export_serving
 from dayhike.similarity import CORE_MEASURES, FACILITIES_FLAG_COLUMNS, MEASURE_NAMES
 from dayhike.web import RESULTS, create_app
 
@@ -598,3 +598,42 @@ def test_a_search_hit_says_whether_the_hike_ends_at_its_start(client: TestClient
         one_way = client.get(f"/api/hikes/{hit['id']}", params={"return_to_start": False}).json()
         assert hit["round_trip"] == one_way["facts"]["round_trip"]
         assert hit["length_m"] == one_way["facts"]["length_m"]
+
+
+def test_place_search_answers_from_the_export_and_is_credited(tmp_path: Path, matrix: Matrix) -> None:
+    path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, path)
+    build_similarity(path, tmp_path / "dem")
+    cities = Path(__file__).parent / "fixtures" / "cities1000.txt"
+    placed = TestClient(create_app(ServingData(export_serving(path, tmp_path / "web", geonames_path=cities)), lambda h: matrix))
+
+    info = placed.get("/api/info").json()
+    assert info["place_search"] is True
+    assert "GeoNames" in info["attribution"]["geonames"]
+    assert placed.get("/api/place", params={"q": "zag", "limit": 1}).json() == {
+        "results": [{"name": "Zagreb", "country": "HR", "lat": 45.81444, "lon": 15.97798, "population": 698966}]
+    }
+    assert placed.get("/api/place", params={"q": "x" * 101}).status_code == 422
+    assert placed.head("/api/place", params={"q": "zag"}).status_code == 200
+
+
+def test_adding_places_to_an_export_changes_the_etag(tmp_path: Path) -> None:
+    path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, path)
+    build_similarity(path, tmp_path / "dem")
+    out = export_serving(path, tmp_path / "web")
+
+    def etag() -> str:
+        return TestClient(create_app(ServingData(out))).get("/api/info").headers["etag"]
+
+    before = etag()
+    export_places(Path(__file__).parent / "fixtures" / "cities1000.txt", out)
+    assert etag() != before
+
+
+def test_an_export_without_places_says_so(client: TestClient) -> None:
+    info = client.get("/api/info").json()
+
+    assert info["place_search"] is False and "geonames" not in info["attribution"]
+    assert "Place search: <a href=\"https://nominatim.org/\">Nominatim</a>" in client.get("/credits.html").text
+    assert client.get("/api/place", params={"q": "zag"}).status_code == 404
