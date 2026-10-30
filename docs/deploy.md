@@ -138,10 +138,11 @@ If an alert fires and the traffic is abuse, close the public access at once:
   links the code that builds it. The repository is public, with the code under
   MIT (`LICENSE`) and the data licences in `DATA-LICENSES.md`; keep it public,
   or change that page to offer the export another way (for example a download of `hikes.sqlite`).
-- **Tile and place-search policies.** The map uses `tile.openstreetmap.org` and
-  the origin search uses Nominatim, both run by the OSM Foundation for
-  low-volume use under their usage policies. If traffic grows, switch to a
-  paid tile and geocoding provider.
+- **Tile and place-search policies.** The map uses `tile.openstreetmap.org`,
+  run by the OSM Foundation for low-volume use under its usage policy; if
+  traffic grows, switch to a paid tile provider. Export with `--geonames` so
+  the origin search reads `places.sqlite`; without it the page falls back to
+  Nominatim, which allows at most one request a second over all visitors.
 - **FABDEM is non-commercial (CC BY-NC-SA 4.0):** the demo must stay
   non-commercial (no ads, no paid tier).
 
