@@ -406,6 +406,19 @@ def test_sampling_again_changes_nothing_but_drops_the_similarity_facts(sampled: 
     assert not similarity_dir_for(catalog).exists()  # the ways back read the samples
 
 
+def test_copernicus_tiles_are_sampled_like_fabdem_tiles(sampled: Path, tmp_path: Path) -> None:
+    catalog = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, catalog)
+    root = tmp_path / "copernicus"
+    root.mkdir()
+    dem, landcover, climate = _write_rasters(root)
+    (dem / "N46E014_FABDEM_V1-2.tif").rename(dem / "Copernicus_DSM_COG_10_N46_00_E014_00_DEM.tif")
+
+    sample_trailgraph(catalog, dem_dir=dem, landcover_dir=landcover, climate_dir=climate)
+
+    assert _segments(catalog) == _segments(sampled)
+
+
 def test_sampling_without_rasters_keeps_the_osm_heights(catalog_path: Path, tmp_path: Path) -> None:
     sample_trailgraph(catalog_path, dem_dir=tmp_path, landcover_dir=tmp_path, climate_dir=tmp_path)
 

@@ -1,4 +1,4 @@
-from dayhike.dem import Bounds, fetch_fabdem, sample_dem
+from dayhike.dem import Bounds, fetch_dem, fetch_fabdem, sample_dem
 from dayhike.landcover import fetch_worldcover, sample_landcover
 from dayhike.climate import fetch_chelsa, sample_climate
 from dayhike.catalog import (
@@ -59,6 +59,7 @@ __all__ = [
     "build_similarity",
     "calibrate_similarity",
     "dayhike_label",
+    "fetch_dem",
     "fetch_fabdem",
     "fetch_chelsa",
     "fetch_worldcover",

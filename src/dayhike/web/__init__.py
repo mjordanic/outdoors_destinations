@@ -45,7 +45,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from dayhike.catalog import MatrixClient, Origin
-from dayhike.serving import GEONAMES_ATTRIBUTION, MEASURE_GROUPS, MEASURE_INFO, SCORE_HELP, WISH_INPUTS, ServingData
+from dayhike.serving import GEONAMES_ATTRIBUTION, MEASURE_GROUPS, MEASURE_INFO, SCORE_HELP, WISH_INPUTS, ServingData, name_dem
 from dayhike.similarity import DEFAULT_WEIGHTS, MEASURES, WISHABLE, Measure
 from dayhike.trailgraph import Route, RouteError
 
@@ -75,6 +75,20 @@ BUILD = hashlib.sha256(
 ).hexdigest()
 
 PAGES = ("index", "about", "support", "credits")  # the site's pages, served with its settings filled in
+# The elevation credits of an export sampled from Copernicus GLO-30 (ADR-0030), in place of
+# FABDEM's between <!--elevation--> and <!--/elevation--> on each page that names it.
+COPERNICUS_CREDITS = {
+    "index": 'Copernicus GLO-30 (<a href="https://doi.org/10.5270/ESA-c5d3d65">© DLR, Airbus; Copernicus DEM licence</a>)',
+    "credits": 'Copernicus DEM GLO-30, <a href="https://doi.org/10.5270/ESA-c5d3d65">doi:10.5270/ESA-c5d3d65</a>, '
+    'from <a href="https://registry.opendata.aws/copernicus-dem/">AWS Open Data</a>, under the '
+    '<a href="https://docs.sentinel-hub.com/api/latest/static/files/data/dem/resources/license/License-COPDEM-30.pdf">'
+    "Copernicus DEM licence</a>. Produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence "
+    "and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved. The "
+    "organisations in charge of the Copernicus programme by law or by delegation do not incur any liability for any "
+    "use of the Copernicus WorldDEM-30. The elevation profiles and the elevation-derived values on this site (heights, "
+    "gain, profile shape, steepness, slope aspect) are computed from it; it maps the surface, so tree tops and roofs "
+    "are included.",
+}
 PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")  # a GoatCounter code or Ko-fi handle
 
 DriveClientFactory = Callable[[float], MatrixClient]
@@ -204,10 +218,13 @@ def wish_input(measure: Measure) -> dict | None:
     return {"kind": "number", "unit": unit, "min": low, "max": high, "step": step, "default": default}
 
 
-def site_pages(goatcounter: str | None, kofi: str | None, place_search: bool = False) -> dict[str, str]:
+def site_pages(
+    goatcounter: str | None, kofi: str | None, place_search: bool = False, *, copernicus: bool = False
+) -> dict[str, str]:
     """Each page's HTML with the GoatCounter tag where a code is set, and the Ko-fi link where a handle is.
 
     With ``place_search`` (the export has GeoNames places) the place-search credit names GeoNames, not Nominatim.
+    With ``copernicus`` (an export sampled from Copernicus GLO-30), the pages credit it instead of FABDEM.
 
     The tag loads the self-hosted ``count.js``, which counts at ``https://<code>.goatcounter.com/count``.
     """
@@ -233,6 +250,8 @@ def site_pages(goatcounter: str | None, kofi: str | None, place_search: bool = F
                 ' (geonames.org), <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</span>'
             )
             html = re.sub(r'<span id="place-credit">.*?</span>', credit, html, flags=re.S)
+        if copernicus and name in COPERNICUS_CREDITS:
+            html = re.sub(r"<!--elevation-->.*?<!--/elevation-->", COPERNICUS_CREDITS[name], html, flags=re.S)
         pages[name] = html
     return pages
 
@@ -280,21 +299,22 @@ def create_app(
     is not a plain name is a ValueError. ``cors_origins`` are the other origins
     (``https://host``) whose pages may call the API.
     """
-    pages = site_pages(goatcounter, kofi, data.places is not None)
+    pages = site_pages(goatcounter, kofi, data.places is not None, copernicus="copernicus" in data.meta["attribution"])
     app = FastAPI(title="GoFindMeAHike", docs_url="/api/docs", openapi_url="/api/openapi.json")
     limiters = {"rank": RateLimiter(rank_rate, RATE_WINDOW_S), "api": RateLimiter(api_rate, RATE_WINDOW_S)}
     one_ranking = threading.Semaphore(1)
     # The API reads change only with the export (its meta.json holds facts_version, places.sqlite may come later), the code and the settings.
     settings = f"{BUILD} {drive_client is not None} {MAX_DRIVE_HOURS} {RESULTS} {data.places is not None}".encode()
     etag = f'W/"{hashlib.sha256((data.directory / "meta.json").read_bytes() + settings).hexdigest()[:16]}"'
+    attribution = data.meta["attribution"]
     measures = [
         {
             "name": measure.name,
             "kind": measure.kind,
             "group": MEASURE_INFO[measure.name][0],
             "label": MEASURE_INFO[measure.name][1],
-            "description": MEASURE_INFO[measure.name][2],
-            "source": MEASURE_INFO[measure.name][3],
+            "description": name_dem(MEASURE_INFO[measure.name][2], attribution),
+            "source": name_dem(MEASURE_INFO[measure.name][3], attribution),
             "columns": list(measure.columns),
             "monthly": measure.monthly,
             "default_weight": DEFAULT_WEIGHTS[measure.name],
@@ -370,9 +390,14 @@ def create_app(
             "results": RESULTS,
         }
 
+    score_help = {
+        **SCORE_HELP,
+        "sections": [{**section, "text": name_dem(section["text"], attribution)} for section in SCORE_HELP["sections"]],
+    }
+
     @app.api_route("/api/measures", methods=["GET", "HEAD"])
     def measure_list() -> dict:
-        return {"groups": list(MEASURE_GROUPS), "measures": measures, "score_help": SCORE_HELP}
+        return {"groups": list(MEASURE_GROUPS), "measures": measures, "score_help": score_help}
 
     @app.api_route("/api/search", methods=["GET", "HEAD"])
     def search(q: str = Query(max_length=100), limit: int = Query(20, ge=1, le=50)) -> dict:

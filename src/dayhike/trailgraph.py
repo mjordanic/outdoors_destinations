@@ -24,7 +24,7 @@ how a ``Route`` names it walked each way.
 The amenity points the Measures count near the network are kept too.
 
 ``sample_trailgraph`` stores per vertex what the Measures read from rasters
-(FABDEM height, WorldCover class, CHELSA cell, slope southness) and the
+(DEM height, WorldCover class, CHELSA cell, slope southness) and the
 WorldCover cells beside open water, so a server without rasters can compute
 the facts of a ComposedHike. ``TrailGraph`` opens the file (or its serving
 copy) and composes a hike from a ``Route``: the OSM ways it walks from OSM
@@ -860,7 +860,8 @@ def sample_trailgraph(
     ``sample-climate`` and ``build-similarity`` read the same rasters, so a
     ComposedHike that walks a DayHike's own vertices gets its facts:
 
-    - ``ele``: FABDEM where a tile covers the vertex, else its OSM ``ele``;
+    - ``ele``: the DEM (FABDEM, or Copernicus GLO-30) where a tile covers
+      the vertex, else its OSM ``ele``;
     - ``landcover``: the WorldCover class (0 uncovered);
     - ``climate_cell``: the CHELSA cell, when all 36 rasters have a value
       there (-1 otherwise), and ``climate_cells`` its 36 values;
@@ -873,7 +874,7 @@ def sample_trailgraph(
     after every sample step. Returns the number of vertices.
     """
     from dayhike.climate import _climate_rasters
-    from dayhike.dem import FABDEM_VERSION, sample_elevations
+    from dayhike.dem import dem_source_of, sample_elevations
     from dayhike.landcover import _raster_paths, sample_landcover_classes
     from dayhike.similarity import slope_southness
 
@@ -881,7 +882,7 @@ def sample_trailgraph(
     if not path.is_file():
         raise FileNotFoundError(path)
     dem_dir, landcover_dir, climate_dir = Path(dem_dir), Path(landcover_dir), Path(climate_dir)
-    has_dem = any(dem_dir.glob(f"*_FABDEM_{FABDEM_VERSION}.tif"))
+    has_dem = dem_source_of(dem_dir) is not None
     has_landcover = bool(_raster_paths(landcover_dir)) if landcover_dir.is_dir() else False
     rasters = _climate_rasters(climate_dir) if climate_dir.is_dir() else []
     grid = _climate_grid(rasters) if rasters else None
