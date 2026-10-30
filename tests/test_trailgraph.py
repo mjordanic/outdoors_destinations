@@ -515,7 +515,9 @@ def test_api_segments_compose_rank_and_pair(client, summit: Route) -> None:
     composed = {"route": str(summit)}
 
     assert client.get("/api/info").json()["compose"] is True
-    box = client.get("/api/segments", params={"south": 46.04, "west": 14.0, "north": 46.07, "east": 14.1}).json()
+    response = client.get("/api/segments", params={"south": 46.04, "west": 14.0, "north": 46.07, "east": 14.1})
+    assert response.headers["cache-control"] == "public, max-age=3600" and response.headers["etag"]
+    box = response.json()
     assert box["too_many"] is False and box["segments"] and box["junctions"]
     hike = client.post("/api/compose", json=composed).json()
     assert hike["route"]["text"] == str(summit) and hike["facts"]["round_trip"] == 1.0  # with its way back

@@ -405,6 +405,60 @@ def test_api_reads_answer_head_like_get(client: TestClient) -> None:
         assert response.content == b""
 
 
+API_READS = (
+    "/api/info",
+    "/api/measures",
+    "/api/search?q=ridge",
+    f"/api/hikes/{RIDGE_WALK_ID}",
+    "/api/hikes?south=45&west=15&north=45.1&east=15.1",
+)
+
+
+def test_api_reads_are_cached_for_an_hour_and_revalidate_by_etag(client: TestClient) -> None:
+    for path in API_READS:
+        response = client.get(path)
+        assert response.headers["cache-control"] == "public, max-age=3600", path
+        etag = response.headers["etag"]
+
+        again = client.get(path, headers={"If-None-Match": etag})
+        assert again.status_code == 304, path
+        assert again.content == b""
+        assert again.headers["etag"] == etag
+        assert client.get(path, headers={"If-None-Match": 'W/"other"'}).status_code == 200
+
+
+def test_refusals_rankings_and_health_are_not_cached(client: TestClient) -> None:
+    for response in (
+        client.get("/api/hikes/999999"),
+        client.get("/api/hikes?south=46&west=15&north=45&east=16"),
+        client.get("/api/search"),
+        client.post("/api/rank", json={"seed": RIDGE_WALK_ID}),
+        client.get("/api/health"),
+    ):
+        assert "etag" not in response.headers, response.url
+        assert "max-age" not in response.headers.get("cache-control", ""), response.url
+
+
+def test_the_page_revalidates_every_time_so_a_redeploy_shows_at_once(client: TestClient) -> None:
+    for path in ("/", "/app.js", "/style.css"):
+        response = client.get(path)
+        assert response.headers["cache-control"] == "no-cache", path
+
+        again = client.get(path, headers={"If-None-Match": response.headers["etag"]})
+        assert again.status_code == 304, path
+
+
+def test_api_json_and_the_page_are_gzipped_for_a_browser_that_takes_it(client: TestClient) -> None:
+    for path in ("/api/measures", "/app.js", "/"):
+        gzipped = client.get(path, headers={"Accept-Encoding": "gzip"})
+        plain = client.get(path, headers={"Accept-Encoding": "identity"})
+
+        assert gzipped.headers["content-encoding"] == "gzip", path
+        assert gzipped.num_bytes_downloaded < len(plain.content) / 2, path
+        assert gzipped.content == plain.content  # the client unzips it
+        assert "content-encoding" not in plain.headers
+
+
 def test_the_page_and_its_assets_are_served(client: TestClient) -> None:
     page = client.get("/")
 
