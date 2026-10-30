@@ -1032,11 +1032,11 @@ uv run dayhike fetch-dem --bounds 32.6,-31.3,71.2,46.4
 `--dest` overrides `data/dem/`. FABDEM V1-2 is University of Bristol data,
 CC BY-NC-SA 4.0 (non-commercial).
 
-**Copernicus GLO-30 instead (ADR-0029):** `--source copernicus` downloads the
+**Copernicus GLO-30 instead (ADR-0030):** `--source copernicus` downloads the
 Copernicus DEM GLO-30 1° Cloud Optimized GeoTIFFs from the AWS open bucket
 (`https://copernicus-dem-30m.s3.amazonaws.com/`, no account), about 26 MB a
 tile. It is free for commercial use, but it maps the surface: tree tops and
-roofs are in it, so forest walks climb a little more (ADR-0029 has the
+roofs are in it, so forest walks climb a little more (ADR-0030 has the
 numbers). Tiles GLO-30 Public leaves out (Armenia, Azerbaijan and their
 borders) are not asked for; sea tiles are not in the bucket. Keep one source
 per directory: every DEM step reads the source from the tile names in its
@@ -2018,7 +2018,7 @@ WorldDEM-30. The elevation values derived from it (heights, gain, profiles,
 ProfileShape, ClimbGrade, SteepestKm, SolarAspect) are adapted material: the
 web demo shares them under CC BY-NC-SA 4.0 and only non-commercially.
 
-Copernicus DEM GLO-30 (the alternative, ADR-0029): produced using Copernicus
+Copernicus DEM GLO-30 (the alternative, ADR-0030): produced using Copernicus
 WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018
 provided under COPERNICUS by the European Union and ESA; all rights reserved.
 The organisations in charge of the Copernicus programme by law or by

@@ -145,7 +145,7 @@ If an alert fires and the traffic is abuse, close the public access at once:
   Nominatim, which allows at most one request a second over all visitors.
 - **FABDEM is non-commercial (CC BY-NC-SA 4.0):** the demo must stay
   non-commercial (no ads, no paid tier).
-  An export sampled from Copernicus GLO-30 instead (ADR-0029) lifts this
+  An export sampled from Copernicus GLO-30 instead (ADR-0030) lifts this
   limit for elevation only when every DEM step (`sample-dem`,
   `sample-trailgraph`, `build-similarity`) ran with the same Copernicus
   `--dem` over tiles covering every DayHike. Otherwise some values are still

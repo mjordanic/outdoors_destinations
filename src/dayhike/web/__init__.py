@@ -71,7 +71,7 @@ BUILD = hashlib.sha256(
 ).hexdigest()
 
 PAGES = ("index", "about", "support", "credits")  # the site's pages, served with its settings filled in
-# The elevation credits of an export sampled from Copernicus GLO-30 (ADR-0029), in place of
+# The elevation credits of an export sampled from Copernicus GLO-30 (ADR-0030), in place of
 # FABDEM's between <!--elevation--> and <!--/elevation--> on each page that names it.
 COPERNICUS_CREDITS = {
     "index": 'Copernicus GLO-30 (<a href="https://doi.org/10.5270/ESA-c5d3d65">© DLR, Airbus; Copernicus DEM licence</a>)',

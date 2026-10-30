@@ -73,7 +73,7 @@ class DemSource:
 
     FABDEM is the default: bare earth, forests and buildings removed (ADR-0008).
     Copernicus GLO-30 is the alternative: a surface model, tree tops and roofs
-    included, free for commercial use (ADR-0029).
+    included, free for commercial use (ADR-0030).
     """
 
     name: str
