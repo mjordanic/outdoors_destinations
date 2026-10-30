@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted (searched only on request since ADR-0027)
 ---
 
 # SuggestedLoops: similar hikes composed from the TrailGraph

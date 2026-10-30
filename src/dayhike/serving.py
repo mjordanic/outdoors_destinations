@@ -1066,6 +1066,7 @@ class ServingData:
         limit: int = 10,
         return_to_start: bool = True,
         reach: Reach | None = None,
+        loops: bool = False,
     ) -> list[dict]:
         """The ``limit`` hikes most similar to one Seed, with every Measure's score.
 
@@ -1078,10 +1079,11 @@ class ServingData:
         its way back (and the figures listed are of that walk), else one way.
         Each hike has its served ``line``.
 
-        With a TrailGraph the hikes are DayHikes and SuggestedLoops (ADR-0020),
-        ranked together: a loop has ``id`` None, its ``route``, a name from
-        where it starts, and ``drive_hours`` to its start from ``reach`` (None
-        without it), which leaves out a loop starting out of reach.
+        With a TrailGraph and ``loops`` (asked for: ADR-0027) the hikes are
+        DayHikes and SuggestedLoops (ADR-0020), ranked together: a loop has
+        ``id`` None, its ``route``, a name from where it starts, and
+        ``drive_hours`` to its start from ``reach`` (None without it), which
+        leaves out a loop starting out of reach.
 
         One row per area: best first, a hike starting within ``GROUP_M`` of a
         better row's start is a version of that row, listed in its
@@ -1095,8 +1097,8 @@ class ServingData:
         seed_row, seed_walk = self._seed(seed, return_to_start)
         allowed = None if allowed_rows is None else self.store.ids[allowed_rows]
         rows, scores = rank_rows(store, [seed_row], weights, month=month, allowed_ids=allowed)
-        loops = []
-        if self.trailgraph is not None and LOOP_SEEDS:
+        found_loops = []
+        if loops and self.trailgraph is not None and LOOP_SEEDS:
             seed_line = (
                 None
                 if isinstance(seed, Mapping)  # a Wish walks nowhere
@@ -1104,10 +1106,10 @@ class ServingData:
                 if seed_walk is None
                 else np.column_stack([seed_walk.lat, seed_walk.lon])
             )
-            loops = self._loops(store, seed_row, seed_line, weights, month, rows[:LOOP_SEEDS], return_to_start, reach)
+            found_loops = self._loops(store, seed_row, seed_line, weights, month, rows[:LOOP_SEEDS], return_to_start, reach)
         # [score, store row or None, the loop or None, points once needed]
         catalog = ([float(score), row, None, None] for row, score in zip(rows.tolist(), scores.tolist()))
-        found = sorted(([loop["score"], None, loop, points] for loop, points in loops), key=lambda c: -c[0])
+        found = sorted(([loop["score"], None, loop, points] for loop, points in found_loops), key=lambda c: -c[0])
         groups: list[list[list]] = []  # the best first in each
         for hike in heapq.merge(catalog, found, key=lambda candidate: -candidate[0]):
             start = self._start(hike)
