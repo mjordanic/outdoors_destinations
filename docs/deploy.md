@@ -146,7 +146,11 @@ If an alert fires and the traffic is abuse, close the public access at once:
 - **FABDEM is non-commercial (CC BY-NC-SA 4.0):** the demo must stay
   non-commercial (no ads, no paid tier).
   An export sampled from Copernicus GLO-30 instead (ADR-0027) lifts this
-  limit for elevation.
+  limit for elevation only when every DEM step (`sample-dem`,
+  `sample-trailgraph`, `build-similarity`) ran with the same Copernicus
+  `--dem` over tiles covering every DayHike. Otherwise some values are still
+  FABDEM: its credit and the non-commercial limit still apply, even though the
+  page credits only Copernicus (it follows the last `sample-dem`).
 
 ## 7. Update or roll back
 

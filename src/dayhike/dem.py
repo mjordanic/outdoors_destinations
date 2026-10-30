@@ -256,15 +256,20 @@ def sample_elevations(
         path = raster_dir / source.tile_file(tile_id)
         if not path.is_file():
             continue
-        coords = [(points[index][1], points[index][0]) for index in indices]
         with rasterio.open(path) as dataset:
             nodata = dataset.nodata
             box = dataset.bounds
-            for index, (lon, lat), sample in zip(indices, coords, dataset.sample(coords), strict=True):
-                # A GLO-30 grid stops half a cell short of its tile's east and south
-                # edges, and outside it a read gives 0, not nodata.
-                if not (box.left <= lon < box.right and box.bottom < lat <= box.top):
-                    continue
+            half_x, half_y = dataset.res[0] / 2, dataset.res[1] / 2
+            # A GLO-30 grid stops half a cell short of its tile's east and south
+            # edges, and outside it a read gives 0, not nodata: read the edge cell.
+            coords = [
+                (
+                    min(max(points[index][1], box.left + half_x), box.right - half_x),
+                    min(max(points[index][0], box.bottom + half_y), box.top - half_y),
+                )
+                for index in indices
+            ]
+            for index, sample in zip(indices, dataset.sample(coords), strict=True):
                 value = float(sample[0])
                 if not math.isfinite(value):
                     continue

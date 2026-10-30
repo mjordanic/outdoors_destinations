@@ -223,7 +223,7 @@ def test_sample_elevations_reads_copernicus_tiles(tmp_path: Path) -> None:
     assert sample_elevations(tmp_path, [(45.2, 15.1), (47.0, 11.0)]) == [pytest.approx(987.0), None]
 
 
-def test_a_point_the_tiles_grid_misses_is_uncovered_not_sea_level(tmp_path: Path) -> None:
+def test_a_point_the_tiles_grid_misses_reads_its_edge_cell_not_sea_level(tmp_path: Path) -> None:
     import rasterio
     from rasterio.transform import from_origin
 
@@ -242,11 +242,14 @@ def test_a_point_the_tiles_grid_misses_is_uncovered_not_sea_level(tmp_path: Path
         crs="EPSG:4326",
         transform=from_origin(15 - cell / 2, 46 + cell / 2, cell, cell),
     ) as dataset:
-        dataset.write(np.full((3600, 3600), 1500.0, dtype="float32"), 1)
+        heights = np.full((3600, 3600), 1500.0, dtype="float32")
+        heights[:, -1] = 1600.0
+        heights[-1, :] = 1700.0
+        dataset.write(heights, 1)
 
     samples = sample_elevations(tmp_path, [(45.5, 15.5), (45.5, 15.99995), (45.00003, 15.5)])
 
-    assert samples == [pytest.approx(1500.0), None, None]
+    assert samples == [pytest.approx(1500.0), pytest.approx(1600.0), pytest.approx(1700.0)]
 
 
 def test_a_dem_directory_holds_one_source(tmp_path: Path) -> None:
