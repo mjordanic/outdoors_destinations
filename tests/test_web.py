@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from dayhike import build_catalog, build_similarity, web
-from dayhike.serving import ServingData, export_serving
+from dayhike.serving import ServingData, export_places, export_serving
 from dayhike.similarity import CORE_MEASURES, FACILITIES_FLAG_COLUMNS, MEASURE_NAMES
 from dayhike.web import RESULTS, create_app
 
@@ -615,6 +615,20 @@ def test_place_search_answers_from_the_export_and_is_credited(tmp_path: Path, ma
     }
     assert placed.get("/api/place", params={"q": "x" * 101}).status_code == 422
     assert placed.head("/api/place", params={"q": "zag"}).status_code == 200
+
+
+def test_adding_places_to_an_export_changes_the_etag(tmp_path: Path) -> None:
+    path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, path)
+    build_similarity(path, tmp_path / "dem")
+    out = export_serving(path, tmp_path / "web")
+
+    def etag() -> str:
+        return TestClient(create_app(ServingData(out))).get("/api/info").headers["etag"]
+
+    before = etag()
+    export_places(Path(__file__).parent / "fixtures" / "cities1000.txt", out)
+    assert etag() != before
 
 
 def test_an_export_without_places_says_so(client: TestClient) -> None:

@@ -278,8 +278,8 @@ def create_app(
     app = FastAPI(title="GoFindMeAHike", docs_url="/api/docs", openapi_url="/api/openapi.json")
     limiters = {"rank": RateLimiter(rank_rate, RATE_WINDOW_S), "api": RateLimiter(api_rate, RATE_WINDOW_S)}
     one_ranking = threading.Semaphore(1)
-    # The API reads change only with the export (its meta.json holds facts_version), the code and the settings.
-    settings = f"{BUILD} {drive_client is not None} {MAX_DRIVE_HOURS} {RESULTS}".encode()
+    # The API reads change only with the export (its meta.json holds facts_version, places.sqlite may come later), the code and the settings.
+    settings = f"{BUILD} {drive_client is not None} {MAX_DRIVE_HOURS} {RESULTS} {data.places is not None}".encode()
     etag = f'W/"{hashlib.sha256((data.directory / "meta.json").read_bytes() + settings).hexdigest()[:16]}"'
     measures = [
         {
