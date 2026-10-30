@@ -1051,8 +1051,9 @@ uv run dayhike build-similarity --dem data/dem-copernicus
 
 A Copernicus `sample-dem` writes its attribution into GeometryStore
 `geometry_meta` (`copernicus_attribution`; a FABDEM run removes it). The
-serving export carries it, and the page then names Copernicus GLO-30 in the
-Measure sources, the score help and the footer instead of FABDEM. That credit
+serving export carries it in place of FABDEM's attribution, and the site then
+names Copernicus GLO-30 instead of FABDEM in the Measure sources, the score
+help, the credits page and the home page footer line. That credit
 follows the last `sample-dem` alone: the export is free of FABDEM's
 non-commercial limit only when all three DEM steps above ran with the same
 Copernicus `--dem` over tiles covering every DayHike. Otherwise some values are

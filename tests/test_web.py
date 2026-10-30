@@ -109,7 +109,8 @@ def test_an_export_sampled_from_copernicus_names_it_and_not_fabdem(tmp_path: Pat
     build_similarity(path, dem)
     client = TestClient(create_app(ServingData(export_serving(path, tmp_path / "web-serving")), None))
 
-    assert "Airbus" in client.get("/api/info").json()["attribution"]["copernicus"]
+    attribution = client.get("/api/info").json()["attribution"]
+    assert "Airbus" in attribution["copernicus"] and "fabdem" not in attribution
     body = client.get("/api/measures").json()
     sources = {m["name"]: m["source"] for m in body["measures"]}
     help_text = " ".join(section["text"] for section in body["score_help"]["sections"])
@@ -117,6 +118,13 @@ def test_an_export_sampled_from_copernicus_names_it_and_not_fabdem(tmp_path: Pat
         assert "Copernicus GLO-30" in sources[name] and "FABDEM" not in sources[name], name
     assert "Copernicus GLO-30" in help_text and "FABDEM" not in help_text
     assert "FABDEM" not in str(body["measures"])
+    # The credits page and the home footer credit the map in use, with its licence notice.
+    credits = client.get("/credits.html").text
+    footer = client.get("/").text.split("<footer", 1)[1]
+    for page in (credits, footer):
+        assert "GLO-30" in page and "FABDEM" not in page and "CC BY-NC-SA" not in page
+    assert "© Airbus Defence and Space GmbH 2014-2018" in credits and "do not incur any liability" in credits
+    assert 'href="https://doi.org/10.5270/ESA-c5d3d65"' in credits
 
 
 def test_every_osm_flag_says_two_hikes_without_it_are_not_compared(client: TestClient) -> None:

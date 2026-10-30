@@ -71,6 +71,20 @@ BUILD = hashlib.sha256(
 ).hexdigest()
 
 PAGES = ("index", "about", "support", "credits")  # the site's pages, served with its settings filled in
+# The elevation credits of an export sampled from Copernicus GLO-30 (ADR-0029), in place of
+# FABDEM's between <!--elevation--> and <!--/elevation--> on each page that names it.
+COPERNICUS_CREDITS = {
+    "index": 'Copernicus GLO-30 (<a href="https://doi.org/10.5270/ESA-c5d3d65">© DLR, Airbus; Copernicus DEM licence</a>)',
+    "credits": 'Copernicus DEM GLO-30, <a href="https://doi.org/10.5270/ESA-c5d3d65">doi:10.5270/ESA-c5d3d65</a>, '
+    'from <a href="https://registry.opendata.aws/copernicus-dem/">AWS Open Data</a>, under the '
+    '<a href="https://docs.sentinel-hub.com/api/latest/static/files/data/dem/resources/license/License-COPDEM-30.pdf">'
+    "Copernicus DEM licence</a>. Produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence "
+    "and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved. The "
+    "organisations in charge of the Copernicus programme by law or by delegation do not incur any liability for any "
+    "use of the Copernicus WorldDEM-30. The elevation profiles and the elevation-derived values on this site (heights, "
+    "gain, profile shape, steepness, slope aspect) are computed from it; it maps the surface, so tree tops and roofs "
+    "are included.",
+}
 PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")  # a GoatCounter code or Ko-fi handle
 
 DriveClientFactory = Callable[[float], MatrixClient]
@@ -200,10 +214,13 @@ def wish_input(measure: Measure) -> dict | None:
     return {"kind": "number", "unit": unit, "min": low, "max": high, "step": step, "default": default}
 
 
-def site_pages(goatcounter: str | None, kofi: str | None, place_search: bool = False) -> dict[str, str]:
+def site_pages(
+    goatcounter: str | None, kofi: str | None, place_search: bool = False, *, copernicus: bool = False
+) -> dict[str, str]:
     """Each page's HTML with the GoatCounter tag where a code is set, and the Ko-fi link where a handle is.
 
     With ``place_search`` (the export has GeoNames places) the place-search credit names GeoNames, not Nominatim.
+    With ``copernicus`` (an export sampled from Copernicus GLO-30), the pages credit it instead of FABDEM.
 
     The tag loads the self-hosted ``count.js``, which counts at ``https://<code>.goatcounter.com/count``.
     """
@@ -229,6 +246,8 @@ def site_pages(goatcounter: str | None, kofi: str | None, place_search: bool = F
                 ' (geonames.org), <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</span>'
             )
             html = re.sub(r'<span id="place-credit">.*?</span>', credit, html, flags=re.S)
+        if copernicus and name in COPERNICUS_CREDITS:
+            html = re.sub(r"<!--elevation-->.*?<!--/elevation-->", COPERNICUS_CREDITS[name], html, flags=re.S)
         pages[name] = html
     return pages
 
@@ -274,7 +293,7 @@ def create_app(
     ``goatcounter`` and ``kofi`` fill in the pages (``site_pages``); a value that
     is not a plain name is a ValueError.
     """
-    pages = site_pages(goatcounter, kofi, data.places is not None)
+    pages = site_pages(goatcounter, kofi, data.places is not None, copernicus="copernicus" in data.meta["attribution"])
     app = FastAPI(title="GoFindMeAHike", docs_url="/api/docs", openapi_url="/api/openapi.json")
     limiters = {"rank": RateLimiter(rank_rate, RATE_WINDOW_S), "api": RateLimiter(api_rate, RATE_WINDOW_S)}
     one_ranking = threading.Semaphore(1)

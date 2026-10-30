@@ -406,13 +406,15 @@ def export_serving(
         export_places(geonames_path, out)
     else:
         (out / "places.sqlite").unlink(missing_ok=True)
+    # The elevation map in use: FABDEM, unless the GeometryStore was sampled from Copernicus GLO-30 (ADR-0029).
+    elevation = {} if "copernicus" in sources else {"fabdem": FABDEM_ATTRIBUTION}
     meta = {
         "format": SERVING_FORMAT,
         "dayhikes": len(ids),
         "facts_version": json.loads((similarity / "meta.json").read_text())["facts_version"],
         "line_tolerance_m": LINE_TOLERANCE_M,
         "elevation_points": ELEVATION_POINTS,
-        "attribution": {"osm": attribution, "fabdem": FABDEM_ATTRIBUTION, **sources},
+        "attribution": {"osm": attribution, **elevation, **sources},
         "drive_time": (out / "valhalla" / "valhalla.json").is_file() and (out / "snaps.npz").is_file(),
         "compose": compose,
         "export_seconds": round(time.monotonic() - started, 1),
