@@ -38,7 +38,7 @@
   <h3>Who receives it</h3>
   <ul>
     <!-- The hosting provider: one item, so a change of host (or a CDN in front) changes only this line. -->
-    <li id="host-recipient"><strong>Google Cloud</strong> (Google Cloud Run, region europe-west1, Belgium) hosts the site and keeps the request logs, as a processor under its <a href="https://cloud.google.com/terms/data-processing-addendum">Cloud Data Processing Addendum</a>.</li>
+    <li id="host-recipient"><strong>Google Cloud</strong> (Google Cloud Run, region europe-west1, Belgium) hosts the site, and Google Cloud Logging keeps the request logs in a storage location that follows Google's defaults, as a processor under its <a href="https://cloud.google.com/terms/data-processing-addendum">Cloud Data Processing Addendum</a>.</li>
     <li><strong>The OpenStreetMap Foundation</strong> (UK) serves the map tiles, so your browser sends it your IP address and the map area you look at (<a href="https://osmfoundation.org/wiki/Privacy_Policy">its privacy policy</a>). <!-- Place search: Nominatim until the export carries GeoNames places (/api/info place_search);
          then place names are looked up on this site's own server and this sentence goes. -->
       <span id="place-recipient">When you search for a place by name, your browser sends the name and your IP address to its <a href="https://nominatim.org/">Nominatim</a> service.</span></li>
@@ -47,7 +47,7 @@
   </ul>
 
   <h3>Transfers outside the EU</h3>
-  <p>The site and its logs are hosted in the EU. Google may still process data outside the EU; its Data Processing Addendum covers such transfers with the EU standard contractual clauses, and Google is certified under the EU–US Data Privacy Framework. The OpenStreetMap Foundation is in the United Kingdom, which the EU recognises as giving adequate protection.</p>
+  <p>The site is hosted in the EU (Google Cloud Run, europe-west1, Belgium). The request logs are kept by Google Cloud Logging, whose storage location follows Google's defaults and may be outside the EU. Google may still process data outside the EU; its Data Processing Addendum covers such transfers with the EU standard contractual clauses, and Google is certified under the EU–US Data Privacy Framework. The OpenStreetMap Foundation is in the United Kingdom, which the EU recognises as giving adequate protection.</p>
 
   <h3>Your rights</h3>
   <p>You can ask for access to your data, its correction or erasure, a restriction of its processing, and you can object to processing based on legitimate interest. Write to the address above. The site cannot tell who you are from a log line, so it may need you to say when you visited and from which IP address.</p>

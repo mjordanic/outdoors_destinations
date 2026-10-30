@@ -746,3 +746,18 @@ def test_a_cors_preflight_from_the_shell_does_not_use_up_the_ranking_budget(data
 
     assert ranked.status_code == 200 and ranked.headers["access-control-allow-origin"] == SHELL
     assert refused.status_code == 429 and refused.headers["access-control-allow-origin"] == SHELL  # the shell reads why
+
+
+def test_the_rate_limiter_forgets_an_idle_client_within_a_window() -> None:
+    now = [0.0]
+    limiter = web.RateLimiter(limit=2, window_s=60.0, clock=lambda: now[0])
+    assert limiter.allow("1.2.3.4") and limiter.allow("1.2.3.4") and not limiter.allow("1.2.3.4")
+    now[0] = 30.0
+    assert limiter.allow("5.6.7.8")
+    assert len(limiter) == 2
+    now[0] = 61.0
+    assert limiter.allow("5.6.7.8")
+    assert len(limiter) == 1
+    now[0] = 121.0
+    assert limiter.allow("9.9.9.9")
+    assert len(limiter) == 1

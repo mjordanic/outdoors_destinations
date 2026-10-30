@@ -268,16 +268,22 @@ def site_pages(
 class RateLimiter:
     """At most ``limit`` requests per ``window_s`` seconds per client key."""
 
-    def __init__(self, limit: int, window_s: float) -> None:
-        self.limit, self.window_s = limit, window_s
+    def __init__(self, limit: int, window_s: float, clock: Callable[[], float] = time.monotonic) -> None:
+        self.limit, self.window_s, self._clock = limit, window_s, clock
         self._seen: dict[str, deque[float]] = {}
+        self._swept = clock()
         self._lock = threading.Lock()
 
+    def __len__(self) -> int:
+        """How many clients it remembers."""
+        return len(self._seen)
+
     def allow(self, key: str) -> bool:
-        now = time.monotonic()
+        now = self._clock()
         with self._lock:
-            if len(self._seen) > 10_000:  # forget idle clients
+            if now - self._swept >= self.window_s:  # forget idle clients once a window
                 self._seen = {k: v for k, v in self._seen.items() if v and now - v[-1] < self.window_s}
+                self._swept = now
             seen = self._seen.setdefault(key, deque())
             while seen and now - seen[0] >= self.window_s:
                 seen.popleft()

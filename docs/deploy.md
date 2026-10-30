@@ -145,7 +145,9 @@ If an alert fires and the traffic is abuse, close the public access at once:
   the origin search reads `places.sqlite`; without it the page falls back to
   Nominatim, which allows at most one request a second over all visitors.
 - **Privacy page.** `privacy.html` names the host (Google Cloud Run,
-  `europe-west1`), the 30-day log retention, the map tile and place-search
+  `europe-west1`), says the request logs are kept by Google Cloud Logging in
+  Google's default storage location (not pinned to the EU), the 30-day log
+  retention, the map tile and place-search
   providers, and GoatCounter and Ko-fi once they are set. Change it with any of
   these: a new host or a CDN in front (the `host-recipient` item), a shorter
   log retention, or a different tile or place-search provider.
