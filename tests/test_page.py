@@ -463,6 +463,16 @@ def test_a_server_that_turns_the_page_away_says_the_site_is_paused(browser, serv
     assert page.locator("#loading").is_visible()
 
 
+def test_a_server_that_answers_too_many_requests_shows_its_own_message(browser, server) -> None:
+    page = browser.new_page()
+    page.route(lambda url: not url.startswith(server), lambda route: route.abort())  # no tiles
+    page.route(f"{server}/api/info", lambda route: route.fulfill(status=429, json={"detail": "Rate limit exceeded"}))
+    page.goto(server)
+
+    page.locator("#loading-text.error").wait_for()
+    assert page.locator("#loading-text").text_content() == "Too many requests; wait a minute and try again."
+
+
 def test_an_api_on_another_origin_whose_answer_the_page_cannot_read_says_paused_or_busy(browser, server) -> None:
     shell_origin = server.replace("127.0.0.1", "localhost")  # another origin, which the API lets in no CORS for
     page = browser.new_context(permissions=["local-network-access"]).new_page()
