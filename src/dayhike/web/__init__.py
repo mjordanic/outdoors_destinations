@@ -1,7 +1,8 @@
 """The public read-only web demo: a JSON API over a serving export, and the page.
 
-``create_app`` serves ``ServingData`` (``dayhike.serving``): name search, the
-hikes in a map view, hike detail, the Measure list, the score of any two hikes, and Ranking with an
+``create_app`` serves ``ServingData`` (``dayhike.serving``): name search, place
+search when the export has GeoNames places (ADR-0027), the hikes in a map view,
+hike detail, the Measure list, the score of any two hikes, and Ranking with an
 optional highways-only DriveTime pre-filter. Every client gets a request budget per minute, and one Ranking
 runs at a time per instance, so a small container holds its memory. When the export has a TrailGraph,
 it also serves the Segments in a map view and the detail of a ComposedHike, which can then be the
@@ -40,7 +41,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from dayhike.catalog import MatrixClient, Origin
-from dayhike.serving import MEASURE_GROUPS, MEASURE_INFO, SCORE_HELP, WISH_INPUTS, ServingData
+from dayhike.serving import GEONAMES_ATTRIBUTION, MEASURE_GROUPS, MEASURE_INFO, SCORE_HELP, WISH_INPUTS, ServingData
 from dayhike.similarity import DEFAULT_WEIGHTS, MEASURES, WISHABLE, Measure
 from dayhike.trailgraph import Route, RouteError
 
@@ -342,7 +343,8 @@ def create_app(
         return {
             "dayhikes": data.meta["dayhikes"],
             "coverage": coverage,
-            "attribution": data.meta["attribution"],
+            "attribution": data.meta["attribution"] | ({"geonames": GEONAMES_ATTRIBUTION} if data.places else {}),
+            "place_search": data.places is not None,
             "drive_time": drive_client is not None,
             "compose": data.trailgraph is not None,
             "max_drive_hours": MAX_DRIVE_HOURS,
@@ -356,6 +358,13 @@ def create_app(
     @app.api_route("/api/search", methods=["GET", "HEAD"])
     def search(q: str = Query(max_length=100), limit: int = Query(20, ge=1, le=50)) -> dict:
         return {"results": data.search(q, limit)}
+
+    # The page's "Find place": a start for the drive filter, without asking Nominatim.
+    @app.api_route("/api/place", methods=["GET", "HEAD"])
+    def place(q: str = Query(max_length=100), limit: int = Query(5, ge=1, le=20)) -> dict:
+        if data.places is None:
+            raise HTTPException(404, "no place search in this export")
+        return {"results": data.find_place(q, limit)}
 
     @app.api_route("/api/hikes", methods=["GET", "HEAD"])
     def hikes_in_box(

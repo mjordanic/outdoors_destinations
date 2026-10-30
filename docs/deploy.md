@@ -24,10 +24,16 @@ docker run -d --name valhalla-highways -p 127.0.0.1:8002:8002 \
 
 uv run dayhike export-serving --catalog data/catalog.sqlite --out data/web-serving \
   --valhalla-tiles data/valhalla/highways-eu --snaps data/catalog.snaps.npz \
-  --valhalla-url http://127.0.0.1:8002
+  --valhalla-url http://127.0.0.1:8002 --geonames data/geonames/cities1000.zip
 ```
 
-`--snaps` is optional (it starts from an existing snap cache). Rerun the
+`--snaps` is optional (it starts from an existing snap cache). `--geonames`
+writes `places.sqlite` for the page's "Find place" (ADR-0027); the file is
+downloaded there when missing, so delete it before a refresh to fetch the
+current GeoNames list. An export written without it falls back to public
+Nominatim. To add place search to an export already built, without exporting
+again, run `uv run dayhike export-places --out data/web-serving` (it reads
+only `trailheads.npy` and leaves `meta.json` as it is), then rebuild the image. Rerun the
 command after any rebuild of the Catalog, the similarity facts or the tiles:
 it rewrites the directory and writes `meta.json` last, so a half-written export
 never opens.

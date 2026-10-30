@@ -405,3 +405,87 @@ def test_a_rerun_without_tiles_or_snaps_drops_the_old_ones(catalog_path: Path, t
     assert json.loads((out / "meta.json").read_text())["drive_time"] is False
     assert not (out / "snaps.npz").exists() and not (out / "valhalla").exists()
     assert (tiles / "valhalla_tiles.tar").read_bytes() == b"tiles"
+
+
+CITIES = Path(__file__).parent / "fixtures" / "cities1000.txt"
+
+
+@pytest.fixture(scope="module")
+def placed(catalog_path: Path) -> ServingData:
+    return ServingData(export_serving(catalog_path, catalog_path.parent / "placed", geonames_path=CITIES))
+
+
+def test_an_export_without_geonames_has_no_place_search(data: ServingData) -> None:
+    assert data.places is None
+    assert not (data.directory / "places.sqlite").exists()
+
+
+def test_place_search_keeps_only_places_near_the_trailheads(placed: ServingData) -> None:
+    assert placed.find_place("lisbon") == []
+    assert placed.find_place("lissabon") == []
+    assert [place["name"] for place in placed.find_place("vo")] == ["Völkermarkt"]
+
+
+def test_place_search_matches_a_folded_prefix_of_any_name_most_populous_first(placed: ServingData) -> None:
+    assert placed.find_place("Za") == [
+        {"name": "Zagreb", "country": "HR", "lat": 45.81444, "lon": 15.97798, "population": 698966},
+        {"name": "Zaprešić", "country": "HR", "lat": 45.85639, "lon": 15.80778, "population": 19644},
+    ]
+    assert [place["name"] for place in placed.find_place("zapresic")] == ["Zaprešić"]
+    assert [place["name"] for place in placed.find_place("  AGRAM ")] == ["Zagreb"]
+    assert [place["name"] for place in placed.find_place("Загреб")] == ["Zagreb"]
+    assert [place["name"] for place in placed.find_place("Voelkermarkt")] == ["Völkermarkt"]
+    assert [place["name"] for place in placed.find_place("za", limit=1)] == ["Zagreb"]
+    assert placed.find_place("greb") == [] and placed.find_place(" ") == []
+
+
+def test_place_search_puts_its_name_then_another_exact_name_before_a_more_populous_prefix(
+    placed: ServingData,
+) -> None:
+    assert [place["name"] for place in placed.find_place("vrh")] == ["Vrh", "Vrhnika"]
+    assert [place["name"] for place in placed.find_place("velikovec")] == ["Völkermarkt", "Velikovecki Breg"]
+
+
+def test_place_file_can_be_added_beside_an_existing_export(catalog_path: Path, tmp_path: Path, capsys) -> None:
+    from dayhike.cli import main
+
+    out = export_serving(catalog_path, tmp_path / "out")
+    meta = (out / "meta.json").read_bytes()
+
+    assert main(["export-places", "--geonames", str(CITIES), "--out", str(out)]) == 0
+
+    assert (out / "meta.json").read_bytes() == meta
+    assert [place["name"] for place in ServingData(out).find_place("ogulin")] == ["Ogulin"]
+    assert capsys.readouterr().out.strip() == str(out / "places.sqlite")
+
+
+def test_place_file_reads_the_geonames_zip(catalog_path: Path, tmp_path: Path) -> None:
+    import zipfile
+
+    with zipfile.ZipFile(tmp_path / "cities1000.zip", "w") as archive:
+        archive.write(CITIES, "cities1000.txt")
+    out = export_serving(catalog_path, tmp_path / "out", geonames_path=tmp_path / "cities1000.zip")
+
+    assert [place["name"] for place in ServingData(out).find_place("ogulin")] == ["Ogulin"]
+
+
+def test_a_rerun_without_geonames_drops_the_old_place_file(catalog_path: Path, tmp_path: Path) -> None:
+    out = export_serving(catalog_path, tmp_path / "out", geonames_path=CITIES)
+    export_serving(catalog_path, out)
+
+    assert ServingData(out).places is None
+
+
+def test_geonames_is_downloaded_only_when_missing(tmp_path: Path) -> None:
+    from dayhike.serving import GEONAMES_URL, fetch_geonames
+
+    asked = []
+
+    def urlretrieve(url: str, path: str) -> None:
+        asked.append(url)
+        Path(path).write_bytes(b"zip")
+
+    target = tmp_path / "geonames" / "cities1000.zip"
+    assert fetch_geonames(target, urlretrieve) == target
+    assert fetch_geonames(target, urlretrieve) == target
+    assert asked == [GEONAMES_URL] == ["https://download.geonames.org/export/dump/cities1000.zip"]

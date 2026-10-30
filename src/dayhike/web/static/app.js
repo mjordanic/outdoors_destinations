@@ -1540,11 +1540,17 @@ async function findPlace() {
   if (state.geocoded.has(text)) { setOrigin(state.geocoded.get(text)); return; }
   $("#origin-found").textContent = "Searching…";
   try {
-    // One request per click (Nominatim usage policy: no autocomplete, cache results).
-    const response = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(text)}`);
-    const [place] = await response.json();
-    if (!place) { $("#origin-found").textContent = "Place not found; try a town name or lat, lon."; return; }
-    const origin = { lat: Number(place.lat), lon: Number(place.lon), label: place.display_name };
+    let origin;
+    if (state.info.place_search) {
+      const { results: [place] } = await api(`/api/place?limit=1&q=${encodeURIComponent(text)}`);
+      if (place) origin = { lat: place.lat, lon: place.lon, label: `${place.name}, ${place.country}` };
+    } else {
+      // An export without GeoNames places: one request per click (Nominatim usage policy: no autocomplete, cache results).
+      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(text)}`);
+      const [place] = await response.json();
+      if (place) origin = { lat: Number(place.lat), lon: Number(place.lon), label: place.display_name };
+    }
+    if (!origin) { $("#origin-found").textContent = "Place not found; try a town name or lat, lon."; return; }
     state.geocoded.set(text, origin);
     setOrigin(origin);
   } catch {
