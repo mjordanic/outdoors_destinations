@@ -10,4 +10,4 @@ The page's "Find place" asked public Nominatim. Its usage policy allows at most 
 
 **Considered Options**: keep Nominatim (its rate limit and the visitor's query leaving the site); a hosted geocoder (an account, a key and a bill); the OSM `place=*` nodes from the Catalog's extracts (no population to rank by, and a second ingest path); all of GeoNames (the world, when only Europe has hikes). Rejected.
 
-**Consequences**: the place list is as fresh as the export and the GeoNames download it used; a place under 1,000 people is not found (type "lat, lon" or use the browser's location). GeoNames is credited in `/api/info` `attribution` and in the page's footer when the file is present. "Roma" finds Roma in Romania before Rome, whose name in GeoNames is "Rome".
+**Consequences**: the place list is as fresh as the export and the GeoNames download it used; a place under 1,000 people is not found (type "lat, lon" or use the browser's location). GeoNames is credited in `/api/info` `attribution` and on the Data and credits page when the file is present. "Roma" finds Roma in Romania before Rome, whose name in GeoNames is "Rome".
