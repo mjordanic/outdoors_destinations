@@ -427,6 +427,23 @@ def test_api_reads_are_cached_for_an_hour_and_revalidate_by_etag(client: TestCli
         assert client.get(path, headers={"If-None-Match": 'W/"other"'}).status_code == 200
 
 
+def test_a_redeploy_with_new_code_or_drive_time_settings_changes_the_etag(
+    data: ServingData, matrix: Matrix, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def etag() -> str:
+        return TestClient(create_app(data, lambda max_hours: matrix)).get("/api/info").headers["etag"]
+
+    before = etag()
+    assert TestClient(create_app(data)).get("/api/info").headers["etag"] != before
+
+    monkeypatch.setattr(web, "BUILD", "another build")
+    assert etag() != before
+
+    monkeypatch.undo()
+    monkeypatch.setattr(web, "MAX_DRIVE_HOURS", 3.0)
+    assert etag() != before
+
+
 def test_refusals_rankings_and_health_are_not_cached(client: TestClient) -> None:
     for response in (
         client.get("/api/hikes/999999"),

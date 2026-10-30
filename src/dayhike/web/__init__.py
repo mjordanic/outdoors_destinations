@@ -10,8 +10,9 @@ A Ranking may start from a Wish instead of a Seed, and the Measure list says how
 a Wish value (ADR-0024).
 Detail, compose, pair and Ranking measure every hike with its way back to the start unless
 ``return_to_start`` is false (ADR-0019).
-A browser keeps the API reads an hour and then revalidates them by an ETag of the export; the page
-always revalidates, so a redeploy shows at once. Responses are gzipped for a browser that takes it.
+A browser keeps the API reads an hour and then revalidates them by an ETag of the export, the code
+and the drive-time settings; the page always revalidates, so a redeploy shows at once. Responses are
+gzipped for a browser that takes it.
 """
 
 from __future__ import annotations
@@ -55,6 +56,14 @@ VALHALLA_TIMEOUT_S = 50.0  # socket timeout for Valhalla calls, under Cloud Run'
 # The API reads a browser keeps API_MAX_AGE_S seconds; after that the ETag revalidates them.
 CACHED_READS = ("/api/info", "/api/measures", "/api/search", "/api/hikes", "/api/segments")
 API_MAX_AGE_S = 3600
+# The code this app runs: a redeploy that changes it changes the ETag of the API reads.
+BUILD = hashlib.sha256(
+    b"".join(
+        path.read_bytes()
+        for path in sorted(Path(__file__).parent.parent.rglob("*"))
+        if path.is_file() and "__pycache__" not in path.parts
+    )
+).hexdigest()
 
 DriveClientFactory = Callable[[float], MatrixClient]
 MEASURE_KINDS = {measure.name: measure.kind for measure in MEASURES}
@@ -222,9 +231,9 @@ def create_app(
     app = FastAPI(title="GoFindMeAHike", docs_url="/api/docs", openapi_url="/api/openapi.json")
     limiters = {"rank": RateLimiter(rank_rate, RATE_WINDOW_S), "api": RateLimiter(api_rate, RATE_WINDOW_S)}
     one_ranking = threading.Semaphore(1)
-    # The API reads change only with the export: its facts_version, and its meta.json for a rebuilt export.
-    export = hashlib.sha256((data.directory / "meta.json").read_bytes()).hexdigest()[:16]
-    etag = f'W/"{data.meta["facts_version"]}-{export}"'
+    # The API reads change only with the export (its meta.json holds facts_version), the code and the settings.
+    settings = f"{BUILD} {drive_client is not None} {MAX_DRIVE_HOURS} {RESULTS}".encode()
+    etag = f'W/"{hashlib.sha256((data.directory / "meta.json").read_bytes() + settings).hexdigest()[:16]}"'
     measures = [
         {
             "name": measure.name,
