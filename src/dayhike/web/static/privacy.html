@@ -39,8 +39,8 @@
   <ul>
     <!-- The hosting provider: one item, so a change of host (or a CDN in front) changes only this line. -->
     <li id="host-recipient"><strong>Google Cloud</strong> (Google Cloud Run, region europe-west1, Belgium) hosts the site, and Google Cloud Logging keeps the request logs in a storage location that follows Google's defaults, as a processor under its <a href="https://cloud.google.com/terms/data-processing-addendum">Cloud Data Processing Addendum</a>.</li>
-    <li><strong>The OpenStreetMap Foundation</strong> (UK) serves the map tiles, so your browser sends it your IP address and the map area you look at (<a href="https://osmfoundation.org/wiki/Privacy_Policy">its privacy policy</a>). <!-- Place search: this sentence is shown only when the export has no GeoNames places (/api/info place_search);
-         with them, place names are looked up on this site's own server and site_pages drops it. -->
+    <li><strong>The OpenStreetMap Foundation</strong> (UK) serves the map tiles, so your browser sends it your IP address and the map area you look at (<a href="https://osmfoundation.org/wiki/Privacy_Policy">its privacy policy</a>). <!-- Place search: the sentence covers both paths (this server when the export has GeoNames places, per
+         /api/info place_search; else Nominatim). site_pages still drops it when the export has places. -->
       <span id="place-recipient">Place names are normally looked up on this site's own server; only if the server has no place list does your browser send the name and your IP address to its <a href="https://nominatim.org/">Nominatim</a> service.</span></li>
     <!--if-kofi--><li><strong>Ko-fi</strong> receives your data only after you click the tip link and leave this site; its own privacy policy then applies. This site sends it nothing and handles no payments.</li><!--/if-kofi-->
     <li><strong>GitHub</strong> receives your data only when you follow a link to the code; its own privacy policy then applies.</li>
