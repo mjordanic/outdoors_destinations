@@ -57,6 +57,7 @@ const state = {
   wishing: false, // the Hiker describes the hike they want instead of naming a liked one
   kept: {}, // the weights and off ticks of the mode not shown: { seed, wish }
   query: null, // the weights, month and return to start of the last Ranking
+  asked: null, // what the shown Ranking asked the server, and of which liked hike or wish: { query, basis }
   results: [],
   expanded: null, // the result row whose versions (var 1, 2, 3) are shown
   selected: null, // the hike shown against the liked one: { key } of a result, or { pair } a DayHike id
@@ -1607,9 +1608,16 @@ async function findSimilar() {
     setStatus(error.message, true);
     return;
   }
+  await rank(query, liked);
+}
+
+// Ask for a Ranking and show it, unless a later one was asked or the liked hike changed meanwhile;
+// ``stale``: the query on the left is no longer this one.
+async function rank(query, liked, stale = false) {
   const request = ++ranked;
-  $("#find").disabled = true;
-  setStatus(query.origin ? "Finding hikes within the drive, then ranking…" : "Ranking every hike…");
+  $("#find").disabled = $("#suggest-loops").disabled = true;
+  setStatus(query.loops ? "Suggesting loops near these hikes…"
+    : query.origin ? "Finding hikes within the drive, then ranking…" : "Ranking every hike…");
   try {
     const body = await api("/api/rank", {
       method: "POST",
@@ -1621,15 +1629,17 @@ async function findSimilar() {
       weights: body.weights, month: body.month, drive: Boolean(query.origin), return_to_start: body.return_to_start,
       wish: query.wish ?? null,
     };
+    state.asked = { query, basis: liked };
     state.results = body.results;
     renderResults(body);
+    if (stale) markStale();
     setStatus(`Done in ${(body.elapsed_ms / 1000).toFixed(1)} s.`);
   } catch (error) {
     if (request !== ranked || liked !== rankBasis()) return;
-    markStale();
+    if (!query.loops || stale) markStale();
     setStatus(error.message, true);
   } finally {
-    if (request === ranked) $("#find").disabled = false;
+    if (request === ranked) $("#find").disabled = $("#suggest-loops").disabled = false;
   }
 }
 
@@ -1659,8 +1669,9 @@ function renderResults(body) {
   $("#wish-card").hidden = true;
   $("#results-title").textContent = state.query.wish ? "Hikes closest to the one you want" : "Most similar hikes";
   $("#results-note").textContent = body.results.length
-    ? `${state.query.wish ? "Closest to the hike you want" : `Like “${state.liked.name}”`}, out of ${considered}${state.info.compose ? " and loops composed near the best of them" : ""}, ${mode}. Click a row to see it.${composed}${versions}`
+    ? `${state.query.wish ? "Closest to the hike you want" : `Like “${state.liked.name}”`}, out of ${considered}${body.loops ? " and loops composed near the best of them" : ""}, ${mode}. Click a row to see it.${composed}${versions}`
     : `No hike matched, out of ${considered}. Try a longer drive or other weights.`;
+  $("#results-loops").hidden = !state.info.compose || body.loops; // SuggestedLoops on request (ADR-0028)
   const table = $("#results-table");
   const measureHeads = comparedMeasures(body.return_to_start).map((m) =>
     `<th class="measure${body.weights[m.name] ? "" : " excluded"}" title="${escapeHtml(`${m.label}: ${m.description}`)}">${escapeHtml(m.label)} ${helpButton(m.name)}</th>`).join("");
@@ -1840,6 +1851,9 @@ async function start() {
     markStale();
   });
   $("#find").addEventListener("click", findSimilar);
+  // The shown Ranking again, with loops near its best hikes, though the query on the left changed since.
+  $("#suggest-loops").addEventListener("click", () =>
+    rank({ ...state.asked.query, loops: true }, state.asked.basis, $("#results").classList.contains("stale")));
   // Remeasure the liked hike in the other mode, and rank again when a Ranking is shown,
   // keeping the hike shown against it open.
   $("#return-on").addEventListener("change", async () => {

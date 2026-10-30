@@ -174,6 +174,7 @@ def test_rank_returns_scored_results_with_every_measure(client: TestClient) -> N
     assert set(body["results"][0]["measures"]) == set(MEASURE_NAMES)
     assert body["reachable"] is None and body["results"][0]["drive_hours"] is None
     assert set(body["weights"]) == set(CORE_MEASURES)
+    assert body["loops"] is False  # SuggestedLoops only on request (ADR-0028)
 
 
 def test_a_wish_ranks_hikes_by_the_values_typed_in(client: TestClient) -> None:
@@ -327,6 +328,7 @@ def test_info_gives_the_trailhead_box_for_the_swapped_coordinates_warning(client
         ({"seed": 999}, 404),
         ({"seed": RIDGE_WALK_ID, "origin": {"lat": 45, "lon": 15}}, 400),
         ({"seed": RIDGE_WALK_ID, "origin": {"lat": 45, "lon": 15}, "max_hours": 5}, 422),
+        ({"seed": RIDGE_WALK_ID, "loops": "sometimes"}, 422),
     ],
 )
 def test_rank_refuses_bad_queries(client: TestClient, body: dict, status: int) -> None:
@@ -341,7 +343,7 @@ def test_drive_filter_keeps_only_reachable_hikes_with_their_hours(
         json={"seed": RIDGE_WALK_ID, "origin": {"lat": 45.1, "lon": 15.1}, "max_hours": 2},
     ).json()
 
-    assert matrix.calls == 2  # the Trailheads, then the starts of SuggestedLoops (ADR-0020)
+    assert matrix.calls == 1  # the Trailheads; the starts of SuggestedLoops only on request (ADR-0028)
     assert body["reachable"] == 3  # the Seed's Trailhead counts; 1003 is unreachable
     assert sorted(r["id"] for r in body["results"]) == [1002, 1007]
     assert all(r["drive_hours"] == 1.0 for r in body["results"])
@@ -361,7 +363,7 @@ def test_a_stalled_drive_service_gives_503_and_frees_the_ranking(
     assert client.post("/api/rank", json=query).status_code == 503
     response = client.post("/api/rank", json=query)
     assert response.status_code == 200
-    assert matrix.calls == 2
+    assert matrix.calls == 1
 
 
 def test_drive_filter_off_without_a_drive_client(data: ServingData) -> None:

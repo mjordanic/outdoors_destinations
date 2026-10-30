@@ -142,6 +142,7 @@ class RankRequest(Weighted):
     wish: dict[str, bool | float] | None = None  # Measure name to value, yes/no as true/false
     origin: Place | None = None
     max_hours: float | None = Field(default=None, gt=0, le=MAX_DRIVE_HOURS)
+    loops: bool = False  # SuggestedLoops too, only on request (ADR-0028)
 
     @field_validator("wish")
     @classmethod
@@ -405,6 +406,7 @@ def create_app(
                 limit=RESULTS,
                 return_to_start=body.return_to_start,
                 reach=reach,
+                loops=body.loops,
             )
         except (urllib.error.URLError, ConnectionError, TimeoutError):
             raise HTTPException(503, "the drive-time service is not answering; try again") from None
@@ -421,6 +423,7 @@ def create_app(
             "wish": body.wish,
             "month": body.month,
             "return_to_start": body.return_to_start,
+            "loops": body.loops,
             "weights": {name: weight for name, weight in weights.items() if weight > 0},
             "reachable": None if hours is None else len(hours),
             "results": results,

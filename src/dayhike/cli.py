@@ -576,6 +576,7 @@ def _compose(
         month=month,
         limit=limit,
         return_to_start=return_to_start,
+        loops=True,
     ):
         for indent, hike in (("", result), *(("  ", version) for version in result["versions"])):
             listed = hike["route"]["text"] if hike["id"] is None else hike["id"]  # a SuggestedLoop by its link

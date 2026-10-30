@@ -347,3 +347,36 @@ def test_the_page_runs_leaflet_1_9_4_from_its_own_server_and_asks_unpkg_for_noth
     assert f"{server}/vendor/leaflet/leaflet.js" in asked
     assert f"{server}/vendor/leaflet/leaflet.css" in asked
     assert not [url for url in asked if "unpkg.com" in url]
+
+
+def test_loops_are_suggested_only_when_the_hiker_asks_for_them(browser, server) -> None:
+    api = Api({})
+    page = open_page(browser, server, api, hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+    suggest = page.get_by_role("button", name="Suggest loops near these hikes (takes a few seconds)")
+
+    assert "loops" not in api.ranked[-1]
+    assert "loops composed" not in page.locator("#results-note").inner_text()
+
+    page.get_by_label("Length weight, 0 to 100").fill("10")  # the shown Ranking's query is the one asked again
+    with page.expect_response(f"{server}/api/rank"):
+        suggest.click()
+    page.wait_for_function("() => document.querySelector('#results-note').textContent.includes('loops composed')")
+
+    assert api.ranked[-1] == {**api.ranked[-2], "loops": True}
+    assert page.locator("#results-table tbody tr").count() > 0
+    assert page.locator("#results-stale").is_visible()  # still not the query on the left
+    assert not suggest.is_visible()
+
+
+def test_a_server_that_cannot_compose_offers_no_loops(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.route(f"{server}/api/info", lambda route: route.fulfill(json={**route.fetch().json(), "compose": False}))
+    page.reload()
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+
+    assert not page.get_by_role("button", name="Suggest loops near these hikes (takes a few seconds)").is_visible()
