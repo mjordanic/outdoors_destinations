@@ -42,14 +42,27 @@ class Matrix:
 
 
 @pytest.fixture(scope="module")
-def server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+def data(tmp_path_factory: pytest.TempPathFactory) -> ServingData:
     directory = tmp_path_factory.mktemp("page")
     path = directory / "catalog.sqlite"
     build_catalog(FIXTURE, path)
     build_similarity(path, directory / "dem")
     cities = Path(__file__).parent / "fixtures" / "cities1000.txt"
-    export = export_serving(path, directory / "web-serving", geonames_path=cities)
-    app = create_app(ServingData(export), lambda max_hours: Matrix())
+    return ServingData(export_serving(path, directory / "web-serving", geonames_path=cities))
+
+
+@pytest.fixture(scope="module")
+def server(data: ServingData) -> Iterator[str]:
+    yield from serve(create_app(data, lambda max_hours: Matrix()))
+
+
+@pytest.fixture(scope="module")
+def counted_server(data: ServingData) -> Iterator[str]:
+    """The app with GoatCounter and Ko-fi set, so every page loads the real count.js."""
+    yield from serve(create_app(data, goatcounter="gofindmeahike", kofi="gofindmeahike"))
+
+
+def serve(app) -> Iterator[str]:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
@@ -524,3 +537,19 @@ def test_a_page_naming_another_api_base_asks_that_server(browser, server) -> Non
     page.wait_for_selector(".weight", state="attached")
 
     assert f"{api_base}/api/info" in asked and f"{api_base}/api/measures" in asked
+
+
+def test_no_page_leaves_a_cookie_or_anything_in_browser_storage_even_with_analytics_on(
+    browser, counted_server
+) -> None:
+    context = browser.new_context()
+    page = context.new_page()
+    page.route(lambda url: not url.startswith(counted_server), lambda route: route.abort())  # no tiles, no counting
+    for path in ("/", "/about.html", "/support.html", "/credits.html", "/privacy.html", "/terms.html"):
+        page.goto(f"{counted_server}{path}")
+        page.wait_for_load_state("load")
+        page.wait_for_function("() => window.goatcounter && window.goatcounter.count")  # count.js has run
+        assert page.evaluate("[document.cookie, localStorage.length, sessionStorage.length]") == ["", 0, 0], path
+
+    assert context.cookies() == []
+    context.close()
