@@ -331,3 +331,16 @@ def test_a_feature_neither_hike_has_mapped_shows_a_dash_and_says_it_is_not_compa
     hut = page.locator("#selected table.facts tr", has=page.locator("td", has_text="Hut along"))
     assert hut.locator("td").last.inner_text().startswith("–")
     assert "Neither has one mapped: not compared" in hut.locator("td").last.inner_text()
+
+
+def test_the_logo_takes_a_hiker_home_to_a_fresh_page(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash="#hike=1002")
+    page.get_by_text("Chosen: Valley Path").wait_for()
+    assert page.get_by_role("link", name="GoFindMeAHike").get_attribute("href") == "/"
+
+    page.locator(".top .mark").click()
+    page.wait_for_selector(".weight", state="attached")
+
+    assert page.url == f"{server}/"
+    assert page.title() == "GoFindMeAHike"
+    assert page.locator("#liked-name").inner_text() == "No hike chosen yet."

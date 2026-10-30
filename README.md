@@ -1,7 +1,7 @@
 # DayHike catalog
 
 <p>
-  <img src="src/dayhike/web/static/mark.svg" alt="DayHike mark: two mountains and a trail" width="72">
+  <img src="src/dayhike/web/static/mark.svg" alt="GoFindMeAHike mark: two mountains and a trail" width="72">
   <img src="src/dayhike/web/static/coverage.svg" alt="Map of Europe; the shaded land has DayHikes in the Catalog" width="360">
 </p>
 
@@ -1924,7 +1924,9 @@ notebook to see its tables and figures.
 
 ## Attribution
 
-The web demo's footer carries the same credits.
+The web demo's footer carries the same credits. The code is under the MIT
+licence ([LICENSE](LICENSE)); [DATA-LICENSES.md](DATA-LICENSES.md) lists the
+licences of the data, which MIT does not cover.
 
 OpenStreetMap data is © OpenStreetMap contributors, licensed under the Open
 Database License (ODbL, https://opendatacommons.org/licenses/odbl/; see

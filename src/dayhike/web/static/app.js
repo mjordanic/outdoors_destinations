@@ -1,5 +1,5 @@
 "use strict";
-// DayHike Finder: plain JS over the JSON API in dayhike.web. Charts are hand-drawn SVG.
+// GoFindMeAHike: plain JS over the JSON API in dayhike.web. Charts are hand-drawn SVG.
 
 const $ = (selector) => document.querySelector(selector);
 const SVG_NS = "http://www.w3.org/2000/svg";

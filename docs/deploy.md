@@ -1,12 +1,13 @@
 # Deploying the web demo to Google Cloud Run
 
-The demo is one container: the FastAPI app (`dayhike serve`) and a
+The GoFindMeAHike demo is one container: the FastAPI app (`dayhike serve`) and a
 highways-only Valhalla for the drive-time filter, with the serving export baked
 into the image. Nothing is written at run time; Cloud Run scales it to zero
 when idle and starts it again on the next visit (a cold start of about 10-12 s).
 
-Nothing here has been deployed. Every `gcloud` command below creates cloud
-resources and costs money, so run them only once the deployment is approved.
+The demo runs on Cloud Run today (the README links it). Every `gcloud`
+command below creates or changes cloud resources and costs money, so run them
+only once the deployment is approved.
 
 ## 1. Build the serving export (on the machine with the data)
 
@@ -126,8 +127,9 @@ If an alert fires and the traffic is abuse, close the public access at once:
 
 - **ODbL offer.** The footer says the hike data is a derivative database of
   OpenStreetMap, offered under the ODbL, and links the code that builds it.
-  The repository is private today: make it public first, or change the footer
-  to offer the export another way (for example a download of `hikes.sqlite`).
+  The repository is public, with the code under MIT (`LICENSE`) and the data
+  licences in `DATA-LICENSES.md`; keep it public, or change the footer to
+  offer the export another way (for example a download of `hikes.sqlite`).
 - **Tile and place-search policies.** The map uses `tile.openstreetmap.org` and
   the origin search uses Nominatim, both run by the OSM Foundation for
   low-volume use under their usage policies. If traffic grows, switch to a
