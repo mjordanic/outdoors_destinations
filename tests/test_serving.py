@@ -16,13 +16,14 @@ from dayhike.serving import (
     _fold,
     _relevance,
     decode_polyline,
+    drawn_profile,
     encode_polyline,
     export_serving,
     score_note,
     scored_measures,
     simplify_line,
 )
-from dayhike.similarity import FACT_COLUMNS, MEASURE_NAMES
+from dayhike.similarity import FACT_COLUMNS, MEASURE_NAMES, _resample
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
 RIDGE_WALK_ID = 1001
@@ -85,6 +86,28 @@ def test_export_keeps_the_route_the_true_metre_profile_and_the_measured_points(
     assert ridge["facts"]["elevation_gain_m"] == pytest.approx(450)
     assert ridge["facts"]["hut_along"] == 1.0
     assert len(ridge["profile_shape"]) == 64
+
+
+def test_a_copernicus_profile_is_drawn_smoothed_and_a_fabdem_one_as_sampled() -> None:
+    # 3 km due north, a vertex every 10 m: a 300 m hill, with 4 m of DEM jitter every 20 m.
+    steps = np.arange(301)
+    lat, lon = 45 + steps * 10 / 111_195, np.full(301, 15.0)
+    hill = 500 + 300 * np.sin(np.pi * steps / 300)
+    noisy = hill + 4.0 * np.where(steps // 2 % 2 == 0, 1.0, -1.0)
+    sampled = _resample(lat, lon, noisy, points=ELEVATION_POINTS)
+    truth = _resample(lat, lon, hill, points=ELEVATION_POINTS)
+
+    assert drawn_profile(lat, lon, noisy, smooth=False).tolist() == sampled.tolist()
+    smoothed = drawn_profile(lat, lon, noisy, smooth=True)
+    assert len(smoothed) == ELEVATION_POINTS
+    assert np.abs(sampled - truth).max() > 3.5
+    assert np.abs(smoothed - truth)[1:-1].max() < 1.5  # the two ends are fitted from one side
+    assert smoothed.max() == pytest.approx(800, abs=1.5)  # the top keeps its height
+    # A walk shorter than the smoothing is drawn as sampled.
+    assert drawn_profile(lat[:5], lon[:5], noisy[:5], smooth=True).tolist() == _resample(
+        lat[:5], lon[:5], noisy[:5], points=ELEVATION_POINTS
+    ).tolist()
+    assert drawn_profile(lat, lon, np.full(301, np.nan), smooth=True) is None
 
 
 def test_a_dayhike_without_elevation_has_no_profile(data: ServingData) -> None:

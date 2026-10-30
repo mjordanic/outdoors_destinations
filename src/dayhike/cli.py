@@ -149,6 +149,12 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_DEM_DIR,
         help="Directory of FABDEM or Copernicus GLO-30 GeoTIFFs (default: data/dem)",
     )
+    sample.add_argument(
+        "--landcover",
+        type=Path,
+        default=DEFAULT_LANDCOVER_DIR,
+        help="WorldCover GeoTIFFs; Copernicus GLO-30 needs them for the ground under trees (default: data/landcover)",
+    )
     sample_lc = subparsers.add_parser(
         "sample-landcover",
         help="Sample local LandCover rasters onto GeometryStore vertices and Catalog fractions",
@@ -422,7 +428,10 @@ def main(argv: list[str] | None = None) -> int:
             snap_tolerance_m=args.snap_tolerance,
         )
     if args.command == "sample-trailgraph":
-        return _sample_trailgraph(args.catalog, args.dem, args.landcover, args.climate)
+        try:
+            return _sample_trailgraph(args.catalog, args.dem, args.landcover, args.climate)
+        except ValueError as exc:
+            sample_tg.error(str(exc))
     if args.command == "compose":
         try:
             return _compose(
@@ -445,7 +454,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "fetch-climate":
         return _fetch_climate(args.dest, args.bounds)
     if args.command == "sample-dem":
-        return _sample_dem(args.catalog, args.dem)
+        try:
+            return _sample_dem(args.catalog, args.dem, args.landcover)
+        except ValueError as exc:
+            sample.error(str(exc))
     if args.command == "sample-landcover":
         return _sample_landcover(args.catalog, args.landcover)
     if args.command == "sample-climate":
@@ -543,10 +555,11 @@ def _fetch_climate(dest: Path, bounds: Bounds) -> int:
     return 0
 
 
-def _sample_dem(catalog_path: Path, raster_dir: Path) -> int:
+def _sample_dem(catalog_path: Path, raster_dir: Path, landcover_dir: Path) -> int:
     sampled = sample_dem(
         catalog_path,
         raster_dir,
+        landcover_dir=landcover_dir,
         progress=lambda message: print(message, file=sys.stderr, flush=True),
     )
     print(sampled)

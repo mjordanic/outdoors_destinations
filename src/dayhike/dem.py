@@ -14,7 +14,7 @@ from urllib.request import Request, urlopen
 
 import numpy as np
 
-from dayhike.catalog import geometry_store_path_for, remove_similarity
+from dayhike.catalog import EARTH_RADIUS_M, geometry_store_path_for, remove_similarity
 
 FABDEM_VERSION = "V1-2"
 FABDEM_DATASET = "https://huggingface.co/datasets/pavelzaitsau/fabdem-v12/resolve/main/tiles"
@@ -43,6 +43,12 @@ DEFAULT_DEM_BOUNDS = Bounds(south=41.8, west=5.9, north=50.6, east=20.4)
 # Same countries as fetch-extracts: Alps + Dinarides.
 _VERTEX_CHUNK = 50_000
 _HIKE_IN_CHUNK = 500
+# Copernicus GLO-30 maps tree tops (ADR-0030). Its cells this close to a point, and
+# the WorldCover cells, give the canopy floor and how much of it the point reads ...
+CANOPY_RADIUS_M = 75.0
+CANOPY_PERCENTILE = 35.0  # ... this percentile of the cells' heights above their plane
+_CANOPY_BLOCK = 512  # GLO-30 cells per side of the blocks ``_canopy_floor`` reads at a time
+_METRES_PER_DEGREE = EARTH_RADIUS_M * math.pi / 180
 
 
 def fabdem_tile_id(lat: float, lon: float) -> str:
@@ -240,8 +246,16 @@ def fetch_dem(
 def sample_elevations(
     raster_dir: Path | str,
     points: Sequence[tuple[float, float]],
+    landcover_dir: Path | str | None = None,
 ) -> list[float | None]:
-    """Sample the DEM tiles in raster_dir at (lat, lon) points. Uncovered is None."""
+    """Sample the DEM tiles in raster_dir at (lat, lon) points. Uncovered is None.
+
+    Copernicus GLO-30 maps tree tops. Given WorldCover tiles in
+    ``landcover_dir``, a point with trees within ``CANOPY_RADIUS_M`` is
+    lowered toward its canopy floor (``_canopy_floor``) by the share of tree
+    cover there; a point with none reads as it is (ADR-0030). FABDEM is bare
+    earth and always reads as it is.
+    """
     import rasterio
 
     raster_dir = Path(raster_dir)
@@ -249,6 +263,11 @@ def sample_elevations(
     source = dem_source_of(raster_dir)
     if source is None:
         return out
+    shares = None
+    if source is COPERNICUS and landcover_dir is not None and points:
+        from dayhike.landcover import tree_share
+
+        shares = np.nan_to_num(tree_share(landcover_dir, *np.array(points, dtype=float).T, CANOPY_RADIUS_M)).tolist()
     buckets: dict[str, list[int]] = {}
     for index, (lat, lon) in enumerate(points):
         buckets.setdefault(fabdem_tile_id(lat, lon), []).append(index)
@@ -278,19 +297,84 @@ def sample_elevations(
                 if nodata is not None and value == nodata:
                     continue
                 out[index] = value
+            if shares is not None:
+                near = [k for k, index in enumerate(indices) if shares[index] > 0 and out[index] is not None]
+                if near:
+                    floors = _canopy_floor(dataset, *np.array([coords[k] for k in near]).T)
+                    for k, floor in zip(near, floors.tolist(), strict=True):
+                        index = indices[k]
+                        out[index] -= shares[index] * (out[index] - floor)
     return out
+
+
+def require_worldcover(landcover_dir: Path | str | None) -> None:
+    """Refuse to sample Copernicus GLO-30 without WorldCover tiles: its heights
+    under trees would keep the canopy (ADR-0030)."""
+    if landcover_dir is None or not any(Path(landcover_dir).glob("ESA_WorldCover_*_Map.tif")):
+        raise ValueError(
+            f"Copernicus GLO-30 needs WorldCover tiles to read the ground under trees, and {landcover_dir} "
+            "has none: run `dayhike fetch-landcover` or pass --landcover"
+        )
+
+
+def _canopy_floor(dataset, lon: np.ndarray, lat: np.ndarray) -> np.ndarray:
+    """The ground under a forest canopy at points on one open Copernicus tile.
+
+    The cells within ``CANOPY_RADIUS_M`` of a point's cell are taken as a
+    least-squares plane plus tree tops: the floor is the plane at the point
+    plus the ``CANOPY_PERCENTILE`` of the cells' heights above the plane, so a
+    slope stays and the canopy goes. Near the grid's edge the edge cells count
+    again, at their own place, so the plane keeps the slope there too.
+    """
+    from rasterio.transform import rowcol
+    from rasterio.windows import Window
+
+    cell_y = dataset.res[1] * _METRES_PER_DEGREE
+    cell_x = dataset.res[0] * _METRES_PER_DEGREE * math.cos(
+        math.radians((dataset.bounds.bottom + dataset.bounds.top) / 2)
+    )
+    reach_y, reach_x = int(CANOPY_RADIUS_M // cell_y), int(CANOPY_RADIUS_M // cell_x)
+    down, right = (offset.ravel() for offset in np.mgrid[-reach_y : reach_y + 1, -reach_x : reach_x + 1])
+    within = np.hypot(down * cell_y, right * cell_x) <= CANOPY_RADIUS_M
+    down, right = down[within], right[within]
+    rows, cols = (np.asarray(v) for v in rowcol(dataset.transform, lon, lat))
+    rows = np.clip(rows, 0, dataset.height - 1)
+    cols = np.clip(cols, 0, dataset.width - 1)
+    cell_rows = np.clip(rows[:, None] + down, 0, dataset.height - 1)
+    cell_cols = np.clip(cols[:, None] + right, 0, dataset.width - 1)
+    heights = np.empty(cell_rows.shape)
+    # One read per block of cells the points fall in.
+    blocks = rows // _CANOPY_BLOCK * (dataset.width // _CANOPY_BLOCK + 1) + cols // _CANOPY_BLOCK
+    for block in np.unique(blocks):
+        at = np.flatnonzero(blocks == block)
+        top = max(int(rows[at].min()) - reach_y, 0)
+        bottom = min(int(rows[at].max()) + reach_y + 1, dataset.height)
+        left = max(int(cols[at].min()) - reach_x, 0)
+        width = min(int(cols[at].max()) + reach_x + 1, dataset.width) - left
+        grid = dataset.read(1, window=Window(left, top, width, bottom - top)).astype(float)
+        heights[at] = grid[cell_rows[at] - top, cell_cols[at] - left]
+    north = -(cell_rows - rows[:, None]) * cell_y
+    east = (cell_cols - cols[:, None]) * cell_x
+    # pinv: a window one cell wide has no slope that way.
+    plane = np.stack([np.ones_like(east), east, north], axis=2)
+    fit = (np.linalg.pinv(plane) @ heights[:, :, None])[:, :, 0]
+    above = heights - (plane @ fit[:, :, None])[:, :, 0]
+    return fit[:, 0] + np.percentile(above, CANOPY_PERCENTILE, axis=1)
 
 
 def sample_dem(
     catalog_path: Path | str,
     raster_dir: Path | str,
     *,
+    landcover_dir: Path | str | None = None,
     progress: Progress | None = None,
 ) -> int:
     """Write DEM elevations onto covered GeometryStore vertices and Catalog stats.
 
-    The tiles in raster_dir name the source. Copernicus GLO-30 records its
-    attribution in the GeometryStore; FABDEM, the default, removes it.
+    The tiles in raster_dir name the source. Copernicus GLO-30 needs the
+    WorldCover tiles in ``landcover_dir`` to read the ground under trees
+    (``sample_elevations``) and records its attribution in the GeometryStore;
+    FABDEM, the default, removes it.
     """
     catalog_path = Path(catalog_path)
     raster_dir = Path(raster_dir)
@@ -300,6 +384,8 @@ def sample_dem(
     source = dem_source_of(raster_dir)
     if source is None:
         return 0
+    if source is COPERNICUS:
+        require_worldcover(landcover_dir)
     available = set(source.tiles_in(raster_dir))
     south = min(_parse_tile(tile_id)[0] for tile_id in available)
     west = min(_parse_tile(tile_id)[1] for tile_id in available)
@@ -333,6 +419,7 @@ def sample_dem(
                 elevations = sample_elevations(
                     raster_dir,
                     [(lat, lon) for _id, _seq, lat, lon in coverable],
+                    landcover_dir,
                 )
                 updates = [
                     (elevation, dayhike_id, seq)

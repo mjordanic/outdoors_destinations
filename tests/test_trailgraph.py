@@ -6,6 +6,7 @@ from another way, a crossing with no node, a bridge, and two ways passing
 15 m apart with no connection near.
 """
 
+import hashlib
 import json
 import math
 import re
@@ -33,6 +34,7 @@ from dayhike.trailgraph import (
     Route,
     RouteError,
     TrailGraph,
+    decode_coords,
     round_trip,
     sample_trailgraph,
     way_back,
@@ -406,7 +408,10 @@ def test_sampling_again_changes_nothing_but_drops_the_similarity_facts(sampled: 
     assert not similarity_dir_for(catalog).exists()  # the ways back read the samples
 
 
-def test_copernicus_tiles_are_sampled_like_fabdem_tiles(sampled: Path, tmp_path: Path) -> None:
+def test_copernicus_tiles_are_sampled_like_fabdem_tiles_away_from_trees(sampled: Path, tmp_path: Path) -> None:
+    from dayhike.dem import CANOPY_RADIUS_M
+    from dayhike.landcover import tree_share
+
     catalog = tmp_path / "catalog.sqlite"
     build_catalog(FIXTURE, catalog)
     root = tmp_path / "copernicus"
@@ -414,9 +419,58 @@ def test_copernicus_tiles_are_sampled_like_fabdem_tiles(sampled: Path, tmp_path:
     dem, landcover, climate = _write_rasters(root)
     (dem / "N46E014_FABDEM_V1-2.tif").rename(dem / "Copernicus_DSM_COG_10_N46_00_E014_00_DEM.tif")
 
+    sample_dem(catalog, dem, landcover_dir=landcover)
     sample_trailgraph(catalog, dem_dir=dem, landcover_dir=landcover, climate_dir=climate)
 
-    assert _segments(catalog) == _segments(sampled)
+    copernicus, fabdem = _segments(catalog), _segments(sampled)
+    assert [{**s, "ele": None} for s in copernicus] == [{**s, "ele": None} for s in fabdem]
+    lat, lon = np.concatenate([decode_coords(s["coords"]) for s in copernicus]).T
+    near_trees = tree_share(landcover, lat, lon, CANOPY_RADIUS_M) > 0
+    ele = np.concatenate([np.frombuffer(s["ele"], dtype="<f4") for s in copernicus])
+    bare = np.concatenate([np.frombuffer(s["ele"], dtype="<f4") for s in fabdem])
+    assert near_trees.any() and not near_trees.all()
+    assert ele[~near_trees].tolist() == bare[~near_trees].tolist()
+    assert (ele[near_trees] != bare[near_trees]).any()
+    # A DayHike's own vertices read what the TrailGraph's read at the same node.
+    hikes = dict(
+        sqlite3.connect(geometry_store_path_for(catalog)).execute("SELECT node_id, ele FROM vertices").fetchall()
+    )
+    nodes = np.concatenate([np.frombuffer(s["node_ids"], dtype="<i8") for s in copernicus])
+    shared = [i for i, node in enumerate(nodes.tolist()) if node in hikes]
+    assert len(shared) > 10
+    assert [ele[i] for i in shared] == [np.float32(hikes[nodes[i]]) for i in shared]
+
+
+def _rows(path: Path, query: str) -> list[tuple]:
+    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        return db.execute(query).fetchall()
+    finally:
+        db.close()
+
+
+def _digest(path: Path, query: str) -> str:
+    return hashlib.sha256(repr(_rows(path, query)).encode()).hexdigest()
+
+
+def test_fabdem_heights_and_drawn_profiles_stay_byte_identical(sampled: Path, data) -> None:
+    # Digests taken before Copernicus got its canopy floor and smoothed profile (ADR-0030):
+    # FABDEM, on tree cover too, gives the same bytes from the same inputs.
+    store = geometry_store_path_for(sampled)
+    assert _rows(store, "SELECT count(*) FROM vertices WHERE landcover = 10")[0][0] > 0
+    assert {
+        "vertices": _digest(store, "SELECT dayhike_id, seq, ele FROM vertices ORDER BY 1, 2"),
+        "catalog": _digest(
+            sampled, "SELECT dayhike_id, elevation_min_m, elevation_max_m, elevation_gain_m FROM feature_vectors ORDER BY 1"
+        ),
+        "segments": _digest(trailgraph_path_for(sampled), "SELECT id, ele FROM segments ORDER BY id"),
+        "drawn": _digest(data.directory / "hikes.sqlite", "SELECT id, elevation, climb_m, descent_m FROM hikes ORDER BY id"),
+    } == {
+        "vertices": "13c1f97740c5700bdabf68ed559c0fab883f54d3a2a64877efd038a6acc203d6",
+        "catalog": "c0ddfd2ec479bd82ff0e7684a41f930e71fd3f6601022697f981f5a56c1f4d01",
+        "segments": "5b7fa9c9287a9a5af0f8c7988a00d4bbe901b1350d6153be53eb9873ffd8548b",
+        "drawn": "2c8077dc35f2b2d4fede7e3f9f975e49ce207d0a66b9b2ca7f4de1936f8e05f2",
+    }
 
 
 def test_sampling_without_rasters_keeps_the_osm_heights(catalog_path: Path, tmp_path: Path) -> None:
@@ -440,6 +494,22 @@ def data(sampled: Path):
 @pytest.fixture(scope="module")
 def summit(sampled: Path) -> Route:
     return _route_of(sampled, SUMMIT_LINE)
+
+
+def test_a_composed_hike_is_drawn_smoothed_only_from_a_copernicus_export(data, summit: Route, monkeypatch) -> None:
+    from dayhike import serving
+    from dayhike.serving import ServingData
+
+    smoothed = []
+    drawn = serving.drawn_profile
+    monkeypatch.setattr(serving, "drawn_profile", lambda *walk, smooth: smoothed.append(smooth) or drawn(*walk, smooth=smooth))
+    copernicus = ServingData(data.directory)
+    copernicus.meta["attribution"]["copernicus"] = "Copernicus DEM GLO-30"
+
+    data.compose(summit)
+    copernicus.compose(summit)
+
+    assert smoothed == [False, True]
 
 
 def test_the_export_keeps_the_trailgraph_with_display_lines(data, sampled: Path) -> None:
