@@ -10,6 +10,7 @@ from dayhike.web import RESULTS, create_app
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
 RIDGE_WALK_ID = 1001
+SITE_PAGES = ("/", "/index.html", "/about.html", "/support.html", "/credits.html")
 
 
 @pytest.fixture(scope="module")
@@ -459,7 +460,7 @@ def test_refusals_rankings_and_health_are_not_cached(client: TestClient) -> None
 
 
 def test_the_page_revalidates_every_time_so_a_redeploy_shows_at_once(client: TestClient) -> None:
-    for path in ("/", "/app.js", "/style.css"):
+    for path in (*SITE_PAGES, "/app.js", "/style.css"):
         response = client.get(path)
         assert response.headers["cache-control"] == "no-cache", path
 
@@ -485,8 +486,86 @@ def test_the_page_and_its_assets_are_served(client: TestClient) -> None:
     assert "Find similar" in page.text
     for asset in ("app.js", "style.css", "coverage.svg", "mark.svg"):
         assert client.get(f"/{asset}").status_code == 200
-    for credit in ("OpenStreetMap", "ESA WorldCover", "CHELSA", "FABDEM", "Copernicus", "Natural Earth", "Valhalla", "Leaflet"):
-        assert credit in page.text
+
+
+def test_every_site_page_has_the_home_link_and_the_footer_navigation(client: TestClient) -> None:
+    for path in SITE_PAGES:
+        page = client.get(path)
+        assert page.status_code == 200, path
+        assert page.headers["content-type"].startswith("text/html"), path
+        assert '<a class="home" href="/">GoFindMeAHike</a>' in page.text, path
+        for link in ('href="about.html"', 'href="support.html"', 'href="credits.html"'):
+            assert link in page.text, (path, link)
+
+
+def test_the_about_page_says_who_runs_the_site_and_where_its_code_is(client: TestClient) -> None:
+    about = client.get("/about.html").text
+
+    assert "Run by Mislav Jordanic, Zagreb, Croatia" in about
+    assert '<a href="mailto:mislav.jordanic@gmail.com">mislav.jordanic@gmail.com</a>' in about
+    assert "free and non-commercial" in about
+    assert 'href="https://github.com/mjordanic/outdoors_destinations"' in about
+    assert 'href="https://github.com/mjordanic/outdoors_destinations/blob/main/LICENSE">MIT licence</a>' in about
+
+
+def test_the_support_page_links_no_tip_jar_until_a_ko_fi_handle_is_set(data: ServingData) -> None:
+    unset = TestClient(create_app(data)).get("/support.html").text
+    assert "ko-fi.com" not in unset
+    assert "not set up yet" in unset
+    assert "only cover hosting" in unset
+
+    support = TestClient(create_app(data, kofi="gofindmeahike")).get("/support.html").text
+    assert '<a href="https://ko-fi.com/gofindmeahike">' in support
+    assert support.count("ko-fi.com") == 1  # a plain link: no widget script
+    assert "not set up yet" not in support
+
+
+def test_the_credits_page_credits_every_source_with_the_fabdem_dataset(client: TestClient) -> None:
+    credits = client.get("/credits.html").text
+
+    for credit in (
+        "OpenStreetMap", "ODbL", "Geofabrik", "Nominatim", "ESA WorldCover", "CHELSA", "FABDEM", "Copernicus",
+        "Natural Earth", "Valhalla", "Leaflet",
+    ):
+        assert credit in credits, credit
+    assert 'href="https://doi.org/10.5523/bris.s5hqmjcdj8yo2ibzi9b4ew3sn"' in credits
+    assert 'href="https://doi.org/10.1088/1748-9326/ac4d4f"' in credits
+
+
+def test_the_home_page_footer_is_a_short_credit_line_to_the_full_credits(client: TestClient) -> None:
+    home = client.get("/").text
+    footer = home[home.index("<footer"):]
+
+    for credit in ("OpenStreetMap", "ODbL", "FABDEM", "CC BY-NC-SA 4.0", 'href="credits.html">full credits</a>'):
+        assert credit in footer, credit
+    assert "Climatologies" not in home  # the full references are on the credits page
+
+
+def test_no_page_loads_analytics_while_no_goatcounter_code_is_set(client: TestClient) -> None:
+    for path in SITE_PAGES:
+        page = client.get(path).text
+        assert "data-goatcounter" not in page and "count.js" not in page, path
+
+
+def test_every_page_counts_with_the_self_hosted_goatcounter_script_once_a_code_is_set(data: ServingData) -> None:
+    client = TestClient(create_app(data, goatcounter="gofindmeahike"))
+    tag = (
+        '<script data-goatcounter="https://gofindmeahike.goatcounter.com/count"'
+        ' async src="vendor/goatcounter/count.js"></script>'
+    )
+
+    for path in SITE_PAGES:
+        assert client.get(path).text.count(tag) == 1, path
+    assert client.get("/vendor/goatcounter/count.js").status_code == 200
+    assert client.get("/vendor/goatcounter/LICENSE").status_code == 200
+
+
+@pytest.mark.parametrize("setting", [{"goatcounter": 'x" onload="alert(1)'}, {"goatcounter": ""}, {"kofi": "a/b"}])
+def test_a_goatcounter_code_or_ko_fi_handle_that_is_not_a_plain_name_is_refused(
+    data: ServingData, setting: dict
+) -> None:
+    with pytest.raises(ValueError):
+        create_app(data, **setting)
 
 
 def test_round_trip_is_left_out_while_every_hike_returns_to_its_start(client: TestClient) -> None:

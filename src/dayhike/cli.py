@@ -344,6 +344,10 @@ def main(argv: list[str] | None = None) -> int:
         default=0,
         help="Proxies that append to X-Forwarded-For in front of the app (1 on Cloud Run)",
     )
+    serve.add_argument(
+        "--goatcounter", help="GoatCounter code: count visits at https://CODE.goatcounter.com; omit for no analytics"
+    )
+    serve.add_argument("--kofi", help="Ko-fi handle for the Support page's tip link; omit for no link")
     coverage = subparsers.add_parser(
         "coverage-map", help="Draw the SVG map of Europe with the covered countries shaded"
     )
@@ -358,7 +362,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "export-serving":
         return _export_serving(args.catalog, args.out, args.valhalla_tiles, args.snaps, args.valhalla_url)
     if args.command == "serve":
-        return _serve(args.data, args.host, args.port, args.valhalla_url, args.forwarded_hops)
+        return _serve(
+            args.data, args.host, args.port, args.valhalla_url, args.forwarded_hops, args.goatcounter, args.kofi
+        )
     if args.command == "coverage-map":
         from dayhike.coverage import coverage_map
 
@@ -634,7 +640,15 @@ def _export_serving(
     return 0
 
 
-def _serve(data: Path, host: str, port: int, valhalla_url: str | None, forwarded_hops: int) -> int:
+def _serve(
+    data: Path,
+    host: str,
+    port: int,
+    valhalla_url: str | None,
+    forwarded_hops: int,
+    goatcounter: str | None,
+    kofi: str | None,
+) -> int:
     try:
         import uvicorn
 
@@ -656,7 +670,11 @@ def _serve(data: Path, host: str, port: int, valhalla_url: str | None, forwarded
         def drive_client(max_hours: float) -> HighwayDriveTimeClient:
             return HighwayDriveTimeClient(max_hours, snaps)
 
-    app = create_app(serving, drive_client, forwarded_hops=forwarded_hops)
+    try:
+        app = create_app(serving, drive_client, forwarded_hops=forwarded_hops, goatcounter=goatcounter, kofi=kofi)
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 1
     # A stalled Valhalla call would hold the one-Ranking lock past the request; time it
     # out instead so /api/rank answers 503 and frees the lock.
     socket.setdefaulttimeout(VALHALLA_TIMEOUT_S)

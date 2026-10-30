@@ -89,6 +89,8 @@ What the flags do:
 | `--concurrency 8` | Searches and hike pages run side by side; Rankings queue one at a time per instance (in the app). |
 | `--timeout 60` | No request may run longer; a 4 h drive query from the densest origin takes 23-31 s on 1 vCPU. |
 | `DAYHIKE_FORWARDED_HOPS=1` | The rate limit keys on the last `X-Forwarded-For` entry, the one Google's front end adds. Earlier entries are client-supplied and ignored, so the limit cannot be dodged by sending a fake header. If that last entry turns out to be a Google proxy address rather than the visitor, the limit becomes one shared budget per instance: stricter, never looser. |
+| `DAYHIKE_GOATCOUNTER=CODE` (optional) | Cookieless visit counts at `https://CODE.goatcounter.com`: every page loads the self-hosted `vendor/goatcounter/count.js`, and "Find" is counted as an event. Unset, no page loads analytics. Not set yet: no GoatCounter account. |
+| `DAYHIKE_KOFI=HANDLE` (optional) | The Support page links `https://ko-fi.com/HANDLE`. Unset, it says the tip link is not set up yet. Not set yet: no Ko-fi handle. While FABDEM is in use, email Fathom / the University of Bristol about the donation link before setting it, unless the Copernicus swap has landed. |
 
 ## 4. Rate limit, instance cap and worst case
 
