@@ -17,6 +17,9 @@ gzipped for a browser that takes it.
 The site's pages (the demo, About, Support, Credits) are served with two optional settings filled in:
 a GoatCounter code adds the cookieless analytics tag, and a Ko-fi handle the tip link. Unset, a page
 loads no analytics and links no tip jar.
+The page may load from another origin, a loading shell on a static host (docs/deploy.md): the origins
+given may then call the API (CORS). Their preflights are answered before the request budget, so
+they use none of it. With none given, no other origin may.
 """
 
 from __future__ import annotations
@@ -35,6 +38,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -264,6 +268,7 @@ def create_app(
     api_rate: int = API_RATE,
     goatcounter: str | None = None,
     kofi: str | None = None,
+    cors_origins: tuple[str, ...] = (),
 ) -> FastAPI:
     """The app over one serving export.
 
@@ -272,7 +277,8 @@ def create_app(
     append to ``X-Forwarded-For`` in front of the app (1 on Cloud Run): the
     client is that many entries from the end. 0 uses the socket peer.
     ``goatcounter`` and ``kofi`` fill in the pages (``site_pages``); a value that
-    is not a plain name is a ValueError.
+    is not a plain name is a ValueError. ``cors_origins`` are the other origins
+    (``https://host``) whose pages may call the API.
     """
     pages = site_pages(goatcounter, kofi, data.places is not None)
     app = FastAPI(title="GoFindMeAHike", docs_url="/api/docs", openapi_url="/api/openapi.json")
@@ -329,7 +335,12 @@ def create_app(
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         return response
 
-    app.add_middleware(GZipMiddleware)  # outermost: API JSON and the page, for a browser that takes gzip
+    app.add_middleware(GZipMiddleware)  # API JSON and the page, for a browser that takes gzip
+    if cors_origins:  # outermost: a preflight is answered before the limiter, and a 429 is readable
+        app.add_middleware(
+            CORSMiddleware, allow_origins=list(cors_origins), allow_methods=["GET", "HEAD", "POST"],
+            allow_headers=["Content-Type"], max_age=3600,
+        )
 
     # A refusal leaves out the input it refuses: a NaN or Infinity in the body cannot be written back as JSON.
     @app.exception_handler(RequestValidationError)

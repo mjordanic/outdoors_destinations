@@ -31,6 +31,10 @@ const LANDCOVER = [["tree_share", "Trees", "#2f6b3a"], ["shrub_share", "Shrub", 
 const SURFACE = [["paved_share", "Paved", "#6b7280"], ["gravel_share", "Gravel", "#c8a96a"],
   ["natural_share", "Natural", "#7f9d4f"], ["rock_share", "Rock", "#8d8d8d"]];
 
+// The API's origin: the page's own, unless the page names another (a loading shell, docs/deploy.md).
+const API_BASE = ($('meta[name="api-base"]')?.content ?? "").replace(/\/+$/, "");
+const WAKE_AFTER_MS = 1500; // a first answer slower than this is a server starting from zero
+
 const PICK_ZOOM = 12; // the map shows hikes from this zoom on
 const PICK_LINE = { color: "#6b2fa3", weight: 3, opacity: 0.85 };
 const PICK_HOVER = { color: "#c2410c", weight: 5, opacity: 1 };
@@ -85,10 +89,10 @@ function setStatus(text, isError = false) {
 }
 
 async function api(path, options) {
-  const response = await fetch(path, options);
+  const response = await fetch(API_BASE + path, options);
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    if (response.status === 429) throw new Error("Too many requests; wait a minute and try again.");
+    if (response.status === 429) throw Object.assign(new Error("Too many requests; wait a minute and try again."), { status: 429 });
     // A validation message without the "Value error, " pydantic puts before it.
     const detail = Array.isArray(body.detail) ? body.detail.map((d) => d.msg.replace(/^Value error, /, "")).join("; ") : body.detail;
     throw Object.assign(new Error(detail || `Request failed (${response.status}).`), { status: response.status });
@@ -1797,12 +1801,33 @@ async function showResult(index, version = 0) {
 
 // ---------- start ----------
 
+// What to tell the hiker when the server did not answer the page: paused, its own message, paused or busy, or down.
+// Cloud Run with its public access closed answers 403. A page on another origin cannot read an
+// answer without CORS headers (that 403, but also a 429 or 503 from Cloud Run's front end): there
+// an opaque answer to a no-cors request says only that something is up.
+async function notAnswering(error) {
+  if (error.status === 401 || error.status === 403) {
+    return "GoFindMeAHike is paused for now: its owner has switched the server off. Please try again later.";
+  }
+  if (error.status) return error.message;
+  try {
+    await fetch(`${API_BASE}/api/health`, { mode: "no-cors", cache: "no-store" });
+    return "GoFindMeAHike is paused or busy. Please try again later.";
+  } catch {
+    return "The server is not answering. Please try again in a few minutes.";
+  }
+}
+
 async function start() {
   for (let m = 1; m <= 12; m++) $("#month").add(new Option(MONTHS[m - 1], String(m)));
   // The weights fold away on a narrow screen, also when the window narrows.
   const narrow = window.matchMedia("(max-width: 900px)");
   $("#weights-panel").open = !narrow.matches;
   narrow.addEventListener("change", () => { $("#weights-panel").open = !narrow.matches; });
+  const loading = $("#loading-text");
+  const waking = setTimeout(() => {
+    loading.textContent = "Waking the server… It sleeps while no one is using it, so the first visit after a quiet spell takes about 15 seconds.";
+  }, WAKE_AFTER_MS);
   try {
     const [info, measures] = await Promise.all([api("/api/info"), api("/api/measures")]);
     state.info = info;
@@ -1810,9 +1835,14 @@ async function start() {
     state.measures = measures.measures;
     state.scoreHelp = measures.score_help;
   } catch (error) {
-    setStatus(`The server is not answering: ${error.message}`, true);
+    clearTimeout(waking);
+    loading.textContent = await notAnswering(error);
+    loading.classList.add("error");
+    $("#loading-retry").hidden = false;
     return;
   }
+  clearTimeout(waking);
+  $("#loading").hidden = true;
   $("#count").textContent = state.info.dayhikes.toLocaleString("en");
   $("#results-scores").innerHTML = `<strong>Score:</strong> ${escapeHtml(state.scoreHelp.overall)}
     <strong>Measure cells:</strong> ${escapeHtml(state.scoreHelp.measure)} ${helpButton("measures")}`;

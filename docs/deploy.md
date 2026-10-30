@@ -96,6 +96,7 @@ What the flags do:
 | `--timeout 60` | No request may run longer; a 4 h drive query from the densest origin takes 23-31 s on 1 vCPU. |
 | `DAYHIKE_FORWARDED_HOPS=1` | The rate limit keys on the last `X-Forwarded-For` entry, the one Google's front end adds. Earlier entries are client-supplied and ignored, so the limit cannot be dodged by sending a fake header. If that last entry turns out to be a Google proxy address rather than the visitor, the limit becomes one shared budget per instance: stricter, never looser. |
 | `DAYHIKE_GOATCOUNTER=CODE` (optional) | Cookieless visit counts at `https://CODE.goatcounter.com`: every page loads the self-hosted `vendor/goatcounter/count.js`, and "Find" is counted as an event. Unset, no page loads analytics. Not set yet: no GoatCounter account. |
+| `DAYHIKE_CORS_ORIGINS="https://HOST ..."` (optional) | The origins whose pages may call the API (CORS): the loading shell of section 8. Unset, no other origin may. Not set yet: no shell. |
 | `DAYHIKE_KOFI=HANDLE` (optional) | The Support page links `https://ko-fi.com/HANDLE`. Unset, it says the tip link is not set up yet. Not set yet: no Ko-fi handle. While FABDEM is in use, email Fathom / the University of Bristol about the donation link before setting it, unless the Copernicus swap has landed. |
 
 ## 4. Rate limit, instance cap and worst case
@@ -151,3 +152,59 @@ If an alert fires and the traffic is abuse, close the public access at once:
 Rebuild the export and the image with a new tag, then `gcloud run deploy` again;
 `gcloud run services update-traffic dayhike --region europe-west1 --to-revisions REVISION=100`
 goes back to an earlier revision.
+
+## 8. A loading shell on a static host (not done yet)
+
+**Not set up.** No domain, static host or shell exists yet; the host is chosen
+once there is a domain. Nothing below has been run.
+
+With `--min-instances 0` the first visit after a quiet spell waits for the
+container to start, and while Cloud Run serves the page too, the browser shows
+nothing until then. A shell on a static host (for example Cloudflare Pages)
+serves the page's files at once, so the loading screen (the logo, then "Waking
+the server…") shows while Cloud Run starts, and the page then calls the API on
+Cloud Run. What is built for it:
+
+- `index.html` holds `<meta name="api-base" content="">`; empty, the page asks
+  its own origin. In the shell's copy it names the Cloud Run URL.
+- `dayhike serve --cors-origin` (`DAYHIKE_CORS_ORIGINS`) lets the shell's
+  origins call the API. CORS sits outside the rate limit: a preflight uses none
+  of a client's budget, and a `429` is readable by the shell.
+- The loading screen says the site is paused when the server answers `401` or
+  `403` (Cloud Run with public access closed, section 5). Across origins the
+  shell cannot read an answer without CORS headers (that `403`, or a `429` or
+  `503` from Cloud Run's front end), so the page asks `/api/health` once in
+  `no-cors` mode: any answer says the site is paused or busy, no answer that
+  the server is down.
+
+The steps, once there is a domain and a host account:
+
+1. Deploy Cloud Run as in section 3, with
+   `DAYHIKE_CORS_ORIGINS="https://SHELL_HOST"` added to `--set-env-vars`
+   (every host the shell is served at, such as the custom domain and the
+   host's own `*.pages.dev` name).
+2. Copy the static files and point the copy at Cloud Run:
+
+   ```bash
+   SHELL_DIR=$(mktemp -d)/shell && cp -R src/dayhike/web/static "$SHELL_DIR"
+   sed -i '' 's|<meta name="api-base" content="">|<meta name="api-base" content="https://SERVICE.run.app">|' "$SHELL_DIR/index.html"
+   ```
+
+   The server fills in the GoatCounter tag and the Ko-fi link (`<!--analytics-->`,
+   `<!--ko-fi-->`); a shell copy keeps the placeholders, so fill them the same way
+   if those settings are on.
+3. Publish `$SHELL_DIR` on the static host after every `gcloud run deploy`, so
+   the shell and the API stay the same version (on Cloudflare Pages:
+   `wrangler pages deploy "$SHELL_DIR" --project-name gofindmeahike`).
+4. Point the custom domain at the static host.
+
+The server sends `Cache-Control: no-cache` on the page; a static host needs the
+same, for example a Cloudflare Pages `_headers` file (an example only; no such
+file is in the repository):
+
+```text
+/*
+  Cache-Control: no-cache
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+```
