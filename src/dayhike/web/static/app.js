@@ -1814,7 +1814,7 @@ async function start() {
     return;
   }
   $("#count").textContent = state.info.dayhikes.toLocaleString("en");
-  // The footer credits the elevation map the export was sampled from (ADR-0027).
+  // The footer credits the elevation map the export was sampled from (ADR-0029).
   const copernicus = "copernicus" in state.info.attribution;
   $("#credit-fabdem").hidden = copernicus;
   $("#credit-copernicus").hidden = !copernicus;
