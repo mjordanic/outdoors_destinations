@@ -1,7 +1,7 @@
 """The public read-only web demo: a JSON API over a serving export, and the page.
 
 ``create_app`` serves ``ServingData`` (``dayhike.serving``): name search, place
-search when the export has GeoNames places (ADR-0027), the hikes in a map view,
+search when the export has GeoNames places (ADR-0028), the hikes in a map view,
 hike detail, the Measure list, the score of any two hikes, and Ranking with an
 optional highways-only DriveTime pre-filter. Every client gets a request budget per minute, and one Ranking
 runs at a time per instance, so a small container holds its memory. When the export has a TrailGraph,
@@ -200,8 +200,10 @@ def wish_input(measure: Measure) -> dict | None:
     return {"kind": "number", "unit": unit, "min": low, "max": high, "step": step, "default": default}
 
 
-def site_pages(goatcounter: str | None, kofi: str | None) -> dict[str, str]:
+def site_pages(goatcounter: str | None, kofi: str | None, place_search: bool = False) -> dict[str, str]:
     """Each page's HTML with the GoatCounter tag where a code is set, and the Ko-fi link where a handle is.
+
+    With ``place_search`` (the export has GeoNames places) the place-search credit names GeoNames, not Nominatim.
 
     The tag loads the self-hosted ``count.js``, which counts at ``https://<code>.goatcounter.com/count``.
     """
@@ -221,6 +223,12 @@ def site_pages(goatcounter: str | None, kofi: str | None) -> dict[str, str]:
                 '  <p class="hint">The link opens Ko-fi, which takes the tip; this site handles no payments.</p>'
             )
             html = re.sub(r"<!--ko-fi-->.*?<!--/ko-fi-->", tip, html, flags=re.S)
+        if place_search:
+            credit = (
+                '<span id="place-credit">Place search: towns from <a href="https://www.geonames.org/">GeoNames</a>'
+                ' (geonames.org), <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</span>'
+            )
+            html = re.sub(r'<span id="place-credit">.*?</span>', credit, html, flags=re.S)
         pages[name] = html
     return pages
 
@@ -266,7 +274,7 @@ def create_app(
     ``goatcounter`` and ``kofi`` fill in the pages (``site_pages``); a value that
     is not a plain name is a ValueError.
     """
-    pages = site_pages(goatcounter, kofi)
+    pages = site_pages(goatcounter, kofi, data.places is not None)
     app = FastAPI(title="GoFindMeAHike", docs_url="/api/docs", openapi_url="/api/openapi.json")
     limiters = {"rank": RateLimiter(rank_rate, RATE_WINDOW_S), "api": RateLimiter(api_rate, RATE_WINDOW_S)}
     one_ranking = threading.Semaphore(1)

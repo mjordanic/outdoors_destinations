@@ -621,4 +621,5 @@ def test_an_export_without_places_says_so(client: TestClient) -> None:
     info = client.get("/api/info").json()
 
     assert info["place_search"] is False and "geonames" not in info["attribution"]
+    assert "Place search: <a href=\"https://nominatim.org/\">Nominatim</a>" in client.get("/credits.html").text
     assert client.get("/api/place", params={"q": "zag"}).status_code == 404

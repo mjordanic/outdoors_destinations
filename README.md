@@ -1593,7 +1593,7 @@ it is off. Clicking a result shows it the same way, next to the
 liked hike. An optional starting place and maximum drive (up to 4 h) keeps only
 hikes within that DriveTime (the start is typed as "lat, lon", taken from the
 browser, or found by "Find place" among the GeoNames towns in the export,
-ADR-0027), estimated on highways-only tiles as in
+ADR-0028), estimated on highways-only tiles as in
 **Highway tiles** above. Measures with no data for a hike (climate and land
 cover do not cover all of Europe yet) show "no data" and drop out of that
 pair's score. Every score has a short line and a "?" beside it (in the results
@@ -1663,7 +1663,7 @@ with `--valhalla-url` it snaps every Trailhead once (`snaps.npz`). With
 writes `places.sqlite`, the towns of 1,000 people or more within 2° of the
 Trailheads' box for "Find place"; `dayhike export-places --out
 data/web-serving` adds it beside an existing export, which needs no other
-change (ADR-0027). Rerun it
+change (ADR-0028). Rerun it
 after any rebuild; `meta.json` is written last, so a half-written export never
 opens.
 
@@ -1964,9 +1964,12 @@ Catalog, the GeometryStore and the web demo's serving export are derivative
 databases of OpenStreetMap: when one is used publicly (the web demo does), it
 is offered under the ODbL, together with this code as the method that makes
 it. The demo's base map is OpenStreetMap's own tiles
-(https://operations.osmfoundation.org/policies/tiles/) and its place search is
-Nominatim (https://operations.osmfoundation.org/policies/nominatim/), both
-used under the OSM Foundation's usage policies.
+(https://operations.osmfoundation.org/policies/tiles/), used under the OSM
+Foundation's tile usage policy. Its place search reads the GeoNames
+`cities1000` towns (GeoNames, https://www.geonames.org/, CC BY 4.0) when the
+export has `places.sqlite`, and Nominatim
+(https://operations.osmfoundation.org/policies/nominatim/, under the OSM
+Foundation's usage policy) otherwise.
 
 FABDEM V1-2: Hawker, L., Uhe, P., Paulo, L., Sosa, J., Savage, J., Sampson, C.
 and Neal, J., 2022. A 30 m global map of elevation with forests and buildings

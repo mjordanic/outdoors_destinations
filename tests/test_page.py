@@ -422,3 +422,14 @@ def test_finding_a_place_asks_the_export_not_nominatim(browser, server) -> None:
     page.get_by_text("Start: Zagreb, HR (45.8144, 15.9780)").wait_for()
 
     assert [url for url in asked if "place" in url] == [f"{server}/api/place?limit=1&q=agram"]
+
+
+def test_the_credits_page_names_geonames_for_place_search_when_the_export_has_places(browser, server) -> None:
+    page = browser.new_page()
+    page.route(lambda url: not url.startswith(server), lambda route: route.abort())  # no tiles
+    page.goto(f"{server}/credits.html")
+    credit = page.locator("#place-credit")
+
+    assert "GeoNames" in credit.inner_text()
+    assert "Nominatim" not in credit.inner_text()
+    assert credit.get_by_role("link", name="CC BY 4.0").get_attribute("href") == "https://creativecommons.org/licenses/by/4.0/"
