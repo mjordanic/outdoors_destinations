@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>DayHike Finder</title>
+  <title>GoFindMeAHike</title>
   <meta name="description" content="Pick a day hike you liked and find similar ones across Europe, from OpenStreetMap data.">
   <link rel="icon" href="mark.svg" type="image/svg+xml">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -15,9 +15,9 @@
 </head>
 <body>
 <header class="top">
-  <img class="mark" src="mark.svg" alt="" width="44" height="44">
+  <a class="home" href="/" tabindex="-1" aria-hidden="true"><img class="mark" src="mark.svg" alt="" width="44" height="44"></a>
   <div class="brand">
-    <h1>DayHike Finder</h1>
+    <h1><a class="home" href="/">GoFindMeAHike</a></h1>
     <p class="tagline">Pick a hike you liked; find the ones most like it, out of <span id="count">160,000</span> day hikes across Europe.</p>
   </div>
   <img class="coverage" src="coverage.svg" alt="Map of Europe with the covered countries shaded" width="120" height="68"
@@ -145,7 +145,7 @@
   <h2>About and credits</h2>
   <p>A non-commercial demo of the <a href="https://github.com/mjordanic/outdoors_destinations">DayHike catalog</a>: OpenStreetMap hiking routes of 1–20 km one way, compared on 27 measures (with Return to start, a hike that does not end at its start is measured with its way back, up to about 40 km). Each measure is calibrated against random pairs of hikes, so weights mean the same on every measure.</p>
   <ul>
-    <li><strong>Hiking routes, huts, water, peaks, roads and names:</strong> map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, available under the <a href="https://opendatacommons.org/licenses/odbl/">Open Database License (ODbL)</a>. The hike data served here is a derivative database of OpenStreetMap and is also offered under the ODbL; the code that builds it is <a href="https://github.com/mjordanic/outdoors_destinations">open source</a>. Extracts from <a href="https://download.geofabrik.de/">Geofabrik</a>.</li>
+    <li><strong>Hiking routes, huts, water, peaks, roads and names:</strong> map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, available under the <a href="https://opendatacommons.org/licenses/odbl/">Open Database License (ODbL)</a>. The hike data served here is a derivative database of OpenStreetMap and is also offered under the ODbL; the code that builds it is <a href="https://github.com/mjordanic/outdoors_destinations">open source</a> under the <a href="https://github.com/mjordanic/outdoors_destinations/blob/main/LICENSE">MIT licence</a>, which covers the code only (<a href="https://github.com/mjordanic/outdoors_destinations/blob/main/DATA-LICENSES.md">data licences</a>). Extracts from <a href="https://download.geofabrik.de/">Geofabrik</a>.</li>
     <li><strong>Base map:</strong> tiles © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, served by the OpenStreetMap Foundation under its <a href="https://operations.osmfoundation.org/policies/tiles/">tile usage policy</a>. Place search: <a href="https://nominatim.org/">Nominatim</a>, data © OpenStreetMap contributors.</li>
     <li><strong>Elevation:</strong> FABDEM V1-2 — Hawker, L., Uhe, P., Paulo, L., Sosa, J., Savage, J., Sampson, C. and Neal, J. (2022), <em>A 30 m global map of elevation with forests and buildings removed</em>, Environmental Research Letters 17, 024016, <a href="https://doi.org/10.1088/1748-9326/ac4d4f">doi:10.1088/1748-9326/ac4d4f</a>; University of Bristol, <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">CC BY-NC-SA 4.0</a>. FABDEM is produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved. The organizations in charge of the Copernicus program by law or by delegation do not incur any liability for any use of the Copernicus WorldDEM-30. The elevation profiles and the elevation-derived values on this page (heights, gain, profile shape, steepness, slope aspect) are adapted from FABDEM and are shared under CC BY-NC-SA 4.0, non-commercially.</li>
     <li><strong>Land cover:</strong> © ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium. Zanaga, D. et al. (2022), ESA WorldCover 10 m 2021 v200, <a href="https://doi.org/10.5281/zenodo.7254221">doi:10.5281/zenodo.7254221</a>; <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>. Land-cover shares and the waterside share per hike are computed from it.</li>
