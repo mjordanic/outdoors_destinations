@@ -10,7 +10,7 @@ from dayhike.web import RESULTS, create_app
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
 RIDGE_WALK_ID = 1001
-SITE_PAGES = ("/", "/index.html", "/about.html", "/support.html", "/credits.html")
+SITE_PAGES = ("/", "/index.html", "/about.html", "/support.html", "/credits.html", "/privacy.html", "/terms.html")
 
 
 @pytest.fixture(scope="module")
@@ -123,6 +123,8 @@ def test_an_export_sampled_from_copernicus_names_it_and_not_fabdem(tmp_path: Pat
     footer = client.get("/").text.split("<footer", 1)[1]
     for page in (credits, footer):
         assert "GLO-30" in page and "FABDEM" not in page and "CC BY-NC-SA" not in page
+    terms = client.get("/terms.html").text
+    assert "Copernicus DEM licence" in terms and "FABDEM" not in terms and "CC BY-NC-SA" not in terms
     assert "© Airbus Defence and Space GmbH 2014-2018" in credits and "do not incur any liability" in credits
     assert 'href="https://doi.org/10.5270/ESA-c5d3d65"' in credits
 
@@ -528,7 +530,9 @@ def test_every_site_page_has_the_home_link_and_the_footer_navigation(client: Tes
         assert page.status_code == 200, path
         assert page.headers["content-type"].startswith("text/html"), path
         assert '<a class="home" href="/">GoFindMeAHike</a>' in page.text, path
-        for link in ('href="about.html"', 'href="support.html"', 'href="credits.html"'):
+        for link in (
+            'href="about.html"', 'href="support.html"', 'href="credits.html"', 'href="privacy.html"', 'href="terms.html"'
+        ):
             assert link in page.text, (path, link)
 
 
@@ -575,6 +579,52 @@ def test_the_home_page_footer_is_a_short_credit_line_to_the_full_credits(client:
     for credit in ("OpenStreetMap", "ODbL", "FABDEM", "CC BY-NC-SA 4.0", 'href="credits.html">full credits</a>'):
         assert credit in footer, credit
     assert "Climatologies" not in home  # the full references are on the credits page
+
+
+def test_the_privacy_page_says_who_controls_the_data_what_is_kept_who_gets_it_and_where_to_complain(
+    client: TestClient,
+) -> None:
+    privacy = client.get("/privacy.html").text
+
+    assert "Mislav Jordanic, Zagreb, Croatia" in privacy
+    assert '<a href="mailto:mislav.jordanic@gmail.com">mislav.jordanic@gmail.com</a>' in privacy
+    for processed in ("IP address", "user agent", "30 days", "access log", "rate limit", "not stored"):
+        assert processed in privacy, processed
+    for recipient in ("Google Cloud", "OpenStreetMap Foundation", "Nominatim", "GitHub"):
+        assert recipient in privacy, recipient
+    assert "Art. 6(1)(f)" in privacy
+    assert "outside the EU" in privacy
+    assert 'href="https://azop.hr/"' in privacy
+    assert "no cookies" in privacy and "no consent banner" in privacy
+
+
+def test_the_privacy_page_names_goatcounter_and_ko_fi_only_once_they_are_set(data: ServingData) -> None:
+    unset = TestClient(create_app(data)).get("/privacy.html").text
+    assert "GoatCounter" not in unset
+    assert "Ko-fi" not in unset
+
+    privacy = TestClient(create_app(data, goatcounter="gofindmeahike", kofi="gofindmeahike")).get("/privacy.html").text
+    assert "GoatCounter" in privacy
+    assert "#toggle-goatcounter" in privacy  # the one thing its script may store, and only when asked
+    assert "Ko-fi" in privacy
+    assert "after you click" in privacy
+
+
+def test_the_terms_page_warns_hikers_and_restricts_no_reuse_beyond_the_data_licences(client: TestClient) -> None:
+    terms = client.get("/terms.html").text
+
+    for warning in ("crowd-sourced", "estimates", "closures", "weather", "navigation", "112", "HGSS", "SAC"):
+        assert warning in terms, warning
+    for licence in ("ODbL", "CC BY-NC-SA 4.0", "MIT licence"):
+        assert licence in terms, licence
+    assert "no further restriction" in terms
+    assert "scrap" not in terms.lower()
+
+
+def test_no_response_sets_a_cookie(data: ServingData) -> None:
+    client = TestClient(create_app(data, goatcounter="gofindmeahike", kofi="gofindmeahike"))
+    for path in (*SITE_PAGES, "/app.js", "/api/info", "/api/measures"):
+        assert "set-cookie" not in client.get(path).headers, path
 
 
 def test_no_page_loads_analytics_while_no_goatcounter_code_is_set(client: TestClient) -> None:
@@ -649,6 +699,11 @@ def test_place_search_answers_from_the_export_and_is_credited(tmp_path: Path, ma
     }
     assert placed.get("/api/place", params={"q": "x" * 101}).status_code == 422
     assert placed.head("/api/place", params={"q": "zag"}).status_code == 200
+    privacy = placed.get("/privacy.html").text
+    assert "nominatim.org" not in privacy  # place names are looked up on this server
+    assert "the place search" in privacy  # a typed place name is in the request URL, so in the logs
+    assert "looked up on this site's server" in privacy and "recipients below" not in privacy
+    assert "OpenStreetMap Foundation</strong> (UK) serves the map tiles" in privacy
 
 
 def test_adding_places_to_an_export_changes_the_etag(tmp_path: Path) -> None:
@@ -671,6 +726,9 @@ def test_an_export_without_places_says_so(client: TestClient) -> None:
     assert info["place_search"] is False and "geonames" not in info["attribution"]
     assert "Place search: <a href=\"https://nominatim.org/\">Nominatim</a>" in client.get("/credits.html").text
     assert client.get("/api/place", params={"q": "zag"}).status_code == 404
+    privacy = client.get("/privacy.html").text
+    assert "sends the name and your IP address to the OpenStreetMap Foundation's" in privacy
+    assert "looked up with Nominatim" in privacy and "the place search" not in privacy
 
 
 SHELL = "https://gofindmeahike.example"  # a loading shell on a static host, calling the API from its own origin
@@ -695,3 +753,18 @@ def test_a_cors_preflight_from_the_shell_does_not_use_up_the_ranking_budget(data
 
     assert ranked.status_code == 200 and ranked.headers["access-control-allow-origin"] == SHELL
     assert refused.status_code == 429 and refused.headers["access-control-allow-origin"] == SHELL  # the shell reads why
+
+
+def test_the_rate_limiter_forgets_an_idle_client_within_a_window() -> None:
+    now = [0.0]
+    limiter = web.RateLimiter(limit=2, window_s=60.0, clock=lambda: now[0])
+    assert limiter.allow("1.2.3.4") and limiter.allow("1.2.3.4") and not limiter.allow("1.2.3.4")
+    now[0] = 30.0
+    assert limiter.allow("5.6.7.8")
+    assert len(limiter) == 2
+    now[0] = 61.0
+    assert limiter.allow("5.6.7.8")
+    assert len(limiter) == 1
+    now[0] = 121.0
+    assert limiter.allow("9.9.9.9")
+    assert len(limiter) == 1

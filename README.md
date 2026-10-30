@@ -134,7 +134,7 @@ call on your machine.
 | `data/valhalla/` | Road PBF + Valhalla routing tiles Docker builds | gitignored |
 | `data/web-serving/` | Serving export for the web demo (`export-serving`) | **gitignored** |
 | `data/geonames/` | GeoNames `cities1000.zip` for the demo's place search | gitignored |
-| `src/dayhike/web/static/` | The demo page, its script, the About, Support and credits pages, the logo and the coverage map | yes |
+| `src/dayhike/web/static/` | The demo page, its script, the About, Support, credits, Privacy and Terms pages, the logo and the coverage map | yes |
 | `web/` | Dockerfile, local compose file and smoke script of the demo | yes |
 | `data/valhalla/compose.yaml` | How to run Valhalla | yes |
 | `data/valhalla/prepare-roads.sh` | osmium filter: car roads only, no buildings | yes |
@@ -1667,15 +1667,19 @@ uv run python web/smoke.py --data data/web-serving --valhalla-url http://127.0.0
 DAYHIKE_SERVING="$PWD/data/web-serving" docker compose -f web/compose.yaml up --build
 ```
 
-Beside the demo the site has About, Support and Data and credits pages
-(`about.html`, `support.html`, `credits.html`), with the logo home and the same
-footer links on every page; the demo's footer is a short credit line, and the
-full credits are on `credits.html`. The server fills in two optional settings:
+Beside the demo the site has About, Support, Data and credits, Privacy and
+Terms and safety pages (`about.html`, `support.html`, `credits.html`,
+`privacy.html`, `terms.html`), with the logo home and the same footer links on
+every page; the demo's footer is a short credit line, and the full credits are
+on `credits.html`. The server fills in two optional settings:
 `dayhike serve --goatcounter CODE` (container: `DAYHIKE_GOATCOUNTER`) adds the
 cookieless GoatCounter tag to every page, and `--kofi HANDLE` (`DAYHIKE_KOFI`)
 the Support page's tip link. Unset, no page loads analytics and the Support page
-says the tip link is not set up yet. A code or handle other than letters,
-digits, `-` and `_` is refused at start.
+says the tip link is not set up yet. The privacy page names GoatCounter and
+Ko-fi only once each is set. No page sets a cookie or writes browser storage
+(GoatCounter's script writes localStorage only when a visitor opens a page with
+`#toggle-goatcounter` to stop counting their own visits). A code or handle
+other than letters, digits, `-` and `_` is refused at start.
 
 The page opens behind a loading screen, the logo and "Loading…", which says
 "Waking the server" when the first answer is slow (a start from zero), and that

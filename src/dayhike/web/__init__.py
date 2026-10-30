@@ -14,9 +14,10 @@ Detail, compose, pair and Ranking measure every hike with its way back to the st
 A browser keeps the API reads an hour and then revalidates them by an ETag of the export, the code
 and the drive-time settings; the page always revalidates, so a redeploy shows at once. Responses are
 gzipped for a browser that takes it.
-The site's pages (the demo, About, Support, Credits) are served with two optional settings filled in:
-a GoatCounter code adds the cookieless analytics tag, and a Ko-fi handle the tip link. Unset, a page
-loads no analytics and links no tip jar.
+The site's pages (the demo, About, Support, Credits, Privacy, Terms) are served with two optional
+settings filled in: a GoatCounter code adds the cookieless analytics tag, and a Ko-fi handle the tip
+link; the privacy page names each only once it is set. Unset, a page loads no analytics and links no
+tip jar.
 The page may load from another origin, a loading shell on a static host (docs/deploy.md): the origins
 given may then call the API (CORS). Their preflights are answered before the request budget, so
 they use none of it. With none given, no other origin may.
@@ -74,11 +75,14 @@ BUILD = hashlib.sha256(
     )
 ).hexdigest()
 
-PAGES = ("index", "about", "support", "credits")  # the site's pages, served with its settings filled in
+PAGES = ("index", "about", "support", "credits", "privacy", "terms")  # the site's pages, served with its settings filled in
 # The elevation credits of an export sampled from Copernicus GLO-30 (ADR-0030), in place of
 # FABDEM's between <!--elevation--> and <!--/elevation--> on each page that names it.
 COPERNICUS_CREDITS = {
     "index": 'Copernicus GLO-30 (<a href="https://doi.org/10.5270/ESA-c5d3d65">© DLR, Airbus; Copernicus DEM licence</a>)',
+    "terms": "The elevation profiles and the values derived from elevation (heights, gain, profile shape, steepness, "
+    'slope aspect) are computed from Copernicus DEM GLO-30, offered under the <a href="https://docs.sentinel-hub.com/'
+    'api/latest/static/files/data/dem/resources/license/License-COPDEM-30.pdf">Copernicus DEM licence</a>.',
     "credits": 'Copernicus DEM GLO-30, <a href="https://doi.org/10.5270/ESA-c5d3d65">doi:10.5270/ESA-c5d3d65</a>, '
     'from <a href="https://registry.opendata.aws/copernicus-dem/">AWS Open Data</a>, under the '
     '<a href="https://docs.sentinel-hub.com/api/latest/static/files/data/dem/resources/license/License-COPDEM-30.pdf">'
@@ -223,8 +227,12 @@ def site_pages(
 ) -> dict[str, str]:
     """Each page's HTML with the GoatCounter tag where a code is set, and the Ko-fi link where a handle is.
 
-    With ``place_search`` (the export has GeoNames places) the place-search credit names GeoNames, not Nominatim.
+    With ``place_search`` (the export has GeoNames places) the place-search credit names GeoNames, not Nominatim,
+    and the privacy page keeps its ``places`` text, not its ``nominatim`` text.
     With ``copernicus`` (an export sampled from Copernicus GLO-30), the pages credit it instead of FABDEM.
+
+    Text between ``<!--if-goatcounter-->`` and ``<!--/if-goatcounter-->`` (or ``kofi``, ``places``,
+    ``nominatim``) is kept only when that setting is on.
 
     The tag loads the self-hosted ``count.js``, which counts at ``https://<code>.goatcounter.com/count``.
     """
@@ -238,6 +246,15 @@ def site_pages(
     pages = {}
     for name in PAGES:
         html = (STATIC_DIR / f"{name}.html").read_text(encoding="utf-8").replace("<!--analytics-->", analytics)
+        settings = {
+            "goatcounter": goatcounter is not None,
+            "kofi": kofi is not None,
+            "places": place_search,
+            "nominatim": not place_search,
+        }
+        for setting, on in settings.items():  # text true only once it is set
+            block = rf"<!--if-{setting}-->(.*?)<!--/if-{setting}-->"
+            html = re.sub(block, (lambda m: m[1]) if on else "", html, flags=re.S)
         if kofi is not None:
             tip = (
                 f'<p class="tip"><a href="https://ko-fi.com/{kofi}">Leave a tip on Ko-fi</a></p>\n'
@@ -259,16 +276,22 @@ def site_pages(
 class RateLimiter:
     """At most ``limit`` requests per ``window_s`` seconds per client key."""
 
-    def __init__(self, limit: int, window_s: float) -> None:
-        self.limit, self.window_s = limit, window_s
+    def __init__(self, limit: int, window_s: float, clock: Callable[[], float] = time.monotonic) -> None:
+        self.limit, self.window_s, self._clock = limit, window_s, clock
         self._seen: dict[str, deque[float]] = {}
+        self._swept = clock()
         self._lock = threading.Lock()
 
+    def __len__(self) -> int:
+        """How many clients it remembers."""
+        return len(self._seen)
+
     def allow(self, key: str) -> bool:
-        now = time.monotonic()
+        now = self._clock()
         with self._lock:
-            if len(self._seen) > 10_000:  # forget idle clients
+            if now - self._swept >= self.window_s:  # forget idle clients once a window
                 self._seen = {k: v for k, v in self._seen.items() if v and now - v[-1] < self.window_s}
+                self._swept = now
             seen = self._seen.setdefault(key, deque())
             while seen and now - seen[0] >= self.window_s:
                 seen.popleft()
