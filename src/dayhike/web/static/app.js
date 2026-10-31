@@ -707,11 +707,17 @@ function syncRoundTrip() {
   off.disabled = returnToStart();
 }
 
+// A weight row the query leaves out: ticked off, unused, or not wishable while wishing.
+function leftOut(row) {
+  const off = row.querySelectorAll("input:not(.wish)")[1];
+  return off.checked || row.classList.contains("unused") || (state.wishing && row.classList.contains("unwishable"));
+}
+
 function readWeights() {
   const weights = {}, excluded = [];
   for (const row of document.querySelectorAll(".weight")) {
-    const [number, off] = row.querySelectorAll("input:not(.wish)");
-    if (off.checked || row.classList.contains("unused") || (state.wishing && row.classList.contains("unwishable"))) {
+    const number = row.querySelector("input:not(.wish)");
+    if (leftOut(row)) {
       excluded.push(row.dataset.measure);
       continue;
     }
@@ -1892,11 +1898,9 @@ async function start() {
     host.addEventListener("input", wishToHash);
   }
   $("#advanced").addEventListener("toggle", () => {
-    const counts = [...$("#advanced-weights").querySelectorAll(".weight")].some((row) => {
-      const [number, off] = row.querySelectorAll("input:not(.wish)");
-      const out = off.checked || row.classList.contains("unused") || (state.wishing && row.classList.contains("unwishable"));
-      return !out && Number(number.value) > 0;
-    });
+    const counts = [...$("#advanced-weights").querySelectorAll(".weight")].some(
+      (row) => !leftOut(row) && Number(row.querySelector("input:not(.wish)").value) > 0,
+    );
     if (counts) markStale();
     wishToHash();
   });
