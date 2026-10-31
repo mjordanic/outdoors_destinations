@@ -50,7 +50,7 @@ def test_info_and_measures_describe_every_measure_in_groups(client: TestClient) 
     assert info["dayhikes"] == 4
     assert info["drive_time"] is True
     assert [m["name"] for m in body["measures"]] == list(MEASURE_NAMES)
-    assert {m["group"] for m in body["measures"]} == set(body["groups"])
+    assert {m["group"] for m in body["measures"]} == {g["name"] for g in body["groups"]}
     assert all(m["label"] and m["description"] for m in body["measures"])
     assert {m["name"] for m in body["measures"] if m["default_weight"] > 0} == set(CORE_MEASURES)
 
@@ -59,7 +59,16 @@ def test_measures_start_with_a_plain_basic_set_and_group_the_rest_for_advanced_s
     body = client.get("/api/measures").json()
     groups = {m["name"]: m["group"] for m in body["measures"]}
 
-    assert body["groups"] == ["basic", "effort", "altitude", "scenery", "facilities", "trail", "water", "weather"]
+    assert body["groups"] == [
+        {"name": "basic", "label": "Main features"},
+        {"name": "effort", "label": "Effort and steepness"},
+        {"name": "altitude", "label": "Altitude"},
+        {"name": "scenery", "label": "Scenery"},
+        {"name": "facilities", "label": "Facilities"},
+        {"name": "trail", "label": "Trail"},
+        {"name": "water", "label": "Water"},
+        {"name": "weather", "label": "Weather"},
+    ]
     assert {m["name"]: m["label"] for m in body["measures"] if m["group"] == "basic"} == {
         "length": "Length",
         "elevation_gain": "Climbing",
@@ -69,7 +78,7 @@ def test_measures_start_with_a_plain_basic_set_and_group_the_rest_for_advanced_s
         "temperature": "Typical temperature",
         "waterside": "Lake or sea",
     }
-    assert {group: sorted(name for name in groups if groups[name] == group) for group in body["groups"][1:]} == {
+    assert {group: sorted(name for name in groups if groups[name] == group) for group in (g["name"] for g in body["groups"][1:])} == {
         "effort": ["climb_grade", "difficulty", "profile", "steepest_km"],
         "altitude": ["lowest"],
         "scenery": ["peaks_around", "viewpoint_along"],
@@ -181,7 +190,7 @@ def test_the_score_explanation_says_what_a_score_means_and_how_it_is_made(client
     assert "Share of random hike pairs less alike" in help_["measure"]
     assert "0.9 means only 1 pair in 10" in help_["measure"]
     assert "about 0.41" in help_["overall"] and "0.72 beats 99" in help_["overall"]  # under the basic set (ADR-0031)
-    assert "0.16 on waterside" in text and "84 %" in text  # two dry hikes: identical, but it tells little
+    assert "0.16 on Lake or sea" in text and "84 %" in text  # two dry hikes: identical, but it tells little
     assert "not compared" in text and "0.95" in text  # a shared absence; both passing a hut
     assert "What does 0.1 mean" in " ".join(section["title"] for section in help_["sections"])
     assert "Kattegat" in text and "0.10" in text

@@ -144,9 +144,47 @@ def test_a_hiker_sees_a_few_plain_measures_and_the_rest_wait_behind_advanced_sea
 
     assert page.get_by_label("Lowest point weight, 0 to 100").is_visible()
     assert page.locator("#advanced legend").all_text_contents() == [
-        "effort", "altitude", "scenery", "facilities", "trail", "water", "weather",
+        "Effort and steepness", "Altitude", "Scenery", "Facilities", "Trail", "Water", "Weather",
     ]  # fmt: skip
     assert len(page.locator(".weight:visible").evaluate_all(SHOWN)) == 27
+
+
+GROUP_IDS = {"basic", "effort", "altitude", "scenery", "facilities", "trail", "water", "weather"}
+
+
+def test_the_facts_of_a_hike_are_headed_by_plain_group_names_never_raw_ids(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.click()
+
+    page.locator('#selected table.facts th[scope="rowgroup"]').first.wait_for()
+    headings = page.locator('#selected table.facts th[scope="rowgroup"]').all_text_contents()
+    assert headings == [
+        "Main features", "Effort and steepness", "Altitude", "Scenery", "Facilities", "Trail", "Water", "Weather",
+    ]  # fmt: skip
+    shown = page.locator('#selected table.facts th[scope="rowgroup"], #weights-panel legend').all_text_contents()
+    assert not GROUP_IDS & {text.strip() for text in shown}
+
+
+def test_looking_into_advanced_search_leaves_results_current_until_an_advanced_weight_counts(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+    results = page.locator("#results")
+
+    open_advanced(page)
+    open_advanced(page)
+    page.evaluate("() => new Promise((done) => setTimeout(done, 50))")  # the toggle events have run
+    assert "stale" not in (results.get_attribute("class") or "")
+
+    open_advanced(page)
+    page.get_by_label("Lowest point weight, 0 to 100").fill("50")
+    page.get_by_role("button", name="Find similar").click()
+    page.wait_for_function("() => !document.querySelector('#results').classList.contains('stale')")
+    open_advanced(page)
+    page.wait_for_function("() => document.querySelector('#results').classList.contains('stale')")
 
 
 def test_measures_behind_a_closed_advanced_search_do_not_count(browser, server) -> None:

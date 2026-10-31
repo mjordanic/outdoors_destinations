@@ -32,7 +32,8 @@ highest point (table below). Left out on purpose:
 - weather: Precipitation, Solar radiation, Sun-facing slopes
 
 The order runs from how hard and how high, through what is on the way, to climate. `MEASURE_GROUPS`
-holds the order, with `basic` first. Scoring still knows no groups (ADR-0013).
+holds the order and each group's plain name, with `basic` first ("Main features" in the facts table).
+Scoring still knows no groups (ADR-0013).
 
 **Only what shows counts.** A Measure behind a closed Advanced search weighs 0, in both forms. What
 the Hiker types there stays, and counts again once Advanced search is open. A Wish address naming an

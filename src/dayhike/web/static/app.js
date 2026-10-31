@@ -619,8 +619,8 @@ function factsTable(hike, compare, result, month, weights, returnToStart) {
   table.innerHTML = `<thead>${head}</thead>`;
   for (const group of state.groups) {
     const body = document.createElement("tbody");
-    body.innerHTML = `<tr><th scope="rowgroup" colspan="${compare ? 4 : 2}">${escapeHtml(group)}</th></tr>`;
-    for (const measure of (compare ? comparedMeasures(returnToStart) : state.measures).filter((m) => m.group === group)) {
+    body.innerHTML = `<tr><th scope="rowgroup" colspan="${compare ? 4 : 2}">${escapeHtml(group.label)}</th></tr>`;
+    for (const measure of (compare ? comparedMeasures(returnToStart) : state.measures).filter((m) => m.group === group.name)) {
       const row = document.createElement("tr");
       if (compare && weights && !weights[measure.name]) row.className = "excluded";
       const cells = [`<td title="${escapeHtml(measure.description)}">${escapeHtml(measure.label)}</td>`];
@@ -661,11 +661,11 @@ function factsTable(hike, compare, result, month, weights, returnToStart) {
 function buildWeights() {
   $("#weights").innerHTML = $("#advanced-weights").innerHTML = "";
   for (const group of state.groups) {
-    const basic = group === "basic";
+    const basic = group.name === "basic";
     const set = document.createElement("fieldset");
     set.className = "weights-group";
-    set.innerHTML = basic ? "" : `<legend>${escapeHtml(group)}</legend>`;
-    const measures = state.measures.filter((m) => m.group === group);
+    set.innerHTML = basic ? "" : `<legend>${escapeHtml(group.label)}</legend>`;
+    const measures = state.measures.filter((m) => m.group === group.name);
     set.classList.toggle("unwishable", !measures.some(wishable));
     for (const measure of measures) {
       const row = document.createElement("div");
@@ -1891,7 +1891,15 @@ async function start() {
     // The address keeps the wish as it is typed, so a reload or a shared link opens it again.
     host.addEventListener("input", wishToHash);
   }
-  $("#advanced").addEventListener("toggle", () => { markStale(); wishToHash(); });
+  $("#advanced").addEventListener("toggle", () => {
+    const counts = [...$("#advanced-weights").querySelectorAll(".weight")].some((row) => {
+      const [number, off] = row.querySelectorAll("input:not(.wish)");
+      const out = off.checked || row.classList.contains("unused") || (state.wishing && row.classList.contains("unwishable"));
+      return !out && Number(number.value) > 0;
+    });
+    if (counts) markStale();
+    wishToHash();
+  });
   $("#drive-on").addEventListener("change", (event) => { $("#drive").hidden = !event.target.checked; markStale(); });
   $("#origin").addEventListener("input", () => { state.origin = null; $("#origin-found").textContent = ""; markStale(); });
   $("#hours").addEventListener("input", markStale);

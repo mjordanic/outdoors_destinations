@@ -261,7 +261,7 @@ SCORE_HELP = {
             "that are less alike than these two. So it says how close the two hikes are, and also how rare it "
             "is to be that close: a match counts for more when fewer random pairs manage it. Two hikes whose "
             "lengths are within 2 % score 0.99 on length. Two hikes that are both never near open water score "
-            "only 0.16 on waterside: they are identical there, but 84 % of random pairs are too, so it tells "
+            "only 0.16 on Lake or sea: they are identical there, but 84 % of random pairs are too, so it tells "
             "little. A score of 0.5 means half of random pairs are at least as alike: an ordinary match. 0.9 "
             "means only 1 pair in 10 is; 0.99 means 1 in 100. 0 means the hikes have nothing in common on that "
             "measure: one passes a hut and the other does not, or their highest points are 400 m or more apart. "
@@ -273,7 +273,7 @@ SCORE_HELP = {
             "title": "Rare shared values tell more",
             "text": "When two hikes have the same value, the score says how rare that value is: two hikes that "
             "both pass a mountain hut score 0.95, two that are both never near water 0.16. Values a measure "
-            "counts as the same are one value: Waterside shares under 0.15, Water sources 3 or more, values at "
+            "counts as the same are one value: Lake or sea shares under 0.15, Water sources 3 or more, values at "
             "or under a measure's floor (walks under 1 km on Length).",
         },
         {
@@ -292,7 +292,7 @@ SCORE_HELP = {
             "text": "A low number on one measure does not mean the hikes are unalike overall. It means that what "
             "they share on that measure is common, or that they are further apart on it than most pairs of "
             "hikes. For example, Kattegatstien and Kattegatkysten are both Danish coast walks, 56 % and 30 % "
-            "of the way beside water. On waterside they score 0.10. Most hikes never come near water, and two "
+            "of the way beside water. On Lake or sea they score 0.10. Most hikes never come near water, and two "
             "such hikes count as alike, so 90 % of random pairs are at least as alike there. Their overall "
             "score is still 0.74, better than 99 random pairs in 100, because every other measure matches.",
         },
@@ -341,7 +341,16 @@ def name_dem(text: str, attribution: Mapping[str, str]) -> str:
     ).replace("FABDEM", "Copernicus GLO-30")
 
 
-MEASURE_GROUPS = ("basic", "effort", "altitude", "scenery", "facilities", "trail", "water", "weather")
+MEASURE_GROUPS: dict[str, str] = {
+    "basic": "Main features",
+    "effort": "Effort and steepness",
+    "altitude": "Altitude",
+    "scenery": "Scenery",
+    "facilities": "Facilities",
+    "trail": "Trail",
+    "water": "Water",
+    "weather": "Weather",
+}
 POINT_COLUMNS = ("kind", "where", "lat", "lon", "along_m", "off_m", "name", "ele")
 
 
