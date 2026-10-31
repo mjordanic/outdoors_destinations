@@ -155,25 +155,26 @@ _SIMILARITY_FILES = (
     "way_back.npy", "meta.json",
 )  # fmt: skip
 
-# Groups are sections of the weights panel only; scoring knows no groups (ADR-0013).
+# Groups are sections of the weights panel only; scoring knows no groups (ADR-0013). The page
+# shows the "basic" group and folds the others away behind Advanced search (ADR-0031).
 MEASURE_INFO: dict[str, tuple[str, str, str, str]] = {
-    "length": ("effort", "Length", "Walk length; scored by the shorter over the longer (floor 1 km), against random hike pairs.", "OpenStreetMap: the hike's line, from the ways of its hiking relation."),
-    "elevation_gain": ("effort", "Elevation gain", "Metres climbed, the larger of climb and descent; scored by the smaller over the larger (floor 100 m), against random hike pairs.", "FABDEM elevation along the line."),
+    "length": ("basic", "Length", "Walk length; scored by the shorter over the longer (floor 1 km), against random hike pairs.", "OpenStreetMap: the hike's line, from the ways of its hiking relation."),
+    "elevation_gain": ("basic", "Climbing", "Metres climbed, the larger of climb and descent; scored by the smaller over the larger (floor 100 m), against random hike pairs.", "FABDEM elevation along the line."),
     "difficulty": ("effort", "Difficulty", "Strictest SAC grade, 1-6; scored by the gap against random hike pairs, lowest from 3 grades apart.", "OpenStreetMap: the sac_scale grade of the hike's ways."),
-    "highest": ("altitude", "Highest point", "Highest elevation; scored by the gap against random hike pairs, lowest from 400 m apart.", "FABDEM elevation along the line."),
+    "highest": ("basic", "Highest point", "Highest elevation; scored by the gap against random hike pairs, lowest from 400 m apart.", "FABDEM elevation along the line."),
     "lowest": ("altitude", "Lowest point", "Lowest elevation; scored by the gap against random hike pairs, lowest from 400 m apart.", "FABDEM elevation along the line."),
-    "profile": ("profile", "Profile shape", "Elevation profile scaled to 0-1 in length and height, walked either way.", "FABDEM elevation along the line."),
-    "landcover": ("landscape", "Land cover", "Shared share of tree, shrub, grass, bare, snow and other cover.", "ESA WorldCover 2021 land cover along the line."),
-    "peak_summited": ("landscape", "Peak summited", "A Peak within 50 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap peaks."),
-    "viewpoint_along": ("landscape", "Viewpoint along", "A Viewpoint within 100 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap viewpoints."),
-    "peaks_around": ("landscape", "Peaks around", "Peaks within 2 km of the line; scored by the fewer over the more (floor 1), against random hike pairs.", "OpenStreetMap peaks."),
-    "temperature": ("weather", "Temperature", "Mean temperature (June-August, or the chosen month); scored by the gap against random hike pairs, lowest from 10 °C apart.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
+    "profile": ("effort", "Profile shape", "Elevation profile scaled to 0-1 in length and height, walked either way.", "FABDEM elevation along the line."),
+    "landcover": ("basic", "Landscape", "Shared share of tree, shrub, grass, bare, snow and other cover.", "ESA WorldCover 2021 land cover along the line."),
+    "peak_summited": ("basic", "Summit", "A Peak within 50 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap peaks."),
+    "viewpoint_along": ("scenery", "Viewpoint along", "A Viewpoint within 100 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap viewpoints."),
+    "peaks_around": ("scenery", "Peaks around", "Peaks within 2 km of the line; scored by the fewer over the more (floor 1), against random hike pairs.", "OpenStreetMap peaks."),
+    "temperature": ("basic", "Typical temperature", "Mean temperature (June-August, or the chosen month); scored by the gap against random hike pairs, lowest from 10 °C apart.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
     "precipitation": ("weather", "Precipitation", "Mean monthly precipitation (or the chosen month's); scored by the smaller over the larger (floor 10 mm), against random hike pairs.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
     "solar_radiation": ("weather", "Solar radiation", "Solar radiation (June-August, or the chosen month), kJ m⁻² day⁻¹; scored by the gap against random hike pairs, lowest from 5,000 apart.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
     "southness": ("weather", "Sun-facing slopes", "Which way the slopes face: 1 south, 0 north (from FABDEM); scored by the gap against random hike pairs.", "FABDEM slopes along the line."),
     "water_count": ("water", "Water sources", "WaterSources within 100 m of the line, counted up to 3; scored by the gap against random hike pairs.", "OpenStreetMap drinking water, springs, taps and water points."),
     "dry_stretch": ("water", "Dry stretch", "Longest walk between WaterSources; scored by the shorter over the longer (floor 1 km), against random hike pairs.", "OpenStreetMap drinking water, springs, taps and water points."),
-    "waterside": ("water", "Waterside", "Share of the walk within 200 m of sea, lake or wide river (WorldCover); scored by the gap against random hike pairs, a gap under 0.15 counting as none, lowest from 0.5 apart.", "ESA WorldCover 2021 permanent water (sea, lakes, wide rivers)."),
+    "waterside": ("basic", "Lake or sea", "Share of the walk within 200 m of sea, lake or wide river (WorldCover); scored by the gap against random hike pairs, a gap under 0.15 counting as none, lowest from 0.5 apart.", "ESA WorldCover 2021 permanent water (sea, lakes, wide rivers)."),
     "hut_along": ("facilities", "Hut along", "A Hut within 100 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap huts."),
     "restaurant_cafe_along": ("facilities", "Restaurant or cafe along", "A restaurant or cafe within 100 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap restaurants and cafes."),
     "shelter_along": ("facilities", "Shelter along", "A Shelter within 100 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap shelters."),
@@ -182,8 +183,8 @@ MEASURE_INFO: dict[str, tuple[str, str, str, str]] = {
     "surface": ("trail", "Surface", "Shared share of paved, gravel, natural and rock surface.", "OpenStreetMap surface tags, else the kind of path or road."),
     "tarmac_approach": ("trail", "Tarmac approach", "Paved metres before the trail leaves the road; scored by the gap against random hike pairs, lowest from 2 km apart.", "OpenStreetMap surface tags, else the kind of path or road."),
     "round_trip": ("trail", "Round trip", "Ends within 50 m of the Trailhead, or not (always, with the way back).", "OpenStreetMap: the hike's line, from the ways of its hiking relation."),
-    "climb_grade": ("steepness", "Climb grade", "Gain over the length of the stretches that climb; scored by the smaller over the larger (floor 3 %), against random hike pairs.", "FABDEM elevation along the line."),
-    "steepest_km": ("steepness", "Steepest km", "Largest height change over 1 km; scored by the smaller over the larger (floor 50 m), against random hike pairs.", "FABDEM elevation along the line."),
+    "climb_grade": ("effort", "Climb grade", "Gain over the length of the stretches that climb; scored by the smaller over the larger (floor 3 %), against random hike pairs.", "FABDEM elevation along the line."),
+    "steepest_km": ("effort", "Steepest km", "Largest height change over 1 km; scored by the smaller over the larger (floor 50 m), against random hike pairs.", "FABDEM elevation along the line."),
 }
 
 # The Wish form's input for each Measure that takes a number (``WISHABLE`` but yes/no): unit,
@@ -248,7 +249,7 @@ def _percent(share: float) -> int:
 # scoring rule changes the words in one place.
 SCORE_HELP = {
     "overall": "Average of the measure scores below, under your weights. Each one is the share of random hike "
-    "pairs less alike than these two. A typical pair scores about 0.44; with the default weights, 0.75 beats "
+    "pairs less alike than these two. A typical pair scores about 0.41; with the default weights, 0.72 beats "
     "99 random pairs in 100.",
     "measure": "Share of random hike pairs less alike than these two on this measure: 0.9 means only 1 pair "
     "in 10 is as alike; 0 means nothing in common.",
@@ -260,7 +261,7 @@ SCORE_HELP = {
             "that are less alike than these two. So it says how close the two hikes are, and also how rare it "
             "is to be that close: a match counts for more when fewer random pairs manage it. Two hikes whose "
             "lengths are within 2 % score 0.99 on length. Two hikes that are both never near open water score "
-            "only 0.16 on waterside: they are identical there, but 84 % of random pairs are too, so it tells "
+            "only 0.16 on Lake or sea: they are identical there, but 84 % of random pairs are too, so it tells "
             "little. A score of 0.5 means half of random pairs are at least as alike: an ordinary match. 0.9 "
             "means only 1 pair in 10 is; 0.99 means 1 in 100. 0 means the hikes have nothing in common on that "
             "measure: one passes a hut and the other does not, or their highest points are 400 m or more apart. "
@@ -272,7 +273,7 @@ SCORE_HELP = {
             "title": "Rare shared values tell more",
             "text": "When two hikes have the same value, the score says how rare that value is: two hikes that "
             "both pass a mountain hut score 0.95, two that are both never near water 0.16. Values a measure "
-            "counts as the same are one value: Waterside shares under 0.15, Water sources 3 or more, values at "
+            "counts as the same are one value: Lake or sea shares under 0.15, Water sources 3 or more, values at "
             "or under a measure's floor (walks under 1 km on Length).",
         },
         {
@@ -291,16 +292,16 @@ SCORE_HELP = {
             "text": "A low number on one measure does not mean the hikes are unalike overall. It means that what "
             "they share on that measure is common, or that they are further apart on it than most pairs of "
             "hikes. For example, Kattegatstien and Kattegatkysten are both Danish coast walks, 56 % and 30 % "
-            "of the way beside water. On waterside they score 0.10. Most hikes never come near water, and two "
+            "of the way beside water. On Lake or sea they score 0.10. Most hikes never come near water, and two "
             "such hikes count as alike, so 90 % of random pairs are at least as alike there. Their overall "
-            "score is still 0.85, because every other measure matches.",
+            "score is still 0.74, better than 99 random pairs in 100, because every other measure matches.",
         },
         {
             "title": "The overall score",
             "text": "The overall score is the average of the measure scores, weighted as you set them: only "
             "their ratios matter, and a measure with no data on either hike, or not compared, drops out. A "
-            "typical random pair of hikes scores about 0.44. With the default weights, 0.75 beats 99 random "
-            "pairs in 100, and the best match for a hike usually scores about 0.85.",
+            "typical random pair of hikes scores about 0.41. With the default weights, 0.72 beats 99 random "
+            "pairs in 100, and the best match for a hike usually scores about 0.82.",
         },
         {
             "title": "Where the facts come from",
@@ -340,7 +341,16 @@ def name_dem(text: str, attribution: Mapping[str, str]) -> str:
     ).replace("FABDEM", "Copernicus GLO-30")
 
 
-MEASURE_GROUPS = ("effort", "altitude", "profile", "landscape", "weather", "water", "facilities", "trail", "steepness")
+MEASURE_GROUPS: dict[str, str] = {
+    "basic": "Main features",
+    "effort": "Effort and steepness",
+    "altitude": "Altitude",
+    "scenery": "Scenery",
+    "facilities": "Facilities",
+    "trail": "Trail",
+    "water": "Water",
+    "weather": "Weather",
+}
 POINT_COLUMNS = ("kind", "where", "lat", "lon", "along_m", "off_m", "name", "ele")
 
 

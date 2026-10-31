@@ -142,10 +142,19 @@ def test_a_wished_temperature_is_of_the_query_month(data) -> None:
     assert data.rank(wish, weights)[0]["id"] == BRIDGE_PATH
 
 
+# The weights the scores of the versions below were read under: ADR-0016's
+# defaults, before the basic set took their place (ADR-0031).
+VERSION_WEIGHTS = dict.fromkeys(
+    ("length", "elevation_gain", "highest", "lowest", "profile", "landcover",
+     "temperature", "precipitation", "solar_radiation", "waterside", "climb_grade"),
+    100,
+)  # fmt: skip
+
+
 def test_hikes_starting_near_each_other_share_a_row_of_versions(data) -> None:
     apart = {r["id"] if r["id"] is not None else r["route"]["text"]: r for r in _rows_apart(data)}
 
-    (row,) = data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True)
+    (row,) = data.rank(MEADOW_PATH, VERSION_WEIGHTS, loops=True)
 
     # The best hike leads; the Middle Path and the Lake Loop, though better than
     # the Connector, lie mostly on it, so the Connector and the loop on the other
@@ -164,7 +173,7 @@ def _rows_apart(data) -> list[dict]:
 
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(serving, "GROUP_M", 0.0)
-        return data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True)
+        return data.rank(MEADOW_PATH, VERSION_WEIGHTS, loops=True)
 
 
 @pytest.mark.parametrize(

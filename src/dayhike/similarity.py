@@ -207,12 +207,10 @@ MEASURES = (
     Measure("steepest_km", "ratio", ("steepest_km_m",), 50),
 )
 MEASURE_NAMES = tuple(measure.name for measure in MEASURES)
-# On by default: the Measures that told good matches from poor ones for blind
-# judges (ADR-0016); the others are off until the Hiker weights them.
-CORE_MEASURES = (
-    "length", "elevation_gain", "highest", "lowest", "profile", "landcover",
-    "temperature", "precipitation", "solar_radiation", "waterside", "climb_grade",
-)  # fmt: skip
+# On by default: the page's basic set less Summit, the Measures a Hiker sees
+# without opening Advanced search (ADR-0031); the others are off until the
+# Hiker weights them.
+CORE_MEASURES = ("length", "elevation_gain", "highest", "landcover", "temperature", "waterside")
 DEFAULT_WEIGHTS = {name: 100.0 if name in CORE_MEASURES else 0.0 for name in MEASURE_NAMES}
 # The Measures a Wish can give a value: one fact, a number or yes/no. A mix or
 # a ProfileShape is no single value (GLOSSARY.md Wish).
@@ -427,7 +425,7 @@ def rank_dayhikes(
     candidate's similarity to one Seed is the weighted mean of its calibrated
     Measure scores over the Measures both DayHikes have; with several Seeds the
     best Seed counts. Ties break on the same weighted mean of raw scores, then
-    on DayHike id. ``score`` is that similarity: about 0.44 for a typical
+    on DayHike id. ``score`` is that similarity: about 0.41 for a typical
     random pair under the default weights, 1.0 when no random pair is as alike
     on any weighted Measure. Of a group of
     Twins only the best is kept, and none of a Seed's Twins. Seeds are

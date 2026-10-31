@@ -420,7 +420,7 @@ def create_app(
 
     @app.api_route("/api/measures", methods=["GET", "HEAD"])
     def measure_list() -> dict:
-        return {"groups": list(MEASURE_GROUPS), "measures": measures, "score_help": score_help}
+        return {"groups": [{"name": name, "label": label} for name, label in MEASURE_GROUPS.items()], "measures": measures, "score_help": score_help}
 
     @app.api_route("/api/search", methods=["GET", "HEAD"])
     def search(q: str = Query(max_length=100), limit: int = Query(20, ge=1, le=50)) -> dict:

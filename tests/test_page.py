@@ -123,20 +123,128 @@ def open_page(browser, server: str, api: Api, *, width: int = 1280, hash: str = 
     return page
 
 
+SHOWN = "rows => rows.map(r => r.dataset.measure)"
+
+
+def open_advanced(page) -> None:
+    """Opens Advanced search, or folds it away again when open."""
+    page.get_by_text("Advanced search", exact=True).click()
+BASIC = ["length", "elevation_gain", "highest", "landcover", "peak_summited", "temperature", "waterside"]
+
+
+def test_a_hiker_sees_a_few_plain_measures_and_the_rest_wait_behind_advanced_search(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+
+    assert page.locator(".weight:visible").evaluate_all(SHOWN) == BASIC
+    assert page.get_by_label("Climbing weight, 0 to 100").input_value() == "100"
+    assert page.get_by_label("Summit weight, 0 to 100").input_value() == "0"
+    assert not page.get_by_label("Lowest point weight, 0 to 100").is_visible()
+
+    open_advanced(page)
+
+    assert page.get_by_label("Lowest point weight, 0 to 100").is_visible()
+    assert page.locator("#advanced legend").all_text_contents() == [
+        "Effort and steepness", "Altitude", "Scenery", "Facilities", "Trail", "Water", "Weather",
+    ]  # fmt: skip
+    assert len(page.locator(".weight:visible").evaluate_all(SHOWN)) == 27
+
+
+GROUP_IDS = {"basic", "effort", "altitude", "scenery", "facilities", "trail", "water", "weather"}
+
+
+def test_the_facts_of_a_hike_are_headed_by_plain_group_names_never_raw_ids(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.click()
+
+    page.locator('#selected table.facts th[scope="rowgroup"]').first.wait_for()
+    headings = page.locator('#selected table.facts th[scope="rowgroup"]').all_text_contents()
+    assert headings == [
+        "Main features", "Effort and steepness", "Altitude", "Scenery", "Facilities", "Trail", "Water", "Weather",
+    ]  # fmt: skip
+    shown = page.locator('#selected table.facts th[scope="rowgroup"], #weights-panel legend').all_text_contents()
+    assert not GROUP_IDS & {text.strip() for text in shown}
+
+
+def test_looking_into_advanced_search_leaves_results_current_until_an_advanced_weight_counts(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+    results = page.locator("#results")
+
+    open_advanced(page)
+    open_advanced(page)
+    page.evaluate("() => new Promise((done) => setTimeout(done, 50))")  # the toggle events have run
+    assert "stale" not in (results.get_attribute("class") or "")
+
+    open_advanced(page)
+    page.get_by_label("Lowest point weight, 0 to 100").fill("50")
+    page.get_by_role("button", name="Find similar").click()
+    page.wait_for_function("() => !document.querySelector('#results').classList.contains('stale')")
+    open_advanced(page)
+    page.wait_for_function("() => document.querySelector('#results').classList.contains('stale')")
+
+
+def test_measures_behind_a_closed_advanced_search_do_not_count(browser, server) -> None:
+    api = Api({})
+    page = open_page(browser, server, api, hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    open_advanced(page)
+    page.get_by_label("Lowest point weight, 0 to 100").fill("50")
+    open_advanced(page)
+
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+
+    counted = {name for name, weight in api.ranked[-1]["weights"].items() if weight > 0}
+    assert counted == {"length", "elevation_gain", "highest", "landcover", "temperature", "waterside"}
+
+    open_advanced(page)
+    page.get_by_role("button", name="Find similar").click()
+    page.wait_for_function("() => !document.querySelector('#results').classList.contains('stale')")
+
+    assert api.ranked[-1]["weights"]["lowest"] == 50
+
+
+def test_a_wish_shows_the_basic_measures_and_asks_advanced_ones_only_while_open(browser, server) -> None:
+    api = Api(WISHABLE)
+    page = open_page(browser, server, api)
+    page.get_by_role("button", name="No particular hike in mind?").click()
+
+    assert page.locator(".weight:visible").evaluate_all(SHOWN) == ["elevation_gain", "highest", "waterside"]
+    open_advanced(page)
+    page.get_by_label("Hut along you want").uncheck()
+    page.get_by_label("Climbing you want, in m").fill("900")
+    open_advanced(page)
+
+    page.wait_for_url("**/#wish=elevation_gain:900:100")
+    with page.expect_response(f"{server}/api/rank"):
+        page.get_by_role("button", name="Find hikes").click()
+    assert api.ranked[-1]["wish"] == {"elevation_gain": 900}
+
+    shared = open_page(browser, server, Api(WISHABLE), hash="#wish=hut_along:0:100")
+
+    assert shared.get_by_label("Hut along you want").is_visible()
+    assert not shared.get_by_label("Hut along you want").is_checked()
+
+
 def test_a_hiker_with_no_hike_in_mind_gets_a_wish_form_of_the_wishable_measures(browser, server) -> None:
     page = open_page(browser, server, Api(WISHABLE))
 
     page.get_by_role("button", name="No particular hike in mind?").click()
+    open_advanced(page)
 
     rows = page.locator(".weight:visible")
     assert sorted(rows.evaluate_all("rows => rows.map(r => r.dataset.measure)")) == sorted(WISHABLE)
-    gain = page.get_by_label("Elevation gain you want, in m")
+    gain = page.get_by_label("Climbing you want, in m")
     assert gain.get_attribute("type") == "number"
     assert (gain.get_attribute("min"), gain.get_attribute("max"), gain.get_attribute("step")) == ("0", "3000", "50")
     assert gain.input_value() == "600"
     hut = page.get_by_label("Hut along you want")
     assert hut.get_attribute("type") == "checkbox" and hut.is_checked()
-    assert page.get_by_label("Elevation gain weight, 0 to 100").is_visible()
+    assert page.get_by_label("Climbing weight, 0 to 100").is_visible()
     assert not page.locator("#search").is_visible()
 
     page.get_by_role("button", name="Back to a hike you liked").click()
@@ -150,12 +258,13 @@ def test_finding_hikes_for_a_wish_asks_the_ranking_for_it_and_lists_the_results(
     api = Api(WISHABLE)
     page = open_page(browser, server, api)
     page.get_by_role("button", name="No particular hike in mind?").click()
-    page.get_by_label("Elevation gain you want, in m").fill("900")
-    page.get_by_label("Elevation gain weight, 0 to 100").fill("80")
+    page.get_by_label("Climbing you want, in m").fill("900")
+    page.get_by_label("Climbing weight, 0 to 100").fill("80")
+    open_advanced(page)
     page.get_by_label("Hut along you want").uncheck()
     page.get_by_label("Hut along weight, 0 to 100").fill("40")
     page.get_by_label("Leave Highest point out").check()
-    page.get_by_label("Waterside weight, 0 to 100").fill("0")
+    page.get_by_label("Lake or sea weight, 0 to 100").fill("0")
     page.get_by_label("Only hikes within a drive").check()
     page.get_by_label("From").fill("45.1, 15.1")
 
@@ -175,10 +284,11 @@ def test_finding_hikes_for_a_wish_asks_the_ranking_for_it_and_lists_the_results(
 def test_a_hike_found_for_a_wish_is_shown_against_what_the_hiker_wants(browser, server) -> None:
     page = open_page(browser, server, Api(WISHABLE))
     page.get_by_role("button", name="No particular hike in mind?").click()
-    page.get_by_label("Elevation gain you want, in m").fill("900")
-    page.get_by_label("Elevation gain weight, 0 to 100").fill("80")
+    page.get_by_label("Climbing you want, in m").fill("900")
+    page.get_by_label("Climbing weight, 0 to 100").fill("80")
+    open_advanced(page)
     page.get_by_label("Hut along weight, 0 to 100").fill("40")
-    page.get_by_label("Waterside weight, 0 to 100").fill("0")
+    page.get_by_label("Lake or sea weight, 0 to 100").fill("0")
     page.get_by_role("button", name="Find hikes").click()
 
     page.locator("#results-table tbody tr").first.click()
@@ -186,17 +296,18 @@ def test_a_hike_found_for_a_wish_is_shown_against_what_the_hiker_wants(browser, 
     facts = page.locator("#selected table.facts")
     facts.wait_for()
     assert facts.locator("thead th").all_inner_texts() == ["Measure", "This hike", "You want", "Score ?"]
-    gain = facts.locator("tr", has=page.locator("td", has_text="Elevation gain"))
+    gain = facts.locator("tr", has=page.locator("td", has_text="Climbing"))
     assert gain.locator("td").nth(2).inner_text() == "900 m"
-    waterside = facts.locator("tr", has=page.locator("td", has_text="Waterside"))
+    waterside = facts.locator("tr", has=page.locator("td", has_text="Lake or sea"))
     assert waterside.locator("td").nth(2).inner_text() == "left out"
 
 
 def test_a_wish_survives_a_reload_and_opens_from_its_link(browser, server) -> None:
     page = open_page(browser, server, Api(WISHABLE))
     page.get_by_role("button", name="No particular hike in mind?").click()
-    page.get_by_label("Elevation gain you want, in m").fill("900")
-    page.get_by_label("Elevation gain weight, 0 to 100").fill("80")
+    page.get_by_label("Climbing you want, in m").fill("900")
+    page.get_by_label("Climbing weight, 0 to 100").fill("80")
+    open_advanced(page)
     page.get_by_label("Hut along you want").uncheck()
     page.get_by_label("Hut along weight, 0 to 100").fill("40")
     page.get_by_label("Highest point weight, 0 to 100").fill("0")
@@ -205,8 +316,8 @@ def test_a_wish_survives_a_reload_and_opens_from_its_link(browser, server) -> No
     page.reload()
     page.wait_for_selector(".weight", state="attached")
 
-    assert page.get_by_label("Elevation gain you want, in m").input_value() == "900"
-    assert page.get_by_label("Elevation gain weight, 0 to 100").input_value() == "80"
+    assert page.get_by_label("Climbing you want, in m").input_value() == "900"
+    assert page.get_by_label("Climbing weight, 0 to 100").input_value() == "80"
     assert not page.get_by_label("Hut along you want").is_checked()
     assert page.get_by_label("Hut along weight, 0 to 100").input_value() == "40"
     assert page.get_by_label("Highest point weight, 0 to 100").input_value() == "0"
@@ -217,7 +328,7 @@ def test_a_wish_survives_a_reload_and_opens_from_its_link(browser, server) -> No
 
     assert shared.get_by_label("Highest point you want, in m").input_value() == "2200"
     assert shared.get_by_label("Highest point weight, 0 to 100").input_value() == "100"
-    assert shared.get_by_label("Elevation gain weight, 0 to 100").input_value() == "0"
+    assert shared.get_by_label("Climbing weight, 0 to 100").input_value() == "0"
     assert shared.get_by_role("button", name="Find hikes").is_enabled()
 
 
@@ -233,13 +344,14 @@ def test_the_wish_form_fits_a_phone(browser, server) -> None:
 
     page.get_by_role("button", name="No particular hike in mind?").click()
 
-    assert page.get_by_label("Elevation gain you want, in m").is_visible()
+    assert page.get_by_label("Climbing you want, in m").is_visible()
     assert page.evaluate("document.documentElement.scrollWidth") <= 375
 
 
 def test_a_round_trip_wish_is_off_while_every_hike_returns_to_its_start(browser, server) -> None:
     page = open_page(browser, server, Api(WISHABLE))
     page.get_by_role("button", name="No particular hike in mind?").click()
+    open_advanced(page)
     round_trip = page.get_by_label("Round trip you want")
 
     assert not round_trip.is_visible()
@@ -263,19 +375,20 @@ def test_changing_the_month_keeps_the_wish_form_in_front_of_a_liked_hike(browser
 
 def test_a_wish_asks_only_what_the_hiker_sets_and_leaves_the_liked_hike_weights_alone(browser, server) -> None:
     page = open_page(browser, server, Api(WISHABLE))
-    page.get_by_label("Elevation gain weight, 0 to 100").fill("70")
+    page.get_by_label("Climbing weight, 0 to 100").fill("70")
     page.get_by_role("button", name="No particular hike in mind?").click()
 
     weights = page.locator(".weight:visible input[aria-label$='weight, 0 to 100']")
     assert set(weights.evaluate_all("inputs => inputs.map(i => i.value)")) == {"0"}
     page.get_by_label("Highest point you want, in m").fill("2000")
+    open_advanced(page)
     page.get_by_label("Hut along you want").uncheck()
     assert page.get_by_label("Highest point weight, 0 to 100").input_value() == "100"
     assert page.get_by_label("Hut along weight, 0 to 100").input_value() == "100"
 
     page.get_by_role("button", name="Back to a hike you liked").click()
 
-    assert page.get_by_label("Elevation gain weight, 0 to 100").input_value() == "70"
+    assert page.get_by_label("Climbing weight, 0 to 100").input_value() == "70"
     assert page.get_by_label("Length weight, 0 to 100").input_value() == "100"
 
 
@@ -325,6 +438,7 @@ def test_a_feature_neither_hike_has_mapped_shows_a_dash_and_says_it_is_not_compa
     # The Valley Path (1002) and the hikes without a Hut: neither has one mapped (ADR-0026).
     page = open_page(browser, server, Api({}), hash="#hike=1002")
     page.get_by_text("Chosen: Valley Path").wait_for()
+    open_advanced(page)
     page.get_by_label("Hut along weight, 0 to 100").fill("100")
     page.get_by_role("button", name="Find similar").click()
 

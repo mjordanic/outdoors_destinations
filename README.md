@@ -428,11 +428,10 @@ Prints DayHike id, name, and score (tab-separated), best first:
 1002	Valley Path	<score>
 ```
 
-With no `--weight` the eleven core Measures weigh 100 and the others are off:
-`length`, `elevation_gain`, `highest`, `lowest`, `profile`, `landcover`,
-`temperature`, `precipitation`, `solar_radiation`, `waterside`,
-`climb_grade` (ADR-0016). Each `--weight MEASURE=WEIGHT` names one Measure;
-the ones not named are excluded. `--limit N` prints only the
+With no `--weight` the six core Measures weigh 100 and the others are off:
+`length`, `elevation_gain`, `highest`, `landcover`, `temperature` and
+`waterside`, the web page's basic set less Summit (ADR-0031). Each
+`--weight MEASURE=WEIGHT` names one Measure; the ones not named are excluded. `--limit N` prints only the
 best N (every DayHike is still scored). `--one-way` compares every hike one
 way instead of with its way back.
 
@@ -487,7 +486,7 @@ restaurant or cafe along, Shelter, restaurant or cafe at the Trailhead,
 parking) two DayHikes that both lack the feature are not compared, and the
 Measure drops out of that pair's mean. The printed score is the similarity
 itself, the weighted mean of the calibrated Measure scores: a typical random
-pair scores about 0.44 under the default weights, 0.75 beats 99 random pairs in
+pair scores about 0.41 under the default weights, 0.72 beats 99 random pairs in
 100, and 1.0 needs a pair no random pair is as alike as on every weighted
 Measure, so the best matches stay apart instead of all reading 1.000. Ties in
 order break on the uncalibrated weighted mean, then on DayHike id.
@@ -514,7 +513,7 @@ Reading a score, as the web demo explains it beside every score (ADR-0025):
   share there is common, or they are further apart on it than most pairs. The
   Kattegat coast walks Kattegatstien and Kattegatkysten (56% and 30% of the way
   beside water) score 0.10 on WaterSide, as most random pairs are two dry hikes
-  that count as alike; their overall score is still 0.85.
+  that count as alike; their overall score is still 0.74.
 - **Where the facts come from.** OpenStreetMap (the line, SAC grade, surface,
   peaks, viewpoints, huts, shelters, water sources, restaurants, parking),
   FABDEM (heights, climb, profile, steepness, slope aspect), ESA WorldCover
@@ -1614,7 +1613,10 @@ the similarity looks at (route and amenity points on an OpenStreetMap map,
 elevation profile in metres above sea level, land cover, trail surface,
 climate by month, and the fact behind every Measure), set a 0–100 weight or
 an "off" tick per Measure, and list the 10 most similar hikes with their score,
-length, climb and descent, and per-Measure scores. With a TrailGraph a button
+length, climb and descent, and per-Measure scores. The weights list shows a
+basic set in plain words (Length, Climbing, Highest point, Landscape, Summit,
+Typical temperature, Lake or sea); the other Measures wait, in groups, behind
+"Advanced search" and count only while it is open (ADR-0031). With a TrailGraph a button
 under the list, "Suggest loops near these hikes (takes a few seconds)", ranks
 the same query again with SuggestedLoops mixed in (ADR-0020, only on request
 since ADR-0028): loops drawn on the marked network near the
@@ -1645,7 +1647,7 @@ reads and how the scores are made (ADR-0025).
 
 A Hiker with no particular hike in mind presses "No particular hike in mind?
 Describe the one you want" under the search. The weights list then shows only
-the Measures `/api/measures` marks wishable, each with a value to ask for in its
+the Measures `/api/measures` marks wishable (Advanced ones again only while it is open), each with a value to ask for in its
 unit and range (a yes/no Measure as a tick box) beside its weight. The form
 starts asking nothing: every weight is 0, and setting a value weighs that
 Measure 100; a Measure weighted 0 or ticked off asks nothing. The liked-hike
