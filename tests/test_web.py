@@ -55,6 +55,35 @@ def test_info_and_measures_describe_every_measure_in_groups(client: TestClient) 
     assert {m["name"] for m in body["measures"] if m["default_weight"] > 0} == set(CORE_MEASURES)
 
 
+def test_measures_start_with_a_plain_basic_set_and_group_the_rest_for_advanced_search(client: TestClient) -> None:
+    body = client.get("/api/measures").json()
+    groups = {m["name"]: m["group"] for m in body["measures"]}
+
+    assert body["groups"] == ["basic", "effort", "altitude", "scenery", "facilities", "trail", "water", "weather"]
+    assert {m["name"]: m["label"] for m in body["measures"] if m["group"] == "basic"} == {
+        "length": "Length",
+        "elevation_gain": "Climbing",
+        "highest": "Highest point",
+        "landcover": "Landscape",
+        "peak_summited": "Summit",
+        "temperature": "Typical temperature",
+        "waterside": "Lake or sea",
+    }
+    assert {group: sorted(name for name in groups if groups[name] == group) for group in body["groups"][1:]} == {
+        "effort": ["climb_grade", "difficulty", "profile", "steepest_km"],
+        "altitude": ["lowest"],
+        "scenery": ["peaks_around", "viewpoint_along"],
+        "facilities": ["hut_along", "parking_trailhead", "restaurant_cafe_along", "restaurant_cafe_trailhead", "shelter_along"],
+        "trail": ["round_trip", "surface", "tarmac_approach"],
+        "water": ["dry_stretch", "water_count"],
+        "weather": ["precipitation", "solar_radiation", "southness"],
+    }
+    # Only the basic set counts by default, Summit left at 0 (ADR-0031).
+    assert {m["name"]: m["default_weight"] for m in body["measures"] if m["default_weight"] > 0} == dict.fromkeys(
+        ("length", "elevation_gain", "highest", "landcover", "temperature", "waterside"), 100.0
+    )
+
+
 def test_measures_say_how_a_wish_value_is_typed_in(client: TestClient) -> None:
     measures = {m["name"]: m for m in client.get("/api/measures").json()["measures"]}
 
@@ -151,7 +180,7 @@ def test_the_score_explanation_says_what_a_score_means_and_how_it_is_made(client
     # The rarity rank (ADR-0026): the share of random pairs less alike, a rare match counting for more.
     assert "Share of random hike pairs less alike" in help_["measure"]
     assert "0.9 means only 1 pair in 10" in help_["measure"]
-    assert "about 0.44" in help_["overall"]
+    assert "about 0.41" in help_["overall"] and "0.72 beats 99" in help_["overall"]  # under the basic set (ADR-0031)
     assert "0.16 on waterside" in text and "84 %" in text  # two dry hikes: identical, but it tells little
     assert "not compared" in text and "0.95" in text  # a shared absence; both passing a hut
     assert "What does 0.1 mean" in " ".join(section["title"] for section in help_["sections"])

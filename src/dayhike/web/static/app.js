@@ -657,13 +657,14 @@ function factsTable(hike, compare, result, month, weights, returnToStart) {
 
 // ---------- weights ----------
 
+// The basic group shows; the others fold away behind Advanced search, and count only while it is open (ADR-0031).
 function buildWeights() {
-  const host = $("#weights");
-  host.innerHTML = "";
+  $("#weights").innerHTML = $("#advanced-weights").innerHTML = "";
   for (const group of state.groups) {
+    const basic = group === "basic";
     const set = document.createElement("fieldset");
     set.className = "weights-group";
-    set.innerHTML = `<legend>${escapeHtml(group)}</legend>`;
+    set.innerHTML = basic ? "" : `<legend>${escapeHtml(group)}</legend>`;
     const measures = state.measures.filter((m) => m.group === group);
     set.classList.toggle("unwishable", !measures.some(wishable));
     for (const measure of measures) {
@@ -691,7 +692,7 @@ function buildWeights() {
       });
       set.appendChild(row);
     }
-    host.appendChild(set);
+    $(basic ? "#weights" : "#advanced-weights").appendChild(set);
   }
   syncRoundTrip();
 }
@@ -714,6 +715,10 @@ function readWeights() {
       excluded.push(row.dataset.measure);
       continue;
     }
+    if (folded(row)) {
+      weights[row.dataset.measure] = 0;
+      continue;
+    }
     const value = Number(number.value);
     if (number.value === "" || !Number.isFinite(value) || value < 0 || value > 100) {
       number.setCustomValidity("0 to 100");
@@ -724,6 +729,11 @@ function readWeights() {
   }
   if (!Object.values(weights).some((w) => w > 0)) throw new Error("Give at least one measure a weight above 0.");
   return { weights, excluded };
+}
+
+// A weight row behind a closed Advanced search: it counts nothing.
+function folded(row) {
+  return row.closest("#advanced") != null && !$("#advanced").open;
 }
 
 // ---------- the hike you want (no Seed) ----------
@@ -774,7 +784,7 @@ function wishHash() {
   const parts = [];
   for (const row of document.querySelectorAll(".weight:not(.unwishable)")) {
     const [value, number, off] = row.querySelectorAll("input");
-    if (off.checked || !(Number(number.value) > 0)) continue;
+    if (off.checked || folded(row) || !(Number(number.value) > 0)) continue;
     parts.push(`${row.dataset.measure}:${value.type === "checkbox" ? Number(value.checked) : value.value}:${number.value}`);
   }
   return `#wish=${parts.join(",")}${modeHash()}`;
@@ -792,6 +802,7 @@ function applyWish(text) {
     if (wanted == null) continue;
     if (value.type === "checkbox") value.checked = wanted === "1";
     else value.value = wanted;
+    if (row.closest("#advanced")) $("#advanced").open = true;
   }
   syncRoundTrip();
 }
@@ -1874,10 +1885,13 @@ async function start() {
     markStale();
     wishToHash();
   });
-  $("#weights").addEventListener("input", markStale);
-  $("#weights").addEventListener("change", markStale);
-  // The address keeps the wish as it is typed, so a reload or a shared link opens it again.
-  $("#weights").addEventListener("input", wishToHash);
+  for (const host of [$("#weights"), $("#advanced-weights")]) {
+    host.addEventListener("input", markStale);
+    host.addEventListener("change", markStale);
+    // The address keeps the wish as it is typed, so a reload or a shared link opens it again.
+    host.addEventListener("input", wishToHash);
+  }
+  $("#advanced").addEventListener("toggle", () => { markStale(); wishToHash(); });
   $("#drive-on").addEventListener("change", (event) => { $("#drive").hidden = !event.target.checked; markStale(); });
   $("#origin").addEventListener("input", () => { state.origin = null; $("#origin-found").textContent = ""; markStale(); });
   $("#hours").addEventListener("input", markStale);

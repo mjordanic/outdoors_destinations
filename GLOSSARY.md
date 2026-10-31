@@ -185,7 +185,7 @@ One fact compared between two DayHikes, giving 1 (alike) to 0 (unlike), or nothi
 _Avoid_: Facet, feature, dimension, criterion
 
 **MeasureWeights**:
-The Hiker's weight for each Measure in one query, from 0 to 100. A Measure at 0 or left out is excluded; without weights the core Measures (ADR-0016) weigh 100 and the others 0. The weights of the Measures scored for a pair renormalize, so only their ratios matter.
+The Hiker's weight for each Measure in one query, from 0 to 100. A Measure at 0 or left out is excluded; without weights the core Measures (ADR-0031) weigh 100 and the others 0. The weights of the Measures scored for a pair renormalize, so only their ratios matter.
 _Avoid_: FacetWeights, preferences, priorities, importance
 
 **Calibration**:
