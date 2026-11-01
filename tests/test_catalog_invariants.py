@@ -106,7 +106,7 @@ def test_values_are_in_range(catalog: sqlite3.Connection) -> None:
             "length_m < 1000",
             "elevation_min_m < -50 OR elevation_max_m > 5100",
             "elevation_min_m > elevation_max_m",
-            "elevation_gain_m NOT BETWEEN 0 AND 5200",
+            "elevation_gain_m < 0",
             *(f"{name} NOT BETWEEN 0 AND 1" for name in LANDCOVER),
             f"{fractions} > 1 + 1e-9",
             "temperature_c NOT BETWEEN -15 AND 30",

@@ -40,7 +40,7 @@ from dayhike.osm import (
     amenity_kind,
 )
 
-INGEST_WORK_SCHEMA = 6
+INGEST_WORK_SCHEMA = 7
 INGEST_CHECKPOINT_OBJECTS = 50_000
 INGEST_PROGRESS_EVERY_OBJECTS = 100_000
 HIKING_ROUTES = ("hiking", "foot")  # route=foot is read as hiking (ADR-0034)
