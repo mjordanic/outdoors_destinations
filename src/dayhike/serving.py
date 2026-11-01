@@ -1242,6 +1242,7 @@ class ServingData:
         near: tuple[Origin, float] | None = None,
         group_m: float | None = None,
         after: Sequence[tuple[float, float]] = (),
+        origin: Origin | None = None,
     ) -> list[dict]:
         """The ``limit`` hikes most similar to one Seed, with every Measure's score.
 
@@ -1268,7 +1269,8 @@ class ServingData:
         ``VERSION_DIFFERS`` of its length off every version kept), else left
         out. Hikes are taken down the whole Ranking until one starts in a
         ``limit`` + 1st area, so ``limit`` rows are listed where the hikes
-        allow; loops are searched near the best ``LOOP_SEEDS`` DayHikes only.
+        allow; loops are searched near the Hiker's ``origin``, when given, first,
+        and near the best ``LOOP_SEEDS`` DayHikes (ADR-0036).
         ``after`` are the starts (lat, lon) of the rows already listed: every hike
         starting within ``group_m`` (above 0) of one is left out, so the rows
         listed continue the areas of those exactly, none twice and none skipped,
@@ -1294,7 +1296,9 @@ class ServingData:
                 if seed_walk is None
                 else np.column_stack([seed_walk.lat, seed_walk.lon])
             )
-            found_loops = self._loops(store, seed_row, seed_line, weights, month, rows[:LOOP_SEEDS], return_to_start, reach)
+            found_loops = self._loops(
+                store, seed_row, seed_line, weights, month, rows[:LOOP_SEEDS], return_to_start, reach, origin
+            )
             starts = np.array([loop["trailhead"] for loop, _ in found_loops]).reshape(-1, 2)
             kept = self._far_and_near(starts, near, group_m, after)
             if kept is not None:
@@ -1368,8 +1372,9 @@ class ServingData:
         rows: np.ndarray,
         return_to_start: bool,
         reach: Reach | None,
+        origin: Origin | None = None,
     ) -> list[tuple[dict, np.ndarray]]:
-        """SuggestedLoops from Junctions near the Trailheads of ``rows``, as
+        """SuggestedLoops from Junctions near ``origin`` and the Trailheads of ``rows``, as
         ``rank`` lists them, each with its walk every ``TWIN_STEP_M``: the
         ``LOOP_MEASURED`` best guesses of ``find_loops`` measured (with their
         way back when the Seed is) and scored like a DayHike. A loop is left out
@@ -1384,7 +1389,15 @@ class ServingData:
             fact["length_m"], fact["highest_m"], fact["lowest_m"], fact["elevation_gain_m"], seed.profile
         )
         trailheads = [(float(lat), float(lon)) for lat, lon in self.trailheads[rows]]
-        found = find_loops(self.trailgraph, target, trailheads, limit=LOOP_MEASURED, deadline=deadline, reach=reach)
+        found = find_loops(
+            self.trailgraph,
+            target,
+            trailheads,
+            limit=LOOP_MEASURED,
+            deadline=deadline,
+            reach=reach,
+            origin=None if origin is None else (origin.latitude, origin.longitude),
+        )
         measured = []
         for loop in found:
             if time.monotonic() >= deadline:

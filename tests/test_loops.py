@@ -10,6 +10,7 @@ within 10 km of the others, so a Ranking lists one row; the tests that look
 at the loops themselves list every hike in its own row.
 """
 
+import numpy as np
 import pytest
 from test_trailgraph import BRIDGE_PATH, FIXTURE, LAKE_LOOP, MEADOW_PATH, _write_rasters
 
@@ -218,6 +219,27 @@ def test_a_loop_starts_within_the_distance_limit(data) -> None:
     assert _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, near=(far, 5_000.0), loops=True)) == []
 
 
+def _fixture_point(east_m: float, north_m: float) -> tuple[float, float]:
+    """(lat, lon) of a point given in the fixture's metres from A (0, 0)."""
+    return 46.05 + north_m * 0.0044966080 / 500, 14.05 + east_m * 0.0064789788 / 500
+
+
+@pytest.mark.usefixtures("rows_apart")
+def test_loops_also_start_near_the_origin_when_no_good_dayhike_does(data) -> None:
+    from dayhike.catalog import Origin, straight_line_distances_m
+
+    # No DayHike allowed, as when none is in reach: no Trailhead to start a loop from.
+    none, wish = np.array([], dtype=np.int64), {"length": 3_000}
+    origin = Origin(*_fixture_point(1_500, 4_000))  # 3 km north of the Lake Loop's corner C
+
+    assert data.rank(wish, {"length": 100}, allowed_rows=none, loops=True) == []
+    loops = _loops(data.rank(wish, {"length": 100}, allowed_rows=none, loops=True, origin=origin))
+    assert loops and all(r["route"] for r in loops)
+    assert (straight_line_distances_m(origin, [r["trailhead"] for r in loops]) <= 5_000).all()
+    far = Origin(*_fixture_point(1_500, 10_000))  # 9 km from every Junction
+    assert data.rank(wish, {"length": 100}, allowed_rows=none, loops=True, origin=far) == []
+
+
 def test_the_next_rows_leave_out_loops_of_an_area_already_listed(data) -> None:
     (row,) = data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True)
 
@@ -266,6 +288,31 @@ def test_api_ranks_loops_with_their_link_versions_and_drive_hours(data) -> None:
     assert (hike["line"], hike["name"]) == (plain["line"], plain["name"])
     for version in plain["versions"][:1]:  # drawn on the map as the hike's own page draws it
         assert client.get(f"/api/hikes/{version['id']}").json()["line"] == version["line"]
+
+
+def test_api_ranks_loops_near_the_origin_of_a_drive_limit(data) -> None:
+    from fastapi.testclient import TestClient
+
+    from dayhike.catalog import Origin, straight_line_distances_m
+    from dayhike.web import create_app
+
+    lat, lon = _fixture_point(600, 100)  # beside the Lake Loop's Junction at (500, 0); every Trailhead 600 m+ off
+
+    class Near:
+        """An hour's drive to places within 300 m, three hours (out of reach) farther."""
+
+        def sources_to_targets(self, origin, trailheads):
+            metres = straight_line_distances_m(Origin(lat, lon), [(t.latitude, t.longitude) for t in trailheads])
+            return [3600.0 if m <= 300 else 3 * 3600.0 for m in metres]
+
+    client = TestClient(create_app(data, lambda max_hours: Near()))
+    body = {"wish": {"length": 3_000}, "loops": True, "origin": {"lat": lat, "lon": lon}, "max_hours": 2}
+    answer = client.post("/api/rank", json=body).json()
+
+    # No DayHike starts within the drive; loops start near the Origin, an hour away.
+    listed = [r for row in answer["results"] for r in (row, *row["versions"])]
+    assert answer["reachable"] == 0 and listed
+    assert {r["id"] for r in listed} == {None} and {r["drive_hours"] for r in listed} == {1.0}
 
 
 def test_api_ranks_without_loops_unless_asked(data) -> None:
