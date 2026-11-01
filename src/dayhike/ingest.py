@@ -43,6 +43,7 @@ from dayhike.osm import (
     _parse_ele_m,
     amenity_kind,
 )
+from dayhike.stages import day_stages
 
 INGEST_WORK_SCHEMA = 8
 INGEST_CHECKPOINT_OBJECTS = 50_000
@@ -58,7 +59,7 @@ CATALOG_TAG_FILTERS = (
     "n/place=city,town,village,hamlet",
 )
 # Sources of DayHikes that are not one relation (ADR-0038), run after the relations are kept.
-BUILT_HIKE_SOURCES: tuple[BuiltHikeSource, ...] = ()
+BUILT_HIKE_SOURCES: tuple[BuiltHikeSource, ...] = (day_stages,)
 
 Progress = Callable[[str], None]
 
