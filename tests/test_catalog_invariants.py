@@ -58,7 +58,9 @@ def test_ingest_report_is_consistent_and_matches_the_snapshot(catalog: sqlite3.C
     report = json.loads(_one(catalog, "SELECT value FROM catalog_meta WHERE key = 'ingest_report'"))
 
     origins = ("named_osm_name", "named_osm_ref", "named_from_to", "named_place", "named_synthetic")
-    assert report["kept"] == sum(report.get(origin, 0) for origin in origins)
+    # Built hikes (NetworkHikes, DayStages) name themselves; the named_* counts are of relations.
+    relations = _one(catalog, "SELECT COUNT(*) FROM dayhikes WHERE kind = 'relation'")
+    assert sum(report.get(origin, 0) for origin in origins) == relations
     assert report["kept"] == _one(catalog, "SELECT COUNT(*) FROM dayhikes")
     if rc.same_snapshot():
         assert report == rc.RECORDED_INGEST_REPORT
