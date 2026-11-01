@@ -22,6 +22,21 @@ serves a trimmed export of them ([Web demo](#web-demo)).
 The map shows the coverage of the current Catalog: land with at least 10
 Trailheads and 0.2 per 1,000 km² is shaded (`dayhike coverage-map`, below).
 
+## Why DayHike
+
+- Start from a hike you liked, and it finds the ones most like it. No hike in
+  mind? Describe the one you want.
+- It weighs the weather too: the typical temperature in the month you pick,
+  and under Advanced search rain and sunshine, alongside length, climbing and
+  landscape.
+- A few plain measures to start with, and more, grouped by topic, under
+  Advanced search. You choose how much each one matters.
+- Free, with no ads, no account and no cookies. The code is open source
+  ([MIT](LICENSE)), and the open data it uses is credited
+  ([Attribution](#attribution), [DATA-LICENSES.md](DATA-LICENSES.md)).
+- It covers Europe where OpenStreetMap maps hiking routes: dense in the Alps
+  and central Europe, thin in much of the east and south-east.
+
 ## Install
 
 ```bash

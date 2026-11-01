@@ -587,6 +587,18 @@ def test_the_about_page_says_who_runs_the_site_and_where_its_code_is(client: Tes
     assert 'href="https://github.com/mjordanic/outdoors_destinations/blob/main/LICENSE">MIT licence</a>' in about
 
 
+def test_the_about_page_says_plainly_why_a_hiker_would_use_the_site(client: TestClient) -> None:
+    about = client.get("/about.html").text
+    why = about[about.index("<h3>Why use it</h3>") : about.index("<h3>Who runs it</h3>")]
+
+    for point in ("a hike you liked", "weather", "Advanced search", "how much each one matters", "no account", "MIT"):
+        assert point in why, point
+    assert 'href="credits.html"' in why
+    assert "Europe" in why and "thin" in why  # coverage, stated as it is
+    for hype in ("best", "only", "first", "unlike", "other "):
+        assert hype not in why.lower(), hype
+
+
 def test_the_terms_page_points_contact_to_the_repository_issues(client: TestClient) -> None:
     terms = client.get("/terms.html").text
 
