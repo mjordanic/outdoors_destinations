@@ -1,5 +1,5 @@
 ---
-status: accepted (the band amended by ADR-0033; route=foot added by ADR-0034)
+status: accepted (the band amended by ADR-0033; route=foot added by ADR-0034; graded paths join the TrailGraph since ADR-0037)
 ---
 
 # TrailGraph sidecar and ComposedHikes

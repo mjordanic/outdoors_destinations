@@ -33,7 +33,7 @@ The sidecar SQLite written at ingest next to a Catalog. It holds DayHikeGeometry
 _Avoid_: experimental database, work file, Catalog, lab
 
 **TrailGraph**:
-The sidecar SQLite written at ingest next to a Catalog (`{catalog}.trailgraph.sqlite`): every member way of every `route=hiking` or `route=foot` relation ingest read, including relations dropped as too short or as node-network legs, split into Segments that meet at Junctions (ADR-0018). Unmarked paths are not in it. A ComposedHike is drawn on it; Ranking of Catalog DayHikes does not read it.
+The sidecar SQLite written at ingest next to a Catalog (`{catalog}.trailgraph.sqlite`): every member way of every `route=hiking` or `route=foot` relation ingest read, including relations dropped as too short or as node-network legs, and every graded path (`highway=path` with a `sac_scale`) although no relation lists it, split into Segments that meet at Junctions (ADR-0018, ADR-0037). Other unmarked paths are not in it. A ComposedHike is drawn on it; Ranking of Catalog DayHikes does not read it.
 _Avoid_: routing graph (that is Valhalla's), network, member-way graph (the per-DayHike graph of ADR-0012)
 
 **Junction**:
@@ -41,7 +41,7 @@ A point of the TrailGraph where Segments meet: an OSM node shared by two or more
 _Avoid_: node (an OSM node is not always a Junction), intersection, vertex
 
 **Segment**:
-A stretch of the TrailGraph between two Junctions with no Junction inside: one or more OSM ways end to end, with their way ids, relation ids, `sac_scale`, surface, and full-resolution vertices. A short gap Segment bridges a joined dead-end tip. A Segment is walked either way.
+A stretch of the TrailGraph between two Junctions with no Junction inside: one or more OSM ways end to end, with their way ids, relation ids (none on a graded path no relation lists), `sac_scale`, surface, and full-resolution vertices. A short gap Segment bridges a joined dead-end tip. A Segment is walked either way.
 _Avoid_: edge, leg, stage (a stage is a relation), section
 
 **Link**:

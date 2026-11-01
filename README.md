@@ -360,8 +360,10 @@ Do not hand-edit FeatureVectors and expect Ranking to follow unless you rerun
 (`trailgraph_path_for`) from the ingest work file, so there is no extra OSM
 pass. It holds the marked hiking network: every member way of every
 `route=hiking` or `route=foot` relation ingest read, **including** the relations
-it dropped (too short, node-network legs). Unmarked paths are not
-in it. Ways split into Segments that meet at Junctions: a node two ways share,
+it dropped (too short, node-network legs), and every graded path
+(`highway=path` with a `sac_scale`) that no such relation lists, with no
+relation id ([ADR-0037](docs/adr/0037-graded-paths-join-the-trailgraph.md)).
+Other unmarked paths are not in it. Ways split into Segments that meet at Junctions: a node two ways share,
 a dead end, a node where the relations along the trail change (a stage
 boundary), or a crossing of two same-layer ways with no node. A dead-end tip
 within `--snap-tolerance` (20 m by default, at most 50 m) of a node more than
@@ -1269,7 +1271,9 @@ Geofabrik `europe-latest.osm.pbf`) is a valid input.
    filter. A file already named `*.catalog.osm.pbf` is read as-is. If `osmium`
    is missing, ingest reads the source file in several passes instead.
 2. **Work file.** Relations, member ways, needed nodes, and amenities go to
-   `data/catalog.sqlite.work` (same directory as the Catalog). Ingest reads only
+   `data/catalog.sqlite.work` (same directory as the Catalog). Graded paths
+   in no hiking relation and the nodes only they use go to tables of their
+   own, read only by the TrailGraph (ADR-0037). Ingest reads only
    the hiking extract from step 1, or the source file itself when there is no
    extract. Access points are parking only (ADR-0012 "Round 2"), so there is
    no scan of drivable roads and no second extract.
@@ -1298,6 +1302,7 @@ Equivalent osmium filter if you want to run it yourself:
 ```bash
 osmium tags-filter data/osm/croatia-latest.osm.pbf \
   r/route=hiking,foot \
+  w/sac_scale \
   nwr/tourism=alpine_hut,wilderness_hut,viewpoint \
   nwr/amenity=parking,restaurant,cafe,drinking_water,shelter,water_point \
   nwr/natural=peak,spring \
