@@ -9,6 +9,7 @@ import json
 import socket
 import threading
 import time
+import urllib.request
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -18,6 +19,7 @@ import uvicorn
 from dayhike import build_catalog, build_similarity, web
 from dayhike.serving import ServingData, export_serving
 from dayhike.web import create_app
+from test_built_hikes import ridge_stage
 
 sync_api = pytest.importorskip("playwright.sync_api")
 
@@ -854,3 +856,42 @@ def test_no_page_leaves_a_cookie_or_anything_in_browser_storage_even_with_analyt
 
     assert context.cookies() == []
     context.close()
+
+
+@pytest.fixture(scope="module")
+def built_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    """The app on the test catalog with Ridge Walk's second half built as a stage (ADR-0038)."""
+    directory = tmp_path_factory.mktemp("built-page")
+    path = directory / "catalog.sqlite"
+    build_catalog(FIXTURE, path, sources=[ridge_stage])
+    build_similarity(path, directory / "dem")
+    data = ServingData(export_serving(path, directory / "web-serving"))
+    yield from serve(create_app(data, lambda max_hours: Matrix(), rank_rate=1_000))
+
+
+def test_a_built_hike_links_the_relations_it_is_built_from_and_itself(browser, built_server) -> None:
+    with urllib.request.urlopen(f"{built_server}/api/search?q=stage%202") as response:
+        (stage,) = json.load(response)["results"]
+    page = open_page(browser, built_server, Api({}), hash=f"#hike={stage['id']}")
+    page.get_by_text("Chosen: Ridge Walk, stage 2").wait_for()
+    head = page.locator("#liked .detail-head")
+
+    assert "Built from OSM relation 1001" in head.inner_text()
+    assert head.get_by_role("link", name="1001").get_attribute("href") == "https://www.openstreetmap.org/relation/1001"
+    link = head.get_by_role("link", name="Link to this hike")
+    assert link.get_attribute("href") == f"#hike={stage['id']}"
+    shared = open_page(browser, built_server, Api({}), hash=link.get_attribute("href"))
+    shared.get_by_text("Chosen: Ridge Walk, stage 2").wait_for()
+    assert shared.locator("#liked .role").text_content() == "Liked hike"
+
+
+def test_a_built_hike_found_similar_can_be_edited_on_the_map(browser, built_server) -> None:
+    page = open_page(browser, built_server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr", has_text="stage 2").first.click()
+    page.locator("#selected").get_by_role("button", name="Edit on the map").click()
+
+    page.get_by_text("Chosen: Ridge Walk, stage 2").wait_for()
+    assert page.locator("#liked .role").text_content() == "Your hike"
+    assert page.evaluate("location.hash").startswith("#compose=2:102.3")

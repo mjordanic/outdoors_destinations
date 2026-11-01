@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from dayhike import build_catalog, build_similarity
+from dayhike import Catalog, build_catalog, build_similarity
 from dayhike.built import BUILT_ID_MIN, BuiltWalk
 from dayhike.catalog import geometry_store_path_for
 from dayhike.serving import ServingData, export_serving
@@ -106,3 +106,16 @@ def test_a_ranking_lists_a_built_dayhike_and_takes_it_as_a_seed(client: TestClie
 
     assert stage in listed({"seed": RIDGE_WALK_ID})
     assert RIDGE_WALK_ID in listed({"seed": stage})
+
+
+def test_a_catalog_from_before_built_dayhikes_reads_and_exports_as_relations(tmp_path: Path) -> None:
+    path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, path)
+    build_similarity(path, tmp_path / "dem")
+    with sqlite3.connect(path) as catalog:
+        for column in ("kind", "parts", "route"):
+            catalog.execute(f"ALTER TABLE dayhikes DROP COLUMN {column}")
+
+    assert {hike.kind for hike in Catalog.open(path).dayhikes} == {"relation"}
+    data = ServingData(export_serving(path, tmp_path / "web-serving"))
+    assert data.detail(RIDGE_WALK_ID)["built"] is None

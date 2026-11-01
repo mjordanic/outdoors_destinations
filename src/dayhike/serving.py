@@ -1144,6 +1144,7 @@ class ServingData:
             "profile_shape": None if shape is None else [_value(v) for v in shape],
             "routes": routes,
             "way_back": None if back is None else {"m": back.metres, "kind": back.kind},
+            "built": None,
         }
 
     def _labels(self, relation_ids: list[int]) -> dict[int, str]:
