@@ -88,6 +88,15 @@ def test_a_stretch_with_no_cut_point_for_over_25_km_gets_no_stage():
     assert all(8_000 <= stage.length_m <= 25_000 for stage in late + early)
 
 
+def test_a_stage_ends_where_the_next_starts_when_two_cut_points_share_a_vertex():
+    # The hamlets Bramousse and Le Riou Vert both lie nearest the vertex at 17 km.
+    points = [point("place", "Bramousse", 17, off_km=0.3), point("place", "Le Riou Vert", 17, off_km=-0.2)]
+
+    first, second = split(line(34), points)
+
+    assert first.end == second.start
+
+
 def test_ingest_cuts_a_long_tour_into_daystages_but_drops_a_twin_of_a_stage_relation(tmp_path: Path) -> None:
     catalog = build_catalog(LONG_TOUR, tmp_path / "catalog.sqlite", sources=[day_stages])
 

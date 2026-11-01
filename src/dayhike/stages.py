@@ -199,14 +199,16 @@ def split(walk: Sequence[tuple[int, Point]], points: Sequence[CutPoint]) -> list
 
 
 def _cuts(lat: np.ndarray, lon: np.ndarray, points: Sequence[CutPoint]) -> list[tuple[int, CutPoint]]:
-    # Each point within its radius of the walk, at the vertex nearest it.
+    # Each point within its radius of the walk, at the vertex nearest it; of
+    # points at one vertex the cheapest kind, then the nearest, so a stage
+    # ends where the next starts.
     if not points:
         return []
     tree = BallTree(np.radians(np.column_stack([lat, lon])), metric="haversine")
     distance, vertex = tree.query(np.radians([(point.lat, point.lon) for point in points]), k=1)
-    cuts = [
-        (int(at[0]), point)
-        for point, d, at in zip(points, distance, vertex)
-        if d[0] * EARTH_RADIUS_M <= CUT_RADIUS_M[point.kind]
-    ]
-    return sorted(cuts, key=lambda cut: cut[0])
+    best: dict[int, tuple[float, float, CutPoint]] = {}
+    for point, d, at in zip(points, distance[:, 0] * EARTH_RADIUS_M, vertex[:, 0]):
+        rank = (CUT_COST[point.kind], float(d), point)
+        if d <= CUT_RADIUS_M[point.kind] and (int(at) not in best or rank[:2] < best[int(at)][:2]):
+            best[int(at)] = rank
+    return sorted((at, point) for at, (_, _, point) in best.items())
