@@ -12,8 +12,10 @@ from pathlib import Path
 import numpy as np
 import osmium
 
+from dayhike.built import BuildContext, BuiltHikeSource, built_dayhike
 from dayhike.catalog import (
     GAP_JOIN_M,
+    KIND_RELATION,
     NAME_ORIGIN_FROM_TO,
     NAME_ORIGIN_OSM_NAME,
     NAME_ORIGIN_OSM_REF,
@@ -55,6 +57,8 @@ CATALOG_TAG_FILTERS = (
     "nwr/man_made=water_tap",
     "n/place=city,town,village,hamlet",
 )
+# Sources of DayHikes that are not one relation (ADR-0038), run after the relations are kept.
+BUILT_HIKE_SOURCES: tuple[BuiltHikeSource, ...] = ()
 
 Progress = Callable[[str], None]
 
@@ -74,6 +78,7 @@ def run_ingest(
     catalog_path: Path,
     progress: Progress | None = None,
     fresh: bool = False,
+    sources: Sequence[BuiltHikeSource] = BUILT_HIKE_SOURCES,
 ) -> tuple[list[DayHike], IngestReport, Path]:
     catalog_path = Path(catalog_path)
     catalog_path.parent.mkdir(parents=True, exist_ok=True)
@@ -110,15 +115,22 @@ def run_ingest(
         emit_progress(progress, "assemble", "DayHikes")
         access_tree = _access_tree(snapshot.access_points)
         amenity_index = _amenity_index(snapshot.amenities)
+        named = named_points(snapshot.named_points)
         kept, report_counts = _keep_dayhikes(
             snapshot,
             access_tree,
             amenity_index,
             _drop_reason,
             _dayhike_from_relation,
-            named_points(snapshot.named_points),
+            named,
             named_points(snapshot.places),
         )
+        if sources:
+            emit_progress(progress, "assemble", "built DayHikes")
+            context = BuildContext(
+                snapshot, tuple(kept), lambda relation: _main_walk(relation, snapshot, access_tree, named)
+            )
+            kept += _build_hikes(conn, sources, context, amenity_index)
         origin_counts = Counter(hike.name_origin for hike in kept)
         report = IngestReport(
             kept=len(kept),
@@ -727,6 +739,37 @@ def _keep_dayhikes(
     return kept, report_counts
 
 
+def _build_hikes(
+    conn: sqlite3.Connection,
+    sources: Sequence[BuiltHikeSource],
+    context: BuildContext,
+    amenity_index,
+) -> list[DayHike]:
+    """The built DayHikes of every source, a walk built twice kept once. Their
+    vertices and ways wait in the work file for the GeometryStore."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS built_walks (id INTEGER PRIMARY KEY, vertices TEXT NOT NULL, ways TEXT NOT NULL)"
+    )
+    conn.execute("DELETE FROM built_walks")
+    built: dict[int, DayHike] = {}
+    for source in sources:
+        for walk in source(context):
+            hike, walked = built_dayhike(walk, context.snapshot, amenity_index)
+            if hike.id in built:
+                continue
+            built[hike.id] = hike
+            conn.execute(
+                "INSERT INTO built_walks (id, vertices, ways) VALUES (?, ?, ?)",
+                (
+                    hike.id,
+                    json.dumps([[node_id, lat, lon] for node_id, (lat, lon) in walk.vertices]),
+                    json.dumps(walked),
+                ),
+            )
+    conn.commit()
+    return sorted(built.values(), key=lambda hike: hike.id)
+
+
 def _main_walk(
     relation: OsmRelation, snapshot: OsmSnapshot, access_tree, named: NamedPoints | None
 ) -> MainWalk:
@@ -810,6 +853,9 @@ def write_geometry_store(
             ("attribution", OSM_ATTRIBUTION),
         )
         for hike in dayhikes:
+            if hike.kind != KIND_RELATION:
+                _write_built_geometry(out, hike, snapshot, conn)
+                continue
             relation = relations[hike.id]
             walk = _main_walk(relation, snapshot, access_tree, named)
             out.execute(
@@ -886,3 +932,54 @@ def write_geometry_store(
         raise
     out.close()
     tmp.replace(path)
+
+
+def _write_built_geometry(
+    out: sqlite3.Connection, hike: DayHike, snapshot: OsmSnapshot, conn: sqlite3.Connection
+) -> None:
+    """A built DayHike's rows of the GeometryStore: its walk as ``_build_hikes``
+    kept it, every way it walks once, in walk order, and no Leftover."""
+    vertices_json, ways_json = conn.execute(
+        "SELECT vertices, ways FROM built_walks WHERE id = ?", (hike.id,)
+    ).fetchone()
+    walked = json.loads(ways_json)
+    out.execute(
+        "INSERT INTO dayhikes (id, name, name_origin, length_m, unconnected_m, "
+        "difficulty, members, relation_tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            hike.id,
+            hike.name,
+            hike.name_origin,
+            hike.length_m,
+            0.0,
+            hike.difficulty.sac_scale,
+            json.dumps([["way", way_id] for way_id, _ in walked]),
+            json.dumps({}),
+        ),
+    )
+    out.executemany(
+        "INSERT INTO vertices (dayhike_id, seq, node_id, latitude, longitude, "
+        "ele, landcover) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [
+            (hike.id, seq, node_id, lat, lon, snapshot.node_elevations.get(node_id), None)
+            for seq, (node_id, lat, lon) in enumerate(json.loads(vertices_json))
+        ],
+    )
+    out.executemany(
+        "INSERT INTO ways (dayhike_id, seq, way_id, node_ids, tags, in_chain, "
+        "leftover, walked_m, walk_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (
+                hike.id,
+                seq,
+                way_id,
+                json.dumps(list(snapshot.ways[way_id].node_ids)),
+                json.dumps(snapshot.ways[way_id].tags),
+                1,
+                None,
+                walked_m,
+                seq,
+            )
+            for seq, (way_id, walked_m) in enumerate(walked)
+        ],
+    )

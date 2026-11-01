@@ -51,7 +51,7 @@ def data(export: Path) -> ServingData:
 def test_export_writes_a_complete_directory(export: Path) -> None:
     meta = json.loads((export / "meta.json").read_text())
 
-    assert meta["format"] == 4
+    assert meta["format"] == 5
     assert meta["compose"] is True
     assert meta["dayhikes"] == 4
     assert meta["attribution"]["osm"] == "© OpenStreetMap contributors"
