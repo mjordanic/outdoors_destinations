@@ -113,3 +113,24 @@ def test_a_dayhike_ingest_kept_with_its_stem_is_kept_to_the_helper(tmp_path: Pat
 
     assert RELATION_ID in kept
     assert reasons == {RELATION_ID: "kept by the main-walk rules"}
+
+
+@needs_osmium
+def test_a_node_network_leg_left_by_an_osm_edit_is_a_leg_to_the_helper(tmp_path: Path) -> None:
+    osm = tmp_path / "leg.osm"
+    osm.write_text(
+        _osm(
+            {"a": (0, 0), "b": (0, 0.8), "c": (0.6, 0.8)}, {1: "ab", 2: "bc"}, [1, 2],
+            tags={"name": "Signpost A - Signpost B", "network:type": "node_network"},
+        )
+    )  # fmt: skip
+    catalog_path = tmp_path / "catalog.sqlite"
+    build_catalog(osm, catalog_path)
+
+    reasons = _main_walk_reasons(
+        {RELATION_ID},
+        extract=_sorted_pbf(osm, tmp_path / "leg.osm.pbf"),
+        geometry=geometry_store_path_for(catalog_path),
+    )
+
+    assert reasons == {RELATION_ID: "node-network leg"}

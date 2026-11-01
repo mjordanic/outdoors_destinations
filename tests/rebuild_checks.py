@@ -93,6 +93,13 @@ def same_snapshot() -> bool:
     return pbf.is_file() and pbf.stat().st_size == RECORDED_SNAPSHOT_BYTES
 
 
+def same_snapshot_as(reference: Path, data: Path = DATA_DIR) -> bool:
+    """Whether ``data`` holds the Europe snapshot ``reference`` was built from (by size, per its raw-manifest.tsv)."""
+    pbf = "osm/europe-latest.osm.pbf"
+    size, _, _ = read_manifest(reference / "raw-manifest.tsv")[pbf]
+    return (data / pbf).stat().st_size == size
+
+
 def connect_ro(path: Path, *, immutable: bool = False) -> sqlite3.Connection:
     """Open SQLite read-only; ``immutable`` also skips locking (for the frozen reference)."""
     if not Path(path).is_file():
@@ -189,6 +196,24 @@ def _same(old: Sequence, new: Sequence, abs_tol: float) -> bool:
         elif a != b:
             return False
     return True
+
+
+# What tests/test_real_data.py ``_main_walk_reasons`` says of a relation the rules
+# would still keep: a departure no OSM edit explains.
+KEPT_BY_THE_RULES = "kept by the main-walk rules"
+
+
+def departures(reasons: Mapping[int, str]) -> tuple[dict[str, list[int]], list[int]]:
+    """DayHike ids that left the Catalog, grouped by reason, and those the rules still keep.
+
+    On a fresh snapshot hikes leave through OSM edits (a relation deleted,
+    retagged or cut below 1 km); only a departure the rules would keep is a
+    rebuild error.
+    """
+    by_reason: dict[str, list[int]] = {}
+    for dayhike_id, reason in sorted(reasons.items()):
+        by_reason.setdefault(reason, []).append(dayhike_id)
+    return dict(sorted(by_reason.items())), by_reason.get(KEPT_BY_THE_RULES, [])
 
 
 def raw_manifest(root: Path, relpaths: Iterable[str], *, hashed: Iterable[str] = ()) -> dict:

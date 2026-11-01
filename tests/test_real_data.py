@@ -48,10 +48,10 @@ import pandas as pd
 import pytest
 from sklearn.neighbors import BallTree
 
-from rebuild_checks import DATA_DIR, real_data
+from rebuild_checks import DATA_DIR, KEPT_BY_THE_RULES, real_data
 
 from dayhike import SimilarityStore, geometry_store_path_for
-from dayhike.catalog import MIN_LENGTH_M, _access_tree, _drop_reason, assemble_main_walk
+from dayhike.catalog import GAP_JOIN_M, MIN_LENGTH_M, _access_tree, _drop_reason, _haversine_m, assemble_main_walk
 from dayhike.osm import amenity_kind
 from dayhike.similarity import MEASURE_NAMES
 
@@ -415,6 +415,7 @@ def test_a_loop_by_a_parking_point_starts_within_300_m_of_one(
 # DayHikes in or out.
 
 LEFT_REASONS = ("under 1 km", "container")
+DROP_REASONS = {"container": "container", "length": "under 1 km", "node_network": "node-network leg"}
 
 
 def _ids_of(path: Path) -> set[int]:
@@ -453,13 +454,10 @@ def _main_walk_reasons(
             if relation.id not in ids:
                 continue
             walk = assemble_main_walk(relation, snapshot.ways, snapshot.nodes, access_tree)
-            drop = _drop_reason(relation, walk.length_m)
-            if drop == "container":
-                reasons[relation.id] = "container"
-            elif drop == "length":
-                reasons[relation.id] = "under 1 km"
-            else:
-                reasons[relation.id] = "kept by the main-walk rules"
+            points = [point for _, point in walk.vertices]
+            round_trip = bool(points) and _haversine_m(*points[0], *points[-1]) <= GAP_JOIN_M
+            drop = _drop_reason(relation, walk.length_m, round_trip)
+            reasons[relation.id] = DROP_REASONS.get(drop, KEPT_BY_THE_RULES)
     return {i: reasons.get(i, "not in the extract") for i in ids}
 
 
