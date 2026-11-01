@@ -11,7 +11,8 @@ cut with this checkout's filter list, lands there and a shared cut is never writ
 ``ingest --fresh``, ``sample-dem``, ``sample-landcover``, ``sample-climate``,
 ``sample-trailgraph`` and ``build-similarity`` on the rasters in DATA/dem, DATA/landcover
 and DATA/climate (only read), and ``export-serving`` without Valhalla, into
-OUT/web-serving. Each step logs to OUT/logs/<step>.log; OUT/build.json holds its seconds.
+OUT/web-serving. Each step logs to OUT/logs/<step>.log; OUT/build.json holds its seconds
+and, under ``sizes``, the export's sizes (``export_sizes``).
 
 ``measure`` prints the Briançon table of the coverage plan for one export (``measure``
 below); with ``--origin`` it measures there, the loops searched from the Origin alone.
@@ -83,7 +84,8 @@ def measure(export: Path | str, plan: Measurement) -> dict:
     ``first_page``: ``loops_off`` and ``loops_on``, the ``/api/rank`` first page for a Wish of
     ``plan.page_length_km`` within ``plan.page_max_km``: its ``rows``, ``hikes`` (rows and
     their versions), ``rows_within`` (rows starting within each of the two smallest radii)
-    and ``elapsed_ms``.
+    and ``elapsed_ms``;
+    ``sizes``: the export's sizes, bytes (``export_sizes``).
     """
     data = ServingData(export)
     origin = Origin(*plan.origin)
@@ -136,6 +138,23 @@ def measure(export: Path | str, plan: Measurement) -> dict:
         "trailheads": {r: int((starts <= r * 1000).sum()) for r in plan.radii_km},
         "loops": loops,
         "first_page": first_page,
+        "sizes": export_sizes(data.directory),
+    }
+
+
+def export_sizes(export: Path) -> dict[str, int]:
+    """The bytes of a serving export's trailgraph.sqlite, hikes.sqlite, similarity/ and all its files."""
+
+    def size(path: Path) -> int:
+        if path.is_file():
+            return path.stat().st_size
+        return sum(file.stat().st_size for file in path.rglob("*") if file.is_file())
+
+    return {
+        "trailgraph.sqlite": size(export / "trailgraph.sqlite"),
+        "hikes.sqlite": size(export / "hikes.sqlite"),
+        "similarity": size(export / "similarity"),
+        "total": size(export),
     }
 
 
@@ -151,12 +170,12 @@ def _found_loops(data: ServingData, km: float, starts: tuple[tuple[float, float]
     return len(find_loops(data.trailgraph, target, list(starts), limit=LOOP_MEASURED, deadline=deadline))
 
 
-def build(pbf: Path, bbox: str | None, data: Path, out: Path) -> dict[str, float]:
-    """Build OUT/web-serving from one region (see the module doc); the seconds of each step."""
+def build(pbf: Path, bbox: str | None, data: Path, out: Path) -> dict:
+    """Build OUT/web-serving from one region (see the module doc); OUT/build.json's content."""
     out.mkdir(parents=True, exist_ok=True)
     (out / "osm").mkdir(exist_ok=True)
     (out / "logs").mkdir(exist_ok=True)
-    seconds: dict[str, float] = {}
+    seconds: dict = {}
 
     def step(name: str, command: list[str]) -> None:
         started = time.monotonic()
@@ -168,6 +187,8 @@ def build(pbf: Path, bbox: str | None, data: Path, out: Path) -> dict[str, float
 
     region = out / "osm" / "region.osm.pbf"
     region.unlink(missing_ok=True)
+    (out / "osm" / "region.catalog.osm.pbf").unlink(missing_ok=True)
+    (out / "osm" / "region.catalog.osm.pbf.filters").unlink(missing_ok=True)
     if bbox is None:
         region.symlink_to(pbf.resolve())
     else:
@@ -184,6 +205,8 @@ def build(pbf: Path, bbox: str | None, data: Path, out: Path) -> dict[str, float
                                "--dem", dem, "--landcover", landcover, "--climate", climate])  # fmt: skip
     step("build-similarity", [*dayhike, "build-similarity", "--catalog", str(catalog), "--dem", dem, "--landcover", landcover])
     step("export-serving", [*dayhike, "export-serving", "--catalog", str(catalog), "--out", str(out / "web-serving")])
+    seconds["sizes"] = export_sizes(out / "web-serving")
+    (out / "build.json").write_text(json.dumps(seconds, indent=1))
     return seconds
 
 
@@ -210,6 +233,7 @@ def table(measured: dict, plan: Measurement) -> str:
             f"rows, hikes, rows within {km(page['rows_within'])} km",
             f"{page['rows']}, {page['hikes']}, {bands(page['rows_within'])} ({page['elapsed_ms']} ms)",
         ))
+    rows.extend((f"Export size, {name}, bytes", str(size)) for name, size in measured["sizes"].items())
     return "\n".join(["| Metric | Value |", "|---|---|", *(f"| {name} | {value} |" for name, value in rows)])
 
 

@@ -59,3 +59,18 @@ def test_counts_the_rows_and_loops_a_ranking_from_the_origin_lists(data, monkeyp
     off, on = measured["first_page"]["loops_off"], measured["first_page"]["loops_on"]
     assert (off["rows"], off["hikes"], off["rows_within"]) == (7, 7, {0.25: 2, 0.6: 3})
     assert (on["rows"], on["hikes"]) == (9, 9)
+
+
+def test_reports_the_size_of_each_export_file_and_the_total(data) -> None:  # noqa: F811
+    export = data.directory
+    files = [path for path in export.rglob("*") if path.is_file()]
+
+    measured = regional.measure(export, AROUND_A)
+
+    assert measured["sizes"] == {
+        "trailgraph.sqlite": (export / "trailgraph.sqlite").stat().st_size,
+        "hikes.sqlite": (export / "hikes.sqlite").stat().st_size,
+        "similarity": sum(path.stat().st_size for path in (export / "similarity").iterdir()),
+        "total": sum(path.stat().st_size for path in files),
+    }
+    assert measured["sizes"]["trailgraph.sqlite"] > 0
