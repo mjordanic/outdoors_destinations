@@ -115,6 +115,8 @@ def _stage_name(tour: str, k: int, start: str | None, end: str | None) -> str:
 
 def _without_twins(walks: list[BuiltWalk], context: BuildContext) -> list[BuiltWalk]:
     # Only relation DayHikes whose length allows a Twin of some stage are compared.
+    if not walks:
+        return []
     relations = {relation.id: relation for relation in context.snapshot.relations}
     given = [
         _route(context.main_walk(relations[hike.id]).vertices)
