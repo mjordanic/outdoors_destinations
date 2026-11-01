@@ -1538,11 +1538,15 @@ class TrailGraph:
         the first entry per Junction, then per entry the neighbour, metres
         and that Segment's id."""
         if self._graph is None:
+            chunks = []
             with self._db() as db:
-                found = db.execute("SELECT id, a, b, length_m FROM segments WHERE kind != 'link'").fetchall()
-            ids = np.array([row[0] for row in found], dtype=np.int64)
-            ends = np.array([row[1:3] for row in found], dtype=np.int64).reshape(-1, 2)
-            metres = np.array([row[3] for row in found], dtype=float)
+                cursor = db.execute("SELECT id, a, b, length_m FROM segments WHERE kind != 'link'")
+                while rows := cursor.fetchmany(100_000):  # arrays chunk by chunk, not a million tuples at once
+                    chunks.append(np.array(rows, dtype=float))
+            found = np.concatenate(chunks) if chunks else np.empty((0, 4))
+            ids = found[:, 0].astype(np.int64)  # ids and OSM node ids are far below 2**53
+            ends = found[:, 1:3].astype(np.int64)
+            metres = found[:, 3].copy()
             nodes = np.unique(ends)
             low, high = np.sort(np.searchsorted(nodes, ends), axis=1).T
             shortest = np.argsort(metres, kind="stable")
