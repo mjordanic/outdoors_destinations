@@ -23,8 +23,7 @@ if TYPE_CHECKING:
     from dayhike.similarity import SimilarityStore
 
 EARTH_RADIUS_M = 6_371_000
-MIN_LENGTH_M = 1_000  # inclusive DayHike length band
-MAX_LENGTH_M = 20_000
+MIN_LENGTH_M = 1_000  # shortest DayHike; there is no upper cap (ADR-0033)
 AMENITY_RADIUS_M = 20_000  # great-circle from Trailhead; zero counts are valid
 TRAILHEAD_ACCESS_RADIUS_M = 5_000  # parking near a line end or loop vertex
 GAP_JOIN_M = 50  # member-way ends this close join two pieces with a straight gap
@@ -155,7 +154,7 @@ class IngestReport:
     kept: int
     dropped_unnamed: int
     dropped_length: int
-    dropped_network: int
+    dropped_container: int
     named_osm_name: int = 0
     named_osm_ref: int = 0
     named_synthetic: int = 0
@@ -319,7 +318,8 @@ class Catalog:
                     kept=report_data["kept"],
                     dropped_unnamed=report_data["dropped_unnamed"],
                     dropped_length=report_data["dropped_length"],
-                    dropped_network=report_data["dropped_network"],
+                    # A Catalog built before ADR-0033 has no container count.
+                    dropped_container=report_data.get("dropped_container", 0),
                     named_osm_name=report_data.get("named_osm_name", 0),
                     named_osm_ref=report_data.get("named_osm_ref", 0),
                     named_synthetic=report_data.get("named_synthetic", 0),
@@ -509,8 +509,9 @@ def build_catalog(
     ``fresh=True`` discards it and starts again. ``progress`` receives one
     line per stage (filter, relations, ways, nodes, assemble, write).
 
-    Unnamed `highway=path` ways, out-of-band lengths, and iwn/nwn superroutes are
-    counted in the ingest report and are not DayHikes. A missing OSM `name` is
+    Unnamed `highway=path` ways are not DayHikes; relations under 1 km,
+    containers and node-network legs are counted in the ingest report and are
+    not DayHikes either (ADR-0033). A missing OSM `name` is
     kept with a Seed label (`name`, else `ref`, else `relation:{id}`). Attribution is stored
     with the Catalog. DriveTime is not computed at ingest. Replaces the
     SQLite file if it exists, only after the new file is complete; overlapping
@@ -562,9 +563,9 @@ def _osm_paths(osm_path: Path | str | Sequence[Path | str]) -> list[Path]:
 
 
 def _drop_reason(relation: OsmRelation, length_m: float, round_trip: bool = False) -> str | None:
-    if _is_network_superroute(relation, length_m):
-        return "network"
-    if length_m < MIN_LENGTH_M or length_m > MAX_LENGTH_M:
+    if _is_container(relation):
+        return "container"
+    if length_m < MIN_LENGTH_M:
         return "length"
     # A node-network route is one leg between two numbered junctions, not an outing.
     if relation.tags.get("network:type") == "node_network" and not round_trip:
@@ -572,15 +573,9 @@ def _drop_reason(relation: OsmRelation, length_m: float, round_trip: bool = Fals
     return None
 
 
-def _is_network_superroute(relation: OsmRelation, length_m: float) -> bool:
-    # iwn/long nwn relations are corridors, not a day outing a Hiker can name as a Seed.
-    network = relation.tags.get("network")
-    if network == "iwn":
-        return True
-    if network != "nwn":
-        return False
-    has_child_relations = any(member_type == "relation" for member_type, _ in relation.members)
-    return has_child_relations or length_m > MAX_LENGTH_M
+def _is_container(relation: OsmRelation) -> bool:
+    # A relation with no way of its own (a superroute of stages) holds no trail (ADR-0033).
+    return not any(member_type == "way" for member_type, _ in relation.members)
 
 
 def _dayhike_from_relation(
@@ -1692,7 +1687,7 @@ def _write_sqlite(path: Path, dayhikes: Iterable[DayHike], report: IngestReport)
                         "kept": report.kept,
                         "dropped_unnamed": report.dropped_unnamed,
                         "dropped_length": report.dropped_length,
-                        "dropped_network": report.dropped_network,
+                        "dropped_container": report.dropped_container,
                         "named_osm_name": report.named_osm_name,
                         "named_osm_ref": report.named_osm_ref,
                         "named_synthetic": report.named_synthetic,

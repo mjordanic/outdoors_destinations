@@ -69,18 +69,19 @@ def test_a_step_no_walked_way_joins_is_still_a_long_step(tmp_path: Path) -> None
     assert steps == {RELATION_ID: pytest.approx(1_000.0, abs=1.0)}
 
 
-# A 19.6 km loop with a 0.6 km dead end at a. With parking by t the dead end is
-# the stem, so the main walk is 20.2 km; without it the dead end is set aside.
+# A 0.8 km loop with a 0.3 km dead end at a. With parking by t the dead end is
+# the stem, so the main walk is 1.1 km; without it the dead end is set aside
+# and the 0.8 km left is under the 1 km minimum.
 LOLLIPOP = {
     "a": (0, 0),
-    "b": (0, 4.9),
-    "m": (2.45, 4.9),
-    "c": (4.9, 4.9),
-    "d": (4.9, 0),
-    "t": (0, -0.6),
+    "b": (0, 0.2),
+    "m": (0.1, 0.2),
+    "c": (0.2, 0.2),
+    "d": (0.2, 0),
+    "t": (0, -0.3),
 }
 LOLLIPOP_WAYS = {1: "ab", 2: "bmc", 3: "cd", 4: "da", 5: "at"}
-PARKING_BY_T = [(0, -0.65)]
+PARKING_BY_T = [(0, -0.35)]
 
 
 def _lollipop(tmp_path: Path, parking: list[tuple[float, float]]):
@@ -93,20 +94,20 @@ def _lollipop(tmp_path: Path, parking: list[tuple[float, float]]):
 
 
 @needs_osmium
-def test_a_dayhike_ingest_dropped_for_its_stem_is_over_20_km_to_the_helper(
+def test_a_dayhike_ingest_dropped_without_its_stem_is_under_1_km_to_the_helper(
     tmp_path: Path,
 ) -> None:
-    extract, geometry, kept = _lollipop(tmp_path, PARKING_BY_T)
+    extract, geometry, kept = _lollipop(tmp_path, [])
 
     reasons = _main_walk_reasons({RELATION_ID}, extract=extract, geometry=geometry)
 
     assert RELATION_ID not in kept
-    assert reasons == {RELATION_ID: "over 20 km"}
+    assert reasons == {RELATION_ID: "under 1 km"}
 
 
 @needs_osmium
-def test_a_dayhike_ingest_kept_without_parking_is_kept_to_the_helper(tmp_path: Path) -> None:
-    extract, geometry, kept = _lollipop(tmp_path, [])
+def test_a_dayhike_ingest_kept_with_its_stem_is_kept_to_the_helper(tmp_path: Path) -> None:
+    extract, geometry, kept = _lollipop(tmp_path, PARKING_BY_T)
 
     reasons = _main_walk_reasons({RELATION_ID}, extract=extract, geometry=geometry)
 

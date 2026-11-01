@@ -175,10 +175,13 @@ XML file with hiking relations so ingest and ranking have a known answer:
 | 1001 | Ridge Walk | **Kept.** ~10 km, `sac_scale=mountain_hiking`, Hut/cafe/parking/water within 20 km of the Trailhead, elevation tags on nodes. A disconnected extra member is skipped (`unconnected_m` ≈ 1 km). |
 | 1002 | Valley Path | **Kept.** ~5 km, no `sac_scale`, no nearby amenities, no `ele`. |
 | 1003 | `relation:1003` | **Kept.** No OSM `name`. `name_origin=synthetic`. |
-| 1004 | Long Traverse | Dropped: ~30 km, outside the 1–20 km band (`dropped_length`). |
-| 1005 | Via Dinarica Red | Dropped: `network=iwn` superroute (`dropped_network`). |
-| 1006 | Fifty Km Walk | Dropped: ~50 km (`dropped_length`). |
+| 1005 | Short Spur | Dropped: ~0.5 km, under the 1 km minimum (`dropped_length`). |
 | 1007 | PS-1 | **Kept.** OSM `ref` only (`name_origin=osm_ref`). |
+| 1008 | Dinaric Trails | Dropped: a pure container, child relations and no way of its own (`dropped_container`). |
+
+`tests/fixtures/catalog_rules.osm` holds one relation per Catalog rule
+(ADR-0033, ADR-0034): a `route=foot` loop, a 30 km tour (no upper cap), an iwn
+stage and its container, a mixed relation, a short spur and a node-network leg.
 
 That is why `tests/fixtures/` looks small: the PRD uses it as the oracle, not as
 the hiking dataset. A real Catalog comes from Geofabrik extracts (see below).
@@ -196,7 +199,7 @@ a hair over 10 km / 5 km because it is computed on the sphere):
 
 ```
 data/catalog.sqlite
-IngestReport(kept=4, dropped_unnamed=0, dropped_length=2, dropped_network=1, named_osm_name=2, named_osm_ref=1, named_synthetic=1, dropped_node_network=0, named_from_to=0, named_place=0)
+IngestReport(kept=4, dropped_unnamed=0, dropped_length=1, dropped_container=1, named_osm_name=2, named_osm_ref=1, named_synthetic=1, dropped_node_network=0, named_from_to=0, named_place=0)
 ```
 
 Progress (`filter:`, `relations:`, `ways:`, `nodes:`, `assemble:`, `write:`,
@@ -356,8 +359,8 @@ Do not hand-edit FeatureVectors and expect Ranking to follow unless you rerun
 `dayhike ingest` also writes `data/catalog.trailgraph.sqlite`
 (`trailgraph_path_for`) from the ingest work file, so there is no extra OSM
 pass. It holds the marked hiking network: every member way of every
-`route=hiking` relation ingest read, **including** the relations it dropped
-(too short, too long, superroutes, node-network legs). Unmarked paths are not
+`route=hiking` or `route=foot` relation ingest read, **including** the relations
+it dropped (too short, node-network legs). Unmarked paths are not
 in it. Ways split into Segments that meet at Junctions: a node two ways share,
 a dead end, a node where the relations along the trail change (a stage
 boundary), or a crossing of two same-layer ways with no node. A dead-end tip
@@ -912,9 +915,11 @@ uv run dayhike ingest data/osm/croatia-latest.osm.pbf \
 ```
 
 Stderr shows stage lines while it runs. Stdout is the path and an
-`IngestReport`. Routes outside 1–20 km, iwn/nwn superroutes and node-network
-legs (`network:type=node_network`, not a RoundTrip) are counted as dropped and
-are **not** DayHikes. A missing OSM `name` is kept: the Seed label is `name`,
+`IngestReport`. Routes under 1 km, containers (relations with no way of their
+own, such as superroutes of stages) and node-network legs
+(`network:type=node_network`, not a RoundTrip) are counted as dropped and are
+**not** DayHikes. There is no upper length cap: multi-day tours and long
+sections are kept (ADR-0033). A missing OSM `name` is kept: the Seed label is `name`,
 else `ref` with `from – to` or "near" the nearest place, else `from – to`, else
 "Hike near" the nearest place (a named city, town, village or hamlet within
 5 km of the Trailhead), else `relation:{id}`, with `name_origin` recording
@@ -1292,7 +1297,7 @@ Equivalent osmium filter if you want to run it yourself:
 
 ```bash
 osmium tags-filter data/osm/croatia-latest.osm.pbf \
-  r/route=hiking \
+  r/route=hiking,foot \
   nwr/tourism=alpine_hut,wilderness_hut,viewpoint \
   nwr/amenity=parking,restaurant,cafe,drinking_water,shelter,water_point \
   nwr/natural=peak,spring \
@@ -1302,7 +1307,9 @@ osmium tags-filter data/osm/croatia-latest.osm.pbf \
 
 ### What ingest keeps
 
-Same rules as the fixture: `route=hiking` relations whose geometry is 1–20 km.
+Same rules as the fixture: `route=hiking` and `route=foot` relations (ADR-0034)
+with trail of their own whose main walk is at least 1 km, with no upper cap
+(ADR-0033).
 Amenities on nodes, ways, and tagged relations: Catalog AmenityFacts still use
 hut/parking/restaurant_cafe/drinking_water within 20 km of the Trailhead.
 Viewpoint, Peak, Shelter, and the other WaterSources (`natural=spring`,
@@ -1312,12 +1319,12 @@ tap that is also `amenity=drinking_water` is a drinking-water point.
 
 The geometry is the main walk of the relation's member ways (ADR-0012): each
 distinct way once, side trips and shortcuts left out as Leftovers, and the
-length band uses its length. The Trailhead is where the walk starts, chosen
+1 km minimum uses its length. The Trailhead is where the walk starts, chosen
 from parking only. A line starts at the end nearer a parking point within 5 km,
 or else at the end where member order starts it. A loop starts at its stem's
 far end, or else at its vertex nearest parking within 5 km.
 
-A hike that is not a `route=hiking` relation in this Catalog cannot be a Seed.
+A hike that is not a `route=hiking` or `route=foot` relation in this Catalog cannot be a Seed.
 Unnamed forest paths (`highway=path` without a hiking relation) never appear.
 Filter `name_origin = 'synthetic'` if you want to drop ingest-assigned labels.
 
@@ -1368,7 +1375,7 @@ Ingest reads the hiking extract (`*.catalog.osm.pbf`) as is. Given the full
 Europe file instead, it filters it first and caches the extract, again when the
 filter list changed. The checks in `tests/test_real_data.py` look at the data
 as it is (geometry, WaterSources, the main walk: steps, ways walked once,
-length band, Leftover reasons, loop starts, the similarity facts, notebook
+1 km minimum, Leftover reasons, loop starts, the similarity facts, notebook
 05's verification lines)
 and, with `data/baseline/`, list the DayHikes that left and joined the Catalog;
 each that left must have left by the main walk. On the Europe snapshot

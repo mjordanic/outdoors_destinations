@@ -43,8 +43,9 @@ from dayhike.osm import (
 INGEST_WORK_SCHEMA = 6
 INGEST_CHECKPOINT_OBJECTS = 50_000
 INGEST_PROGRESS_EVERY_OBJECTS = 100_000
+HIKING_ROUTES = ("hiking", "foot")  # route=foot is read as hiking (ADR-0034)
 CATALOG_TAG_FILTERS = (
-    "r/route=hiking",
+    "r/route=hiking,foot",
     "nwr/tourism=alpine_hut,wilderness_hut,viewpoint",
     "nwr/amenity=parking,restaurant,cafe,drinking_water,shelter,water_point",
     "nwr/natural=peak,spring",
@@ -120,7 +121,7 @@ def run_ingest(
             kept=len(kept),
             dropped_unnamed=0,
             dropped_length=report_counts["length"],
-            dropped_network=report_counts["network"],
+            dropped_container=report_counts["container"],
             named_osm_name=origin_counts[NAME_ORIGIN_OSM_NAME],
             named_osm_ref=origin_counts[NAME_ORIGIN_OSM_REF],
             named_synthetic=origin_counts[NAME_ORIGIN_SYNTHETIC],
@@ -394,7 +395,7 @@ def _pass_relations(
             ]
             roles = [str(member.role) for member in obj.members]
             osm_id = int(obj.id)
-            if tags.get("route") == "hiking":
+            if tags.get("route") in HIKING_ROUTES:
                 conn.execute(
                     "INSERT OR REPLACE INTO relations (id, members, roles, tags) "
                     "VALUES (?, ?, ?, ?)",
@@ -644,14 +645,14 @@ def _keep_dayhikes(
     named: NamedPoints | None = None,
     places: NamedPoints | None = None,
 ):
-    report_counts = {"unnamed": 0, "length": 0, "network": 0, "node_network": 0}
+    report_counts = {"unnamed": 0, "length": 0, "container": 0, "node_network": 0}
     kept = []
     seen: set[int] = set()
     for relation in snapshot.relations:
         if relation.id in seen:
             continue
         seen.add(relation.id)
-        if relation.tags.get("route") != "hiking":
+        if relation.tags.get("route") not in HIKING_ROUTES:
             continue
         walk = _main_walk(relation, snapshot, access_tree, named)
         vertices = walk.vertices

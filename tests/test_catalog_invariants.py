@@ -100,10 +100,10 @@ def test_values_are_in_range(catalog: sqlite3.Connection) -> None:
     south, west, north, east = rc.EUROPE_BOUNDS
     fractions = " + ".join(LANDCOVER)
     checks = {
-        "dayhikes": ["length_m NOT BETWEEN 1000 AND 20000"],
+        "dayhikes": ["length_m < 1000"],
         "trailheads": [f"latitude NOT BETWEEN {south} AND {north}", f"longitude NOT BETWEEN {west} AND {east}"],
         "feature_vectors": [
-            "length_m NOT BETWEEN 1000 AND 20000",
+            "length_m < 1000",
             "elevation_min_m < -50 OR elevation_max_m > 5100",
             "elevation_min_m > elevation_max_m",
             "elevation_gain_m NOT BETWEEN 0 AND 5200",
