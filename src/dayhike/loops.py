@@ -32,7 +32,8 @@ from dayhike.trailgraph import TrailGraph, decode_coords, _haversine
 LOOP_SEEDS = 30  # the best Catalog results whose Trailheads start the search
 LOOP_START_M = 2_000.0  # start Junctions within this of such a Trailhead ...
 LOOP_STARTS_PER_TRAILHEAD = 3  # ... the nearest this many
-LOOP_ORIGIN_M = 5_000.0  # the Origin's nearest start Junctions within this, searched first (ADR-0036)
+LOOP_ORIGIN_M = 5_000.0  # start Junctions within this of the Origin, searched first (ADR-0036) ...
+LOOP_ORIGIN_STARTS = 20  # ... the nearest this many
 LOOP_STARTS = 40  # and at most this many in all
 LOOP_BAND = (0.75, 1.25)  # a loop's length against the Seed's
 LOOP_MIN_M = 1_000.0  # the Catalog's shortest DayHike
@@ -106,8 +107,8 @@ def find_loops(
     if not math.isfinite(target.length_m) or low >= high:
         return []
     with sqlite3.connect(f"file:{graph.path}?mode=ro", uri=True) as db:
-        near = [] if origin is None else [(origin, LOOP_ORIGIN_M)]
-        starts = _starts(db, near + [(trailhead, LOOP_START_M) for trailhead in trailheads])
+        near = [] if origin is None else [(origin, LOOP_ORIGIN_M, LOOP_ORIGIN_STARTS)]
+        starts = _starts(db, near + [(trailhead, LOOP_START_M, LOOP_STARTS_PER_TRAILHEAD) for trailhead in trailheads])
         hours: list[float | None] = [None] * len(starts)
         if reach is not None and starts:
             hours = reach([(lat, lon) for _, lat, lon in starts])
@@ -141,13 +142,13 @@ def find_loops(
 
 
 def _starts(
-    db: sqlite3.Connection, places: Sequence[tuple[tuple[float, float], float]]
+    db: sqlite3.Connection, places: Sequence[tuple[tuple[float, float], float, int]]
 ) -> list[tuple[int, float, float]]:
     """(Junction id, lat, lon) of the start Junctions: per place ((lat, lon),
-    metres) in order, the ``LOOP_STARTS_PER_TRAILHEAD`` nearest within its
-    metres where two trail Segments meet, at most ``LOOP_STARTS`` in all."""
+    metres, count) in order, the count nearest within its metres where two
+    trail Segments meet, at most ``LOOP_STARTS`` in all."""
     starts: dict[int, tuple[float, float]] = {}
-    for (lat, lon), radius_m in places:
+    for (lat, lon), radius_m, count in places:
         if len(starts) >= LOOP_STARTS:
             break
         grow_lat = math.degrees(radius_m / EARTH_RADIUS_M)
@@ -164,7 +165,7 @@ def _starts(
         metres = _haversine(np.full(len(near), lat), np.full(len(near), lon), points[:, 0], points[:, 1])
         taken = 0
         for at in np.argsort(metres, kind="stable").tolist():
-            if metres[at] > radius_m or taken >= LOOP_STARTS_PER_TRAILHEAD or len(starts) >= LOOP_STARTS:
+            if metres[at] > radius_m or taken >= count or len(starts) >= LOOP_STARTS:
                 break
             junction = int(near[at][0])
             if junction not in starts:
