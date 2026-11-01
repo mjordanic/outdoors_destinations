@@ -33,9 +33,10 @@ KNOWN_DEM_GAPS = frozenset({"N41E043", "N41E044", "N41E046"})
 # Geofabrik "europe" children that group other children.
 COMPOSITE_REGIONS = frozenset({"alps", "dach", "britain-and-ireland", "great-britain"})
 CHUNK = 2_000
-# The Geofabrik Europe snapshot of 2026-09-18 that the recorded numbers below come from.
-RECORDED_SNAPSHOT_BYTES = 34_999_693_913
-RECORDED_SNAPSHOT_SHA256 = "77aaa00727e343a9d44f118f04cd5165c4240c03c11c408f92e12a71ff4beba0"
+# The Geofabrik Europe snapshot that the recorded numbers below come from:
+# europe-261031.osm.pbf, osmosis_replication_timestamp 2026-10-31T21:23:06Z.
+RECORDED_SNAPSHOT_BYTES = 35_354_652_634
+RECORDED_SNAPSHOT_SHA256 = "6e2bfbfd7756ece175d5d879f5eb0b1f11536f6131260b0b234cb6840a89cd82"
 # These counts come from the pre-ADR-0033 rules; they are re-recorded from the
 # shared rebuild on a fresh snapshot (plan step R1).
 RECORDED_INGEST_REPORT = {
