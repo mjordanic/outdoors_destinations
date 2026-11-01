@@ -114,14 +114,18 @@ def _stage_name(tour: str, k: int, start: str | None, end: str | None) -> str:
 
 
 def _without_twins(walks: list[BuiltWalk], context: BuildContext) -> list[BuiltWalk]:
-    # Only relation DayHikes whose length allows a Twin of some stage are compared.
+    # Only relation DayHikes whose length allows a Twin of some stage, and that
+    # walk one of the OSM ways some stage walks, are compared: assembling every
+    # main walk again would cost most of the source's time.
     if not walks:
         return []
     relations = {relation.id: relation for relation in context.snapshot.relations}
+    walked = {way_id for walk in walks for way_id in walk.way_ids}
     given = [
         _route(context.main_walk(relations[hike.id]).vertices)
         for hike in context.dayhikes
         if TWIN_SHARE * STAGE_MIN_M <= hike.length_m <= STAGE_MAX_M / TWIN_SHARE
+        and any(kind == "way" and way_id in walked for kind, way_id in relations[hike.id].members)
     ]
     # A group's root is its first row, so a group holding a relation has a root below len(given).
     groups = twin_groups([*given, *(_route(walk.vertices) for walk in walks)])[len(given) :]
