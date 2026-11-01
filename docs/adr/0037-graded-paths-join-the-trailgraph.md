@@ -10,7 +10,7 @@ Around Briançon the local trails are mapped as signpost-to-signpost legs and mo
 
 **Ingest.** The catalog extract's filter list gains `w/sac_scale`, so the next ingest of a full PBF cuts the extract again. In the ways pass, a graded path that is no hiking member way goes to its own work-file table, `graded_ways`, and the nodes only graded paths use go to `graded_nodes`. The DayHike assembly and the GeometryStore read only the hiking tables, so the Catalog is unchanged and their memory is too; only `write_trailgraph` reads both. The work-file schema is 7, so an older work file is not resumed.
 
-**Naming.** A walk on graded paths only has no trail names. The proposed name falls back to "Your hike from" the named hiking place nearest its start, and a SuggestedLoop is named "Loop from/near" such a place as before (ADR-0022). The composer calls a Segment with no route name an "Unnamed trail" and the detail says "Drawn from trail segments", not "marked trail segments".
+**Naming.** A trail names a walk only when the walk follows it for at least 30 % of its length (`TRAIL_NAME_SHARE`), so 150 m of GR 5 does not name 7 km of graded paths; of those, the two walked longest name it, as before. A walk on graded paths only, or with no trail that long, has no trail names. The proposed name falls back to "Your hike from" the named hiking place nearest its start, and a SuggestedLoop is named "Loop from/near" such a place as before (ADR-0022). The composer calls a Segment with no route name an "Unnamed trail" and the detail says "Drawn from trail segments", not "marked trail segments".
 
 **Measured on the Hautes-Alpes cut** (6.25–7.05 E, 44.70–45.10 N, smart extract from the 2026-09-17 Europe snapshot; develop against this change, same pipeline):
 

@@ -143,7 +143,7 @@ call on your machine.
 | `tests/fixtures/catalog.osm` | Tiny OSM XML **oracle** for tests and demos | yes |
 | `data/catalog.sqlite` | The Catalog you work with (SQLite database) | **gitignored** |
 | `data/catalog.geometry.sqlite` | GeometryStore: DayHikeGeometry + raw amenities | **gitignored** |
-| `data/catalog.trailgraph.sqlite` | TrailGraph: the marked hiking network as Junctions and Segments | **gitignored** |
+| `data/catalog.trailgraph.sqlite` | TrailGraph: the marked hiking network and graded paths as Junctions and Segments | **gitignored** |
 | `data/catalog.similarity/` | Similarity facts + Calibration (numpy arrays) | **gitignored** |
 | `data/osm/` | Geofabrik / osmium extracts you download | gitignored |
 | `data/valhalla/` | Road PBF + Valhalla routing tiles Docker builds | gitignored |
@@ -358,7 +358,7 @@ Do not hand-edit FeatureVectors and expect Ranking to follow unless you rerun
 
 `dayhike ingest` also writes `data/catalog.trailgraph.sqlite`
 (`trailgraph_path_for`) from the ingest work file, so there is no extra OSM
-pass. It holds the marked hiking network: every member way of every
+pass. It holds the marked hiking network and graded paths: every member way of every
 `route=hiking` or `route=foot` relation ingest read, **including** the relations
 it dropped (too short, node-network legs), and every graded path
 (`highway=path` with a `sac_scale`) that no such relation lists, with no
@@ -1627,7 +1627,7 @@ A public, read-only page over the Catalog: search a hike you liked by name, or
 tick "Select hike on map", zoom in (hikes show from zoom 12, once the view
 holds at most 100, as lines with both ends marked) and click one, or press
 "Design your own from segments" there and draw a walk from the marked hiking
-network (Segments show from zoom 13; click a Junction or a Segment to start,
+network and graded paths (Segments show from zoom 13; click a Junction or a Segment to start,
 then a Segment to walk along it; one away from the walk's end is reached the
 shortest way over trail Segments, drawn dashed in amber, never over a gap or
 Link the Hiker did not take; "connect here" crosses a Link; the walk may repeat
@@ -1646,7 +1646,7 @@ Typical temperature, Lake or sea), each on at 100 by default; the other Measures
 "Advanced search" and count only while it is open (ADR-0031). With a TrailGraph a button
 under the list, "Suggest loops near these hikes (takes a few seconds)", ranks
 the same query again with SuggestedLoops mixed in (ADR-0020, only on request
-since ADR-0028): loops drawn on the marked network near the
+since ADR-0028): loops drawn on the marked network and graded paths near the
 best Catalog results, found as the query runs, named after a hiking place near
 where they start, else by the trails they walk (ADR-0022), marked "composed" and
 drawn dashed green on the "Select hike on map" map. Each opens like a composed hike, with its
@@ -2126,7 +2126,7 @@ Bulky local files stay out of git:
 
 - `data/catalog.sqlite` — Catalog built from ingest
 - `data/catalog.geometry.sqlite` — GeometryStore (DayHikeGeometry + raw amenities)
-- `data/catalog.trailgraph.sqlite` — TrailGraph (the marked hiking network)
+- `data/catalog.trailgraph.sqlite` — TrailGraph (the marked hiking network and graded paths)
 - `data/catalog.similarity/` — similarity facts and Calibration (`build-similarity`)
 - `data/catalog.sqlite.work` — in-progress ingest (resume handle)
 - `data/osm/` — Geofabrik / osmium extracts

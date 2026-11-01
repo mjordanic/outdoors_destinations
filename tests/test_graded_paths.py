@@ -21,6 +21,7 @@ from dayhike.loops import LoopTarget, find_loops
 from dayhike.trailgraph import sample_trailgraph
 
 FIXTURE = Path(__file__).parent / "fixtures" / "graded_paths.osm"
+NAMING_FIXTURE = Path(__file__).parent / "fixtures" / "graded_naming.osm"
 VALLEY_TRAIL, RIDGE_TRAIL = 3001, 3002
 GRADED_PATH = 210
 B, C = 2, 3  # node ids (fixture comments)
@@ -83,20 +84,23 @@ def test_the_catalog_extract_keeps_graded_paths(tmp_path: Path) -> None:
     assert json.loads(graded["relation_ids"]) == [] and graded["length_m"] == pytest.approx(3_000, abs=1)
 
 
-@pytest.fixture(scope="module")
-def data(tmp_path_factory: pytest.TempPathFactory):
+def _served(root: Path, fixture: Path):
     from dayhike.serving import ServingData, export_serving
 
-    root = tmp_path_factory.mktemp("graded-export")
     dem, landcover, climate = _write_rasters(root)
     path = root / "catalog.sqlite"
-    build_catalog(FIXTURE, path)
+    build_catalog(fixture, path)
     sample_dem(path, dem)
     sample_landcover(path, landcover)
     sample_climate(path, climate)
     sample_trailgraph(path, dem_dir=dem, landcover_dir=landcover, climate_dir=climate)
     build_similarity(path, dem, landcover_dir=landcover)
-    return ServingData(export_serving(path, root / "web-serving"))
+    return ServingData(export_serving(path, root / "web-serving")), path
+
+
+@pytest.fixture(scope="module")
+def data(tmp_path_factory: pytest.TempPathFactory):
+    return _served(tmp_path_factory.mktemp("graded-export"), FIXTURE)[0]
 
 
 def test_a_loop_closes_over_a_graded_path(data) -> None:
@@ -118,3 +122,32 @@ def test_a_walk_on_graded_paths_only_is_named_by_the_place_at_its_start(data, ca
 
     assert hike["name"] == "Your hike from Mossy Spring"
     assert hike["routes"] == [] and hike["walk_m"] == pytest.approx(3_000, abs=1)
+
+
+@pytest.fixture(scope="module")
+def naming(tmp_path_factory: pytest.TempPathFactory):
+    return _served(tmp_path_factory.mktemp("graded-naming"), NAMING_FIXTURE)
+
+
+def test_a_trail_walked_for_a_small_share_of_a_walk_does_not_name_it(naming) -> None:
+    data, path = naming
+    segments = _segments(path)
+    short_link, graded = _on_way(segments, 301), _on_way(segments, 310)
+
+    hike = data.compose(_route(path, 1, [short_link["id"], graded["id"]]))
+
+    # 150 m of the Short Link and about 7 km of graded path.
+    assert hike["walk_m"] == pytest.approx(7_130, abs=50)
+    assert hike["routes"] == ["Short Link"]
+    assert hike["name"] == "Your hike from Stone Spring"
+
+
+def test_a_walk_mostly_on_one_trail_is_named_after_it(naming) -> None:
+    data, path = naming
+    segments = _segments(path)
+    short_link, long_trail = _on_way(segments, 301), _on_way(segments, 302)
+
+    hike = data.compose(_route(path, 1, [short_link["id"], long_trail["id"]]))
+
+    assert hike["walk_m"] == pytest.approx(5_150, abs=10)
+    assert hike["name"] == "Long Trail from Stone Spring"
