@@ -12,6 +12,10 @@ _Avoid_: destination, trail, route, path, recommendation
 A DayHike that ingest builds from OSM data rather than reads as one relation: a NetworkHike or a DayStage. A built-hike source returns its walk; from then on it is a DayHike like any other, on the map, in search and in every Ranking. It has a kind (`network` or `stage`), the OSM relations it is built from, and its Route (ADR-0018); its id is a hash of that Route above 2^40, so it stays the same across a rebuild that leaves the walk unchanged (ADR-0038). Unlike a ComposedHike it is stored in the Catalog.
 _Avoid_: composed DayHike, generated hike, virtual relation, synthetic hike
 
+**DayStage**:
+A built DayHike that is one day of a long tour: a piece of 8–25 km of a relation DayHike over 25 km, cut where a day can end, at a hut, else a place, else parking near the line, as near 16 km as those allow. It is named "{tour}, stage k: {from} – {to}" and the tour stays listed too. Tours that share a stretch cut it at the same points; a DayStage that is a Twin of a relation DayHike, such as a stage relation, is left out (ADR-0040).
+_Avoid_: stage (a stage is a relation), section, leg, day stage relation
+
 **NameOrigin**:
 Whether a DayHike label came from OSM `name`, OSM `ref`, the `from`/`to` tags, the nearest place, or a synthetic `relation:{id}` assigned at ingest; for a built DayHike, `network` or `stage`, from the source that built it. Synthetic labels can be dropped in postprocessing.
 _Avoid_: unnamed as a drop reason, title, display name

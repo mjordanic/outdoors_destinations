@@ -1,0 +1,20 @@
+---
+status: accepted (builds on ADR-0033 and ADR-0038)
+---
+
+# DayStages: day-sized pieces of long tours
+
+With no upper length cap (ADR-0033) the Catalog lists tours of several days: the GR 5 sections through Briançon (117 and 163 km), GR 57 (85 km), the 66 km Tour du Mont Thabor, single relations up to about 2,000 km. A Hiker looking for a day's walk on one of them finds only the whole tour. Some tours are mapped as stage relations too (Via Alpina), most are not.
+
+**A DayStage is a built DayHike (ADR-0038): one day of a relation DayHike longer than 25 km, 8–25 km long.** The `day_stages` source in `dayhike.stages` takes every kept relation DayHike over 25 km and cuts its main walk, from its Trailhead, where a day's walk can end:
+
+- **Cut points**, cheapest first: an alpine or wilderness hut within 200 m of the line, a place (city, town, village or hamlet) within 500 m, parking within 200 m. Each cuts the walk at the vertex nearest it; of several at one vertex the cheapest kind, then the nearest, so a stage ends where the next starts. The tour's two ends are cut points too.
+- **The cut** is the cheapest of every way to cut the walk at those points into stages of 8–25 km (a dynamic program over the cut points): each stage costs its squared distance from 16 km, in units of 8 km, plus 0 at a hut, 0.25 at a place or 0.5 at parking, so a hut wins over a village a few km nearer 16 km. A km left out of every stage costs more than any stage, so the stages cover all they can; a stretch with no cut point for more than 25 km gets no stage, and the tour stays listed whole.
+- **Name.** "{tour}, stage k: {from} – {to}", k counted along the tour, each end named after its cut point, else the nearest place within 500 m; "from {from}" or "to {to}" with one name, "{tour}, stage k" with none. NameOrigin `stage`, parts the tour's relation id.
+- **Twins.** Cut points are OSM objects, the same for every tour that passes them, so tours that share a stretch (GR 5 and Via Alpina, E4 and OKT) cut it at the same points. The same walk twice is one built DayHike (its id is its Route). A stage that is a Twin (the Twin rule of `similarity`) of a relation DayHike, such as a Via Alpina stage, or of a stage kept before it, such as the same stage of a tour walking the other way, is left out.
+
+The tour itself stays in the Catalog beside its stages. A tour of 25 km or less is not cut.
+
+**Consequences.** The Catalog gains DayStages wherever long tours pass huts, villages or parking: on a cut holding the whole tours through Briançon (5.9–7.6 E, 44.0–45.8 N, 2026-09-17 snapshot), 310 DayStages of 78 of its 87 tours over 25 km, the Twin check leaving out 36 of 346: Tour du Mont Thabor (66 km) gives 4, GR 57 (85 km) 5, the Grande boucle de la Clarée (31 km) 2, the GR 5 sections (117 and 163 km) 5 and 7. Europe-wide the upper bound before Twins is about 43,000 (776,000 km of trail in relations over 20 km, ÷ 18 km); the real count comes from the rebuild's ingest. Ingest assembles the main walk of every relation DayHike between 6.4 and 31.25 km once more for the Twin check, the only lengths that can be a Twin of an 8–25 km stage. A stage's walk is its tour's vertices, so its Route crosses the same joined gaps as the tour, and "Edit on the map" opens it, or says why not, as for any built DayHike.
+
+**Considered Options.** Cut every tour into equal pieces near 16 km whatever lies there (rejected: a stage would end in the middle of nowhere, and overlapping tours would cut a shared stretch at different points, giving near-copies the Twin rule does not catch). Cut greedily, the best point 8–25 km from the last cut (rejected: one bad early choice can leave a stretch over 25 km uncut; the dynamic program finds the cheapest cut of the whole walk). Use only stage relations OSM already has (rejected: most long tours have none). Call them "stages" (rejected: GLOSSARY uses stage for a stage relation).

@@ -182,6 +182,9 @@ XML file with hiking relations so ingest and ranking have a known answer:
 `tests/fixtures/catalog_rules.osm` holds one relation per Catalog rule
 (ADR-0033, ADR-0034): a `route=foot` loop, a 30 km tour (no upper cap), an iwn
 stage and its container, a mixed relation, a short spur and a node-network leg.
+`tests/fixtures/long_tour.osm` holds a 40 km tour with two huts and a stage
+relation on its last 13 km: ingest cuts it into two DayStages, the third being
+a Twin of the stage relation (ADR-0040).
 
 That is why `tests/fixtures/` looks small: the PRD uses it as the oracle, not as
 the hiking dataset. A real Catalog comes from Geofabrik extracts (see below).
@@ -1338,6 +1341,13 @@ as NetworkHikes and DayStages (ADR-0038). Each gets an id hashed from its Route,
 from 2^40 up, so a rebuild that leaves the walk unchanged keeps it; `kind`,
 `parts` and `route` say what it is built from. With no source registered the
 Catalog holds relations only.
+
+`day_stages` (`dayhike.stages`, ADR-0040) is registered: it cuts every relation
+DayHike over 25 km into DayStages of 8–25 km, as near 16 km as huts (within
+200 m of the line), then places (500 m), then parking (200 m) allow, named
+"{tour}, stage k: {from} – {to}". A stretch with no such point for over 25 km
+gets no stage, and a DayStage that is a Twin of a relation DayHike or of an
+earlier DayStage is left out.
 
 A hike that is neither a `route=hiking` or `route=foot` relation nor a built DayHike in this Catalog cannot be a Seed.
 Unnamed forest paths (`highway=path` without a hiking relation) never appear.
