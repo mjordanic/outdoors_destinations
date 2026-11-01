@@ -96,7 +96,7 @@
     </details>
 
     <section class="panel">
-      <label class="panel-title check"><input type="checkbox" id="drive-on"> 3. Only hikes within a drive</label>
+      <label class="panel-title check"><input type="checkbox" id="drive-on"> 3. Only hikes near a starting place</label>
       <div id="drive" hidden>
         <div class="row">
           <label for="origin">From</label>
@@ -107,13 +107,26 @@
           <button type="button" id="origin-here" class="secondary">Use my location</button>
         </div>
         <p id="origin-found" class="hint"></p>
-        <div class="row">
-          <label for="hours">Max hours</label>
-          <input id="hours" type="number" min="0.5" max="4" step="0.5" value="2">
+        <div class="row limit">
+          <label class="check"><input type="checkbox" id="hours-on" checked> Max drive hours</label>
+          <input id="hours" type="number" min="0.5" max="4" step="0.5" value="2" aria-label="Max drive hours value">
         </div>
-        <p class="hint">An estimate: motorway, trunk and primary roads, plus a straight line at 35 km/h to and from them. Good to about ±10 min; a 4 h limit is 4 h ± 30 min.</p>
+        <p class="hint" id="drive-hint">An estimate: motorway, trunk and primary roads, plus a straight line at 35 km/h to and from them. Good to about ±10 min; a 4 h limit is 4 h ± 30 min.</p>
+        <p id="drive-off" class="hint" hidden>The drive-time limit is not available on this server.</p>
+        <div class="row limit">
+          <label class="check"><input type="checkbox" id="km-on"> Max km, straight line</label>
+          <input id="km" type="number" min="1" max="200" step="5" value="50" aria-label="Max km value">
+        </div>
+        <p class="hint">As the crow flies from the starting place to where the hike starts, not by road.</p>
       </div>
-      <p id="drive-off" class="hint" hidden>The drive-time filter is not available on this server.</p>
+      <details id="more-options">
+        <summary>More options</summary>
+        <div class="row">
+          <label for="group-km">Group hikes starting within (km)</label>
+          <input id="group-km" type="number" min="0.1" max="50" step="0.5" inputmode="decimal">
+        </div>
+        <p class="hint" id="group-hint"></p>
+      </details>
     </section>
 
     <label class="check return-bar" id="return-bar" hidden
@@ -167,6 +180,7 @@
       <p class="hint" id="results-note"></p>
       <p class="stale-note" id="results-stale" hidden>The query changed since this ranking; press Find again to update it.</p>
       <div class="table-wrap"><table id="results-table"></table></div>
+      <p id="results-more" hidden><button type="button" class="secondary" id="show-more">Show 10 more</button></p>
       <p id="results-loops" hidden><button type="button" class="secondary" id="suggest-loops">Suggest loops near these hikes (takes a few seconds)</button></p>
       <p class="hint"><span id="results-scores"></span> Only the best of hikes that follow the same route is listed. A dash is “no data”, or a hut, cafe, shelter, viewpoint, summit or parking neither hike has mapped: either way it is left out of that pair’s score.</p>
     </section>

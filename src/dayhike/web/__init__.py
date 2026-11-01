@@ -3,7 +3,7 @@
 ``create_app`` serves ``ServingData`` (``dayhike.serving``): name search, place
 search when the export has GeoNames places (ADR-0029), the hikes in a map view,
 hike detail, the Measure list, the score of any two hikes, and Ranking with an
-optional highways-only DriveTime pre-filter. Every client gets a request budget per minute, and one Ranking
+optional highways-only DriveTime pre-filter and a straight-line distance limit, ten rows at a time (ADR-0032). Every client gets a request budget per minute, and one Ranking
 runs at a time per instance, so a small container holds its memory. When the export has a TrailGraph,
 it also serves the Segments in a map view and the detail of a ComposedHike, which can then be the
 Seed of a Ranking or of a pair, and a Ranking lists SuggestedLoops beside the DayHikes (ADR-0020).
@@ -46,14 +46,30 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from dayhike.catalog import MatrixClient, Origin
-from dayhike.serving import GEONAMES_ATTRIBUTION, MEASURE_GROUPS, MEASURE_INFO, SCORE_HELP, WISH_INPUTS, ServingData, name_dem
+from dayhike.catalog import MatrixClient, Origin, straight_line_distances_m
+from dayhike.serving import (
+    GEONAMES_ATTRIBUTION,
+    GROUP_KMH,
+    GROUP_M,
+    GROUP_MIN_M,
+    GROUP_SHARE,
+    MEASURE_GROUPS,
+    MEASURE_INFO,
+    SCORE_HELP,
+    WISH_INPUTS,
+    ServingData,
+    group_radius_m,
+    name_dem,
+)
 from dayhike.similarity import DEFAULT_WEIGHTS, MEASURES, WISHABLE, Measure
 from dayhike.trailgraph import Route, RouteError
 
 STATIC_DIR = Path(__file__).parent / "static"
-RESULTS = 10
+RESULTS = 10  # rows a Ranking lists; "Show 10 more" asks the next ones (ADR-0032)
+MAX_ROWS = 100  # the most rows a Ranking may list in all, the rows shown before included
 MAX_DRIVE_HOURS = 4.0
+MAX_KM = 200.0  # the longest straight-line distance limit: 4 h at GROUP_KMH, so it groups as no limit does
+MAX_GROUP_KM = 50.0  # the widest grouping radius a Hiker may ask
 MAP_HIKES = 100  # a map view shows its hikes only when it holds at most this many
 MAP_SEGMENTS = 1_500  # and its TrailGraph Segments only when it holds at most this many
 ROUTE_STEPS = 2_000  # the most steps (OSM ways walked) a ComposedHike may have
@@ -175,7 +191,12 @@ class RankRequest(Weighted):
     wish: dict[str, bool | float] | None = None  # Measure name to value, yes/no as true/false
     origin: Place | None = None
     max_hours: float | None = Field(default=None, gt=0, le=MAX_DRIVE_HOURS)
+    max_km: float | None = Field(default=None, gt=0, le=MAX_KM)  # straight line from origin to a hike's start
     loops: bool = False  # SuggestedLoops too, only on request (ADR-0028)
+    # Hikes starting this near a better one are its versions; None follows the limits (ADR-0032).
+    # At least 0.1 km, so the rows after those shown leave the rows shown out.
+    group_km: float | None = Field(default=None, ge=0.1, le=MAX_GROUP_KM)
+    after: list[Place] = Field(default=[], max_length=MAX_ROWS - RESULTS)  # the starts of the rows already shown
 
     @field_validator("wish")
     @classmethod
@@ -414,7 +435,11 @@ def create_app(
             "drive_time": drive_client is not None,
             "compose": data.trailgraph is not None,
             "max_drive_hours": MAX_DRIVE_HOURS,
+            "max_km": MAX_KM,
             "results": RESULTS,
+            "max_rows": MAX_ROWS,
+            # The default grouping radius (ADR-0032): share of the limit, a drive hour as kmh km, at least min_km, km with none.
+            "grouping": {"km": GROUP_M / 1000, "share": GROUP_SHARE, "min_km": GROUP_MIN_M / 1000, "kmh": GROUP_KMH},
         }
 
     score_help = {
@@ -498,17 +523,20 @@ def create_app(
     def rank(body: RankRequest) -> dict:
         started = time.monotonic()
         weights = body.measure_weights()
-        if (body.origin is None) != (body.max_hours is None):
-            raise HTTPException(400, "give both origin and max_hours, or neither")
-        if body.origin is not None and drive_client is None:
+        if (body.origin is None) != (body.max_hours is None and body.max_km is None):
+            raise HTTPException(400, "give origin with max_hours, max_km or both, or none of them")
+        if body.max_hours is not None and drive_client is None:
             raise HTTPException(400, "the drive-time filter is not available on this server")
+        origin = None if body.origin is None else Origin(body.origin.lat, body.origin.lon)
+        near = None if body.max_km is None else (origin, body.max_km * 1000)
+        group_m = group_radius_m(body.max_hours, body.max_km) if body.group_km is None else body.group_km * 1000
         seed = seed_of(body.seed, body.composed) if body.wish is None else body.wish
         if not one_ranking.acquire(timeout=RANK_WAIT_S):
             raise HTTPException(503, "busy; try again in a moment")
         try:
             hours = reach = None
-            if body.origin is not None:
-                origin, max_hours = Origin(body.origin.lat, body.origin.lon), body.max_hours
+            if body.max_hours is not None:
+                max_hours = body.max_hours
                 client = drive_client(max_hours)
                 hours = data.reachable(origin, max_hours, client)
 
@@ -524,6 +552,9 @@ def create_app(
                 return_to_start=body.return_to_start,
                 reach=reach,
                 loops=body.loops,
+                near=near,
+                group_m=group_m,
+                after=[(place.lat, place.lon) for place in body.after],
             )
         except (urllib.error.URLError, ConnectionError, TimeoutError):
             raise HTTPException(503, "the drive-time service is not answering; try again") from None
@@ -531,9 +562,18 @@ def create_app(
             raise HTTPException(400, str(error)) from None
         finally:
             one_ranking.release()
-        for result in (hike for row in results for hike in (row, *row["versions"])):
+        listed = [hike for row in results for hike in (row, *row["versions"])]
+        for result in listed:
             if result["id"] is not None:  # a SuggestedLoop has the hours to its own start
                 result["drive_hours"] = None if hours is None else hours[data.row_of(result["id"])]
+        starts = [result["trailhead"] for result in listed]
+        metres = straight_line_distances_m(origin, starts) if origin is not None and starts else [None] * len(starts)
+        for result, distance_m in zip(listed, metres):
+            result["distance_km"] = None if distance_m is None else round(float(distance_m) / 1000, 1)
+        reachable = None if hours is None else set(hours)
+        if near is not None:  # the rows within both limits
+            within = (straight_line_distances_m(origin, data.trailheads) <= near[1]).nonzero()[0].tolist()
+            reachable = set(within) if reachable is None else reachable & set(within)
         return {
             "seed": body.seed,
             "composed": None if body.composed is None else body.composed.model_dump(),
@@ -541,8 +581,12 @@ def create_app(
             "month": body.month,
             "return_to_start": body.return_to_start,
             "loops": body.loops,
+            "max_hours": body.max_hours,
+            "max_km": body.max_km,
+            "group_km": round(group_m / 1000, 3),
+            "after": len(body.after),
             "weights": {name: weight for name, weight in weights.items() if weight > 0},
-            "reachable": None if hours is None else len(hours),
+            "reachable": None if reachable is None else len(reachable),
             "results": results,
             "elapsed_ms": round((time.monotonic() - started) * 1000),
         }

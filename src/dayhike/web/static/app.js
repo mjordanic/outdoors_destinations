@@ -1588,6 +1588,27 @@ function useMyLocation() {
   );
 }
 
+// ---------- grouping ----------
+
+// The grouping radius the server takes when the Hiker leaves it empty: a share of the smaller limit,
+// a drive hour counted as so many km, at least a floor; with no limit, today's 10 km (ADR-0032).
+function groupDefaultKm() {
+  const { km, share, min_km: least, kmh } = state.info.grouping;
+  const limits = [];
+  if ($("#drive-on").checked) {
+    if ($("#hours-on").checked && Number($("#hours").value) > 0) limits.push(Number($("#hours").value) * kmh);
+    if ($("#km-on").checked && Number($("#km").value) > 0) limits.push(Number($("#km").value));
+  }
+  return limits.length ? Math.max(least, share * Math.min(...limits)) : km;
+}
+
+function showGroupDefault() {
+  const { km, share, min_km: least, kmh } = state.info.grouping;
+  const now = String(Math.round(groupDefaultKm() * 10) / 10);
+  $("#group-km").placeholder = now;
+  $("#group-hint").textContent = `A hike starting this near a better one is listed as one of its versions, not in a row of its own. Empty: ${now} km for this search, ${share * 100} % of the limit (a drive hour counts as ${kmh} km), at least ${least} km; ${km} km with no limit.`;
+}
+
 // ---------- ranking ----------
 
 // What a Ranking is like: the liked hike, or the wish while the Hiker describes the hike they want.
@@ -1614,13 +1635,28 @@ async function findSimilar() {
       const warning = typed && swappedWarning(typed);
       if (warning) throw new Error(warning);
       const origin = typed || state.origin;
-      if (!origin) throw new Error("Set a starting place for the drive-time filter.");
-      const hours = Number($("#hours").value);
-      if (!(hours >= 0.5 && hours <= state.info.max_drive_hours)) {
-        throw new Error(`Max hours is from 0.5 to ${state.info.max_drive_hours}.`);
-      }
+      if (!origin) throw new Error("Set a starting place.");
+      const byHours = $("#hours-on").checked, byKm = $("#km-on").checked;
+      if (!byHours && !byKm) throw new Error("Tick Max drive hours, Max km or both.");
       query.origin = { lat: origin.lat, lon: origin.lon };
-      query.max_hours = hours;
+      if (byHours) {
+        const hours = Number($("#hours").value);
+        if (!(hours >= 0.5 && hours <= state.info.max_drive_hours)) {
+          throw new Error(`Max hours is from 0.5 to ${state.info.max_drive_hours}.`);
+        }
+        query.max_hours = hours;
+      }
+      if (byKm) {
+        const km = Number($("#km").value);
+        if (!(km >= 1 && km <= state.info.max_km)) throw new Error(`Max km is from 1 to ${state.info.max_km}.`);
+        query.max_km = km;
+      }
+    }
+    const group = $("#group-km").value.trim();
+    if (group !== "") { // empty: the server groups by the limits (ADR-0032)
+      const km = Number(group);
+      if (!(km >= 0.1 && km <= 50)) throw new Error("Group hikes starting within 0.1 to 50 km.");
+      query.group_km = km;
     }
   } catch (error) {
     setStatus(error.message, true);
@@ -1637,7 +1673,7 @@ async function rank(query, liked, stale = false) {
   const request = ++ranked;
   $("#find").disabled = $("#suggest-loops").disabled = true;
   setStatus(query.loops ? "Suggesting loops near these hikes…"
-    : query.origin ? "Finding hikes within the drive, then ranking…" : "Ranking every hike…");
+    : query.max_hours ? "Finding hikes within the drive, then ranking…" : "Ranking every hike…");
   try {
     const body = await api("/api/rank", {
       method: "POST",
@@ -1646,8 +1682,8 @@ async function rank(query, liked, stale = false) {
     });
     if (request !== ranked || liked !== rankBasis()) return;
     state.query = {
-      weights: body.weights, month: body.month, drive: Boolean(query.origin), return_to_start: body.return_to_start,
-      wish: query.wish ?? null,
+      weights: body.weights, month: body.month, drive: Boolean(query.max_hours), km: Boolean(query.max_km),
+      return_to_start: body.return_to_start, wish: query.wish ?? null,
     };
     state.asked = { query, basis: liked };
     state.results = body.results;
@@ -1676,42 +1712,80 @@ function renderResults(body) {
   section.classList.remove("stale");
   $("#results-stale").hidden = true;
   $("#selected").hidden = true;
+  const limits = [body.max_hours && "the drive", body.max_km && "the distance"].filter(Boolean).join(" and ");
   const considered = body.reachable == null
     ? `${state.info.dayhikes.toLocaleString("en")} hikes`
-    : `${body.reachable.toLocaleString("en")} hikes within the drive`;
+    : `${body.reachable.toLocaleString("en")} hikes within ${limits}`;
   const mode = body.return_to_start ? "each with its way back to the start" : "each one way";
   const composed = body.results.some((result) => result.route)
     ? " Rows marked composed are loops drawn from marked trail segments, not catalog hikes; with Select hike on map ticked, that map shows them dashed green."
     : "";
   const versions = body.results.some((result) => result.versions.length)
-    ? " Hikes starting within 10 km of a better one are its versions: click a row with versions to list the others (var 2, 3) under it and see each on the map."
+    ? ` Hikes starting within ${body.group_km} km of a better one are its versions: click a row with versions to list the others (var 2, 3) under it and see each on the map.`
     : "";
   $("#wish-card").hidden = true;
   $("#results-title").textContent = state.query.wish ? "Hikes closest to the one you want" : "Most similar hikes";
   $("#results-note").textContent = body.results.length
     ? `${state.query.wish ? "Closest to the hike you want" : `Like “${state.liked.name}”`}, out of ${considered}${body.loops ? " and loops composed near the best of them" : ""}, ${mode}. Click a row to see it.${composed}${versions}`
-    : `No hike matched, out of ${considered}. Try a longer drive or other weights.`;
+    : `No hike matched, out of ${considered}. Try a longer drive, a longer distance or other weights.`;
   $("#results-loops").hidden = !state.info.compose || body.loops; // SuggestedLoops on request (ADR-0028)
   const table = $("#results-table");
   const measureHeads = comparedMeasures(body.return_to_start).map((m) =>
     `<th class="measure${body.weights[m.name] ? "" : " excluded"}" title="${escapeHtml(`${m.label}: ${m.description}`)}">${escapeHtml(m.label)} ${helpButton(m.name)}</th>`).join("");
   const figures = body.return_to_start ? "with the way back" : "one way";
-  table.innerHTML = `<thead><tr><th>#</th><th class="name">Hike</th><th>Score ${helpButton("overall")}</th>${state.query.drive ? "<th>Drive</th>" : ""}<th title="Length, ${figures}">Length${body.return_to_start ? " with way back" : ""}</th><th title="Climb and descent, ${figures}">Up / down</th>${measureHeads}</tr></thead>`;
-  const tbody = document.createElement("tbody");
+  table.innerHTML = `<thead><tr><th>#</th><th class="name">Hike</th><th>Score ${helpButton("overall")}</th>${state.query.drive ? "<th>Drive</th>" : ""}${state.query.km ? '<th title="Straight line from the starting place">Distance</th>' : ""}<th title="Length, ${figures}">Length${body.return_to_start ? " with way back" : ""}</th><th title="Climb and descent, ${figures}">Up / down</th>${measureHeads}</tr></thead>`;
   state.expanded = null;
-  body.results.forEach((result, i) => {
+  table.appendChild(document.createElement("tbody"));
+  listRows(0);
+  showMoreButton(body.results.length);
+  section.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// Rows for the results from ``from`` on, at the end of the table.
+function listRows(from) {
+  const tbody = $("#results-table tbody");
+  state.results.slice(from).forEach((result, k) => {
+    const i = from + k;
     const row = resultRow(result, i + 1, () => showResult(i));
     row.dataset.index = i;
     tbody.appendChild(row);
   });
-  table.appendChild(tbody);
   pick.drawLoops();
-  section.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// "Show 10 more" while the last answer filled its page and the table may grow.
+function showMoreButton(answered) {
+  $("#show-more").textContent = `Show ${state.info.results} more`;
+  $("#results-more").hidden = answered < state.info.results || state.results.length >= state.info.max_rows;
+}
+
+// The next rows of the shown Ranking: its query again, leaving out the areas of the rows shown (ADR-0032).
+async function showMore() {
+  const { asked, results } = state;
+  $("#show-more").disabled = true;
+  setStatus("Finding the next hikes…");
+  try {
+    const after = results.map((result) => ({ lat: result.trailhead[0], lon: result.trailhead[1] }));
+    const body = await api("/api/rank", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...asked.query, after }),
+    });
+    if (asked !== state.asked || results !== state.results) return;
+    results.push(...body.results);
+    listRows(after.length);
+    showMoreButton(body.results.length);
+    setStatus(body.results.length ? `Done in ${(body.elapsed_ms / 1000).toFixed(1)} s.` : "No more hikes in other areas.");
+  } catch (error) {
+    if (asked === state.asked && results === state.results) setStatus(error.message, true);
+  } finally {
+    $("#show-more").disabled = false;
+  }
 }
 
 // One row of the results table: the hike's figures and every Measure's score.
 function resultRow(result, number, open) {
-  const { weights, drive, return_to_start: back } = state.query;
+  const { weights, drive, km, return_to_start: back } = state.query;
   const row = document.createElement("tr");
   row.tabIndex = 0;
   const cells = comparedMeasures(back).map((m) => {
@@ -1729,6 +1803,7 @@ function resultRow(result, number, open) {
   row.innerHTML = `<td>${number}</td><td class="name" title="${escapeHtml(result.name)}">${tag}${escapeHtml(result.name)}${versions}</td>
     <td class="score">${result.score.toFixed(3)}</td>
     ${drive ? `<td>${result.drive_hours.toFixed(1)} h</td>` : ""}
+    ${km ? `<td>${result.distance_km.toFixed(1)} km</td>` : ""}
     <td class="figure">${result.length_m != null ? fmt.km(result.length_m) : "–"}</td>
     <td class="figure">${result.climb_m != null ? upDown(result.climb_m, result.descent_m) : "–"}</td>${cells}`;
   row.addEventListener("click", open);
@@ -1862,10 +1937,14 @@ async function start() {
     setWishing(true);
   });
   $("#wish-off").addEventListener("click", () => setWishing(false));
-  if (!state.info.drive_time) {
-    $("#drive-on").disabled = true;
+  if (!state.info.drive_time) { // the distance needs no drive-time service
+    $("#hours-on").checked = false;
+    $("#hours-on").disabled = $("#hours").disabled = true;
+    $("#drive-hint").hidden = true;
     $("#drive-off").hidden = false;
+    $("#km-on").checked = true;
   }
+  showGroupDefault();
   nameSearch($("#search"), $("#suggestions"), choose);
   $("#map-pick-on").addEventListener("change", (event) => (event.target.checked ? pick.open() : pick.close()));
   $("#compose-bar").hidden = !state.info.compose;
@@ -1897,7 +1976,11 @@ async function start() {
   });
   $("#drive-on").addEventListener("change", (event) => { $("#drive").hidden = !event.target.checked; markStale(); });
   $("#origin").addEventListener("input", () => { state.origin = null; $("#origin-found").textContent = ""; markStale(); });
-  $("#hours").addEventListener("input", markStale);
+  for (const limit of ["#drive-on", "#hours-on", "#hours", "#km-on", "#km"]) {
+    $(limit).addEventListener("input", markStale);
+    $(limit).addEventListener("input", showGroupDefault);
+  }
+  $("#group-km").addEventListener("input", markStale);
   $("#origin").addEventListener("keydown", (event) => { if (event.key === "Enter") findPlace(); });
   $("#origin-find").addEventListener("click", findPlace);
   $("#origin-here").addEventListener("click", useMyLocation);
@@ -1906,6 +1989,7 @@ async function start() {
     markStale();
   });
   $("#find").addEventListener("click", findSimilar);
+  $("#show-more").addEventListener("click", showMore);
   // The shown Ranking again, with loops near its best hikes, though the query on the left changed since.
   $("#suggest-loops").addEventListener("click", () =>
     rank({ ...state.asked.query, loops: true }, state.asked.basis, $("#results").classList.contains("stale")));

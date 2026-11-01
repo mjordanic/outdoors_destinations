@@ -1639,21 +1639,27 @@ best Catalog results, found as the query runs, named after a hiking place near
 where they start, else by the trails they walk (ADR-0022), marked "composed" and
 drawn dashed green on the "Select hike on map" map. Each opens like a composed hike, with its
 link, and "Edit on the map" makes it the liked hike in the composer. The list
-holds one row per area: hikes, catalog or composed, starting within 10 km of a
-better one are its versions; clicking the row lists up to three versions
+holds one row per area: hikes, catalog or composed, starting within the
+GroupingRadius of a better one are its versions; clicking the row lists up to three versions
 (var 1, 2, 3), each more than half a different route, under it and on the map,
-each to open. A loop that mostly walks the liked hike again is not suggested. The "Return to start" tick
+each to open. The GroupingRadius follows the search (ADR-0032): 5 % of the
+distance limit, or of the drive limit at 50 km per hour, the smaller, at least
+0.5 km, and 10 km with no limit. "More options", under the limits, sets it from 0.1 to 50 km.
+"Show 10 more" under the table adds the next 10 areas of the shown Ranking, up
+to 100 rows, loops included when they were asked. A loop that mostly walks the liked hike again is not suggested. The "Return to start" tick
 box above "Find similar" (on by default) measures the liked hike and every hike
 compared with it with its way back to its start, so a summit line is compared
 up and back; off, every hike is compared one way. While it is on, Round trip
 is left out (every hike is then a round trip; ADR-0022). Turning it changes the
 liked hike's figures and ranks again, and an address ends in `&oneway` when
 it is off. Clicking a result shows it the same way, next to the
-liked hike. An optional starting place and maximum drive (up to 4 h) keeps only
-hikes within that DriveTime (the start is typed as "lat, lon", taken from the
+liked hike. An optional starting place with a maximum drive (up to 4 h), a
+maximum straight-line distance (up to 200 km, from the start to where a hike
+starts, not by road; ADR-0032) or both keeps only hikes within those limits (the
+start is typed as "lat, lon", taken from the
 browser, or found by "Find place" among the GeoNames towns in the export,
-ADR-0029), estimated on highways-only tiles as in
-**Highway tiles** above. Measures with no data for a hike (climate and land
+ADR-0029). The DriveTime is estimated on highways-only tiles as in
+**Highway tiles** above; the distance needs no routing engine. Measures with no data for a hike (climate and land
 cover do not cover all of Europe yet) show "no data" and drop out of that
 pair's score. Every score has a short line and a "?" beside it (in the results
 table, in each column heading); hover, focus, click or tap opens what the score
@@ -1752,12 +1758,22 @@ and encoded line; when the box holds more than 100, none are listed and
 `too_many` is true, so the page asks to zoom in),
 `GET /api/measures`, `GET /api/info`
 (with the Trailheads' box, `coverage`, for the page's swapped "lat, lon"
-warning, and `place_search`, true when the export has `places.sqlite`),
+warning, `place_search`, true when the export has `places.sqlite`, `results`
+and `max_rows`, the rows a page and a whole list hold, `max_km`, and `grouping`,
+the rule of the default GroupingRadius),
 `GET /api/place?q=&limit=` (GeoNames places with a name starting with the
 query, folded like search: the place named exactly that, then one with it as an
 alternate name, then the most populous; 404 without `places.sqlite`), `POST /api/rank` with `{"seed": id, "weights": {measure: 0-100},
 "excluded": [measure], "month": 1-12, "origin": {"lat", "lon"}, "max_hours":
-0-4}`, and `POST /api/pair` with `{"a": id, "b": id}` plus the same weights,
+0-4, "max_km": 0-200, "group_km": 0.1-50, "after": [{"lat", "lon"}]}` (ADR-0032:
+an `origin` needs `max_hours`, `max_km` or both, and a hike must be within each
+one given, `max_km` in a straight line to its start; `group_km` is the
+GroupingRadius, by default from the limits as `grouping` in `/api/info` says;
+`after`, at most 90, are the starts of the rows already shown, and the answer
+lists the next `results` rows, leaving out every hike starting within the
+GroupingRadius of one; the answer echoes `max_hours`, `max_km`, `group_km` and
+how many starts `after` had, `reachable` counts the hikes within the limits, and
+each hike has `drive_hours` and `distance_km`, null without that limit or start), and `POST /api/pair` with `{"a": id, "b": id}` plus the same weights,
 excluded and month, giving the score a Ranking would show for `b` with `a` as
 the Seed and every Measure's score. Detail, compose, rank and pair take
 `return_to_start` (default true; `?return_to_start=false` on `GET
@@ -1788,8 +1804,8 @@ echoed as `loops`; ADR-0028) a Ranking also lists SuggestedLoops
 `name` (from where it starts) and the figures of a DayHike row; with `origin`
 and `max_hours` only loops starting within the drive, each with its
 `drive_hours`. Every row has its `line` and `versions`, the other hikes of its
-area (DayHikes or loops starting within 10 km of it, at most three hikes per
-row) in the same shape. Loop work stops at 5 s. The GET routes also answer HEAD. Each client gets 20 Rankings and
+area (DayHikes or loops starting within the GroupingRadius of it, at most three hikes per
+row) in the same shape. With `max_km` only loops starting within it are listed. Loop work stops at 5 s. The GET routes also answer HEAD. Each client gets 20 Rankings and
 300 other calls a minute; one Ranking runs at a time per process.
 
 Measured on the Europe Catalog (161,614 DayHikes), 8-core Mac, the container

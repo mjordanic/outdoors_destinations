@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 import uvicorn
 
-from dayhike import build_catalog, build_similarity
+from dayhike import build_catalog, build_similarity, web
 from dayhike.serving import ServingData, export_serving
 from dayhike.web import create_app
 
@@ -53,7 +53,8 @@ def data(tmp_path_factory: pytest.TempPathFactory) -> ServingData:
 
 @pytest.fixture(scope="module")
 def server(data: ServingData) -> Iterator[str]:
-    yield from serve(create_app(data, lambda max_hours: Matrix()))
+    # Every test here ranks from one address: the Ranking budget per minute (RANK_RATE) is not under test.
+    yield from serve(create_app(data, lambda max_hours: Matrix(), rank_rate=1_000))
 
 
 @pytest.fixture(scope="module")
@@ -311,7 +312,7 @@ def test_finding_hikes_for_a_wish_asks_the_ranking_for_it_and_lists_the_results(
     page.get_by_label("Hut along weight, 0 to 100").fill("40")
     page.get_by_label("Highest point weight, 0 to 100").fill("0")
     page.get_by_label("Lake or sea weight, 0 to 100").fill("0")
-    page.get_by_label("Only hikes within a drive").check()
+    page.get_by_label("Only hikes near a starting place").check()
     page.get_by_label("From").fill("45.1, 15.1")
 
     page.get_by_role("button", name="Find hikes").click()
@@ -561,6 +562,98 @@ def test_loops_are_suggested_only_when_the_hiker_asks_for_them(browser, server) 
     assert not suggest.is_visible()
 
 
+def _listed(page) -> list[str]:
+    return page.locator("#results-table tbody tr td.name").all_inner_texts()
+
+
+def test_show_more_appends_the_next_rows_under_the_table(browser, server, monkeypatch) -> None:
+    monkeypatch.setattr(web, "RESULTS", 1)  # three areas hold the other hikes: three pages of one row
+    api = Api({})
+    page = open_page(browser, server, api, hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+    more = page.get_by_role("button", name="Show 1 more")
+    first = _listed(page)
+    assert len(first) == 1 and "after" not in api.ranked[-1]
+
+    page.get_by_label("Length weight, 0 to 100").fill("10")  # the shown Ranking's query is the one continued
+    more.click()
+    page.locator("#results-table tbody tr").nth(1).wait_for()
+
+    lat, lon = page.evaluate("state.results[0].trailhead")
+    assert api.ranked[-1] == {**api.ranked[0], "after": [{"lat": lat, "lon": lon}]}
+    assert _listed(page)[0] == first[0] and len(set(_listed(page))) == 2
+    assert page.locator("#results-table tbody tr td:first-child").all_inner_texts() == ["1", "2"]
+    more.click()
+    page.locator("#results-table tbody tr").nth(2).wait_for()
+    assert len(set(_listed(page))) == 3
+    with page.expect_response(f"{server}/api/rank"):
+        more.click()  # no fourth area
+    page.wait_for_function("() => document.querySelector('#results-more').hidden")
+    assert len(_listed(page)) == 3
+
+
+def test_a_distance_limit_alone_or_with_the_drive_time_is_asked(browser, server) -> None:
+    api = Api({})
+    page = open_page(browser, server, api, hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_label("Only hikes near a starting place").check()
+    page.get_by_label("From", exact=True).fill("45.2, 15.1")
+    page.get_by_label("Max drive hours", exact=True).uncheck()
+    page.get_by_label("Max km, straight line", exact=True).check()
+    page.get_by_label("Max km value").fill("20")
+
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+
+    asked = api.ranked[-1]
+    assert asked["origin"] == {"lat": 45.2, "lon": 15.1} and asked["max_km"] == 20 and "max_hours" not in asked
+    assert "Distance" in page.locator("#results-table thead").inner_text()
+    assert "Drive" not in page.locator("#results-table thead").inner_text()
+    assert page.locator("#results-table tbody tr").first.locator("td").nth(3).inner_text() == "0.0 km"
+
+    page.get_by_label("Max drive hours", exact=True).check()
+    page.get_by_role("button", name="Find similar").click()
+    page.wait_for_function("() => document.querySelector('#results-table thead').textContent.includes('Drive')")
+    assert api.ranked[-1]["max_km"] == 20 and api.ranked[-1]["max_hours"] == 2
+
+    page.get_by_label("Max km, straight line", exact=True).uncheck()
+    page.get_by_label("Max drive hours", exact=True).uncheck()
+    page.get_by_role("button", name="Find similar").click()
+    page.get_by_text("Tick Max drive hours, Max km or both.").wait_for()
+
+
+def test_the_grouping_radius_waits_under_more_options_and_follows_the_limits(browser, server) -> None:
+    api = Api({})
+    page = open_page(browser, server, api, hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    radius = page.get_by_label("Group hikes starting within (km)")
+    assert not radius.is_visible()
+
+    page.get_by_text("More options", exact=True).click()
+
+    assert radius.is_visible() and radius.input_value() == ""
+    assert radius.get_attribute("placeholder") == "10"  # no limit: today's 10 km
+    page.get_by_label("Only hikes near a starting place").check()
+    assert radius.get_attribute("placeholder") == "5"  # 2 h at 50 km/h, 5 %
+    page.get_by_label("Max km, straight line", exact=True).check()
+    page.get_by_label("Max km value").fill("30")
+    assert radius.get_attribute("placeholder") == "1.5"  # the smaller limit
+    page.get_by_label("Max km value").fill("4")
+    assert radius.get_attribute("placeholder") == "0.5"  # at least 500 m
+    page.get_by_label("Only hikes near a starting place").uncheck()
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+    assert "group_km" not in api.ranked[-1]  # the server follows the limits
+
+    radius.fill("20")
+    page.get_by_role("button", name="Find similar").click()
+    page.wait_for_function("() => document.querySelector('#results-note').textContent.includes('within 20 km')")
+    assert api.ranked[-1]["group_km"] == 20
+    assert page.locator("#results-table tbody tr").count() == 2  # 1002 and 1003, 14 km apart, share a row
+
+
 def test_a_server_that_cannot_compose_offers_no_loops(browser, server) -> None:
     page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
     page.route(f"{server}/api/info", lambda route: route.fulfill(json={**route.fetch().json(), "compose": False}))
@@ -603,7 +696,7 @@ def test_finding_a_place_asks_the_export_not_nominatim(browser, server) -> None:
     page = open_page(browser, server, Api(WISHABLE))
     asked = []
     page.on("request", lambda request: asked.append(request.url))
-    page.get_by_label("Only hikes within a drive").check()
+    page.get_by_label("Only hikes near a starting place").check()
 
     page.get_by_label("From").fill("agram")
     page.get_by_role("button", name="Find place").click()
