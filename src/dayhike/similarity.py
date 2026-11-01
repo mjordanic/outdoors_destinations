@@ -207,9 +207,9 @@ MEASURES = (
     Measure("steepest_km", "ratio", ("steepest_km_m",), 50),
 )
 MEASURE_NAMES = tuple(measure.name for measure in MEASURES)
-# On by default: the page's basic set less Summit, the Measures a Hiker sees
-# without opening Advanced search (ADR-0031); the others are off until the
-# Hiker weights them.
+# On by default: the page's basic set, the Measures a Hiker sees without
+# opening Advanced search (ADR-0031); the others are off until the Hiker
+# weights them.
 CORE_MEASURES = ("length", "elevation_gain", "highest", "landcover", "temperature", "waterside")
 DEFAULT_WEIGHTS = {name: 100.0 if name in CORE_MEASURES else 0.0 for name in MEASURE_NAMES}
 # The Measures a Wish can give a value: one fact, a number or yes/no. A mix or

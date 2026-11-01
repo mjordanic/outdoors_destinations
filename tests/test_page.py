@@ -129,7 +129,7 @@ SHOWN = "rows => rows.map(r => r.dataset.measure)"
 def open_advanced(page) -> None:
     """Opens Advanced search, or folds it away again when open."""
     page.get_by_text("Advanced search", exact=True).click()
-BASIC = ["length", "elevation_gain", "highest", "landcover", "peak_summited", "temperature", "waterside"]
+BASIC = ["length", "elevation_gain", "highest", "landcover", "temperature", "waterside"]
 
 
 def test_a_hiker_sees_a_few_plain_measures_and_the_rest_wait_behind_advanced_search(browser, server) -> None:
@@ -137,16 +137,62 @@ def test_a_hiker_sees_a_few_plain_measures_and_the_rest_wait_behind_advanced_sea
 
     assert page.locator(".weight:visible").evaluate_all(SHOWN) == BASIC
     assert page.get_by_label("Climbing weight, 0 to 100").input_value() == "100"
-    assert page.get_by_label("Summit weight, 0 to 100").input_value() == "0"
+    assert not page.get_by_label("Summit weight, 0 to 100").is_visible()
     assert not page.get_by_label("Lowest point weight, 0 to 100").is_visible()
 
     open_advanced(page)
 
     assert page.get_by_label("Lowest point weight, 0 to 100").is_visible()
+    assert page.get_by_label("Summit weight, 0 to 100").is_visible()
     assert page.locator("#advanced legend").all_text_contents() == [
         "Effort and steepness", "Altitude", "Scenery", "Facilities", "Trail", "Water", "Weather",
     ]  # fmt: skip
     assert len(page.locator(".weight:visible").evaluate_all(SHOWN)) == 27
+
+
+def test_every_main_feature_counts_by_default(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+
+    basic = page.locator("#weights .weight input[type=range]")
+    assert basic.count() == len(BASIC)
+    assert set(basic.evaluate_all("inputs => inputs.map(i => i.value)")) == {"100"}
+    assert page.locator("#weights .weight.excluded").count() == 0
+
+
+def test_each_weight_is_a_slider_from_0_to_100_in_steps_of_10_with_its_value_shown(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+    open_advanced(page)
+
+    sliders = page.locator(".weight input:not(.wish)")
+    assert set(sliders.evaluate_all("inputs => inputs.map(i => [i.type, i.min, i.max, i.step].join())")) == {"range,0,100,10"}
+    assert page.locator(".weight input[type=checkbox]:not(.wish)").count() == 0  # no "off" tick
+    assert page.locator('.weight[data-measure="elevation_gain"] output').inner_text() == "100"
+
+    climbing = page.get_by_label("Climbing weight, 0 to 100")
+    climbing.focus()
+    climbing.press("ArrowLeft")
+    assert climbing.input_value() == "90"
+    assert page.locator('.weight[data-measure="elevation_gain"] output').inner_text() == "90"
+
+
+def test_a_weight_slid_to_0_is_off_struck_through_and_left_out(browser, server) -> None:
+    api = Api({})
+    page = open_page(browser, server, api, hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    climbing = page.locator('.weight[data-measure="elevation_gain"]')
+
+    page.get_by_label("Climbing weight, 0 to 100").fill("0")
+
+    assert "excluded" in climbing.get_attribute("class")
+    assert climbing.locator(".name").evaluate("e => getComputedStyle(e).textDecorationLine") == "line-through"
+    assert climbing.locator("output").inner_text() == "off"
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+    assert not api.ranked[-1]["weights"].get("elevation_gain")
+
+    page.get_by_label("Climbing weight, 0 to 100").fill("30")
+    assert "excluded" not in climbing.get_attribute("class")
+    assert climbing.locator("output").inner_text() == "30"
 
 
 GROUP_IDS = {"basic", "effort", "altitude", "scenery", "facilities", "trail", "water", "weather"}
@@ -263,7 +309,7 @@ def test_finding_hikes_for_a_wish_asks_the_ranking_for_it_and_lists_the_results(
     open_advanced(page)
     page.get_by_label("Hut along you want").uncheck()
     page.get_by_label("Hut along weight, 0 to 100").fill("40")
-    page.get_by_label("Leave Highest point out").check()
+    page.get_by_label("Highest point weight, 0 to 100").fill("0")
     page.get_by_label("Lake or sea weight, 0 to 100").fill("0")
     page.get_by_label("Only hikes within a drive").check()
     page.get_by_label("From").fill("45.1, 15.1")
@@ -379,17 +425,20 @@ def test_a_wish_asks_only_what_the_hiker_sets_and_leaves_the_liked_hike_weights_
     page.get_by_role("button", name="No particular hike in mind?").click()
 
     weights = page.locator(".weight:visible input[aria-label$='weight, 0 to 100']")
-    assert set(weights.evaluate_all("inputs => inputs.map(i => i.value)")) == {"0"}
+    assert set(weights.evaluate_all("inputs => inputs.map(i => i.type + i.value)")) == {"range0"}
+    assert page.locator(".weight:visible:not(.excluded)").count() == 0  # all off, struck through
     page.get_by_label("Highest point you want, in m").fill("2000")
     open_advanced(page)
     page.get_by_label("Hut along you want").uncheck()
     assert page.get_by_label("Highest point weight, 0 to 100").input_value() == "100"
     assert page.get_by_label("Hut along weight, 0 to 100").input_value() == "100"
+    assert page.locator(".weight:visible:not(.excluded)").evaluate_all(SHOWN) == ["highest", "hut_along"]
 
     page.get_by_role("button", name="Back to a hike you liked").click()
 
     assert page.get_by_label("Climbing weight, 0 to 100").input_value() == "70"
     assert page.get_by_label("Length weight, 0 to 100").input_value() == "100"
+    assert page.locator("#weights .weight.excluded").count() == 0
 
 
 def test_resetting_a_wish_asks_nothing_again(browser, server) -> None:

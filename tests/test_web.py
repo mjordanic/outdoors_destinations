@@ -74,23 +74,22 @@ def test_measures_start_with_a_plain_basic_set_and_group_the_rest_for_advanced_s
         "elevation_gain": "Climbing",
         "highest": "Highest point",
         "landcover": "Landscape",
-        "peak_summited": "Summit",
         "temperature": "Typical temperature",
         "waterside": "Lake or sea",
     }
     assert {group: sorted(name for name in groups if groups[name] == group) for group in (g["name"] for g in body["groups"][1:])} == {
         "effort": ["climb_grade", "difficulty", "profile", "steepest_km"],
         "altitude": ["lowest"],
-        "scenery": ["peaks_around", "viewpoint_along"],
+        "scenery": ["peak_summited", "peaks_around", "viewpoint_along"],
         "facilities": ["hut_along", "parking_trailhead", "restaurant_cafe_along", "restaurant_cafe_trailhead", "shelter_along"],
         "trail": ["round_trip", "surface", "tarmac_approach"],
         "water": ["dry_stretch", "water_count"],
         "weather": ["precipitation", "solar_radiation", "southness"],
     }
-    # Only the basic set counts by default, Summit left at 0 (ADR-0031).
-    assert {m["name"]: m["default_weight"] for m in body["measures"] if m["default_weight"] > 0} == dict.fromkeys(
-        ("length", "elevation_gain", "highest", "landcover", "temperature", "waterside"), 100.0
-    )
+    # The basic set is what counts by default, every one of it at 100, and nothing else (ADR-0031).
+    assert {m["name"]: m["default_weight"] for m in body["measures"] if m["default_weight"] > 0} == {
+        m["name"]: 100.0 for m in body["measures"] if m["group"] == "basic"
+    }
 
 
 def test_measures_say_how_a_wish_value_is_typed_in(client: TestClient) -> None:
