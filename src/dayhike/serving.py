@@ -1267,7 +1267,10 @@ class ServingData:
         allow; loops are searched near the best ``LOOP_SEEDS`` DayHikes only.
         ``after`` are the starts (lat, lon) of the rows already listed: every hike
         starting within ``group_m`` (above 0) of one is left out, so the rows
-        listed continue those exactly (ADR-0032).
+        listed continue the areas of those exactly, none twice and none skipped,
+        and the DayHike rows match one longer Ranking. With ``loops`` each page
+        searches loops anew near its own best DayHikes, so its loops can differ
+        from those one longer Ranking would list (ADR-0032).
         """
         group_m = GROUP_M if group_m is None else group_m
         store = self.store.mode(return_to_start)

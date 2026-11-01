@@ -10,7 +10,7 @@ Three changes to the results list, asked together by the captain.
 asks the next 10 areas and adds them under the rows shown. It asks the query of the table shown, as
 the loops button does (ADR-0028), with `after`: the starts of the rows already shown. The server
 ranks again and leaves out every hike that starts within the GroupingRadius of one of those starts,
-then groups the rest as before. That is exactly how the rows shown would have gone on. The rule of
+then groups the rest as before. The areas go on exactly as the rows shown would have. The rule of
 ADR-0020 takes a hike as a new row only when it starts outside the GroupingRadius of every better
 row, so every hike ranked above the 11th row's leader is within the GroupingRadius of a row shown.
 Page 2 leaves those out and starts at that 11th leader. No area is shown twice and none is skipped.
@@ -21,9 +21,10 @@ shown (`after` takes at most 90 starts).
 Loops are still searched only on request. "Show 10 more" asks the shown table's query again, loops
 included. Without loops, each page costs one Catalog Ranking. With loops, each page searches loops
 near the best 30 DayHikes that start outside the areas shown, so the new rows get loops near them
-too, and each page costs a loop search. The search's 5 s stop can cut a later search shorter than
-an earlier one. Pages built from starts stay exact anyway, because a page never re-searches the
-rows already shown. "Suggest loops near these hikes" still ranks the shown query again with loops
+too, and each page costs a loop search. The areas still go on exactly, none twice and none
+skipped, and the DayHike rows match one longer Ranking. The loops do not: each page searches loops
+anew near its own best DayHikes, and the search's 5 s stop can cut a later search shorter than an
+earlier one, so a page's loops can differ from those one longer Ranking would list. "Suggest loops near these hikes" still ranks the shown query again with loops
 and shows its first 10 rows, so the table starts over from row 1.
 
 **A GroupingRadius that follows the search.** A fixed 10 km hides many hikes when someone searches
