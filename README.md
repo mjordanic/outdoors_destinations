@@ -1632,7 +1632,7 @@ then a Segment to walk along it; one away from the walk's end is reached the
 shortest way over trail Segments, drawn dashed in amber, never over a gap or
 Link the Hiker did not take; "connect here" crosses a Link; the walk may repeat
 a Segment and is measured as drawn; it gets a proposed name, from the trails
-walked longest and a named place at the start, that the Hiker may change; its
+walked longest (each at least 30 % of it) and a named place at the start, that the Hiker may change; its
 link, `#compose=1:104.11,105.13`, shares it as the OSM ways it walks from node
 to node (and `&name=…` when the Hiker named it), so it opens the same walk after
 a rebuild that adds or drops Junctions, and nothing is stored); see what
