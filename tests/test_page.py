@@ -379,6 +379,39 @@ def test_a_wish_survives_a_reload_and_opens_from_its_link(browser, server) -> No
     assert shared.get_by_role("button", name="Find hikes").is_enabled()
 
 
+KM_LENGTH = {
+    "kind": "number", "unit": "m", "min": 1000, "max": 2_000_000, "step": 500, "default": 10_000,
+    "display": {"unit": "km", "per": 1000},
+}  # fmt: skip
+
+
+def test_a_multi_day_length_is_wished_in_km_with_a_hint(browser, server) -> None:
+    # Lengths are typed in km, up to 2,000 km, and sent in metres (ADR-0035).
+    api = Api({**WISHABLE, "length": KM_LENGTH})
+    page = open_page(browser, server, api)
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    length = page.get_by_label("Length you want, in km")
+
+    assert (length.get_attribute("min"), length.get_attribute("max"), length.get_attribute("step")) == ("1", "2000", "0.5")
+    assert length.input_value() == "10"
+    assert page.get_by_text("Over about 25 km is usually more than a day").is_visible()
+
+    length.fill("66")
+    page.get_by_label("Length weight, 0 to 100").fill("100")
+    page.get_by_role("button", name="Find hikes").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+
+    assert api.ranked[-1]["wish"] == {"length": 66_000}
+    page.wait_for_url("**/#wish=length:66000:100")  # the address keeps metres, as links made before km do
+    page.locator("#results-table tbody tr").first.click()
+    facts = page.locator("#selected table.facts")
+    facts.wait_for()
+    assert facts.locator("tr", has=page.locator("td", has_text="Length")).locator("td").nth(2).inner_text() == "66 km"
+
+    shared = open_page(browser, server, api, hash="#wish=length:12500:100")
+    assert shared.get_by_label("Length you want, in km").input_value() == "12.5"
+
+
 def test_a_wish_address_with_a_small_nonzero_weight_keeps_its_measure_on(browser, server) -> None:
     api = Api(WISHABLE)
     page = open_page(browser, server, api, hash="#wish=highest:2000:3")

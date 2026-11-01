@@ -111,6 +111,21 @@ def test_measures_say_how_a_wish_value_is_typed_in(client: TestClient) -> None:
     assert client.post("/api/rank", json={"wish": defaults, "return_to_start": False}).status_code == 200
 
 
+def test_lengths_are_wished_in_km_up_to_multi_day_tours(client: TestClient) -> None:
+    # The API takes metres, the Measure's fact; the page shows km (ADR-0035).
+    measures = {m["name"]: m for m in client.get("/api/measures").json()["measures"]}
+    km = {"unit": "km", "per": 1000}
+
+    assert measures["length"]["wish"] == {
+        "kind": "number", "unit": "m", "min": 1000, "max": 2_000_000, "step": 500, "default": 10_000, "display": km,
+    }  # fmt: skip
+    assert measures["dry_stretch"]["wish"] == {
+        "kind": "number", "unit": "m", "min": 0, "max": 2_000_000, "step": 500, "default": 5_000, "display": km,
+    }  # fmt: skip
+    assert measures["elevation_gain"]["wish"]["display"] is None
+    assert client.post("/api/rank", json={"wish": {"length": 66_000}}).status_code == 200
+
+
 ELEVATION_MEASURES = ("elevation_gain", "highest", "lowest", "profile", "southness", "climb_grade", "steepest_km")
 CLIMATE_MEASURES = ("temperature", "precipitation", "solar_radiation")
 LANDCOVER_MEASURES = ("landcover", "waterside")

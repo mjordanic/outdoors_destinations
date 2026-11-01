@@ -56,6 +56,7 @@ from dayhike.serving import (
     MEASURE_GROUPS,
     MEASURE_INFO,
     SCORE_HELP,
+    WISH_DISPLAY,
     WISH_INPUTS,
     ServingData,
     group_radius_m,
@@ -243,7 +244,9 @@ def wish_input(measure: Measure) -> dict | None:
     if measure.kind == "agree":
         return {"kind": "yes/no", "unit": None, "min": None, "max": None, "step": None, "default": True}
     unit, low, high, step, default = WISH_INPUTS[measure.name]
-    return {"kind": "number", "unit": unit, "min": low, "max": high, "step": step, "default": default}
+    shown = WISH_DISPLAY.get(measure.name)
+    display = None if shown is None else {"unit": shown[0], "per": shown[1]}
+    return {"kind": "number", "unit": unit, "min": low, "max": high, "step": step, "default": default, "display": display}
 
 
 def site_pages(

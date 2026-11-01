@@ -197,7 +197,7 @@ MEASURE_INFO: dict[str, tuple[str, str, str, str]] = {
 # The Wish form's input for each Measure that takes a number (``WISHABLE`` but yes/no): unit,
 # lowest, highest, step and default, in the units of the Measure's fact.
 WISH_INPUTS: dict[str, tuple[str | None, float, float, float, float]] = {
-    "length": ("m", 1_000, 40_000, 500, 10_000),
+    "length": ("m", 1_000, 2_000_000, 500, 10_000),
     "elevation_gain": ("m", 0, 3_000, 50, 600),
     "difficulty": ("SAC grade", 1, 6, 1, 2),
     "highest": ("m", 0, 5_000, 50, 1_500),
@@ -208,12 +208,15 @@ WISH_INPUTS: dict[str, tuple[str | None, float, float, float, float]] = {
     "solar_radiation": ("kJ m⁻² day⁻¹", 0, 25_000, 500, 16_000),
     "southness": (None, 0, 1, 0.05, 0.5),
     "water_count": ("sources", 0, 3, 1, 1),
-    "dry_stretch": ("m", 0, 40_000, 500, 5_000),
+    "dry_stretch": ("m", 0, 2_000_000, 500, 5_000),
     "waterside": ("share", 0, 1, 0.05, 0.5),
     "tarmac_approach": ("m", 0, 5_000, 100, 0),
     "climb_grade": ("share", 0, 0.5, 0.01, 0.1),
     "steepest_km": ("m", 0, 800, 10, 150),
 }
+# The unit the page shows a Wish value in, where it is not the fact's, and how many fact units make
+# one: lengths up to multi-day tours are typed in km (ADR-0035).
+WISH_DISPLAY: dict[str, tuple[str, float]] = {"length": ("km", 1_000), "dry_stretch": ("km", 1_000)}
 
 
 def score_note(

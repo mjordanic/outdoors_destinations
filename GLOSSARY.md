@@ -145,7 +145,7 @@ A DayHike whose main walk ends within 50 m of its Trailhead, so its length is th
 _Avoid_: loop (the main walk's loop includes lollipops), circular, closed route
 
 **WayBack**:
-The shortest walk from where a hike ends back to its Trailhead: nothing when it ends there, a straight step across a gap of at most 50 m, else the shortest way along the TrailGraph's trails when it is shorter than the hike walked backwards, else the hike retraced. It never crosses a Link.
+The shortest walk from where a hike ends back to its Trailhead: nothing when it ends there, a straight step across a gap of at most 50 m, else the shortest way along the TrailGraph's trails when it is shorter than the hike walked backwards, else the hike retraced. The trail search looks only for ways back of up to 50 km; a hike with no shorter way back than that is retraced, so a long line costs no more to measure than a day hike (ADR-0035). It never crosses a Link.
 _Avoid_: return route, loop closure, descent route
 
 **ReturnToStart**:
