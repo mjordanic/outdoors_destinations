@@ -595,15 +595,22 @@ def test_the_terms_page_points_contact_to_the_repository_issues(client: TestClie
     assert 'href="https://github.com/mjordanic/outdoors_destinations/issues"' in terms
 
 
-def test_no_served_static_file_names_the_owner() -> None:
+def test_no_served_static_file_names_the_owner(data: ServingData) -> None:
     static = Path(web.__file__).parent / "static"
-    files = [path for path in static.rglob("*") if path.is_file() and path.suffix in (".html", ".js", ".css", ".svg")]
-    assert files
-    for path in files:
+    paths = [
+        "/" + path.relative_to(static).as_posix()
+        for path in static.rglob("*")
+        if path.is_file() and path.suffix in (".html", ".js", ".css", ".svg")
+    ]
+    assert paths
+    served = TestClient(create_app(data, goatcounter="gofindmeahike", kofi="gofindmeahike"))
+    for path in paths:
+        response = served.get(path)
+        assert response.status_code == 200, path
         # the repository's GitHub address is public and is how to reach the maintainer
-        text = path.read_text(encoding="utf-8").lower().replace("github.com/mjordanic/", "")
+        text = response.text.lower().replace("github.com/mjordanic/", "")
         for personal in ("mislav", "jordanic", "jordanić", "zagreb", "@gmail.com"):
-            assert personal not in text, (path.name, personal)
+            assert personal not in text, (path, personal)
 
 
 def test_the_support_page_links_no_tip_jar_until_a_ko_fi_handle_is_set(data: ServingData) -> None:
@@ -641,12 +648,13 @@ def test_the_home_page_footer_is_a_short_credit_line_to_the_full_credits(client:
     assert "Climatologies" not in home  # the full references are on the credits page
 
 
-def test_the_privacy_page_says_who_controls_the_data_what_is_kept_who_gets_it_and_where_to_complain(
+def test_the_privacy_page_says_who_runs_the_site_what_is_kept_who_gets_it_and_where_to_complain(
     client: TestClient,
 ) -> None:
     privacy = client.get("/privacy.html").text
 
-    assert "The controller is the maintainer of this open-source project" in privacy
+    assert "The site is run by the maintainer of this open-source project" in privacy
+    assert "Art. 13" not in privacy and "controller" not in privacy
     assert 'href="https://github.com/mjordanic/outdoors_destinations/issues"' in privacy
     for processed in ("IP address", "user agent", "30 days", "access log", "rate limit", "not stored"):
         assert processed in privacy, processed
