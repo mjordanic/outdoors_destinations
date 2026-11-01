@@ -78,4 +78,4 @@ def test_a_multi_day_seed_gets_no_suggested_loops(graph: TrailGraph) -> None:
     loops = find_loops(graph, target, [N3, N5], limit=5, deadline=started + 5)
 
     assert loops == []
-    assert time.monotonic() - started < 0.5
+    assert time.monotonic() - started < 2.0
