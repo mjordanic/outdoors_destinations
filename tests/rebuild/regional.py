@@ -72,7 +72,9 @@ BRIANCON = Measurement(
 def measure(export: Path | str, plan: Measurement) -> dict:
     """The coverage counts of a serving export around ``plan.origin``.
 
-    ``relations``: per radius, the hikes with a vertex of their served line within it;
+    ``relations``: per radius, the hikes with a vertex of their served line within it (every
+    Catalog hike is one OSM relation today; once the Catalog holds built hikes, count only those
+    of a relation here);
     ``trailheads``: per radius, the hikes whose Trailhead is within it;
     ``loops``: per loop length, ``found``, the loops ``find_loops`` draws from Junctions near
     ``plan.starts`` with that length and nothing else to follow, and ``listed``, the
