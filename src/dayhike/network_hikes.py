@@ -17,6 +17,7 @@ import math
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import cached_property
 
 import numpy as np
 from sklearn.neighbors import BallTree
@@ -78,6 +79,17 @@ class LegGraph:
 
     legs: tuple[Leg, ...]
     signposts: tuple[Point, ...]
+
+    @cached_property
+    def incident(self) -> dict[int, list[int]]:
+        """Per signpost, the legs (indexes into ``legs``) to another signpost from it, in leg order."""
+        incident: dict[int, list[int]] = {}
+        for index, leg in enumerate(self.legs):
+            a, b = leg.ends
+            if a != b:
+                incident.setdefault(a, []).append(index)
+                incident.setdefault(b, []).append(index)
+        return incident
 
 
 @dataclass(frozen=True)
@@ -301,15 +313,29 @@ def starts(
         distance, _ = tree.query(np.radians(graph.signposts), k=1)
         near = [was or float(d[0]) * EARTH_RADIUS_M <= radius_m for was, d in zip(near, distance)]
     found: list[list[int]] = []
+    # Starts by grid cell of their first signpost; a cell is START_CLUSTER_M wide or more
+    # everywhere, so a start within START_CLUSTER_M lies in the cell or one next to it.
+    cell_lat = math.degrees(START_CLUSTER_M / EARTH_RADIUS_M)
+    widest = max((abs(lat) for lat, _ in graph.signposts), default=0.0) + cell_lat
+    cell_lon = cell_lat / math.cos(math.radians(min(widest, 89.0)))
+    cells: dict[tuple[int, int], list[int]] = {}
     for signpost, is_near in enumerate(near):
         if not is_near:
             continue
         point = graph.signposts[signpost]
-        for members in found:
-            if _haversine_m(*point, *graph.signposts[members[0]]) <= START_CLUSTER_M:
-                members.append(signpost)
-                break
+        row, column = math.floor(point[0] / cell_lat), math.floor(point[1] / cell_lon)
+        nearby = (
+            start
+            for r in (row - 1, row, row + 1)
+            for c in (column - 1, column, column + 1)
+            for start in cells.get((r, c), ())
+            if _haversine_m(*point, *graph.signposts[found[start][0]]) <= START_CLUSTER_M
+        )
+        first = min(nearby, default=None)
+        if first is not None:
+            found[first].append(signpost)
         else:
+            cells.setdefault((row, column), []).append(len(found))
             found.append([signpost])
     return [Start(tuple(members), graph.signposts[members[0]]) for members in found]
 
@@ -321,12 +347,7 @@ def candidates(graph: LegGraph, start: Start) -> list[Chain]:
     at most ``NETWORK_EXPANSIONS`` legs, shared equally by every first leg
     from every start signpost, in order, each passing on what it leaves unused.
     """
-    incident: dict[int, list[int]] = {}
-    for index, leg in enumerate(graph.legs):
-        a, b = leg.ends
-        if a != b:
-            incident.setdefault(a, []).append(index)
-            incident.setdefault(b, []).append(index)
+    incident = graph.incident
     found: list[Chain] = []
     loops_seen: set[frozenset[int]] = set()
     roots = [(first, index) for first in start.signposts for index in incident.get(first, ())]
