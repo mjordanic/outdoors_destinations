@@ -1,5 +1,5 @@
 ---
-status: accepted (amends ADR-0020; pages of rows: ADR-0032)
+status: accepted (amends ADR-0020; pages of rows: ADR-0032; loop budget: ADR-0036)
 ---
 
 # SuggestedLoops only on request

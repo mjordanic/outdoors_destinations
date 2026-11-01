@@ -134,7 +134,7 @@ ELEVATION_POINTS = 128
 DRAWN_SMOOTH_M = 90.0  # a Copernicus GLO-30 ElevationProfile is drawn smoothed over this (ADR-0030) ...
 DRAWN_STEP_M = 10.0  # ... resampled this often first
 LOOP_MEASURED = 40  # the SuggestedLoops guessed best that a Ranking measures exactly
-LOOP_BUDGET_S = 5.0  # the most a Ranking spends on SuggestedLoops
+LOOP_BUDGET_S = 5.0  # the most a Ranking spends on SuggestedLoops (measured on 1 CPU: ADR-0036)
 LOOP_SEED_SHARE = 0.5  # a loop sharing more of its walk with the Seed, or of the Seed's, is no suggestion
 GROUP_M = 10_000.0  # hikes starting closer than this to a better one are its versions, one row
 # The grouping radius a Ranking takes by default follows its search limit (ADR-0032): this share of
