@@ -5,7 +5,6 @@ from pathlib import Path
 
 from dayhike import Catalog, build_catalog
 from dayhike.catalog import (
-    MAX_LENGTH_M,
     MIN_LENGTH_M,
     NAME_ORIGIN_OSM_NAME,
     NAME_ORIGIN_OSM_REF,
@@ -22,7 +21,7 @@ REF_SPINE_ID = 1007
 KEPT_IDS = {RIDGE_WALK_ID, VALLEY_PATH_ID, UNNAMED_ID, REF_SPINE_ID}
 
 
-def test_build_catalog_keeps_named_in_band_dayhikes(tmp_path: Path) -> None:
+def test_build_catalog_keeps_named_and_unnamed_dayhikes_of_at_least_1_km(tmp_path: Path) -> None:
     catalog = build_catalog(FIXTURE, tmp_path / "catalog.sqlite")
 
     kept = catalog.dayhikes
@@ -42,15 +41,15 @@ def _by_id(catalog: Catalog, hike_id: int):
     return next(hike for hike in catalog.dayhikes if hike.id == hike_id)
 
 
-def test_kept_dayhikes_have_trailhead_and_length_in_band(tmp_path: Path) -> None:
+def test_kept_dayhikes_have_trailhead_and_at_least_the_minimum_length(tmp_path: Path) -> None:
     catalog = build_catalog(FIXTURE, tmp_path / "catalog.sqlite")
     ridge = _by_id(catalog, RIDGE_WALK_ID)
     valley = _by_id(catalog, VALLEY_PATH_ID)
 
     assert (ridge.trailhead.latitude, ridge.trailhead.longitude) == (45.0, 15.0)
     assert (valley.trailhead.latitude, valley.trailhead.longitude) == (45.2, 15.1)
-    assert MIN_LENGTH_M <= ridge.length_m <= MAX_LENGTH_M
-    assert MIN_LENGTH_M <= valley.length_m <= MAX_LENGTH_M
+    assert ridge.length_m >= MIN_LENGTH_M
+    assert valley.length_m >= MIN_LENGTH_M
 
 
 def test_difficulty_is_max_sac_scale_or_missing_not_t1(tmp_path: Path) -> None:
@@ -69,8 +68,8 @@ def test_ingest_report_counts_kept_versus_dropped_by_reason(tmp_path: Path) -> N
 
     assert report.kept == 4
     assert report.dropped_unnamed == 0
-    assert report.dropped_length == 2
-    assert report.dropped_network == 1
+    assert report.dropped_length == 1
+    assert report.dropped_container == 1
     assert report.named_osm_name == 2
     assert report.named_osm_ref == 1
     assert report.named_synthetic == 1

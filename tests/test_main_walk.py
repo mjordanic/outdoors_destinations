@@ -242,12 +242,12 @@ def test_a_small_cycle_hanging_off_a_line_by_one_way_is_a_dead_end(tmp_path: Pat
     assert walk.jumps == []
 
 
-def test_the_length_band_reads_the_whole_line_past_a_hanging_cycle(tmp_path: Path) -> None:
+def test_the_length_reads_the_whole_line_past_a_hanging_cycle(tmp_path: Path) -> None:
     # 11 km each side of b: a walk stalled at the cycle kept a-b-x-y-z-x (13 km).
     nodes = {**HANGING, "a": (0, -8), "c": (0, 14)}
-    too_long = Walk(tmp_path, nodes, HANGING_WAYS, HANGING_MEMBERS)
+    walk = Walk(tmp_path, nodes, HANGING_WAYS, HANGING_MEMBERS)
 
-    assert too_long.hike is None
+    assert walk.hike.length_m == pytest.approx(22_000.0, abs=1.0)
 
 
 def test_two_small_cycles_hanging_off_a_line_are_both_dead_ends(tmp_path: Path) -> None:
@@ -408,12 +408,12 @@ def test_access_is_looked_for_at_the_main_walks_ends(tmp_path: Path) -> None:
     assert walk.jumps == []
 
 
-def test_the_length_band_reads_the_main_walk(tmp_path: Path) -> None:
+def test_the_length_reads_the_main_walk(tmp_path: Path) -> None:
     # Listed 1, 3, 2: a one-pass chain kept only a-b (5 km) + b-c (10 km).
     nodes = {"a": (0, 0), "b": (0, 5), "c": (0, 15), "d": (0, 25)}
-    too_long = Walk(tmp_path, nodes, {1: "ab", 2: "bc", 3: "cd"}, [1, 3, 2])
+    walk = Walk(tmp_path, nodes, {1: "ab", 2: "bc", 3: "cd"}, [1, 3, 2])
 
-    assert too_long.hike is None
+    assert walk.hike.length_m == pytest.approx(25_000.0, abs=1.0)
 
 
 def test_a_relation_whose_first_member_is_a_short_stray_is_kept(tmp_path: Path) -> None:

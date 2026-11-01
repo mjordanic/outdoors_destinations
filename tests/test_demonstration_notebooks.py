@@ -94,8 +94,8 @@ def test_notebook_shows_ingest_keep_drop_counts_and_kept_names() -> None:
 
     assert "kept=4" in output
     assert "dropped_unnamed=0" in output
-    assert "dropped_length=2" in output
-    assert "dropped_network=1" in output
+    assert "dropped_length=1" in output
+    assert "dropped_container=1" in output
     assert "Ridge Walk" in output
     assert "Valley Path" in output
 
@@ -157,7 +157,8 @@ def test_notebook_states_catalog_limitations() -> None:
     folded = markdown.casefold()
 
     assert "route=hiking" in markdown
-    assert "length band" in folded
+    assert "1 km" in folded
+    assert "no upper length cap" in folded
     assert "unnamed" in folded
     assert "scraped reviews" in folded
     assert "webpage ratings" in folded or "webpage rating" in folded
@@ -209,13 +210,13 @@ def test_readme_documents_landcover_and_climate() -> None:
     assert "QueryMonth" in text
 
 
-def test_notebook_sanity_checks_catalog_counts_length_band_and_map() -> None:
+def test_notebook_sanity_checks_catalog_counts_min_length_and_map() -> None:
     output, markdown, source = _run_notebooks()
 
     assert "The Catalog" in markdown
     assert "data/catalog.sqlite" in source
     assert "sanity kept_matches_rows\tok" in output
-    assert "sanity length_band\tok" in output
+    assert "sanity min_length\tok" in output
     assert "sanity trailhead_per_dayhike\tok" in output
     assert "geopandas" in source.casefold()
     assert "contextily" in source.casefold()

@@ -43,7 +43,8 @@ a rewrite.
 
 ### Why it's parked
 
-A DayHike is one named relation in a length band. Hut-to-hut is a sequence of
+A DayHike is one relation of at least 1 km; since ADR-0033 that includes
+multi-day tours and long sections, with no upper cap. Hut-to-hut is a sequence of
 DayHikes (or stages) plus overnight Hut choice. OSM superroutes are not that
 product; they are often 200 km traces.
 
@@ -208,12 +209,12 @@ lengths, so a 5 km line and a 5 km RoundTrip look equally long. The
 - A rule for the length a Hiker walks: twice a line, the loop plus twice the
   stem for a lollipop, or a line left as is when it ends near a bus stop or
   parking.
-- Whether the Catalog length band (1–20 km) and the `length` Measure read that walked length
+- Whether the Catalog's 1 km minimum and the `length` Measure read that walked length
   or keep the one-way length.
 
 ADR-0019 takes up the comparison: with ReturnToStart (on by default) every hike
 is measured with its WayBack, the shortest walk back to its Trailhead. The
-Catalog keeps the one-way length and the 1–20 km band; a line left as is near a
+Catalog keeps the one-way length and the 1 km minimum (no upper cap, ADR-0033); a line left as is near a
 bus stop (a shuttle) is still open.
 
 ---

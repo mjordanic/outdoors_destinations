@@ -5,7 +5,7 @@ A local Catalog of DayHikes built from OpenStreetMap, ranked by similarity to Se
 ## Language
 
 **DayHike**:
-A day-length hiking outing stored in the Catalog. It is an OSM `route=hiking` relation that survived the length band, superroute and node-network rules (a `network:type=node_network` leg that is not a RoundTrip is not a DayHike). Its label is OSM `name`, else `ref` with `from – to` or the nearest place, else `from – to`, else "Hike near" the nearest place, else `relation:{id}` (ADR-0017). Its length is the length of its DayHikeGeometry, each way once: a there-and-back trail counts one way.
+A hiking outing stored in the Catalog, a day or longer. It is an OSM `route=hiking` or `route=foot` relation with trail of its own that survived the 1 km minimum, container and node-network rules: there is no upper length cap, a container (a relation with no way of its own, such as a superroute of stages) is not a DayHike, and neither is a `network:type=node_network` leg that is not a RoundTrip (ADR-0033, ADR-0034). Its label is OSM `name`, else `ref` with `from – to` or the nearest place, else `from – to`, else "Hike near" the nearest place, else `relation:{id}` (ADR-0017). Its length is the length of its DayHikeGeometry, each way once: a there-and-back trail counts one way.
 _Avoid_: destination, trail, route, path, recommendation
 
 **NameOrigin**:
@@ -33,7 +33,7 @@ The sidecar SQLite written at ingest next to a Catalog. It holds DayHikeGeometry
 _Avoid_: experimental database, work file, Catalog, lab
 
 **TrailGraph**:
-The sidecar SQLite written at ingest next to a Catalog (`{catalog}.trailgraph.sqlite`): every member way of every `route=hiking` relation ingest read, including relations dropped as too short, too long, superroutes or node-network legs, split into Segments that meet at Junctions (ADR-0018). Unmarked paths are not in it. A ComposedHike is drawn on it; Ranking of Catalog DayHikes does not read it.
+The sidecar SQLite written at ingest next to a Catalog (`{catalog}.trailgraph.sqlite`): every member way of every `route=hiking` or `route=foot` relation ingest read, including relations dropped as too short or as node-network legs, split into Segments that meet at Junctions (ADR-0018). Unmarked paths are not in it. A ComposedHike is drawn on it; Ranking of Catalog DayHikes does not read it.
 _Avoid_: routing graph (that is Valhalla's), network, member-way graph (the per-DayHike graph of ADR-0012)
 
 **Junction**:

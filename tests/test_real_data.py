@@ -13,7 +13,7 @@ compares against that baseline, not against the round-1 Catalog (161,599). The
 old WaterSource "unchanged against the baseline" checks were removed: the main
 walk changes lengths, geometry and facts.
 
-The main-walk checks (steps, ways walked once, length band, Leftover reasons,
+The main-walk checks (steps, ways walked once, 1 km minimum, Leftover reasons,
 loop starts) need the new GeometryStore columns ``leftover``, ``walked_m`` and
 ``walk_order``, so they fail on a store from before the main walk. The
 baseline comparison prints the DayHike ids that left and joined the Catalog,
@@ -51,7 +51,7 @@ from sklearn.neighbors import BallTree
 from rebuild_checks import DATA_DIR, real_data
 
 from dayhike import SimilarityStore, geometry_store_path_for
-from dayhike.catalog import MAX_LENGTH_M, _access_tree, _drop_reason, assemble_main_walk
+from dayhike.catalog import MIN_LENGTH_M, _access_tree, _drop_reason, assemble_main_walk
 from dayhike.osm import amenity_kind
 from dayhike.similarity import MEASURE_NAMES
 
@@ -227,7 +227,6 @@ PAIR_GROUPS = (
 # The main walk (ADR-0012): rules a full ingest must have followed.
 
 STEP_MAX_M = 50.0
-BAND_M = (1_000.0, 20_000.0)
 LOOP_CLOSES_M = 50.0  # first and last vertex this close: a loop
 LOOP_NEAR_PARKING_M = 100.0
 LOOP_START_M = 300.0
@@ -362,14 +361,10 @@ def test_no_way_is_walked_twice_in_one_dayhike() -> None:
     assert twice.empty, f"a way walked twice in {_ids(twice)}"
 
 
-def test_every_catalog_length_is_between_1_and_20_km() -> None:
-    outside = _read(
-        CATALOG,
-        "SELECT id FROM dayhikes WHERE length_m < ? OR length_m > ?",
-        BAND_M,
-    )["id"]
+def test_every_catalog_length_is_at_least_1_km() -> None:
+    short = _read(CATALOG, "SELECT id FROM dayhikes WHERE length_m < ?", (MIN_LENGTH_M,))["id"]
 
-    assert outside.empty, f"length_m outside 1-20 km in {_ids(outside)}"
+    assert short.empty, f"length_m under 1 km in {_ids(short)}"
 
 
 def test_every_leftover_has_a_reason_and_every_walked_way_a_walk_order() -> None:
@@ -419,7 +414,7 @@ def test_a_loop_by_a_parking_point_starts_within_300_m_of_one(
 # Against data/baseline/: the same OSM snapshot, so only the main walk may move
 # DayHikes in or out.
 
-LEFT_REASONS = ("over 20 km", "under 1 km", "superroute")
+LEFT_REASONS = ("under 1 km", "container")
 
 
 def _ids_of(path: Path) -> set[int]:
@@ -433,7 +428,7 @@ def _main_walk_reasons(
 
     Assembled as ingest does, with all parking as access points. The ``osmium
     getid`` extract of the relations holds no parking, so it comes from the
-    ``amenities`` of ``geometry``. A stem near parking counts toward the band.
+    ``amenities`` of ``geometry``. A stem near parking counts toward the length.
     """
     from dayhike.ingest import _load_hiking_snapshot, run_ingest
 
@@ -459,10 +454,10 @@ def _main_walk_reasons(
                 continue
             walk = assemble_main_walk(relation, snapshot.ways, snapshot.nodes, access_tree)
             drop = _drop_reason(relation, walk.length_m)
-            if drop == "network":
-                reasons[relation.id] = "superroute"
+            if drop == "container":
+                reasons[relation.id] = "container"
             elif drop == "length":
-                reasons[relation.id] = "over 20 km" if walk.length_m > MAX_LENGTH_M else "under 1 km"
+                reasons[relation.id] = "under 1 km"
             else:
                 reasons[relation.id] = "kept by the main-walk rules"
     return {i: reasons.get(i, "not in the extract") for i in ids}

@@ -3,7 +3,7 @@
 ``write_trailgraph`` runs in ``build_catalog`` on the ingest work file, just
 before it is deleted, and writes ``{catalog}.trailgraph.sqlite`` beside the
 Catalog (``trailgraph_path_for``). Its input is every member way of every
-``route=hiking`` relation ingest read, kept as a DayHike or not:
+``route=hiking`` or ``route=foot`` relation ingest read, kept as a DayHike or not:
 
 - Ways are split at every node two of them share (or one repeats). Two ways
   of the same layer that cross with no node there get one at the crossing.
