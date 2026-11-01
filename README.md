@@ -1647,7 +1647,7 @@ Typical temperature, Lake or sea), each on at 100 by default; the other Measures
 under the list, "Suggest loops near these hikes (takes a few seconds)", ranks
 the same query again with SuggestedLoops mixed in (ADR-0020, only on request
 since ADR-0028): loops drawn on the marked network and graded paths near the
-best Catalog results, found as the query runs, named after a hiking place near
+start, when one is given, and near the best Catalog results (ADR-0036), found as the query runs, named after a hiking place near
 where they start, else by the trails they walk (ADR-0022), marked "composed" and
 drawn dashed green on the "Select hike on map" map. Each opens like a composed hike, with its
 link, and "Edit on the map" makes it the liked hike in the composer. The list
@@ -1814,8 +1814,8 @@ data `source`; `score_help` holds the score explanation (`SCORE_HELP`). With a T
 echoed as `loops`; ADR-0028) a Ranking also lists SuggestedLoops
 (ADR-0020): `id` null, `route` `{"text"}` (what `/api/compose` takes), `line`,
 `name` (from where it starts) and the figures of a DayHike row; with `origin`
-and `max_hours` only loops starting within the drive, each with its
-`drive_hours`. Every row has its `line` and `versions`, the other hikes of its
+loops also start near it (ADR-0036), and with `max_hours` only loops starting
+within the drive, each with its `drive_hours`. Every row has its `line` and `versions`, the other hikes of its
 area (DayHikes or loops starting within the GroupingRadius of it, at most three hikes per
 row) in the same shape. With `max_km` only loops starting within it are listed. Loop work stops at 5 s. The GET routes also answer HEAD. Each client gets 20 Rankings and
 300 other calls a minute; one Ranking runs at a time per process.
@@ -1831,7 +1831,7 @@ limited to 2 GiB and 1 CPU like Cloud Run (`web/smoke.py`):
 | Container start to first answer | 3 s (both processes); 215 MiB |
 | Search / hike detail | 6–10 ms / 3–5 ms |
 | Ranking, one Seed, 3 / 27 Measures | 0.3 s / not yet re-measured (27 Measures); 3 Measures 0.07 s on the Mac without the 1-CPU cap |
-| Ranking with SuggestedLoops (`"loops": true`, ADR-0028) | about 3.3 s on average, against about 0.35 s without (hosting study); not yet re-measured with `web/smoke.py` |
+| Ranking with SuggestedLoops (`"loops": true`, ADR-0028) | about 3.3 s on average, against about 0.35 s without (hosting study). A Wish of 10 km within a 1 h drive from 10 Origins, loops near the Origin too, the 2026-10-28 export of 135,588 DayHikes, measured 2026-11-01: cold (fresh container, files out of the page cache) 5.3 s p50, 7.4 s p75; warm 2.7 s p50, 3.8 s p75 (ADR-0036) |
 | Ranking within 2 h / 4 h drive (Ljubljana, Munich) | 2.7 s / 12 s; 4 h from Paris 14 s, Berlin 8 s, Prague 8 s, Rome 3 s, Oslo 3 s |
 | Container memory peak (cgroup, after those queries) | 1.5 GB of the 2 GiB: Valhalla 1.0–1.3 GB resident (0.46 GB its own, the rest the mapped tiles), the app 0.96 GB resident (0.82 GB its own) |
 
