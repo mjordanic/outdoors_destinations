@@ -22,6 +22,21 @@ serves a trimmed export of them ([Web demo](#web-demo)).
 The map shows the coverage of the current Catalog: land with at least 10
 Trailheads and 0.2 per 1,000 km² is shaded (`dayhike coverage-map`, below).
 
+## Why DayHike
+
+- Start from a hike you liked, and it finds the ones most like it. No hike in
+  mind? Describe the one you want.
+- It weighs the weather too: the typical temperature in the month you pick,
+  and under Advanced search rain and sunshine, alongside length, climbing and
+  landscape.
+- A few plain measures to start with, and more, grouped by topic, under
+  Advanced search. You choose how much each one matters.
+- Free, with no ads, no account and no cookies. The code is open source
+  ([MIT](LICENSE)), and the open data it uses is credited
+  ([Attribution](#attribution), [DATA-LICENSES.md](DATA-LICENSES.md)).
+- It covers Europe where OpenStreetMap maps hiking routes: dense in the Alps
+  and central Europe, thin in much of the east and south-east.
+
 ## Install
 
 ```bash
@@ -430,7 +445,7 @@ Prints DayHike id, name, and score (tab-separated), best first:
 
 With no `--weight` the six core Measures weigh 100 and the others are off:
 `length`, `elevation_gain`, `highest`, `landcover`, `temperature` and
-`waterside`, the web page's basic set less Summit (ADR-0031). Each
+`waterside`, the web page's basic set (ADR-0031). Each
 `--weight MEASURE=WEIGHT` names one Measure; the ones not named are excluded. `--limit N` prints only the
 best N (every DayHike is still scored). `--one-way` compares every hike one
 way instead of with its way back.
@@ -1611,11 +1626,11 @@ to node (and `&name=…` when the Hiker named it), so it opens the same walk aft
 a rebuild that adds or drops Junctions, and nothing is stored); see what
 the similarity looks at (route and amenity points on an OpenStreetMap map,
 elevation profile in metres above sea level, land cover, trail surface,
-climate by month, and the fact behind every Measure), set a 0–100 weight or
-an "off" tick per Measure, and list the 10 most similar hikes with their score,
+climate by month, and the fact behind every Measure), set each Measure's weight
+on a 0–100 slider in steps of 10 (at 0 the Measure is off, its name struck through), and list the 10 most similar hikes with their score,
 length, climb and descent, and per-Measure scores. The weights list shows a
-basic set in plain words (Length, Climbing, Highest point, Landscape, Summit,
-Typical temperature, Lake or sea); the other Measures wait, in groups, behind
+basic set in plain words (Length, Climbing, Highest point, Landscape,
+Typical temperature, Lake or sea), each on at 100 by default; the other Measures wait, in groups, behind
 "Advanced search" and count only while it is open (ADR-0031). With a TrailGraph a button
 under the list, "Suggest loops near these hikes (takes a few seconds)", ranks
 the same query again with SuggestedLoops mixed in (ADR-0020, only on request
@@ -1650,7 +1665,7 @@ Describe the one you want" under the search. The weights list then shows only
 the Measures `/api/measures` marks wishable (Advanced ones again only while it is open), each with a value to ask for in its
 unit and range (a yes/no Measure as a tick box) beside its weight. The form
 starts asking nothing: every weight is 0, and setting a value weighs that
-Measure 100; a Measure weighted 0 or ticked off asks nothing. The liked-hike
+Measure 100; a Measure weighted 0 asks nothing. The liked-hike
 weights are kept for when the Hiker goes back. "Find hikes" ranks with that wish
 instead of a Seed, the drive filter, month and Return to start work as before,
 and a result opens with what the Hiker asked for in place of the liked hike. The

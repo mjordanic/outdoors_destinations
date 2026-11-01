@@ -74,23 +74,22 @@ def test_measures_start_with_a_plain_basic_set_and_group_the_rest_for_advanced_s
         "elevation_gain": "Climbing",
         "highest": "Highest point",
         "landcover": "Landscape",
-        "peak_summited": "Summit",
         "temperature": "Typical temperature",
         "waterside": "Lake or sea",
     }
     assert {group: sorted(name for name in groups if groups[name] == group) for group in (g["name"] for g in body["groups"][1:])} == {
         "effort": ["climb_grade", "difficulty", "profile", "steepest_km"],
         "altitude": ["lowest"],
-        "scenery": ["peaks_around", "viewpoint_along"],
+        "scenery": ["peak_summited", "peaks_around", "viewpoint_along"],
         "facilities": ["hut_along", "parking_trailhead", "restaurant_cafe_along", "restaurant_cafe_trailhead", "shelter_along"],
         "trail": ["round_trip", "surface", "tarmac_approach"],
         "water": ["dry_stretch", "water_count"],
         "weather": ["precipitation", "solar_radiation", "southness"],
     }
-    # Only the basic set counts by default, Summit left at 0 (ADR-0031).
-    assert {m["name"]: m["default_weight"] for m in body["measures"] if m["default_weight"] > 0} == dict.fromkeys(
-        ("length", "elevation_gain", "highest", "landcover", "temperature", "waterside"), 100.0
-    )
+    # The basic set is what counts by default, every one of it at 100, and nothing else (ADR-0031).
+    assert {m["name"]: m["default_weight"] for m in body["measures"] if m["default_weight"] > 0} == {
+        m["name"]: 100.0 for m in body["measures"] if m["group"] == "basic"
+    }
 
 
 def test_measures_say_how_a_wish_value_is_typed_in(client: TestClient) -> None:
@@ -586,6 +585,18 @@ def test_the_about_page_says_who_runs_the_site_and_where_its_code_is(client: Tes
     assert "free and non-commercial" in about
     assert 'href="https://github.com/mjordanic/outdoors_destinations"' in about
     assert 'href="https://github.com/mjordanic/outdoors_destinations/blob/main/LICENSE">MIT licence</a>' in about
+
+
+def test_the_about_page_says_plainly_why_a_hiker_would_use_the_site(client: TestClient) -> None:
+    about = client.get("/about.html").text
+    why = about[about.index("<h3>Why use it</h3>") : about.index("<h3>Who runs it</h3>")]
+
+    for point in ("a hike you liked", "weather", "Advanced search", "how much each one matters", "no account", "MIT"):
+        assert point in why, point
+    assert 'href="credits.html"' in why
+    assert "Europe" in why and "thin" in why  # coverage, stated as it is
+    for hype in ("best", "only", "first", "unlike", "other "):
+        assert hype not in why.lower(), hype
 
 
 def test_the_terms_page_points_contact_to_the_repository_issues(client: TestClient) -> None:

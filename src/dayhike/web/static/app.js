@@ -59,7 +59,7 @@ const state = {
   scoreHelp: null, // what a score means, from the server (ADR-0025)
   liked: null,
   wishing: false, // the Hiker describes the hike they want instead of naming a liked one
-  kept: {}, // the weights and off ticks of the mode not shown: { seed, wish }
+  kept: {}, // the weights of the mode not shown: { seed, wish }
   query: null, // the weights, month and return to start of the last Ranking
   asked: null, // what the shown Ranking asked the server, and of which liked hike or wish: { query, basis }
   results: [],
@@ -675,21 +675,18 @@ function buildWeights() {
       row.innerHTML = `
         <label class="name" for="${id}" title="${escapeHtml(measure.description)}">${escapeHtml(measure.label)}</label>
         ${wishable(measure) ? wishInput(measure) : ""}
-        <input id="${id}" type="number" min="0" max="100" step="1" value="${measure.default_weight}" inputmode="numeric" aria-label="${escapeHtml(measure.label)} weight, 0 to 100">
-        <label class="off"><input type="checkbox" aria-label="Leave ${escapeHtml(measure.label)} out"> off</label>`;
+        <input id="${id}" type="range" min="0" max="100" step="10" value="${measure.default_weight}" aria-label="${escapeHtml(measure.label)} weight, 0 to 100">
+        <output for="${id}"></output>`;
       if (measure.name === "round_trip") {
         row.insertAdjacentHTML("beforeend", '<p class="hint weight-note">Left out with Return to start: every hike is then a round trip.</p>');
       }
-      const [number, off] = row.querySelectorAll("input:not(.wish)");
-      off.addEventListener("change", () => {
-        number.disabled = off.checked || row.classList.contains("unused");
-        row.classList.toggle("excluded", off.checked);
-      });
-      number.addEventListener("input", () => number.setCustomValidity(""));
+      const slider = row.querySelector("input:not(.wish)");
+      slider.addEventListener("input", () => showWeight(row));
       // Asking a value of a Measure left at 0 asks it in full.
       row.querySelector("input.wish")?.addEventListener("input", () => {
-        if (!off.checked && Number(number.value) === 0) number.value = 100;
+        if (Number(slider.value) === 0) setWeight(row, 100);
       });
+      showWeight(row);
       set.appendChild(row);
     }
     $(basic ? "#weights" : "#advanced-weights").appendChild(set);
@@ -697,41 +694,40 @@ function buildWeights() {
   syncRoundTrip();
 }
 
+// A weight row's slider value, shown beside it; at 0 the Measure is off and its name struck through.
+function showWeight(row) {
+  const slider = row.querySelector("input:not(.wish)"), text = Number(slider.value) === 0 ? "off" : slider.value;
+  row.querySelector("output").textContent = text;
+  slider.setAttribute("aria-valuetext", text);
+  row.classList.toggle("excluded", text === "off");
+}
+
+function setWeight(row, weight) {
+  row.querySelector("input:not(.wish)").value = weight;
+  showWeight(row);
+}
+
 // Round trip tells no hike from another while every hike returns to its start: greyed out then.
 function syncRoundTrip() {
   const row = document.querySelector('.weight[data-measure="round_trip"]');
   if (!row) return;
-  const [number, off] = row.querySelectorAll("input:not(.wish)");
   row.classList.toggle("unused", returnToStart());
-  number.disabled = returnToStart() || off.checked;
-  off.disabled = returnToStart();
+  row.querySelector("input:not(.wish)").disabled = returnToStart();
 }
 
-// A weight row the query leaves out: ticked off, unused, or not wishable while wishing.
+// A weight row the query leaves out: unused, or not wishable while wishing.
 function leftOut(row) {
-  const off = row.querySelectorAll("input:not(.wish)")[1];
-  return off.checked || row.classList.contains("unused") || (state.wishing && row.classList.contains("unwishable"));
+  return row.classList.contains("unused") || (state.wishing && row.classList.contains("unwishable"));
 }
 
 function readWeights() {
   const weights = {}, excluded = [];
   for (const row of document.querySelectorAll(".weight")) {
-    const number = row.querySelector("input:not(.wish)");
     if (leftOut(row)) {
       excluded.push(row.dataset.measure);
       continue;
     }
-    if (folded(row)) {
-      weights[row.dataset.measure] = 0;
-      continue;
-    }
-    const value = Number(number.value);
-    if (number.value === "" || !Number.isFinite(value) || value < 0 || value > 100) {
-      number.setCustomValidity("0 to 100");
-      number.reportValidity();
-      throw new Error("Each weight is a number from 0 to 100.");
-    }
-    weights[row.dataset.measure] = value;
+    weights[row.dataset.measure] = folded(row) ? 0 : Number(row.querySelector("input:not(.wish)").value);
   }
   if (!Object.values(weights).some((w) => w > 0)) throw new Error("Give at least one measure a weight above 0.");
   return { weights, excluded };
@@ -789,8 +785,8 @@ function wishText(measure, value) {
 function wishHash() {
   const parts = [];
   for (const row of document.querySelectorAll(".weight:not(.unwishable)")) {
-    const [value, number, off] = row.querySelectorAll("input");
-    if (off.checked || folded(row) || !(Number(number.value) > 0)) continue;
+    const [value, number] = row.querySelectorAll("input");
+    if (folded(row) || !(Number(number.value) > 0)) continue;
     parts.push(`${row.dataset.measure}:${value.type === "checkbox" ? Number(value.checked) : value.value}:${number.value}`);
   }
   return `#wish=${parts.join(",")}${modeHash()}`;
@@ -800,11 +796,9 @@ function wishHash() {
 function applyWish(text) {
   const asked = new Map(text.split(",").filter(Boolean).map((part) => [part.split(":")[0], part.split(":")]));
   for (const row of document.querySelectorAll(".weight:not(.unwishable)")) {
-    const [value, number, off] = row.querySelectorAll("input");
+    const value = row.querySelector("input.wish");
     const [, wanted, weight] = asked.get(row.dataset.measure) ?? [];
-    off.checked = false;
-    row.classList.remove("excluded");
-    number.value = weight ?? 0;
+    setWeight(row, Number(weight) > 0 ? Math.max(Number(weight), 10) : 0);
     if (wanted == null) continue;
     if (value.type === "checkbox") value.checked = wanted === "1";
     else value.value = wanted;
@@ -816,13 +810,10 @@ function applyWish(text) {
 // Each mode keeps its own weights: a wish starts asking nothing, and a liked hike's weights
 // are as they were when the Hiker comes back.
 function swapWeights(on) {
-  const rows = [...document.querySelectorAll(".weight")].map((row) => row.querySelectorAll("input:not(.wish)"));
-  state.kept[on ? "seed" : "wish"] = rows.map(([number, off]) => [number.value, off.checked]);
-  const back = state.kept[on ? "wish" : "seed"] ?? rows.map(() => ["0", false]);
-  rows.forEach(([number, off], i) => {
-    [number.value, off.checked] = back[i];
-    off.dispatchEvent(new Event("change"));
-  });
+  const rows = [...document.querySelectorAll(".weight")];
+  state.kept[on ? "seed" : "wish"] = rows.map((row) => row.querySelector("input:not(.wish)").value);
+  const back = state.kept[on ? "wish" : "seed"] ?? rows.map(() => "0");
+  rows.forEach((row, i) => setWeight(row, back[i]));
   syncRoundTrip();
 }
 
