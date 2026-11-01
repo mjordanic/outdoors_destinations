@@ -11,8 +11,8 @@ Every other Measure waits behind a closed **Advanced search**, in named groups. 
 form and the Wish form work this way.
 
 **The basic set.** Length, Climbing (`elevation_gain`), Highest point, Landscape (`landcover`),
-Summit (`peak_summited`), Typical temperature (`temperature`) and Lake or sea (`waterside`).
-Landscape is a mix, which a Wish cannot ask for (ADR-0024), so the Wish form shows the other six.
+Typical temperature (`temperature`) and Lake or sea (`waterside`). Each of them counts by default.
+Landscape is a mix, which a Wish cannot ask for (ADR-0024), so the Wish form shows the other five.
 They were chosen with a Spearman check of each Measure's fact over 40,000 of the 135,588 Catalog
 DayHikes, so that no two say the same thing. Every pair has |rho| ≤ 0.48, except Climbing and Highest
 point at +0.71. Highest point stays despite that, because Climbing alone lets results drift 305 m in
@@ -21,11 +21,14 @@ highest point (table below). Left out on purpose:
 - Difficulty: 62 % of DayHikes have no SAC grade.
 - Climb grade and Steepest km: +0.79 and +0.92 with Climbing.
 - Dry stretch: +0.94 with Length.
+- Summit: it was in the basic set at first, at weight 0. A basic Measure that weighs nothing by
+  default says it does not matter, which contradicts showing it first. The evidence below gives it no
+  weight (Summit at 100 does not improve matches), so it moved to Scenery.
 
 **The advanced groups, in order.**
 - effort: Difficulty, Profile shape, Climb grade, Steepest km
 - altitude: Lowest point
-- scenery: Viewpoint along, Peaks around
+- scenery: Summit, Viewpoint along, Peaks around
 - facilities: Hut along, Restaurant or cafe along, Shelter along, Restaurant at trailhead, Parking at trailhead
 - trail: Surface, Tarmac approach, Round trip
 - water: Water sources, Dry stretch
@@ -39,11 +42,16 @@ Scoring still knows no groups (ADR-0013).
 the Hiker types there stays, and counts again once Advanced search is open. A Wish address naming an
 advanced Measure opens it.
 
-**New defaults.** Without weights, `length`, `elevation_gain`, `highest`, `landcover`, `temperature`
-and `waterside` weigh 100. Summit shows at 0. The others are off. This replaces ADR-0016's eleven core
+**New defaults.** Without weights, the basic set, `length`, `elevation_gain`, `highest`, `landcover`,
+`temperature` and `waterside`, weighs 100. The others are off. This replaces ADR-0016's eleven core
 Measures. Under "only what shows counts", the old default would have used Measures the Hiker cannot
-see. Summit stays at 0 because ADR-0016's judges found the OSM flags did not separate good matches from
+see. Summit is off because ADR-0016's judges found the OSM flags did not separate good matches from
 poor ones, and the evidence below agrees. The CLI and the API take the same default.
+
+**Weights are sliders.** Each Measure's weight is a slider from 0 to 100 in steps of 10, its value
+shown beside it. At 0 the Measure is off: its name is struck through and it is left out, as the old
+"off" tick and a weight of 0 both did. A Wish address with a weight between steps opens at the nearest step,
+but a nonzero weight opens at 10 or more, so an old link never turns a Measure off.
 
 **Evidence.** For 300 random Seeds, with Return to start on, each candidate default ranked every DayHike.
 Its top 10 was compared with the top 10 of ADR-0016's judge-tuned default:
