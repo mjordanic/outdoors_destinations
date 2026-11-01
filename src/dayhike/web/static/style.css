@@ -82,6 +82,8 @@ button.secondary:hover { border-color: var(--green); }
 .weight .weight-note { grid-column: 1 / -1; margin: 0; display: none; }
 .weight.unused .name { color: var(--muted); }
 .weight.unused .weight-note { display: block; }
+.weight .length-note { grid-column: 1 / -1; margin: 0; display: none; }
+.wishing .weight .length-note { display: block; }
 
 .detail-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; align-items: baseline; }
 .detail-head .role { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); }

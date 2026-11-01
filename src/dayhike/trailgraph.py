@@ -63,6 +63,7 @@ Progress = Callable[[str], None]
 SNAP_DETOUR_FACTOR = 3  # a tip joins only a node more than this x the tolerance away along the network
 LINK_DETOUR_M = 100.0  # ways passing this much farther apart along the network get a Link
 MAX_WALK_M = 100_000.0  # the longest ComposedHike
+WAY_BACK_SEARCH_M = 50_000.0  # the longest trail back searched; past it a walk is retraced (ADR-0035)
 MAX_WALK_STEPS = 50_000  # the most vertex steps a ComposedHike walks: 500 Segments of Slovenia's mean 72 vertices, and room
 TRAILHEAD_KINDS = ("parking", "restaurant_cafe")
 _SEGMENT_CHUNK = 5_000
@@ -1157,7 +1158,9 @@ def way_back(lat: np.ndarray, lon: np.ndarray, graph: TrailGraph | None) -> WayB
     Ends at most ``GAP_JOIN_M`` apart take the straight step. Otherwise the
     shortest walk over the TrailGraph's trails and gaps (never a Link), when
     both ends are TrailGraph vertices and it is shorter than retracing the
-    walk; else the walk retraced. Without a TrailGraph there is no trail.
+    walk and than ``WAY_BACK_SEARCH_M``; else the walk retraced. Without a
+    TrailGraph there is no trail. The bound keeps the search's work that of a
+    day hike's for a walk of any length (ADR-0035).
     """
     if len(lat) < 2:
         return WayBack("none", 0.0)
@@ -1167,7 +1170,8 @@ def way_back(lat: np.ndarray, lon: np.ndarray, graph: TrailGraph | None) -> WayB
     if gap <= GAP_JOIN_M:
         return WayBack("step", gap)
     retrace = float(_haversine(lat[:-1], lon[:-1], lat[1:], lon[1:]).sum())
-    trail = None if graph is None else graph.trail_back(lat, lon, retrace - 1.0)
+    limit = min(retrace - 1.0, WAY_BACK_SEARCH_M)
+    trail = None if graph is None or gap >= limit else graph.trail_back(lat, lon, limit)
     if trail is None:
         return WayBack("retrace", retrace)
     return WayBack("trail", float(_haversine(trail.lat[:-1], trail.lon[:-1], trail.lat[1:], trail.lon[1:]).sum()), trail)

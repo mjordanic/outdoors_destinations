@@ -677,6 +677,9 @@ function buildWeights() {
         ${wishable(measure) ? wishInput(measure) : ""}
         <input id="${id}" type="range" min="0" max="100" step="10" value="${measure.default_weight}" aria-label="${escapeHtml(measure.label)} weight, 0 to 100">
         <output for="${id}"></output>`;
+      if (measure.name === "length") {
+        row.insertAdjacentHTML("beforeend", '<p class="hint length-note">Over about 25 km is usually more than a day. With Return to start a line counts there and back.</p>');
+      }
       if (measure.name === "round_trip") {
         row.insertAdjacentHTML("beforeend", '<p class="hint weight-note">Left out with Return to start: every hike is then a round trip.</p>');
       }
@@ -743,6 +746,11 @@ function folded(row) {
 // A Measure the Hiker can ask a value of: its "wish" input (ADR-0024); a server without wishes gives none.
 const wishable = (measure) => measure.wish != null;
 const yesNo = (measure) => measure.wish.kind === "yes/no";
+// A number wish is sent in the Measure's fact units; the page may show it in another, such as km for metres (ADR-0035).
+const shownUnit = (measure) => measure.wish.display?.unit ?? measure.wish.unit;
+const perShown = (measure) => measure.wish.display?.per ?? 1;
+const toShown = (measure, value) => Math.round((value / perShown(measure)) * 1e6) / 1e6;
+const toFact = (measure, value) => Math.round(value * perShown(measure) * 1e6) / 1e6;
 
 // The value input of a weight row: a yes/no toggle, or a number in the Measure's unit and range.
 function wishInput(measure) {
@@ -750,9 +758,9 @@ function wishInput(measure) {
   if (yesNo(measure)) {
     return `<label class="wish-value"><input class="wish" type="checkbox"${wish.default ? " checked" : ""} aria-label="${label} you want"> yes</label>`;
   }
-  const range = ["min", "max", "step"].filter((key) => wish[key] != null).map((key) => ` ${key}="${escapeHtml(wish[key])}"`).join("");
-  const unit = wish.unit ? escapeHtml(wish.unit) : "";
-  return `<span class="wish-value"><input class="wish" type="number"${range} value="${escapeHtml(wish.default)}" inputmode="decimal"
+  const range = ["min", "max", "step"].filter((key) => wish[key] != null).map((key) => ` ${key}="${escapeHtml(toShown(measure, wish[key]))}"`).join("");
+  const unit = shownUnit(measure) ? escapeHtml(shownUnit(measure)) : "";
+  return `<span class="wish-value"><input class="wish" type="number"${range} value="${escapeHtml(toShown(measure, wish.default))}" inputmode="decimal"
     aria-label="${label} you want${unit ? `, in ${unit}` : ""}">${unit ? `<span class="unit">${unit}</span>` : ""}</span>`;
 }
 
@@ -763,9 +771,9 @@ function readWish(weights) {
     if (!(weights[measure.name] > 0)) continue;
     const input = document.querySelector(`.weight[data-measure="${measure.name}"] input.wish`);
     if (yesNo(measure)) { wish[measure.name] = input.checked; continue; }
-    const value = Number(input.value), { min, max, unit } = measure.wish;
+    const value = toFact(measure, Number(input.value)), { min, max } = measure.wish, unit = shownUnit(measure);
     if (input.value === "" || !Number.isFinite(value) || value < (min ?? -Infinity) || value > (max ?? Infinity)) {
-      const range = `${min} to ${max}${unit ? ` ${unit}` : ""}`;
+      const range = `${toShown(measure, min)} to ${toShown(measure, max)}${unit ? ` ${unit}` : ""}`;
       input.setCustomValidity(range);
       input.reportValidity();
       throw new Error(`${measure.label}: you want a value from ${range}.`);
@@ -777,19 +785,27 @@ function readWish(weights) {
 
 function wishText(measure, value) {
   if (typeof value === "boolean") return fmt.yes(value);
-  return `${value.toLocaleString("en")}${measure.wish?.unit ? ` ${measure.wish.unit}` : ""}`;
+  if (!measure.wish) return value.toLocaleString("en");
+  return `${toShown(measure, value).toLocaleString("en")}${shownUnit(measure) ? ` ${shownUnit(measure)}` : ""}`;
 }
 
 // The wish as an address: "#wish=elevation_gain:800:100,hut_along:1:50", each Measure the Hiker
-// weights with its value and weight, as typed.
+// weights with its value and weight, as typed; a value shown in another unit, such as km, in the
+// Measure's fact units, so an address reads the same whatever the page shows.
 function wishHash() {
   const parts = [];
   for (const row of document.querySelectorAll(".weight:not(.unwishable)")) {
     const [value, number] = row.querySelectorAll("input");
     if (folded(row) || !(Number(number.value) > 0)) continue;
-    parts.push(`${row.dataset.measure}:${value.type === "checkbox" ? Number(value.checked) : value.value}:${number.value}`);
+    parts.push(`${row.dataset.measure}:${value.type === "checkbox" ? Number(value.checked) : typedFact(row, value.value)}:${number.value}`);
   }
   return `#wish=${parts.join(",")}${modeHash()}`;
+}
+
+// A typed number in its Measure's fact units, or the text as typed when it is no number.
+function typedFact(row, typed) {
+  const measure = state.measures.find((m) => m.name === row.dataset.measure), value = Number(typed);
+  return typed === "" || !Number.isFinite(value) ? typed : String(toFact(measure, value));
 }
 
 // Fills the form from a wish address: every wishable Measure it does not name weighs 0.
@@ -800,8 +816,9 @@ function applyWish(text) {
     const [, wanted, weight] = asked.get(row.dataset.measure) ?? [];
     setWeight(row, Number(weight) > 0 ? Math.max(Number(weight), 10) : 0);
     if (wanted == null) continue;
+    const measure = state.measures.find((m) => m.name === row.dataset.measure);
     if (value.type === "checkbox") value.checked = wanted === "1";
-    else value.value = wanted;
+    else value.value = wanted === "" || !Number.isFinite(Number(wanted)) ? wanted : String(toShown(measure, Number(wanted)));
     if (row.closest("#advanced")) $("#advanced").open = true;
   }
   syncRoundTrip();
