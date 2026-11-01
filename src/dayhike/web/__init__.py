@@ -12,7 +12,8 @@ a Wish value (ADR-0024).
 Detail, compose, pair and Ranking measure every hike with its way back to the start unless
 ``return_to_start`` is false (ADR-0019).
 A browser keeps the API reads an hour and then revalidates them by an ETag of the export, the code
-and the drive-time settings; the page always revalidates, so a redeploy shows at once. Responses are
+and the drive-time settings; the page, the API info and the Measure list always revalidate, so a
+redeploy shows at once. Responses are
 gzipped for a browser that takes it.
 The site's pages (the demo, About, Support, Credits, Privacy, Terms) are served with two optional
 settings filled in: a GoatCounter code adds the cookieless analytics tag, and a Ko-fi handle the tip
@@ -65,6 +66,8 @@ RANK_WAIT_S = 30.0  # a Ranking waits this long for the one running before it
 VALHALLA_TIMEOUT_S = 50.0  # socket timeout for Valhalla calls, under Cloud Run's 60 s request timeout
 # The API reads a browser keeps API_MAX_AGE_S seconds; after that the ETag revalidates them.
 CACHED_READS = ("/api/info", "/api/measures", "/api/search", "/api/hikes", "/api/segments")
+# The metadata the page's shape depends on: a browser revalidates it every time, so new code never reads old metadata.
+REVALIDATED_READS = ("/api/info", "/api/measures")
 API_MAX_AGE_S = 3600
 # The code this app runs: a redeploy that changes it changes the ETag of the API reads.
 BUILD = hashlib.sha256(
@@ -366,7 +369,8 @@ def create_app(
         cached = request.method in ("GET", "HEAD") and (path in CACHED_READS or path.startswith("/api/hikes/"))
         response = await call_next(request)
         if cached and response.status_code == 200:
-            headers = {"Cache-Control": f"public, max-age={API_MAX_AGE_S}", "ETag": etag}
+            policy = "no-cache" if path in REVALIDATED_READS else f"public, max-age={API_MAX_AGE_S}"
+            headers = {"Cache-Control": policy, "ETag": etag}
             if etag in (tag.strip() for tag in request.headers.get("if-none-match", "").split(",")):
                 response = Response(status_code=304, headers=headers)
             else:

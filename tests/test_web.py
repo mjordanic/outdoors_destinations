@@ -486,19 +486,19 @@ def test_api_reads_answer_head_like_get(client: TestClient) -> None:
         assert response.content == b""
 
 
+METADATA_READS = ("/api/info", "/api/measures")
 API_READS = (
-    "/api/info",
-    "/api/measures",
     "/api/search?q=ridge",
     f"/api/hikes/{RIDGE_WALK_ID}",
     "/api/hikes?south=45&west=15&north=45.1&east=15.1",
 )
 
 
-def test_api_reads_are_cached_for_an_hour_and_revalidate_by_etag(client: TestClient) -> None:
-    for path in API_READS:
+def test_api_reads_are_cached_and_revalidate_by_etag(client: TestClient) -> None:
+    for path in (*METADATA_READS, *API_READS):
         response = client.get(path)
-        assert response.headers["cache-control"] == "public, max-age=3600", path
+        expected = "no-cache" if path in METADATA_READS else "public, max-age=3600"
+        assert response.headers["cache-control"] == expected, path
         etag = response.headers["etag"]
 
         again = client.get(path, headers={"If-None-Match": etag})
