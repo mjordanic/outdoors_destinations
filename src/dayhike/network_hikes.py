@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import math
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -127,7 +127,7 @@ def network_hikes(
     """
     graph = leg_graph(legs, ways, nodes)
     found = starts(graph, access_points, places)
-    kept = select(graph, [candidates(graph, start) for start in found], destinations, relations)
+    kept = select(graph, (candidates(graph, start) for start in found), destinations, relations)
     names = signpost_names(graph, guideposts)
     marked, settled = named_points(destinations), named_points(places)
     hikes = []
@@ -269,8 +269,9 @@ def starts(
 def candidates(graph: LegGraph, start: Start) -> list[Chain]:
     """Chains of at least two legs from ``start``'s signposts, ``NETWORK_MIN_M``
     to ``NETWORK_MAX_M`` long: every line that passes no signpost twice and
-    every loop back to its first signpost, each loop once. The search stops
-    after ``NETWORK_EXPANSIONS`` legs tried.
+    every loop back to its first signpost, each loop once. The search tries
+    at most ``NETWORK_EXPANSIONS`` legs, shared equally by every first leg
+    from every start signpost, in order, each passing on what it leaves unused.
     """
     incident: dict[int, list[int]] = {}
     for index, leg in enumerate(graph.legs):
@@ -280,16 +281,19 @@ def candidates(graph: LegGraph, start: Start) -> list[Chain]:
             incident.setdefault(b, []).append(index)
     found: list[Chain] = []
     loops_seen: set[frozenset[int]] = set()
+    roots = [(first, index) for first in start.signposts for index in incident.get(first, ())]
     budget = NETWORK_EXPANSIONS
-    for first in start.signposts:
-        stack: list[tuple[tuple[int, ...], tuple[int, ...], float]] = [((), (first,), 0.0)]
-        while stack and budget > 0:
-            legs, signposts, length_m = stack.pop()
+    for n, (first, root) in enumerate(roots):
+        left = budget // (len(roots) - n)
+        budget -= left
+        stack: list[tuple[tuple[int, ...], tuple[int, ...], float, Sequence[int]]] = [((), (first,), 0.0, (root,))]
+        while stack and left > 0:
+            legs, signposts, length_m, options = stack.pop()
             deeper = []
-            for index in incident.get(signposts[-1], ()):
+            for index in options:
                 if index in legs:
                     continue
-                budget -= 1
+                left -= 1
                 leg = graph.legs[index]
                 at = leg.ends[1] if leg.ends[0] == signposts[-1] else leg.ends[0]
                 walked = length_m + leg.length_m
@@ -305,8 +309,9 @@ def candidates(graph: LegGraph, start: Start) -> list[Chain]:
                     continue
                 if len(chain.legs) >= 2 and walked >= NETWORK_MIN_M:
                     found.append(chain)
-                deeper.append((chain.legs, chain.signposts, walked))
+                deeper.append((chain.legs, chain.signposts, walked, incident.get(at, ())))
             stack += reversed(deeper)  # legs in listed order, depth first
+        budget += left
     return found
 
 
@@ -324,11 +329,12 @@ def walk(graph: LegGraph, chain: Chain) -> list[tuple[int, Point]]:
 
 def select(
     graph: LegGraph,
-    per_start: Sequence[Sequence[Chain]],
+    per_start: Iterable[Iterable[Chain]],
     destinations: Sequence[tuple[float, float, str]] = (),
     relations: Sequence[Sequence[Point]] = (),
 ) -> list[tuple[int, Chain]]:
     """The chains to keep, as (start index into ``per_start``, chain), best first.
+    ``per_start`` is read once, one start at a time, so it may be lazy.
 
     Loops come first, then lines that end at one of the named
     ``destinations`` (lat, lon, name), then other lines; within each, nearer

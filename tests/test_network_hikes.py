@@ -4,8 +4,10 @@ Each leg graph is hand-built on a kilometre grid around 45N 15E: every named
 point is one OSM node, every leg one way from its first point to its last.
 """
 
+import gc
 import math
 import time
+import weakref
 
 from dayhike.network_hikes import (
     NETWORK_CAP,
@@ -18,6 +20,7 @@ from dayhike.network_hikes import (
     signpost_names,
     starts,
 )
+import dayhike.network_hikes as network_hikes_module
 from dayhike.catalog import named_points
 from dayhike.osm import OsmRelation, OsmWay
 
@@ -330,9 +333,8 @@ def test_network_hikes_are_the_kept_chains_ready_for_the_catalog():
     assert round(north.length_m) == round(4 * 2 ** 0.5 * 1500)
 
 
-def test_a_dense_network_keeps_the_cap_in_bounded_time():
+def _grid(size: int = 12) -> Network:
     # A knooppunt-like grid of 1.5 km legs offers thousands of chains from one signpost.
-    size = 12
     net = Network({f"{i},{j}": (1.5 * i, 1.5 * j) for i in range(size) for j in range(size)})
     for i in range(size):
         for j in range(size):
@@ -340,6 +342,11 @@ def test_a_dense_network_keeps_the_cap_in_bounded_time():
                 net.leg(1 + len(net.legs), f"{i},{j}", f"{i + 1},{j}")
             if j + 1 < size:
                 net.leg(1 + len(net.legs), f"{i},{j}", f"{i},{j + 1}")
+    return net
+
+
+def test_a_dense_network_keeps_the_cap_in_bounded_time():
+    net = _grid()
     graph = leg_graph(net.legs, net.ways, net.nodes)
     started = time.monotonic()
 
@@ -347,6 +354,45 @@ def test_a_dense_network_keeps_the_cap_in_bounded_time():
 
     assert time.monotonic() - started < 20
     assert len(kept) == NETWORK_CAP
+    assert len({chain.legs[0] for _, chain in kept}) > 1
+
+
+def test_a_dense_start_searches_every_signpost_and_every_first_leg():
+    net = _grid()
+    graph = leg_graph(net.legs, net.ways, net.nodes)
+    here, there = _start_at(graph, net.point("5,5")), _start_at(graph, net.point("5,6"))
+    start = Start(here.signposts + there.signposts, here.point)
+
+    chains = candidates(graph, start)
+
+    assert {chain.signposts[0] for chain in chains} == set(start.signposts)
+    for signpost in start.signposts:
+        first_legs = {chain.legs[0] for chain in chains if chain.signposts[0] == signpost}
+        assert len(first_legs) == 4
+
+
+def test_network_hikes_hold_one_starts_candidates_at_a_time(monkeypatch):
+    # Three parkings far apart on the grid: three starts, each with thousands of candidates.
+    net = _grid()
+    parking = [net.point("1,1"), net.point("5,5"), net.point("10,10")]
+    held: list[weakref.ref] = []
+
+    class Tracked(list):
+        pass
+
+    def tracked_candidates(graph, start):
+        gc.collect()
+        assert all(ref() is None for ref in held[:-1])
+        chains = Tracked(candidates(graph, start))
+        held.append(weakref.ref(chains))
+        return chains
+
+    monkeypatch.setattr(network_hikes_module, "candidates", tracked_candidates)
+
+    hikes = network_hikes(net.legs, net.ways, net.nodes, parking, places=[])
+
+    assert len(held) == 3
+    assert hikes
 
 
 def test_a_loop_does_not_go_via_its_own_start():
