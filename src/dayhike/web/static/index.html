@@ -3,21 +3,49 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>DayHike Finder</title>
+  <title>GoFindMeAHike</title>
   <meta name="description" content="Pick a day hike you liked and find similar ones across Europe, from OpenStreetMap data.">
+  <!-- The API's origin; empty is this page's own. A loading shell on a static host names the server (docs/deploy.md). -->
+  <meta name="api-base" content="">
   <link rel="icon" href="mark.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  <style>
+    /* Inline, so the loading screen shows before anything else loads. */
+    .loading { position: fixed; inset: 0; z-index: 10000; display: flex; flex-direction: column; align-items: center;
+      justify-content: center; gap: 0.6rem; padding: 1.5rem; background: #f7f8f6; color: #1f2a24; text-align: center;
+      font: 1rem/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .loading[hidden] { display: none; }
+    .loading-name { margin: 0; font-size: 1.5rem; font-weight: 700; }
+    .loading-text { margin: 0; max-width: 32rem; }
+    .loading-text.error { color: #b42318; }
+    .loading button { font: inherit; padding: 0.4rem 1rem; }
+  </style>
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css"
         integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
   <link rel="stylesheet" href="style.css">
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+  <script src="vendor/leaflet/leaflet.js" defer
           integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <script src="app.js" defer></script>
+  <!--analytics-->
 </head>
 <body>
+<div id="loading" class="loading" role="status" aria-live="polite">
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="96" height="96" aria-hidden="true">
+    <circle cx="32" cy="32" r="31" fill="#e8f1ea"/>
+    <circle cx="46" cy="17" r="5" fill="#e9b949"/>
+    <path d="M4 50 L24 18 L33 32 L40 23 L60 50 Z" fill="#2f7d4f"/>
+    <path d="M24 18 L30.2 28 L27 26.5 L24 29 L21 26 L18.6 27.4 Z" fill="#ffffff"/>
+    <path d="M40 23 L45 30 L42.5 29 L40 31 L37.6 29.4 L36.4 28.2 Z" fill="#ffffff"/>
+    <path d="M14 50 C20 44 30 46 28 40 C26 35 33 34 34 31" fill="none" stroke="#f6e7c1" stroke-width="2.4" stroke-linecap="round" stroke-dasharray="0.1 4.2"/>
+    <path d="M4 50 H60 A31 31 0 0 1 4 50 Z" fill="#245f3c"/>
+  </svg>
+  <p class="loading-name">GoFindMeAHike</p>
+  <p class="loading-text" id="loading-text">Loading…</p>
+  <button type="button" id="loading-retry" hidden onclick="location.reload()">Try again</button>
+</div>
 <header class="top">
-  <img class="mark" src="mark.svg" alt="" width="44" height="44">
+  <a class="home" href="/" tabindex="-1" aria-hidden="true"><img class="mark" src="mark.svg" alt="" width="44" height="44"></a>
   <div class="brand">
-    <h1>DayHike Finder</h1>
+    <h1><a class="home" href="/">GoFindMeAHike</a></h1>
     <p class="tagline">Pick a hike you liked; find the ones most like it, out of <span id="count">160,000</span> day hikes across Europe.</p>
   </div>
   <img class="coverage" src="coverage.svg" alt="Map of Europe with the covered countries shaded" width="120" height="68"
@@ -57,6 +85,11 @@
       </div>
       <div class="wish-head" id="wish-head" hidden aria-hidden="true"><span>Measure</span><span>You want</span><span>Weight</span><span></span></div>
       <div id="weights"></div>
+      <details id="advanced">
+        <summary>Advanced search</summary>
+        <p class="hint">These measures count only while Advanced search is open.</p>
+        <div id="advanced-weights"></div>
+      </details>
       <div class="row buttons">
         <button type="button" id="reset-weights" class="secondary">Reset weights</button>
       </div>
@@ -134,6 +167,7 @@
       <p class="hint" id="results-note"></p>
       <p class="stale-note" id="results-stale" hidden>The query changed since this ranking; press Find again to update it.</p>
       <div class="table-wrap"><table id="results-table"></table></div>
+      <p id="results-loops" hidden><button type="button" class="secondary" id="suggest-loops">Suggest loops near these hikes (takes a few seconds)</button></p>
       <p class="hint"><span id="results-scores"></span> Only the best of hikes that follow the same route is listed. A dash is “no data”, or a hut, cafe, shelter, viewpoint, summit or parking neither hike has mapped: either way it is left out of that pair’s score.</p>
     </section>
 
@@ -142,19 +176,11 @@
 </main>
 
 <footer class="credits" id="credits">
-  <h2>About and credits</h2>
-  <p>A non-commercial demo of the <a href="https://github.com/mjordanic/outdoors_destinations">DayHike catalog</a>: OpenStreetMap hiking routes of 1–20 km one way, compared on 27 measures (with Return to start, a hike that does not end at its start is measured with its way back, up to about 40 km). Each measure is calibrated against random pairs of hikes, so weights mean the same on every measure.</p>
-  <ul>
-    <li><strong>Hiking routes, huts, water, peaks, roads and names:</strong> map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, available under the <a href="https://opendatacommons.org/licenses/odbl/">Open Database License (ODbL)</a>. The hike data served here is a derivative database of OpenStreetMap and is also offered under the ODbL; the code that builds it is <a href="https://github.com/mjordanic/outdoors_destinations">open source</a>. Extracts from <a href="https://download.geofabrik.de/">Geofabrik</a>.</li>
-    <li><strong>Base map:</strong> tiles © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, served by the OpenStreetMap Foundation under its <a href="https://operations.osmfoundation.org/policies/tiles/">tile usage policy</a>. Place search: <a href="https://nominatim.org/">Nominatim</a>, data © OpenStreetMap contributors.</li>
-    <li><strong>Elevation:</strong> FABDEM V1-2 — Hawker, L., Uhe, P., Paulo, L., Sosa, J., Savage, J., Sampson, C. and Neal, J. (2022), <em>A 30 m global map of elevation with forests and buildings removed</em>, Environmental Research Letters 17, 024016, <a href="https://doi.org/10.1088/1748-9326/ac4d4f">doi:10.1088/1748-9326/ac4d4f</a>; University of Bristol, <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">CC BY-NC-SA 4.0</a>. FABDEM is produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved. The organizations in charge of the Copernicus program by law or by delegation do not incur any liability for any use of the Copernicus WorldDEM-30. The elevation profiles and the elevation-derived values on this page (heights, gain, profile shape, steepness, slope aspect) are adapted from FABDEM and are shared under CC BY-NC-SA 4.0, non-commercially.</li>
-    <li><strong>Land cover:</strong> © ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium. Zanaga, D. et al. (2022), ESA WorldCover 10 m 2021 v200, <a href="https://doi.org/10.5281/zenodo.7254221">doi:10.5281/zenodo.7254221</a>; <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>. Land-cover shares and the waterside share per hike are computed from it.</li>
-    <li><strong>Climate:</strong> CHELSA V2.1, 1981–2010 normals — Karger, D.N., Conrad, O., Böhner, J., Kawohl, T., Kreft, H., Soria-Auza, R.W., Zimmermann, N.E., Linder, H.P. and Kessler, M. (2017), <em>Climatologies at high resolution for the earth's land surface areas</em>, Scientific Data 4, 170122, <a href="https://doi.org/10.1038/sdata.2017.122">doi:10.1038/sdata.2017.122</a>; data from <a href="https://chelsa-climate.org/">CHELSA</a> via EnviDat, <a href="https://doi.org/10.16904/envidat.228.v2.1">doi:10.16904/envidat.228.v2.1</a>, <a href="https://creativecommons.org/publicdomain/zero/1.0/">CC0 1.0</a>. Per-hike monthly averages are computed from it.</li>
-    <li><strong>Drive time:</strong> <a href="https://github.com/valhalla/valhalla">Valhalla</a> routing engine (MIT), on OpenStreetMap roads.</li>
-    <li><strong>Coverage map:</strong> country shapes made with <a href="https://www.naturalearthdata.com/">Natural Earth</a> (public domain), shaded from the hikes in the catalog.</li>
-    <li><strong>Software:</strong> <a href="https://leafletjs.com/">Leaflet</a> (BSD-2-Clause), <a href="https://fastapi.tiangolo.com/">FastAPI</a> (MIT), <a href="https://numpy.org/">NumPy</a> (BSD), <a href="https://shapely.readthedocs.io/">Shapely</a> (BSD), <a href="https://scikit-learn.org/">scikit-learn</a> (BSD).</li>
-  </ul>
+  <p>Map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors (<a href="https://opendatacommons.org/licenses/odbl/">ODbL</a>) · elevation <!--elevation--><a href="https://doi.org/10.5523/bris.s5hqmjcdj8yo2ibzi9b4ew3sn">FABDEM</a> (<a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">CC BY-NC-SA 4.0</a>)<!--/elevation--> · <a href="credits.html">full credits</a></p>
   <p class="hint">Climate and land cover are missing for some regions; those measures then show “no data” and drop out of the score. Drive times are estimates, not routes. Check conditions and maps before you go.</p>
+  <nav class="site-nav" aria-label="Site">
+    <a href="/">Find hikes</a> · <a href="about.html">About</a> · <a href="support.html">Support</a> · <a href="credits.html">Data and credits</a> · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms and safety</a>
+  </nav>
 </footer>
 <div id="score-help" class="score-help" role="dialog" aria-labelledby="score-help-title" tabindex="-1" hidden></div>
 </body>

@@ -16,6 +16,7 @@ from dayhike import (
 from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS
 from dayhike.landcover import (
     fetch_worldcover,
+    tree_share,
     worldcover_tile_id,
     worldcover_tile_url,
     worldcover_tiles_covering,
@@ -400,6 +401,21 @@ def test_cli_sample_landcover_prints_sampled_count(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert int(result.stdout.strip().splitlines()[-1]) > 0
+
+
+def test_tree_share_counts_the_worldcover_tree_cells_around_each_point(tmp_path: Path) -> None:
+    # WorldCover's 1/12000 degree cells: forest west of 15.5, grassland east of it.
+    codes = np.where(np.arange(240) < 120, 10, 30)[None, :].repeat(240, axis=0)
+    _write_class_tif(
+        tmp_path / "ESA_WorldCover_10m_2021_v200_N45E015_Map.tif",
+        west=15.49, south=45.49, east=15.51, north=45.51, codes=codes,
+    )
+
+    shares = tree_share(tmp_path, np.array([45.5, 45.5, 45.5, 47.5]), np.array([15.495, 15.505, 15.5, 15.5]), 50.0)
+
+    assert shares[:2].tolist() == [1.0, 0.0]
+    assert shares[2] == pytest.approx(0.5, abs=0.1)  # on the forest edge
+    assert np.isnan(shares[3])  # no tile there
 
 
 def test_worldcover_tile_url_points_at_public_v200_map_cog() -> None:

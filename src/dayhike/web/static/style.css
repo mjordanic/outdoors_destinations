@@ -24,6 +24,7 @@ h3 { font-size: 0.95rem; margin: 14px 0 6px; }
 }
 .top .brand { flex: 1; min-width: 0; }
 .top h1 { font-size: 1.3rem; color: var(--green-dark); }
+.top .home { color: inherit; text-decoration: none; }
 .tagline { margin: 2px 0 0; color: var(--muted); font-size: 0.9rem; }
 .coverage { width: 120px; height: auto; }
 
@@ -156,6 +157,9 @@ svg text { font-size: 11px; fill: var(--muted); }
   .pick-map { height: 380px; }
 }
 summary.panel-title { cursor: pointer; }
+#advanced { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 8px; }
+#advanced > summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; }
+#advanced > .hint { margin: 4px 0 0; }
 .facts td:first-child, .facts thead th:first-child { width: 190px; }
 .facts thead th { color: var(--muted); font-weight: 600; }
 .mode-switch { margin-top: 8px; width: 100%; text-align: left; }
@@ -188,3 +192,11 @@ button.help:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 .score-help h4 { margin: 10px 0 2px; font-size: 0.84rem; }
 .score-help p { margin: 4px 0; }
 .score-help .help-close { position: absolute; top: 6px; right: 6px; padding: 0 6px; border: none; font-size: 1.1rem; line-height: 1.2; }
+
+.page { max-width: 900px; margin: 16px auto; }
+.page p, .page li { max-width: 75ch; }
+.page ul { padding-left: 18px; }
+.page li { margin: 6px 0; }
+.tip { font-size: 1.05rem; font-weight: 600; }
+.site-nav { margin-top: 10px; }
+.page + .credits { max-width: 900px; }

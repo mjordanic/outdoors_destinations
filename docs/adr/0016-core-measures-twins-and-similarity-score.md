@@ -1,5 +1,5 @@
 ---
-status: accepted (amends ADR-0013)
+status: accepted (amends ADR-0013; default weights amended by ADR-0031)
 ---
 
 # Core Measures by default, WaterSide, Twins, and the similarity as the score

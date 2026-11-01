@@ -381,7 +381,7 @@ def _guess(
     up: float,
     down: float,
 ) -> float:
-    """A cheap stand-in for the core Measures on elevation and length (raw
+    """A cheap stand-in for the length and elevation Measures (raw
     scores, as ``Measure`` defines them): the mean of those both sides have."""
     scores = [min(max(metres, 1_000.0), max(target.length_m, 1_000.0)) / max(metres, target.length_m, 1_000.0)]
     gain = max(up, down)

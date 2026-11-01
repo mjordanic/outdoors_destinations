@@ -15,7 +15,7 @@ from dayhike.catalog import (
     build_catalog,
     filter_by_drive_time,
 )
-from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS, DEFAULT_DEM_DIR, fetch_fabdem, sample_dem
+from dayhike.dem import DEM_SOURCES, Bounds, DEFAULT_DEM_BOUNDS, DEFAULT_DEM_DIR, fetch_dem, sample_dem
 from dayhike.landcover import DEFAULT_LANDCOVER_DIR, fetch_worldcover, sample_landcover
 from dayhike.climate import DEFAULT_CLIMATE_DIR, fetch_chelsa, sample_climate
 from dayhike.extracts import fetch_geofabrik_extracts
@@ -80,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     fetch_dem = subparsers.add_parser(
         "fetch-dem",
-        help="Download FABDEM GeoTIFFs covering Alps+Dinarides into data/dem",
+        help="Download FABDEM (or Copernicus GLO-30) GeoTIFFs covering Alps+Dinarides into data/dem",
     )
     fetch_dem.add_argument(
         "--dest",
@@ -93,6 +93,13 @@ def main(argv: list[str] | None = None) -> int:
         type=_parse_bounds,
         default=DEFAULT_DEM_BOUNDS,
         help="south,west,north,east in WGS84 (default: PRD extract bbox)",
+    )
+    fetch_dem.add_argument(
+        "--source",
+        choices=list(DEM_SOURCES),
+        default="fabdem",
+        help="Elevation map: fabdem, bare earth, non-commercial (default); or copernicus, "
+        "GLO-30 with tree tops and roofs, commercial use allowed. Keep one per directory",
     )
     fetch_lc = subparsers.add_parser(
         "fetch-landcover",
@@ -128,7 +135,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     sample = subparsers.add_parser(
         "sample-dem",
-        help="Sample local FABDEM onto GeometryStore vertices and Catalog elevation",
+        help="Sample local FABDEM (or Copernicus GLO-30) onto GeometryStore vertices and Catalog elevation",
     )
     sample.add_argument(
         "--catalog",
@@ -140,7 +147,13 @@ def main(argv: list[str] | None = None) -> int:
         "--dem",
         type=Path,
         default=DEFAULT_DEM_DIR,
-        help="Directory of FABDEM GeoTIFFs (default: data/dem)",
+        help="Directory of FABDEM or Copernicus GLO-30 GeoTIFFs (default: data/dem)",
+    )
+    sample.add_argument(
+        "--landcover",
+        type=Path,
+        default=DEFAULT_LANDCOVER_DIR,
+        help="WorldCover GeoTIFFs; Copernicus GLO-30 needs them for the ground under trees (default: data/landcover)",
     )
     sample_lc = subparsers.add_parser(
         "sample-landcover",
@@ -176,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     sample_tg = subparsers.add_parser(
         "sample-trailgraph",
-        help="Sample local FABDEM, LandCover and climate rasters onto the TrailGraph's vertices",
+        help="Sample local DEM, LandCover and climate rasters onto the TrailGraph's vertices",
     )
     sample_tg.add_argument(
         "--catalog",
@@ -184,7 +197,7 @@ def main(argv: list[str] | None = None) -> int:
         default=Path("data/catalog.sqlite"),
         help="SQLite Catalog path (default: data/catalog.sqlite)",
     )
-    sample_tg.add_argument("--dem", type=Path, default=DEFAULT_DEM_DIR, help="FABDEM GeoTIFFs (default: data/dem)")
+    sample_tg.add_argument("--dem", type=Path, default=DEFAULT_DEM_DIR, help="FABDEM or Copernicus GLO-30 GeoTIFFs (default: data/dem)")
     sample_tg.add_argument(
         "--landcover", type=Path, default=DEFAULT_LANDCOVER_DIR, help="WorldCover GeoTIFFs (default: data/landcover)"
     )
@@ -205,7 +218,7 @@ def main(argv: list[str] | None = None) -> int:
         "--dem",
         type=Path,
         default=DEFAULT_DEM_DIR,
-        help="Directory of FABDEM GeoTIFFs for SolarAspect (default: data/dem)",
+        help="Directory of FABDEM or Copernicus GLO-30 GeoTIFFs for SolarAspect (default: data/dem)",
     )
     similarity.add_argument(
         "--landcover",
@@ -330,6 +343,21 @@ def main(argv: list[str] | None = None) -> int:
     export.add_argument(
         "--valhalla-url", help="Running highways-only Valhalla: snap every Trailhead now"
     )
+    export.add_argument(
+        "--geonames",
+        type=Path,
+        help="GeoNames cities1000.zip for the page's place search; downloaded there when missing",
+    )
+    places = subparsers.add_parser(
+        "export-places", help="Add GeoNames place search beside an existing serving export"
+    )
+    places.add_argument(
+        "--geonames",
+        type=Path,
+        default=Path("data/geonames/cities1000.zip"),
+        help="GeoNames cities1000.zip; downloaded there when missing",
+    )
+    places.add_argument("--out", type=Path, default=Path("data/web-serving"))
     serve = subparsers.add_parser("serve", help="Serve the web demo from a serving export")
     serve.add_argument("--data", type=Path, default=Path("data/web-serving"))
     serve.add_argument("--host", default="127.0.0.1")
@@ -344,6 +372,16 @@ def main(argv: list[str] | None = None) -> int:
         default=0,
         help="Proxies that append to X-Forwarded-For in front of the app (1 on Cloud Run)",
     )
+    serve.add_argument(
+        "--goatcounter", help="GoatCounter code: count visits at https://CODE.goatcounter.com; omit for no analytics"
+    )
+    serve.add_argument("--kofi", help="Ko-fi handle for the Support page's tip link; omit for no link")
+    serve.add_argument(
+        "--cors-origin",
+        action="append",
+        default=[],
+        help="Another origin (https://host) whose page may call the API, e.g. a loading shell; repeatable",
+    )
     coverage = subparsers.add_parser(
         "coverage-map", help="Draw the SVG map of Europe with the covered countries shaded"
     )
@@ -356,9 +394,25 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     if args.command == "export-serving":
-        return _export_serving(args.catalog, args.out, args.valhalla_tiles, args.snaps, args.valhalla_url)
+        return _export_serving(
+            args.catalog, args.out, args.valhalla_tiles, args.snaps, args.valhalla_url, args.geonames
+        )
+    if args.command == "export-places":
+        from dayhike.serving import export_places, fetch_geonames
+
+        print(export_places(fetch_geonames(args.geonames), args.out))
+        return 0
     if args.command == "serve":
-        return _serve(args.data, args.host, args.port, args.valhalla_url, args.forwarded_hops)
+        return _serve(
+            args.data,
+            args.host,
+            args.port,
+            args.valhalla_url,
+            args.forwarded_hops,
+            args.goatcounter,
+            args.kofi,
+            tuple(args.cors_origin),
+        )
     if args.command == "coverage-map":
         from dayhike.coverage import coverage_map
 
@@ -374,7 +428,10 @@ def main(argv: list[str] | None = None) -> int:
             snap_tolerance_m=args.snap_tolerance,
         )
     if args.command == "sample-trailgraph":
-        return _sample_trailgraph(args.catalog, args.dem, args.landcover, args.climate)
+        try:
+            return _sample_trailgraph(args.catalog, args.dem, args.landcover, args.climate)
+        except ValueError as exc:
+            sample_tg.error(str(exc))
     if args.command == "compose":
         try:
             return _compose(
@@ -391,13 +448,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "fetch-extracts":
         return _fetch_extracts(args.dest)
     if args.command == "fetch-dem":
-        return _fetch_dem(args.dest, args.bounds)
+        return _fetch_dem(args.dest, args.bounds, args.source)
     if args.command == "fetch-landcover":
         return _fetch_landcover(args.dest, args.bounds)
     if args.command == "fetch-climate":
         return _fetch_climate(args.dest, args.bounds)
     if args.command == "sample-dem":
-        return _sample_dem(args.catalog, args.dem)
+        try:
+            return _sample_dem(args.catalog, args.dem, args.landcover)
+        except ValueError as exc:
+            sample.error(str(exc))
     if args.command == "sample-landcover":
         return _sample_landcover(args.catalog, args.landcover)
     if args.command == "sample-climate":
@@ -461,10 +521,11 @@ def _fetch_extracts(dest: Path) -> int:
     return 0
 
 
-def _fetch_dem(dest: Path, bounds: Bounds) -> int:
-    paths = fetch_fabdem(
+def _fetch_dem(dest: Path, bounds: Bounds, source: str) -> int:
+    paths = fetch_dem(
         dest,
         bounds,
+        source=DEM_SOURCES[source],
         progress=lambda message: print(message, file=sys.stderr, flush=True),
     )
     for path in paths:
@@ -494,10 +555,11 @@ def _fetch_climate(dest: Path, bounds: Bounds) -> int:
     return 0
 
 
-def _sample_dem(catalog_path: Path, raster_dir: Path) -> int:
+def _sample_dem(catalog_path: Path, raster_dir: Path, landcover_dir: Path) -> int:
     sampled = sample_dem(
         catalog_path,
         raster_dir,
+        landcover_dir=landcover_dir,
         progress=lambda message: print(message, file=sys.stderr, flush=True),
     )
     print(sampled)
@@ -576,6 +638,7 @@ def _compose(
         month=month,
         limit=limit,
         return_to_start=return_to_start,
+        loops=True,
     ):
         for indent, hike in (("", result), *(("  ", version) for version in result["versions"])):
             listed = hike["route"]["text"] if hike["id"] is None else hike["id"]  # a SuggestedLoop by its link
@@ -610,8 +673,9 @@ def _export_serving(
     valhalla_tiles: Path | None,
     snaps: Path | None,
     valhalla_url: str | None,
+    geonames: Path | None,
 ) -> int:
-    from dayhike.serving import ServingExportError, export_serving
+    from dayhike.serving import ServingExportError, export_serving, fetch_geonames
 
     def progress(message: str) -> None:
         print(message, file=sys.stderr, flush=True)
@@ -624,6 +688,7 @@ def _export_serving(
                 valhalla_dir=valhalla_tiles,
                 snaps_path=snaps,
                 valhalla_url=valhalla_url,
+                geonames_path=geonames and fetch_geonames(geonames),
                 progress=progress,
             )
         )
@@ -633,7 +698,16 @@ def _export_serving(
     return 0
 
 
-def _serve(data: Path, host: str, port: int, valhalla_url: str | None, forwarded_hops: int) -> int:
+def _serve(
+    data: Path,
+    host: str,
+    port: int,
+    valhalla_url: str | None,
+    forwarded_hops: int,
+    goatcounter: str | None,
+    kofi: str | None,
+    cors_origins: tuple[str, ...],
+) -> int:
     try:
         import uvicorn
 
@@ -655,7 +729,18 @@ def _serve(data: Path, host: str, port: int, valhalla_url: str | None, forwarded
         def drive_client(max_hours: float) -> HighwayDriveTimeClient:
             return HighwayDriveTimeClient(max_hours, snaps)
 
-    app = create_app(serving, drive_client, forwarded_hops=forwarded_hops)
+    try:
+        app = create_app(
+            serving,
+            drive_client,
+            forwarded_hops=forwarded_hops,
+            goatcounter=goatcounter,
+            kofi=kofi,
+            cors_origins=cors_origins,
+        )
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 1
     # A stalled Valhalla call would hold the one-Ranking lock past the request; time it
     # out instead so /api/rank answers 503 and frees the lock.
     socket.setdefaulttimeout(VALHALLA_TIMEOUT_S)

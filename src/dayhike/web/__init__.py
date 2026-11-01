@@ -1,7 +1,8 @@
 """The public read-only web demo: a JSON API over a serving export, and the page.
 
-``create_app`` serves ``ServingData`` (``dayhike.serving``): name search, the
-hikes in a map view, hike detail, the Measure list, the score of any two hikes, and Ranking with an
+``create_app`` serves ``ServingData`` (``dayhike.serving``): name search, place
+search when the export has GeoNames places (ADR-0029), the hikes in a map view,
+hike detail, the Measure list, the score of any two hikes, and Ranking with an
 optional highways-only DriveTime pre-filter. Every client gets a request budget per minute, and one Ranking
 runs at a time per instance, so a small container holds its memory. When the export has a TrailGraph,
 it also serves the Segments in a map view and the detail of a ComposedHike, which can then be the
@@ -10,11 +11,24 @@ A Ranking may start from a Wish instead of a Seed, and the Measure list says how
 a Wish value (ADR-0024).
 Detail, compose, pair and Ranking measure every hike with its way back to the start unless
 ``return_to_start`` is false (ADR-0019).
+A browser keeps the API reads an hour and then revalidates them by an ETag of the export, the code
+and the drive-time settings; the page, the API info and the Measure list always revalidate, so a
+redeploy shows at once. Responses are
+gzipped for a browser that takes it.
+The site's pages (the demo, About, Support, Credits, Privacy, Terms) are served with two optional
+settings filled in: a GoatCounter code adds the cookieless analytics tag, and a Ko-fi handle the tip
+link; the privacy page names each only once it is set. Unset, a page loads no analytics and links no
+tip jar.
+The page may load from another origin, a loading shell on a static host (docs/deploy.md): the origins
+given may then call the API (CORS). Their preflights are answered before the request budget, so
+they use none of it. With none given, no other origin may.
 """
 
 from __future__ import annotations
 
+import hashlib
 import math
+import re
 import threading
 import time
 import unicodedata
@@ -26,12 +40,14 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from dayhike.catalog import MatrixClient, Origin
-from dayhike.serving import MEASURE_GROUPS, MEASURE_INFO, SCORE_HELP, WISH_INPUTS, ServingData
+from dayhike.serving import GEONAMES_ATTRIBUTION, MEASURE_GROUPS, MEASURE_INFO, SCORE_HELP, WISH_INPUTS, ServingData, name_dem
 from dayhike.similarity import DEFAULT_WEIGHTS, MEASURES, WISHABLE, Measure
 from dayhike.trailgraph import Route, RouteError
 
@@ -48,6 +64,39 @@ API_RATE = 300
 RATE_WINDOW_S = 60.0
 RANK_WAIT_S = 30.0  # a Ranking waits this long for the one running before it
 VALHALLA_TIMEOUT_S = 50.0  # socket timeout for Valhalla calls, under Cloud Run's 60 s request timeout
+# The API reads a browser keeps API_MAX_AGE_S seconds; after that the ETag revalidates them.
+CACHED_READS = ("/api/info", "/api/measures", "/api/search", "/api/hikes", "/api/segments")
+# The metadata the page's shape depends on: a browser revalidates it every time, so new code never reads old metadata.
+REVALIDATED_READS = ("/api/info", "/api/measures")
+API_MAX_AGE_S = 3600
+# The code this app runs: a redeploy that changes it changes the ETag of the API reads.
+BUILD = hashlib.sha256(
+    b"".join(
+        path.read_bytes()
+        for path in sorted(Path(__file__).parent.parent.rglob("*"))
+        if path.is_file() and "__pycache__" not in path.parts
+    )
+).hexdigest()
+
+PAGES = ("index", "about", "support", "credits", "privacy", "terms")  # the site's pages, served with its settings filled in
+# The elevation credits of an export sampled from Copernicus GLO-30 (ADR-0030), in place of
+# FABDEM's between <!--elevation--> and <!--/elevation--> on each page that names it.
+COPERNICUS_CREDITS = {
+    "index": 'Copernicus GLO-30 (<a href="https://doi.org/10.5270/ESA-c5d3d65">© DLR, Airbus; Copernicus DEM licence</a>)',
+    "terms": "The elevation profiles and the values derived from elevation (heights, gain, profile shape, steepness, "
+    'slope aspect) are computed from Copernicus DEM GLO-30, offered under the <a href="https://docs.sentinel-hub.com/'
+    'api/latest/static/files/data/dem/resources/license/License-COPDEM-30.pdf">Copernicus DEM licence</a>.',
+    "credits": 'Copernicus DEM GLO-30, <a href="https://doi.org/10.5270/ESA-c5d3d65">doi:10.5270/ESA-c5d3d65</a>, '
+    'from <a href="https://registry.opendata.aws/copernicus-dem/">AWS Open Data</a>, under the '
+    '<a href="https://docs.sentinel-hub.com/api/latest/static/files/data/dem/resources/license/License-COPDEM-30.pdf">'
+    "Copernicus DEM licence</a>. Produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence "
+    "and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved. The "
+    "organisations in charge of the Copernicus programme by law or by delegation do not incur any liability for any "
+    "use of the Copernicus WorldDEM-30. The elevation profiles and the elevation-derived values on this site (heights, "
+    "gain, profile shape, steepness, slope aspect) are computed from it; it maps the surface, so tree tops and roofs "
+    "are included.",
+}
+PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")  # a GoatCounter code or Ko-fi handle
 
 DriveClientFactory = Callable[[float], MatrixClient]
 MEASURE_KINDS = {measure.name: measure.kind for measure in MEASURES}
@@ -126,6 +175,7 @@ class RankRequest(Weighted):
     wish: dict[str, bool | float] | None = None  # Measure name to value, yes/no as true/false
     origin: Place | None = None
     max_hours: float | None = Field(default=None, gt=0, le=MAX_DRIVE_HOURS)
+    loops: bool = False  # SuggestedLoops too, only on request (ADR-0028)
 
     @field_validator("wish")
     @classmethod
@@ -175,19 +225,76 @@ def wish_input(measure: Measure) -> dict | None:
     return {"kind": "number", "unit": unit, "min": low, "max": high, "step": step, "default": default}
 
 
+def site_pages(
+    goatcounter: str | None, kofi: str | None, place_search: bool = False, *, copernicus: bool = False
+) -> dict[str, str]:
+    """Each page's HTML with the GoatCounter tag where a code is set, and the Ko-fi link where a handle is.
+
+    With ``place_search`` (the export has GeoNames places) the place-search credit names GeoNames, not Nominatim,
+    and the privacy page keeps its ``places`` text, not its ``nominatim`` text.
+    With ``copernicus`` (an export sampled from Copernicus GLO-30), the pages credit it instead of FABDEM.
+
+    Text between ``<!--if-goatcounter-->`` and ``<!--/if-goatcounter-->`` (or ``kofi``, ``places``,
+    ``nominatim``) is kept only when that setting is on.
+
+    The tag loads the self-hosted ``count.js``, which counts at ``https://<code>.goatcounter.com/count``.
+    """
+    for setting, value in (("GoatCounter code", goatcounter), ("Ko-fi handle", kofi)):
+        if value is not None and not PLAIN_NAME.fullmatch(value):
+            raise ValueError(f"a {setting} is letters, digits, - and _, not {value!r}")
+    analytics = "" if goatcounter is None else (
+        f'<script data-goatcounter="https://{goatcounter}.goatcounter.com/count"'
+        ' async src="vendor/goatcounter/count.js"></script>'
+    )
+    pages = {}
+    for name in PAGES:
+        html = (STATIC_DIR / f"{name}.html").read_text(encoding="utf-8").replace("<!--analytics-->", analytics)
+        settings = {
+            "goatcounter": goatcounter is not None,
+            "kofi": kofi is not None,
+            "places": place_search,
+            "nominatim": not place_search,
+        }
+        for setting, on in settings.items():  # text true only once it is set
+            block = rf"<!--if-{setting}-->(.*?)<!--/if-{setting}-->"
+            html = re.sub(block, (lambda m: m[1]) if on else "", html, flags=re.S)
+        if kofi is not None:
+            tip = (
+                f'<p class="tip"><a href="https://ko-fi.com/{kofi}">Leave a tip on Ko-fi</a></p>\n'
+                '  <p class="hint">The link opens Ko-fi, which takes the tip; this site handles no payments.</p>'
+            )
+            html = re.sub(r"<!--ko-fi-->.*?<!--/ko-fi-->", tip, html, flags=re.S)
+        if place_search:
+            credit = (
+                '<span id="place-credit">Place search: towns from <a href="https://www.geonames.org/">GeoNames</a>'
+                ' (geonames.org), <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</span>'
+            )
+            html = re.sub(r'<span id="place-credit">.*?</span>', credit, html, flags=re.S)
+        if copernicus and name in COPERNICUS_CREDITS:
+            html = re.sub(r"<!--elevation-->.*?<!--/elevation-->", COPERNICUS_CREDITS[name], html, flags=re.S)
+        pages[name] = html
+    return pages
+
+
 class RateLimiter:
     """At most ``limit`` requests per ``window_s`` seconds per client key."""
 
-    def __init__(self, limit: int, window_s: float) -> None:
-        self.limit, self.window_s = limit, window_s
+    def __init__(self, limit: int, window_s: float, clock: Callable[[], float] = time.monotonic) -> None:
+        self.limit, self.window_s, self._clock = limit, window_s, clock
         self._seen: dict[str, deque[float]] = {}
+        self._swept = clock()
         self._lock = threading.Lock()
 
+    def __len__(self) -> int:
+        """How many clients it remembers."""
+        return len(self._seen)
+
     def allow(self, key: str) -> bool:
-        now = time.monotonic()
+        now = self._clock()
         with self._lock:
-            if len(self._seen) > 10_000:  # forget idle clients
+            if now - self._swept >= self.window_s:  # forget idle clients once a window
                 self._seen = {k: v for k, v in self._seen.items() if v and now - v[-1] < self.window_s}
+                self._swept = now
             seen = self._seen.setdefault(key, deque())
             while seen and now - seen[0] >= self.window_s:
                 seen.popleft()
@@ -204,6 +311,9 @@ def create_app(
     forwarded_hops: int = 0,
     rank_rate: int = RANK_RATE,
     api_rate: int = API_RATE,
+    goatcounter: str | None = None,
+    kofi: str | None = None,
+    cors_origins: tuple[str, ...] = (),
 ) -> FastAPI:
     """The app over one serving export.
 
@@ -211,18 +321,26 @@ def create_app(
     turns the drive-time filter off. ``forwarded_hops`` is how many proxies
     append to ``X-Forwarded-For`` in front of the app (1 on Cloud Run): the
     client is that many entries from the end. 0 uses the socket peer.
+    ``goatcounter`` and ``kofi`` fill in the pages (``site_pages``); a value that
+    is not a plain name is a ValueError. ``cors_origins`` are the other origins
+    (``https://host``) whose pages may call the API.
     """
-    app = FastAPI(title="DayHike demo", docs_url="/api/docs", openapi_url="/api/openapi.json")
+    pages = site_pages(goatcounter, kofi, data.places is not None, copernicus="copernicus" in data.meta["attribution"])
+    app = FastAPI(title="GoFindMeAHike", docs_url="/api/docs", openapi_url="/api/openapi.json")
     limiters = {"rank": RateLimiter(rank_rate, RATE_WINDOW_S), "api": RateLimiter(api_rate, RATE_WINDOW_S)}
     one_ranking = threading.Semaphore(1)
+    # The API reads change only with the export (its meta.json holds facts_version, places.sqlite may come later), the code and the settings.
+    settings = f"{BUILD} {drive_client is not None} {MAX_DRIVE_HOURS} {RESULTS} {data.places is not None}".encode()
+    etag = f'W/"{hashlib.sha256((data.directory / "meta.json").read_bytes() + settings).hexdigest()[:16]}"'
+    attribution = data.meta["attribution"]
     measures = [
         {
             "name": measure.name,
             "kind": measure.kind,
             "group": MEASURE_INFO[measure.name][0],
             "label": MEASURE_INFO[measure.name][1],
-            "description": MEASURE_INFO[measure.name][2],
-            "source": MEASURE_INFO[measure.name][3],
+            "description": name_dem(MEASURE_INFO[measure.name][2], attribution),
+            "source": name_dem(MEASURE_INFO[measure.name][3], attribution),
             "columns": list(measure.columns),
             "monthly": measure.monthly,
             "default_weight": DEFAULT_WEIGHTS[measure.name],
@@ -248,13 +366,28 @@ def create_app(
                     status_code=429,
                     headers={"Retry-After": str(int(RATE_WINDOW_S))},
                 )
+        cached = request.method in ("GET", "HEAD") and (path in CACHED_READS or path.startswith("/api/hikes/"))
         response = await call_next(request)
+        if cached and response.status_code == 200:
+            policy = "no-cache" if path in REVALIDATED_READS else f"public, max-age={API_MAX_AGE_S}"
+            headers = {"Cache-Control": policy, "ETag": etag}
+            if etag in (tag.strip() for tag in request.headers.get("if-none-match", "").split(",")):
+                response = Response(status_code=304, headers=headers)
+            else:
+                response.headers.update(headers)
         if not path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-cache"  # revalidate (ETag): a redeploy shows at once
         response.headers["X-Content-Type-Options"] = "nosniff"
         # OSM tile and Nominatim policies ask for a Referer; send the origin only.
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         return response
+
+    app.add_middleware(GZipMiddleware)  # API JSON and the page, for a browser that takes gzip
+    if cors_origins:  # outermost: a preflight is answered before the limiter, and a 429 is readable
+        app.add_middleware(
+            CORSMiddleware, allow_origins=list(cors_origins), allow_methods=["GET", "HEAD", "POST"],
+            allow_headers=["Content-Type"], max_age=3600,
+        )
 
     # A refusal leaves out the input it refuses: a NaN or Infinity in the body cannot be written back as JSON.
     @app.exception_handler(RequestValidationError)
@@ -276,20 +409,33 @@ def create_app(
         return {
             "dayhikes": data.meta["dayhikes"],
             "coverage": coverage,
-            "attribution": data.meta["attribution"],
+            "attribution": data.meta["attribution"] | ({"geonames": GEONAMES_ATTRIBUTION} if data.places else {}),
+            "place_search": data.places is not None,
             "drive_time": drive_client is not None,
             "compose": data.trailgraph is not None,
             "max_drive_hours": MAX_DRIVE_HOURS,
             "results": RESULTS,
         }
 
+    score_help = {
+        **SCORE_HELP,
+        "sections": [{**section, "text": name_dem(section["text"], attribution)} for section in SCORE_HELP["sections"]],
+    }
+
     @app.api_route("/api/measures", methods=["GET", "HEAD"])
     def measure_list() -> dict:
-        return {"groups": list(MEASURE_GROUPS), "measures": measures, "score_help": SCORE_HELP}
+        return {"groups": [{"name": name, "label": label} for name, label in MEASURE_GROUPS.items()], "measures": measures, "score_help": score_help}
 
     @app.api_route("/api/search", methods=["GET", "HEAD"])
     def search(q: str = Query(max_length=100), limit: int = Query(20, ge=1, le=50)) -> dict:
         return {"results": data.search(q, limit)}
+
+    # The page's "Find place": a start for the drive filter, without asking Nominatim.
+    @app.api_route("/api/place", methods=["GET", "HEAD"])
+    def place(q: str = Query(max_length=100), limit: int = Query(5, ge=1, le=20)) -> dict:
+        if data.places is None:
+            raise HTTPException(404, "no place search in this export")
+        return {"results": data.find_place(q, limit)}
 
     @app.api_route("/api/hikes", methods=["GET", "HEAD"])
     def hikes_in_box(
@@ -377,6 +523,7 @@ def create_app(
                 limit=RESULTS,
                 return_to_start=body.return_to_start,
                 reach=reach,
+                loops=body.loops,
             )
         except (urllib.error.URLError, ConnectionError, TimeoutError):
             raise HTTPException(503, "the drive-time service is not answering; try again") from None
@@ -393,6 +540,7 @@ def create_app(
             "wish": body.wish,
             "month": body.month,
             "return_to_start": body.return_to_start,
+            "loops": body.loops,
             "weights": {name: weight for name, weight in weights.items() if weight > 0},
             "reachable": None if hours is None else len(hours),
             "results": results,
@@ -415,6 +563,25 @@ def create_app(
             "return_to_start": body.return_to_start,
             "weights": {name: w for name, w in weights.items() if w > 0},
         }
+
+    page_etags = {name: f'"{hashlib.sha256(html.encode()).hexdigest()[:16]}"' for name, html in pages.items()}
+
+    def site_page(name: str, request: Request) -> Response:
+        """A page with its ETag, like the static files: the browser revalidates it every time."""
+        if name not in pages:
+            raise HTTPException(404, "Not Found")
+        etag = page_etags[name]
+        if etag in (tag.strip() for tag in request.headers.get("if-none-match", "").split(",")):
+            return Response(status_code=304, headers={"ETag": etag})
+        return HTMLResponse(pages[name], headers={"ETag": etag})
+
+    @app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
+    def home(request: Request) -> Response:
+        return site_page("index", request)
+
+    @app.api_route("/{name}.html", methods=["GET", "HEAD"], include_in_schema=False)
+    def page(name: str, request: Request) -> Response:
+        return site_page(name, request)
 
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="page")
     return app

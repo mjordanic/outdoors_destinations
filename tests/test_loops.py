@@ -66,7 +66,7 @@ def _segments(data, loop: dict) -> set[int]:
 
 @pytest.mark.usefixtures("rows_apart")
 def test_a_ranking_lists_loops_drawn_from_segments_beside_dayhikes(data) -> None:
-    results = data.rank(MEADOW_PATH, DEFAULT_WEIGHTS)
+    results = data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True)
     loops = _loops(results)
 
     # Both sides of the Middle Path.
@@ -95,26 +95,42 @@ def test_a_ranking_lists_loops_drawn_from_segments_beside_dayhikes(data) -> None
 
 
 @pytest.mark.usefixtures("rows_apart")
+def test_a_ranking_lists_loops_only_when_asked(data, monkeypatch) -> None:
+    import dayhike.serving as serving
+
+    def no_search(*args, **kwargs):
+        raise AssertionError("loops searched unasked")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(serving, "find_loops", no_search)
+        plain = data.rank(MEADOW_PATH, DEFAULT_WEIGHTS)
+    asked = data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True)
+
+    assert _loops(plain) == [] and len(_loops(asked)) == 2
+    assert [r["id"] for r in plain] == [r["id"] for r in asked if r["id"] is not None]
+
+
+@pytest.mark.usefixtures("rows_apart")
 def test_a_loop_mostly_on_the_seed_is_no_suggestion(data) -> None:
-    loops = _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS))
+    loops = _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True))
 
     # Two thirds of either loop is the Lake Loop.
-    assert _loops(data.rank(LAKE_LOOP, DEFAULT_WEIGHTS)) == []
+    assert _loops(data.rank(LAKE_LOOP, DEFAULT_WEIGHTS, loops=True)) == []
     # From one loop, the other is a third the same: suggested; the Seed itself, walked either way, is not.
     for seed, other in (loops, loops[::-1]):
-        results = data.rank(Route.parse(seed["route"]["text"]), DEFAULT_WEIGHTS)
+        results = data.rank(Route.parse(seed["route"]["text"]), DEFAULT_WEIGHTS, loops=True)
         assert [_segments(data, r) for r in _loops(results)] == [_segments(data, other)]
         assert LAKE_LOOP in [r["id"] for r in results]
 
 
 @pytest.mark.usefixtures("rows_apart")
 def test_a_wish_with_a_length_lists_loops_and_leaves_no_hike_out(data) -> None:
-    results = data.rank({"length": 3_000}, {"length": 100})
+    results = data.rank({"length": 3_000}, {"length": 100}, loops=True)
 
     # Both loops, though two thirds of each is the Lake Loop: a Wish walks nowhere.
     assert [round(loop["length_m"], -2) for loop in _loops(results)] == [3_100, 3_100]
     assert {r["id"] for r in results} - {None} == set(data.store.ids.tolist())
-    assert _loops(data.rank({"elevation_gain": 300}, {"elevation_gain": 100})) == []  # no length to follow
+    assert _loops(data.rank({"elevation_gain": 300}, {"elevation_gain": 100}, loops=True)) == []  # no length to follow
 
 
 @pytest.mark.usefixtures("rows_apart")
@@ -126,10 +142,19 @@ def test_a_wished_temperature_is_of_the_query_month(data) -> None:
     assert data.rank(wish, weights)[0]["id"] == BRIDGE_PATH
 
 
+# The weights the scores of the versions below were read under: ADR-0016's
+# defaults, before the basic set took their place (ADR-0031).
+VERSION_WEIGHTS = dict.fromkeys(
+    ("length", "elevation_gain", "highest", "lowest", "profile", "landcover",
+     "temperature", "precipitation", "solar_radiation", "waterside", "climb_grade"),
+    100,
+)  # fmt: skip
+
+
 def test_hikes_starting_near_each_other_share_a_row_of_versions(data) -> None:
     apart = {r["id"] if r["id"] is not None else r["route"]["text"]: r for r in _rows_apart(data)}
 
-    (row,) = data.rank(MEADOW_PATH, DEFAULT_WEIGHTS)
+    (row,) = data.rank(MEADOW_PATH, VERSION_WEIGHTS, loops=True)
 
     # The best hike leads; the Middle Path and the Lake Loop, though better than
     # the Connector, lie mostly on it, so the Connector and the loop on the other
@@ -148,7 +173,7 @@ def _rows_apart(data) -> list[dict]:
 
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(serving, "GROUP_M", 0.0)
-        return data.rank(MEADOW_PATH, DEFAULT_WEIGHTS)
+        return data.rank(MEADOW_PATH, VERSION_WEIGHTS, loops=True)
 
 
 @pytest.mark.parametrize(
@@ -163,7 +188,7 @@ def test_a_row_keeps_few_versions_each_mostly_a_different_route(
 ) -> None:
     monkeypatch.setattr(f"dayhike.serving.{name}", value)
 
-    (row,) = data.rank(MEADOW_PATH, DEFAULT_WEIGHTS)
+    (row,) = data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True)
 
     assert [v["id"] for v in row["versions"]] == versions
 
@@ -176,9 +201,9 @@ def test_a_loop_starts_within_the_drive_and_shows_its_hours(data) -> None:
     def nowhere(places: list) -> list:
         return [None] * len(places)
 
-    loops = _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, reach=everywhere))
+    loops = _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, reach=everywhere, loops=True))
     assert len(loops) == 2 and {r["drive_hours"] for r in loops} == {1.5}
-    assert _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, reach=nowhere)) == []
+    assert _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, reach=nowhere, loops=True)) == []
 
 
 @pytest.mark.parametrize(
@@ -194,7 +219,7 @@ def test_a_loop_starts_within_the_drive_and_shows_its_hours(data) -> None:
 def test_a_search_stops_at_its_budget(data, monkeypatch, module: str, name: str, value: float) -> None:
     monkeypatch.setattr(f"{module}.{name}", value)
 
-    results = data.rank(MEADOW_PATH, DEFAULT_WEIGHTS)
+    results = data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True)
 
     assert _loops(results) == [] and len(results) == len(data.store.ids) - 1
 
@@ -209,9 +234,9 @@ def test_api_ranks_loops_with_their_link_versions_and_drive_hours(data) -> None:
             return [3600.0] * len(trailheads)
 
     client = TestClient(create_app(data, lambda max_hours: Hour()))
-    (plain,) = client.post("/api/rank", json={"seed": MEADOW_PATH}).json()["results"]
+    (plain,) = client.post("/api/rank", json={"seed": MEADOW_PATH, "loops": True}).json()["results"]
     (driven,) = client.post(
-        "/api/rank", json={"seed": MEADOW_PATH, "origin": {"lat": 46.0, "lon": 14.0}, "max_hours": 2}
+        "/api/rank", json={"seed": MEADOW_PATH, "loops": True, "origin": {"lat": 46.0, "lon": 14.0}, "max_hours": 2}
     ).json()["results"]
 
     # One row, a loop with a Catalog DayHike and the other loop as its versions, each with the hours to its start.
@@ -225,25 +250,39 @@ def test_api_ranks_loops_with_their_link_versions_and_drive_hours(data) -> None:
         assert client.get(f"/api/hikes/{version['id']}").json()["line"] == version["line"]
 
 
+def test_api_ranks_without_loops_unless_asked(data) -> None:
+    from fastapi.testclient import TestClient
+
+    from dayhike.web import create_app
+
+    client = TestClient(create_app(data, None))
+    plain = client.post("/api/rank", json={"seed": MEADOW_PATH}).json()
+    asked = client.post("/api/rank", json={"seed": MEADOW_PATH, "loops": True}).json()
+
+    assert (plain["loops"], asked["loops"]) == (False, True)
+    assert [r["id"] for row in plain["results"] for r in (row, *row["versions"])].count(None) == 0
+    assert [r["id"] for row in asked["results"] for r in (row, *row["versions"])].count(None) == 2
+
+
 @pytest.mark.usefixtures("rows_apart")
 def test_cli_compose_lists_loops_by_their_link(data, capsys) -> None:
     from dayhike.cli import main
 
-    seed = _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS))[1]["route"]["text"]
+    seed = _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True))[1]["route"]["text"]
 
     assert main(["compose", "--data", str(data.directory), seed]) == 0
     listed = [line.split("\t")[0] for line in capsys.readouterr().out.strip().splitlines()[1:]]
     assert str(LAKE_LOOP) in listed and str(MIDDLE_PATH) in listed
     assert [item for item in listed if not item.isdigit()] == [
-        r["route"]["text"] for r in _loops(data.rank(Route.parse(seed), DEFAULT_WEIGHTS))
+        r["route"]["text"] for r in _loops(data.rank(Route.parse(seed), DEFAULT_WEIGHTS, loops=True))
     ]
 
 
 def test_cli_compose_prints_each_rows_versions_under_it(data, capsys) -> None:
     from dayhike.cli import main
 
-    seed = data.rank(MEADOW_PATH, DEFAULT_WEIGHTS)[0]["route"]["text"]
-    rows = data.rank(Route.parse(seed), DEFAULT_WEIGHTS)
+    seed = data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True)[0]["route"]["text"]
+    rows = data.rank(Route.parse(seed), DEFAULT_WEIGHTS, loops=True)
 
     assert main(["compose", "--data", str(data.directory), seed]) == 0
     listed = [line.split("\t")[0] for line in capsys.readouterr().out.rstrip("\n").splitlines()[1:]]
@@ -258,7 +297,7 @@ def test_cli_compose_prints_each_rows_versions_under_it(data, capsys) -> None:
 def test_a_found_loop_names_whole_segments_from_its_start(data) -> None:
     from dayhike.loops import LoopTarget, find_loops
 
-    loop = _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS))[0]
+    loop = _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True))[0]
     target = LoopTarget(3_100.0, float("nan"), float("nan"), float("nan"), None)
 
     found = find_loops(data.trailgraph, target, [tuple(loop["trailhead"])], limit=10, deadline=float("inf"))
@@ -275,6 +314,6 @@ def test_a_loop_with_no_hiking_place_near_its_start_is_named_by_its_trails(data,
 
     monkeypatch.setattr(serving, "LOOP_NAME_M", 600.0)  # the Cold Spring is 1 km away
 
-    names = {loop["name"] for loop in _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS))}
+    names = {loop["name"] for loop in _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True))}
 
     assert names and all(name.startswith("Loop on ") for name in names), names

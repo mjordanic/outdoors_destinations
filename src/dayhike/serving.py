@@ -21,10 +21,15 @@ similarity directory live. It writes a directory a server memory-maps:
   snap file or a Valhalla URL is given.
 - ``valhalla/``: the highways-only tile extract and a ``valhalla.json`` that
   serves it from ``SERVING_ROOT`` inside the container, when given.
+- ``places.sqlite``: GeoNames towns of 1,000 people or more within
+  ``PLACE_MARGIN_DEG`` of the Trailheads' box, each under every folded name it
+  has, for the page's place search, when a GeoNames ``cities1000`` file is
+  given. ``export_places`` writes it beside an existing export too: it reads
+  only ``trailheads.npy``, and an export without it still opens.
 - ``meta.json``: written last, so a directory without it is incomplete.
 
 ``ServingData`` opens such a directory without ``Catalog.open``: name search,
-the hikes in a map view, hike detail and Ranking all read the memory-mapped arrays and the SQLite file.
+place search, the hikes in a map view, hike detail and Ranking all read the memory-mapped arrays and the SQLite file.
 The Segments in a map view and a ComposedHike's detail read ``trailgraph.sqlite``; a Ranking
 from a ComposedHike or a Wish scores its facts against every DayHike like any Seed's. Detail, pair and
 Ranking measure every hike with its way back to the start, or every hike one way (ADR-0019).
@@ -44,11 +49,13 @@ import shutil
 import sqlite3
 import time
 import unicodedata
+import zipfile
 import zlib
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
+from urllib.request import urlretrieve as default_urlretrieve
 
 import numpy as np
 import shapely
@@ -65,6 +72,8 @@ from dayhike.catalog import (
     straight_line_distances_m,
     trailgraph_path_for,
 )
+from dayhike.dem import FABDEM_ATTRIBUTION
+from dayhike.extracts import UrlRetrieve
 from dayhike.loops import LOOP_SEEDS, LoopTarget, find_loops
 from dayhike.similarity import (
     ALONG_KINDS,
@@ -122,6 +131,8 @@ SERVING_FORMAT = 4
 SERVING_ROOT = "/data"  # where the container finds the export (web/Dockerfile)
 LINE_TOLERANCE_M = 10.0
 ELEVATION_POINTS = 128
+DRAWN_SMOOTH_M = 90.0  # a Copernicus GLO-30 ElevationProfile is drawn smoothed over this (ADR-0030) ...
+DRAWN_STEP_M = 10.0  # ... resampled this often first
 LOOP_MEASURED = 40  # the SuggestedLoops guessed best that a Ranking measures exactly
 LOOP_BUDGET_S = 5.0  # the most a Ranking spends on SuggestedLoops
 LOOP_SEED_SHARE = 0.5  # a loop sharing more of its walk with the Seed, or of the Seed's, is no suggestion
@@ -133,6 +144,9 @@ UNNAMING_KINDS = ("restaurant_cafe", "parking")  # amenity points that name no h
 TRAILHEAD_NEAREST = 3  # parking and restaurant/cafe points kept per Trailhead
 VALHALLA_CACHE_BYTES = 256 * 1024 * 1024  # mjolnir.max_cache_size; the build default is 1 GB
 SEARCH_SCAN_CAP = 5_000  # occurrences of the scanned word a search looks at, so short queries stay fast
+GEONAMES_URL = "https://download.geonames.org/export/dump/cities1000.zip"
+GEONAMES_ATTRIBUTION = "GeoNames (geonames.org), CC BY 4.0"
+PLACE_MARGIN_DEG = 2.0  # places this far outside the Trailheads' box are kept: a start a drive away
 _HIKE_CHUNK = 2_000
 _RASTER_FACTS = ("tree_share", "temperature_c", "southness", "waterside_share")  # read from rasters
 _SIMILARITY_FILES = (
@@ -141,25 +155,26 @@ _SIMILARITY_FILES = (
     "way_back.npy", "meta.json",
 )  # fmt: skip
 
-# Groups are sections of the weights panel only; scoring knows no groups (ADR-0013).
+# Groups are sections of the weights panel only; scoring knows no groups (ADR-0013). The page
+# shows the "basic" group and folds the others away behind Advanced search (ADR-0031).
 MEASURE_INFO: dict[str, tuple[str, str, str, str]] = {
-    "length": ("effort", "Length", "Walk length; scored by the shorter over the longer (floor 1 km), against random hike pairs.", "OpenStreetMap: the hike's line, from the ways of its hiking relation."),
-    "elevation_gain": ("effort", "Elevation gain", "Metres climbed, the larger of climb and descent; scored by the smaller over the larger (floor 100 m), against random hike pairs.", "FABDEM elevation along the line."),
+    "length": ("basic", "Length", "Walk length; scored by the shorter over the longer (floor 1 km), against random hike pairs.", "OpenStreetMap: the hike's line, from the ways of its hiking relation."),
+    "elevation_gain": ("basic", "Climbing", "Metres climbed, the larger of climb and descent; scored by the smaller over the larger (floor 100 m), against random hike pairs.", "FABDEM elevation along the line."),
     "difficulty": ("effort", "Difficulty", "Strictest SAC grade, 1-6; scored by the gap against random hike pairs, lowest from 3 grades apart.", "OpenStreetMap: the sac_scale grade of the hike's ways."),
-    "highest": ("altitude", "Highest point", "Highest elevation; scored by the gap against random hike pairs, lowest from 400 m apart.", "FABDEM elevation along the line."),
+    "highest": ("basic", "Highest point", "Highest elevation; scored by the gap against random hike pairs, lowest from 400 m apart.", "FABDEM elevation along the line."),
     "lowest": ("altitude", "Lowest point", "Lowest elevation; scored by the gap against random hike pairs, lowest from 400 m apart.", "FABDEM elevation along the line."),
-    "profile": ("profile", "Profile shape", "Elevation profile scaled to 0-1 in length and height, walked either way.", "FABDEM elevation along the line."),
-    "landcover": ("landscape", "Land cover", "Shared share of tree, shrub, grass, bare, snow and other cover.", "ESA WorldCover 2021 land cover along the line."),
-    "peak_summited": ("landscape", "Peak summited", "A Peak within 50 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap peaks."),
-    "viewpoint_along": ("landscape", "Viewpoint along", "A Viewpoint within 100 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap viewpoints."),
-    "peaks_around": ("landscape", "Peaks around", "Peaks within 2 km of the line; scored by the fewer over the more (floor 1), against random hike pairs.", "OpenStreetMap peaks."),
-    "temperature": ("weather", "Temperature", "Mean temperature (June-August, or the chosen month); scored by the gap against random hike pairs, lowest from 10 °C apart.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
+    "profile": ("effort", "Profile shape", "Elevation profile scaled to 0-1 in length and height, walked either way.", "FABDEM elevation along the line."),
+    "landcover": ("basic", "Landscape", "Shared share of tree, shrub, grass, bare, snow and other cover.", "ESA WorldCover 2021 land cover along the line."),
+    "peak_summited": ("basic", "Summit", "A Peak within 50 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap peaks."),
+    "viewpoint_along": ("scenery", "Viewpoint along", "A Viewpoint within 100 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap viewpoints."),
+    "peaks_around": ("scenery", "Peaks around", "Peaks within 2 km of the line; scored by the fewer over the more (floor 1), against random hike pairs.", "OpenStreetMap peaks."),
+    "temperature": ("basic", "Typical temperature", "Mean temperature (June-August, or the chosen month); scored by the gap against random hike pairs, lowest from 10 °C apart.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
     "precipitation": ("weather", "Precipitation", "Mean monthly precipitation (or the chosen month's); scored by the smaller over the larger (floor 10 mm), against random hike pairs.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
     "solar_radiation": ("weather", "Solar radiation", "Solar radiation (June-August, or the chosen month), kJ m⁻² day⁻¹; scored by the gap against random hike pairs, lowest from 5,000 apart.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
     "southness": ("weather", "Sun-facing slopes", "Which way the slopes face: 1 south, 0 north (from FABDEM); scored by the gap against random hike pairs.", "FABDEM slopes along the line."),
     "water_count": ("water", "Water sources", "WaterSources within 100 m of the line, counted up to 3; scored by the gap against random hike pairs.", "OpenStreetMap drinking water, springs, taps and water points."),
     "dry_stretch": ("water", "Dry stretch", "Longest walk between WaterSources; scored by the shorter over the longer (floor 1 km), against random hike pairs.", "OpenStreetMap drinking water, springs, taps and water points."),
-    "waterside": ("water", "Waterside", "Share of the walk within 200 m of sea, lake or wide river (WorldCover); scored by the gap against random hike pairs, a gap under 0.15 counting as none, lowest from 0.5 apart.", "ESA WorldCover 2021 permanent water (sea, lakes, wide rivers)."),
+    "waterside": ("basic", "Lake or sea", "Share of the walk within 200 m of sea, lake or wide river (WorldCover); scored by the gap against random hike pairs, a gap under 0.15 counting as none, lowest from 0.5 apart.", "ESA WorldCover 2021 permanent water (sea, lakes, wide rivers)."),
     "hut_along": ("facilities", "Hut along", "A Hut within 100 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap huts."),
     "restaurant_cafe_along": ("facilities", "Restaurant or cafe along", "A restaurant or cafe within 100 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap restaurants and cafes."),
     "shelter_along": ("facilities", "Shelter along", "A Shelter within 100 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap shelters."),
@@ -168,8 +183,8 @@ MEASURE_INFO: dict[str, tuple[str, str, str, str]] = {
     "surface": ("trail", "Surface", "Shared share of paved, gravel, natural and rock surface.", "OpenStreetMap surface tags, else the kind of path or road."),
     "tarmac_approach": ("trail", "Tarmac approach", "Paved metres before the trail leaves the road; scored by the gap against random hike pairs, lowest from 2 km apart.", "OpenStreetMap surface tags, else the kind of path or road."),
     "round_trip": ("trail", "Round trip", "Ends within 50 m of the Trailhead, or not (always, with the way back).", "OpenStreetMap: the hike's line, from the ways of its hiking relation."),
-    "climb_grade": ("steepness", "Climb grade", "Gain over the length of the stretches that climb; scored by the smaller over the larger (floor 3 %), against random hike pairs.", "FABDEM elevation along the line."),
-    "steepest_km": ("steepness", "Steepest km", "Largest height change over 1 km; scored by the smaller over the larger (floor 50 m), against random hike pairs.", "FABDEM elevation along the line."),
+    "climb_grade": ("effort", "Climb grade", "Gain over the length of the stretches that climb; scored by the smaller over the larger (floor 3 %), against random hike pairs.", "FABDEM elevation along the line."),
+    "steepest_km": ("effort", "Steepest km", "Largest height change over 1 km; scored by the smaller over the larger (floor 50 m), against random hike pairs.", "FABDEM elevation along the line."),
 }
 
 # The Wish form's input for each Measure that takes a number (``WISHABLE`` but yes/no): unit,
@@ -234,7 +249,7 @@ def _percent(share: float) -> int:
 # scoring rule changes the words in one place.
 SCORE_HELP = {
     "overall": "Average of the measure scores below, under your weights. Each one is the share of random hike "
-    "pairs less alike than these two. A typical pair scores about 0.44; with the default weights, 0.75 beats "
+    "pairs less alike than these two. A typical pair scores about 0.41; with the default weights, 0.72 beats "
     "99 random pairs in 100.",
     "measure": "Share of random hike pairs less alike than these two on this measure: 0.9 means only 1 pair "
     "in 10 is as alike; 0 means nothing in common.",
@@ -246,7 +261,7 @@ SCORE_HELP = {
             "that are less alike than these two. So it says how close the two hikes are, and also how rare it "
             "is to be that close: a match counts for more when fewer random pairs manage it. Two hikes whose "
             "lengths are within 2 % score 0.99 on length. Two hikes that are both never near open water score "
-            "only 0.16 on waterside: they are identical there, but 84 % of random pairs are too, so it tells "
+            "only 0.16 on Lake or sea: they are identical there, but 84 % of random pairs are too, so it tells "
             "little. A score of 0.5 means half of random pairs are at least as alike: an ordinary match. 0.9 "
             "means only 1 pair in 10 is; 0.99 means 1 in 100. 0 means the hikes have nothing in common on that "
             "measure: one passes a hut and the other does not, or their highest points are 400 m or more apart. "
@@ -258,7 +273,7 @@ SCORE_HELP = {
             "title": "Rare shared values tell more",
             "text": "When two hikes have the same value, the score says how rare that value is: two hikes that "
             "both pass a mountain hut score 0.95, two that are both never near water 0.16. Values a measure "
-            "counts as the same are one value: Waterside shares under 0.15, Water sources 3 or more, values at "
+            "counts as the same are one value: Lake or sea shares under 0.15, Water sources 3 or more, values at "
             "or under a measure's floor (walks under 1 km on Length).",
         },
         {
@@ -277,16 +292,16 @@ SCORE_HELP = {
             "text": "A low number on one measure does not mean the hikes are unalike overall. It means that what "
             "they share on that measure is common, or that they are further apart on it than most pairs of "
             "hikes. For example, Kattegatstien and Kattegatkysten are both Danish coast walks, 56 % and 30 % "
-            "of the way beside water. On waterside they score 0.10. Most hikes never come near water, and two "
+            "of the way beside water. On Lake or sea they score 0.10. Most hikes never come near water, and two "
             "such hikes count as alike, so 90 % of random pairs are at least as alike there. Their overall "
-            "score is still 0.85, because every other measure matches.",
+            "score is still 0.74, better than 99 random pairs in 100, because every other measure matches.",
         },
         {
             "title": "The overall score",
             "text": "The overall score is the average of the measure scores, weighted as you set them: only "
             "their ratios matter, and a measure with no data on either hike, or not compared, drops out. A "
-            "typical random pair of hikes scores about 0.44. With the default weights, 0.75 beats 99 random "
-            "pairs in 100, and the best match for a hike usually scores about 0.85.",
+            "typical random pair of hikes scores about 0.41. With the default weights, 0.72 beats 99 random "
+            "pairs in 100, and the best match for a hike usually scores about 0.82.",
         },
         {
             "title": "Where the facts come from",
@@ -312,8 +327,56 @@ SCORE_HELP = {
 }
 
 
-MEASURE_GROUPS = ("effort", "altitude", "profile", "landscape", "weather", "water", "facilities", "trail", "steepness")
+def name_dem(text: str, attribution: Mapping[str, str]) -> str:
+    """``text`` naming the elevation map an export was sampled from (ADR-0030).
+
+    MEASURE_INFO and SCORE_HELP name FABDEM, the default. An export sampled
+    from Copernicus GLO-30 carries its attribution, and the texts name it.
+    """
+    if "copernicus" not in attribution:
+        return text
+    return text.replace(
+        "FABDEM, a 30 m elevation map with forests and buildings removed",
+        "Copernicus GLO-30, a 30 m elevation map of the surface, tree tops and roofs included",
+    ).replace("FABDEM", "Copernicus GLO-30")
+
+
+MEASURE_GROUPS: dict[str, str] = {
+    "basic": "Main features",
+    "effort": "Effort and steepness",
+    "altitude": "Altitude",
+    "scenery": "Scenery",
+    "facilities": "Facilities",
+    "trail": "Trail",
+    "water": "Water",
+    "weather": "Weather",
+}
 POINT_COLUMNS = ("kind", "where", "lat", "lon", "along_m", "off_m", "name", "ele")
+
+
+def drawn_profile(
+    lat: np.ndarray, lon: np.ndarray, ele: np.ndarray, *, smooth: bool
+) -> np.ndarray | None:
+    """The ElevationProfile the page draws: metres at ``ELEVATION_POINTS``
+    equal steps, None with fewer than two heights.
+
+    ``smooth``, for a Copernicus GLO-30 export, first resamples the walk every
+    ``DRAWN_STEP_M`` and fits a Savitzky-Golay quadratic over
+    ``DRAWN_SMOOTH_M``, so what is left of the tree tops does not jag the line
+    while climbs, tops and dips keep their shape. It is drawn only: climb,
+    descent and the facts read the heights as sampled.
+    """
+    window = round(DRAWN_SMOOTH_M / DRAWN_STEP_M) // 2 * 2 + 1  # odd, in steps
+    points = round(float(_step_m(np.asarray(lat, float), np.asarray(lon, float)).sum()) / DRAWN_STEP_M) + 1
+    if not smooth or points < window:
+        return _resample(lat, lon, ele, points=ELEVATION_POINTS)
+    from scipy.signal import savgol_filter
+
+    dense = _resample(lat, lon, ele, points=points)
+    if dense is None:
+        return None
+    dense = savgol_filter(dense, window, 2, mode="interp")
+    return np.interp(np.linspace(0, points - 1, ELEVATION_POINTS), np.arange(points), dense)
 
 
 class ServingExportError(ValueError):
@@ -327,6 +390,7 @@ def export_serving(
     valhalla_dir: Path | str | None = None,
     snaps_path: Path | str | None = None,
     valhalla_url: str | None = None,
+    geonames_path: Path | str | None = None,
     progress: Progress | None = None,
 ) -> Path:
     """Write the serving export of a Catalog into ``out_dir`` (see the module doc).
@@ -336,7 +400,8 @@ def export_serving(
     and the ``valhalla.json`` that built it; the tar is hard-linked when it
     can be (same disk), else copied. ``snaps_path`` seeds ``snaps.npz`` from an
     existing snap cache; with ``valhalla_url`` every Trailhead not in it is
-    snapped now, so a server never has to.
+    snapped now, so a server never has to. ``geonames_path`` is GeoNames'
+    ``cities1000`` file (zip or txt) for ``places.sqlite``.
     """
     started = time.monotonic()
     catalog_path, out = Path(catalog_path), Path(out_dir)
@@ -374,13 +439,19 @@ def export_serving(
         _write_snaps(out / "snaps.npz", trailheads, snaps_path, valhalla_url, progress)
     else:
         (out / "snaps.npz").unlink(missing_ok=True)
+    if geonames_path is not None:
+        export_places(geonames_path, out)
+    else:
+        (out / "places.sqlite").unlink(missing_ok=True)
+    # The elevation map in use: FABDEM, unless the GeometryStore was sampled from Copernicus GLO-30 (ADR-0030).
+    elevation = {} if "copernicus" in sources else {"fabdem": FABDEM_ATTRIBUTION}
     meta = {
         "format": SERVING_FORMAT,
         "dayhikes": len(ids),
         "facts_version": json.loads((similarity / "meta.json").read_text())["facts_version"],
         "line_tolerance_m": LINE_TOLERANCE_M,
         "elevation_points": ELEVATION_POINTS,
-        "attribution": {"osm": attribution, **sources},
+        "attribution": {"osm": attribution, **elevation, **sources},
         "drive_time": (out / "valhalla" / "valhalla.json").is_file() and (out / "snaps.npz").is_file(),
         "compose": compose,
         "export_seconds": round(time.monotonic() - started, 1),
@@ -432,7 +503,7 @@ def _write_hikes(
                     kept_lat, kept_lon = simplify_line(lat, lon, LINE_TOLERANCE_M)
                     line = encode_polyline(kept_lat, kept_lon)
                     boxes.append((dayhike_id, kept_lat.min(), kept_lat.max(), kept_lon.min(), kept_lon.max()))
-                    profile = _resample(lat, lon, ele, points=ELEVATION_POINTS)
+                    profile = drawn_profile(lat, lon, ele, smooth="copernicus" in sources)
                     if profile is not None:
                         elevation = np.round(profile).astype("<i2").tobytes()
                         climb_m, descent_m = (round(v) for v in climb_and_descent(lat, lon, ele))
@@ -730,6 +801,75 @@ def _write_snaps(
     snaps.of(places)
 
 
+def fetch_geonames(path: Path | str, urlretrieve: UrlRetrieve = default_urlretrieve) -> Path:
+    """GeoNames' ``cities1000.zip`` at ``path``, downloaded first when it is not there."""
+    path = Path(path)
+    if not path.is_file():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        partial = path.with_name(f"{path.name}.partial")  # a cut download is not taken for the file
+        urlretrieve(GEONAMES_URL, str(partial))
+        os.replace(partial, path)
+    return path
+
+
+def export_places(geonames_path: Path | str, out_dir: Path | str) -> Path:
+    """Write ``places.sqlite`` into the export ``out_dir`` from a GeoNames cities file (zip or txt).
+
+    Keeps the places within ``PLACE_MARGIN_DEG`` of the box of ``trailheads.npy``,
+    each with its name, country, population and position, and an index of every
+    name folded like ``_fold``, marked whether it is only an alternate name (not
+    its name or ASCII name). Written to a temporary file first, so a server
+    never opens half of one.
+    """
+    geonames_path, out = Path(geonames_path), Path(out_dir)
+    trailheads = np.load(out / "trailheads.npy")
+    (south, west), (north, east) = trailheads.min(axis=0) - PLACE_MARGIN_DEG, trailheads.max(axis=0) + PLACE_MARGIN_DEG
+    path, partial = out / "places.sqlite", out / "places.sqlite.partial"
+    partial.unlink(missing_ok=True)
+    db = sqlite3.connect(partial)
+    try:
+        db.execute(
+            "CREATE TABLE places (id INTEGER PRIMARY KEY, name TEXT, country TEXT, population INTEGER, lat REAL, lon REAL)"
+        )
+        db.execute(
+            "CREATE TABLE place_names (name TEXT, place INTEGER, alternate INTEGER, PRIMARY KEY (name, place)) "
+            "WITHOUT ROWID"
+        )
+        for line in _geonames_lines(geonames_path):
+            # geonameid, name, asciiname, alternatenames, latitude, longitude, ... country code (8), ... population (14)
+            fields = line.rstrip("\n").split("\t")
+            lat, lon = float(fields[4]), float(fields[5])
+            if not (south <= lat <= north and west <= lon <= east):
+                continue
+            place = int(fields[0])
+            db.execute(
+                "INSERT INTO places VALUES (?, ?, ?, ?, ?, ?)",
+                (place, fields[1], fields[8], int(fields[14] or 0), lat, lon),
+            )
+            own = {_fold(name).strip() for name in fields[1:3]}
+            names = (own | {_fold(name).strip() for name in fields[3].split(",")}) - {""}
+            db.executemany(
+                "INSERT INTO place_names VALUES (?, ?, ?)", [(name, place, name not in own) for name in names]
+            )
+        db.commit()
+    finally:
+        db.close()
+    os.replace(partial, path)
+    return path
+
+
+def _geonames_lines(path: Path) -> Iterator[str]:
+    if path.suffix != ".zip":
+        with path.open(encoding="utf-8") as lines:
+            yield from lines
+        return
+    with zipfile.ZipFile(path) as archive:
+        name = next(name for name in archive.namelist() if name.endswith(".txt"))
+        with archive.open(name) as raw:
+            for line in raw:
+                yield line.decode("utf-8")
+
+
 class ServingData:
     """A serving export, opened read-only and memory-mapped."""
 
@@ -754,6 +894,8 @@ class ServingData:
         # One string of every folded name between newlines: str.find walks it in C.
         self._haystack = "\n" + "\n".join(self._folded) + "\n"
         self._starts = np.cumsum([1] + [len(name) + 1 for name in self._folded[:-1]])
+        places = self.directory / "places.sqlite"
+        self.places = f"file:{places}?mode=ro&immutable=1" if places.is_file() else None
 
     def _db(self) -> sqlite3.Connection:
         return sqlite3.connect(self._db_uri, uri=True)
@@ -792,6 +934,26 @@ class ServingData:
             found.sort(key=lambda row: (_relevance(self._folded[row], needle, words), len(self._folded[row]), row))
             rows += found
         return self._summaries(rows[:limit])
+
+    def find_place(self, query: str, limit: int = 5) -> list[dict]:
+        """Places with a name starting with the query, folded like ``search``.
+
+        A place named exactly the query comes first, then one with it as an
+        alternate name (Wien is Vienna), then the most populous: so Krk is the
+        town of Krk before Kraków, whose alternate names include Krk.
+        """
+        needle = _fold(query).strip()
+        if self.places is None or not needle:
+            return []
+        with sqlite3.connect(self.places, uri=True) as db:
+            rows = db.execute(
+                "SELECT p.name, p.country, p.lat, p.lon, p.population FROM place_names n "
+                "JOIN places p ON p.id = n.place WHERE n.name >= ? AND n.name < ? "
+                "GROUP BY p.id ORDER BY MIN(CASE WHEN n.name = ? THEN n.alternate ELSE 2 END), "
+                "p.population DESC, p.id LIMIT ?",
+                (needle, needle + "\U0010ffff", needle, limit),
+            ).fetchall()
+        return [dict(zip(("name", "country", "lat", "lon", "population"), row)) for row in rows]
 
     def _rows_containing(self, word: str) -> list[int]:
         """Rows whose name holds ``word``, in id order, from its first SEARCH_SCAN_CAP occurrences."""
@@ -936,7 +1098,7 @@ class ServingData:
         line = elevation = climb_m = descent_m = None
         if len(lat) >= 2:
             line = encode_polyline(*simplify_line(lat, lon, LINE_TOLERANCE_M))
-            profile = _resample(lat, lon, ele, points=ELEVATION_POINTS)
+            profile = drawn_profile(lat, lon, ele, smooth="copernicus" in self.meta["attribution"])
             if profile is not None:
                 elevation = {"step_m": walk_m / (ELEVATION_POINTS - 1), "metres": np.round(profile).astype(int).tolist()}
                 climb_m, descent_m = (_round(v) for v in climb_and_descent(trip.lat, trip.lon, trip.ele))
@@ -1066,6 +1228,7 @@ class ServingData:
         limit: int = 10,
         return_to_start: bool = True,
         reach: Reach | None = None,
+        loops: bool = False,
     ) -> list[dict]:
         """The ``limit`` hikes most similar to one Seed, with every Measure's score.
 
@@ -1078,10 +1241,11 @@ class ServingData:
         its way back (and the figures listed are of that walk), else one way.
         Each hike has its served ``line``.
 
-        With a TrailGraph the hikes are DayHikes and SuggestedLoops (ADR-0020),
-        ranked together: a loop has ``id`` None, its ``route``, a name from
-        where it starts, and ``drive_hours`` to its start from ``reach`` (None
-        without it), which leaves out a loop starting out of reach.
+        With a TrailGraph and ``loops`` (asked for: ADR-0028) the hikes are
+        DayHikes and SuggestedLoops (ADR-0020), ranked together: a loop has
+        ``id`` None, its ``route``, a name from where it starts, and
+        ``drive_hours`` to its start from ``reach`` (None without it), which
+        leaves out a loop starting out of reach.
 
         One row per area: best first, a hike starting within ``GROUP_M`` of a
         better row's start is a version of that row, listed in its
@@ -1095,8 +1259,8 @@ class ServingData:
         seed_row, seed_walk = self._seed(seed, return_to_start)
         allowed = None if allowed_rows is None else self.store.ids[allowed_rows]
         rows, scores = rank_rows(store, [seed_row], weights, month=month, allowed_ids=allowed)
-        loops = []
-        if self.trailgraph is not None and LOOP_SEEDS:
+        found_loops = []
+        if loops and self.trailgraph is not None and LOOP_SEEDS:
             seed_line = (
                 None
                 if isinstance(seed, Mapping)  # a Wish walks nowhere
@@ -1104,10 +1268,10 @@ class ServingData:
                 if seed_walk is None
                 else np.column_stack([seed_walk.lat, seed_walk.lon])
             )
-            loops = self._loops(store, seed_row, seed_line, weights, month, rows[:LOOP_SEEDS], return_to_start, reach)
+            found_loops = self._loops(store, seed_row, seed_line, weights, month, rows[:LOOP_SEEDS], return_to_start, reach)
         # [score, store row or None, the loop or None, points once needed]
         catalog = ([float(score), row, None, None] for row, score in zip(rows.tolist(), scores.tolist()))
-        found = sorted(([loop["score"], None, loop, points] for loop, points in loops), key=lambda c: -c[0])
+        found = sorted(([loop["score"], None, loop, points] for loop, points in found_loops), key=lambda c: -c[0])
         groups: list[list[list]] = []  # the best first in each
         for hike in heapq.merge(catalog, found, key=lambda candidate: -candidate[0]):
             start = self._start(hike)
