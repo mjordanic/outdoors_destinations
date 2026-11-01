@@ -418,7 +418,8 @@ way back to its Trailhead: the Seed, a composed Seed and every DayHike it is
 compared with alike. The way back is the shortest one: none for a loop that
 ends where it starts, a straight step for ends at most 50 m apart, else the
 shortest walk over the TrailGraph's trails when it is shorter than the hike
-itself backwards, else the hike retraced. So a hike that ends 500 m from its
+itself backwards and than 50 km (`WAY_BACK_SEARCH_M`, ADR-0035), else the hike
+retraced. So a hike that ends 500 m from its
 start adds about 500 m, and a line up to a summit is compared up and back:
 twice the length, its climb and its descent both ways. `build-similarity`
 stores a second set of facts with the way back, calibrated on its own, and
@@ -1681,14 +1682,16 @@ reads and how the scores are made (ADR-0025).
 A Hiker with no particular hike in mind presses "No particular hike in mind?
 Describe the one you want" under the search. The weights list then shows only
 the Measures `/api/measures` marks wishable (Advanced ones again only while it is open), each with a value to ask for in its
-unit and range (a yes/no Measure as a tick box) beside its weight. The form
+unit and range (a yes/no Measure as a tick box) beside its weight. Length and
+dry stretch are typed in km, up to 2,000 km, with a hint under Length that over
+about 25 km is usually more than a day (ADR-0035). The form
 starts asking nothing: every weight is 0, and setting a value weighs that
 Measure 100; a Measure weighted 0 asks nothing. The liked-hike
 weights are kept for when the Hiker goes back. "Find hikes" ranks with that wish
 instead of a Seed, the drive filter, month and Return to start work as before,
 and a result opens with what the Hiker asked for in place of the liked hike. The
-address, `#wish=elevation_gain:800:100,hut_along:1:50` (Measure, value, weight),
-keeps the form for a reload or a shared link. "Back to a hike you liked" returns
+address, `#wish=elevation_gain:800:100,hut_along:1:50` (Measure, value in the
+Measure's fact units, metres for a length typed in km, weight), keeps the form for a reload or a shared link. "Back to a hike you liked" returns
 to the search. A server whose Measures are not wishable shows no such button.
 
 It answers from a serving export, not from the Catalog: `dayhike
@@ -1808,7 +1811,9 @@ are not listed. `"wish": {measure: value}` stands in place of `seed` on rank
 yes/no Measure; only the Measures with a value weigh (100 each without
 `weights`), and no hike is left out. Exactly one of `seed`, `composed` and
 `wish` (else 422). `GET /api/measures` gives each Measure's `wish` input:
-`kind` (`number` or `yes/no`), `unit`, `min`, `max`, `step` and `default`, or
+`kind` (`number` or `yes/no`), `unit`, `min`, `max`, `step` and `default`
+(in the fact's unit), and for a number `display`, the unit the page shows it in
+(`{"unit": "km", "per": 1000}` for `length` and `dry_stretch`, else null), or
 null for a Measure that takes no value (profile, land cover, surface), and its
 data `source`; `score_help` holds the score explanation (`SCORE_HELP`). With a TrailGraph and `"loops": true` (default false,
 echoed as `loops`; ADR-0028) a Ranking also lists SuggestedLoops
