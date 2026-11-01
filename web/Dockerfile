@@ -15,7 +15,7 @@ ENV UV_PYTHON_INSTALL_DIR=/opt/python \
     UV_LINK_MODE=copy \
     UV_NO_CACHE=1
 WORKDIR /app
-COPY pyproject.toml uv.lock .python-version ./
+COPY pyproject.toml uv.lock .python-version LICENSE ./
 RUN uv sync --frozen --no-dev --extra web --no-install-project
 COPY src ./src
 RUN uv sync --frozen --no-dev --extra web --no-editable && rm -rf /app/src
