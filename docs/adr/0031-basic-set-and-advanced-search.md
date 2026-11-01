@@ -50,7 +50,8 @@ poor ones, and the evidence below agrees. The CLI and the API take the same defa
 
 **Weights are sliders.** Each Measure's weight is a slider from 0 to 100 in steps of 10, its value
 shown beside it. At 0 the Measure is off: its name is struck through and it is left out, as the old
-"off" tick and a weight of 0 both did. A Wish address with a weight between steps opens at the nearest step.
+"off" tick and a weight of 0 both did. A Wish address with a weight between steps opens at the nearest step,
+but a nonzero weight opens at 10 or more, so an old link never turns a Measure off.
 
 **Evidence.** For 300 random Seeds, with Return to start on, each candidate default ranked every DayHike.
 Its top 10 was compared with the top 10 of ADR-0016's judge-tuned default:

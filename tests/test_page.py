@@ -378,6 +378,18 @@ def test_a_wish_survives_a_reload_and_opens_from_its_link(browser, server) -> No
     assert shared.get_by_role("button", name="Find hikes").is_enabled()
 
 
+def test_a_wish_address_with_a_small_nonzero_weight_keeps_its_measure_on(browser, server) -> None:
+    api = Api(WISHABLE)
+    page = open_page(browser, server, api, hash="#wish=highest:2000:3")
+    highest = page.locator('.weight[data-measure="highest"]')
+
+    assert page.get_by_label("Highest point weight, 0 to 100").input_value() == "10"
+    assert highest.locator(".name").evaluate("e => getComputedStyle(e).textDecorationLine") != "line-through"
+    with page.expect_response(f"{server}/api/rank"):
+        page.get_by_role("button", name="Find hikes").click()
+    assert api.ranked[-1]["wish"] == {"highest": 2000}
+
+
 def test_a_server_without_wishes_offers_no_wish_form(browser, server) -> None:
     page = open_page(browser, server, Api({}), hash="#wish=highest:2200:100")
 

@@ -798,7 +798,7 @@ function applyWish(text) {
   for (const row of document.querySelectorAll(".weight:not(.unwishable)")) {
     const value = row.querySelector("input.wish");
     const [, wanted, weight] = asked.get(row.dataset.measure) ?? [];
-    setWeight(row, weight ?? 0);
+    setWeight(row, Number(weight) > 0 ? Math.max(Number(weight), 10) : 0);
     if (wanted == null) continue;
     if (value.type === "checkbox") value.checked = wanted === "1";
     else value.value = wanted;
