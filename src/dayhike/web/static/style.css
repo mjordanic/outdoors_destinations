@@ -160,6 +160,10 @@ summary.panel-title { cursor: pointer; }
 #advanced { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 8px; }
 #advanced > summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; }
 #advanced > .hint { margin: 4px 0 0; }
+.row.limit > label.check { flex: 0 0 170px; margin: 0; }
+#more-options { margin-top: 8px; font-size: 0.85rem; color: var(--muted); }
+#more-options > summary { cursor: pointer; }
+#more-options .row > label { flex: 0 0 170px; font-size: 0.85rem; }
 .facts td:first-child, .facts thead th:first-child { width: 190px; }
 .facts thead th { color: var(--muted); font-weight: 600; }
 .mode-switch { margin-top: 8px; width: 100%; text-align: left; }

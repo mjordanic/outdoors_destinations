@@ -353,6 +353,75 @@ def test_rank_fills_its_rows_from_further_down_when_the_best_hikes_share_an_area
     assert [len(data.rank(RIDGE_WALK_ID, {"length": 100}, limit=limit)) for limit in (1, 3)] == [1, 2]
 
 
+def _rows(results: list[dict]) -> list[tuple[int, list[int]]]:
+    return [(r["id"], [v["id"] for v in r["versions"]]) for r in results]
+
+
+def test_the_next_rows_continue_the_rows_listed_exactly(data: ServingData, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 1002 and 1003 start 14 km apart, 1007 farther: two areas within 20 km.
+    monkeypatch.setattr(serving, "GROUP_M", 20_000.0)
+    monkeypatch.setattr(serving, "LOOP_SEEDS", 0)
+    first = data.rank(RIDGE_WALK_ID, {"length": 100}, limit=1)
+
+    after = [tuple(row["trailhead"]) for row in first]
+    following = data.rank(RIDGE_WALK_ID, {"length": 100}, limit=1, after=after)
+
+    assert _rows(first) == [(1002, [1003])]
+    assert _rows(following) == [(1007, [])]
+    assert _rows(first + following) == _rows(data.rank(RIDGE_WALK_ID, {"length": 100}, limit=2))
+    shown = after + [tuple(row["trailhead"]) for row in following]
+    assert data.rank(RIDGE_WALK_ID, {"length": 100}, limit=1, after=shown) == []
+
+
+def test_the_rows_after_leave_out_every_hike_of_an_area_already_listed(
+    data: ServingData, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 1003, a version of 1002's row on the first page, never leads a row on the next.
+    monkeypatch.setattr(serving, "LOOP_SEEDS", 0)
+
+    following = data.rank(RIDGE_WALK_ID, {"length": 100}, after=[(45.2, 15.1)], group_m=20_000.0)
+
+    assert _rows(following) == [(1007, [])]
+
+
+def test_the_grouping_radius_is_asked_per_ranking(data: ServingData, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(serving, "LOOP_SEEDS", 0)
+
+    assert _rows(data.rank(RIDGE_WALK_ID, {"length": 100}, group_m=20_000.0)) == [(1002, [1003]), (1007, [])]
+    assert _rows(data.rank(RIDGE_WALK_ID, {"length": 100}, group_m=0.0)) == [(1002, []), (1003, []), (1007, [])]
+    # Without one, today's 10 km: 1002 and 1003, 14 km apart, are rows of their own.
+    assert _rows(data.rank(RIDGE_WALK_ID, {"length": 100})) == [(1002, []), (1003, []), (1007, [])]
+
+
+@pytest.mark.parametrize(
+    ("max_hours", "max_km", "metres"),
+    [
+        (None, None, 10_000.0),  # no limit: today's 10 km
+        (None, 50.0, 2_500.0),  # 5 % of the distance
+        (2.0, None, 5_000.0),  # 2 h at 50 km/h is 100 km
+        (4.0, None, 10_000.0),  # the longest drive groups as no limit does
+        (2.0, 50.0, 2_500.0),  # both: the smaller
+        (2.0, 300.0, 5_000.0),
+        (0.1, None, 500.0),  # at least 500 m
+        (None, 5.0, 500.0),
+    ],
+)
+def test_the_default_grouping_radius_follows_the_search_limit(
+    max_hours: float | None, max_km: float | None, metres: float
+) -> None:
+    assert serving.group_radius_m(max_hours, max_km) == pytest.approx(metres)
+
+
+def test_a_distance_limit_keeps_hikes_starting_within_it_in_a_straight_line(data: ServingData) -> None:
+    # From 45.2,15.1 (1002's Trailhead): 1003 at 45.3,15.2 is 13.6 km off, 1007 at 45.6,15.5 about 55 km.
+    near = (Origin(45.2, 15.1), 20_000.0)
+
+    assert [r["id"] for r in data.rank(RIDGE_WALK_ID, {"length": 100}, near=near, group_m=0.0)] == [1002, 1003]
+    assert data.rank(RIDGE_WALK_ID, {"length": 100}, near=(Origin(45.2, 15.1), 1.0)) == [
+        r for r in data.rank(RIDGE_WALK_ID, {"length": 100}, near=near, group_m=0.0) if r["id"] == 1002
+    ]
+
+
 def test_reachable_asks_only_trailheads_within_straight_line_reach(data: ServingData) -> None:
     class Matrix:
         def sources_to_targets(self, origin, trailheads):

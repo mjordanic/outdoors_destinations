@@ -137,6 +137,12 @@ LOOP_MEASURED = 40  # the SuggestedLoops guessed best that a Ranking measures ex
 LOOP_BUDGET_S = 5.0  # the most a Ranking spends on SuggestedLoops
 LOOP_SEED_SHARE = 0.5  # a loop sharing more of its walk with the Seed, or of the Seed's, is no suggestion
 GROUP_M = 10_000.0  # hikes starting closer than this to a better one are its versions, one row
+# The grouping radius a Ranking takes by default follows its search limit (ADR-0032): this share of
+# the distance limit, or of the drive-time limit at GROUP_KMH straight-line km per hour, the smaller
+# of the two, at least GROUP_MIN_M; with no limit, GROUP_M.
+GROUP_SHARE = 0.05
+GROUP_MIN_M = 500.0
+GROUP_KMH = 50.0  # the 4 h longest drive (web.MAX_DRIVE_HOURS) then groups as no limit does
 VERSIONS = 3  # versions per row, the row's own included
 VERSION_DIFFERS = 0.5  # a version walks more than this share of its length off every other one
 LOOP_NAME_M = 2_000.0  # a loop is named after a named point this near its start
@@ -1229,6 +1235,9 @@ class ServingData:
         return_to_start: bool = True,
         reach: Reach | None = None,
         loops: bool = False,
+        near: tuple[Origin, float] | None = None,
+        group_m: float | None = None,
+        after: Sequence[tuple[float, float]] = (),
     ) -> list[dict]:
         """The ``limit`` hikes most similar to one Seed, with every Measure's score.
 
@@ -1245,18 +1254,28 @@ class ServingData:
         DayHikes and SuggestedLoops (ADR-0020), ranked together: a loop has
         ``id`` None, its ``route``, a name from where it starts, and
         ``drive_hours`` to its start from ``reach`` (None without it), which
-        leaves out a loop starting out of reach.
+        leaves out a loop starting out of reach. ``near``, an Origin and metres,
+        leaves out every hike, DayHike or loop, starting farther from it in a
+        straight line.
 
-        One row per area: best first, a hike starting within ``GROUP_M`` of a
-        better row's start is a version of that row, listed in its
+        One row per area: best first, a hike starting within ``group_m``
+        (``GROUP_M`` when None) of a better row's start is a version of that row, listed in its
         ``versions`` (at most ``VERSIONS`` - 1, each walking more than
         ``VERSION_DIFFERS`` of its length off every version kept), else left
         out. Hikes are taken down the whole Ranking until one starts in a
         ``limit`` + 1st area, so ``limit`` rows are listed where the hikes
         allow; loops are searched near the best ``LOOP_SEEDS`` DayHikes only.
+        ``after`` are the starts (lat, lon) of the rows already listed: every hike
+        starting within ``group_m`` (above 0) of one is left out, so the rows
+        listed continue those exactly (ADR-0032).
         """
+        group_m = GROUP_M if group_m is None else group_m
         store = self.store.mode(return_to_start)
         seed_row, seed_walk = self._seed(seed, return_to_start)
+        kept = self._far_and_near(self.trailheads, near, group_m, after)
+        if kept is not None:
+            kept_rows = np.flatnonzero(kept)
+            allowed_rows = kept_rows if allowed_rows is None else np.intersect1d(allowed_rows, kept_rows)
         allowed = None if allowed_rows is None else self.store.ids[allowed_rows]
         rows, scores = rank_rows(store, [seed_row], weights, month=month, allowed_ids=allowed)
         found_loops = []
@@ -1269,13 +1288,17 @@ class ServingData:
                 else np.column_stack([seed_walk.lat, seed_walk.lon])
             )
             found_loops = self._loops(store, seed_row, seed_line, weights, month, rows[:LOOP_SEEDS], return_to_start, reach)
+            starts = np.array([loop["trailhead"] for loop, _ in found_loops]).reshape(-1, 2)
+            kept = self._far_and_near(starts, near, group_m, after)
+            if kept is not None:
+                found_loops = list(itertools.compress(found_loops, kept))
         # [score, store row or None, the loop or None, points once needed]
         catalog = ([float(score), row, None, None] for row, score in zip(rows.tolist(), scores.tolist()))
         found = sorted(([loop["score"], None, loop, points] for loop, points in found_loops), key=lambda c: -c[0])
         groups: list[list[list]] = []  # the best first in each
         for hike in heapq.merge(catalog, found, key=lambda candidate: -candidate[0]):
             start = self._start(hike)
-            group = next((g for g in groups if _haversine_m(*start, *self._start(g[0])) < GROUP_M), None)
+            group = next((g for g in groups if _haversine_m(*start, *self._start(g[0])) < group_m), None)
             if group is None:
                 if len(groups) == limit:
                     break
@@ -1295,6 +1318,23 @@ class ServingData:
         }
         results = [[hike[2] if hike[1] is None else dayhikes[hike[1]] for hike in group] for group in groups]
         return [{**group[0], "versions": group[1:]} for group in results]
+
+    @staticmethod
+    def _far_and_near(
+        places: np.ndarray, near: tuple[Origin, float] | None, group_m: float, after: Sequence[tuple[float, float]]
+    ) -> np.ndarray | None:
+        """Which places (lat, lon rows) are within ``near`` and ``group_m`` or farther from
+        every start in ``after``, as ``rank`` keeps hikes starting there; None keeps all."""
+        if near is None and not after:
+            return None
+        kept = np.ones(len(places), dtype=bool)
+        if not len(places):
+            return kept
+        if near is not None:
+            kept &= straight_line_distances_m(near[0], places) <= near[1]
+        for lat, lon in after:
+            kept &= straight_line_distances_m(Origin(lat, lon), places) >= group_m
+        return kept
 
     def _start(self, hike: list) -> tuple[float, float]:
         """Where a hike of ``rank``'s grouping starts: a DayHike at its Trailhead."""
@@ -1473,6 +1513,15 @@ class ServingData:
             if seconds is not None and math.isfinite(seconds) and 0 <= seconds <= max_hours * 3600:
                 hours[row] = seconds / 3600
         return hours
+
+
+def group_radius_m(max_hours: float | None, max_km: float | None) -> float:
+    """The grouping radius a Ranking takes by default from its limits (ADR-0032): ``GROUP_SHARE`` of the
+    distance limit, or of the drive-time limit at ``GROUP_KMH``, the smaller, at least ``GROUP_MIN_M``;
+    ``GROUP_M`` with neither."""
+    limits = [km * 1000 for km in (max_km,) if km is not None]
+    limits += [hours * GROUP_KMH * 1000 for hours in (max_hours,) if hours is not None]
+    return max(GROUP_MIN_M, GROUP_SHARE * min(limits)) if limits else GROUP_M
 
 
 def scored_measures(

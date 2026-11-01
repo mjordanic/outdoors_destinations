@@ -62,7 +62,15 @@ _Avoid_: home, location, user location
 
 **DriveTime**:
 Travel time by car from Origin to a Trailhead, computed at query time by the local routing engine.
-_Avoid_: isochrone, drive estimate as a stored column, distance (distance may exist alongside time but is not the filter)
+_Avoid_: isochrone, drive estimate as a stored column, distance (a straight-line DistanceLimit may stand beside it; road distance is never computed)
+
+**DistanceLimit**:
+The Hiker's optional limit on the straight-line (great-circle) distance from Origin to where a hike starts (a DayHike's Trailhead, a SuggestedLoop's start), checked at query time (ADR-0032). It needs no routing engine. With a DriveTime limit too, a hike must be within both.
+_Avoid_: road distance, range, radius (the GroupingRadius is another thing)
+
+**GroupingRadius**:
+How near the start of a better row's hike a hike must start to be one of that row's versions rather than a row of its own (ADR-0020). Unless the Hiker sets it, it follows the query's limits: 5 % of the DistanceLimit, or of the DriveTime limit at 50 km per hour, the smaller, at least 500 m; 10 km with no limit (ADR-0032).
+_Avoid_: area size, cluster radius
 
 **Hut**:
 An OSM alpine or mountain hut near a Trailhead or along the DayHike geometry.

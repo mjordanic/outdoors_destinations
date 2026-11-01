@@ -206,6 +206,24 @@ def test_a_loop_starts_within_the_drive_and_shows_its_hours(data) -> None:
     assert _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, reach=nowhere, loops=True)) == []
 
 
+@pytest.mark.usefixtures("rows_apart")
+def test_a_loop_starts_within_the_distance_limit(data) -> None:
+    from dayhike.catalog import Origin
+
+    loops = _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True))
+    start = Origin(*loops[0]["trailhead"])
+
+    assert len(_loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, near=(start, 5_000.0), loops=True))) == 2
+    far = Origin(start.latitude + 0.1, start.longitude)  # 11 km north
+    assert _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, near=(far, 5_000.0), loops=True)) == []
+
+
+def test_the_next_rows_leave_out_loops_of_an_area_already_listed(data) -> None:
+    (row,) = data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True)
+
+    assert data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True, after=[tuple(row["trailhead"])]) == []
+
+
 @pytest.mark.parametrize(
     ("module", "name", "value"),
     [

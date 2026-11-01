@@ -427,6 +427,93 @@ def test_drive_filter_keeps_only_reachable_hikes_with_their_hours(
     assert all(r["drive_hours"] == 1.0 for r in body["results"])
 
 
+def test_a_distance_limit_keeps_hikes_within_it_in_a_straight_line_without_a_drive_service(
+    data: ServingData,
+) -> None:
+    client = TestClient(create_app(data))  # no drive-time service: the distance needs none
+    # From 1002's Trailhead (45.2,15.1): 1003 is 13.6 km off, 1007 about 55 km, the Seed 26 km.
+    body = client.post(
+        "/api/rank", json={"seed": RIDGE_WALK_ID, "origin": {"lat": 45.2, "lon": 15.1}, "max_km": 20, "group_km": 0.1}
+    ).json()
+
+    assert body["max_km"] == 20 and body["max_hours"] is None
+    assert body["reachable"] == 2
+    assert [(r["id"], r["distance_km"], r["drive_hours"]) for r in body["results"]] == [
+        (1002, 0.0, None), (1003, 13.6, None)]  # fmt: skip
+
+
+def test_a_distance_limit_and_a_drive_limit_together_keep_hikes_within_both(
+    client: TestClient, matrix: Matrix
+) -> None:
+    # 1003 is within 20 km but unreachable by car; 1007 is reachable but 55 km off.
+    body = client.post(
+        "/api/rank",
+        json={"seed": RIDGE_WALK_ID, "origin": {"lat": 45.2, "lon": 15.1}, "max_hours": 2, "max_km": 20},
+    ).json()
+
+    assert [(r["id"], r["drive_hours"], r["distance_km"]) for r in body["results"]] == [(1002, 1.0, 0.0)]
+    assert body["reachable"] == 1
+
+
+def test_rank_says_how_near_hikes_are_grouped_by_default_and_as_asked(client: TestClient) -> None:
+    def rank(**query) -> dict:
+        return client.post("/api/rank", json={"seed": RIDGE_WALK_ID, **query}).json()
+
+    place = {"lat": 45.2, "lon": 15.1}
+    assert rank()["group_km"] == 10
+    assert rank(origin=place, max_km=50)["group_km"] == 2.5
+    assert rank(origin=place, max_hours=2)["group_km"] == 5
+    assert rank(origin=place, max_hours=2, max_km=50)["group_km"] == 2.5
+    assert rank(origin=place, max_km=5)["group_km"] == 0.5
+    asked = rank(group_km=20)
+    assert asked["group_km"] == 20
+    assert [(r["id"], [v["id"] for v in r["versions"]]) for r in asked["results"]] == [(1002, [1003]), (1007, [])]
+    assert len(rank(group_km=0.1)["results"]) == 3
+
+
+def test_info_gives_the_rule_of_the_default_grouping_and_the_limits(client: TestClient) -> None:
+    info = client.get("/api/info").json()
+
+    assert info["grouping"] == {"km": 10, "share": 0.05, "min_km": 0.5, "kmh": 50}
+    assert (info["max_km"], info["max_rows"], info["results"]) == (web.MAX_KM, web.MAX_ROWS, RESULTS)
+
+
+def test_the_next_rows_follow_the_rows_already_shown(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(web, "RESULTS", 1)
+    query = {"seed": RIDGE_WALK_ID, "group_km": 20}
+
+    first = client.post("/api/rank", json=query).json()["results"]
+    after = [{"lat": row["trailhead"][0], "lon": row["trailhead"][1]} for row in first]
+    following = client.post("/api/rank", json={**query, "after": after}).json()
+
+    assert [r["id"] for r in first] == [1002]
+    assert [r["id"] for r in following["results"]] == [1007]
+    assert following["after"] == 1
+    assert client.post("/api/rank", json={**query, "after": after * web.MAX_ROWS}).status_code == 422
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"origin": {"lat": 45, "lon": 15}, "max_km": 0},
+        {"origin": {"lat": 45, "lon": 15}, "max_km": 201},
+        {"group_km": 0},  # a row per area needs an area: 0.1 km at least, so the next rows leave out those shown
+        {"group_km": 51},
+        {"after": [{"lat": 91, "lon": 15}]},
+    ],
+)
+def test_rank_refuses_limits_out_of_range(client: TestClient, body: dict) -> None:
+    assert client.post("/api/rank", json={"seed": RIDGE_WALK_ID, **body}).status_code == 422
+
+
+@pytest.mark.parametrize("body", [{"max_km": 20}, {"max_hours": 1}, {"origin": {"lat": 45, "lon": 15}}])
+def test_rank_refuses_a_starting_place_without_a_limit_or_a_limit_without_one(client: TestClient, body: dict) -> None:
+    response = client.post("/api/rank", json={"seed": RIDGE_WALK_ID, **body})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "give origin with max_hours, max_km or both, or none of them"
+
+
 def test_a_stalled_drive_service_gives_503_and_frees_the_ranking(
     data: ServingData, matrix: Matrix
 ) -> None:
