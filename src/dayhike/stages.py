@@ -16,8 +16,9 @@ from dataclasses import dataclass
 import numpy as np
 from sklearn.neighbors import BallTree
 
-from dayhike.catalog import EARTH_RADIUS_M
-from dayhike.similarity import _step_m
+from dayhike.built import BuildContext, BuiltWalk
+from dayhike.catalog import EARTH_RADIUS_M, named_points
+from dayhike.similarity import TWIN_SHARE, TWIN_STEP_M, _even_points, _step_m, twin_groups
 
 Point = tuple[float, float]  # (lat, lon)
 
@@ -52,6 +53,88 @@ class DayStage:
     length_m: float
     start: str | None
     end: str | None
+
+
+def day_stages(context: BuildContext) -> list[BuiltWalk]:
+    """The built-hike source of DayStages (ADR-0038): every relation DayHike
+    longer than ``STAGE_SPLIT_M`` ``split`` at the snapshot's huts, places and
+    parking, named "{tour}, stage k: {from} – {to}". A stage that is a Twin of
+    a relation DayHike, or of a stage kept before it, is left out.
+    """
+    snapshot = context.snapshot
+    tours = [hike for hike in context.dayhikes if hike.length_m > STAGE_SPLIT_M]
+    if not tours:
+        return []
+    relations = {relation.id: relation for relation in snapshot.relations}
+    names = {(lat, lon): name for lat, lon, name in snapshot.named_points}
+    points = [
+        CutPoint(kind, lat, lon, names.get((lat, lon)))
+        for kind, at in snapshot.amenities
+        if kind in CUT_RADIUS_M
+        for lat, lon in at
+    ] + [CutPoint("place", lat, lon, name) for lat, lon, name in snapshot.places]
+    if not points:
+        return []
+    tree = BallTree(np.radians([(point.lat, point.lon) for point in points]), metric="haversine")
+    places = named_points(snapshot.places)
+    walks: list[BuiltWalk] = []
+    for tour in tours:
+        relation = relations[tour.id]
+        walk = context.main_walk(relation).vertices
+        near = tree.query_radius(np.radians([point for _, point in walk]), r=max(CUT_RADIUS_M.values()) / EARTH_RADIUS_M)
+        stages = split(walk, [points[index] for index in sorted(set(np.concatenate(near).tolist()))])
+        ways_at: dict[int, list[int]] = {}
+        for kind, way_id in relation.members:
+            if kind == "way" and way_id in snapshot.ways:
+                for node_id in snapshot.ways[way_id].node_ids:
+                    ways_at.setdefault(node_id, []).append(way_id)
+        for k, stage in enumerate(stages, start=1):
+            ends = [
+                name or (places and places.nearest(*stage.vertices[at][1], CUT_RADIUS_M["place"]))
+                for name, at in ((stage.start, 0), (stage.end, -1))
+            ]
+            walks.append(
+                BuiltWalk(
+                    kind="stage",
+                    name=_stage_name(tour.name, k, *ends),
+                    vertices=stage.vertices,
+                    way_ids=tuple(dict.fromkeys(way for node_id, _ in stage.vertices for way in ways_at.get(node_id, ()))),
+                    parts=(tour.id,),
+                )
+            )
+    return _without_twins(walks, context)
+
+
+def _stage_name(tour: str, k: int, start: str | None, end: str | None) -> str:
+    if start and end:
+        return f"{tour}, stage {k}: {start} – {end}"
+    if start or end:
+        return f"{tour}, stage {k}: " + (f"from {start}" if start else f"to {end}")
+    return f"{tour}, stage {k}"
+
+
+def _without_twins(walks: list[BuiltWalk], context: BuildContext) -> list[BuiltWalk]:
+    # Only relation DayHikes whose length allows a Twin of some stage are compared.
+    relations = {relation.id: relation for relation in context.snapshot.relations}
+    given = [
+        _route(context.main_walk(relations[hike.id]).vertices)
+        for hike in context.dayhikes
+        if TWIN_SHARE * STAGE_MIN_M <= hike.length_m <= STAGE_MAX_M / TWIN_SHARE
+    ]
+    # A group's root is its first row, so a group holding a relation has a root below len(given).
+    groups = twin_groups([*given, *(_route(walk.vertices) for walk in walks)])[len(given) :]
+    kept, kept_groups = [], set()
+    for walk, group in zip(walks, groups):
+        if group >= len(given) and group not in kept_groups:
+            kept_groups.add(int(group))
+            kept.append(walk)
+    return kept
+
+
+def _route(vertices: Sequence[tuple[int, Point]]) -> np.ndarray:
+    # The walk as (lat, lon) rows every TWIN_STEP_M, as Twins are compared.
+    points = np.array([point for _, point in vertices])
+    return _even_points(points[:, 0], points[:, 1], TWIN_STEP_M)
 
 
 def split(walk: Sequence[tuple[int, Point]], points: Sequence[CutPoint]) -> list[DayStage]:

@@ -1,13 +1,17 @@
 """DayStages: day-sized pieces of a long tour, cut at huts, villages and parking.
 
-Every tour is hand-built on a kilometre grid around 45N 15E: one vertex every
-500 m, walking north unless a test says otherwise, and every cut point a
-little east of the line.
+``split`` tours are hand-built on a kilometre grid around 45N 15E: one vertex
+every 500 m, walking north unless a test says otherwise, and every cut point a
+little east of the line. Ingest builds DayStages from ``long_tour.osm``.
 """
 
 import math
+from pathlib import Path
 
-from dayhike.stages import CutPoint, split
+from dayhike import build_catalog
+from dayhike.stages import CutPoint, day_stages, split
+
+LONG_TOUR = Path(__file__).parent / "fixtures" / "long_tour.osm"
 
 KM_LAT = 1_000.0 / 6_371_000 * 180 / math.pi
 
@@ -82,3 +86,24 @@ def test_a_stretch_with_no_cut_point_for_over_25_km_gets_no_stage():
     assert [(stage.start, stage.end) for stage in late] == [(None, "Refuge A"), ("Refuge A", "Refuge B")]
     assert [(stage.start, stage.end) for stage in early] == [("Refuge C", "Refuge D"), ("Refuge D", None)]
     assert all(8_000 <= stage.length_m <= 25_000 for stage in late + early)
+
+
+def test_ingest_cuts_a_long_tour_into_daystages_but_drops_a_twin_of_a_stage_relation(tmp_path: Path) -> None:
+    catalog = build_catalog(LONG_TOUR, tmp_path / "catalog.sqlite", sources=[day_stages])
+
+    stages = sorted((hike for hike in catalog.dayhikes if hike.kind == "stage"), key=lambda hike: hike.name)
+    # Stage 3, the tour's last 13 km, walks what Via Fixture R3 walks.
+    assert [(hike.name, round(hike.length_m), hike.parts) for hike in stages] == [
+        ("Tour des Refuges, stage 1: Saint-Départ – Refuge du Lac", 13_000, (3001,)),
+        ("Tour des Refuges, stage 2: Refuge du Lac – Refuge du Col", 14_000, (3001,)),
+    ]
+    assert sorted(hike.id for hike in catalog.dayhikes if hike.kind == "relation") == [3001, 3002]
+
+
+def test_ingest_builds_daystages_by_default(tmp_path: Path) -> None:
+    catalog = build_catalog(LONG_TOUR, tmp_path / "catalog.sqlite")
+
+    assert sorted(hike.name for hike in catalog.dayhikes if hike.kind == "stage") == [
+        "Tour des Refuges, stage 1: Saint-Départ – Refuge du Lac",
+        "Tour des Refuges, stage 2: Refuge du Lac – Refuge du Col",
+    ]
