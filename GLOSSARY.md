@@ -53,7 +53,7 @@ A walk the Hiker draws from TrailGraph Segments, from a start Junction, Segment 
 _Avoid_: custom route, user route, composed DayHike
 
 **SuggestedLoop**:
-A ComposedHike that a Ranking proposes itself: a loop drawn on the TrailGraph from a Junction near the Trailhead of one of the best Catalog DayHikes, that ends where it starts, visits no Junction twice and crosses no Link. It is found at query time by following the Seed's ElevationProfile and length, scored like a DayHike and listed among them, and left out when more than half of it lies on the Seed (or of the Seed on it) or when it is a Twin of a DayHike. It shares rows with DayHikes as the Ranking groups them (ADR-0020). It is named after a hiking place near where it starts, else by the trails it walks (ADR-0022), and shared, opened and edited like any ComposedHike.
+A ComposedHike that a Ranking proposes itself: a loop drawn on the TrailGraph from a Junction near the Trailhead of one of the best Catalog DayHikes, that ends where it starts, visits no Junction twice and crosses no Link. It is found at query time, when the Hiker asks for loops (ADR-0028), by following the Seed's ElevationProfile and length, scored like a DayHike and listed among them, and left out when more than half of it lies on the Seed (or of the Seed on it) or when it is a Twin of a DayHike. It shares rows with DayHikes as the Ranking groups them (ADR-0020). It is named after a hiking place near where it starts, else by the trails it walks (ADR-0022), and shared, opened and edited like any ComposedHike.
 _Avoid_: generated route, composed DayHike, recommendation
 
 **Origin**:
@@ -185,7 +185,7 @@ One fact compared between two DayHikes, giving 1 (alike) to 0 (unlike), or nothi
 _Avoid_: Facet, feature, dimension, criterion
 
 **MeasureWeights**:
-The Hiker's weight for each Measure in one query, from 0 to 100. A Measure at 0 or left out is excluded; without weights the core Measures (ADR-0016) weigh 100 and the others 0. The weights of the Measures scored for a pair renormalize, so only their ratios matter.
+The Hiker's weight for each Measure in one query, from 0 to 100. A Measure at 0 or left out is excluded; without weights the core Measures (ADR-0031) weigh 100 and the others 0. The weights of the Measures scored for a pair renormalize, so only their ratios matter.
 _Avoid_: FacetWeights, preferences, priorities, importance
 
 **Calibration**:

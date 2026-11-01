@@ -3,6 +3,8 @@ name = "dayhike"
 version = "0.1.0"
 description = "Local Catalog of DayHikes from OpenStreetMap"
 requires-python = ">=3.13"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "osmium>=4.3.1",
     "rasterio>=1.5.1",

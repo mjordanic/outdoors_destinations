@@ -1,7 +1,7 @@
 # DayHike catalog
 
 <p>
-  <img src="src/dayhike/web/static/mark.svg" alt="DayHike mark: two mountains and a trail" width="72">
+  <img src="src/dayhike/web/static/mark.svg" alt="GoFindMeAHike mark: two mountains and a trail" width="72">
   <img src="src/dayhike/web/static/coverage.svg" alt="Map of Europe; the shaded land has DayHikes in the Catalog" width="360">
 </p>
 
@@ -133,7 +133,8 @@ call on your machine.
 | `data/osm/` | Geofabrik / osmium extracts you download | gitignored |
 | `data/valhalla/` | Road PBF + Valhalla routing tiles Docker builds | gitignored |
 | `data/web-serving/` | Serving export for the web demo (`export-serving`) | **gitignored** |
-| `src/dayhike/web/static/` | The demo page, its script, the logo and the coverage map | yes |
+| `data/geonames/` | GeoNames `cities1000.zip` for the demo's place search | gitignored |
+| `src/dayhike/web/static/` | The demo page, its script, the About, Support, credits, Privacy and Terms pages, the logo and the coverage map | yes |
 | `web/` | Dockerfile, local compose file and smoke script of the demo | yes |
 | `data/valhalla/compose.yaml` | How to run Valhalla | yes |
 | `data/valhalla/prepare-roads.sh` | osmium filter: car roads only, no buildings | yes |
@@ -141,7 +142,7 @@ call on your machine.
 | `data/catalog.snaps.npz` | Where Trailheads snap onto the highway tiles (`--highways` cache, a few MB) | **gitignored** |
 | `data/valhalla/mjolnir.drive-time.json` | Valhalla flags: no walk/bike/driveways | yes |
 | `data/valhalla/*.osm.pbf` | Road extract for tiles | **gitignored** |
-| `data/dem/` | FABDEM 1° GeoTIFFs for elevation | **gitignored** |
+| `data/dem/` | FABDEM (or Copernicus GLO-30) 1° GeoTIFFs for elevation | **gitignored** |
 | `data/landcover/` | ESA WorldCover 2021 map GeoTIFFs | **gitignored** |
 | `data/climate/` | CHELSA V2.1 monthly GeoTIFFs | **gitignored** |
 
@@ -427,11 +428,10 @@ Prints DayHike id, name, and score (tab-separated), best first:
 1002	Valley Path	<score>
 ```
 
-With no `--weight` the eleven core Measures weigh 100 and the others are off:
-`length`, `elevation_gain`, `highest`, `lowest`, `profile`, `landcover`,
-`temperature`, `precipitation`, `solar_radiation`, `waterside`,
-`climb_grade` (ADR-0016). Each `--weight MEASURE=WEIGHT` names one Measure;
-the ones not named are excluded. `--limit N` prints only the
+With no `--weight` the six core Measures weigh 100 and the others are off:
+`length`, `elevation_gain`, `highest`, `landcover`, `temperature` and
+`waterside`, the web page's basic set less Summit (ADR-0031). Each
+`--weight MEASURE=WEIGHT` names one Measure; the ones not named are excluded. `--limit N` prints only the
 best N (every DayHike is still scored). `--one-way` compares every hike one
 way instead of with its way back.
 
@@ -486,7 +486,7 @@ restaurant or cafe along, Shelter, restaurant or cafe at the Trailhead,
 parking) two DayHikes that both lack the feature are not compared, and the
 Measure drops out of that pair's mean. The printed score is the similarity
 itself, the weighted mean of the calibrated Measure scores: a typical random
-pair scores about 0.44 under the default weights, 0.75 beats 99 random pairs in
+pair scores about 0.41 under the default weights, 0.72 beats 99 random pairs in
 100, and 1.0 needs a pair no random pair is as alike as on every weighted
 Measure, so the best matches stay apart instead of all reading 1.000. Ties in
 order break on the uncalibrated weighted mean, then on DayHike id.
@@ -513,7 +513,7 @@ Reading a score, as the web demo explains it beside every score (ADR-0025):
   share there is common, or they are further apart on it than most pairs. The
   Kattegat coast walks Kattegatstien and Kattegatkysten (56% and 30% of the way
   beside water) score 0.10 on WaterSide, as most random pairs are two dry hikes
-  that count as alike; their overall score is still 0.85.
+  that count as alike; their overall score is still 0.74.
 - **Where the facts come from.** OpenStreetMap (the line, SAC grade, surface,
   peaks, viewpoints, huts, shelters, water sources, restaurants, parking),
   FABDEM (heights, climb, profile, steepness, slope aspect), ESA WorldCover
@@ -1031,6 +1031,41 @@ uv run dayhike fetch-dem --bounds 32.6,-31.3,71.2,46.4
 `--dest` overrides `data/dem/`. FABDEM V1-2 is University of Bristol data,
 CC BY-NC-SA 4.0 (non-commercial).
 
+**Copernicus GLO-30 instead (ADR-0030):** `--source copernicus` downloads the
+Copernicus DEM GLO-30 1° Cloud Optimized GeoTIFFs from the AWS open bucket
+(`https://copernicus-dem-30m.s3.amazonaws.com/`, no account), about 26 MB a
+tile. It is free for commercial use, but it maps the surface: tree tops and
+roofs are in it. So `sample-dem` and `sample-trailgraph` read the ground
+under trees from it: a point with WorldCover tree cover within 75 m is lowered
+toward its canopy floor (the plane through the GLO-30 cells within 75 m, plus
+the 35th percentile of their heights above it) by the share of tree cover
+there; open ground reads as it is. Both steps therefore need the WorldCover
+tiles (`fetch-landcover`, `--landcover`) and refuse to run without them. The
+page draws a Copernicus ElevationProfile smoothed over 90 m; climb, descent
+and every fact read the heights as sampled. ADR-0030 has the numbers.
+Tiles GLO-30 Public leaves out (Armenia, Azerbaijan and their borders) are
+not asked for; sea tiles are not in the bucket. Keep one source per
+directory: every DEM step reads the source from the tile names in its
+`--dem` directory and refuses a directory that holds both.
+
+```bash
+uv run dayhike fetch-dem --source copernicus --dest data/dem-copernicus
+uv run dayhike fetch-landcover
+uv run dayhike sample-dem --dem data/dem-copernicus
+uv run dayhike sample-trailgraph --dem data/dem-copernicus
+uv run dayhike build-similarity --dem data/dem-copernicus
+```
+
+A Copernicus `sample-dem` writes its attribution into GeometryStore
+`geometry_meta` (`copernicus_attribution`; a FABDEM run removes it). The
+serving export carries it in place of FABDEM's attribution, and the site then
+names Copernicus GLO-30 instead of FABDEM in the Measure sources, the score
+help, the credits page and the home page footer line. That credit
+follows the last `sample-dem` alone: the export is free of FABDEM's
+non-commercial limit only when all three DEM steps above ran with the same
+Copernicus `--dem` over tiles covering every DayHike. Otherwise some values are
+still FABDEM, and its credit and the non-commercial limit still apply.
+
 **Store and update SQLite:** `dayhike sample-dem` reads those GeoTIFFs and:
 
 1. Writes sampled metres onto GeometryStore `vertices.ele` for vertices that
@@ -1042,7 +1077,8 @@ CC BY-NC-SA 4.0 (non-commercial).
 
 It does not add or drop DayHikes, does not change amenities, and does not
 download tiles. `--catalog` defaults to `data/catalog.sqlite`; `--dem`
-defaults to `data/dem/`.
+defaults to `data/dem/`; `--landcover` (read for Copernicus GLO-30 only)
+defaults to `data/landcover/`.
 
 ```bash
 uv run dayhike sample-dem
@@ -1051,7 +1087,7 @@ uv run dayhike sample-dem
 After this, rerun `dayhike build-similarity`: elevation gain, ProfileShape,
 ClimbGrade and SteepestKm come from these heights. SolarAspect (which way the
 geometry faces the sun) is **not** a Catalog column; `build-similarity` reads
-it from the same FABDEM tiles as the `southness` fact (1 south, 0 north).
+it from the same DEM tiles as the `southness` fact (1 south, 0 north).
 
 Python:
 
@@ -1061,6 +1097,12 @@ from dayhike.dem import DEFAULT_DEM_BOUNDS, DEFAULT_DEM_DIR
 
 fetch_fabdem(DEFAULT_DEM_DIR, DEFAULT_DEM_BOUNDS)
 sample_dem("data/catalog.sqlite", DEFAULT_DEM_DIR)
+
+# Copernicus GLO-30 instead:
+from dayhike import fetch_dem
+from dayhike.dem import COPERNICUS
+
+fetch_dem("data/dem-copernicus", DEFAULT_DEM_BOUNDS, source=COPERNICUS)
 ```
 
 ### LandCover and ClimateNormal
@@ -1571,8 +1613,13 @@ the similarity looks at (route and amenity points on an OpenStreetMap map,
 elevation profile in metres above sea level, land cover, trail surface,
 climate by month, and the fact behind every Measure), set a 0–100 weight or
 an "off" tick per Measure, and list the 10 most similar hikes with their score,
-length, climb and descent, and per-Measure scores. With a TrailGraph the list
-mixes in SuggestedLoops (ADR-0020): loops drawn on the marked network near the
+length, climb and descent, and per-Measure scores. The weights list shows a
+basic set in plain words (Length, Climbing, Highest point, Landscape, Summit,
+Typical temperature, Lake or sea); the other Measures wait, in groups, behind
+"Advanced search" and count only while it is open (ADR-0031). With a TrailGraph a button
+under the list, "Suggest loops near these hikes (takes a few seconds)", ranks
+the same query again with SuggestedLoops mixed in (ADR-0020, only on request
+since ADR-0028): loops drawn on the marked network near the
 best Catalog results, found as the query runs, named after a hiking place near
 where they start, else by the trails they walk (ADR-0022), marked "composed" and
 drawn dashed green on the "Select hike on map" map. Each opens like a composed hike, with its
@@ -1588,7 +1635,9 @@ is left out (every hike is then a round trip; ADR-0022). Turning it changes the
 liked hike's figures and ranks again, and an address ends in `&oneway` when
 it is off. Clicking a result shows it the same way, next to the
 liked hike. An optional starting place and maximum drive (up to 4 h) keeps only
-hikes within that DriveTime, estimated on highways-only tiles as in
+hikes within that DriveTime (the start is typed as "lat, lon", taken from the
+browser, or found by "Find place" among the GeoNames towns in the export,
+ADR-0029), estimated on highways-only tiles as in
 **Highway tiles** above. Measures with no data for a hike (climate and land
 cover do not cover all of Europe yet) show "no data" and drop out of that
 pair's score. Every score has a short line and a "?" beside it (in the results
@@ -1598,7 +1647,7 @@ reads and how the scores are made (ADR-0025).
 
 A Hiker with no particular hike in mind presses "No particular hike in mind?
 Describe the one you want" under the search. The weights list then shows only
-the Measures `/api/measures` marks wishable, each with a value to ask for in its
+the Measures `/api/measures` marks wishable (Advanced ones again only while it is open), each with a value to ask for in its
 unit and range (a yes/no Measure as a tick box) beside its weight. The form
 starts asking nothing: every weight is 0, and setting a value weighs that
 Measure 100; a Measure weighted 0 or ticked off asks nothing. The liked-hike
@@ -1617,7 +1666,8 @@ FastAPI app, extra `web`) memory-maps it. No `Catalog.open` runs in the server.
 # needs the similarity facts (step 9) and, for drive time, the highway tiles
 # served by Valhalla on 8002 (docs/deploy.md, step 1)
 uv run dayhike export-serving --catalog data/catalog.sqlite --out data/web-serving \
-  --valhalla-tiles data/valhalla/highways-eu --valhalla-url http://127.0.0.1:8002
+  --valhalla-tiles data/valhalla/highways-eu --valhalla-url http://127.0.0.1:8002 \
+  --geonames data/geonames/cities1000.zip
 
 uv sync --extra web
 uv run dayhike serve --data data/web-serving --valhalla-url http://127.0.0.1:8002
@@ -1627,6 +1677,31 @@ uv run python web/smoke.py --data data/web-serving --valhalla-url http://127.0.0
 # the same container Cloud Run runs (app + Valhalla + data):
 DAYHIKE_SERVING="$PWD/data/web-serving" docker compose -f web/compose.yaml up --build
 ```
+
+Beside the demo the site has About, Support, Data and credits, Privacy and
+Terms and safety pages (`about.html`, `support.html`, `credits.html`,
+`privacy.html`, `terms.html`), with the logo home and the same footer links on
+every page; the demo's footer is a short credit line, and the full credits are
+on `credits.html`. The server fills in two optional settings:
+`dayhike serve --goatcounter CODE` (container: `DAYHIKE_GOATCOUNTER`) adds the
+cookieless GoatCounter tag to every page, and `--kofi HANDLE` (`DAYHIKE_KOFI`)
+the Support page's tip link. Unset, no page loads analytics and the Support page
+says the tip link is not set up yet. The privacy page names GoatCounter and
+Ko-fi only once each is set. No page sets a cookie or writes browser storage
+(GoatCounter's script writes localStorage only when a visitor opens a page with
+`#toggle-goatcounter` to stop counting their own visits). A code or handle
+other than letters, digits, `-` and `_` is refused at start.
+
+The page opens behind a loading screen, the logo and "Loading…", which says
+"Waking the server" when the first answer is slow (a start from zero), and that
+the site is paused (the server turns the page away), the server's own message
+for another error it can read (such as a `429`), paused or busy (an answer the
+page cannot read, across origins) or the server is down, with
+a Try again button. The page asks the API at its own origin, or at the one its
+`<meta name="api-base">` names: a loading shell on a static host
+(docs/deploy.md, section 8). `dayhike serve --cors-origin https://HOST`
+(repeatable; container: `DAYHIKE_CORS_ORIGINS`, space-separated) lets such a
+page call the API; unset, no other origin may.
 
 What the export holds (`src/dayhike/serving.py`): a copy of
 `catalog.similarity/`, Trailheads as a numpy array, and `hikes.sqlite` with per
@@ -1642,7 +1717,12 @@ metres each climbs either way, the Junctions, amenity points and sampled
 values, with the OSM node and way ids a shared link names (export format 4; `dayhike serve` refuses an
 older export, so rerun `export-serving` once). With `--valhalla-tiles` it also links the
 tile extract and writes a `valhalla.json` that serves it inside the container;
-with `--valhalla-url` it snaps every Trailhead once (`snaps.npz`). Rerun it
+with `--valhalla-url` it snaps every Trailhead once (`snaps.npz`). With
+`--geonames` (GeoNames `cities1000.zip`, downloaded there when missing) it
+writes `places.sqlite`, the towns of 1,000 people or more within 2° of the
+Trailheads' box for "Find place"; `dayhike export-places --out
+data/web-serving` adds it beside an existing export, which needs no other
+change (ADR-0029). Rerun it
 after any rebuild; `meta.json` is written last, so a half-written export never
 opens.
 
@@ -1657,7 +1737,10 @@ and encoded line; when the box holds more than 100, none are listed and
 `too_many` is true, so the page asks to zoom in),
 `GET /api/measures`, `GET /api/info`
 (with the Trailheads' box, `coverage`, for the page's swapped "lat, lon"
-warning), `POST /api/rank` with `{"seed": id, "weights": {measure: 0-100},
+warning, and `place_search`, true when the export has `places.sqlite`),
+`GET /api/place?q=&limit=` (GeoNames places with a name starting with the
+query, folded like search: the place named exactly that, then one with it as an
+alternate name, then the most populous; 404 without `places.sqlite`), `POST /api/rank` with `{"seed": id, "weights": {measure: 0-100},
 "excluded": [measure], "month": 1-12, "origin": {"lat", "lon"}, "max_hours":
 0-4}`, and `POST /api/pair` with `{"a": id, "b": id}` plus the same weights,
 excluded and month, giving the score a Ranking would show for `b` with `a` as
@@ -1684,7 +1767,8 @@ yes/no Measure; only the Measures with a value weigh (100 each without
 `wish` (else 422). `GET /api/measures` gives each Measure's `wish` input:
 `kind` (`number` or `yes/no`), `unit`, `min`, `max`, `step` and `default`, or
 null for a Measure that takes no value (profile, land cover, surface), and its
-data `source`; `score_help` holds the score explanation (`SCORE_HELP`). With a TrailGraph a Ranking also lists SuggestedLoops
+data `source`; `score_help` holds the score explanation (`SCORE_HELP`). With a TrailGraph and `"loops": true` (default false,
+echoed as `loops`; ADR-0028) a Ranking also lists SuggestedLoops
 (ADR-0020): `id` null, `route` `{"text"}` (what `/api/compose` takes), `line`,
 `name` (from where it starts) and the figures of a DayHike row; with `origin`
 and `max_hours` only loops starting within the drive, each with its
@@ -1704,6 +1788,7 @@ limited to 2 GiB and 1 CPU like Cloud Run (`web/smoke.py`):
 | Container start to first answer | 3 s (both processes); 215 MiB |
 | Search / hike detail | 6–10 ms / 3–5 ms |
 | Ranking, one Seed, 3 / 27 Measures | 0.3 s / not yet re-measured (27 Measures); 3 Measures 0.07 s on the Mac without the 1-CPU cap |
+| Ranking with SuggestedLoops (`"loops": true`, ADR-0028) | about 3.3 s on average, against about 0.35 s without (hosting study); not yet re-measured with `web/smoke.py` |
 | Ranking within 2 h / 4 h drive (Ljubljana, Munich) | 2.7 s / 12 s; 4 h from Paris 14 s, Berlin 8 s, Prague 8 s, Rome 3 s, Oslo 3 s |
 | Container memory peak (cgroup, after those queries) | 1.5 GB of the 2 GiB: Valhalla 1.0–1.3 GB resident (0.46 GB its own, the rest the mapped tiles), the app 0.96 GB resident (0.82 GB its own) |
 
@@ -1874,7 +1959,7 @@ The same seams the CLI wraps:
 - `trailgraph_path_for` / `dayhike.trailgraph.write_trailgraph` / `sample_trailgraph` — the TrailGraph sidecar, written at ingest and sampled from the rasters
 - `dayhike.trailgraph.TrailGraph` / `Route` — open a TrailGraph (or its serving copy) and compute the facts of a ComposedHike
 - `dayhike.loops.find_loops` — the beam search for SuggestedLoops near given Trailheads (`ServingData.rank` measures and lists them)
-- `fetch_fabdem` / `sample_dem` — local FABDEM tiles → GeometryStore vertices and Catalog elevation
+- `fetch_fabdem` / `fetch_dem` / `sample_dem` — local FABDEM (or Copernicus GLO-30, `source=COPERNICUS`) tiles → GeometryStore vertices and Catalog elevation
 - `fetch_worldcover` / `sample_landcover` — local WorldCover tiles → GeometryStore classes and Catalog fractions
 - `fetch_chelsa` / `sample_climate` — local CHELSA rasters → Catalog hike-level monthly means
 - `filter_by_drive_time` — Ranking filtered by DriveTime from Origin
@@ -1924,7 +2009,10 @@ notebook to see its tables and figures.
 
 ## Attribution
 
-The web demo's footer carries the same credits.
+The web demo's Data and credits page (`credits.html`) carries the same credits.
+The code is under the MIT licence ([LICENSE](LICENSE));
+[DATA-LICENSES.md](DATA-LICENSES.md) lists the licences of the data, which MIT
+does not cover.
 
 OpenStreetMap data is © OpenStreetMap contributors, licensed under the Open
 Database License (ODbL, https://opendatacommons.org/licenses/odbl/; see
@@ -1935,15 +2023,19 @@ Catalog, the GeometryStore and the web demo's serving export are derivative
 databases of OpenStreetMap: when one is used publicly (the web demo does), it
 is offered under the ODbL, together with this code as the method that makes
 it. The demo's base map is OpenStreetMap's own tiles
-(https://operations.osmfoundation.org/policies/tiles/) and its place search is
-Nominatim (https://operations.osmfoundation.org/policies/nominatim/), both
-used under the OSM Foundation's usage policies.
+(https://operations.osmfoundation.org/policies/tiles/), used under the OSM
+Foundation's tile usage policy. Its place search reads the GeoNames
+`cities1000` towns (GeoNames, https://www.geonames.org/, CC BY 4.0) when the
+export has `places.sqlite`, and Nominatim
+(https://operations.osmfoundation.org/policies/nominatim/, under the OSM
+Foundation's usage policy) otherwise.
 
 FABDEM V1-2: Hawker, L., Uhe, P., Paulo, L., Sosa, J., Savage, J., Sampson, C.
 and Neal, J., 2022. A 30 m global map of elevation with forests and buildings
 removed. Environmental Research Letters 17 (2): 024016,
-https://doi.org/10.1088/1748-9326/ac4d4f. University of Bristol,
-CC BY-NC-SA 4.0 (non-commercial, share-alike). FABDEM is produced using
+https://doi.org/10.1088/1748-9326/ac4d4f. University of Bristol, dataset
+https://doi.org/10.5523/bris.s5hqmjcdj8yo2ibzi9b4ew3sn, CC BY-NC-SA 4.0
+(non-commercial, share-alike). FABDEM is produced using
 Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space
 GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all
 rights reserved. The organizations in charge of the Copernicus program by law
@@ -1951,6 +2043,16 @@ or by delegation do not incur any liability for any use of the Copernicus
 WorldDEM-30. The elevation values derived from it (heights, gain, profiles,
 ProfileShape, ClimbGrade, SteepestKm, SolarAspect) are adapted material: the
 web demo shares them under CC BY-NC-SA 4.0 and only non-commercially.
+
+Copernicus DEM GLO-30 (the alternative, ADR-0030): produced using Copernicus
+WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018
+provided under COPERNICUS by the European Union and ESA; all rights reserved.
+The organisations in charge of the Copernicus programme by law or by
+delegation do not incur any liability for any use of the Copernicus
+WorldDEM-30. https://doi.org/10.5270/ESA-c5d3d65, from AWS Open Data
+(https://registry.opendata.aws/copernicus-dem/), free of charge including
+commercial use under the Copernicus DEM licence. Written into GeometryStore
+`geometry_meta` when a Catalog has been sampled from it.
 
 ESA WorldCover 2021: © ESA WorldCover project 2021 / Contains modified
 Copernicus Sentinel data (2021) processed by ESA WorldCover consortium.
@@ -1969,7 +2071,10 @@ climate has been sampled.
 
 Natural Earth (https://www.naturalearthdata.com/, public domain): country
 shapes of the coverage map. Valhalla (MIT, https://github.com/valhalla/valhalla)
-computes DriveTime. The demo page uses Leaflet (BSD-2-Clause) and the server
+computes DriveTime. The demo page uses Leaflet 1.9.4 (BSD-2-Clause), served from
+`src/dayhike/web/static/vendor/leaflet/` with its licence, and, when analytics
+are on, GoatCounter's `count.js` v2.7.0 (ISC), served from
+`src/dayhike/web/static/vendor/goatcounter/` with its licence; the server runs
 FastAPI (MIT) and Uvicorn (BSD-3-Clause).
 
 ## What is gitignored under `data/`

@@ -44,7 +44,7 @@ from dayhike.catalog import (
     similarity_dir_for,
     trailgraph_path_for,
 )
-from dayhike.dem import DEFAULT_DEM_DIR, FABDEM_VERSION, fabdem_tile_id
+from dayhike.dem import DEFAULT_DEM_DIR, dem_source_of, fabdem_tile_id
 from dayhike.landcover import DEFAULT_LANDCOVER_DIR, _landcover_fractions, worldcover_tile_id
 from dayhike.trailgraph import WAY_BACK_KINDS, ComposedWalk, TrailGraph, WayBack, round_trip, way_back
 
@@ -207,12 +207,10 @@ MEASURES = (
     Measure("steepest_km", "ratio", ("steepest_km_m",), 50),
 )
 MEASURE_NAMES = tuple(measure.name for measure in MEASURES)
-# On by default: the Measures that told good matches from poor ones for blind
-# judges (ADR-0016); the others are off until the Hiker weights them.
-CORE_MEASURES = (
-    "length", "elevation_gain", "highest", "lowest", "profile", "landcover",
-    "temperature", "precipitation", "solar_radiation", "waterside", "climb_grade",
-)  # fmt: skip
+# On by default: the page's basic set less Summit, the Measures a Hiker sees
+# without opening Advanced search (ADR-0031); the others are off until the
+# Hiker weights them.
+CORE_MEASURES = ("length", "elevation_gain", "highest", "landcover", "temperature", "waterside")
 DEFAULT_WEIGHTS = {name: 100.0 if name in CORE_MEASURES else 0.0 for name in MEASURE_NAMES}
 # The Measures a Wish can give a value: one fact, a number or yes/no. A mix or
 # a ProfileShape is no single value (GLOSSARY.md Wish).
@@ -427,7 +425,7 @@ def rank_dayhikes(
     candidate's similarity to one Seed is the weighted mean of its calibrated
     Measure scores over the Measures both DayHikes have; with several Seeds the
     best Seed counts. Ties break on the same weighted mean of raw scores, then
-    on DayHike id. ``score`` is that similarity: about 0.44 for a typical
+    on DayHike id. ``score`` is that similarity: about 0.41 for a typical
     random pair under the default weights, 1.0 when no random pair is as alike
     on any weighted Measure. Of a group of
     Twins only the best is kept, and none of a Seed's Twins. Seeds are
@@ -741,7 +739,7 @@ def build_similarity(
     """Write the facts, Twins and Calibration of every Catalog DayHike, one
     way and with its way back.
 
-    Reads the Catalog and its GeometryStore (read-only), FABDEM tiles in
+    Reads the Catalog and its GeometryStore (read-only), DEM tiles in
     ``dem_dir`` for SolarAspect and WorldCover tiles in ``landcover_dir`` for
     WaterSide, and the TrailGraph for each way back (its per-vertex samples,
     so after ``sample_trailgraph``), then calibrates (``calibrate_similarity``).
@@ -1460,7 +1458,7 @@ def solar_aspect_southness(
     ``points`` are (lat, lon) rows chosen by ``solar_aspect_points``;
     ``owners`` gives each point's DayHike row, out of ``n`` rows.
 
-    At each point FABDEM is read at the point and ``SOLAR_ASPECT_OFFSET_ARCSEC``
+    At each point the DEM is read at the point and ``SOLAR_ASPECT_OFFSET_ARCSEC``
     east and north of it; the downslope direction gives (1 - its north
     component) / 2. Points flatter than ``SOLAR_ASPECT_MIN_SLOPE_DEG`` or
     without a height are left out; a DayHike with none left is NaN.
@@ -1637,7 +1635,7 @@ def are_twins(a: np.ndarray, b: np.ndarray) -> bool:
 
 
 def dem_heights(dem_dir: Path | str, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
-    """FABDEM height of the cell holding each point; NaN without a tile or data.
+    """DEM height of the cell holding each point; NaN without a tile or data.
 
     Each covering tile is read once. A point in the half-cell margin outside
     its tile's grid reads the tile's edge cell.
@@ -1645,13 +1643,15 @@ def dem_heights(dem_dir: Path | str, lat: np.ndarray, lon: np.ndarray) -> np.nda
     import rasterio
 
     heights = np.full(len(lat), np.nan)
+    source = dem_source_of(dem_dir)
+    if source is None:
+        return heights
     corners = np.column_stack([np.floor(lat), np.floor(lon)]).astype(int)
     unique, tiles = np.unique(corners, axis=0, return_inverse=True)
     order = np.argsort(tiles.ravel(), kind="stable")
     bounds = np.searchsorted(tiles.ravel()[order], np.arange(len(unique) + 1))
     for tile, (south, west) in enumerate(unique):
-        tile_id = fabdem_tile_id(south, west)
-        path = Path(dem_dir) / f"{tile_id}_FABDEM_{FABDEM_VERSION}.tif"
+        path = Path(dem_dir) / source.tile_file(fabdem_tile_id(south, west))
         if not path.is_file():
             continue
         at = order[bounds[tile] : bounds[tile + 1]]

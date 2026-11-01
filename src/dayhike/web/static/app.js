@@ -1,5 +1,5 @@
 "use strict";
-// DayHike Finder: plain JS over the JSON API in dayhike.web. Charts are hand-drawn SVG.
+// GoFindMeAHike: plain JS over the JSON API in dayhike.web. Charts are hand-drawn SVG.
 
 const $ = (selector) => document.querySelector(selector);
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -31,6 +31,10 @@ const LANDCOVER = [["tree_share", "Trees", "#2f6b3a"], ["shrub_share", "Shrub", 
 const SURFACE = [["paved_share", "Paved", "#6b7280"], ["gravel_share", "Gravel", "#c8a96a"],
   ["natural_share", "Natural", "#7f9d4f"], ["rock_share", "Rock", "#8d8d8d"]];
 
+// The API's origin: the page's own, unless the page names another (a loading shell, docs/deploy.md).
+const API_BASE = ($('meta[name="api-base"]')?.content ?? "").replace(/\/+$/, "");
+const WAKE_AFTER_MS = 1500; // a first answer slower than this is a server starting from zero
+
 const PICK_ZOOM = 12; // the map shows hikes from this zoom on
 const PICK_LINE = { color: "#6b2fa3", weight: 3, opacity: 0.85 };
 const PICK_HOVER = { color: "#c2410c", weight: 5, opacity: 1 };
@@ -57,6 +61,7 @@ const state = {
   wishing: false, // the Hiker describes the hike they want instead of naming a liked one
   kept: {}, // the weights and off ticks of the mode not shown: { seed, wish }
   query: null, // the weights, month and return to start of the last Ranking
+  asked: null, // what the shown Ranking asked the server, and of which liked hike or wish: { query, basis }
   results: [],
   expanded: null, // the result row whose versions (var 1, 2, 3) are shown
   selected: null, // the hike shown against the liked one: { key } of a result, or { pair } a DayHike id
@@ -84,10 +89,10 @@ function setStatus(text, isError = false) {
 }
 
 async function api(path, options) {
-  const response = await fetch(path, options);
+  const response = await fetch(API_BASE + path, options);
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    if (response.status === 429) throw new Error("Too many requests; wait a minute and try again.");
+    if (response.status === 429) throw Object.assign(new Error("Too many requests; wait a minute and try again."), { status: 429 });
     // A validation message without the "Value error, " pydantic puts before it.
     const detail = Array.isArray(body.detail) ? body.detail.map((d) => d.msg.replace(/^Value error, /, "")).join("; ") : body.detail;
     throw Object.assign(new Error(detail || `Request failed (${response.status}).`), { status: response.status });
@@ -614,8 +619,8 @@ function factsTable(hike, compare, result, month, weights, returnToStart) {
   table.innerHTML = `<thead>${head}</thead>`;
   for (const group of state.groups) {
     const body = document.createElement("tbody");
-    body.innerHTML = `<tr><th scope="rowgroup" colspan="${compare ? 4 : 2}">${escapeHtml(group)}</th></tr>`;
-    for (const measure of (compare ? comparedMeasures(returnToStart) : state.measures).filter((m) => m.group === group)) {
+    body.innerHTML = `<tr><th scope="rowgroup" colspan="${compare ? 4 : 2}">${escapeHtml(group.label)}</th></tr>`;
+    for (const measure of (compare ? comparedMeasures(returnToStart) : state.measures).filter((m) => m.group === group.name)) {
       const row = document.createElement("tr");
       if (compare && weights && !weights[measure.name]) row.className = "excluded";
       const cells = [`<td title="${escapeHtml(measure.description)}">${escapeHtml(measure.label)}</td>`];
@@ -652,14 +657,15 @@ function factsTable(hike, compare, result, month, weights, returnToStart) {
 
 // ---------- weights ----------
 
+// The basic group shows; the others fold away behind Advanced search, and count only while it is open (ADR-0031).
 function buildWeights() {
-  const host = $("#weights");
-  host.innerHTML = "";
+  $("#weights").innerHTML = $("#advanced-weights").innerHTML = "";
   for (const group of state.groups) {
+    const basic = group.name === "basic";
     const set = document.createElement("fieldset");
     set.className = "weights-group";
-    set.innerHTML = `<legend>${escapeHtml(group)}</legend>`;
-    const measures = state.measures.filter((m) => m.group === group);
+    set.innerHTML = basic ? "" : `<legend>${escapeHtml(group.label)}</legend>`;
+    const measures = state.measures.filter((m) => m.group === group.name);
     set.classList.toggle("unwishable", !measures.some(wishable));
     for (const measure of measures) {
       const row = document.createElement("div");
@@ -686,7 +692,7 @@ function buildWeights() {
       });
       set.appendChild(row);
     }
-    host.appendChild(set);
+    $(basic ? "#weights" : "#advanced-weights").appendChild(set);
   }
   syncRoundTrip();
 }
@@ -701,12 +707,22 @@ function syncRoundTrip() {
   off.disabled = returnToStart();
 }
 
+// A weight row the query leaves out: ticked off, unused, or not wishable while wishing.
+function leftOut(row) {
+  const off = row.querySelectorAll("input:not(.wish)")[1];
+  return off.checked || row.classList.contains("unused") || (state.wishing && row.classList.contains("unwishable"));
+}
+
 function readWeights() {
   const weights = {}, excluded = [];
   for (const row of document.querySelectorAll(".weight")) {
-    const [number, off] = row.querySelectorAll("input:not(.wish)");
-    if (off.checked || row.classList.contains("unused") || (state.wishing && row.classList.contains("unwishable"))) {
+    const number = row.querySelector("input:not(.wish)");
+    if (leftOut(row)) {
       excluded.push(row.dataset.measure);
+      continue;
+    }
+    if (folded(row)) {
+      weights[row.dataset.measure] = 0;
       continue;
     }
     const value = Number(number.value);
@@ -719,6 +735,11 @@ function readWeights() {
   }
   if (!Object.values(weights).some((w) => w > 0)) throw new Error("Give at least one measure a weight above 0.");
   return { weights, excluded };
+}
+
+// A weight row behind a closed Advanced search: it counts nothing.
+function folded(row) {
+  return row.closest("#advanced") != null && !$("#advanced").open;
 }
 
 // ---------- the hike you want (no Seed) ----------
@@ -769,7 +790,7 @@ function wishHash() {
   const parts = [];
   for (const row of document.querySelectorAll(".weight:not(.unwishable)")) {
     const [value, number, off] = row.querySelectorAll("input");
-    if (off.checked || !(Number(number.value) > 0)) continue;
+    if (off.checked || folded(row) || !(Number(number.value) > 0)) continue;
     parts.push(`${row.dataset.measure}:${value.type === "checkbox" ? Number(value.checked) : value.value}:${number.value}`);
   }
   return `#wish=${parts.join(",")}${modeHash()}`;
@@ -787,6 +808,7 @@ function applyWish(text) {
     if (wanted == null) continue;
     if (value.type === "checkbox") value.checked = wanted === "1";
     else value.value = wanted;
+    if (row.closest("#advanced")) $("#advanced").open = true;
   }
   syncRoundTrip();
 }
@@ -1539,11 +1561,17 @@ async function findPlace() {
   if (state.geocoded.has(text)) { setOrigin(state.geocoded.get(text)); return; }
   $("#origin-found").textContent = "Searching…";
   try {
-    // One request per click (Nominatim usage policy: no autocomplete, cache results).
-    const response = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(text)}`);
-    const [place] = await response.json();
-    if (!place) { $("#origin-found").textContent = "Place not found; try a town name or lat, lon."; return; }
-    const origin = { lat: Number(place.lat), lon: Number(place.lon), label: place.display_name };
+    let origin;
+    if (state.info.place_search) {
+      const { results: [place] } = await api(`/api/place?limit=1&q=${encodeURIComponent(text)}`);
+      if (place) origin = { lat: place.lat, lon: place.lon, label: `${place.name}, ${place.country}` };
+    } else {
+      // An export without GeoNames places: one request per click (Nominatim usage policy: no autocomplete, cache results).
+      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(text)}`);
+      const [place] = await response.json();
+      if (place) origin = { lat: Number(place.lat), lon: Number(place.lon), label: place.display_name };
+    }
+    if (!origin) { $("#origin-found").textContent = "Place not found; try a town name or lat, lon."; return; }
     state.geocoded.set(text, origin);
     setOrigin(origin);
   } catch {
@@ -1607,9 +1635,18 @@ async function findSimilar() {
     setStatus(error.message, true);
     return;
   }
+  // A GoatCounter event when the server set analytics up; without them there is no goatcounter.
+  window.goatcounter?.count?.({ path: "find", event: true });
+  await rank(query, liked);
+}
+
+// Ask for a Ranking and show it, unless a later one was asked or the liked hike changed meanwhile;
+// ``stale``: the query on the left is no longer this one.
+async function rank(query, liked, stale = false) {
   const request = ++ranked;
-  $("#find").disabled = true;
-  setStatus(query.origin ? "Finding hikes within the drive, then ranking…" : "Ranking every hike…");
+  $("#find").disabled = $("#suggest-loops").disabled = true;
+  setStatus(query.loops ? "Suggesting loops near these hikes…"
+    : query.origin ? "Finding hikes within the drive, then ranking…" : "Ranking every hike…");
   try {
     const body = await api("/api/rank", {
       method: "POST",
@@ -1621,15 +1658,17 @@ async function findSimilar() {
       weights: body.weights, month: body.month, drive: Boolean(query.origin), return_to_start: body.return_to_start,
       wish: query.wish ?? null,
     };
+    state.asked = { query, basis: liked };
     state.results = body.results;
     renderResults(body);
+    if (stale) markStale();
     setStatus(`Done in ${(body.elapsed_ms / 1000).toFixed(1)} s.`);
   } catch (error) {
     if (request !== ranked || liked !== rankBasis()) return;
-    markStale();
+    if (!query.loops || stale) markStale();
     setStatus(error.message, true);
   } finally {
-    if (request === ranked) $("#find").disabled = false;
+    if (request === ranked) $("#find").disabled = $("#suggest-loops").disabled = false;
   }
 }
 
@@ -1659,8 +1698,9 @@ function renderResults(body) {
   $("#wish-card").hidden = true;
   $("#results-title").textContent = state.query.wish ? "Hikes closest to the one you want" : "Most similar hikes";
   $("#results-note").textContent = body.results.length
-    ? `${state.query.wish ? "Closest to the hike you want" : `Like “${state.liked.name}”`}, out of ${considered}${state.info.compose ? " and loops composed near the best of them" : ""}, ${mode}. Click a row to see it.${composed}${versions}`
+    ? `${state.query.wish ? "Closest to the hike you want" : `Like “${state.liked.name}”`}, out of ${considered}${body.loops ? " and loops composed near the best of them" : ""}, ${mode}. Click a row to see it.${composed}${versions}`
     : `No hike matched, out of ${considered}. Try a longer drive or other weights.`;
+  $("#results-loops").hidden = !state.info.compose || body.loops; // SuggestedLoops on request (ADR-0028)
   const table = $("#results-table");
   const measureHeads = comparedMeasures(body.return_to_start).map((m) =>
     `<th class="measure${body.weights[m.name] ? "" : " excluded"}" title="${escapeHtml(`${m.label}: ${m.description}`)}">${escapeHtml(m.label)} ${helpButton(m.name)}</th>`).join("");
@@ -1778,12 +1818,33 @@ async function showResult(index, version = 0) {
 
 // ---------- start ----------
 
+// What to tell the hiker when the server did not answer the page: paused, its own message, paused or busy, or down.
+// Cloud Run with its public access closed answers 403. A page on another origin cannot read an
+// answer without CORS headers (that 403, but also a 429 or 503 from Cloud Run's front end): there
+// an opaque answer to a no-cors request says only that something is up.
+async function notAnswering(error) {
+  if (error.status === 401 || error.status === 403) {
+    return "GoFindMeAHike is paused for now: its owner has switched the server off. Please try again later.";
+  }
+  if (error.status) return error.message;
+  try {
+    await fetch(`${API_BASE}/api/health`, { mode: "no-cors", cache: "no-store" });
+    return "GoFindMeAHike is paused or busy. Please try again later.";
+  } catch {
+    return "The server is not answering. Please try again in a few minutes.";
+  }
+}
+
 async function start() {
   for (let m = 1; m <= 12; m++) $("#month").add(new Option(MONTHS[m - 1], String(m)));
   // The weights fold away on a narrow screen, also when the window narrows.
   const narrow = window.matchMedia("(max-width: 900px)");
   $("#weights-panel").open = !narrow.matches;
   narrow.addEventListener("change", () => { $("#weights-panel").open = !narrow.matches; });
+  const loading = $("#loading-text");
+  const waking = setTimeout(() => {
+    loading.textContent = "Waking the server… It sleeps while no one is using it, so the first visit after a quiet spell takes about 15 seconds.";
+  }, WAKE_AFTER_MS);
   try {
     const [info, measures] = await Promise.all([api("/api/info"), api("/api/measures")]);
     state.info = info;
@@ -1791,9 +1852,14 @@ async function start() {
     state.measures = measures.measures;
     state.scoreHelp = measures.score_help;
   } catch (error) {
-    setStatus(`The server is not answering: ${error.message}`, true);
+    clearTimeout(waking);
+    loading.textContent = await notAnswering(error);
+    loading.classList.add("error");
+    $("#loading-retry").hidden = false;
     return;
   }
+  clearTimeout(waking);
+  $("#loading").hidden = true;
   $("#count").textContent = state.info.dayhikes.toLocaleString("en");
   $("#results-scores").innerHTML = `<strong>Score:</strong> ${escapeHtml(state.scoreHelp.overall)}
     <strong>Measure cells:</strong> ${escapeHtml(state.scoreHelp.measure)} ${helpButton("measures")}`;
@@ -1825,10 +1891,19 @@ async function start() {
     markStale();
     wishToHash();
   });
-  $("#weights").addEventListener("input", markStale);
-  $("#weights").addEventListener("change", markStale);
-  // The address keeps the wish as it is typed, so a reload or a shared link opens it again.
-  $("#weights").addEventListener("input", wishToHash);
+  for (const host of [$("#weights"), $("#advanced-weights")]) {
+    host.addEventListener("input", markStale);
+    host.addEventListener("change", markStale);
+    // The address keeps the wish as it is typed, so a reload or a shared link opens it again.
+    host.addEventListener("input", wishToHash);
+  }
+  $("#advanced").addEventListener("toggle", () => {
+    const counts = [...$("#advanced-weights").querySelectorAll(".weight")].some(
+      (row) => !leftOut(row) && Number(row.querySelector("input:not(.wish)").value) > 0,
+    );
+    if (counts) markStale();
+    wishToHash();
+  });
   $("#drive-on").addEventListener("change", (event) => { $("#drive").hidden = !event.target.checked; markStale(); });
   $("#origin").addEventListener("input", () => { state.origin = null; $("#origin-found").textContent = ""; markStale(); });
   $("#hours").addEventListener("input", markStale);
@@ -1840,6 +1915,9 @@ async function start() {
     markStale();
   });
   $("#find").addEventListener("click", findSimilar);
+  // The shown Ranking again, with loops near its best hikes, though the query on the left changed since.
+  $("#suggest-loops").addEventListener("click", () =>
+    rank({ ...state.asked.query, loops: true }, state.asked.basis, $("#results").classList.contains("stale")));
   // Remeasure the liked hike in the other mode, and rank again when a Ranking is shown,
   // keeping the hike shown against it open.
   $("#return-on").addEventListener("change", async () => {

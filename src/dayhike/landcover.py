@@ -12,7 +12,9 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from dayhike.catalog import LANDCOVER_FEATURE_NAMES, geometry_store_path_for, remove_similarity
+import numpy as np
+
+from dayhike.catalog import EARTH_RADIUS_M, LANDCOVER_FEATURE_NAMES, geometry_store_path_for, remove_similarity
 from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS
 
 Progress = Callable[[str], None]
@@ -29,6 +31,8 @@ _VERTEX_CHUNK = 50_000
 _HIKE_IN_CHUNK = 500
 # Europe has 267 tiles; the macOS default soft limit is 256 open files.
 _MAX_OPEN_TILES = 128
+_SHARE_BLOCK = 1024  # WorldCover cells per side of the blocks ``tree_share`` reads at a time
+_METRES_PER_DEGREE = EARTH_RADIUS_M * math.pi / 180
 _WORLDCOVER_NODATA = 0
 _TREE = 10
 _SHRUB = 20
@@ -129,6 +133,55 @@ def sample_landcover_classes(
         tiles = _Tiles(rasters)
         stack.callback(tiles.close)
         return _sample_open_datasets(tiles, points)
+
+
+def tree_share(
+    raster_dir: Path | str, lat: np.ndarray, lon: np.ndarray, radius_m: float
+) -> np.ndarray:
+    """Share of the WorldCover cells within ``radius_m`` north, south, east and
+    west of each point (a square) that are tree cover; NaN where no tile
+    (named ``ESA_WorldCover_10m_2021_v200_{tile}_Map.tif``) covers the point.
+    Near a tile's edge the square is cut at the edge.
+    """
+    import rasterio
+    from rasterio.windows import Window
+
+    lat, lon = np.asarray(lat, dtype=float), np.asarray(lon, dtype=float)
+    out = np.full(len(lat), np.nan)
+    tiles: dict[str, list[int]] = {}
+    for index, (y, x) in enumerate(zip(lat.tolist(), lon.tolist())):
+        tiles.setdefault(worldcover_tile_id(y, x), []).append(index)
+    for tile_id, indices in tiles.items():
+        path = Path(raster_dir) / f"ESA_WorldCover_10m_2021_v200_{tile_id}_Map.tif"
+        if not path.is_file():
+            continue
+        at = np.array(indices)
+        with rasterio.open(path) as dataset:
+            rows, cols = (np.asarray(v) for v in rasterio.transform.rowcol(dataset.transform, lon[at], lat[at]))
+            inside = (rows >= 0) & (rows < dataset.height) & (cols >= 0) & (cols < dataset.width)
+            at, rows, cols = at[inside], rows[inside], cols[inside]
+            reach_y = round(radius_m / (dataset.res[1] * _METRES_PER_DEGREE))
+            reach_x = np.round(
+                radius_m / (dataset.res[0] * _METRES_PER_DEGREE * np.cos(np.radians(lat[at])))
+            ).astype(int)
+            # One read per block of cells the points fall in.
+            blocks = rows // _SHARE_BLOCK * (dataset.width // _SHARE_BLOCK + 1) + cols // _SHARE_BLOCK
+            for block in np.unique(blocks):
+                here = np.flatnonzero(blocks == block)
+                top = max(int(rows[here].min()) - reach_y, 0)
+                bottom = min(int(rows[here].max()) + reach_y + 1, dataset.height)
+                left = max(int((cols[here] - reach_x[here]).min()), 0)
+                right = min(int((cols[here] + reach_x[here]).max()) + 1, dataset.width)
+                trees = dataset.read(1, window=Window(left, top, right - left, bottom - top)) == _TREE
+                summed = np.zeros((trees.shape[0] + 1, trees.shape[1] + 1))
+                summed[1:, 1:] = trees.cumsum(axis=0).cumsum(axis=1)
+                y0 = np.clip(rows[here] - reach_y - top, 0, trees.shape[0])
+                y1 = np.clip(rows[here] + reach_y + 1 - top, 0, trees.shape[0])
+                x0 = np.clip(cols[here] - reach_x[here] - left, 0, trees.shape[1])
+                x1 = np.clip(cols[here] + reach_x[here] + 1 - left, 0, trees.shape[1])
+                count = summed[y1, x1] - summed[y0, x1] - summed[y1, x0] + summed[y0, x0]
+                out[at[here]] = count / ((y1 - y0) * (x1 - x0))
+    return out
 
 
 def _raster_paths(raster_dir: Path) -> list[Path]:
