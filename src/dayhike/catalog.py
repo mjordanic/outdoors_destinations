@@ -20,6 +20,7 @@ from sklearn.neighbors import BallTree
 from dayhike.osm import OsmRelation, OsmSnapshot, OsmWay
 
 if TYPE_CHECKING:
+    from dayhike.built import BuiltHikeSource
     from dayhike.similarity import SimilarityStore
 
 EARTH_RADIUS_M = 6_371_000
@@ -40,6 +41,7 @@ NAME_ORIGIN_OSM_REF = "osm_ref"
 NAME_ORIGIN_FROM_TO = "osm_from_to"
 NAME_ORIGIN_PLACE = "nearest_place"
 NAME_ORIGIN_SYNTHETIC = "synthetic"
+KIND_RELATION = "relation"  # a DayHike that is one OSM relation; built ones are not (ADR-0038)
 LANDCOVER_FEATURE_NAMES = (
     "tree_fraction",
     "shrub_fraction",
@@ -117,6 +119,11 @@ class DayHike:
     feature_vector: FeatureVector
     name_origin: str = NAME_ORIGIN_OSM_NAME
     climate_months: tuple[tuple[float, float, float] | None, ...] = (None,) * 12
+    # A built DayHike (ADR-0038) is a "network" or "stage" walk, built from
+    # the OSM relations in ``parts``, that walks its Route ``route``.
+    kind: str = KIND_RELATION
+    parts: tuple[int, ...] = ()
+    route: str | None = None
 
 
 @dataclass(frozen=True)
@@ -284,18 +291,13 @@ class Catalog:
             dayhike_columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(dayhikes)")
             }
-            if "name_origin" in dayhike_columns:
-                dayhike_rows = connection.execute(
-                    "SELECT id, name, length_m, difficulty, name_origin "
-                    "FROM dayhikes ORDER BY id"
-                )
-            else:
-                dayhike_rows = (
-                    (*row, NAME_ORIGIN_OSM_NAME)
-                    for row in connection.execute(
-                        "SELECT id, name, length_m, difficulty FROM dayhikes ORDER BY id"
-                    )
-                )
+            # A Catalog built before NameOrigin or built DayHikes (ADR-0038) lacks their columns.
+            name_origin = "name_origin" if "name_origin" in dayhike_columns else f"'{NAME_ORIGIN_OSM_NAME}'"
+            built = "kind, parts, route" if "kind" in dayhike_columns else f"'{KIND_RELATION}', NULL, NULL"
+            dayhike_rows = connection.execute(
+                f"SELECT id, name, length_m, difficulty, {name_origin}, {built} "
+                "FROM dayhikes ORDER BY id"
+            )
             dayhikes = tuple(
                 DayHike(
                     id=dayhike_id,
@@ -308,8 +310,11 @@ class Catalog:
                     climate_months=tuple(
                         climate_months_by_id.get(dayhike_id, [None] * 12)
                     ),
+                    kind=kind,
+                    parts=tuple(json.loads(parts)) if parts else (),
+                    route=route,
                 )
-                for dayhike_id, name, length_m, sac_scale, name_origin in dayhike_rows
+                for dayhike_id, name, length_m, sac_scale, name_origin, kind, parts, route in dayhike_rows
             )
             return cls(
                 path=path,
@@ -500,6 +505,7 @@ def build_catalog(
     progress: Callable[[str], None] | None = None,
     fresh: bool = False,
     snap_tolerance_m: float = SNAP_TOLERANCE_M,
+    sources: Sequence[BuiltHikeSource] | None = None,
 ) -> Catalog:
     """Ingest OSM XML or PBF snapshot(s) into a Catalog of DayHikes.
 
@@ -517,14 +523,20 @@ def build_catalog(
     SQLite file if it exists, only after the new file is complete; overlapping
     snapshots keep one row per OSM id. The GeometryStore and the TrailGraph
     (``snap_tolerance_m``, see ``dayhike.trailgraph``) are written beside it.
+    ``sources`` build DayHikes that are not one relation (ADR-0038); by
+    default ingest's own ``BUILT_HIKE_SOURCES``.
     """
-    from dayhike.ingest import emit_progress, run_ingest, write_geometry_store
+    from dayhike.ingest import BUILT_HIKE_SOURCES, emit_progress, run_ingest, write_geometry_store
     from dayhike.trailgraph import check_snap_tolerance, write_trailgraph
 
     check_snap_tolerance(snap_tolerance_m)
     catalog_path = Path(catalog_path)
     kept, report, work_path = run_ingest(
-        _osm_paths(osm_path), catalog_path, progress=progress, fresh=fresh
+        _osm_paths(osm_path),
+        catalog_path,
+        progress=progress,
+        fresh=fresh,
+        sources=BUILT_HIKE_SOURCES if sources is None else sources,
     )
     emit_progress(progress, "write", str(catalog_path))
     _write_sqlite(catalog_path, kept, report)
@@ -589,15 +601,42 @@ def _dayhike_from_relation(
 ) -> DayHike:
     # The main walk starts at the Trailhead.
     latitude, longitude = points[0]
-    sac_scale = _max_sac_scale(relation, snapshot.ways)
+    place = None if places is None else places.nearest(latitude, longitude, PLACE_RADIUS_M)
+    name, name_origin = dayhike_label(relation.id, relation.tags, place)
+    return _dayhike(
+        relation.id,
+        name,
+        name_origin,
+        vertices,
+        _max_sac_scale(relation, snapshot.ways),
+        snapshot,
+        amenity_index,
+        length_m,
+    )
+
+
+def _dayhike(
+    hike_id: int,
+    name: str,
+    name_origin: str,
+    vertices: Sequence[tuple[int, tuple[float, float]]],
+    sac_scale: str | None,
+    snapshot: OsmSnapshot,
+    amenity_index: _AmenityIndex | None,
+    length_m: float | None = None,
+    **built,
+) -> DayHike:
+    """The DayHike whose main walk is ``vertices``, from the Trailhead; its
+    length is their line length unless given."""
+    latitude, longitude = vertices[0][1]
+    if length_m is None:
+        length_m = _linestring_length_m([point for _, point in vertices])
     amenity_facts = _amenity_facts_at(latitude, longitude, amenity_index)
     elevation_min_m, elevation_max_m, elevation_gain_m = _elevation_stats(
         vertices, snapshot.node_elevations
     )
-    place = None if places is None else places.nearest(latitude, longitude, PLACE_RADIUS_M)
-    name, name_origin = dayhike_label(relation.id, relation.tags, place)
     return DayHike(
-        id=relation.id,
+        id=hike_id,
         name=name,
         trailhead=Trailhead(
             latitude=latitude,
@@ -615,6 +654,7 @@ def _dayhike_from_relation(
             amenity_facts=amenity_facts,
         ),
         name_origin=name_origin,
+        **built,
     )
 
 
@@ -1575,12 +1615,16 @@ def _member_way_length_m(
 
 
 def _max_sac_scale(relation: OsmRelation, ways: Mapping[int, OsmWay]) -> str | None:
-    # Strictest member-way sac_scale. Missing stays None, not silently "hiking".
+    return _strictest_sac_scale(
+        (member_id for member_type, member_id in relation.members if member_type == "way"), ways
+    )
+
+
+def _strictest_sac_scale(way_ids: Iterable[int], ways: Mapping[int, OsmWay]) -> str | None:
+    # Strictest sac_scale of the ways. Missing stays None, not silently "hiking".
     best: tuple[int, str] | None = None
-    for member_type, member_id in relation.members:
-        if member_type != "way":
-            continue
-        way = ways.get(member_id)
+    for way_id in way_ids:
+        way = ways.get(way_id)
         if way is None:
             continue
         scale = way.tags.get("sac_scale")
@@ -1628,7 +1672,10 @@ def _write_sqlite(path: Path, dayhikes: Iterable[DayHike], report: IngestReport)
                 name TEXT NOT NULL,
                 name_origin TEXT NOT NULL,
                 length_m REAL NOT NULL,
-                difficulty TEXT
+                difficulty TEXT,
+                kind TEXT NOT NULL,
+                parts TEXT,
+                route TEXT
             );
             CREATE TABLE trailheads (
                 dayhike_id INTEGER PRIMARY KEY REFERENCES dayhikes(id),
@@ -1699,10 +1746,19 @@ def _write_sqlite(path: Path, dayhikes: Iterable[DayHike], report: IngestReport)
             ),
         )
         connection.executemany(
-            "INSERT INTO dayhikes (id, name, name_origin, length_m, difficulty) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO dayhikes (id, name, name_origin, length_m, difficulty, kind, parts, route) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             [
-                (hike.id, hike.name, hike.name_origin, hike.length_m, hike.difficulty.sac_scale)
+                (
+                    hike.id,
+                    hike.name,
+                    hike.name_origin,
+                    hike.length_m,
+                    hike.difficulty.sac_scale,
+                    hike.kind,
+                    json.dumps(list(hike.parts)) if hike.parts else None,
+                    hike.route,
+                )
                 for hike in dayhikes
             ],
         )

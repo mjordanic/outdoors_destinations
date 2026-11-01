@@ -255,7 +255,7 @@ print(resolve_seed(catalog, "ridge walk"))  # 1001; case-insensitive exact match
 
 | Table | Contents |
 | --- | --- |
-| `dayhikes` | OSM relation id, Seed label, `name_origin`, length_m, Difficulty (`sac_scale` or NULL) |
+| `dayhikes` | id (the OSM relation id, or a built DayHike's hashed id from 2^40 up), Seed label, `name_origin`, length_m, Difficulty (`sac_scale` or NULL), `kind` (`relation`, `network`, `stage`), `parts` (JSON list of the OSM relations a built DayHike is built from, else NULL), `route` (a built DayHike's Route, else NULL) |
 | `trailheads` | lat/lon used for amenities and DriveTime |
 | `amenity_facts` | per DayHike: hut, parking, restaurant_cafe, drinking_water (count + nearest_m) |
 | `feature_vectors` | length, elevation min/max/gain, Difficulty ordinal, LandCover fractions, regime climate |
@@ -281,7 +281,9 @@ not read it. If you only have `catalog.sqlite`, re-run ingest; `sample-dem`,
 `sample-landcover`, and `sample-climate` cannot create the sidecar by themselves.
 
 It holds **Catalog DayHikes only** (dropped length/network relations are
-absent):
+absent). A built DayHike (ADR-0038) has its walk as its source built it: its
+member list is the ways it walks, its relation tags are `{}`, and `ways` lists
+each way once, in walk order, with no Leftover:
 
 | Table | Contents |
 | --- | --- |
@@ -1330,7 +1332,14 @@ from parking only. A line starts at the end nearer a parking point within 5 km,
 or else at the end where member order starts it. A loop starts at its stem's
 far end, or else at its vertex nearest parking within 5 km.
 
-A hike that is not a `route=hiking` or `route=foot` relation in this Catalog cannot be a Seed.
+After the relations, each built-hike source in `BUILT_HIKE_SOURCES`
+(`dayhike.ingest`) adds built DayHikes: walks that are not one relation, such
+as NetworkHikes and DayStages (ADR-0038). Each gets an id hashed from its Route,
+from 2^40 up, so a rebuild that leaves the walk unchanged keeps it; `kind`,
+`parts` and `route` say what it is built from. With no source registered the
+Catalog holds relations only.
+
+A hike that is neither a `route=hiking` or `route=foot` relation nor a built DayHike in this Catalog cannot be a Seed.
 Unnamed forest paths (`highway=path` without a hiking relation) never appear.
 Filter `name_origin = 'synthetic'` if you want to drop ingest-assigned labels.
 
@@ -1750,7 +1759,9 @@ Trailhead) with their OSM names, plus an R*Tree of each simplified line's
 bounding box for the map picker (export format 3), and, when the Catalog has a
 TrailGraph, `trailgraph.sqlite`: its Segments with a simplified line and the
 metres each climbs either way, the Junctions, amenity points and sampled
-values, with the OSM node and way ids a shared link names (export format 4; `dayhike serve` refuses an
+values, with the OSM node and way ids a shared link names (export format 4), and
+each hike's `kind`, `parts` and `route`, so the page links what a built DayHike is built from
+(export format 5; `dayhike serve` refuses an
 older export, so rerun `export-serving` once). With `--valhalla-tiles` it also links the
 tile extract and writes a `valhalla.json` that serves it inside the container;
 with `--valhalla-url` it snaps every Trailhead once (`snaps.npz`). With
@@ -1766,7 +1777,8 @@ API (JSON): `GET /api/search?q=` (every word in any order, at least one of
 two letters or more; case, accents
 and ue/oe/ae spellings ignored; the exact name first, then names starting with
 the query, then names where every word starts a word, shorter first; a number
-finds that id), `GET /api/hikes/{id}`, `GET
+finds that id), `GET /api/hikes/{id}` (with `built`, `{"kind", "parts",
+"route"}` for a built DayHike, else null; ADR-0038), `GET
 /api/hikes?south=&west=&north=&east=` (the hikes whose line's bounding box
 meets that box, for "Select hike on map", each with its id, name, walk length
 and encoded line; when the box holds more than 100, none are listed and

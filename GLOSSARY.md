@@ -5,11 +5,15 @@ A local Catalog of DayHikes built from OpenStreetMap, ranked by similarity to Se
 ## Language
 
 **DayHike**:
-A hiking outing stored in the Catalog, a day or longer. It is an OSM `route=hiking` or `route=foot` relation with trail of its own that survived the 1 km minimum, container and node-network rules: there is no upper length cap, a container (a relation with no way of its own, such as a superroute of stages) is not a DayHike, and neither is a `network:type=node_network` leg that is not a RoundTrip (ADR-0033, ADR-0034). Its label is OSM `name`, else `ref` with `from – to` or the nearest place, else `from – to`, else "Hike near" the nearest place, else `relation:{id}` (ADR-0017). Its length is the length of its DayHikeGeometry, each way once: a there-and-back trail counts one way.
+A hiking outing stored in the Catalog, a day or longer. It is an OSM `route=hiking` or `route=foot` relation with trail of its own that survived the 1 km minimum, container and node-network rules: there is no upper length cap, a container (a relation with no way of its own, such as a superroute of stages) is not a DayHike, and neither is a `network:type=node_network` leg that is not a RoundTrip (ADR-0033, ADR-0034). Or it is a built DayHike, a NetworkHike or DayStage (ADR-0038). Its label is OSM `name`, else `ref` with `from – to` or the nearest place, else `from – to`, else "Hike near" the nearest place, else `relation:{id}` (ADR-0017). Its length is the length of its DayHikeGeometry, each way once: a there-and-back trail counts one way.
 _Avoid_: destination, trail, route, path, recommendation
 
+**Built DayHike**:
+A DayHike that ingest builds from OSM data rather than reads as one relation: a NetworkHike or a DayStage. A built-hike source returns its walk; from then on it is a DayHike like any other, on the map, in search and in every Ranking. It has a kind (`network` or `stage`), the OSM relations it is built from, and its Route (ADR-0018); its id is a hash of that Route above 2^40, so it stays the same across a rebuild that leaves the walk unchanged (ADR-0038). Unlike a ComposedHike it is stored in the Catalog.
+_Avoid_: composed DayHike, generated hike, virtual relation, synthetic hike
+
 **NameOrigin**:
-Whether a DayHike label came from OSM `name`, OSM `ref`, the `from`/`to` tags, the nearest place, or a synthetic `relation:{id}` assigned at ingest. Synthetic labels can be dropped in postprocessing.
+Whether a DayHike label came from OSM `name`, OSM `ref`, the `from`/`to` tags, the nearest place, or a synthetic `relation:{id}` assigned at ingest; for a built DayHike, `network` or `stage`, from the source that built it. Synthetic labels can be dropped in postprocessing.
 _Avoid_: unnamed as a drop reason, title, display name
 
 **Trailhead**:

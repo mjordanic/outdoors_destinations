@@ -62,6 +62,7 @@ import shapely
 
 from dayhike.catalog import (
     EARTH_RADIUS_M,
+    KIND_RELATION,
     MAX_CAR_SPEED_MS,
     NAME_ORIGIN_SYNTHETIC,
     MatrixClient,
@@ -127,7 +128,7 @@ Progress = Callable[[str], None]
 Reach = Callable[[list[tuple[float, float]]], list[float | None]]  # drive hours to places, None out of reach
 Seed = int | Route | Mapping[str, float]  # a DayHike id, a ComposedHike, or a Wish (Measure name to value)
 
-SERVING_FORMAT = 4
+SERVING_FORMAT = 5
 SERVING_ROOT = "/data"  # where the container finds the export (web/Dockerfile)
 LINE_TOLERANCE_M = 10.0
 ELEVATION_POINTS = 128
@@ -419,9 +420,12 @@ def export_serving(
     (out / "meta.json").unlink(missing_ok=True)
     catalog = sqlite3.connect(f"file:{catalog_path}?mode=ro", uri=True)
     try:
+        # A Catalog built before built DayHikes (ADR-0038) holds relations only.
+        columns = {row[1] for row in catalog.execute("PRAGMA table_info(dayhikes)")}
+        built = "d.kind, d.parts, d.route" if "kind" in columns else f"'{KIND_RELATION}', NULL, NULL"
         hikes = catalog.execute(
-            "SELECT d.id, d.name, d.name_origin, d.difficulty, t.latitude, t.longitude "
-            "FROM dayhikes d JOIN trailheads t ON t.dayhike_id = d.id ORDER BY d.id"
+            "SELECT d.id, d.name, d.name_origin, d.difficulty, t.latitude, t.longitude, "
+            f"{built} FROM dayhikes d JOIN trailheads t ON t.dayhike_id = d.id ORDER BY d.id"
         ).fetchall()
         attribution = dict(catalog.execute("SELECT key, value FROM catalog_meta"))["attribution"]
     finally:
@@ -496,14 +500,14 @@ def _write_hikes(
             "CREATE TABLE hikes ("
             " id INTEGER PRIMARY KEY, name TEXT NOT NULL, name_origin TEXT NOT NULL,"
             " sac_scale TEXT, walk_m REAL, line TEXT, elevation BLOB, climb_m REAL, descent_m REAL,"
-            " points BLOB NOT NULL);"
+            " points BLOB NOT NULL, kind TEXT NOT NULL, parts TEXT, route TEXT);"
             "CREATE VIRTUAL TABLE hike_boxes USING rtree(id, south, north, west, east)"
         )
         for start in range(0, len(hikes), _HIKE_CHUNK):
             chunk = hikes[start : start + _HIKE_CHUNK]
             walks = _vertices(geo, chunk[0][0], chunk[-1][0])
             rows, boxes = [], []
-            for dayhike_id, name, name_origin, sac_scale, th_lat, th_lon in chunk:
+            for dayhike_id, name, name_origin, sac_scale, th_lat, th_lon, *built in chunk:
                 points = _trailhead_points(trailhead_kinds, th_lat, th_lon)
                 line = elevation = walk_m = climb_m = descent_m = None
                 walk = walks.get(dayhike_id)
@@ -520,12 +524,15 @@ def _write_hikes(
                     along = [p for kinds, radius in line_kinds for p in _line_points(kinds, lat, lon, radius)]
                     points = sorted(along, key=lambda point: point[4]) + points
                 rows.append(
-                    (dayhike_id, name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points)
+                    (dayhike_id, name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, *built, points)
                 )
             _name_points(geo, rows)
             db.executemany(
-                "INSERT INTO hikes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [(*row[:9], zlib.compress(json.dumps(row[9], ensure_ascii=False).encode())) for row in rows],
+                "INSERT INTO hikes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (*row[:9], zlib.compress(json.dumps(row[-1], ensure_ascii=False).encode()), *row[9:12])
+                    for row in rows
+                ],
             )
             db.executemany("INSERT INTO hike_boxes VALUES (?, ?, ?, ?, ?)", boxes)
             if progress is not None:
@@ -1034,11 +1041,13 @@ class ServingData:
         row = self.row_of(dayhike_id)
         store = self.store.mode(return_to_start)
         with self._db() as db:
-            name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points = db.execute(
-                "SELECT name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points "
-                "FROM hikes WHERE id = ?",
-                (dayhike_id,),
-            ).fetchone()
+            name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points, kind, parts, route = (
+                db.execute(
+                    "SELECT name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points, "
+                    "kind, parts, route FROM hikes WHERE id = ?",
+                    (dayhike_id,),
+                ).fetchone()
+            )
         profile = np.frombuffer(elevation, dtype="<i2").tolist() if elevation else None
         return {
             "id": dayhike_id,
@@ -1056,6 +1065,10 @@ class ServingData:
             "facts": {column: _value(store.facts[i, row]) for i, column in enumerate(FACT_COLUMNS)},
             "profile_shape": [_value(v) for v in store.profile[row]],
             "way_back": _way_back(*store.way_back[[0, 3], row]) if return_to_start else None,
+            # A built DayHike (ADR-0038): what kind, the OSM relations it is built from, its Route.
+            "built": None
+            if kind == KIND_RELATION
+            else {"kind": kind, "parts": json.loads(parts), "route": route},
         }
 
     def segments_in_box(
@@ -1131,6 +1144,7 @@ class ServingData:
             "profile_shape": None if shape is None else [_value(v) for v in shape],
             "routes": routes,
             "way_back": None if back is None else {"m": back.metres, "kind": back.kind},
+            "built": None,
         }
 
     def _labels(self, relation_ids: list[int]) -> dict[int, str]:

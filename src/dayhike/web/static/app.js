@@ -580,6 +580,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
       <div><div class="role">${escapeHtml(role)}</div><h2>${escapeHtml(hike.name)}</h2></div>
       ${hike.route
         ? `<span><a href="${routeHash(hike)}${modeHash()}" title="This address opens this hike as your hike">Link to this hike</a>${compare ? ' <button type="button" class="secondary edit-composed">Edit on the map</button>' : ""}</span>`
+        : hike.built ? builtLinks(hike, compare)
         : `<a href="https://www.openstreetmap.org/relation/${hike.id}" target="_blank" rel="noopener">OpenStreetMap relation ${hike.id}</a>`}
     </div>
     ${scoreLine}
@@ -592,7 +593,9 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     <div class="charts"></div>
     <h3>${compare ? `Every measure: this hike against the ${compare.wish ? "one you want" : "liked one"}` : "The facts behind every measure"}</h3>
     <div class="table-wrap"><table class="facts"></table></div>`;
-  card.querySelector(".edit-composed")?.addEventListener("click", () => editComposed(hike));
+  card.querySelector(".edit-composed")?.addEventListener("click", () => editComposed(
+    hike.built ? { route: { text: hike.built.route }, name: hike.name } : hike,
+  ));
   const { map, hover } = drawMap(card.querySelector(".map"), hike);
   card._map = map;
   const slot = card.querySelector(".slot-elevation");
@@ -603,6 +606,14 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     climateChart(f, month),
   );
   card.querySelector(".facts").replaceWith(factsTable(hike, compare, result, month, query?.weights, query?.return_to_start));
+}
+
+// A built hike's head (ADR-0038): the OSM relations it is built from, a link to it,
+// and, beside a liked hike when the server can compose, its Route to edit on the map.
+function builtLinks(hike, compare) {
+  const parts = hike.built.parts.map((id) => `<a href="https://www.openstreetmap.org/relation/${id}" target="_blank" rel="noopener">${id}</a>`);
+  const edit = compare && state.info.compose ? ' <button type="button" class="secondary edit-composed">Edit on the map</button>' : "";
+  return `<span>Built from OSM relation${parts.length === 1 ? "" : "s"} ${parts.join(", ")} · <a href="#hike=${hike.id}${modeHash()}" title="This address opens this hike">Link to this hike</a>${edit}</span>`;
 }
 
 // The Measures a comparison shows: with the way back every hike is a round trip, so not Round trip.

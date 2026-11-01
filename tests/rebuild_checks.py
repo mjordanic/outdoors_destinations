@@ -49,7 +49,7 @@ CATALOG_SCHEMA = {
     "amenity_facts": ["dayhike_id", "kind", "count", "nearest_m"],
     "catalog_meta": ["key", "value"],
     "climate_months": ["dayhike_id", "month", "temperature_c", "precipitation_mm", "solar_radiation"],
-    "dayhikes": ["id", "name", "name_origin", "length_m", "difficulty"],
+    "dayhikes": ["id", "name", "name_origin", "length_m", "difficulty", "kind", "parts", "route"],
     "feature_vectors": [
         "dayhike_id", "length_m", "elevation_min_m", "elevation_max_m", "elevation_gain_m",
         "difficulty_ordinal", "tree_fraction", "shrub_fraction", "grass_fraction",
