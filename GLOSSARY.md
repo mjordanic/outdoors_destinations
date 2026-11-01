@@ -185,7 +185,7 @@ The numeric Catalog description of a DayHike (length, elevation stats, Difficult
 _Avoid_: embedding, description, tags
 
 **Ranking**:
-An ordered list of Catalog DayHikes by similarity to the Seed set, or to a Wish. A DayHike's similarity to one Seed is the MeasureWeights-weighted mean of its calibrated Measure scores; with several Seeds the best Seed counts. Its score is that similarity. Of a group of Twins only the best is listed, and none of a Seed's Twins. An optional QueryMonth selects the ClimateNormal slice. The Seed carries the climate being matched. With ReturnToStart every hike in it is measured with its WayBack. From a serving export it lists one row per area: a hike, DayHike or SuggestedLoop, starting within 10 km of a better row's start is a version of that row, and a row holds at most three versions, each more than half off the others (ADR-0020).
+An ordered list of Catalog DayHikes by similarity to the Seed set, or to a Wish. A DayHike's similarity to one Seed is the MeasureWeights-weighted mean of its calibrated Measure scores; with several Seeds the best Seed counts. Its score is that similarity. Of a group of Twins only the best is listed, and none of a Seed's Twins. An optional QueryMonth selects the ClimateNormal slice. The Seed carries the climate being matched. With ReturnToStart every hike in it is measured with its WayBack. From a serving export it lists one row per area: a hike, DayHike or SuggestedLoop, starting within the GroupingRadius of a better row's start is a version of that row, and a row holds at most three versions, each more than half off the others (ADR-0020).
 _Avoid_: recommendation, unsupervised clustering, prediction, climate target
 
 **Measure**:
