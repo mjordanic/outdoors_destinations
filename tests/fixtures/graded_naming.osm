@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="dayhike-fixture">
+  <!-- Naming a walk that is mostly graded paths (ADR-0037). Comments give
+       each node's (east, north) metres from S at 46.035, 14.005.
+
+       Short Link (3101): S - J, 150 m.
+       Long Trail (3102): J - L, 5 km east.
+       Way 310: a graded highway=path (mountain_hiking) in no relation,
+         J - G1 - G2, about 7 km.
+       Stone Spring: a named spring 30 m north of S. -->
+  <node id="1" lat="46.0350000000" lon="14.0050000000" version="1"><!-- S (0, 0) -->
+    <tag k="ele" v="600"/>
+  </node>
+  <node id="2" lat="46.0350000000" lon="14.0069431633" version="1"><!-- J (150, 0) -->
+    <tag k="ele" v="610"/>
+  </node>
+  <node id="3" lat="46.0709728145" lon="14.0069431633" version="1"><!-- G1 (150, 4000) -->
+    <tag k="ele" v="900"/>
+  </node>
+  <node id="4" lat="46.0709728145" lon="14.0458064296" version="1"><!-- G2 (3150, 4000) -->
+    <tag k="ele" v="950"/>
+  </node>
+  <node id="5" lat="46.0350000000" lon="14.0717152738" version="1"><!-- L (5150, 0) -->
+    <tag k="ele" v="700"/>
+  </node>
+  <node id="90" lat="46.0352697961" lon="14.0050000000" version="1"><!-- (0, 30) -->
+    <tag k="natural" v="spring"/>
+    <tag k="name" v="Stone Spring"/>
+  </node>
+  <way id="301" version="1">
+    <nd ref="1"/>
+    <nd ref="2"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="302" version="1">
+    <nd ref="2"/>
+    <nd ref="5"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="310" version="1">
+    <nd ref="2"/>
+    <nd ref="3"/>
+    <nd ref="4"/>
+    <tag k="highway" v="path"/>
+    <tag k="sac_scale" v="mountain_hiking"/>
+  </way>
+  <relation id="3101" version="1">
+    <member type="way" ref="301" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Short Link"/>
+  </relation>
+  <relation id="3102" version="1">
+    <member type="way" ref="302" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Long Trail"/>
+  </relation>
+</osm>

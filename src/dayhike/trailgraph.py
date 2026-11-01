@@ -1,9 +1,11 @@
-"""The TrailGraph: the marked hiking network as Junctions and Segments (ADR-0018).
+"""The TrailGraph: the marked hiking network and graded paths as Junctions and Segments (ADR-0018, ADR-0037).
 
 ``write_trailgraph`` runs in ``build_catalog`` on the ingest work file, just
 before it is deleted, and writes ``{catalog}.trailgraph.sqlite`` beside the
 Catalog (``trailgraph_path_for``). Its input is every member way of every
-``route=hiking`` or ``route=foot`` relation ingest read, kept as a DayHike or not:
+``route=hiking`` or ``route=foot`` relation ingest read, kept as a DayHike or not,
+and every graded path (``highway=path`` with a ``sac_scale``) no such relation
+lists, with no relation id (ADR-0037):
 
 - Ways are split at every node two of them share (or one repeats). Two ways
   of the same layer that cross with no node there get one at the crossing.
@@ -78,7 +80,7 @@ def _emit(progress: Progress | None, message: str) -> None:
 
 @dataclass
 class _Network:
-    """Every hiking member way as node indices, with what Segments keep of it."""
+    """Every hiking member way and graded path as node indices, with what Segments keep of it."""
 
     node_id: np.ndarray  # OSM node id per node index; crossings get negative ids
     lat: np.ndarray
@@ -142,13 +144,18 @@ def _load_network(conn: sqlite3.Connection) -> _Network:
     from dayhike.similarity import surface_class
 
     node_chunks = []
-    cursor = conn.execute("SELECT id, lat, lon, ifnull(ele, 'nan') FROM nodes ORDER BY id")
+    cursor = conn.execute(
+        "SELECT id, lat, lon, ifnull(ele, 'nan') FROM nodes "
+        "UNION ALL SELECT id, lat, lon, ifnull(ele, 'nan') FROM graded_nodes ORDER BY id"
+    )
     while rows := cursor.fetchmany(1_000_000):
         node_chunks.append(np.array(rows, dtype=float))
     nodes = np.concatenate(node_chunks) if node_chunks else np.empty((0, 4))
     node_id = nodes[:, 0].astype(np.int64)  # OSM ids are far below 2**53
     way_ids, refs, lengths, level, sac, surface = [], [], [], [], [], []
-    for way_id, node_ids_json, tags_json in conn.execute("SELECT id, node_ids, tags FROM ways ORDER BY id"):
+    for way_id, node_ids_json, tags_json in conn.execute(
+        "SELECT id, node_ids, tags FROM ways UNION ALL SELECT id, node_ids, tags FROM graded_ways ORDER BY id"
+    ):
         node_ids = json.loads(node_ids_json)
         tags = json.loads(tags_json)
         way_ids.append(way_id)
@@ -1531,11 +1538,15 @@ class TrailGraph:
         the first entry per Junction, then per entry the neighbour, metres
         and that Segment's id."""
         if self._graph is None:
+            chunks = []
             with self._db() as db:
-                found = db.execute("SELECT id, a, b, length_m FROM segments WHERE kind != 'link'").fetchall()
-            ids = np.array([row[0] for row in found], dtype=np.int64)
-            ends = np.array([row[1:3] for row in found], dtype=np.int64).reshape(-1, 2)
-            metres = np.array([row[3] for row in found], dtype=float)
+                cursor = db.execute("SELECT id, a, b, length_m FROM segments WHERE kind != 'link'")
+                while rows := cursor.fetchmany(100_000):  # arrays chunk by chunk, not a million tuples at once
+                    chunks.append(np.array(rows, dtype=float))
+            found = np.concatenate(chunks) if chunks else np.empty((0, 4))
+            ids = found[:, 0].astype(np.int64)  # ids and OSM node ids are far below 2**53
+            ends = found[:, 1:3].astype(np.int64)
+            metres = found[:, 3].copy()
             nodes = np.unique(ends)
             low, high = np.sort(np.searchsorted(nodes, ends), axis=1).T
             shortest = np.argsort(metres, kind="stable")

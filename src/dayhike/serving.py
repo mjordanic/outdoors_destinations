@@ -146,6 +146,7 @@ GROUP_KMH = 50.0  # the 4 h longest drive (web.MAX_DRIVE_HOURS) then groups as n
 VERSIONS = 3  # versions per row, the row's own included
 VERSION_DIFFERS = 0.5  # a version walks more than this share of its length off every other one
 LOOP_NAME_M = 2_000.0  # a loop is named after a named point this near its start
+TRAIL_NAME_SHARE = 0.3  # a trail names a walk only when it is at least this share of the walk's length (ADR-0037)
 UNNAMING_KINDS = ("restaurant_cafe", "parking")  # amenity points that name no hike: a cafe, a car park
 TRAILHEAD_NEAREST = 3  # parking and restaurant/cafe points kept per Trailhead
 VALHALLA_CACHE_BYTES = 256 * 1024 * 1024  # mjolnir.max_cache_size; the build default is 1 GB
@@ -1150,12 +1151,15 @@ class ServingData:
         return f"{trails} from {near[0][1]}" if near else trails
 
     def _trails(self, walk: ComposedWalk, labels: dict[int, str]) -> str:
-        """The two trails a walk walks longest, by name, joined by "and"; "" with none."""
+        """The two trails a walk walks longest, by name, joined by "and", of
+        those that are at least ``TRAIL_NAME_SHARE`` of its length; "" with none."""
         main: dict[str, float] = {}
         for relation, metres in walk.relation_m.items():
             if labels.get(relation):
                 main[labels[relation]] = main.get(labels[relation], 0.0) + metres
-        return " and ".join(sorted(sorted(main, key=lambda label: -main[label])[:2]))
+        least = TRAIL_NAME_SHARE * float(_step_m(walk.lat, walk.lon).sum())
+        named = [label for label in sorted(main, key=lambda label: -main[label])[:2] if main[label] >= least]
+        return " and ".join(sorted(named))
 
     def _places_near_start(self, walk: ComposedWalk, radius_m: float) -> list[tuple[float, str]]:
         """(metres, name) of the named amenity points within ``radius_m`` of a

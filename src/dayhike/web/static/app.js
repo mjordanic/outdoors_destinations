@@ -583,7 +583,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
         : `<a href="https://www.openstreetmap.org/relation/${hike.id}" target="_blank" rel="noopener">OpenStreetMap relation ${hike.id}</a>`}
     </div>
     ${scoreLine}
-    ${hike.route ? `<p class="hint">Drawn from marked trail segments${hike.routes?.length ? ` along ${escapeHtml(hike.routes.slice(0, 5).join(", "))}${hike.routes.length > 5 ? " and more" : ""}` : ""}; measured as drawn${hike.way_back ? ", with its way back" : ""}.</p>` : ""}
+    ${hike.route ? `<p class="hint">Drawn from trail segments${hike.routes?.length ? ` along ${escapeHtml(hike.routes.slice(0, 5).join(", "))}${hike.routes.length > 5 ? " and more" : ""}` : ""}; measured as drawn${hike.way_back ? ", with its way back" : ""}.</p>` : ""}
     ${hike.way_back && hike.way_back.kind !== "none" ? `<p class="hint">Length, climb, descent and every measure include the way back to the start (${escapeHtml(wayBackText(hike.way_back))}); the map and profile show the hike itself.</p>` : ""}
     <ul class="badges">${badges.map((b) => `<li>${escapeHtml(b)}</li>`).join("")}</ul>
     <div class="map"></div>
@@ -1156,7 +1156,7 @@ const pick = {
 
 // ---------- design your own from segments ----------
 
-// The marked trails in view as segments, junction to junction (from COMPOSE_ZOOM on).
+// The marked trails and graded paths in view as segments, junction to junction (from COMPOSE_ZOOM on).
 // Click a junction or a segment to start, then segments to walk on; one away from the
 // route's end is reached the shortest way over the trail segments loaded so far (and
 // gaps or links the Hiker took themselves), drawn apart so they can see it. A dotted
@@ -1207,7 +1207,7 @@ const compose = {
     if (pick.map.getZoom() < COMPOSE_ZOOM) {
       this.shown = [];
       this.draw();
-      pick.hint("Zoom in on the map to see the marked trails there as segments.");
+      pick.hint("Zoom in on the map to see the trails there as segments.");
       return;
     }
     this.timer = setTimeout(async () => {
@@ -1225,7 +1225,7 @@ const compose = {
         this.shown = body.segments.map((segment) => segment[0]);
         this.draw();
         if (body.too_many) pick.hint("Too many trail segments in view; zoom in further to see them.");
-        else if (!this.shown.length) pick.hint("No marked trails in view; move the map.");
+        else if (!this.shown.length) pick.hint("No trails in view; move the map.");
         else this.hintNext();
       } catch (error) {
         if (error.name !== "AbortError" && request === boxed) pick.hint(error.message);
@@ -1235,7 +1235,7 @@ const compose = {
 
   hintNext() {
     pick.hint(this.start == null
-      ? "Click a junction or a trail segment to start your hike there. Only marked trails are segments, and a hike starts and ends at a junction."
+      ? "Click a junction or a trail segment to start your hike there. Only marked trails and graded paths are segments, and a hike starts and ends at a junction."
       : "Click a segment to walk on it; Undo takes the last one back. Use this hike measures it.");
   },
 
@@ -1255,7 +1255,7 @@ const compose = {
       return `<strong>Connect here</strong><br>${fmt.m(segment.length)} between two trails that pass close, not on a marked trail`;
     }
     if (segment.kind === "gap") return `<strong>Gap</strong><br>${fmt.m(segment.length)} where two trails almost meet`;
-    const parts = [`<strong>${escapeHtml(segment.routes.join(" · ") || "Marked trail")}</strong>`, fmt.km(segment.length)];
+    const parts = [`<strong>${escapeHtml(segment.routes.join(" · ") || "Unnamed trail")}</strong>`, fmt.km(segment.length)];
     if (segment.climbAB != null) parts.push(`↑ ${fmt.m(segment.climbAB)} / ${fmt.m(segment.climbBA)} the other way`);
     if (segment.sac) parts.push(escapeHtml(SAC[SAC_RANK[segment.sac]] || segment.sac));
     return parts.join("<br>");
@@ -1718,7 +1718,7 @@ function renderResults(body) {
     : `${body.reachable.toLocaleString("en")} hikes within ${limits}`;
   const mode = body.return_to_start ? "each with its way back to the start" : "each one way";
   const composed = body.results.some((result) => result.route)
-    ? " Rows marked composed are loops drawn from marked trail segments, not catalog hikes; with Select hike on map ticked, that map shows them dashed green."
+    ? " Rows marked composed are loops drawn from trail segments, not catalog hikes; with Select hike on map ticked, that map shows them dashed green."
     : "";
   const versions = body.results.some((result) => result.versions.length)
     ? ` Hikes starting within ${body.group_km} km of a better one are its versions: click a row with versions to list the others (var 2, 3) under it and see each on the map.`
@@ -1796,7 +1796,7 @@ function resultRow(result, number, open) {
     }
     return `<td class="cell" style="background:${scoreColor(score)}" title="${escapeHtml(m.label)}: ${score.toFixed(2)}">${Math.round(score * 100)}</td>`;
   }).join("");
-  const tag = result.route ? '<span class="composed-tag" title="A loop drawn from marked trail segments, not a catalog hike">composed</span> ' : "";
+  const tag = result.route ? '<span class="composed-tag" title="A loop drawn from trail segments, not a catalog hike">composed</span> ' : "";
   const versions = result.versions?.length
     ? ` <span class="versions" title="Click to see each on the map and in this table">${result.versions.length + 1} versions</span>`
     : "";

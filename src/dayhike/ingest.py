@@ -9,6 +9,7 @@ from collections import Counter
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+import numpy as np
 import osmium
 
 from dayhike.catalog import (
@@ -21,6 +22,7 @@ from dayhike.catalog import (
     DayHike,
     IngestReport,
     MainWalk,
+    SAC_SCALE_RANK,
     NamedPoints,
     _access_tree,
     _amenity_index,
@@ -40,12 +42,13 @@ from dayhike.osm import (
     amenity_kind,
 )
 
-INGEST_WORK_SCHEMA = 7
+INGEST_WORK_SCHEMA = 8
 INGEST_CHECKPOINT_OBJECTS = 50_000
 INGEST_PROGRESS_EVERY_OBJECTS = 100_000
 HIKING_ROUTES = ("hiking", "foot")  # route=foot is read as hiking (ADR-0034)
 CATALOG_TAG_FILTERS = (
     "r/route=hiking,foot",
+    "w/sac_scale",
     "nwr/tourism=alpine_hut,wilderness_hut,viewpoint",
     "nwr/amenity=parking,restaurant,cafe,drinking_water,shelter,water_point",
     "nwr/natural=peak,spring",
@@ -208,10 +211,24 @@ def _init_work(
             node_ids TEXT NOT NULL,
             tags TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS graded_ways (
+            id INTEGER PRIMARY KEY,
+            node_ids TEXT NOT NULL,
+            tags TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS needed_nodes (
             id INTEGER PRIMARY KEY
         );
+        CREATE TABLE IF NOT EXISTS graded_needed_nodes (
+            id INTEGER PRIMARY KEY
+        );
         CREATE TABLE IF NOT EXISTS nodes (
+            id INTEGER PRIMARY KEY,
+            lat REAL NOT NULL,
+            lon REAL NOT NULL,
+            ele REAL
+        );
+        CREATE TABLE IF NOT EXISTS graded_nodes (
             id INTEGER PRIMARY KEY,
             lat REAL NOT NULL,
             lon REAL NOT NULL,
@@ -444,6 +461,7 @@ def _pass_ways(
     amenity_ways = {row[0] for row in conn.execute("SELECT id FROM amenity_ways")}
     seen = 0
     kept = 0
+    graded = 0
     for path in paths:
         last_id, done = _file_state(conn, "ways", path)
         if done:
@@ -466,6 +484,16 @@ def _pass_ways(
                     [(node_id,) for node_id in node_ids],
                 )
                 kept += 1
+            elif _is_graded_path(tags):
+                conn.execute(
+                    "INSERT OR REPLACE INTO graded_ways (id, node_ids, tags) VALUES (?, ?, ?)",
+                    (osm_id, json.dumps(node_ids), json.dumps(tags)),
+                )
+                conn.executemany(
+                    "INSERT OR IGNORE INTO graded_needed_nodes (id) VALUES (?)",
+                    [(node_id,) for node_id in node_ids],
+                )
+                graded += 1
             if node_ids and (kind is not None or osm_id in amenity_ways):
                 conn.execute(
                     "INSERT OR REPLACE INTO pending_amenity_ways "
@@ -485,7 +513,12 @@ def _pass_ways(
                     progress, "ways", f"{seen} scanned, {kept} hiking ways, last_id={osm_id}"
                 )
         _mark_progress(conn, "ways", path, file_last, done=True)
-    emit_progress(progress, "ways", f"{kept} hiking ways")
+    emit_progress(progress, "ways", f"{kept} hiking ways, {graded} graded paths")
+
+
+def _is_graded_path(tags: dict[str, str]) -> bool:
+    """A ``highway=path`` with a ``sac_scale`` grade: in the TrailGraph though no relation lists it (ADR-0037)."""
+    return tags.get("highway") == "path" and tags.get("sac_scale") in SAC_SCALE_RANK
 
 
 def _pass_nodes(
@@ -496,6 +529,10 @@ def _pass_nodes(
         emit_progress(progress, "nodes", "resumed, already complete")
         return
     needed_nodes = {row[0] for row in conn.execute("SELECT id FROM needed_nodes")}
+    # Sorted ids, not a set: graded paths may hold as many nodes as the hiking ways.
+    graded_nodes = np.fromiter(
+        (row[0] for row in conn.execute("SELECT id FROM graded_needed_nodes ORDER BY id")), dtype=np.int64
+    )
     seen = 0
     kept = 0
     for path in paths:
@@ -510,14 +547,21 @@ def _pass_nodes(
             location = obj.location
             tags = dict(obj.tags)
             kind = amenity_kind(tags)
-            if location.valid() and (osm_id in needed_nodes or kind is not None):
+            needed = osm_id in needed_nodes
+            graded = not needed and _sorted_has(graded_nodes, osm_id)
+            if location.valid() and (needed or graded or kind is not None):
                 point = (float(location.lat), float(location.lon))
-                if osm_id in needed_nodes:
+                if needed:
                     conn.execute(
                         "INSERT OR REPLACE INTO nodes (id, lat, lon, ele) VALUES (?, ?, ?, ?)",
                         (osm_id, point[0], point[1], _parse_ele_m(tags.get("ele"))),
                     )
                     kept += 1
+                elif graded:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO graded_nodes (id, lat, lon, ele) VALUES (?, ?, ?, ?)",
+                        (osm_id, point[0], point[1], _parse_ele_m(tags.get("ele"))),
+                    )
                 if kind is not None:
                     conn.execute(
                         "INSERT OR REPLACE INTO amenities "
@@ -535,6 +579,11 @@ def _pass_nodes(
         _mark_progress(conn, "nodes", path, file_last, done=True)
     _resolve_pending_amenities(conn)
     emit_progress(progress, "nodes", f"{kept} geometry nodes")
+
+
+def _sorted_has(ids: np.ndarray, osm_id: int) -> bool:
+    at = int(ids.searchsorted(osm_id))
+    return at < len(ids) and int(ids[at]) == osm_id
 
 
 def _resolve_pending_amenities(conn: sqlite3.Connection) -> None:

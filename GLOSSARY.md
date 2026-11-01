@@ -33,7 +33,7 @@ The sidecar SQLite written at ingest next to a Catalog. It holds DayHikeGeometry
 _Avoid_: experimental database, work file, Catalog, lab
 
 **TrailGraph**:
-The sidecar SQLite written at ingest next to a Catalog (`{catalog}.trailgraph.sqlite`): every member way of every `route=hiking` or `route=foot` relation ingest read, including relations dropped as too short or as node-network legs, split into Segments that meet at Junctions (ADR-0018). Unmarked paths are not in it. A ComposedHike is drawn on it; Ranking of Catalog DayHikes does not read it.
+The sidecar SQLite written at ingest next to a Catalog (`{catalog}.trailgraph.sqlite`): every member way of every `route=hiking` or `route=foot` relation ingest read, including relations dropped as too short or as node-network legs, and every graded path (`highway=path` with a `sac_scale`) although no relation lists it, split into Segments that meet at Junctions (ADR-0018, ADR-0037). Other unmarked paths are not in it. A ComposedHike is drawn on it; Ranking of Catalog DayHikes does not read it.
 _Avoid_: routing graph (that is Valhalla's), network, member-way graph (the per-DayHike graph of ADR-0012)
 
 **Junction**:
@@ -41,7 +41,7 @@ A point of the TrailGraph where Segments meet: an OSM node shared by two or more
 _Avoid_: node (an OSM node is not always a Junction), intersection, vertex
 
 **Segment**:
-A stretch of the TrailGraph between two Junctions with no Junction inside: one or more OSM ways end to end, with their way ids, relation ids, `sac_scale`, surface, and full-resolution vertices. A short gap Segment bridges a joined dead-end tip. A Segment is walked either way.
+A stretch of the TrailGraph between two Junctions with no Junction inside: one or more OSM ways end to end, with their way ids, relation ids (none on a graded path no relation lists), `sac_scale`, surface, and full-resolution vertices. A short gap Segment bridges a joined dead-end tip. A Segment is walked either way.
 _Avoid_: edge, leg, stage (a stage is a relation), section
 
 **Link**:
@@ -49,7 +49,7 @@ A "connect here" offer: two nearby TrailGraph points, within the snap tolerance 
 _Avoid_: shortcut, snap, gap (a gap Segment is joined automatically)
 
 **ComposedHike**:
-A walk the Hiker draws from TrailGraph Segments, from a start Junction, Segment after Segment. It may reuse a Segment, and is measured as drawn, by distance walked: its facts come from the same rules as a DayHike's, applied to the vertices walked. It has a name the Hiker may change (proposed from the trails it walks longest and a named place at its start). It is not stored; it is shared through its URL, which names the OSM ways it walks from OSM node to OSM node, not Junctions or Segments, so the link opens the same walk after a rebuild, and it is not in the Catalog.
+A walk the Hiker draws from TrailGraph Segments, from a start Junction, Segment after Segment. It may reuse a Segment, and is measured as drawn, by distance walked: its facts come from the same rules as a DayHike's, applied to the vertices walked. It has a name the Hiker may change (proposed from the trails it walks longest, each at least 30 % of it (ADR-0037), and a named place at its start). It is not stored; it is shared through its URL, which names the OSM ways it walks from OSM node to OSM node, not Junctions or Segments, so the link opens the same walk after a rebuild, and it is not in the Catalog.
 _Avoid_: custom route, user route, composed DayHike
 
 **SuggestedLoop**:
