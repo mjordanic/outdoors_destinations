@@ -35,7 +35,7 @@ Trailheads and 0.2 per 1,000 km² is shaded (`dayhike coverage-map`, below).
   ([MIT](LICENSE)), and the open data it uses is credited
   ([Attribution](#attribution), [DATA-LICENSES.md](DATA-LICENSES.md)).
 - It covers Europe where OpenStreetMap maps hiking routes: dense in the Alps
-  and central Europe, thin in much of the east and south-east (the map above).
+  and central Europe, thin in much of the east and south-east.
 
 ## Install
 
