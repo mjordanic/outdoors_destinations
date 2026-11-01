@@ -1,0 +1,8 @@
+3194351	Ogulin	Ogulin	Ogulin,Огулин	45.26611	15.22861	P	PPL	HR		01				8216		300	Europe/Zagreb	2026-01-01
+3186886	Zagreb	Zagreb	Agram,Zagabria,Zagreb,Загреб	45.81444	15.97798	P	PPL	HR		01				698966		300	Europe/Zagreb	2026-01-01
+3186952	Zaprešić	Zapresic	Zapresic,Zaprešić	45.85639	15.80778	P	PPL	HR		01				19644		300	Europe/Zagreb	2026-01-01
+3186000	Vrh	Vrh		45.11	14.6	P	PPL	HR		01				400		300	Europe/Zagreb	2026-01-01
+3186001	Vrhnika	Vrhnika	Oberlaibach,Vrh,Vrhnika	45.96583	14.29361	P	PPL	SI		01				8462		300	Europe/Zagreb	2026-01-01
+2762372	Völkermarkt	Volkermarkt	Velikovec,Völkermarkt	46.66222	14.63444	P	PPL	AT		01				11139		300	Europe/Zagreb	2026-01-01
+2267057	Lisbon	Lisbon	Lisboa,Lisbon,Lissabon	38.71667	-9.13333	P	PPL	PT		01				517802		300	Europe/Zagreb	2026-01-01
+3186002	Velikovecki Breg	Velikovecki Breg		45.5	15.5	P	PPL	HR		01				20000		300	Europe/Zagreb	2026-01-01

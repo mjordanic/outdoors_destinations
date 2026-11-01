@@ -3,13 +3,14 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from dayhike import build_catalog, build_similarity, web
-from dayhike.serving import ServingData, export_serving
+from dayhike import build_catalog, build_similarity, serving, web
+from dayhike.serving import ServingData, export_places, export_serving
 from dayhike.similarity import CORE_MEASURES, FACILITIES_FLAG_COLUMNS, MEASURE_NAMES
 from dayhike.web import RESULTS, create_app
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
 RIDGE_WALK_ID = 1001
+SITE_PAGES = ("/", "/index.html", "/about.html", "/support.html", "/credits.html", "/privacy.html", "/terms.html")
 
 
 @pytest.fixture(scope="module")
@@ -49,9 +50,47 @@ def test_info_and_measures_describe_every_measure_in_groups(client: TestClient) 
     assert info["dayhikes"] == 4
     assert info["drive_time"] is True
     assert [m["name"] for m in body["measures"]] == list(MEASURE_NAMES)
-    assert {m["group"] for m in body["measures"]} == set(body["groups"])
+    assert {m["group"] for m in body["measures"]} == {g["name"] for g in body["groups"]}
     assert all(m["label"] and m["description"] for m in body["measures"])
     assert {m["name"] for m in body["measures"] if m["default_weight"] > 0} == set(CORE_MEASURES)
+
+
+def test_measures_start_with_a_plain_basic_set_and_group_the_rest_for_advanced_search(client: TestClient) -> None:
+    body = client.get("/api/measures").json()
+    groups = {m["name"]: m["group"] for m in body["measures"]}
+
+    assert body["groups"] == [
+        {"name": "basic", "label": "Main features"},
+        {"name": "effort", "label": "Effort and steepness"},
+        {"name": "altitude", "label": "Altitude"},
+        {"name": "scenery", "label": "Scenery"},
+        {"name": "facilities", "label": "Facilities"},
+        {"name": "trail", "label": "Trail"},
+        {"name": "water", "label": "Water"},
+        {"name": "weather", "label": "Weather"},
+    ]
+    assert {m["name"]: m["label"] for m in body["measures"] if m["group"] == "basic"} == {
+        "length": "Length",
+        "elevation_gain": "Climbing",
+        "highest": "Highest point",
+        "landcover": "Landscape",
+        "peak_summited": "Summit",
+        "temperature": "Typical temperature",
+        "waterside": "Lake or sea",
+    }
+    assert {group: sorted(name for name in groups if groups[name] == group) for group in (g["name"] for g in body["groups"][1:])} == {
+        "effort": ["climb_grade", "difficulty", "profile", "steepest_km"],
+        "altitude": ["lowest"],
+        "scenery": ["peaks_around", "viewpoint_along"],
+        "facilities": ["hut_along", "parking_trailhead", "restaurant_cafe_along", "restaurant_cafe_trailhead", "shelter_along"],
+        "trail": ["round_trip", "surface", "tarmac_approach"],
+        "water": ["dry_stretch", "water_count"],
+        "weather": ["precipitation", "solar_radiation", "southness"],
+    }
+    # Only the basic set counts by default, Summit left at 0 (ADR-0031).
+    assert {m["name"]: m["default_weight"] for m in body["measures"] if m["default_weight"] > 0} == dict.fromkeys(
+        ("length", "elevation_gain", "highest", "landcover", "temperature", "waterside"), 100.0
+    )
 
 
 def test_measures_say_how_a_wish_value_is_typed_in(client: TestClient) -> None:
@@ -92,6 +131,46 @@ def test_every_measure_names_the_data_its_fact_comes_from(client: TestClient) ->
             assert "OpenStreetMap" in source, name
 
 
+def test_an_export_sampled_from_copernicus_names_it_and_not_fabdem(tmp_path: Path, monkeypatch) -> None:
+    from test_dem import _write_constant_tif, _write_grassland
+
+    from dayhike import sample_dem
+
+    path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, path)
+    dem = tmp_path / "dem"
+    dem.mkdir()
+    _write_constant_tif(
+        dem / "Copernicus_DSM_COG_10_N45_00_E015_00_DEM.tif", west=14.99, south=44.99, east=16.01, north=46.01, z=900.0
+    )
+    sample_dem(path, dem, landcover_dir=_write_grassland(tmp_path))
+    build_similarity(path, dem)
+    smoothed = []
+    drawn = serving.drawn_profile
+    monkeypatch.setattr(serving, "drawn_profile", lambda *walk, smooth: smoothed.append(smooth) or drawn(*walk, smooth=smooth))
+    client = TestClient(create_app(ServingData(export_serving(path, tmp_path / "web-serving")), None))
+
+    attribution = client.get("/api/info").json()["attribution"]
+    assert "Airbus" in attribution["copernicus"] and "fabdem" not in attribution
+    body = client.get("/api/measures").json()
+    sources = {m["name"]: m["source"] for m in body["measures"]}
+    help_text = " ".join(section["text"] for section in body["score_help"]["sections"])
+    for name in ELEVATION_MEASURES:
+        assert "Copernicus GLO-30" in sources[name] and "FABDEM" not in sources[name], name
+    assert "Copernicus GLO-30" in help_text and "FABDEM" not in help_text
+    assert "FABDEM" not in str(body["measures"])
+    assert smoothed and all(smoothed)  # its ElevationProfiles are drawn smoothed (ADR-0030)
+    # The credits page and the home footer credit the map in use, with its licence notice.
+    credits = client.get("/credits.html").text
+    footer = client.get("/").text.split("<footer", 1)[1]
+    for page in (credits, footer):
+        assert "GLO-30" in page and "FABDEM" not in page and "CC BY-NC-SA" not in page
+    terms = client.get("/terms.html").text
+    assert "Copernicus DEM licence" in terms and "FABDEM" not in terms and "CC BY-NC-SA" not in terms
+    assert "© Airbus Defence and Space GmbH 2014-2018" in credits and "do not incur any liability" in credits
+    assert 'href="https://doi.org/10.5270/ESA-c5d3d65"' in credits
+
+
 def test_every_osm_flag_says_two_hikes_without_it_are_not_compared(client: TestClient) -> None:
     descriptions = {m["name"]: m["description"] for m in client.get("/api/measures").json()["measures"]}
 
@@ -110,8 +189,8 @@ def test_the_score_explanation_says_what_a_score_means_and_how_it_is_made(client
     # The rarity rank (ADR-0026): the share of random pairs less alike, a rare match counting for more.
     assert "Share of random hike pairs less alike" in help_["measure"]
     assert "0.9 means only 1 pair in 10" in help_["measure"]
-    assert "about 0.44" in help_["overall"]
-    assert "0.16 on waterside" in text and "84 %" in text  # two dry hikes: identical, but it tells little
+    assert "about 0.41" in help_["overall"] and "0.72 beats 99" in help_["overall"]  # under the basic set (ADR-0031)
+    assert "0.16 on Lake or sea" in text and "84 %" in text  # two dry hikes: identical, but it tells little
     assert "not compared" in text and "0.95" in text  # a shared absence; both passing a hut
     assert "What does 0.1 mean" in " ".join(section["title"] for section in help_["sections"])
     assert "Kattegat" in text and "0.10" in text
@@ -174,6 +253,7 @@ def test_rank_returns_scored_results_with_every_measure(client: TestClient) -> N
     assert set(body["results"][0]["measures"]) == set(MEASURE_NAMES)
     assert body["reachable"] is None and body["results"][0]["drive_hours"] is None
     assert set(body["weights"]) == set(CORE_MEASURES)
+    assert body["loops"] is False  # SuggestedLoops only on request (ADR-0028)
 
 
 def test_a_wish_ranks_hikes_by_the_values_typed_in(client: TestClient) -> None:
@@ -327,6 +407,7 @@ def test_info_gives_the_trailhead_box_for_the_swapped_coordinates_warning(client
         ({"seed": 999}, 404),
         ({"seed": RIDGE_WALK_ID, "origin": {"lat": 45, "lon": 15}}, 400),
         ({"seed": RIDGE_WALK_ID, "origin": {"lat": 45, "lon": 15}, "max_hours": 5}, 422),
+        ({"seed": RIDGE_WALK_ID, "loops": "sometimes"}, 422),
     ],
 )
 def test_rank_refuses_bad_queries(client: TestClient, body: dict, status: int) -> None:
@@ -341,7 +422,7 @@ def test_drive_filter_keeps_only_reachable_hikes_with_their_hours(
         json={"seed": RIDGE_WALK_ID, "origin": {"lat": 45.1, "lon": 15.1}, "max_hours": 2},
     ).json()
 
-    assert matrix.calls == 2  # the Trailheads, then the starts of SuggestedLoops (ADR-0020)
+    assert matrix.calls == 1  # the Trailheads; the starts of SuggestedLoops only on request (ADR-0028)
     assert body["reachable"] == 3  # the Seed's Trailhead counts; 1003 is unreachable
     assert sorted(r["id"] for r in body["results"]) == [1002, 1007]
     assert all(r["drive_hours"] == 1.0 for r in body["results"])
@@ -361,7 +442,7 @@ def test_a_stalled_drive_service_gives_503_and_frees_the_ranking(
     assert client.post("/api/rank", json=query).status_code == 503
     response = client.post("/api/rank", json=query)
     assert response.status_code == 200
-    assert matrix.calls == 2
+    assert matrix.calls == 1
 
 
 def test_drive_filter_off_without_a_drive_client(data: ServingData) -> None:
@@ -405,6 +486,77 @@ def test_api_reads_answer_head_like_get(client: TestClient) -> None:
         assert response.content == b""
 
 
+METADATA_READS = ("/api/info", "/api/measures")
+API_READS = (
+    "/api/search?q=ridge",
+    f"/api/hikes/{RIDGE_WALK_ID}",
+    "/api/hikes?south=45&west=15&north=45.1&east=15.1",
+)
+
+
+def test_api_reads_are_cached_and_revalidate_by_etag(client: TestClient) -> None:
+    for path in (*METADATA_READS, *API_READS):
+        response = client.get(path)
+        expected = "no-cache" if path in METADATA_READS else "public, max-age=3600"
+        assert response.headers["cache-control"] == expected, path
+        etag = response.headers["etag"]
+
+        again = client.get(path, headers={"If-None-Match": etag})
+        assert again.status_code == 304, path
+        assert again.content == b""
+        assert again.headers["etag"] == etag
+        assert client.get(path, headers={"If-None-Match": 'W/"other"'}).status_code == 200
+
+
+def test_a_redeploy_with_new_code_or_drive_time_settings_changes_the_etag(
+    data: ServingData, matrix: Matrix, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def etag() -> str:
+        return TestClient(create_app(data, lambda max_hours: matrix)).get("/api/info").headers["etag"]
+
+    before = etag()
+    assert TestClient(create_app(data)).get("/api/info").headers["etag"] != before
+
+    monkeypatch.setattr(web, "BUILD", "another build")
+    assert etag() != before
+
+    monkeypatch.undo()
+    monkeypatch.setattr(web, "MAX_DRIVE_HOURS", 3.0)
+    assert etag() != before
+
+
+def test_refusals_rankings_and_health_are_not_cached(client: TestClient) -> None:
+    for response in (
+        client.get("/api/hikes/999999"),
+        client.get("/api/hikes?south=46&west=15&north=45&east=16"),
+        client.get("/api/search"),
+        client.post("/api/rank", json={"seed": RIDGE_WALK_ID}),
+        client.get("/api/health"),
+    ):
+        assert "etag" not in response.headers, response.url
+        assert "max-age" not in response.headers.get("cache-control", ""), response.url
+
+
+def test_the_page_revalidates_every_time_so_a_redeploy_shows_at_once(client: TestClient) -> None:
+    for path in (*SITE_PAGES, "/app.js", "/style.css"):
+        response = client.get(path)
+        assert response.headers["cache-control"] == "no-cache", path
+
+        again = client.get(path, headers={"If-None-Match": response.headers["etag"]})
+        assert again.status_code == 304, path
+
+
+def test_api_json_and_the_page_are_gzipped_for_a_browser_that_takes_it(client: TestClient) -> None:
+    for path in ("/api/measures", "/app.js", "/"):
+        gzipped = client.get(path, headers={"Accept-Encoding": "gzip"})
+        plain = client.get(path, headers={"Accept-Encoding": "identity"})
+
+        assert gzipped.headers["content-encoding"] == "gzip", path
+        assert gzipped.num_bytes_downloaded < len(plain.content) / 2, path
+        assert gzipped.content == plain.content  # the client unzips it
+        assert "content-encoding" not in plain.headers
+
+
 def test_the_page_and_its_assets_are_served(client: TestClient) -> None:
     page = client.get("/")
 
@@ -412,8 +564,162 @@ def test_the_page_and_its_assets_are_served(client: TestClient) -> None:
     assert "Find similar" in page.text
     for asset in ("app.js", "style.css", "coverage.svg", "mark.svg"):
         assert client.get(f"/{asset}").status_code == 200
-    for credit in ("OpenStreetMap", "ESA WorldCover", "CHELSA", "FABDEM", "Copernicus", "Natural Earth", "Valhalla", "Leaflet"):
-        assert credit in page.text
+
+
+def test_every_site_page_has_the_home_link_and_the_footer_navigation(client: TestClient) -> None:
+    for path in SITE_PAGES:
+        page = client.get(path)
+        assert page.status_code == 200, path
+        assert page.headers["content-type"].startswith("text/html"), path
+        assert '<a class="home" href="/">GoFindMeAHike</a>' in page.text, path
+        for link in (
+            'href="about.html"', 'href="support.html"', 'href="credits.html"', 'href="privacy.html"', 'href="terms.html"'
+        ):
+            assert link in page.text, (path, link)
+
+
+def test_the_about_page_says_who_runs_the_site_and_where_its_code_is(client: TestClient) -> None:
+    about = client.get("/about.html").text
+
+    assert "Run by the maintainer of this open-source project" in about
+    assert 'href="https://github.com/mjordanic/outdoors_destinations/issues"' in about
+    assert "free and non-commercial" in about
+    assert 'href="https://github.com/mjordanic/outdoors_destinations"' in about
+    assert 'href="https://github.com/mjordanic/outdoors_destinations/blob/main/LICENSE">MIT licence</a>' in about
+
+
+def test_the_terms_page_points_contact_to_the_repository_issues(client: TestClient) -> None:
+    terms = client.get("/terms.html").text
+
+    assert "run by the maintainer of this open-source project" in terms
+    assert 'href="https://github.com/mjordanic/outdoors_destinations/issues"' in terms
+
+
+def test_no_served_static_file_names_the_owner(data: ServingData) -> None:
+    static = Path(web.__file__).parent / "static"
+    paths = [
+        "/" + path.relative_to(static).as_posix()
+        for path in static.rglob("*")
+        if path.is_file() and path.suffix in (".html", ".js", ".css", ".svg")
+    ]
+    assert paths
+    served = TestClient(create_app(data, goatcounter="gofindmeahike", kofi="gofindmeahike"))
+    for path in paths:
+        response = served.get(path)
+        assert response.status_code == 200, path
+        # the repository's GitHub address is public and is how to reach the maintainer
+        text = response.text.lower().replace("github.com/mjordanic/", "")
+        for personal in ("mislav", "jordanic", "jordanić", "zagreb", "@gmail.com"):
+            assert personal not in text, (path, personal)
+
+
+def test_the_support_page_links_no_tip_jar_until_a_ko_fi_handle_is_set(data: ServingData) -> None:
+    unset = TestClient(create_app(data)).get("/support.html").text
+    assert "ko-fi.com" not in unset
+    assert "not set up yet" in unset
+    assert "only cover hosting" in unset
+    assert "The link opens Ko-fi" not in unset
+
+    support = TestClient(create_app(data, kofi="gofindmeahike")).get("/support.html").text
+    assert '<a href="https://ko-fi.com/gofindmeahike">' in support
+    assert support.count("ko-fi.com") == 1  # a plain link: no widget script
+    assert "not set up yet" not in support
+    assert "The link opens Ko-fi, which takes the tip" in support
+
+
+def test_the_credits_page_credits_every_source_with_the_fabdem_dataset(client: TestClient) -> None:
+    credits = client.get("/credits.html").text
+
+    for credit in (
+        "OpenStreetMap", "ODbL", "Geofabrik", "Nominatim", "ESA WorldCover", "CHELSA", "FABDEM", "Copernicus",
+        "Natural Earth", "Valhalla", "Leaflet",
+    ):
+        assert credit in credits, credit
+    assert 'href="https://doi.org/10.5523/bris.s5hqmjcdj8yo2ibzi9b4ew3sn"' in credits
+    assert 'href="https://doi.org/10.1088/1748-9326/ac4d4f"' in credits
+
+
+def test_the_home_page_footer_is_a_short_credit_line_to_the_full_credits(client: TestClient) -> None:
+    home = client.get("/").text
+    footer = home[home.index("<footer"):]
+
+    for credit in ("OpenStreetMap", "ODbL", "FABDEM", "CC BY-NC-SA 4.0", 'href="credits.html">full credits</a>'):
+        assert credit in footer, credit
+    assert "Climatologies" not in home  # the full references are on the credits page
+
+
+def test_the_privacy_page_says_who_runs_the_site_what_is_kept_who_gets_it_and_where_to_complain(
+    client: TestClient,
+) -> None:
+    privacy = client.get("/privacy.html").text
+
+    assert "The site is run by the maintainer of this open-source project" in privacy
+    assert "Art. 13" not in privacy and "controller" not in privacy
+    assert 'href="https://github.com/mjordanic/outdoors_destinations/issues"' in privacy
+    for processed in ("IP address", "user agent", "30 days", "access log", "rate limit", "not stored"):
+        assert processed in privacy, processed
+    for recipient in ("Google Cloud", "OpenStreetMap Foundation", "Nominatim", "GitHub"):
+        assert recipient in privacy, recipient
+    assert "Art. 6(1)(f)" in privacy
+    assert "outside the EU" in privacy
+    assert "data protection authority" in privacy
+    assert "no cookies" in privacy and "no consent banner" in privacy
+
+
+def test_the_privacy_page_names_goatcounter_and_ko_fi_only_once_they_are_set(data: ServingData) -> None:
+    unset = TestClient(create_app(data)).get("/privacy.html").text
+    assert "GoatCounter" not in unset
+    assert "Ko-fi" not in unset
+
+    privacy = TestClient(create_app(data, goatcounter="gofindmeahike", kofi="gofindmeahike")).get("/privacy.html").text
+    assert "GoatCounter" in privacy
+    assert "#toggle-goatcounter" in privacy  # the one thing its script may store, and only when asked
+    assert "Ko-fi" in privacy
+    assert "after you click" in privacy
+
+
+def test_the_terms_page_warns_hikers_and_restricts_no_reuse_beyond_the_data_licences(client: TestClient) -> None:
+    terms = client.get("/terms.html").text
+
+    for warning in ("crowd-sourced", "estimates", "closures", "weather", "navigation", "112", "HGSS", "SAC"):
+        assert warning in terms, warning
+    for licence in ("ODbL", "CC BY-NC-SA 4.0", "MIT licence"):
+        assert licence in terms, licence
+    assert "no further restriction" in terms
+    assert "scrap" not in terms.lower()
+
+
+def test_no_response_sets_a_cookie(data: ServingData) -> None:
+    client = TestClient(create_app(data, goatcounter="gofindmeahike", kofi="gofindmeahike"))
+    for path in (*SITE_PAGES, "/app.js", "/api/info", "/api/measures"):
+        assert "set-cookie" not in client.get(path).headers, path
+
+
+def test_no_page_loads_analytics_while_no_goatcounter_code_is_set(client: TestClient) -> None:
+    for path in SITE_PAGES:
+        page = client.get(path).text
+        assert "data-goatcounter" not in page and "count.js" not in page, path
+
+
+def test_every_page_counts_with_the_self_hosted_goatcounter_script_once_a_code_is_set(data: ServingData) -> None:
+    client = TestClient(create_app(data, goatcounter="gofindmeahike"))
+    tag = (
+        '<script data-goatcounter="https://gofindmeahike.goatcounter.com/count"'
+        ' async src="vendor/goatcounter/count.js"></script>'
+    )
+
+    for path in SITE_PAGES:
+        assert client.get(path).text.count(tag) == 1, path
+    assert client.get("/vendor/goatcounter/count.js").status_code == 200
+    assert client.get("/vendor/goatcounter/LICENSE").status_code == 200
+
+
+@pytest.mark.parametrize("setting", [{"goatcounter": 'x" onload="alert(1)'}, {"goatcounter": ""}, {"kofi": "a/b"}])
+def test_a_goatcounter_code_or_ko_fi_handle_that_is_not_a_plain_name_is_refused(
+    data: ServingData, setting: dict
+) -> None:
+    with pytest.raises(ValueError):
+        create_app(data, **setting)
 
 
 def test_round_trip_is_left_out_while_every_hike_returns_to_its_start(client: TestClient) -> None:
@@ -444,3 +750,89 @@ def test_a_search_hit_says_whether_the_hike_ends_at_its_start(client: TestClient
         one_way = client.get(f"/api/hikes/{hit['id']}", params={"return_to_start": False}).json()
         assert hit["round_trip"] == one_way["facts"]["round_trip"]
         assert hit["length_m"] == one_way["facts"]["length_m"]
+
+
+def test_place_search_answers_from_the_export_and_is_credited(tmp_path: Path, matrix: Matrix) -> None:
+    path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, path)
+    build_similarity(path, tmp_path / "dem")
+    cities = Path(__file__).parent / "fixtures" / "cities1000.txt"
+    placed = TestClient(create_app(ServingData(export_serving(path, tmp_path / "web", geonames_path=cities)), lambda h: matrix))
+
+    info = placed.get("/api/info").json()
+    assert info["place_search"] is True
+    assert "GeoNames" in info["attribution"]["geonames"]
+    assert placed.get("/api/place", params={"q": "zag", "limit": 1}).json() == {
+        "results": [{"name": "Zagreb", "country": "HR", "lat": 45.81444, "lon": 15.97798, "population": 698966}]
+    }
+    assert placed.get("/api/place", params={"q": "x" * 101}).status_code == 422
+    assert placed.head("/api/place", params={"q": "zag"}).status_code == 200
+    privacy = placed.get("/privacy.html").text
+    assert "nominatim.org" not in privacy  # place names are looked up on this server
+    assert "the place search" in privacy  # a typed place name is in the request URL, so in the logs
+    assert "looked up on this site's server" in privacy and "recipients below" not in privacy
+    assert "OpenStreetMap Foundation</strong> (UK) serves the map tiles" in privacy
+
+
+def test_adding_places_to_an_export_changes_the_etag(tmp_path: Path) -> None:
+    path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, path)
+    build_similarity(path, tmp_path / "dem")
+    out = export_serving(path, tmp_path / "web")
+
+    def etag() -> str:
+        return TestClient(create_app(ServingData(out))).get("/api/info").headers["etag"]
+
+    before = etag()
+    export_places(Path(__file__).parent / "fixtures" / "cities1000.txt", out)
+    assert etag() != before
+
+
+def test_an_export_without_places_says_so(client: TestClient) -> None:
+    info = client.get("/api/info").json()
+
+    assert info["place_search"] is False and "geonames" not in info["attribution"]
+    assert "Place search: <a href=\"https://nominatim.org/\">Nominatim</a>" in client.get("/credits.html").text
+    assert client.get("/api/place", params={"q": "zag"}).status_code == 404
+    privacy = client.get("/privacy.html").text
+    assert "sends the name and your IP address to the OpenStreetMap Foundation's" in privacy
+    assert "looked up with Nominatim" in privacy and "the place search" not in privacy
+
+
+SHELL = "https://gofindmeahike.example"  # a loading shell on a static host, calling the API from its own origin
+PREFLIGHT = {"Origin": SHELL, "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "content-type"}
+
+
+def test_no_other_site_may_call_the_api_while_no_cors_origin_is_set(data: ServingData) -> None:
+    for client in (TestClient(create_app(data)), TestClient(create_app(data, cors_origins=("https://other.example",)))):
+        assert "access-control-allow-origin" not in client.get("/api/info", headers={"Origin": SHELL}).headers
+        assert "access-control-allow-origin" not in client.options("/api/rank", headers=PREFLIGHT).headers
+
+
+def test_a_cors_preflight_from_the_shell_does_not_use_up_the_ranking_budget(data: ServingData) -> None:
+    client = TestClient(create_app(data, rank_rate=1, cors_origins=(SHELL,)))
+
+    for _ in range(3):
+        answered = client.options("/api/rank", headers=PREFLIGHT)
+        assert answered.status_code == 200
+        assert answered.headers["access-control-allow-origin"] == SHELL
+    ranked = client.post("/api/rank", json={"seed": RIDGE_WALK_ID}, headers={"Origin": SHELL})
+    refused = client.post("/api/rank", json={"seed": RIDGE_WALK_ID}, headers={"Origin": SHELL})
+
+    assert ranked.status_code == 200 and ranked.headers["access-control-allow-origin"] == SHELL
+    assert refused.status_code == 429 and refused.headers["access-control-allow-origin"] == SHELL  # the shell reads why
+
+
+def test_the_rate_limiter_forgets_an_idle_client_within_a_window() -> None:
+    now = [0.0]
+    limiter = web.RateLimiter(limit=2, window_s=60.0, clock=lambda: now[0])
+    assert limiter.allow("1.2.3.4") and limiter.allow("1.2.3.4") and not limiter.allow("1.2.3.4")
+    now[0] = 30.0
+    assert limiter.allow("5.6.7.8")
+    assert len(limiter) == 2
+    now[0] = 61.0
+    assert limiter.allow("5.6.7.8")
+    assert len(limiter) == 1
+    now[0] = 121.0
+    assert limiter.allow("9.9.9.9")
+    assert len(limiter) == 1

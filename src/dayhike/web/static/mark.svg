@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Two mountains with a trail">
-  <title>DayHike mark</title>
+  <title>GoFindMeAHike mark</title>
   <circle cx="32" cy="32" r="31" fill="#e8f1ea"/>
   <circle cx="46" cy="17" r="5" fill="#e9b949"/>
   <path d="M4 50 L24 18 L33 32 L40 23 L60 50 Z" fill="#2f7d4f"/>
