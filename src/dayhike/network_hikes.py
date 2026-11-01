@@ -4,7 +4,7 @@ A node network maps its trails as one relation per signpost-to-signpost leg
 (``network:type=node_network``). A leg is not a DayHike, but a chain of legs
 can be a day's outing. ``leg_graph`` joins the legs' main walks at their
 signposts. ``starts`` are signposts near parking or a place, one per place.
-``candidates`` lists every day-sized chain from a start. ``select`` keeps a
+``candidates`` lists day-sized chains from a start. ``select`` keeps a
 few distinct ones per start, loops first, and drops Twins of each other and
 of relation DayHikes. ``chain_name`` names them from signposts, destinations
 and places. ``network_hikes`` runs all of it, pure: ingest wiring is apart.
