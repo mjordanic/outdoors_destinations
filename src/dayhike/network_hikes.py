@@ -7,7 +7,8 @@ signposts. ``starts`` are signposts near parking or a place, one per place.
 ``candidates`` lists day-sized chains from a start. ``select`` keeps a
 few distinct ones per start, loops first, and drops Twins of each other and
 of relation DayHikes. ``chain_name`` names them from signposts, destinations
-and places. ``network_hikes`` runs all of it, pure: ingest wiring is apart.
+and places. ``network_hikes`` runs all of it, pure; ``network_source`` is the
+built-hike source ingest runs it as (ADR-0038, ADR-0039).
 """
 
 from __future__ import annotations
@@ -16,13 +17,16 @@ import math
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import cached_property
 
 import numpy as np
 from sklearn.neighbors import BallTree
 
+from dayhike.built import BuildContext, BuiltWalk
 from dayhike.catalog import (
     EARTH_RADIUS_M,
     GAP_JOIN_M,
+    KIND_RELATION,
     PLACE_RADIUS_M,
     MainWalk,
     NamedPoints,
@@ -49,6 +53,9 @@ START_CLUSTER_M = 1_000.0  # signposts this close to a start's first one start w
 DESTINATION_M = 200.0  # a line whose end is this close to a named Peak, Hut, Viewpoint or lake goes there
 NETWORK_TARGET_M = 10_000.0  # a day's walk: of two chains alike otherwise, the one nearer this length is better
 GUIDEPOST_M = 50.0  # a named guidepost this close names a signpost its legs do not
+# A relation DayHike that starts farther than this from every leg is no chain's Twin:
+# a Twin lies 80 % on a chain of at most NETWORK_MAX_M, so it is at most NETWORK_MAX_M / 0.8 long.
+TWIN_REACH_M = 2 * NETWORK_MAX_M
 
 
 @dataclass(frozen=True)
@@ -72,6 +79,17 @@ class LegGraph:
 
     legs: tuple[Leg, ...]
     signposts: tuple[Point, ...]
+
+    @cached_property
+    def incident(self) -> dict[int, list[int]]:
+        """Per signpost, the legs (indexes into ``legs``) to another signpost from it, in leg order."""
+        incident: dict[int, list[int]] = {}
+        for index, leg in enumerate(self.legs):
+            a, b = leg.ends
+            if a != b:
+                incident.setdefault(a, []).append(index)
+                incident.setdefault(b, []).append(index)
+        return incident
 
 
 @dataclass(frozen=True)
@@ -108,6 +126,48 @@ class Chain:
     @property
     def loop(self) -> bool:
         return self.signposts[0] == self.signposts[-1]
+
+
+def network_source(context: BuildContext) -> list[BuiltWalk]:
+    """The NetworkHikes of what ingest read, as built walks: ``network_hikes``
+    over every ``network:type=node_network`` relation (ingest reads only
+    hiking and foot routes), started at its parking and places, going to its
+    named Peaks, Huts, Viewpoints and lakes, its signposts also named by its
+    guideposts, none a Twin of a relation DayHike that starts within
+    ``TWIN_REACH_M`` of a leg."""
+    snapshot = context.snapshot
+    legs = [relation for relation in snapshot.relations if relation.tags.get("network:type") == "node_network"]
+    hikes = network_hikes(
+        legs,
+        snapshot.ways,
+        snapshot.nodes,
+        snapshot.access_points,
+        snapshot.places,
+        snapshot.destinations,
+        snapshot.guideposts,
+        relations=_relation_walks(context, legs),
+    )
+    return [BuiltWalk("network", hike.name, hike.vertices, hike.way_ids, hike.parts) for hike in hikes]
+
+
+def _relation_walks(context: BuildContext, legs: Sequence[OsmRelation]) -> list[list[Point]]:
+    # The main walks of the relation DayHikes that start near a leg: only those can be a chain's Twin.
+    snapshot = context.snapshot
+    ends = [
+        snapshot.nodes[node_ids[0]]
+        for leg in legs
+        for kind, member_id in leg.members
+        if kind == "way" and member_id in snapshot.ways
+        and (node_ids := snapshot.ways[member_id].node_ids) and node_ids[0] in snapshot.nodes
+    ]
+    hikes = [hike for hike in context.dayhikes if hike.kind == KIND_RELATION]
+    if not ends or not hikes:
+        return []
+    trailheads = np.radians([(hike.trailhead.latitude, hike.trailhead.longitude) for hike in hikes])
+    distance, _ = BallTree(np.radians(ends), metric="haversine").query(trailheads, k=1)
+    near = {hike.id for hike, d in zip(hikes, distance[:, 0]) if d * EARTH_RADIUS_M <= TWIN_REACH_M}
+    walks = (context.main_walk(relation) for relation in snapshot.relations if relation.id in near)
+    return [[point for _, point in walk.vertices] for walk in walks if len(walk.vertices) >= 2]
 
 
 def network_hikes(
@@ -253,15 +313,29 @@ def starts(
         distance, _ = tree.query(np.radians(graph.signposts), k=1)
         near = [was or float(d[0]) * EARTH_RADIUS_M <= radius_m for was, d in zip(near, distance)]
     found: list[list[int]] = []
+    # Starts by grid cell of their first signpost; a cell is START_CLUSTER_M wide or more
+    # everywhere, so a start within START_CLUSTER_M lies in the cell or one next to it.
+    cell_lat = math.degrees(START_CLUSTER_M / EARTH_RADIUS_M)
+    widest = max((abs(lat) for lat, _ in graph.signposts), default=0.0) + cell_lat
+    cell_lon = cell_lat / math.cos(math.radians(min(widest, 89.0)))
+    cells: dict[tuple[int, int], list[int]] = {}
     for signpost, is_near in enumerate(near):
         if not is_near:
             continue
         point = graph.signposts[signpost]
-        for members in found:
-            if _haversine_m(*point, *graph.signposts[members[0]]) <= START_CLUSTER_M:
-                members.append(signpost)
-                break
+        row, column = math.floor(point[0] / cell_lat), math.floor(point[1] / cell_lon)
+        nearby = (
+            start
+            for r in (row - 1, row, row + 1)
+            for c in (column - 1, column, column + 1)
+            for start in cells.get((r, c), ())
+            if _haversine_m(*point, *graph.signposts[found[start][0]]) <= START_CLUSTER_M
+        )
+        first = min(nearby, default=None)
+        if first is not None:
+            found[first].append(signpost)
         else:
+            cells.setdefault((row, column), []).append(len(found))
             found.append([signpost])
     return [Start(tuple(members), graph.signposts[members[0]]) for members in found]
 
@@ -273,12 +347,7 @@ def candidates(graph: LegGraph, start: Start) -> list[Chain]:
     at most ``NETWORK_EXPANSIONS`` legs, shared equally by every first leg
     from every start signpost, in order, each passing on what it leaves unused.
     """
-    incident: dict[int, list[int]] = {}
-    for index, leg in enumerate(graph.legs):
-        a, b = leg.ends
-        if a != b:
-            incident.setdefault(a, []).append(index)
-            incident.setdefault(b, []).append(index)
+    incident = graph.incident
     found: list[Chain] = []
     loops_seen: set[frozenset[int]] = set()
     roots = [(first, index) for first in start.signposts for index in incident.get(first, ())]
