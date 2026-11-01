@@ -26,6 +26,9 @@ Trailheads and 0.2 per 1,000 km² is shaded (`dayhike coverage-map`, below).
 
 - Start from a hike you liked, and it finds the ones most like it. No hike in
   mind? Describe the one you want.
+- Day hikes and multi-day tours: routes of any length, long tours also cut
+  into day stages of 8–25 km (DayStages), and hikes joined from signpost
+  networks (NetworkHikes). Over about 25 km is usually more than a day.
 - It weighs the weather too: the typical temperature in the month you pick,
   and under Advanced search rain and sunshine, alongside length, climbing and
   landscape.

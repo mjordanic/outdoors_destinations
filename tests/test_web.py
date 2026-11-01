@@ -693,7 +693,10 @@ def test_the_about_page_says_plainly_why_a_hiker_would_use_the_site(client: Test
     about = client.get("/about.html").text
     why = about[about.index("<h3>Why use it</h3>") : about.index("<h3>Who runs it</h3>")]
 
-    for point in ("a hike you liked", "weather", "Advanced search", "how much each one matters", "no account", "MIT"):
+    for point in (
+        "a hike you liked", "weather", "Advanced search", "how much each one matters", "no account", "MIT",
+        "multi-day tours",
+    ):  # fmt: skip
         assert point in why, point
     assert 'href="credits.html"' in why
     assert "Europe" in why and "thin" in why  # coverage, stated as it is
