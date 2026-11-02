@@ -728,6 +728,7 @@ def test_the_about_page_shows_the_wordmark_and_the_tagline(client: TestClient) -
     assert 'alt="HikesAlike: Hikes like the ones you love."' in about
     assert client.get("/wordmark.svg").status_code == 200
     assert '<p class="tagline">Hikes like the ones you love.</p>' in about
+    assert ">Hike catalog</a>" in about and "DayHike catalog" not in about
 
 
 def test_the_about_page_says_who_runs_the_site_and_where_its_code_is(client: TestClient) -> None:
