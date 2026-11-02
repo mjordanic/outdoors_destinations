@@ -37,12 +37,12 @@ CHUNK = 2_000
 # europe-261031.osm.pbf, osmosis_replication_timestamp 2026-10-31T21:23:06Z.
 RECORDED_SNAPSHOT_BYTES = 35_354_652_634
 RECORDED_SNAPSHOT_SHA256 = "6e2bfbfd7756ece175d5d879f5eb0b1f11536f6131260b0b234cb6840a89cd82"
-# These counts come from the pre-ADR-0033 rules; they are re-recorded from the
-# shared rebuild on a fresh snapshot (plan step R1).
+# The ingest report of the shared rebuild on that snapshot: ADR-0033/0034 rules, NetworkHikes
+# (55,558) and DayStages (33,646) built; ``kept`` counts them, the named_* counts only relations.
 RECORDED_INGEST_REPORT = {
-    "kept": 135_588, "dropped_unnamed": 0, "dropped_length": 77_561, "dropped_container": 6_234,
-    "named_osm_name": 98_845, "named_osm_ref": 21_692, "named_synthetic": 90,
-    "dropped_node_network": 26_026, "named_from_to": 11_058, "named_place": 3_903,
+    "kept": 250_160, "dropped_unnamed": 0, "dropped_length": 104_311, "dropped_container": 3_740,
+    "named_osm_name": 122_133, "named_osm_ref": 22_886, "named_synthetic": 107,
+    "dropped_node_network": 43_351, "named_from_to": 11_572, "named_place": 4_258,
 }  # fmt: skip
 # Tables and columns of a Catalog and its GeometryStore after ingest, the three
 # sample steps and build-similarity (tests/test_pipeline_rebuild.py checks it).
