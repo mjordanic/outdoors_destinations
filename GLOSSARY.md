@@ -1,4 +1,4 @@
-# DayHike catalog
+# Hike catalog
 
 A local Catalog of DayHikes built from OpenStreetMap, ranked by similarity to Seed DayHikes the hiker already knows. Drive time is a query-time filter, not a property of a hike.
 
