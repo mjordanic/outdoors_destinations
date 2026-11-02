@@ -567,13 +567,13 @@ def test_a_feature_neither_hike_has_mapped_shows_a_dash_and_says_it_is_not_compa
 def test_the_logo_takes_a_hiker_home_to_a_fresh_page(browser, server) -> None:
     page = open_page(browser, server, Api({}), hash="#hike=1002")
     page.get_by_text("Chosen: Valley Path").wait_for()
-    assert page.get_by_role("link", name="GoFindMeAHike").get_attribute("href") == "/"
+    assert page.get_by_role("link", name="HikesAlike").get_attribute("href") == "/"
 
     page.locator(".top .mark").click()
     page.wait_for_selector(".weight", state="attached")
 
     assert page.url == f"{server}/"
-    assert page.title() == "GoFindMeAHike"
+    assert page.title() == "HikesAlike"
     assert page.locator("#liked-name").inner_text() == "No hike chosen yet."
 
 
@@ -791,7 +791,7 @@ def test_a_server_that_turns_the_page_away_says_the_site_is_paused(browser, serv
     page.route(f"{server}/api/info", lambda route: route.fulfill(status=403, body="Forbidden"))
     page.goto(server)
 
-    page.get_by_text("GoFindMeAHike is paused for now").wait_for()
+    page.get_by_text("HikesAlike is paused for now").wait_for()
     assert page.locator("#loading").is_visible()
 
 
@@ -817,7 +817,7 @@ def test_an_api_on_another_origin_whose_answer_the_page_cannot_read_says_paused_
     page.route(f"{shell_origin}/", shell)
     page.goto(shell_origin)
 
-    page.get_by_text("GoFindMeAHike is paused or busy").wait_for()
+    page.get_by_text("HikesAlike is paused or busy").wait_for()
     assert not page.get_by_text("its owner has switched the server off").is_visible()
 
 

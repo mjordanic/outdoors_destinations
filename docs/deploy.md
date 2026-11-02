@@ -1,6 +1,6 @@
 # Deploying the web demo to Google Cloud Run
 
-The GoFindMeAHike demo is one container: the FastAPI app (`dayhike serve`) and a
+The HikesAlike demo is one container: the FastAPI app (`dayhike serve`) and a
 highways-only Valhalla for the drive-time filter, with the serving export baked
 into the image. Nothing is written at run time; Cloud Run scales it to zero
 when idle and starts it again on the next visit (a cold start of about 10-12 s).

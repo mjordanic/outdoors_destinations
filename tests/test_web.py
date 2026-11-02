@@ -672,11 +672,62 @@ def test_every_site_page_has_the_home_link_and_the_footer_navigation(client: Tes
         page = client.get(path)
         assert page.status_code == 200, path
         assert page.headers["content-type"].startswith("text/html"), path
-        assert '<a class="home" href="/">GoFindMeAHike</a>' in page.text, path
+        assert '<a class="home" href="/">HikesAlike</a>' in page.text, path
         for link in (
             'href="about.html"', 'href="support.html"', 'href="credits.html"', 'href="privacy.html"', 'href="terms.html"'
         ):
             assert link in page.text, (path, link)
+
+
+def test_every_site_page_carries_the_hikesalike_name_icons_and_social_preview(client: TestClient) -> None:
+    for path in SITE_PAGES:
+        text = client.get(path).text
+        title = text[text.index("<title>") + 7 : text.index("</title>")]
+        assert title == "HikesAlike" or title.endswith(" · HikesAlike"), (path, title)
+        assert "GoFindMeAHike" not in text, path
+        for tag in (
+            '<link rel="icon" href="mark.svg" type="image/svg+xml">',
+            '<link rel="apple-touch-icon" href="apple-touch-icon.png">',
+            '<meta property="og:site_name" content="HikesAlike">',
+            '<meta property="og:image" content="social-preview.png">',
+            '<meta property="og:image:width" content="1200">',
+            '<meta property="og:image:height" content="630">',
+            '<meta name="twitter:card" content="summary_large_image">',
+            '<meta name="twitter:image" content="social-preview.png">',
+        ):
+            assert tag in text, (path, tag)
+        assert f'<meta property="og:title" content="{title}">' in text, path
+
+
+def png_size(png: bytes) -> tuple[int, int]:
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    return int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")
+
+
+def test_the_touch_icon_and_the_social_preview_are_pngs_of_their_sizes(client: TestClient) -> None:
+    for path, size in (("/apple-touch-icon.png", (180, 180)), ("/social-preview.png", (1200, 630))):
+        response = client.get(path)
+        assert response.status_code == 200, path
+        assert response.headers["content-type"] == "image/png", path
+        assert png_size(response.content) == size, path
+
+
+def test_the_mark_is_the_square_hikesalike_tile(client: TestClient) -> None:
+    mark = client.get("/mark.svg").text
+
+    assert 'aria-label="HikesAlike mark"' in mark
+    assert "<title>HikesAlike mark</title>" in mark
+    _, _, width, height = mark.split('viewBox="')[1].split('"')[0].split()
+    assert width == height
+
+
+def test_the_about_page_shows_the_wordmark_and_the_tagline(client: TestClient) -> None:
+    about = client.get("/about.html").text
+
+    assert '<img class="wordmark" src="wordmark.svg"' in about
+    assert 'alt="HikesAlike: Hikes like the ones you love."' in about
+    assert client.get("/wordmark.svg").status_code == 200
+    assert '<p class="tagline">Hikes like the ones you love.</p>' in about
 
 
 def test_the_about_page_says_who_runs_the_site_and_where_its_code_is(client: TestClient) -> None:

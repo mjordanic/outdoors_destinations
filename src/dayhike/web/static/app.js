@@ -1,5 +1,5 @@
 "use strict";
-// GoFindMeAHike: plain JS over the JSON API in dayhike.web. Charts are hand-drawn SVG.
+// HikesAlike: plain JS over the JSON API in dayhike.web. Charts are hand-drawn SVG.
 
 const $ = (selector) => document.querySelector(selector);
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -1918,12 +1918,12 @@ async function showResult(index, version = 0) {
 // an opaque answer to a no-cors request says only that something is up.
 async function notAnswering(error) {
   if (error.status === 401 || error.status === 403) {
-    return "GoFindMeAHike is paused for now: its owner has switched the server off. Please try again later.";
+    return "HikesAlike is paused for now: its owner has switched the server off. Please try again later.";
   }
   if (error.status) return error.message;
   try {
     await fetch(`${API_BASE}/api/health`, { mode: "no-cors", cache: "no-store" });
-    return "GoFindMeAHike is paused or busy. Please try again later.";
+    return "HikesAlike is paused or busy. Please try again later.";
   } catch {
     return "The server is not answering. Please try again in a few minutes.";
   }
