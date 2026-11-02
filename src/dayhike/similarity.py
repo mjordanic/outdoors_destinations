@@ -526,7 +526,7 @@ def score_rows(
     best_raw = np.full(len(rows), np.nan)
     for seed in seed_rows:
         raw = np.column_stack(
-            [measure_scores(store, measure, seed, rows, month=month) for measure in measures]
+            [ranked_scores(store, measure, seed, rows, month=month) for measure in measures]
         )
         calibrated = np.column_stack(
             [
@@ -544,6 +544,29 @@ def score_rows(
         best = np.where(better, similarity, best)
         best_raw = np.where(better, weighted_mean(raw, w), best_raw)
     return best, best_raw
+
+
+def ranked_scores(
+    store: SimilarityStore,
+    measure: Measure,
+    seed: int | OutsideSeed,
+    rows: np.ndarray,
+    *,
+    month: int | None = None,
+) -> np.ndarray:
+    """Raw scores of one Measure between a Seed and ``rows`` as a Ranking weighs them.
+
+    ``measure_scores``, except that a DayHike without a Difficulty grade scores 0
+    on Difficulty (as far apart as grades go) against a Seed that has one: a
+    hike with the Seed's grade ranks above one with no grade, which stays listed.
+    The Calibration's random pairs still leave a missing grade out.
+    """
+    raw = measure_scores(store, measure, seed, rows, month=month)
+    if measure.name != "difficulty":
+        return raw
+    (column,) = measure.columns
+    graded = ~np.isnan(_seed_value(store, seed, column))
+    return np.where(graded & np.isnan(store.column(column)[rows]), 0.0, raw)
 
 
 def measure_scores(

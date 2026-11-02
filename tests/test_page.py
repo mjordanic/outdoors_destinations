@@ -49,7 +49,7 @@ def data(tmp_path_factory: pytest.TempPathFactory) -> ServingData:
     path = directory / "catalog.sqlite"
     build_catalog(FIXTURE, path)
     build_similarity(path, directory / "dem")
-    cities = Path(__file__).parent / "fixtures" / "cities1000.txt"
+    cities = Path(__file__).parent / "fixtures" / "geonames.txt"
     return ServingData(export_serving(path, directory / "web-serving", geonames_path=cities))
 
 
@@ -675,6 +675,16 @@ def test_a_distance_limit_alone_or_with_the_drive_time_is_asked(browser, server)
     page.get_by_text("Tick Max drive hours, Max km or both.").wait_for()
 
 
+def test_round_and_small_max_km_values_are_valid_in_the_box(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+    page.get_by_label("Only hikes near a starting place").check()
+    box = page.get_by_label("Max km value")
+
+    for km in ("1", "4", "30", "50", "200"):
+        box.fill(km)
+        assert box.evaluate("box => box.validity.valid"), km
+
+
 def test_the_grouping_radius_waits_under_more_options_and_follows_the_limits(browser, server) -> None:
     api = Api({})
     page = open_page(browser, server, api, hash=f"#hike={RIDGE_WALK_ID}")
@@ -754,6 +764,25 @@ def test_finding_a_place_asks_the_export_not_nominatim(browser, server) -> None:
     page.get_by_text("Start: Zagreb, HR (45.8144, 15.9780)").wait_for()
 
     assert [url for url in asked if "place" in url] == [f"{server}/api/place?limit=1&q=agram"]
+
+
+def test_a_place_not_found_clears_the_previous_start_and_finding_hikes_says_why(browser, server) -> None:
+    api = Api({})
+    page = open_page(browser, server, api, hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_label("Only hikes near a starting place").check()
+    page.get_by_label("From", exact=True).fill("agram")
+    page.get_by_role("button", name="Find place").click()
+    page.get_by_text("Start: Zagreb, HR (45.8144, 15.9780)").wait_for()
+
+    # Set as autofill or a restored form sets it: no input event clears the start found before.
+    page.eval_on_selector("#origin", "box => { box.value = 'Nevache'; }")
+    page.get_by_role("button", name="Find place").click()
+    page.get_by_text("Place not found; try a town name or lat, lon.").wait_for()
+    page.get_by_role("button", name="Find similar").click()
+
+    page.get_by_text("No start: Nevache was not found.").wait_for()
+    assert api.ranked == []
 
 
 def test_the_credits_page_names_geonames_for_place_search_when_the_export_has_places(browser, server) -> None:

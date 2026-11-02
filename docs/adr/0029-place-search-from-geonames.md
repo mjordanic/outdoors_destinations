@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted (villages near Trailheads added by ADR-0042)
 ---
 
 # "Find place" searches GeoNames towns in the serving export, not Nominatim

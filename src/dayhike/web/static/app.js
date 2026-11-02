@@ -66,6 +66,7 @@ const state = {
   expanded: null, // the result row whose versions (var 1, 2, 3) are shown
   selected: null, // the hike shown against the liked one: { key } of a result, or { pair } a DayHike id
   origin: null,
+  missed: null, // the place text the last lookup found nothing for
   geocoded: new Map(),
 };
 
@@ -1571,6 +1572,9 @@ function swappedWarning(origin) {
 async function findPlace() {
   const text = $("#origin").value.trim();
   if (!text) return;
+  // The box no longer names the start found before: a failed lookup must not leave it in place.
+  state.origin = null;
+  state.missed = null;
   const parsed = parseLatLon(text);
   if (parsed) {
     const warning = swappedWarning(parsed);
@@ -1590,7 +1594,11 @@ async function findPlace() {
       const [place] = await response.json();
       if (place) origin = { lat: Number(place.lat), lon: Number(place.lon), label: place.display_name };
     }
-    if (!origin) { $("#origin-found").textContent = "Place not found; try a town name or lat, lon."; return; }
+    if (!origin) {
+      state.missed = text;
+      $("#origin-found").textContent = "Place not found; try a town name or lat, lon.";
+      return;
+    }
     state.geocoded.set(text, origin);
     setOrigin(origin);
   } catch {
@@ -1663,7 +1671,9 @@ async function findSimilar() {
       const warning = typed && swappedWarning(typed);
       if (warning) throw new Error(warning);
       const origin = typed || state.origin;
-      if (!origin) throw new Error("Set a starting place.");
+      if (!origin) {
+        throw new Error(state.missed ? `No start: ${state.missed} was not found.` : "Set a starting place.");
+      }
       const byHours = $("#hours-on").checked, byKm = $("#km-on").checked;
       if (!byHours && !byKm) throw new Error("Tick Max drive hours, Max km or both.");
       query.origin = { lat: origin.lat, lon: origin.lon };
@@ -2003,7 +2013,7 @@ async function start() {
     wishToHash();
   });
   $("#drive-on").addEventListener("change", (event) => { $("#drive").hidden = !event.target.checked; markStale(); });
-  $("#origin").addEventListener("input", () => { state.origin = null; $("#origin-found").textContent = ""; markStale(); });
+  $("#origin").addEventListener("input", () => { state.origin = null; state.missed = null; $("#origin-found").textContent = ""; markStale(); });
   for (const limit of ["#drive-on", "#hours-on", "#hours", "#km-on", "#km"]) {
     $(limit).addEventListener("input", markStale);
     $(limit).addEventListener("input", showGroupDefault);

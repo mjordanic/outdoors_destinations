@@ -320,6 +320,31 @@ def test_two_dry_hikes_score_low_on_waterside_and_the_dead_band_is_one_value(tmp
     assert dry[2] < dry[0]
 
 
+def test_a_hike_without_a_grade_ranks_below_one_with_the_wished_grade_when_difficulty_weighs(tmp_path: Path) -> None:
+    # Hike 0 has no grade and the wished length; hike 1 has the wished T4 and is 2 km longer.
+    grades = [np.nan, 4, *[1, 2, 3, 4, 5, 6] * 16, 2, 3]
+    lengths = [10_000, 12_000, *np.linspace(5_000, 20_000, 98)]
+    store = _calibrated(tmp_path, 100, difficulty_rank=grades, length_m=lengths)
+    wish = OutsideSeed.wished({"difficulty": 4, "length": 10_000})
+    rows = np.array([0, 1])
+
+    weighted, _ = score_rows(store, [wish], rows, {"difficulty": 100, "length": 100})
+    graded_seed, _ = score_rows(store, [1], np.array([0]), {"difficulty": 100, "length": 100})
+    length_only, _ = score_rows(store, [wish], rows, {"length": 100})
+    measures = scored_measures(store, wish, rows, None)
+
+    assert weighted[1] > weighted[0]
+    # Still listed: no grade scores as far apart as grades go, not as missing.
+    assert weighted[0] == pytest.approx(length_only[0] / 2)
+    assert graded_seed[0] < 1 and measures[0]["difficulty"]["raw"] == 0.0
+    # Difficulty not weighted: the ungraded hike's better length wins as before.
+    assert length_only[0] > length_only[1]
+    # A Seed without a grade compares no grade: Difficulty drops out.
+    no_grade, _ = score_rows(store, [0], np.array([1]), {"difficulty": 100, "length": 100})
+    only_length, _ = score_rows(store, [0], np.array([1]), {"length": 100})
+    assert no_grade == pytest.approx(only_length)
+
+
 def test_weighted_mean_renormalizes_over_the_scored_columns() -> None:
     scores = np.array([[1.0, 0.0], [1.0, np.nan], [np.nan, np.nan]])
     mean = weighted_mean(scores, np.array([100.0, 50.0]))

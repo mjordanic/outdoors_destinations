@@ -154,7 +154,7 @@ call on your machine.
 | `data/osm/` | Geofabrik / osmium extracts you download | gitignored |
 | `data/valhalla/` | Road PBF + Valhalla routing tiles Docker builds | gitignored |
 | `data/web-serving/` | Serving export for the web demo (`export-serving`) | **gitignored** |
-| `data/geonames/` | GeoNames `cities1000.zip` for the demo's place search | gitignored |
+| `data/geonames/` | GeoNames `allCountries.zip` for the demo's place search | gitignored |
 | `src/dayhike/web/static/` | The demo page, its script, the About, Support, credits, Privacy and Terms pages, the logo (mark, wordmark, touch icon and social preview) and the coverage map | yes |
 | `web/` | Dockerfile, local compose file and smoke script of the demo | yes |
 | `data/valhalla/compose.yaml` | How to run Valhalla | yes |
@@ -502,7 +502,9 @@ is the shared share of fractions, `agree` is 1 when two yes/no facts agree
 compares both values), `profile` is 1 − the mean
 absolute difference of two ProfileShapes, walked either way. A Measure whose
 fact is missing on either DayHike drops out of that pair and the other weights
-renormalize; a candidate with no weighted Measure scored is left out.
+renormalize; a candidate with no weighted Measure scored is left out. One
+exception: a DayHike with no Difficulty grade scores 0 on Difficulty against a
+Seed that has one, so it ranks below a hike with the grade asked for (ADR-0043).
 
 ### What the score means
 
@@ -1738,7 +1740,7 @@ FastAPI app, extra `web`) memory-maps it. No `Catalog.open` runs in the server.
 # served by Valhalla on 8002 (docs/deploy.md, step 1)
 uv run dayhike export-serving --catalog data/catalog.sqlite --out data/web-serving \
   --valhalla-tiles data/valhalla/highways-eu --valhalla-url http://127.0.0.1:8002 \
-  --geonames data/geonames/cities1000.zip
+  --geonames data/geonames/allCountries.zip
 
 uv sync --extra web
 uv run dayhike serve --data data/web-serving --valhalla-url http://127.0.0.1:8002
@@ -1791,9 +1793,10 @@ each hike's `kind`, `parts` and `route`, so the page links what a built DayHike 
 older export, so rerun `export-serving` once). With `--valhalla-tiles` it also links the
 tile extract and writes a `valhalla.json` that serves it inside the container;
 with `--valhalla-url` it snaps every Trailhead once (`snaps.npz`). With
-`--geonames` (GeoNames `cities1000.zip`, downloaded there when missing) it
+`--geonames` (GeoNames `allCountries.zip`, downloaded there when missing) it
 writes `places.sqlite`, the towns of 1,000 people or more within 2° of the
-Trailheads' box for "Find place"; `dayhike export-places --out
+Trailheads' box and the smaller villages within 5 km of a Trailhead for "Find
+place" (ADR-0042); `dayhike export-places --out
 data/web-serving` adds it beside an existing export, which needs no other
 change (ADR-0029). Rerun it
 after any rebuild; `meta.json` is written last, so a half-written export never
@@ -2110,8 +2113,8 @@ databases of OpenStreetMap: when one is used publicly (the web demo does), it
 is offered under the ODbL, together with this code as the method that makes
 it. The demo's base map is OpenStreetMap's own tiles
 (https://operations.osmfoundation.org/policies/tiles/), used under the OSM
-Foundation's tile usage policy. Its place search reads the GeoNames
-`cities1000` towns (GeoNames, https://www.geonames.org/, CC BY 4.0) when the
+Foundation's tile usage policy. Its place search reads GeoNames towns and
+villages (GeoNames, https://www.geonames.org/, CC BY 4.0) when the
 export has `places.sqlite`, and Nominatim
 (https://operations.osmfoundation.org/policies/nominatim/, under the OSM
 Foundation's usage policy) otherwise.

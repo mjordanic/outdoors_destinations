@@ -924,7 +924,7 @@ def test_place_search_answers_from_the_export_and_is_credited(tmp_path: Path, ma
     path = tmp_path / "catalog.sqlite"
     build_catalog(FIXTURE, path)
     build_similarity(path, tmp_path / "dem")
-    cities = Path(__file__).parent / "fixtures" / "cities1000.txt"
+    cities = Path(__file__).parent / "fixtures" / "geonames.txt"
     placed = TestClient(create_app(ServingData(export_serving(path, tmp_path / "web", geonames_path=cities)), lambda h: matrix))
 
     info = placed.get("/api/info").json()
@@ -952,7 +952,7 @@ def test_adding_places_to_an_export_changes_the_etag(tmp_path: Path) -> None:
         return TestClient(create_app(ServingData(out))).get("/api/info").headers["etag"]
 
     before = etag()
-    export_places(Path(__file__).parent / "fixtures" / "cities1000.txt", out)
+    export_places(Path(__file__).parent / "fixtures" / "geonames.txt", out)
     assert etag() != before
 
 
