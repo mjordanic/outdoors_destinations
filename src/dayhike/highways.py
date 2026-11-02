@@ -41,6 +41,7 @@ CONTOUR_GENERALIZE_M = 300
 # Polygon edges are approximate: a point this close to its band's edge may belong to the next.
 CONTOUR_MARGIN_S = 300
 CONTOUR_RING_DEG = 0.15  # about 17 km north-south
+CONTOUR_SIMPLIFY_DEG = 0.01  # about 1 km: the ring is drawn around the contour simplified this far
 LOCATE_BATCH_SIZE = 1_000
 LOCATE_WORKERS = 4
 
@@ -185,7 +186,10 @@ class HighwayDriveTimeClient:
         bands: list[tuple[float, float | None]] = [(0.0, None)] * len(points)
         # Isochrones skip roads that the matrix reaches (the far side of a ferry, say),
         # so a ring around the largest contour is checked exactly too.
-        ring = shapely.buffer(contours[-1], CONTOUR_RING_DEG)
+        # Buffered whole, a 4 h contour (50-90k vertices) took 5-7 s; simplified, it stays within
+        # CONTOUR_SIMPLIFY_DEG of the contour, so a ring that much wider holds every point the exact one does.
+        simple = shapely.simplify(contours[-1], CONTOUR_SIMPLIFY_DEG)
+        ring = shapely.buffer(simple, CONTOUR_RING_DEG + CONTOUR_SIMPLIFY_DEG)
         alive = np.flatnonzero(shapely.contains_xy(ring, lons, lats))
         for i in alive:
             bands[i] = (0.0, math.inf)
