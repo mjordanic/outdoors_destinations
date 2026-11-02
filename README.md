@@ -1,7 +1,10 @@
-# DayHike catalog
+<p align="center">
+  <img src="src/dayhike/web/static/wordmark.svg" alt="HikesAlike: Hikes like the ones you love." width="560">
+</p>
+
+# HikesAlike
 
 <p>
-  <img src="src/dayhike/web/static/mark.svg" alt="GoFindMeAHike mark: two mountains and a trail" width="72">
   <img src="src/dayhike/web/static/coverage.svg" alt="Map of Europe; the shaded land has DayHikes in the Catalog" width="360">
 </p>
 
@@ -22,7 +25,7 @@ serves a trimmed export of them ([Web demo](#web-demo)).
 The map shows the coverage of the current Catalog: land with at least 10
 Trailheads and 0.2 per 1,000 km² is shaded (`dayhike coverage-map`, below).
 
-## Why DayHike
+## Why HikesAlike
 
 - Start from a hike you liked, and it finds the ones most like it. No hike in
   mind? Describe the one you want.
@@ -152,7 +155,7 @@ call on your machine.
 | `data/valhalla/` | Road PBF + Valhalla routing tiles Docker builds | gitignored |
 | `data/web-serving/` | Serving export for the web demo (`export-serving`) | **gitignored** |
 | `data/geonames/` | GeoNames `cities1000.zip` for the demo's place search | gitignored |
-| `src/dayhike/web/static/` | The demo page, its script, the About, Support, credits, Privacy and Terms pages, the logo and the coverage map | yes |
+| `src/dayhike/web/static/` | The demo page, its script, the About, Support, credits, Privacy and Terms pages, the logo (mark, wordmark, touch icon and social preview) and the coverage map | yes |
 | `web/` | Dockerfile, local compose file and smoke script of the demo | yes |
 | `data/valhalla/compose.yaml` | How to run Valhalla | yes |
 | `data/valhalla/prepare-roads.sh` | osmium filter: car roads only, no buildings | yes |

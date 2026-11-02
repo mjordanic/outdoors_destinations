@@ -350,7 +350,7 @@ def create_app(
     (``https://host``) whose pages may call the API.
     """
     pages = site_pages(goatcounter, kofi, data.places is not None, copernicus="copernicus" in data.meta["attribution"])
-    app = FastAPI(title="GoFindMeAHike", docs_url="/api/docs", openapi_url="/api/openapi.json")
+    app = FastAPI(title="HikesAlike", docs_url="/api/docs", openapi_url="/api/openapi.json")
     limiters = {"rank": RateLimiter(rank_rate, RATE_WINDOW_S), "api": RateLimiter(api_rate, RATE_WINDOW_S)}
     one_ranking = threading.Semaphore(1)
     # The API reads change only with the export (its meta.json holds facts_version, places.sqlite may come later), the code and the settings.
