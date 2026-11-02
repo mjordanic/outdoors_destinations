@@ -1707,11 +1707,11 @@ liked hike. An optional starting place with a maximum drive (up to 4 h), a
 maximum straight-line distance (up to 200 km, from the start to where a hike
 starts, not by road; ADR-0032) or both keeps only hikes within those limits (the
 start is typed as "lat, lon", taken from the
-browser, or found by "Find place" among the GeoNames towns in the export,
-ADR-0029). The DriveTime is estimated on highways-only tiles as in
+browser, or found by "Find place" among the GeoNames towns and villages in the
+export, ADR-0029, ADR-0042). The DriveTime is estimated on highways-only tiles as in
 **Highway tiles** above; the distance needs no routing engine. Measures with no data for a hike (climate and land
 cover do not cover all of Europe yet) show "no data" and drop out of that
-pair's score. Every score has a short line and a "?" beside it (in the results
+pair's score (a missing Difficulty grade scores 0 instead, ADR-0043). Every score has a short line and a "?" beside it (in the results
 table, in each column heading); hover, focus, click or tap opens what the score
 means, why alike hikes can score low on one measure, the data each measure
 reads and how the scores are made (ADR-0025).
