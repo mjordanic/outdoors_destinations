@@ -290,7 +290,7 @@ def site_pages(
             html = re.sub(r"<!--ko-fi-->.*?<!--/ko-fi-->", tip, html, flags=re.S)
         if place_search:
             credit = (
-                '<span id="place-credit">Place search: towns from <a href="https://www.geonames.org/">GeoNames</a>'
+                '<span id="place-credit">Place search: towns and villages from <a href="https://www.geonames.org/">GeoNames</a>'
                 ' (geonames.org), <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</span>'
             )
             html = re.sub(r'<span id="place-credit">.*?</span>', credit, html, flags=re.S)

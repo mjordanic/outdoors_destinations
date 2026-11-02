@@ -23,8 +23,9 @@ similarity directory live. It writes a directory a server memory-maps:
   serves it from ``SERVING_ROOT`` inside the container, when given.
 - ``places.sqlite``: GeoNames towns of 1,000 people or more within
   ``PLACE_MARGIN_DEG`` of the Trailheads' box, each under every folded name it
-  has, for the page's place search, when a GeoNames ``cities1000`` file is
-  given. ``export_places`` writes it beside an existing export too: it reads
+  has, and smaller villages within ``VILLAGE_M`` of a Trailhead under their own
+  names, for the page's place search, when a GeoNames dump (``allCountries``)
+  is given. ``export_places`` writes it beside an existing export too: it reads
   only ``trailheads.npy``, and an export without it still opens.
 - ``meta.json``: written last, so a directory without it is incomplete.
 
@@ -106,10 +107,10 @@ from dayhike.similarity import (
     calibrate,
     climb_and_descent,
     measure_rarity,
-    measure_scores,
     nearest_on_line,
     random_pair_shares,
     rank_rows,
+    ranked_scores,
     score_rows,
 )
 from dayhike.trailgraph import (
@@ -119,6 +120,7 @@ from dayhike.trailgraph import (
     Route,
     TrailGraph,
     WayBack,
+    _unit,
     decode_coords,
     round_trip,
     way_back,
@@ -152,9 +154,13 @@ UNNAMING_KINDS = ("restaurant_cafe", "parking")  # amenity points that name no h
 TRAILHEAD_NEAREST = 3  # parking and restaurant/cafe points kept per Trailhead
 VALHALLA_CACHE_BYTES = 256 * 1024 * 1024  # mjolnir.max_cache_size; the build default is 1 GB
 SEARCH_SCAN_CAP = 5_000  # occurrences of the scanned word a search looks at, so short queries stay fast
-GEONAMES_URL = "https://download.geonames.org/export/dump/cities1000.zip"
+GEONAMES_URL = "https://download.geonames.org/export/dump/allCountries.zip"
 GEONAMES_ATTRIBUTION = "GeoNames (geonames.org), CC BY 4.0"
 PLACE_MARGIN_DEG = 2.0  # places this far outside the Trailheads' box are kept: a start a drive away
+TOWN_POPULATION = 1_000  # a town (this many people, or a seat as below) is kept anywhere in the margin, as cities1000
+SEAT_CODES = ("PPLC", "PPLA", "PPLA2", "PPLA3")  # GeoNames capitals and seats of administrative divisions
+VILLAGE_M = 5_000  # a smaller populated place is kept this close to a Trailhead: a village a hike starts from
+NOT_VILLAGE_CODES = ("PPLX", "PPLH", "PPLQ", "PPLW", "PPLCH")  # a section of a place; historical, abandoned, gone
 _HIKE_CHUNK = 2_000
 _RASTER_FACTS = ("tree_share", "temperature_c", "southness", "waterside_share")  # read from rasters
 _SIMILARITY_FILES = (
@@ -411,8 +417,8 @@ def export_serving(
     and the ``valhalla.json`` that built it; the tar is hard-linked when it
     can be (same disk), else copied. ``snaps_path`` seeds ``snaps.npz`` from an
     existing snap cache; with ``valhalla_url`` every Trailhead not in it is
-    snapped now, so a server never has to. ``geonames_path`` is GeoNames'
-    ``cities1000`` file (zip or txt) for ``places.sqlite``.
+    snapped now, so a server never has to. ``geonames_path`` is a GeoNames
+    dump (``allCountries``, zip or txt) for ``places.sqlite``.
     """
     started = time.monotonic()
     catalog_path, out = Path(catalog_path), Path(out_dir)
@@ -819,7 +825,7 @@ def _write_snaps(
 
 
 def fetch_geonames(path: Path | str, urlretrieve: UrlRetrieve = default_urlretrieve) -> Path:
-    """GeoNames' ``cities1000.zip`` at ``path``, downloaded first when it is not there."""
+    """GeoNames' ``allCountries.zip`` at ``path``, downloaded first when it is not there."""
     path = Path(path)
     if not path.is_file():
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -830,17 +836,24 @@ def fetch_geonames(path: Path | str, urlretrieve: UrlRetrieve = default_urlretri
 
 
 def export_places(geonames_path: Path | str, out_dir: Path | str) -> Path:
-    """Write ``places.sqlite`` into the export ``out_dir`` from a GeoNames cities file (zip or txt).
+    """Write ``places.sqlite`` into the export ``out_dir`` from a GeoNames dump (zip or txt).
 
-    Keeps the places within ``PLACE_MARGIN_DEG`` of the box of ``trailheads.npy``,
-    each with its name, country, population and position, and an index of every
-    name folded like ``_fold``, marked whether it is only an alternate name (not
-    its name or ASCII name). Written to a temporary file first, so a server
-    never opens half of one.
+    Keeps the populated places within ``PLACE_MARGIN_DEG`` of the box of
+    ``trailheads.npy``: a town (``TOWN_POPULATION`` people or a seat) anywhere
+    there, a smaller place only within ``VILLAGE_M`` of a Trailhead, and none
+    of ``NOT_VILLAGE_CODES``. Each has its name, country, population and
+    position, and an index of its names folded like ``_fold``, marked whether
+    it is only an alternate name (not its name or ASCII name); a village keeps
+    only its own two, as alternate names would take most of the file. Written
+    to a temporary file first, so a server never opens half of one.
     """
+    from scipy.spatial import cKDTree
+
     geonames_path, out = Path(geonames_path), Path(out_dir)
     trailheads = np.load(out / "trailheads.npy")
     (south, west), (north, east) = trailheads.min(axis=0) - PLACE_MARGIN_DEG, trailheads.max(axis=0) + PLACE_MARGIN_DEG
+    near = cKDTree(_unit(trailheads[:, 0], trailheads[:, 1]))
+    chord = 2 * math.sin(VILLAGE_M / (2 * EARTH_RADIUS_M))
     path, partial = out / "places.sqlite", out / "places.sqlite.partial"
     partial.unlink(missing_ok=True)
     db = sqlite3.connect(partial)
@@ -853,18 +866,27 @@ def export_places(geonames_path: Path | str, out_dir: Path | str) -> Path:
             "WITHOUT ROWID"
         )
         for line in _geonames_lines(geonames_path):
-            # geonameid, name, asciiname, alternatenames, latitude, longitude, ... country code (8), ... population (14)
+            # geonameid, name, asciiname, alternatenames, latitude, longitude, feature class (6) and code (7),
+            # country code (8), ... population (14)
             fields = line.rstrip("\n").split("\t")
+            if fields[6] != "P":
+                continue
             lat, lon = float(fields[4]), float(fields[5])
             if not (south <= lat <= north and west <= lon <= east):
                 continue
+            population = int(fields[14] or 0)
+            town = population >= TOWN_POPULATION or fields[7] in SEAT_CODES
+            if not town and (
+                fields[7] in NOT_VILLAGE_CODES
+                or not near.query_ball_point(_unit(lat, lon)[0], chord, return_length=True)
+            ):
+                continue
             place = int(fields[0])
             db.execute(
-                "INSERT INTO places VALUES (?, ?, ?, ?, ?, ?)",
-                (place, fields[1], fields[8], int(fields[14] or 0), lat, lon),
+                "INSERT INTO places VALUES (?, ?, ?, ?, ?, ?)", (place, fields[1], fields[8], population, lat, lon)
             )
             own = {_fold(name).strip() for name in fields[1:3]}
-            names = (own | {_fold(name).strip() for name in fields[3].split(",")}) - {""}
+            names = (own | ({_fold(name).strip() for name in fields[3].split(",")} if town else set())) - {""}
             db.executemany(
                 "INSERT INTO place_names VALUES (?, ?, ?)", [(name, place, name not in own) for name in names]
             )
@@ -1568,7 +1590,7 @@ def scored_measures(
     ``score_note`` against the Seed."""
     measures = {}
     for measure in MEASURES:
-        raw = measure_scores(store, measure, seed, rows, month=month)
+        raw = ranked_scores(store, measure, seed, rows, month=month)
         key = _calibration_key(measure, month, seed)
         same = _sameness(store, measure, seed, rows, month, raw)
         calibrated = calibrate(store, key, raw, measure_rarity(store, measure, seed, rows, month=month))

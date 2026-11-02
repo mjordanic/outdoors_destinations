@@ -499,7 +499,7 @@ def test_a_rerun_without_tiles_or_snaps_drops_the_old_ones(catalog_path: Path, t
     assert (tiles / "valhalla_tiles.tar").read_bytes() == b"tiles"
 
 
-CITIES = Path(__file__).parent / "fixtures" / "cities1000.txt"
+CITIES = Path(__file__).parent / "fixtures" / "geonames.txt"
 
 
 @pytest.fixture(scope="module")
@@ -531,6 +531,18 @@ def test_place_search_matches_a_folded_prefix_of_any_name_most_populous_first(pl
     assert placed.find_place("greb") == [] and placed.find_place(" ") == []
 
 
+def test_place_search_finds_a_village_a_hike_starts_from_under_its_own_names(placed: ServingData) -> None:
+    assert placed.find_place("planina") == [
+        {"name": "Planina", "country": "HR", "lat": 45.31, "lon": 15.21, "population": 0}
+    ]
+    # A village keeps its name and ASCII name only: its alternate names would cost the most room.
+    assert placed.find_place("alpe") == []
+    # Far from every Trailhead (though inside the towns' margin), a hamlet is not kept;
+    # nor is a feature that is no place (a mountain) or a section of one.
+    assert placed.find_place("daleka") == []
+    assert placed.find_place("kapelica") == [] and placed.find_place("gornji") == []
+
+
 def test_place_search_puts_its_name_then_another_exact_name_before_a_more_populous_prefix(
     placed: ServingData,
 ) -> None:
@@ -554,9 +566,9 @@ def test_place_file_can_be_added_beside_an_existing_export(catalog_path: Path, t
 def test_place_file_reads_the_geonames_zip(catalog_path: Path, tmp_path: Path) -> None:
     import zipfile
 
-    with zipfile.ZipFile(tmp_path / "cities1000.zip", "w") as archive:
-        archive.write(CITIES, "cities1000.txt")
-    out = export_serving(catalog_path, tmp_path / "out", geonames_path=tmp_path / "cities1000.zip")
+    with zipfile.ZipFile(tmp_path / "allCountries.zip", "w") as archive:
+        archive.write(CITIES, "geonames.txt")
+    out = export_serving(catalog_path, tmp_path / "out", geonames_path=tmp_path / "allCountries.zip")
 
     assert [place["name"] for place in ServingData(out).find_place("ogulin")] == ["Ogulin"]
 
@@ -577,7 +589,7 @@ def test_geonames_is_downloaded_only_when_missing(tmp_path: Path) -> None:
         asked.append(url)
         Path(path).write_bytes(b"zip")
 
-    target = tmp_path / "geonames" / "cities1000.zip"
+    target = tmp_path / "geonames" / "allCountries.zip"
     assert fetch_geonames(target, urlretrieve) == target
     assert fetch_geonames(target, urlretrieve) == target
-    assert asked == [GEONAMES_URL] == ["https://download.geonames.org/export/dump/cities1000.zip"]
+    assert asked == [GEONAMES_URL] == ["https://download.geonames.org/export/dump/allCountries.zip"]

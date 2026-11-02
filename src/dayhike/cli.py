@@ -346,7 +346,7 @@ def main(argv: list[str] | None = None) -> int:
     export.add_argument(
         "--geonames",
         type=Path,
-        help="GeoNames cities1000.zip for the page's place search; downloaded there when missing",
+        help="GeoNames allCountries.zip for the page's place search; downloaded there when missing",
     )
     places = subparsers.add_parser(
         "export-places", help="Add GeoNames place search beside an existing serving export"
@@ -354,8 +354,8 @@ def main(argv: list[str] | None = None) -> int:
     places.add_argument(
         "--geonames",
         type=Path,
-        default=Path("data/geonames/cities1000.zip"),
-        help="GeoNames cities1000.zip; downloaded there when missing",
+        default=Path("data/geonames/allCountries.zip"),
+        help="GeoNames allCountries.zip; downloaded there when missing",
     )
     places.add_argument("--out", type=Path, default=Path("data/web-serving"))
     serve = subparsers.add_parser("serve", help="Serve the web demo from a serving export")

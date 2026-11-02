@@ -24,11 +24,11 @@ docker run -d --name valhalla-highways -p 127.0.0.1:8002:8002 \
 
 uv run dayhike export-serving --catalog data/catalog.sqlite --out data/web-serving \
   --valhalla-tiles data/valhalla/highways-eu --snaps data/catalog.snaps.npz \
-  --valhalla-url http://127.0.0.1:8002 --geonames data/geonames/cities1000.zip
+  --valhalla-url http://127.0.0.1:8002 --geonames data/geonames/allCountries.zip
 ```
 
 `--snaps` is optional (it starts from an existing snap cache). `--geonames`
-writes `places.sqlite` for the page's "Find place" (ADR-0029); the file is
+writes `places.sqlite` for the page's "Find place" (ADR-0029, ADR-0042); the file (about 420 MB) is
 downloaded there when missing, so delete it before a refresh to fetch the
 current GeoNames list. An export written without it falls back to public
 Nominatim. To add place search to an export already built, without exporting
