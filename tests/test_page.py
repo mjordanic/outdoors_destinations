@@ -414,6 +414,22 @@ def test_a_multi_day_length_is_wished_in_km_with_a_hint(browser, server) -> None
     assert shared.get_by_label("Length you want, in km").input_value() == "12.5"
 
 
+def test_the_site_says_it_lists_day_hikes_and_multi_day_tours(browser, server) -> None:
+    page = browser.new_page()
+    page.route(lambda url: not url.startswith(server), lambda route: route.abort())  # no tiles
+    page.goto(f"{server}/about.html")
+    for told in (
+        "Day hikes and multi-day tours",
+        "hikes joined from signpost networks",
+        "day stages of long tours",
+    ):
+        assert page.get_by_text(told).first.is_visible(), told
+
+    page.goto(f"{server}/")
+    assert "day hikes" not in page.locator(".tagline").inner_text()
+    assert "day hike" not in page.locator('meta[name="description"]').get_attribute("content")
+
+
 def test_a_wish_address_with_a_small_nonzero_weight_keeps_its_measure_on(browser, server) -> None:
     api = Api(WISHABLE)
     page = open_page(browser, server, api, hash="#wish=highest:2000:3")
