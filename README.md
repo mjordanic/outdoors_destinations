@@ -1312,6 +1312,8 @@ osmium tags-filter data/osm/croatia-latest.osm.pbf \
   nwr/tourism=alpine_hut,wilderness_hut,viewpoint \
   nwr/amenity=parking,restaurant,cafe,drinking_water,shelter,water_point \
   nwr/natural=peak,spring \
+  wr/water=lake,reservoir,pond \
+  n/information=guidepost \
   nwr/man_made=water_tap \
   -o data/osm/croatia-latest.catalog.osm.pbf
 ```
@@ -1348,6 +1350,14 @@ DayHike over 25 km into DayStages of 8–25 km, as near 16 km as huts (within
 "{tour}, stage k: {from} – {to}". A stretch with no such point for over 25 km
 gets no stage, and a DayStage that is a Twin of a relation DayHike or of an
 earlier DayStage is left out.
+
+`network_source` (`dayhike.network_hikes`, ADR-0039) is registered too: it
+chains node-network legs into NetworkHikes, day walks of 3–25 km from
+signposts near parking or a place, at most 4 per start, loops first, then lines to a named Peak, Hut, Viewpoint or lake, none a
+Twin of a relation DayHike or of a better chain. Named lakes
+(`water=lake,reservoir,pond`) and named guideposts (`information=guidepost`)
+are read for them alone: they name destinations and signposts, and are no
+amenity and not in the GeometryStore.
 
 A hike that is neither a `route=hiking` or `route=foot` relation nor a built DayHike in this Catalog cannot be a Seed.
 Unnamed forest paths (`highway=path` without a hiking relation) never appear.

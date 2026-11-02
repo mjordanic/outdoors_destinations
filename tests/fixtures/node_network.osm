@@ -1,0 +1,204 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="dayhike-fixture">
+  <!-- NetworkHikes chained from node-network legs (ADR-0039). Comments give
+       each node's (east, north) km from S at 44.90, 6.60; every leg is one
+       way from signpost to signpost.
+
+       Le Pinet (S), parking by it: legs 11 S - A (Belvoir), 12 A - B (Serre Lan)
+         and 13 B - S close a 6.8 km loop; legs 14 S - W (Pralong) and 15 W - L
+         (route=foot, its far end "?") lead 4.5 km to L, 141 m from the shore
+         of a named lake (way 300, Lac de l'Eychauda).
+       T, 10 km east, parking by it, its legs' ends there "?", a named
+         guidepost 20 m away (Col de Granon): legs 21 T - P (Prapic), 22 P - Q
+         (Les Combes) and 23 Q - T close a 10.2 km loop that relation 2001
+         Tour des Combes, an ordinary route, also walks; legs 24 T - U (La
+         Croix), 25 U - V (Les Granges) and 26 V - T close a 6.8 km loop to
+         the south-west. -->
+  <node id="1" lat="44.9000000000" lon="6.6000000000" version="1"/><!-- S (0, 0) -->
+  <node id="2" lat="44.9000000000" lon="6.6253923769" version="1"/><!-- A (2, 0) -->
+  <node id="3" lat="44.9179864321" lon="6.6254003241" version="1"/><!-- B (2, 2) -->
+  <node id="4" lat="44.9000000000" lon="6.5746076231" version="1"/><!-- W (-2, 0) -->
+  <node id="5" lat="44.9224830401" lon="6.5745976880" version="1"/><!-- L (-2, 2.5) -->
+  <node id="6" lat="44.9000000000" lon="6.7269618844" version="1"/><!-- T (10, 0) -->
+  <node id="7" lat="44.9000000000" lon="6.7650504497" version="1"/><!-- P (13, 0) -->
+  <node id="8" lat="44.9269796482" lon="6.7651279531" version="1"/><!-- Q (13, 3) -->
+  <node id="9" lat="44.8820135679" lon="6.7269221858" version="1"/><!-- U (10, -2) -->
+  <node id="10" lat="44.8820135679" lon="6.7015377486" version="1"/><!-- V (8, -2) -->
+  <node id="31" lat="44.9233823618" lon="6.5733271548" version="1"/><!-- lake 1 (-2.1, 2.6) -->
+  <node id="32" lat="44.9233823618" lon="6.5707868838" version="1"/><!-- lake 2 (-2.3, 2.6) -->
+  <node id="33" lat="44.9251810050" lon="6.5707859692" version="1"/><!-- lake 3 (-2.3, 2.8) -->
+  <node id="34" lat="44.9251810050" lon="6.5733263197" version="1"/><!-- lake 4 (-2.1, 2.8) -->
+  <node id="90" lat="44.9002697965" lon="6.6000000000" version="1"><!-- parking by S (0, 0.03) -->
+    <tag k="amenity" v="parking"/>
+  </node>
+  <node id="91" lat="44.9002697965" lon="6.7269624802" version="1"><!-- parking by T (10, 0.03) -->
+    <tag k="amenity" v="parking"/>
+  </node>
+  <node id="92" lat="44.9000000000" lon="6.7272158082" version="1"><!-- guidepost by T (10.02, 0) -->
+    <tag k="tourism" v="information"/>
+    <tag k="information" v="guidepost"/>
+    <tag k="name" v="Col de Granon"/>
+  </node>
+  <way id="101" version="1">
+    <nd ref="1"/>
+    <nd ref="2"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="102" version="1">
+    <nd ref="2"/>
+    <nd ref="3"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="103" version="1">
+    <nd ref="3"/>
+    <nd ref="1"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="104" version="1">
+    <nd ref="1"/>
+    <nd ref="4"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="105" version="1">
+    <nd ref="4"/>
+    <nd ref="5"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="121" version="1">
+    <nd ref="6"/>
+    <nd ref="7"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="122" version="1">
+    <nd ref="7"/>
+    <nd ref="8"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="123" version="1">
+    <nd ref="8"/>
+    <nd ref="6"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="124" version="1">
+    <nd ref="6"/>
+    <nd ref="9"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="125" version="1">
+    <nd ref="9"/>
+    <nd ref="10"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="126" version="1">
+    <nd ref="10"/>
+    <nd ref="6"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="300" version="1">
+    <nd ref="31"/>
+    <nd ref="32"/>
+    <nd ref="33"/>
+    <nd ref="34"/>
+    <nd ref="31"/>
+    <tag k="natural" v="water"/>
+    <tag k="water" v="lake"/>
+    <tag k="name" v="Lac de l'Eychauda"/>
+  </way>
+  <relation id="11" version="1">
+    <member type="way" ref="101" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="network" v="lwn"/>
+    <tag k="network:type" v="node_network"/>
+    <tag k="name" v="Le Pinet - Belvoir"/>
+  </relation>
+  <relation id="12" version="1">
+    <member type="way" ref="102" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="network" v="lwn"/>
+    <tag k="network:type" v="node_network"/>
+    <tag k="name" v="Belvoir - Serre Lan"/>
+  </relation>
+  <relation id="13" version="1">
+    <member type="way" ref="103" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="network" v="lwn"/>
+    <tag k="network:type" v="node_network"/>
+    <tag k="name" v="Serre Lan - Le Pinet"/>
+  </relation>
+  <relation id="14" version="1">
+    <member type="way" ref="104" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="network" v="lwn"/>
+    <tag k="network:type" v="node_network"/>
+    <tag k="name" v="Le Pinet - Pralong"/>
+  </relation>
+  <relation id="15" version="1">
+    <member type="way" ref="105" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="foot"/>
+    <tag k="network" v="lwn"/>
+    <tag k="network:type" v="node_network"/>
+    <tag k="name" v="Pralong - ?"/>
+  </relation>
+  <relation id="21" version="1">
+    <member type="way" ref="121" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="network" v="lwn"/>
+    <tag k="network:type" v="node_network"/>
+    <tag k="name" v="? - Prapic"/>
+  </relation>
+  <relation id="22" version="1">
+    <member type="way" ref="122" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="network" v="lwn"/>
+    <tag k="network:type" v="node_network"/>
+    <tag k="name" v="Prapic - Les Combes"/>
+  </relation>
+  <relation id="23" version="1">
+    <member type="way" ref="123" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="network" v="lwn"/>
+    <tag k="network:type" v="node_network"/>
+    <tag k="name" v="Les Combes - ?"/>
+  </relation>
+  <relation id="24" version="1">
+    <member type="way" ref="124" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="network" v="lwn"/>
+    <tag k="network:type" v="node_network"/>
+    <tag k="name" v="? - La Croix"/>
+  </relation>
+  <relation id="25" version="1">
+    <member type="way" ref="125" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="network" v="lwn"/>
+    <tag k="network:type" v="node_network"/>
+    <tag k="name" v="La Croix - Les Granges"/>
+  </relation>
+  <relation id="26" version="1">
+    <member type="way" ref="126" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="network" v="lwn"/>
+    <tag k="network:type" v="node_network"/>
+    <tag k="name" v="Les Granges - ?"/>
+  </relation>
+  <relation id="2001" version="1">
+    <member type="way" ref="121" role=""/>
+    <member type="way" ref="122" role=""/>
+    <member type="way" ref="123" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="network" v="lwn"/>
+    <tag k="name" v="Tour des Combes"/>
+  </relation>
+</osm>

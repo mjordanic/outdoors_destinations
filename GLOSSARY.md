@@ -16,6 +16,10 @@ _Avoid_: composed DayHike, generated hike, virtual relation, synthetic hike
 A built DayHike that is one day of a long tour: a piece of 8–25 km of a relation DayHike over 25 km, cut where a day can end, at a hut, else a place, else parking near the line, as near 16 km as those allow. It is named "{tour}, stage k: {from} – {to}" and the tour stays listed too. Tours that share a stretch cut it at the same points; a DayStage that is a Twin of a relation DayHike, such as a stage relation, is left out (ADR-0040).
 _Avoid_: stage (a stage is a relation), section, leg, day stage relation
 
+**NetworkHike**:
+A built DayHike that chains node-network legs (`network:type=node_network` relations, signpost to signpost) into a day's walk of 3–25 km and at least two legs: a loop back to its first signpost, or a line that passes no signpost twice. It starts at a signpost within 500 m of parking or 300 m of a place, and every start (its signposts within 1 km) keeps at most 4: loops first, then lines to a named Peak, Hut, Viewpoint or lake, then the rest, each nearer 10 km first, each more than half off the better ones there. None is a Twin of a relation DayHike or of a better NetworkHike. Its label is "Loop from {start} via {destination}" or "{start} – {destination}", from its legs' end names, named guideposts, destinations and places (ADR-0039).
+_Avoid_: network DayHike, knooppunt route, chain, leg
+
 **NameOrigin**:
 Whether a DayHike label came from OSM `name`, OSM `ref`, the `from`/`to` tags, the nearest place, or a synthetic `relation:{id}` assigned at ingest; for a built DayHike, `network` or `stage`, from the source that built it. Synthetic labels can be dropped in postprocessing.
 _Avoid_: unnamed as a drop reason, title, display name

@@ -35,6 +35,7 @@ from dayhike.catalog import (
     declared_start,
     named_points,
 )
+from dayhike.network_hikes import network_source
 from dayhike.osm import (
     OsmRelation,
     OsmSnapshot,
@@ -45,7 +46,7 @@ from dayhike.osm import (
 )
 from dayhike.stages import day_stages
 
-INGEST_WORK_SCHEMA = 8
+INGEST_WORK_SCHEMA = 9
 INGEST_CHECKPOINT_OBJECTS = 50_000
 INGEST_PROGRESS_EVERY_OBJECTS = 100_000
 HIKING_ROUTES = ("hiking", "foot")  # route=foot is read as hiking (ADR-0034)
@@ -55,11 +56,17 @@ CATALOG_TAG_FILTERS = (
     "nwr/tourism=alpine_hut,wilderness_hut,viewpoint",
     "nwr/amenity=parking,restaurant,cafe,drinking_water,shelter,water_point",
     "nwr/natural=peak,spring",
+    "wr/water=lake,reservoir,pond",
+    "n/information=guidepost",
     "nwr/man_made=water_tap",
     "n/place=city,town,village,hamlet",
 )
+LAKE_WATER = ("lake", "reservoir", "pond")  # a named natural=water of these is a lake a NetworkHike may go to
+DESTINATION_KINDS = ("peak", "hut", "viewpoint", "lake")  # named, a NetworkHike's destinations (ADR-0039)
+# Point kinds read only for NetworkHikes: no amenity, no named point, not in the GeometryStore.
+NETWORK_ONLY_KINDS = ("lake", "guidepost")
 # Sources of DayHikes that are not one relation (ADR-0038), run after the relations are kept.
-BUILT_HIKE_SOURCES: tuple[BuiltHikeSource, ...] = (day_stages,)
+BUILT_HIKE_SOURCES: tuple[BuiltHikeSource, ...] = (day_stages, network_source)
 
 Progress = Callable[[str], None]
 
@@ -436,7 +443,7 @@ def _pass_relations(
                     [(member_id,) for member_type, member_id in members if member_type == "way"],
                 )
                 hiking += 1
-            kind = amenity_kind(tags)
+            kind = _point_kind(tags)
             if kind is not None:
                 conn.execute(
                     "INSERT OR REPLACE INTO pending_amenity_relations "
@@ -486,7 +493,7 @@ def _pass_ways(
             osm_id = int(obj.id)
             node_ids = [int(node.ref) for node in obj.nodes]
             tags = dict(obj.tags)
-            kind = amenity_kind(tags)
+            kind = _point_kind(tags)
             if osm_id in needed_ways:
                 conn.execute(
                     "INSERT OR REPLACE INTO ways (id, node_ids, tags) VALUES (?, ?, ?)",
@@ -529,6 +536,19 @@ def _pass_ways(
     emit_progress(progress, "ways", f"{kept} hiking ways, {graded} graded paths")
 
 
+def _point_kind(tags: dict[str, str]) -> str | None:
+    """The amenity kind of an OSM object, else ``lake`` for a named lake
+    (``LAKE_WATER``) or ``guidepost`` for a named guidepost."""
+    kind = amenity_kind(tags)
+    if kind is not None or not tags.get("name"):
+        return kind
+    if tags.get("natural") == "water" and tags.get("water") in LAKE_WATER:
+        return "lake"
+    if tags.get("information") == "guidepost":
+        return "guidepost"
+    return None
+
+
 def _is_graded_path(tags: dict[str, str]) -> bool:
     """A ``highway=path`` with a ``sac_scale`` grade: in the TrailGraph though no relation lists it (ADR-0037)."""
     return tags.get("highway") == "path" and tags.get("sac_scale") in SAC_SCALE_RANK
@@ -559,7 +579,7 @@ def _pass_nodes(
             osm_id = int(obj.id)
             location = obj.location
             tags = dict(obj.tags)
-            kind = amenity_kind(tags)
+            kind = _point_kind(tags)
             needed = osm_id in needed_nodes
             graded = not needed and _sorted_has(graded_nodes, osm_id)
             if location.valid() and (needed or graded or kind is not None):
@@ -687,6 +707,12 @@ def _load_hiking_snapshot(
     for kind, lat, lon, name in conn.execute(
         "SELECT kind, lat, lon, json_extract(tags, '$.name') FROM amenities"
     ):
+        if name and kind in DESTINATION_KINDS:
+            snapshot.destinations.append((lat, lon, name))
+        if name and kind == "guidepost":
+            snapshot.guideposts.append((lat, lon, name))
+        if kind in NETWORK_ONLY_KINDS:
+            continue
         if kind == "place":
             snapshot.places.append((lat, lon, name))
         else:
@@ -918,7 +944,10 @@ def write_geometry_store(
                 way_rows,
             )
         amenity_rows = list(
-            conn.execute("SELECT osm_key, kind, lat, lon, tags FROM amenities")
+            conn.execute(
+                f"SELECT osm_key, kind, lat, lon, tags FROM amenities WHERE kind NOT IN ({','.join('?' * len(NETWORK_ONLY_KINDS))})",
+                NETWORK_ONLY_KINDS,
+            )
         )
         out.executemany(
             "INSERT INTO amenities (osm_key, kind, latitude, longitude, tags) "

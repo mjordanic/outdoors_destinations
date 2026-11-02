@@ -403,3 +403,31 @@ def test_a_loop_does_not_go_via_its_own_start():
     names[loop.signposts[0]] = "Briançon"
 
     assert chain_name(graph, loop, names) == "Loop from Briançon"
+
+
+def _triangles(count: int) -> tuple[Network, list[tuple[float, float]]]:
+    # ``count`` separate 6.8 km triangles of legs 10 km apart, a parking by each one's first corner.
+    points = {}
+    for k in range(count):
+        x, y = 10.0 * (k % 100), 10.0 * (k // 100)
+        points |= {f"{k}a": (x, y), f"{k}b": (x + 2, y), f"{k}c": (x + 2, y + 2)}
+    net = Network(points)
+    for k in range(count):
+        net.leg(3 * k + 1, f"{k}a", f"{k}b")
+        net.leg(3 * k + 2, f"{k}b", f"{k}c")
+        net.leg(3 * k + 3, f"{k}c", f"{k}a")
+    return net, [_lat_lon(10.0 * (k % 100), 10.0 * (k // 100) + 0.03) for k in range(count)]
+
+
+def test_network_hikes_take_time_in_proportion_to_the_networks():
+    # Europe has tens of thousands of starts: a step per start that reads every leg or start would not end.
+    def seconds(count: int) -> float:
+        net, parking = _triangles(count)
+        started = time.monotonic()
+        hikes = network_hikes(net.legs, net.ways, net.nodes, parking, places=[])
+        assert len(hikes) == count
+        return time.monotonic() - started
+
+    small, large = seconds(1_000), seconds(4_000)
+
+    assert large < 8 * small  # 4 times the networks: 4 times the time, not 16

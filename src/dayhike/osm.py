@@ -49,6 +49,10 @@ class OsmSnapshot:
     # (lat, lon, name) of named settlements, and of every named point (places and amenities).
     places: list[tuple[float, float, str]] = field(default_factory=list)
     named_points: list[tuple[float, float, str]] = field(default_factory=list)
+    # (lat, lon, name) of named Peaks, Huts, Viewpoints and lakes a NetworkHike may go to (ADR-0039).
+    destinations: list[tuple[float, float, str]] = field(default_factory=list)
+    # (lat, lon, name) of named guideposts: they name signposts (ADR-0039).
+    guideposts: list[tuple[float, float, str]] = field(default_factory=list)
 
     def merge(self, other: OsmSnapshot) -> None:
         self.nodes.update(other.nodes)
@@ -65,6 +69,8 @@ class OsmSnapshot:
         self.access_points = list(access_points)
         self.places = list(dict.fromkeys(self.places + other.places))
         self.named_points = list(dict.fromkeys(self.named_points + other.named_points))
+        self.destinations = list(dict.fromkeys(self.destinations + other.destinations))
+        self.guideposts = list(dict.fromkeys(self.guideposts + other.guideposts))
 
 
 def parse_osm(path: Path) -> OsmSnapshot:
