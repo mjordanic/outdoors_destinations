@@ -6,8 +6,8 @@ small OSM files, so a check that disagrees with ingest fails in the normal suite
 """
 
 import shutil
-import time
 import sqlite3
+import time
 from pathlib import Path
 
 import pytest
