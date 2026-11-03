@@ -61,7 +61,9 @@ def test_a_route_and_its_reverse_are_each_others_best_match(store, seed: int, re
     similarity, raw, rank = rc.similarity_between(store, seed, reverse, rc.GEOMETRY_WEIGHTS, with_elevation)
 
     assert rank == 1
-    assert raw == pytest.approx(1.0, abs=1e-3)
+    # Not 1: the climb differs by direction (Etapp 8: 252.6 against 255.5 m; Etapp 9: 219.8
+    # against 236.8 m), in the 2026-09-17 Catalog as in this one (raw 0.998 and 0.990).
+    assert raw >= 0.985
     assert similarity >= 0.98
 
 
