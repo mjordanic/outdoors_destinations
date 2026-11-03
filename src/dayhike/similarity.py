@@ -1073,7 +1073,7 @@ def _build_facts(
         "ids": ids,
         "facts": facts,
         "profile": profile,
-        "twins": twin_groups(routes, in_workers=True),
+        "twins": twin_groups(routes),
         "facts_back": back_facts,
         "profile_back": back_profile,
         "way_back": back_rows,
@@ -1681,16 +1681,15 @@ class WaterTile:
         return count >= WATERSIDE_MIN_SHARE * (bottom - top) * (right - left)
 
 
-def twin_groups(routes: Sequence[np.ndarray | None], *, in_workers: bool = False) -> np.ndarray:
+def twin_groups(routes: Sequence[np.ndarray | None]) -> np.ndarray:
     """First row of each DayHike's group of Twins (its own row without one).
 
     ``routes`` holds per DayHike row its walk as (lat, lon) rows every
     ``TWIN_STEP_M``, or None. Two DayHikes are Twins (the same route, walked
     either way) when at least ``TWIN_SHARE`` of each one's points lie within
     ``TWIN_M`` of the other's line; Twins of Twins join one group. Only pairs
-    whose lengths and point centres allow that share are compared. With
-    ``in_workers`` the pairs are compared in ``parallel_map``'s workers;
-    otherwise in this process, whatever ``DAYHIKE_WORKERS`` says.
+    whose lengths and point centres allow that share are compared, in
+    ``parallel_map``'s workers.
     """
     parent = np.arange(len(routes))
 
@@ -1720,7 +1719,7 @@ def twin_groups(routes: Sequence[np.ndarray | None], *, in_workers: bool = False
 
     # A group's root is its first row whatever order the rows are compared in.
     rows = range(len(have))
-    for i, twins in enumerate(parallel_map(twins_after, rows) if in_workers else map(twins_after, rows)):
+    for i, twins in enumerate(parallel_map(twins_after, rows)):
         for j in twins:
             first, second = sorted((root(have[i]), root(j)))
             parent[second] = first

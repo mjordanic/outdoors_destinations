@@ -39,6 +39,7 @@ from dayhike.catalog import (
     named_points,
 )
 from dayhike.osm import OsmRelation, OsmWay
+from dayhike.parallel import parallel_map
 from dayhike.serving import VERSION_DIFFERS
 from dayhike.similarity import CORRIDOR_M, TWIN_STEP_M, _even_points, twin_groups
 
@@ -232,7 +233,10 @@ def network_hikes(
     """
     graph = leg_graph(legs, ways, nodes)
     found = starts(graph, access_points, places)
-    kept = select(graph, (candidates(graph, start) for start in found), destinations, relations)
+    destination_of = _destination_of(graph, destinations)
+    # Each start's chains are found and shortlisted in a worker; only its shortlist comes back.
+    shortlists = parallel_map(lambda start: _shortlisted(graph, candidates(graph, start), destination_of), found)
+    kept = _selected(graph, shortlists, destination_of, relations)
     firsts = {}
     returns = set()  # per loop ending on another node than it starts, (end node, start node)
     for _, chain in kept:
@@ -731,51 +735,90 @@ def select(
     share of its own; the line it replaces stays when the direct line is a
     Twin of a relation DayHike or of another chain kept (see ``_widened``).
     """
+    destination_of = _destination_of(graph, destinations)
+    return _selected(
+        graph, [_shortlisted(graph, list(listed), destination_of) for listed in per_start], destination_of, relations
+    )
+
+
+def _destination_of(graph: LegGraph, destinations: Sequence[tuple[float, float, str]]) -> dict[int, str]:
+    # Per signpost near a named destination, its name.
     reached = named_points(destinations)
-    destination_of = {
+    return {
         signpost: name
         for signpost, point in enumerate(graph.signposts)
         if (name := _nearest(reached, point, DESTINATION_M))
     }
 
-    def goes_to(chain: Chain) -> str | None:
-        return None if chain.loop else destination_of.get(chain.signposts[-1])
+
+def _goes_to(chain: Chain, destination_of: Mapping[int, str]) -> str | None:
+    return None if chain.loop else destination_of.get(chain.signposts[-1])
+
+
+def _preference(chain: Chain, destination_of: Mapping[int, str]) -> tuple[int, float]:
+    kind = 0 if chain.loop else 1 if _goes_to(chain, destination_of) else 2
+    return kind, abs(math.log(chain.length_m / NETWORK_TARGET_M))
+
+
+def _shortlisted(
+    graph: LegGraph, listed: Sequence[Chain], destination_of: Mapping[int, str]
+) -> tuple[int, list[Chain], list[Chain | None]]:
+    """One start's part of ``select``: its cap, its shortlisted chains best
+    first, and per chain the direct line that may replace it, or None."""
+    direct: dict[str, Chain] = {}
+    for chain in listed:
+        name = _goes_to(chain, destination_of)
+        if name and (name not in direct or chain.length_m < direct[name].length_m):
+            direct[name] = chain
+    cap = min(NETWORK_CAP_MAX, max(NETWORK_CAP, len(direct)))
+    legs: list[set[int]] = []
+    picked: list[Chain] = []
+    for chain in sorted(listed, key=lambda chain: _preference(chain, destination_of)):
+        if len(legs) >= 2 * cap:
+            break
+        walked = set(chain.legs)
+        # Chains of one network share whole legs, so the share off another is in leg metres.
+        if all(
+            1.0 - sum(graph.legs[leg].length_m for leg in walked & other) / chain.length_m > VERSION_DIFFERS
+            for other in legs
+        ):
+            legs.append(walked)
+            picked.append(chain)
+    # The first line shortlisted to a destination may become its direct line, unless that is shortlisted too.
+    served = {id(chain) for chain in picked}
+    directs: list[Chain | None] = []
+    for chain in picked:
+        name = _goes_to(chain, destination_of)
+        line = direct[name] if name else None
+        if line is not None and id(line) not in served and line.length_m < chain.length_m:
+            served.add(id(line))
+            directs.append(line)
+        else:
+            directs.append(None)
+    return cap, picked, directs
+
+
+def _selected(
+    graph: LegGraph,
+    shortlists: Sequence[tuple[int, list[Chain], list[Chain | None]]],
+    destination_of: Mapping[int, str],
+    relations: Sequence[Sequence[Point]],
+) -> list[tuple[int, Chain]]:
+    """``select`` of the starts' ``_shortlisted`` results, in start order."""
 
     def preference(chain: Chain) -> tuple[int, float]:
-        kind = 0 if chain.loop else 1 if goes_to(chain) else 2
-        return kind, abs(math.log(chain.length_m / NETWORK_TARGET_M))
+        return _preference(chain, destination_of)
 
     shortlist: list[tuple[int, Chain]] = []
     extra: list[tuple[int, Chain]] = []  # shortlisted past NETWORK_SHORTLIST, at a start with a higher cap
     caps: list[int] = []
     direct_of: dict[int, Chain] = {}  # by id of a shortlisted chain, the direct line that may replace it
-    for start, listed in enumerate(per_start):
-        listed = list(listed)
-        direct: dict[str, Chain] = {}
-        for chain in listed:
-            if (name := goes_to(chain)) and (name not in direct or chain.length_m < direct[name].length_m):
-                direct[name] = chain
-        caps.append(min(NETWORK_CAP_MAX, max(NETWORK_CAP, len(direct))))
-        legs: list[set[int]] = []
-        picked: list[Chain] = []
-        for chain in sorted(listed, key=preference):
-            if len(legs) >= 2 * caps[start]:
-                break
-            walked = set(chain.legs)
-            # Chains of one network share whole legs, so the share off another is in leg metres.
-            if all(
-                1.0 - sum(graph.legs[leg].length_m for leg in walked & other) / chain.length_m > VERSION_DIFFERS
-                for other in legs
-            ):
-                legs.append(walked)
-                (shortlist if len(legs) <= NETWORK_SHORTLIST else extra).append((start, chain))
-                picked.append(chain)
-        # The first line shortlisted to a destination may become its direct line, unless that is shortlisted too.
-        served = {id(chain) for chain in picked}
-        for chain in picked:
-            if (name := goes_to(chain)) and id(direct[name]) not in served and direct[name].length_m < chain.length_m:
-                served.add(id(direct[name]))
-                direct_of[id(chain)] = direct[name]
+    for start, (cap, picked, directs) in enumerate(shortlists):
+        caps.append(cap)
+        for rank, (chain, line) in enumerate(zip(picked, directs)):
+            (shortlist if rank < NETWORK_SHORTLIST else extra).append((start, chain))
+            if line is not None:
+                direct_of[id(chain)] = line
     given = [_even_points(*np.array(walk).T, TWIN_STEP_M) for walk in relations]
     # A group's root is its first row, so a group holding a relation has a root below len(given).
     groups = twin_groups([*given, *(_route(graph, chain) for _, chain in shortlist)])[len(given) :]

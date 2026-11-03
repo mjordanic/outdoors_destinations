@@ -45,6 +45,7 @@ from dayhike.osm import (
     _parse_ele_m,
     amenity_kind,
 )
+from dayhike.parallel import parallel_iter, parallel_map
 from dayhike.stages import day_stages
 
 INGEST_WORK_SCHEMA = 9
@@ -777,14 +778,17 @@ def _keep_dayhikes(
     it left out. ``walks``, when given, gets each kept DayHike's main walk
     (see ``_store_walk``)."""
     report_counts = {"unnamed": 0, "length": 0, "container": 0, "node_network": 0}
-    kept = []
     seen: set[int] = set()
+    hiking = []
     for relation in snapshot.relations:
         if relation.id in seen:
             continue
         seen.add(relation.id)
-        if relation.tags.get("route") not in HIKING_ROUTES:
-            continue
+        if relation.tags.get("route") in HIKING_ROUTES:
+            hiking.append(relation)
+
+    def keep(relation: OsmRelation) -> tuple[DayHike, _StoredWalk | None] | str:
+        # The relation's DayHike and its stored main walk, or why it is dropped.
         walk = _main_walk(relation, snapshot, access_tree, named)
         vertices = walk.vertices
         points = [point for _, point in vertices]
@@ -792,21 +796,20 @@ def _keep_dayhikes(
         round_trip = bool(points) and _haversine_m(*points[0], *points[-1]) <= GAP_JOIN_M
         reason = drop_reason(relation, length_m, round_trip)
         if reason is not None:
-            report_counts[reason] += 1
+            return reason
+        hike = dayhike_from_relation(relation, snapshot, vertices, points, length_m, amenity_index, places)
+        return hike, _store_walk(walk) if walks is not None else None
+
+    kept = []
+    # Each relation is walked in a worker; only its DayHike and stored walk come back.
+    for result in parallel_map(keep, hiking):
+        if isinstance(result, str):
+            report_counts[result] += 1
             continue
-        kept.append(
-            dayhike_from_relation(
-                relation,
-                snapshot,
-                vertices,
-                points,
-                length_m,
-                amenity_index,
-                places,
-            )
-        )
+        hike, stored = result
+        kept.append(hike)
         if walks is not None:
-            walks[relation.id] = _store_walk(walk)
+            walks[hike.id] = stored
     kept.sort(key=lambda hike: hike.id)
     return kept, report_counts
 
@@ -825,8 +828,9 @@ def _build_hikes(
     conn.execute("DELETE FROM built_walks")
     built: dict[int, DayHike] = {}
     for source in sources:
-        for walk in source(context):
-            hike, walked = built_dayhike(walk, context.snapshot, amenity_index)
+        walks = list(source(context))
+        made = parallel_map(lambda walk: built_dayhike(walk, context.snapshot, amenity_index), walks)
+        for walk, (hike, walked) in zip(walks, made):
             if hike.id in built:
                 continue
             built[hike.id] = hike
@@ -959,70 +963,33 @@ def write_geometry_store(
             "INSERT INTO geometry_meta (key, value) VALUES (?, ?)",
             ("attribution", OSM_ATTRIBUTION),
         )
+        relation_hikes = [hike for hike in dayhikes if hike.kind == KIND_RELATION]
+        # The main walks are assembled again in the workers; the rows are written here, in hike order.
+        relation_rows = parallel_iter(
+            lambda hike: _relation_geometry_rows(hike, relations[hike.id], snapshot, access_tree, named),
+            relation_hikes,
+        )
         for hike in dayhikes:
             if hike.kind != KIND_RELATION:
                 _write_built_geometry(out, hike, snapshot, conn)
                 continue
-            relation = relations[hike.id]
-            walk = _main_walk(relation, snapshot, access_tree, named)
+            dayhike_row, vertex_rows, way_rows = next(relation_rows)
             out.execute(
                 "INSERT INTO dayhikes (id, name, name_origin, length_m, unconnected_m, "
                 "difficulty, members, relation_tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    hike.id,
-                    hike.name,
-                    hike.name_origin,
-                    hike.length_m,
-                    walk.unconnected_m,
-                    hike.difficulty.sac_scale,
-                    json.dumps([list(member) for member in relation.members]),
-                    json.dumps(relation.tags),
-                ),
+                dayhike_row,
             )
-            vertices = walk.vertices
             out.executemany(
                 "INSERT INTO vertices (dayhike_id, seq, node_id, latitude, longitude, "
                 "ele, landcover) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [
-                    (
-                        hike.id,
-                        seq,
-                        node_id,
-                        lat,
-                        lon,
-                        snapshot.node_elevations.get(node_id),
-                        None,
-                    )
-                    for seq, (node_id, (lat, lon)) in enumerate(vertices)
-                ],
+                vertex_rows,
             )
-            way_rows = []
-            way_seq = 0
-            for member_type, member_id in relation.members:
-                if member_type != "way":
-                    continue
-                way = snapshot.ways.get(member_id)
-                if way is None:
-                    continue
-                way_rows.append(
-                    (
-                        hike.id,
-                        way_seq,
-                        member_id,
-                        json.dumps(list(way.node_ids)),
-                        json.dumps(way.tags),
-                        int(walk.in_chain[way_seq]),
-                        walk.leftovers[way_seq],
-                        walk.walked_m[way_seq],
-                        walk.walk_order[way_seq],
-                    )
-                )
-                way_seq += 1
             out.executemany(
                 "INSERT INTO ways (dayhike_id, seq, way_id, node_ids, tags, in_chain, "
                 "leftover, walked_m, walk_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 way_rows,
             )
+        relation_rows.close()  # every row is taken: stop the workers now
         amenity_rows = list(
             conn.execute(
                 f"SELECT osm_key, kind, lat, lon, tags FROM amenities WHERE kind NOT IN ({','.join('?' * len(NETWORK_ONLY_KINDS))})",
@@ -1042,6 +1009,51 @@ def write_geometry_store(
         raise
     out.close()
     tmp.replace(path)
+
+
+def _relation_geometry_rows(
+    hike: DayHike, relation: OsmRelation, snapshot: OsmSnapshot, access_tree, named: NamedPoints | None
+) -> tuple[tuple, list[tuple], list[tuple]]:
+    """A relation DayHike's rows of the GeometryStore: its dayhikes row, its
+    main walk's vertices and its member ways."""
+    walk = _main_walk(relation, snapshot, access_tree, named)
+    dayhike_row = (
+        hike.id,
+        hike.name,
+        hike.name_origin,
+        hike.length_m,
+        walk.unconnected_m,
+        hike.difficulty.sac_scale,
+        json.dumps([list(member) for member in relation.members]),
+        json.dumps(relation.tags),
+    )
+    vertex_rows = [
+        (hike.id, seq, node_id, lat, lon, snapshot.node_elevations.get(node_id), None)
+        for seq, (node_id, (lat, lon)) in enumerate(walk.vertices)
+    ]
+    way_rows = []
+    way_seq = 0
+    for member_type, member_id in relation.members:
+        if member_type != "way":
+            continue
+        way = snapshot.ways.get(member_id)
+        if way is None:
+            continue
+        way_rows.append(
+            (
+                hike.id,
+                way_seq,
+                member_id,
+                json.dumps(list(way.node_ids)),
+                json.dumps(way.tags),
+                int(walk.in_chain[way_seq]),
+                walk.leftovers[way_seq],
+                walk.walked_m[way_seq],
+                walk.walk_order[way_seq],
+            )
+        )
+        way_seq += 1
+    return dayhike_row, vertex_rows, way_rows
 
 
 def _write_built_geometry(
