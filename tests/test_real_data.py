@@ -356,6 +356,13 @@ def _measure_walks(geometry: Path) -> dict:
     }
 
 
+def _relation_ids() -> set[int]:
+    """Ids of the Catalog's relation DayHikes; every id in a Catalog of relations only."""
+    columns = _read(CATALOG, "PRAGMA table_info(dayhikes)")["name"].tolist()
+    where = " WHERE kind = 'relation'" if "kind" in columns else ""
+    return set(_read(CATALOG, f"SELECT id FROM dayhikes{where}")["id"].tolist())
+
+
 @pytest.fixture(scope="module")
 def walk_measures() -> dict:
     return _measure_walks(GEOMETRY)
@@ -415,8 +422,12 @@ def test_a_loop_by_a_parking_point_starts_within_300_m_of_one(
 ) -> None:
     # The PRD's 22.5% "before" measure. Access is parking only, so a loop by a
     # parking point starts near parking; the 2% allowance is for the few loops
-    # that start at a stem's far end instead.
-    near, failing = walk_measures["loops_near_parking"], walk_measures["loops_failing"]
+    # that start at a stem's far end instead. The rule is the main walk's: a
+    # NetworkHike starts at a signpost within 500 m of parking or 300 m of a
+    # place (ADR-0039), a DayStage where its tour's day ends (ADR-0038).
+    relations = _relation_ids()
+    near = [i for i in walk_measures["loops_near_parking"] if i in relations]
+    failing = [i for i in walk_measures["loops_failing"] if i in relations]
     share = len(failing) / len(near) if near else 0.0
     with capsys.disabled():
         print(
