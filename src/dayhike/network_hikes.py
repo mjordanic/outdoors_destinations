@@ -873,7 +873,8 @@ def chain_name(
             return f"{start} – {end}"
         return f"Hike from {start}" if start else f"Hike to {end}" if end else "Network hike"
     vertices = sorted((point for _, point in walk(graph, chain)), key=lambda point: -_haversine_m(*first, *point))
-    via = next((name for point in vertices if (name := _nearest(destinations, point, CORRIDOR_M))), None)
+    near = [] if destinations is None else destinations.nearest_each(vertices, CORRIDOR_M)
+    via = next((name for name in near if name), None)
     if via is None:
         passed = sorted(chain.signposts[1:-1], key=lambda signpost: -_haversine_m(*first, *graph.signposts[signpost]))
         via = next((names[signpost] for signpost in passed if names[signpost]), None)

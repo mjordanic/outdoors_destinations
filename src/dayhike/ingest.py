@@ -124,6 +124,7 @@ def run_ingest(
         access_tree = _access_tree(snapshot.access_points)
         amenity_index = _amenity_index(snapshot.amenities)
         named = named_points(snapshot.named_points)
+        walks: dict[int, _StoredWalk] = {}
         kept, report_counts = _keep_dayhikes(
             snapshot,
             access_tree,
@@ -132,13 +133,16 @@ def run_ingest(
             _dayhike_from_relation,
             named,
             named_points(snapshot.places),
+            walks if sources else None,
         )
         if sources:
             emit_progress(progress, "assemble", "built DayHikes")
             context = BuildContext(
                 snapshot,
                 tuple(kept),
-                lambda relation: _main_walk(relation, snapshot, access_tree, named),
+                lambda relation: _stored_walk(walks[relation.id], snapshot.nodes)
+                if relation.id in walks
+                else _main_walk(relation, snapshot, access_tree, named),
                 progress,
             )
             kept += _build_hikes(conn, sources, context, amenity_index)
@@ -735,7 +739,11 @@ def _keep_dayhikes(
     dayhike_from_relation,
     named: NamedPoints | None = None,
     places: NamedPoints | None = None,
+    walks: dict[int, _StoredWalk] | None = None,
 ):
+    """The relation DayHikes, by id, and per drop reason how many relations
+    it left out. ``walks``, when given, gets each kept DayHike's main walk
+    (see ``_store_walk``)."""
     report_counts = {"unnamed": 0, "length": 0, "container": 0, "node_network": 0}
     kept = []
     seen: set[int] = set()
@@ -765,6 +773,8 @@ def _keep_dayhikes(
                 places,
             )
         )
+        if walks is not None:
+            walks[relation.id] = _store_walk(walk)
     kept.sort(key=lambda hike: hike.id)
     return kept, report_counts
 
@@ -798,6 +808,38 @@ def _build_hikes(
             )
     conn.commit()
     return sorted(built.values(), key=lambda hike: hike.id)
+
+
+# A MainWalk held compactly: its vertices as node ids (their points are the
+# snapshot's), its per-listing lists as arrays, walk_order None as -1. Europe's
+# relation DayHikes walk 71 M vertices, too many to hold as Python tuples.
+_StoredWalk = tuple[np.ndarray, float, np.ndarray, float, tuple[str | None, ...], np.ndarray, np.ndarray]
+
+
+def _store_walk(walk: MainWalk) -> _StoredWalk:
+    return (
+        np.array([node_id for node_id, _ in walk.vertices], dtype=np.int64),
+        walk.length_m,
+        np.array(walk.in_chain, dtype=bool),
+        walk.unconnected_m,
+        tuple(walk.leftovers),
+        np.array(walk.walked_m, dtype=np.float64),
+        np.array([-1 if order is None else order for order in walk.walk_order], dtype=np.int64),
+    )
+
+
+def _stored_walk(stored: _StoredWalk, nodes) -> MainWalk:
+    """The MainWalk ``_store_walk`` held, equal to the one it was given."""
+    node_ids, length_m, in_chain, unconnected_m, leftovers, walked_m, walk_order = stored
+    return MainWalk(
+        [(node_id, nodes[node_id]) for node_id in node_ids.tolist()],
+        length_m,
+        in_chain.tolist(),
+        unconnected_m,
+        list(leftovers),
+        walked_m.tolist(),
+        [None if order < 0 else order for order in walk_order.tolist()],
+    )
 
 
 def _main_walk(
