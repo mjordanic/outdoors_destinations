@@ -53,6 +53,12 @@ class Network:
             tags["name"] = name
         self.legs.append(OsmRelation(relation_id, (("way", way_id),), tags, ("",)))
 
+    def path(self, *points: str) -> int:
+        """A trail way through ``points`` that is no leg; its way id."""
+        way_id = 100 + len(self.ways)
+        self.ways[way_id] = OsmWay(tuple(self.node_ids[point] for point in points), {"highway": "path"})
+        return way_id
+
     def point(self, name: str) -> tuple[float, float]:
         return self.nodes[self.node_ids[name]]
 
@@ -608,6 +614,56 @@ def test_network_hikes_are_the_kept_chains_ready_for_the_catalog():
     assert [node_id for node_id, _ in north.vertices] == [net.node_ids[n] for n in ("S", "N1", "N2", "N3", "S")]
     assert north.way_ids == (100, 101, 102, 103)
     assert round(north.length_m) == round(4 * 2 ** 0.5 * 1500)
+
+
+def test_a_network_hike_from_parking_starts_there_when_a_trail_leads_to_its_signpost():
+    # Parking 300 m west of S, a path P-Q-S from beside it: each loop walks
+    # from P to S, round, and back to P.
+    net = Network(FIGURE_EIGHT | {"P": (-0.3, 0.02), "Q": (-0.15, 0)})
+    for relation_id, (a, b) in enumerate(
+        [("S", "N1"), ("N1", "N2"), ("N2", "N3"), ("N3", "S"), ("S", "S1"), ("S1", "S2"), ("S2", "S3"), ("S3", "S")],
+        start=1,
+    ):
+        net.leg(relation_id, a, b)
+    path = net.path("P", "Q", "S")
+    parking = [_lat_lon(-0.31, 0.03)]
+
+    hikes = network_hikes(net.legs, net.ways, net.nodes, parking, places=[])
+
+    north = next(hike for hike in hikes if hike.parts == (1, 2, 3, 4))
+    names = ("P", "Q", "S", "N1", "N2", "N3", "S", "Q", "P")
+    assert [node for node, _ in north.vertices] == [net.node_ids[name] for name in names]
+    assert north.way_ids == (path, 100, 101, 102, 103, path)
+    assert round(north.length_m) == round(4 * 2**0.5 * 1500 + 2_000 * (_km(net, "P", "Q") + _km(net, "Q", "S")))
+    route_of(north.vertices, north.way_ids, net.ways)  # every step on a way it names
+
+
+def _km(net: Network, a: str, b: str) -> float:
+    from dayhike.catalog import _haversine_m
+
+    return _haversine_m(*net.point(a), *net.point(b)) / 1000
+
+
+def test_a_network_hike_starts_at_its_signpost_when_no_trail_leads_there_from_parking():
+    net, _ = _named_figure_eight()
+    parking = [_lat_lon(-0.3, 0)]
+
+    hikes = network_hikes(net.legs, net.ways, net.nodes, parking, places=[])
+
+    assert {hike.vertices[0][1] for hike in hikes} == {net.point("S")}
+
+
+def test_a_network_hike_whose_first_leg_passes_the_parking_starts_there_without_walking_back():
+    # The line S-M-A-B passes parking at M, 400 m along its first leg: it starts at M.
+    net = Network({"S": (0, 0), "M": (0.4, 0), "A": (2, 0), "B": (4, 0)})
+    net.leg(1, "S", "M", "A")
+    net.leg(2, "A", "B")
+    parking = [_lat_lon(0.4, 0.02)]
+
+    (hike,) = network_hikes(net.legs, net.ways, net.nodes, parking, places=[])
+
+    assert [node for node, _ in hike.vertices] == [net.node_ids[name] for name in ("M", "A", "B")]
+    assert round(hike.length_m) == 3_600
 
 
 def _grid(size: int = 12) -> Network:

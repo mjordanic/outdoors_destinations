@@ -55,6 +55,8 @@ NETWORK_SHORTLIST = 2 * NETWORK_CAP  # distinct chains per start checked for Twi
 START_PARKING_M = 500.0  # a signpost this close to parking starts chains ...
 START_PLACE_M = 300.0  # ... and one this close to a place node
 START_CLUSTER_M = 1_000.0  # signposts this close to a start's first one start with it
+PARKING_ENTRY_M = 50.0  # a trail node this close to parking is where a walk from it begins ...
+PARKING_WALK_M = 2 * START_PARKING_M  # ... and a NetworkHike walks at most this far from there to its start
 DESTINATION_M = 200.0  # a line whose end is this close to a named Peak, Hut, Viewpoint or lake goes there
 NETWORK_TARGET_M = 10_000.0  # a day's walk: of two chains alike otherwise, the one nearer this length is better
 GUIDEPOST_M = 50.0  # a named guidepost this close names a signpost its legs do not
@@ -219,10 +221,23 @@ def network_hikes(
     ``CROSSING_MAX_RATIO`` times the straight jump: then it jumps, as when no
     crossing is found. It favours walking legs over stepping between their
     ends, and takes the shortest crossing only when that favourite is too long.
+
+    A kept chain that starts within ``START_PARKING_M`` of parking starts at
+    the parking: it first walks there from it along ``ways`` (see
+    ``_parking_walks``), and a loop walks back to it at the end, not again
+    along the same trail where the chain itself walks on along it. Where no
+    such walk is found, or it would take the hike out of ``NETWORK_MIN_M`` to
+    ``NETWORK_MAX_M``, the hike starts at its signpost.
     """
     graph = leg_graph(legs, ways, nodes)
     found = starts(graph, access_points, places)
     kept = select(graph, (candidates(graph, start) for start in found), destinations, relations)
+    firsts = {}
+    for _, chain in kept:
+        leg = graph.legs[chain.legs[0]]
+        node, point = leg.vertices[0] if leg.ends[0] == chain.signposts[0] else leg.vertices[-1]
+        firsts[node] = point
+    from_parking = _parking_walks(ways, nodes, access_points, firsts)
     names = signpost_names(graph, guideposts)
     marked, settled = named_points(destinations), named_points(places)
     touching: dict[int, list[int]] = {}  # per signpost, the legs with an end joined into it
@@ -272,6 +287,8 @@ def network_hikes(
             way_ids += leg.way_ids if forward else leg.way_ids[::-1]
             parts.append(leg.relation_id)
             last = index
+        if vertices[0][0] in from_parking:
+            vertices, way_ids = _start_at_parking(vertices, way_ids, *from_parking[vertices[0][0]], chain.loop)
         hikes.append(
             NetworkHike(
                 chain_name(graph, chain, names, marked, settled),
@@ -284,6 +301,113 @@ def network_hikes(
             )
         )
     return hikes
+
+
+def _parking_walks(
+    ways: Mapping[int, OsmWay],
+    nodes: Mapping[int, Point],
+    access_points: Sequence[Point],
+    sources: Mapping[int, Point],
+) -> dict[int, tuple[list[tuple[int, Point]], list[int]]]:
+    """Per source node (id to point), the shortest walk to it along ``ways``
+    from a node within ``PARKING_ENTRY_M`` of an access point (parking) that
+    lies within ``START_PARKING_M`` of the source, of at most
+    ``PARKING_WALK_M``: its (node id, point) vertices from there to the
+    source, and the ways it walks, in walking order. A source that close to
+    parking itself, or with no such walk, has none."""
+    if not access_points or not sources:
+        return {}
+    ids = list(sources)
+    tree = BallTree(np.radians(access_points), metric="haversine")
+    near = tree.query_radius(np.radians([sources[node] for node in ids]), r=START_PARKING_M / EARTH_RADIUS_M)
+    parkings = {node: [access_points[i] for i in found] for node, found in zip(ids, near) if len(found)}
+    # Only ways with a node in a grid cell next to a source's: a cell is PARKING_WALK_M wide or more,
+    # so every node a walk of at most that reaches lies in one.
+    cell_lat = math.degrees(PARKING_WALK_M / EARTH_RADIUS_M)
+    widest = max((abs(sources[node][0]) for node in parkings), default=0.0) + cell_lat
+    cell_lon = cell_lat / math.cos(math.radians(min(widest, 89.0)))
+
+    def cell(point: Point) -> tuple[int, int]:
+        return math.floor(point[0] / cell_lat), math.floor(point[1] / cell_lon)
+
+    cells = {
+        (row + dr, column + dc)
+        for row, column in (cell(sources[node]) for node in parkings)
+        for dr in (-1, 0, 1)
+        for dc in (-1, 0, 1)
+    }
+    edges: dict[int, list[tuple[int, float, int]]] = {}
+    for way_id, way in ways.items():
+        on_way = [node for node in way.node_ids if node in nodes]
+        if not any(cell(nodes[node]) in cells for node in on_way):
+            continue
+        for a, b in zip(on_way, on_way[1:]):
+            metres = _haversine_m(*nodes[a], *nodes[b])
+            edges.setdefault(a, []).append((b, metres, way_id))
+            edges.setdefault(b, []).append((a, metres, way_id))
+
+    def at_parking(node: int, near: Sequence[Point]) -> bool:
+        return any(_haversine_m(*nodes[node], *point) <= PARKING_ENTRY_M for point in near)
+
+    walks: dict[int, tuple[list[tuple[int, Point]], list[int]]] = {}
+    for source, near in parkings.items():
+        if at_parking(source, near):
+            continue
+        came: dict[int, tuple[float, int, int] | None] = {source: None}  # cost, way, node towards the source
+        done: set[int] = set()
+        queue = [(0.0, source)]
+        while queue:
+            cost, node = heapq.heappop(queue)
+            if node in done:
+                continue
+            done.add(node)
+            if at_parking(node, near):
+                path, way_ids = [], []
+                while came[node] is not None:
+                    _, way_id, after = came[node]
+                    path.append((node, nodes[node]))
+                    if not way_ids or way_ids[-1] != way_id:
+                        way_ids.append(way_id)
+                    node = after
+                walks[source] = ([*path, (source, nodes[source])], way_ids)
+                break
+            for there, step, way_id in edges.get(node, ()):
+                walked = cost + step
+                if there not in done and walked <= PARKING_WALK_M and (there not in came or walked < came[there][0]):
+                    came[there] = (walked, way_id, node)
+                    heapq.heappush(queue, (walked, there))
+    return walks
+
+
+def _start_at_parking(
+    vertices: Sequence[tuple[int, Point]],
+    way_ids: Sequence[int],
+    path: Sequence[tuple[int, Point]],
+    path_ways: Sequence[int],
+    loop: bool,
+) -> tuple[list[tuple[int, Point]], list[int]]:
+    """The hike along ``vertices`` and ``way_ids`` walked first along
+    ``path`` (ways ``path_ways``) from the parking to its first vertex and, for
+    a loop, back along it at the end. Where the hike walks on along the path,
+    it starts (or ends) where the path leaves it. Unchanged when that takes it
+    out of ``NETWORK_MIN_M`` to ``NETWORK_MAX_M``."""
+    walked = [*path[:-1], *vertices]
+    ways = [*path_ways, *way_ids]
+    if loop:
+        walked += path[::-1][1:]
+        ways += path_ways[::-1]
+        _unretrace(walked, len(path) + len(vertices) - 2)
+    _unretrace(walked, len(path) - 1)
+    if not NETWORK_MIN_M <= _linestring_length_m([point for _, point in walked]) <= NETWORK_MAX_M:
+        return list(vertices), list(way_ids)
+    return walked, ways
+
+
+def _unretrace(vertices: list[tuple[int, Point]], at: int) -> None:
+    # Drop the walk out and back that turns at vertices[at].
+    while 0 < at < len(vertices) - 1 and vertices[at - 1][0] == vertices[at + 1][0]:
+        del vertices[at : at + 2]
+        at -= 1
 
 
 def _connect(
