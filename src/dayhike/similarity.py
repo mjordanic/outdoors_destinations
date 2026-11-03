@@ -62,6 +62,7 @@ PEAK_SUMMITED_M = 50.0
 PEAKS_AROUND_M = 2_000.0
 TRAILHEAD_M = 500.0  # amenity at the Trailhead (GLOSSARY.md Trailhead)
 SEARCH_STEP_M = 100.0  # line points this far apart find candidate amenities
+_SEARCH_EVERY = 10  # rows_near asks the amenity tree around every 10th line point
 WATER_SOURCE_KINDS = ("drinking_water", "spring", "water_tap", "water_point")
 SOLAR_ASPECT_POINTS = 32  # about this many vertices sampled per DayHike
 SOLAR_ASPECT_OFFSET_ARCSEC = 2  # east and north offsets: two FABDEM cells
@@ -78,6 +79,7 @@ CALIBRATION_QUANTILES = 1_024
 CALIBRATION_PAIRS = 100_000
 CALIBRATION_SEED = 20261024
 _HIKE_CHUNK = 2_000
+_NEAREST_CELLS = 1 << 20  # (point, segment) pairs per slice in nearest_on_line
 
 LANDCOVER_SHARE_COLUMNS = (
     "tree_share",
@@ -1012,17 +1014,25 @@ def _build_facts(
                 progress(f"similarity facts: {min(start + _HIKE_CHUNK, n)}/{n} DayHikes")
     finally:
         geo.close()
-    for suffix, target in (("", facts), ("_back", back_facts)):
-        if progress is not None:
-            progress(f"similarity facts{suffix}: SolarAspect")
-        points = np.concatenate(probes[suffix]) if probes[suffix] else np.empty((0, 2))
-        owners = np.concatenate(probe_rows[suffix]) if probe_rows[suffix] else np.empty(0, dtype=int)
-        target[column["southness"]] = solar_aspect_southness(dem_dir, points, owners, n)
-        if progress is not None:
-            progress(f"similarity facts{suffix}: WaterSide")
-        points = np.concatenate(water_probes[suffix]) if water_probes[suffix] else np.empty((0, 2))
-        owners = np.concatenate(water_rows[suffix]) if water_rows[suffix] else np.empty(0, dtype=int)
-        target[column["waterside_share"]] = waterside_share(landcover_dir, points, owners, n)
+    def both_ways(points: dict[str, list[np.ndarray]], rows: dict[str, list[np.ndarray]]) -> tuple[np.ndarray, np.ndarray]:
+        """The one-way and way-back points in one list, so each tile is read
+        once; owners of the way back are offset by ``n``."""
+        found = [*points[""], *points["_back"]]
+        owners = [*rows[""], *(owner + n for owner in rows["_back"])]
+        return (
+            np.concatenate(found) if found else np.empty((0, 2)),
+            np.concatenate(owners) if owners else np.empty(0, dtype=int),
+        )
+
+    if progress is not None:
+        progress("similarity facts: SolarAspect")
+    southness = solar_aspect_southness(dem_dir, *both_ways(probes, probe_rows), 2 * n)
+    if progress is not None:
+        progress("similarity facts: WaterSide")
+    waterside = waterside_share(landcover_dir, *both_ways(water_probes, water_rows), 2 * n)
+    for half, target in enumerate((facts, back_facts)):
+        target[column["southness"]] = southness[half * n : (half + 1) * n]
+        target[column["waterside_share"]] = waterside[half * n : (half + 1) * n]
     if progress is not None:
         progress("similarity facts: Twins")
     return {
@@ -1093,6 +1103,28 @@ class AmenityPoints:
             metric="haversine",
         )
 
+    def rows_near(self, line: np.ndarray, radius_m: float) -> np.ndarray:
+        """Sorted rows of the points within hypot(radius, ``SEARCH_STEP_M`` / 2)
+        + 1 m of any ``line`` point (radians, at most ``SEARCH_STEP_M`` apart),
+        so every point within ``radius_m`` of the line.
+
+        The tree is asked around every ``_SEARCH_EVERY``-th line point only,
+        that far further out (a superset), then each point found is kept if a
+        line point is within the reach.
+        """
+        reach = (math.hypot(radius_m, SEARCH_STEP_M / 2) + 1.0) / EARTH_RADIUS_M
+        centres = np.arange(0, len(line), _SEARCH_EVERY)
+        # How far each line point is from the centre it is counted with.
+        owner = np.minimum(np.round(np.arange(len(line)) / _SEARCH_EVERY).astype(int), len(centres) - 1)
+        apart = _angle(line, line[centres[owner]]).max() if len(line) else 0.0
+        found = self.tree.query_radius(line[centres], r=reach + apart + 1.0 / EARTH_RADIUS_M)
+        hits = np.unique(np.concatenate(found)).astype(int) if len(found) else np.empty(0, dtype=int)
+        hits = hits[hits < len(self.points)]
+        if not hits.size:
+            return hits
+        near = BallTree(line, metric="haversine").query_radius(np.radians(self.points[hits]), r=reach, count_only=True)
+        return hits[near > 0]
+
     def near_line(
         self, lat: np.ndarray, lon: np.ndarray, line: np.ndarray, radius_m: float
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -1103,10 +1135,7 @@ class AmenityPoints:
         point within ``radius_m`` of the line is within hypot(radius, step / 2)
         of one of them.
         """
-        reach = math.hypot(radius_m, SEARCH_STEP_M / 2) + 1.0
-        hits = self.tree.query_radius(line, r=reach / EARTH_RADIUS_M)
-        hits = np.unique(np.concatenate(hits)).astype(int)
-        hits = hits[hits < len(self.points)]
+        hits = self.rows_near(line, radius_m)
         distance, position = nearest_on_line(
             lat, lon, self.points[hits, 0], self.points[hits, 1]
         )
@@ -1235,20 +1264,24 @@ def nearest_on_line(
     py = np.radians(plat - lat0) * EARTH_RADIUS_M
     dx, dy = np.diff(x), np.diff(y)
     flat = dx**2 + dy**2
-    # Share of each segment, per (point, segment), clipped to the segment.
-    along = np.clip(
-        ((px[:, None] - x[:-1]) * dx + (py[:, None] - y[:-1]) * dy)
-        / np.where(flat > 0, flat, 1.0),
-        0.0,
-        1.0,
-    )
-    miss = np.hypot(x[:-1] + along * dx - px[:, None], y[:-1] + along * dy - py[:, None])
-    nearest = miss.argmin(axis=1)
-    rows = np.arange(len(px))
-    return (
-        miss[rows, nearest],
-        start[nearest] + along[rows, nearest] * segment[nearest],
-    )
+    distance, position = np.empty(len(px)), np.empty(len(px))
+    # Points a slice at a time, so (point, segment) matrices stay small.
+    step = max(1, _NEAREST_CELLS // len(dx))
+    for first in range(0, len(px), step):
+        cx, cy = px[first : first + step], py[first : first + step]
+        # Share of each segment, per (point, segment), clipped to the segment.
+        along = np.clip(
+            ((cx[:, None] - x[:-1]) * dx + (cy[:, None] - y[:-1]) * dy)
+            / np.where(flat > 0, flat, 1.0),
+            0.0,
+            1.0,
+        )
+        miss = np.hypot(x[:-1] + along * dx - cx[:, None], y[:-1] + along * dy - cy[:, None])
+        nearest = miss.argmin(axis=1)
+        rows = np.arange(len(cx))
+        distance[first : first + step] = miss[rows, nearest]
+        position[first : first + step] = start[nearest] + along[rows, nearest] * segment[nearest]
+    return distance, position
 
 
 def _densify(lat: np.ndarray, lon: np.ndarray, step_m: float) -> np.ndarray:
@@ -1295,33 +1328,39 @@ def climb_and_descent(lat: np.ndarray, lon: np.ndarray, ele: np.ndarray) -> tupl
     ele = np.asarray(ele, dtype=float)
     known = np.isfinite(ele)
     along = np.concatenate([[0.0], np.cumsum(_step_m(np.asarray(lat, float), np.asarray(lon, float)))])
-    kept: list[tuple[float, float]] = []  # (metres along, elevation)
-    for here in zip(along[known].tolist(), ele[known].tolist()):
-        while len(kept) >= 2 and _is_spike(kept[-2], kept[-1], here):
-            kept.pop()
-        kept.append(here)
-    if not kept:
+    at, height = along[known].tolist(), ele[known].tolist()
+    if not height:
         return math.nan, math.nan
+    # The kept vertices, as a stack: ``kept_at`` / ``kept`` (metres along,
+    # elevation). A plain loop over floats: this runs on every walk.
+    kept_at, kept = [at[0]], [height[0]]
+    rise_m, grade = SPIKE_RISE_M, SPIKE_GRADE
+    for here_at, here in zip(at[1:], height[1:]):
+        while len(kept) >= 2:
+            vertex = kept[-1]
+            rise, fall = vertex - kept[-2], vertex - here
+            if not (
+                rise * fall > 0
+                and min(abs(rise), abs(fall)) >= rise_m
+                and abs(rise) >= grade * (kept_at[-1] - kept_at[-2])
+                and abs(fall) >= grade * (here_at - kept_at[-1])
+            ):
+                break
+            kept_at.pop()
+            kept.pop()
+        kept_at.append(here_at)
+        kept.append(here)
     climb = descent = 0.0
-    last = kept[0][1]
-    for _, metres in kept[1:]:
-        if metres - last >= GAIN_HYSTERESIS_M:
+    last = kept[0]
+    step = GAIN_HYSTERESIS_M
+    for metres in kept:
+        if metres - last >= step:
             climb += metres - last
             last = metres
-        elif last - metres >= GAIN_HYSTERESIS_M:
+        elif last - metres >= step:
             descent += last - metres
             last = metres
     return climb, descent
-
-
-def _is_spike(before: tuple[float, float], vertex: tuple[float, float], after: tuple[float, float]) -> bool:
-    rise, fall = vertex[1] - before[1], vertex[1] - after[1]
-    return (
-        rise * fall > 0
-        and min(abs(rise), abs(fall)) >= SPIKE_RISE_M
-        and abs(rise) >= SPIKE_GRADE * (vertex[0] - before[0])
-        and abs(fall) >= SPIKE_GRADE * (after[0] - vertex[0])
-    )
 
 
 def profile_shape(
@@ -1654,7 +1693,38 @@ def are_twins(a: np.ndarray, b: np.ndarray) -> bool:
         distance, _ = nearest_on_line(b[:, 0], b[:, 1], a[:, 0], a[:, 1])
         return float((distance <= TWIN_M).mean())
 
+    if _share_near_vertices(a, b) < TWIN_SHARE or _share_near_vertices(b, a) < TWIN_SHARE:
+        return False
     return share_on(a, b) >= TWIN_SHARE and share_on(b, a) >= TWIN_SHARE
+
+
+def _share_near_vertices(a: np.ndarray, b: np.ndarray) -> float:
+    """An upper bound of the share of ``a``'s points within ``TWIN_M`` of
+    ``b``'s line, from a KD-tree of ``b``'s vertices instead of every point
+    against every line piece.
+
+    On the flat plane ``nearest_on_line`` measures on, a point within
+    ``TWIN_M`` of a piece is within ``TWIN_M`` plus half the piece of one of
+    its ends; 1 m more covers rounding.
+    """
+    from scipy.spatial import cKDTree
+
+    lat, lon = np.asarray(b[:, 0], dtype=float), np.asarray(b[:, 1], dtype=float)
+    if len(lat) < 2:
+        return 1.0
+    lat0, lon0 = lat.mean(), lon.mean()
+    scale = math.cos(math.radians(lat0))
+
+    def flat(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
+        return np.column_stack(
+            [np.radians(lon - lon0) * EARTH_RADIUS_M * scale, np.radians(lat - lat0) * EARTH_RADIUS_M]
+        )
+
+    vertices = flat(lat, lon)
+    reach = TWIN_M + np.hypot(*np.diff(vertices, axis=0).T).max() / 2 + 1.0
+    points = flat(np.asarray(a[:, 0], dtype=float), np.asarray(a[:, 1], dtype=float))
+    distance, _ = cKDTree(vertices).query(points, distance_upper_bound=reach)
+    return float(np.isfinite(distance).mean())
 
 
 def dem_heights(dem_dir: Path | str, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
@@ -1682,11 +1752,30 @@ def dem_heights(dem_dir: Path | str, lat: np.ndarray, lon: np.ndarray) -> np.nda
             rows, cols = rasterio.transform.rowcol(dataset.transform, lon[at], lat[at])
             rows = np.clip(np.asarray(rows), 0, dataset.height - 1)
             cols = np.clip(np.asarray(cols), 0, dataset.width - 1)
-            values = dataset.read(1)[rows, cols].astype(float)
+            values = _read_cells(dataset, rows, cols).astype(float)
             if dataset.nodata is not None:
                 values[values == dataset.nodata] = np.nan
         heights[at] = values
     return heights
+
+
+def _read_cells(dataset, rows: np.ndarray, cols: np.ndarray) -> np.ndarray:
+    """Band 1 at each (row, col) of an open raster, reading only the
+    internal blocks that hold them rather than the whole tile."""
+    from rasterio.windows import Window
+
+    block_rows, block_cols = dataset.block_shapes[0]
+    across = -(-dataset.width // block_cols)
+    blocks = (rows // block_rows) * across + cols // block_cols
+    order = np.argsort(blocks, kind="stable")
+    unique, starts = np.unique(blocks[order], return_index=True)
+    values = np.empty(len(rows), dtype=dataset.dtypes[0])
+    for block, first, last in zip(unique.tolist(), starts, [*starts[1:], len(order)]):
+        top, left = block // across * block_rows, block % across * block_cols
+        window = Window(left, top, min(block_cols, dataset.width - left), min(block_rows, dataset.height - top))
+        at = order[first:last]
+        values[at] = dataset.read(1, window=window)[rows[at] - top, cols[at] - left]
+    return values
 
 
 def _step_m(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
@@ -1702,6 +1791,16 @@ def _step_m(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
 
 def _path_length_m(lat: np.ndarray, lon: np.ndarray) -> float:
     return float(_step_m(lat, lon).sum())
+
+
+def _angle(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Great-circle angle between (lat, lon) rows in radians, row by row."""
+    return 2 * np.arcsin(
+        np.sqrt(
+            np.sin((a[:, 0] - b[:, 0]) / 2) ** 2
+            + np.cos(a[:, 0]) * np.cos(b[:, 0]) * np.sin((a[:, 1] - b[:, 1]) / 2) ** 2
+        )
+    )
 
 
 def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

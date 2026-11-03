@@ -659,11 +659,7 @@ def _line_points(kinds: _Kinds, lat: np.ndarray, lon: np.ndarray, radius_m: floa
     Peaks within ``PEAKS_AROUND_M`` (the Measures summit those within 50 m).
     The name column holds a rowid until ``_name_points`` replaces it.
     """
-    line = np.radians(_densify(lat, lon, SEARCH_STEP_M))
-    reach = math.hypot(radius_m, SEARCH_STEP_M / 2) + 1.0
-    hits = kinds.points.tree.query_radius(line, r=reach / EARTH_RADIUS_M)
-    hits = np.unique(np.concatenate(hits)).astype(int)
-    hits = hits[hits < len(kinds.rowids)]
+    hits = kinds.points.rows_near(np.radians(_densify(lat, lon, SEARCH_STEP_M)), radius_m)
     off, along = nearest_on_line(lat, lon, kinds.points.points[hits, 0], kinds.points.points[hits, 1])
     found = []
     for hit, off_m, along_m in zip(hits, off, along):

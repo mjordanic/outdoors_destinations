@@ -21,6 +21,8 @@ from dayhike.similarity import (
     AmenityPoints,
     SimilarityStore,
     _FACTS_VERSION,
+    _step_m,
+    are_twins,
     calibrate,
     random_pair_shares,
     calibrate_similarity,
@@ -29,6 +31,7 @@ from dayhike.similarity import (
     climb_and_descent,
     elevation_gain,
     measure_scores,
+    nearest_on_line,
     profile_shape,
     similarity_dir_for,
     solar_aspect_points,
@@ -435,6 +438,53 @@ def test_elevation_gain_drops_dem_spikes_but_keeps_a_steep_summit() -> None:
     assert elevation_gain(*_north_line([460.0, 400.0, 401.0], step_m=30.0)) == 60.0
 
 
+def _stepwise_climb_and_descent(along, ele):
+    """Climb and descent by the GLOSSARY.md rules, one vertex at a time: a
+    vertex at least 10 m above or below both kept neighbours and at least a
+    25 % grade on both sides is dropped (and the one before it is looked at
+    again), then a change counts once it moves 10 m from the last counted
+    elevation."""
+    kept = []
+    for here in ((m, e) for m, e in zip(along, ele) if math.isfinite(e)):
+        while len(kept) >= 2:
+            (b_m, b_e), (v_m, v_e) = kept[-2], kept[-1]
+            rise, fall = v_e - b_e, v_e - here[1]
+            if not (
+                rise * fall > 0
+                and min(abs(rise), abs(fall)) >= 10.0
+                and abs(rise) >= 0.25 * (v_m - b_m)
+                and abs(fall) >= 0.25 * (here[0] - v_m)
+            ):
+                break
+            kept.pop()
+        kept.append(here)
+    if not kept:
+        return math.nan, math.nan
+    climb = descent = 0.0
+    last = kept[0][1]
+    for _, e in kept[1:]:
+        if e - last >= 10.0:
+            climb, last = climb + (e - last), e
+        elif last - e >= 10.0:
+            descent, last = descent + (last - e), e
+    return climb, descent
+
+
+def test_climb_and_descent_match_the_stepwise_rules_on_noisy_spiky_walks() -> None:
+    rng = np.random.default_rng(20261103)
+    for _ in range(300):
+        count = int(rng.integers(1, 400))
+        step = rng.uniform(5.0, 120.0)
+        lat, lon, _ = _north_line([0.0] * count, step_m=step)
+        ele = 500.0 + np.cumsum(rng.normal(0.0, rng.uniform(0.5, 15.0), count))
+        spikes = rng.random(count) < rng.uniform(0.0, 0.3)
+        ele[spikes] += rng.choice([-1.0, 1.0], spikes.sum()) * rng.uniform(5.0, 80.0, spikes.sum())
+        ele[rng.random(count) < rng.uniform(0.0, 0.2)] = math.nan
+        along = np.concatenate([[0.0], np.cumsum(_step_m(np.asarray(lat, float), np.asarray(lon, float)))])
+        expected = _stepwise_climb_and_descent(along.tolist(), ele.tolist())
+        assert climb_and_descent(lat, lon, ele) == pytest.approx(expected, rel=0, abs=0, nan_ok=True)
+
+
 def test_climb_grade_is_the_gain_over_the_climbing_length() -> None:
     # 1 km up 200 m, then 1 km flat: the flat km does not dilute the grade.
     climb_grade, _ = steepness(*_north_line([*np.linspace(0, 200, 11), *[200.0] * 10]))
@@ -642,6 +692,32 @@ def test_dem_heights_read_the_cell_holding_each_point(tmp_path: Path) -> None:
     assert math.isnan(dem_heights(tmp_path, np.array([45.0]), np.array([15.0]))[0])
 
 
+def test_dem_heights_read_each_cell_across_a_tiled_tile_and_its_ragged_edge_blocks(tmp_path: Path) -> None:
+    import rasterio
+    from rasterio.transform import from_origin
+
+    size, cell = 72, 1 / 3600
+    data = np.arange(size * size, dtype="float32").reshape(size, size)
+    data[5, 7] = -9999.0
+    tmp_path.mkdir(exist_ok=True)
+    with rasterio.open(
+        tmp_path / "N45E015_FABDEM_V1-2.tif", "w", driver="GTiff", height=size, width=size, count=1,
+        dtype="float32", crs="EPSG:4326", transform=from_origin(15.0, 46.0, cell, cell), nodata=-9999.0,
+        tiled=True, blockxsize=32, blockysize=32,  # 3 x 3 blocks, the last row and column cut short
+    ) as dataset:
+        dataset.write(data, 1)
+    rng = np.random.default_rng(3)
+    rows, cols = rng.integers(0, size, 500), rng.integers(0, size, 500)
+    rows[:2], cols[:2] = (5, 71), (7, 71)
+    lat = 46.0 - (rows + 0.5) * cell  # the tile's north-west corner, inside N45E015
+    lon = 15.0 + (cols + 0.5) * cell
+    heights = dem_heights(tmp_path, lat, lon)
+    expected = data[rows, cols].astype(float)
+    expected[expected == -9999.0] = np.nan
+    assert np.array_equal(heights, expected, equal_nan=True)
+    assert math.isnan(heights[0]) and heights[1] == size * size - 1
+
+
 def _southness(dem_dir, lat, lon) -> float:
     chosen = solar_aspect_points(len(lat))
     points = np.column_stack([lat[chosen], lon[chosen]])
@@ -762,6 +838,99 @@ def test_twins_are_routes_that_each_lie_80_percent_on_the_other() -> None:
     ]
 
     assert twin_groups(routes).tolist() == [0, 0, 2, 3, 0, 5]
+
+
+def _wander(rng: np.random.Generator, metres: float, lat0: float = 45.0) -> np.ndarray:
+    """A winding walk of about ``metres`` from (lat0, 15), sampled every ``TWIN_STEP_M``."""
+    heading = np.cumsum(rng.normal(0.0, 0.3, int(metres // TWIN_STEP_M)))
+    north = np.concatenate([[0.0], np.cumsum(TWIN_STEP_M * np.cos(heading))])
+    east = np.concatenate([[0.0], np.cumsum(TWIN_STEP_M * np.sin(heading))])
+    return np.column_stack(
+        [[_metres_north(m, lat0) for m in north], [_metres_east(m) for m in east]]
+    ).astype(np.float32)
+
+
+def _defined_twins(a: np.ndarray, b: np.ndarray) -> bool:
+    """GLOSSARY.md Twin, measured on every point and every piece of the other line."""
+
+    def share_on(a: np.ndarray, b: np.ndarray) -> float:
+        distance, _ = nearest_on_line(b[:, 0], b[:, 1], a[:, 0], a[:, 1])
+        return float((distance <= 30.0).mean())
+
+    return share_on(a, b) >= 0.8 and share_on(b, a) >= 0.8
+
+
+def test_twins_answer_as_the_share_on_every_line_piece_near_the_thresholds() -> None:
+    rng = np.random.default_rng(20261103)
+    answers = []
+    for _ in range(300):
+        a = _wander(rng, rng.uniform(500, 6_000), lat0=rng.uniform(36, 70))
+        b = a[int(rng.integers(0, len(a) // 3)) : len(a) - int(rng.integers(0, len(a) // 3))].astype(float)
+        b = b + rng.normal(0.0, rng.uniform(0, 30), b.shape) / EARTH_RADIUS_M * 180 / math.pi
+        b[:, 1] += math.degrees(rng.uniform(0, 45) / EARTH_RADIUS_M)
+        if rng.random() < 0.5:
+            b = b[::-1]
+        b = b.astype(np.float32)
+        expected = _defined_twins(a, b)
+        assert are_twins(a, b) == expected
+        assert are_twins(b, a) == expected
+        answers.append(expected)
+    assert 30 < sum(answers) < 270  # both answers are tested, many close to a threshold
+
+
+def test_routes_far_from_twins_are_told_apart_without_a_points_by_pieces_matrix() -> None:
+    import tracemalloc
+
+    a = _route(0, 150_000)  # 3,001 points
+    b = _route(0, 150_000, east_m=500)
+    tracemalloc.start()
+    try:
+        assert not are_twins(a, b)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 10_000_000  # a 3,001 x 3,000 float64 matrix alone is 72 MB
+
+
+def test_nearest_on_a_long_line_holds_a_bounded_slice_of_points_by_pieces_in_memory() -> None:
+    import tracemalloc
+
+    line = _route(0, 250_000)  # 5,001 vertices
+    rng = np.random.default_rng(7)
+    points = line[rng.integers(0, len(line), 3_000)].astype(float)
+    points[:, 1] += np.degrees(rng.uniform(-200, 200, len(points)) / EARTH_RADIUS_M)
+    whole_distance, whole_position = nearest_on_line(line[:, 0], line[:, 1], points[:1, 0], points[:1, 1])
+    tracemalloc.start()
+    try:
+        distance, position = nearest_on_line(line[:, 0], line[:, 1], points[:, 0], points[:, 1])
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 100_000_000  # one 3,000 x 5,000 float64 matrix is 120 MB
+    assert (distance[0], position[0]) == (whole_distance[0], whole_position[0])
+    assert distance.max() < 201 and np.all(np.diff(position[np.argsort(points[:, 0])]) >= -1e-6)
+
+
+@pytest.mark.parametrize("radius_m", [50.0, 100.0, 2_000.0])
+def test_rows_near_a_line_are_the_points_within_reach_of_a_line_point(radius_m) -> None:
+    from sklearn.neighbors import BallTree
+
+    from dayhike.similarity import SEARCH_STEP_M, _densify
+
+    rng = np.random.default_rng(int(radius_m))
+    reach = (math.hypot(radius_m, SEARCH_STEP_M / 2) + 1.0) / EARTH_RADIUS_M
+    for _ in range(40):
+        walk = _wander(rng, rng.uniform(100, 20_000), lat0=rng.uniform(36, 70)).astype(float)
+        line = np.radians(_densify(walk[:, 0], walk[:, 1], SEARCH_STEP_M))
+        # Points scattered around the walk, many of them near the reach.
+        near = line[rng.integers(0, len(line), 3_000)]
+        offset = rng.uniform(0.5, 1.5, (len(near), 1)) * reach * rng.normal(size=(len(near), 2))
+        offset[:, 1] /= np.cos(near[:, :1].ravel())
+        points = np.degrees(near + offset)
+        found = AmenityPoints(points, ["hut"] * len(points)).rows_near(line, radius_m)
+        within = BallTree(line, metric="haversine").query_radius(np.radians(points), r=reach, count_only=True) > 0
+        assert found.tolist() == np.flatnonzero(within).tolist()
+        assert 0 < within.sum() < len(points)
 
 
 def _fixture_catalog(tmp_path: Path) -> Path:
