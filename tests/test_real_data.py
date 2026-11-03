@@ -443,11 +443,13 @@ def _main_walk_reasons(
     with tempfile.TemporaryDirectory() as folder:
         folder_path = Path(folder)
         wanted = folder_path / "wanted.osm.pbf"
-        subprocess.run(
+        # Exit 1 means some ids are not in the extract: relations deleted or retagged in OSM.
+        done = subprocess.run(
             ["osmium", "getid", "-r", "-t", str(extract), *(f"r{i}" for i in sorted(ids)),
              "-o", str(wanted), "--no-progress", "--overwrite"],
-            check=True,
         )
+        if done.returncode not in (0, 1):
+            done.check_returncode()
         _, _, work_path = run_ingest([wanted], folder_path / "catalog.sqlite")
         connection = sqlite3.connect(work_path)
         try:

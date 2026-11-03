@@ -167,3 +167,13 @@ def test_measuring_the_steps_of_a_long_walk_grows_about_linearly(tmp_path: Path)
         assert steps == {1: pytest.approx(100.0, abs=1.0)}
 
     assert timings[1] < 8 * timings[0] + 0.5
+
+
+@needs_osmium
+def test_a_dayhike_whose_relation_left_osm_is_not_in_the_extract_to_the_helper(tmp_path: Path) -> None:
+    # On a fresh snapshot a relation deleted in OSM is a departure, not an error.
+    extract, geometry, _ = _lollipop(tmp_path, [])
+
+    reasons = _main_walk_reasons({RELATION_ID, 999_999}, extract=extract, geometry=geometry)
+
+    assert reasons == {RELATION_ID: "under 1 km", 999_999: "not in the extract"}
