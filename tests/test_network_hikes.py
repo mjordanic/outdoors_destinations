@@ -5,10 +5,12 @@ point is one OSM node, every leg one way from its first point to its last.
 """
 
 import gc
+import logging
 import math
 import time
 import weakref
 
+from dayhike.built import BuildContext, BuiltWalk, built_id, route_of
 from dayhike.network_hikes import (
     NETWORK_CAP,
     Start,
@@ -16,13 +18,14 @@ from dayhike.network_hikes import (
     chain_name,
     leg_graph,
     network_hikes,
+    network_source,
     select,
     signpost_names,
     starts,
 )
 import dayhike.network_hikes as network_hikes_module
 from dayhike.catalog import named_points
-from dayhike.osm import OsmRelation, OsmWay
+from dayhike.osm import OsmRelation, OsmSnapshot, OsmWay
 
 KM_LAT = 1_000.0 / 6_371_000 * 180 / math.pi
 
@@ -183,7 +186,7 @@ def test_a_crossing_within_twice_the_straight_jump_is_walked_when_the_favourite_
     assert hike.jumps == 0
 
 
-def test_a_crossing_over_twice_the_straight_jump_keeps_the_jump():
+def _crossing_over_the_cap() -> Network:
     # B and B3 are 51 m apart, one signpost through leg ends K1, K2 and K3
     # that bend 80 m north (177 m across); leg B-Y-B3 bends 47 m south (107 m).
     # Every crossing is over 2 times the jump.
@@ -198,12 +201,55 @@ def test_a_crossing_over_twice_the_straight_jump_keeps_the_jump():
     net.leg(4, "B", "Y", "B3")
     net.leg(5, "K2", "E2")
     net.leg(6, "K3", "E3")
+    return net
+
+
+def test_a_crossing_over_twice_the_straight_jump_keeps_the_jump():
+    net = _crossing_over_the_cap()
 
     hike = _hike_to_d(net)
 
     assert [node for node, _ in hike.vertices] == [net.node_ids[name] for name in ("A", "B", "B3", "D")]
     assert hike.parts == (1, 3)
     assert hike.jumps == 1
+
+
+def _network_source(net: Network, caplog) -> tuple[list[str], list[str], list[BuiltWalk], OsmSnapshot]:
+    # What ingest runs: the network source over a snapshot of ``net``, started at A.
+    snapshot = OsmSnapshot(
+        nodes=net.nodes, ways=net.ways, relations=net.legs, access_points=[net.point("A")]
+    )
+    lines: list[str] = []
+    context = BuildContext(snapshot, [], lambda relation: None, lines.append)
+    with caplog.at_level(logging.WARNING, logger="dayhike.network_hikes"):
+        walks = network_source(context)
+    return lines, [record.getMessage() for record in caplog.records], walks, snapshot
+
+
+def test_a_crossing_over_the_cap_logs_one_warning_and_the_hike_is_kept(caplog):
+    net = _crossing_over_the_cap()
+
+    lines, warnings, walks, snapshot = _network_source(net, caplog)
+
+    (walk,) = [walk for walk in walks if walk.vertices[-1][0] == net.node_ids["D"]]
+    hike_id = built_id(route_of(walk.vertices, walk.way_ids, snapshot.ways)[0])
+    (warning,) = warnings
+    assert [record.levelno for record in caplog.records] == [logging.WARNING]
+    assert f"{hike_id} {walk.name}" in warning
+    assert "straight jump 51 m" in warning
+    assert "crossing 107 m" in warning  # the shortest crossing found
+    assert "ratio 2.10" in warning
+    assert "assemble: network hikes: 1 straight jumps over 50 m left" in lines
+    assert "assemble: network hikes: 1 crossings over 2.0 times the straight jump left as jumps" in lines
+
+
+def test_a_crossing_within_the_cap_logs_no_warning(caplog):
+    net = _curved_crossing(0.047)  # round Y is 2.10 times the jump, but stepping through K is walked
+
+    lines, warnings, _, _ = _network_source(net, caplog)
+
+    assert warnings == []
+    assert "assemble: network hikes: 0 crossings over 2.0 times the straight jump left as jumps" in lines
 
 
 FIGURE_EIGHT = {
