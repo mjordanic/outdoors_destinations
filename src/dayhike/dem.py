@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 import numpy as np
 
 from dayhike.catalog import EARTH_RADIUS_M, geometry_store_path_for, remove_similarity
-from dayhike.parallel import parallel_iter
+from dayhike.parallel import parallel_iter, workers
 
 FABDEM_VERSION = "V1-2"
 FABDEM_DATASET = "https://huggingface.co/datasets/pavelzaitsau/fabdem-v12/resolve/main/tiles"
@@ -410,6 +410,7 @@ def sample_dem(
     """
     catalog_path = Path(catalog_path)
     raster_dir = Path(raster_dir)
+    workers()  # a bad DAYHIKE_WORKERS fails here, before the GeometryStore is open
     store_path = geometry_store_path_for(catalog_path)
     if not store_path.is_file():
         raise FileNotFoundError(store_path)

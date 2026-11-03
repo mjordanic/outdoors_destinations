@@ -156,3 +156,14 @@ def test_build_similarity_measures_the_hikes_in_the_workers(tmp_path, monkeypatc
     pids = read.read_text().split()
     assert len(pids) > 1
     assert str(os.getpid()) not in pids
+
+
+@pytest.mark.parametrize("sample, raster", [(sample_dem, 0), (sample_landcover, 1)])
+def test_a_bad_worker_count_is_refused_before_the_store_is_touched(tmp_path, monkeypatch, sample, raster):
+    catalog_path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, catalog_path)
+    raster_dir = _rasters(tmp_path)[raster]
+    monkeypatch.setenv(WORKERS_ENV, "0")
+
+    with pytest.raises(ValueError, match=WORKERS_ENV):
+        sample(catalog_path, raster_dir)

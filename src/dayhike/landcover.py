@@ -17,7 +17,7 @@ import numpy as np
 
 from dayhike.catalog import EARTH_RADIUS_M, LANDCOVER_FEATURE_NAMES, geometry_store_path_for, remove_similarity
 from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS
-from dayhike.parallel import parallel_iter
+from dayhike.parallel import parallel_iter, workers
 
 Progress = Callable[[str], None]
 Retrieve = Callable[[str, str], None]
@@ -267,6 +267,7 @@ def sample_landcover(
     """Write land-cover classes onto covered vertices and Catalog fractions."""
     catalog_path = Path(catalog_path)
     raster_dir = Path(raster_dir)
+    workers()  # a bad DAYHIKE_WORKERS fails here, before the GeometryStore is open
     store_path = geometry_store_path_for(catalog_path)
     if not store_path.is_file():
         raise FileNotFoundError(store_path)
