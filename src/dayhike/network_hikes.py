@@ -54,6 +54,7 @@ START_CLUSTER_M = 1_000.0  # signposts this close to a start's first one start w
 DESTINATION_M = 200.0  # a line whose end is this close to a named Peak, Hut, Viewpoint or lake goes there
 NETWORK_TARGET_M = 10_000.0  # a day's walk: of two chains alike otherwise, the one nearer this length is better
 GUIDEPOST_M = 50.0  # a named guidepost this close names a signpost its legs do not
+CROSSING_MAX_RATIO = 2.0  # a crossing longer than this times the straight jump is not walked
 # A relation DayHike that starts farther than this from every leg is no chain's Twin:
 # a Twin lies 80 % on a chain of at most NETWORK_MAX_M, so it is at most NETWORK_MAX_M / 0.8 long.
 TWIN_REACH_M = 2 * NETWORK_MAX_M
@@ -191,7 +192,9 @@ def network_hikes(
     ``chain_name``. ``relations`` are the relation DayHikes' walks, whose
     Twins are left out. A kept chain walks from one leg to the next across a
     signpost along the legs touching it when their ends lie farther apart than
-    ``GAP_JOIN_M`` (see ``_connect``).
+    ``GAP_JOIN_M`` (see ``_connect``), unless that crossing is more than
+    ``CROSSING_MAX_RATIO`` times the straight jump: then it jumps, as when no
+    crossing is found.
     """
     graph = leg_graph(legs, ways, nodes)
     found = starts(graph, access_points, places)
@@ -213,9 +216,14 @@ def network_hikes(
             leg = graph.legs[index]
             forward = leg.ends[0] == at
             steps = list(leg.vertices if forward else leg.vertices[::-1])
-            if vertices and _haversine_m(*vertices[-1][1], *steps[0][1]) > GAP_JOIN_M:
+            straight_m = _haversine_m(*vertices[-1][1], *steps[0][1]) if vertices else 0.0
+            if straight_m > GAP_JOIN_M:
                 walked = [via for via in touching[at] if via not in (last, index)]
                 connected = _connect(graph, at, touching[at], walked, vertices[-1][0], steps[0][0], ways, nodes)
+                if connected is not None:
+                    crossing = [vertices[-1][1], *(point for _, point in connected[0]), steps[0][1]]
+                    if _linestring_length_m(crossing) > CROSSING_MAX_RATIO * straight_m:
+                        connected = None
                 if connected is None:
                     jumps += 1
                 else:

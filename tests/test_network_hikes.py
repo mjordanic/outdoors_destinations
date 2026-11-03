@@ -142,6 +142,46 @@ def test_a_crossing_does_not_walk_back_along_the_next_leg():
     assert [node for node, _ in hike.vertices] == [net.node_ids[name] for name in ("A", "X", "Z", "Y", "X", "D")]
 
 
+def _curved_crossing(bend_km: float) -> Network:
+    # B and B3 are 51 m apart, one signpost through K between them. Leg B-Y-B3
+    # bends out to Y, ``bend_km`` off the line: a crossing cheaper than the two
+    # steps through K, and longer the farther Y lies.
+    net = Network({
+        "A": (0, 0), "B": (2, 0), "K": (2.0255, 0), "B3": (2.051, 0),
+        "Y": (2.0255, bend_km), "E": (2.0255, -2), "D": (2.051, 2),
+    })
+    net.leg(1, "A", "B")
+    net.leg(2, "K", "E")
+    net.leg(3, "B3", "D")
+    net.leg(4, "B", "Y", "B3")
+    return net
+
+
+def _hike_to_d(net: Network):
+    hikes = network_hikes(net.legs, net.ways, net.nodes, [net.point("A")], [])
+    (hike,) = [hike for hike in hikes if hike.vertices[-1][0] == net.node_ids["D"]]
+    return hike
+
+
+def test_a_crossing_at_most_twice_the_straight_jump_is_walked():
+    net = _curved_crossing(0.042)  # 98 m round Y, 1.93 times the 51 m jump
+
+    hike = _hike_to_d(net)
+
+    assert [node for node, _ in hike.vertices] == [net.node_ids[name] for name in ("A", "B", "Y", "B3", "D")]
+    assert hike.jumps == 0
+
+
+def test_a_crossing_over_twice_the_straight_jump_keeps_the_jump():
+    net = _curved_crossing(0.047)  # 107 m round Y, 2.10 times the 51 m jump
+
+    hike = _hike_to_d(net)
+
+    assert [node for node, _ in hike.vertices] == [net.node_ids[name] for name in ("A", "B", "B3", "D")]
+    assert hike.parts == (1, 3)
+    assert hike.jumps == 1
+
+
 FIGURE_EIGHT = {
     "S": (0, 0),
     "N1": (1.5, 1.5), "N2": (0, 3), "N3": (-1.5, 1.5),
