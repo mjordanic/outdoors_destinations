@@ -126,14 +126,14 @@ def sample_climate(
     sampled = int(covered.sum())
     if not sampled:
         return 0
-    counts = np.bincount(hike_index[covered], minlength=len(hike_ids))
+    covered_hike = hike_index[covered]
+    covered_cells = {id(point_cell): point_cell[covered] for _cells, point_cell in grids.values()}
+    counts = np.bincount(covered_hike, minlength=len(hike_ids))
     means = np.full((len(hike_ids), 12, 3), np.nan)
     for (var, month, _path), (values, vertex_cell) in zip(rasters, cells, strict=True):
         if progress is not None:
             progress(f"climate sample: {var} {month:02d}")
-        sums = np.bincount(
-            hike_index[covered], weights=values[vertex_cell[covered]], minlength=len(hike_ids)
-        )
+        sums = np.bincount(covered_hike, weights=values[covered_cells[id(vertex_cell)]], minlength=len(hike_ids))
         with np.errstate(invalid="ignore", divide="ignore"):
             means[:, month - 1, CHELSA_VARIABLES.index(var)] = sums / counts
     if progress is not None:
