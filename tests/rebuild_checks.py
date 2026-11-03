@@ -28,8 +28,10 @@ REFERENCE_DIR = (
 VALHALLA_URL = os.environ.get("DAYHIKE_VALHALLA_URL", "http://127.0.0.1:8002")
 SERVING_DIR = Path(os.environ.get("DAYHIKE_SERVING_DIR", DATA_DIR / "web-serving"))
 EUROPE_BOUNDS = (32.6, -31.3, 71.2, 46.4)  # south, west, north, east (README Europe walkthrough)
-# FABDEM tiles that carry vertices but are 404 on the mirror (checked 2026-10-25).
-KNOWN_DEM_GAPS = frozenset({"N41E043", "N41E044", "N41E046"})
+# FABDEM tiles that carry vertices but are 404 on the mirror (checked 2026-10-25): Georgian
+# mountains; and open sea under the ferry gaps of the E2, E8 and E9 long-distance paths,
+# kept since ADR-0033 (checked 2026-11-02).
+KNOWN_DEM_GAPS = frozenset({"N41E043", "N41E044", "N41E046", "N49W004", "N49W005", "N52E002", "N52E003"})
 # Geofabrik "europe" children that group other children.
 COMPOSITE_REGIONS = frozenset({"alps", "dach", "britain-and-ireland", "great-britain"})
 CHUNK = 2_000
@@ -373,13 +375,18 @@ def top_matches(store, seed_id: int, weights: Mapping[str, float], limit: int = 
     ]
 
 
-def similarity_between(store, seed_id: int, other_id: int, weights: Mapping[str, float]) -> tuple[float, float, int]:
-    """(similarity, raw, rank among all candidates) of ``other_id`` for Seed ``seed_id``."""
+def similarity_between(
+    store, seed_id: int, other_id: int, weights: Mapping[str, float], among: np.ndarray | None = None
+) -> tuple[float, float, int]:
+    """(similarity, raw, rank among all candidates) of ``other_id`` for Seed ``seed_id``.
+
+    ``among``: a mask over the store's rows that limits the candidates ranked.
+    """
     from dayhike.similarity import score_rows
 
     seed_row, other_row = np.searchsorted(store.ids, [seed_id, other_id])
     rows = np.arange(len(store.ids))
-    rows = rows[rows != seed_row]
+    rows = rows[(rows != seed_row) & (True if among is None else among)]
     similarity, raw = score_rows(store, [seed_row], rows, weights)
     at = int(np.searchsorted(rows, other_row))
     better = (similarity > similarity[at]) | ((similarity == similarity[at]) & (raw > raw[at]))

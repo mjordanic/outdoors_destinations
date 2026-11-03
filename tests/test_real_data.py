@@ -48,7 +48,7 @@ import pandas as pd
 import pytest
 from sklearn.neighbors import BallTree
 
-from rebuild_checks import DATA_DIR, KEPT_BY_THE_RULES, real_data
+from rebuild_checks import DATA_DIR, KEPT_BY_THE_RULES, REPO, real_data
 
 from dayhike import SimilarityStore, geometry_store_path_for
 from dayhike.catalog import GAP_JOIN_M, MIN_LENGTH_M, _access_tree, _drop_reason, _haversine_m, assemble_main_walk
@@ -98,7 +98,8 @@ def test_every_catalog_dayhike_has_a_geometry_of_at_least_two_vertices() -> None
 def test_geometry_store_holds_every_amenity_kind_with_the_water_sources() -> None:
     kinds = set(_read(GEOMETRY, "SELECT DISTINCT kind FROM amenities")["kind"])
 
-    assert kinds == set(OLD_KINDS + NEW_WATER_KINDS)
+    # Place nodes too: NetworkHikes start at them and DayStages are cut at them (ADR-0039, ADR-0040).
+    assert kinds == set(OLD_KINDS + NEW_WATER_KINDS + ("place",))
 
 
 def test_no_stored_water_source_is_tagged_not_drinkable() -> None:
@@ -186,6 +187,8 @@ def test_notebook_05_passes_every_verification_on_the_real_facts(
 ) -> None:
     from test_demonstration_notebooks import NOTEBOOKS, _notebook_text
 
+    if DATA_DIR.resolve() != (REPO / "data").resolve():
+        pytest.skip("the notebook reads data/ of this checkout, not DAYHIKE_DATA_DIR")
     monkeypatch.setenv("MPLBACKEND", "Agg")
     output, _, _ = _notebook_text(NOTEBOOKS / "05_similarity.ipynb")
     lines = [line.split("\t") for line in output.splitlines()]

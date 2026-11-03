@@ -112,7 +112,7 @@ def test_values_are_in_range(catalog: sqlite3.Connection) -> None:
             *(f"{name} NOT BETWEEN 0 AND 1" for name in LANDCOVER),
             f"{fractions} > 1 + 1e-9",
             "temperature_c NOT BETWEEN -15 AND 30",
-            "precipitation_mm NOT BETWEEN 0 AND 400",
+            "precipitation_mm NOT BETWEEN 0 AND 500",  # western Norway (DNT VSB trails): 479 mm
             "solar_radiation NOT BETWEEN 0 AND 30000",
         ],
         "climate_months": [

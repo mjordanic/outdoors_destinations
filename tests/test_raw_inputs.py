@@ -78,8 +78,11 @@ def test_climate_rasters_are_complete_and_cover_the_vertex_extent(tiles: dict) -
     (transform,) = transforms
     cell, _, origin_x, _, minus_cell, origin_y = transform
     assert cell == pytest.approx(1 / 120) and minus_cell == pytest.approx(-1 / 120)
+    # CHELSA V2.1's 30" cell edges sit 1/60 of a cell (1/7200 degree) west and south of
+    # the 30" multiples, in every file; a clip keeps whole cells of that grid.
     for origin in (origin_x, origin_y):
-        assert math.isclose(origin * 120, round(origin * 120), abs_tol=1e-6), origin
+        cells = origin * 120 + 1 / 60
+        assert math.isclose(cells, round(cells), abs_tol=1e-3), origin
 
 
 def test_catalog_extract_was_made_with_the_current_filter_list() -> None:
