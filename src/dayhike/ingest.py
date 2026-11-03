@@ -94,10 +94,8 @@ def run_ingest(
     catalog_path.parent.mkdir(parents=True, exist_ok=True)
     work_path = work_path_for(catalog_path)
     fingerprint = _fingerprint(source_paths)
-    if fresh and work_path.exists():
-        remove_work(work_path)
-    resume = _work_is_resumable(work_path, fingerprint)
-    if work_path.exists() and not resume:
+    resume = not fresh and _work_is_resumable(work_path, fingerprint)
+    if not resume:
         remove_work(work_path)
 
     emit_progress(progress, "filter", "starting")

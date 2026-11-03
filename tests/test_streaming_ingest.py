@@ -1,3 +1,4 @@
+from contextlib import closing
 from pathlib import Path
 import shutil
 import sqlite3
@@ -266,7 +267,7 @@ def test_a_work_file_left_by_a_machine_crash_inside_a_pass_builds_the_same_catal
 
     def crash_inside_the_pass(message: str) -> None:
         if message.startswith(f"{pass_name}:") and "scanned" in message:
-            with sqlite3.connect(work_path) as conn:
+            with closing(sqlite3.connect(work_path)) as conn:
                 journal_modes.append(conn.execute("PRAGMA journal_mode").fetchone()[0])
             # The files as the disk holds them when the machine stops here.
             on_disk.mkdir()
