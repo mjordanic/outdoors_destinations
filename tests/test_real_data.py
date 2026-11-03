@@ -52,6 +52,7 @@ from rebuild_checks import DATA_DIR, KEPT_BY_THE_RULES, REPO, real_data
 
 from dayhike import SimilarityStore, geometry_store_path_for
 from dayhike.catalog import GAP_JOIN_M, MIN_LENGTH_M, _access_tree, _drop_reason, _haversine_m, assemble_main_walk
+from dayhike.network_hikes import START_PARKING_M, START_PLACE_M
 from dayhike.osm import amenity_kind
 from dayhike.similarity import MEASURE_NAMES
 
@@ -296,6 +297,21 @@ def _distance_to_parking(tree: cKDTree | None, lat: np.ndarray, lon: np.ndarray)
     return metres
 
 
+def _start_distances(geometry: Path, ids: list[int]) -> tuple[dict[int, float], dict[int, float]]:
+    """Metres from each DayHike's first vertex to the nearest parking point and the nearest place."""
+    starts = _read(geometry, "SELECT dayhike_id, latitude, longitude FROM vertices WHERE seq = 0")
+    starts = starts[starts["dayhike_id"].isin(ids)]
+    found = []
+    for kind in ("parking", "place"):
+        points = _read(geometry, "SELECT latitude, longitude FROM amenities WHERE kind = ?", (kind,))
+        chord = cKDTree(_unit_vectors(points["latitude"], points["longitude"])).query(
+            _unit_vectors(starts["latitude"], starts["longitude"])
+        )[0]
+        metres = 2 * EARTH_RADIUS_M * np.arcsin(np.minimum(chord, 2.0) / 2)
+        found.append(dict(zip(starts["dayhike_id"].tolist(), metres.tolist())))
+    return found[0], found[1]
+
+
 def _measure_walks(geometry: Path) -> dict:
     """One pass over a GeometryStore: long steps and loop starts."""
     parking = _read(geometry, "SELECT latitude, longitude FROM amenities WHERE kind = 'parking'")
@@ -440,6 +456,21 @@ def test_a_loop_by_a_parking_point_starts_within_300_m_of_one(
         f"{share:.2%} of loops by parking start over {LOOP_START_M:.0f} m from it, "
         f"{_ids(failing)}"
     )
+
+
+def test_a_networkhike_starts_by_parking_or_a_place() -> None:
+    # ADR-0039: chains start at a signpost within START_PARKING_M of parking or
+    # START_PLACE_M of a place. A signpost stands at the first leg end of its
+    # group, so a chain's first vertex may be GAP_JOIN_M from it.
+    ids = _read(CATALOG, "SELECT id FROM dayhikes WHERE kind = 'network'")["id"].tolist()
+    to_parking, to_place = _start_distances(GEOMETRY, ids)
+
+    far = [
+        i for i in ids
+        if to_parking[i] > START_PARKING_M + GAP_JOIN_M and to_place[i] > START_PLACE_M + GAP_JOIN_M
+    ]  # fmt: skip
+    assert len(to_parking) == len(ids)
+    assert not far, f"{len(far)} NetworkHikes start far from parking and places, {_ids(far)}"
 
 
 # Against data/baseline/: the same OSM snapshot, so only the main walk may move

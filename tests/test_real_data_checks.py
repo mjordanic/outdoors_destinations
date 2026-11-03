@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 from test_main_walk import RELATION_ID, _osm
-from test_real_data import _main_walk_reasons, _measure_walks
+from test_real_data import _main_walk_reasons, _measure_walks, _start_distances
 from test_streaming_ingest import _sorted_pbf
 
 from dayhike import build_catalog, geometry_store_path_for
@@ -222,3 +222,16 @@ def test_a_loop_by_a_parking_point_and_where_it_starts(tmp_path, parking, near, 
     measures = _measure_walks(_loop_store(tmp_path / "loop.sqlite", parking))
 
     assert (measures["loops"], measures["loops_near_parking"], measures["loops_failing"]) == (1, near, failing)
+
+
+def test_a_hike_start_is_measured_to_the_nearest_parking_and_place(tmp_path: Path) -> None:
+    store = _loop_store(tmp_path / "loop.sqlite", [(0.0, 4 * STEP_DEG)])  # 400 m east of the square's start
+    connection = sqlite3.connect(store)
+    connection.execute("INSERT INTO amenities VALUES (?, 0.0, 'place')", (-STEP_DEG,))  # 100 m south of it
+    connection.commit()
+    connection.close()
+
+    to_parking, to_place = _start_distances(store, [1])
+
+    assert to_parking == {1: pytest.approx(400.0, rel=0.01)}
+    assert to_place == {1: pytest.approx(100.0, rel=0.01)}
