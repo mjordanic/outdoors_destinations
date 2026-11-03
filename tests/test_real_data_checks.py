@@ -6,6 +6,7 @@ small OSM files, so a check that disagrees with ingest fails in the normal suite
 """
 
 import shutil
+import time
 import sqlite3
 from pathlib import Path
 
@@ -134,3 +135,35 @@ def test_a_node_network_leg_left_by_an_osm_edit_is_a_leg_to_the_helper(tmp_path:
     )
 
     assert reasons == {RELATION_ID: "node-network leg"}
+
+
+def _straight_walk_store(path: Path, vertices: int) -> Path:
+    """A GeometryStore of one DayHike: ``vertices`` points 100 m apart, each its own walked way."""
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        "CREATE TABLE amenities (latitude REAL, longitude REAL, kind TEXT);"
+        "CREATE TABLE dayhikes (id INTEGER PRIMARY KEY);"
+        "CREATE TABLE vertices (dayhike_id INTEGER, seq INTEGER, node_id INTEGER, latitude REAL, longitude REAL);"
+        "CREATE TABLE ways (dayhike_id INTEGER, node_ids TEXT, walk_order INTEGER);"
+        "INSERT INTO dayhikes VALUES (1);"
+    )
+    connection.executemany(
+        "INSERT INTO vertices VALUES (1, ?, ?, ?, 0.0)", [(i, 10 + i, i * 0.0009) for i in range(vertices)]
+    )
+    connection.executemany("INSERT INTO ways VALUES (1, ?, ?)", [(f"[{10 + i}]", i) for i in range(vertices)])
+    connection.commit()
+    connection.close()
+    return path
+
+
+def test_measuring_the_steps_of_a_long_walk_grows_about_linearly(tmp_path: Path) -> None:
+    # Hikes have no upper length cap (ADR-0033): a 1,700 km line has tens of thousands of steps.
+    timings = []
+    for vertices in (2_000, 8_000):
+        store = _straight_walk_store(tmp_path / f"walk{vertices}.sqlite", vertices)
+        started = time.perf_counter()
+        steps = _measure_walks(store)["long_steps"]
+        timings.append(time.perf_counter() - started)
+        assert steps == {1: pytest.approx(100.0, abs=1.0)}
+
+    assert timings[1] < 8 * timings[0] + 0.5

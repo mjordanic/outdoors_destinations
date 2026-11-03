@@ -249,24 +249,27 @@ def _haversine_m(lat1, lon1, lat2, lon2):
     return 2 * EARTH_RADIUS_M * np.arcsin(np.sqrt(h))
 
 
-def _joins_ends_at_one_point(
-    first: int, second: int, walked_ways: list[list[int]], stored: set[int]
-) -> bool:
-    """Is ``first`` to ``second`` the join of two way ends that share a point?
+def _end_joins(walked_ways: list[list[int]], stored: set[int]) -> tuple[set[int], set[int]]:
+    """Way ends, and the nodes next to an end the GeometryStore dropped, of one DayHike.
 
     The assembly joins the ends of two ways within ``GAP_JOIN_M`` with a gap,
     and the vertex builder drops the second end when it repeats the point
     before it. So the stored step runs from the first way's end to the next
     node of the second way. The GeometryStore holds no coordinates for the
     dropped end, but it is a node of a walked way with no vertex of its own.
+    A step ``first`` to ``second`` is such a join when ``first`` is in the
+    first set and ``second`` in the second. Built once per DayHike, so a long
+    walk's steps are checked in constant time each.
     """
     ends = {nodes[end] for nodes in walked_ways for end in (0, -1)}
-    return first in ends and any(
-        nodes[neighbour] == second and nodes[end] not in stored
+    after_dropped = {
+        nodes[neighbour]
         for nodes in walked_ways
         if len(nodes) >= 2
         for end, neighbour in ((0, 1), (-1, -2))
-    )
+        if nodes[end] not in stored
+    }
+    return ends, after_dropped
 
 
 def _measure_walks(geometry: Path) -> dict:
@@ -315,11 +318,12 @@ def _measure_walks(geometry: Path) -> dict:
             node = vertices["node_id"].to_numpy()[rows]
             steps = _haversine_m(lat[:-1], lon[:-1], lat[1:], lon[1:])
             pairs = edges.get(dayhike_id, set())
-            for index in np.flatnonzero(steps > STEP_MAX_M):
+            long = np.flatnonzero(steps > STEP_MAX_M)
+            if long.size:
+                ends, after_dropped = _end_joins(walked_ways.get(dayhike_id, []), set(node.tolist()))
+            for index in long:
                 first, second = int(node[index]), int(node[index + 1])
-                if (first, second) not in pairs and not _joins_ends_at_one_point(
-                    first, second, walked_ways.get(dayhike_id, []), set(node.tolist())
-                ):
+                if (first, second) not in pairs and not (first in ends and second in after_dropped):
                     long_steps[dayhike_id] = max(long_steps.get(dayhike_id, 0.0), steps[index])
             if _haversine_m(lat[0], lon[0], lat[-1], lon[-1]) <= LOOP_CLOSES_M:
                 loops += 1
