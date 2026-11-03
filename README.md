@@ -2014,11 +2014,12 @@ at the rebuild.
    uv run dayhike export-serving --valhalla-tiles data/valhalla/highways-eu --valhalla-url http://127.0.0.1:8003  # 22 min
    ```
 
-   `sample-dem`, `sample-landcover`, `sample-trailgraph` and `build-similarity` take
-   `--workers N` (or `DAYHIKE_WORKERS=N` for every step): they run their
-   independent work in N forked processes and write the same files as with
-   one, the default (ADR-0044). Each worker adds memory, so pick N for the
-   machine's free cores and RAM. `ingest`, `sample-climate` and
+   `ingest`, `sample-dem`, `sample-landcover`, `sample-trailgraph` and
+   `build-similarity` take `--workers N` (or `DAYHIKE_WORKERS=N` for every
+   step): they run their independent work in N forked processes and write
+   the same files as with one, the default (ADR-0044). Each worker adds
+   memory, so pick N for the machine's free cores and RAM: an ingest worker
+   adds up to about 30 % of ingest's one-process peak. `sample-climate` and
    `export-serving` run in one process whatever `DAYHIKE_WORKERS` says.
 
    Beside the sample steps, rebuild the highway tiles ([Highway tiles](#highway-tiles-all-of-europe-small-server):
