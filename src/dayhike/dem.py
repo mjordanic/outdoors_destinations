@@ -243,6 +243,37 @@ def fetch_dem(
     return paths
 
 
+def read_cells(dataset, lon: np.ndarray, lat: np.ndarray) -> np.ndarray:
+    """The value of the cell under each point of an open raster, in its dtype.
+
+    The same as ``dataset.sample`` point by point: the cell is found with the
+    same floor, and off the grid a point reads the nodata value (0 without
+    one). Each block of the raster holding a point is read once.
+    """
+    from rasterio.transform import rowcol
+    from rasterio.windows import Window
+
+    out = np.full(len(lon), dataset.nodata or 0, dtype=dataset.dtypes[0])
+    if not len(lon):
+        return out
+    rows, cols = (np.asarray(v, dtype=np.int64) for v in rowcol(dataset.transform, lon, lat))
+    inside = np.flatnonzero((rows >= 0) & (rows < dataset.height) & (cols >= 0) & (cols < dataset.width))
+    if not len(inside):
+        return out
+    block_height, block_width = dataset.block_shapes[0]
+    blocks = rows[inside] // block_height * (dataset.width // block_width + 1) + cols[inside] // block_width
+    order = np.argsort(blocks, kind="stable")
+    inside, blocks = inside[order], blocks[order]
+    starts = np.flatnonzero(np.r_[True, blocks[1:] != blocks[:-1]])
+    for start, end in zip(starts.tolist(), [*starts[1:].tolist(), len(blocks)]):
+        at = inside[start:end]
+        top = int(rows[at[0]]) // block_height * block_height
+        left = int(cols[at[0]]) // block_width * block_width
+        window = Window(left, top, min(block_width, dataset.width - left), min(block_height, dataset.height - top))
+        out[at] = dataset.read(1, window=window)[rows[at] - top, cols[at] - left]
+    return out
+
+
 def sample_elevations(
     raster_dir: Path | str,
     points: Sequence[tuple[float, float]],
@@ -290,8 +321,8 @@ def sample_elevations(
                     )
                     for lon, lat in coords
                 ]
-            for index, sample in zip(indices, dataset.sample(coords), strict=True):
-                value = float(sample[0])
+            values = read_cells(dataset, *np.array(coords, dtype=float).T).tolist()
+            for index, value in zip(indices, values, strict=True):
                 if not math.isfinite(value):
                     continue
                 if nodata is not None and value == nodata:
