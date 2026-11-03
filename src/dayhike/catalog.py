@@ -526,7 +526,7 @@ def build_catalog(
     ``sources`` build DayHikes that are not one relation (ADR-0038); by
     default ingest's own ``BUILT_HIKE_SOURCES``.
     """
-    from dayhike.ingest import BUILT_HIKE_SOURCES, emit_progress, run_ingest, write_geometry_store
+    from dayhike.ingest import BUILT_HIKE_SOURCES, _connect_work, emit_progress, run_ingest, write_geometry_store
     from dayhike.trailgraph import check_snap_tolerance, write_trailgraph
 
     check_snap_tolerance(snap_tolerance_m)
@@ -541,7 +541,7 @@ def build_catalog(
     emit_progress(progress, "write", str(catalog_path))
     _write_sqlite(catalog_path, kept, report)
     if work_path.exists():
-        work_conn = sqlite3.connect(work_path)
+        work_conn = _connect_work(work_path)
         try:
             write_geometry_store(geometry_store_path_for(catalog_path), kept, work_conn)
             write_trailgraph(
