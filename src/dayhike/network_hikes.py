@@ -49,8 +49,9 @@ logger = logging.getLogger(__name__)
 NETWORK_MIN_M = 3_000.0  # a NetworkHike is day-sized: at least this long ...
 NETWORK_MAX_M = 25_000.0  # ... and at most this
 NETWORK_EXPANSIONS = 20_000  # legs one start's search may try
-NETWORK_CAP = 4  # chains kept per start
-NETWORK_SHORTLIST = 2 * NETWORK_CAP  # distinct chains per start checked for Twins
+NETWORK_CAP = 4  # chains kept per start ...
+NETWORK_CAP_MAX = 8  # ... or one per named destination its lines reach, up to this
+NETWORK_SHORTLIST = 2 * NETWORK_CAP  # distinct chains per start checked for Twins, twice its cap
 START_PARKING_M = 500.0  # a signpost this close to parking starts chains ...
 START_PLACE_M = 300.0  # ... and one this close to a place node
 START_CLUSTER_M = 1_000.0  # signposts this close to a start's first one start with it
@@ -558,18 +559,22 @@ def select(
     ``destinations`` (lat, lon, name), then other lines; within each, nearer
     ``NETWORK_TARGET_M`` (by ratio) first. Per start, best first, a chain is
     shortlisted when more than ``VERSION_DIFFERS`` of its length lies on legs
-    that no chain shortlisted there walks, up to ``NETWORK_SHORTLIST``. Of
-    those, at most ``NETWORK_CAP`` per start are kept, none a Twin of a better chain kept or
-    of one of the relation DayHikes' walks ``relations`` (Twins of Twins
-    count, as in ``twin_groups``).
+    that no chain shortlisted there walks, up to twice the start's cap. A
+    start's cap is the number of named destinations its lines reach, at least
+    ``NETWORK_CAP`` and at most ``NETWORK_CAP_MAX``. Of its first
+    ``NETWORK_SHORTLIST``, at most ``NETWORK_CAP`` per start are kept, none a
+    Twin of a better chain kept or of one of the relation DayHikes' walks
+    ``relations`` (Twins of Twins count, as in ``twin_groups``). Then, best
+    first, its other shortlisted chains are kept up to its cap, none a Twin of
+    a relation DayHike or of a chain kept before, so none takes the place of
+    a chain kept before.
 
-    A shortlisted line to a destination is replaced by that destination's
+    A kept line to a destination is then replaced by that destination's
     direct line from the start, its shortest line, when that is shorter and
     no other line shortlisted there is it or goes to the destination before
     it. The direct line takes the line's place in the order and needs no
-    share of its own; the line it replaces is kept in its place when the
-    direct line is a Twin of a relation DayHike or of another chain kept
-    (see ``_direct_lines``).
+    share of its own; the line it replaces stays when the direct line is a
+    Twin of a relation DayHike or of another chain kept (see ``_widened``).
     """
     reached = named_points(destinations)
     destination_of = {
@@ -586,18 +591,20 @@ def select(
         return kind, abs(math.log(chain.length_m / NETWORK_TARGET_M))
 
     shortlist: list[tuple[int, Chain]] = []
-    direct_of: dict[int, Chain] = {}  # per shortlist row, the direct line that may replace it
+    extra: list[tuple[int, Chain]] = []  # shortlisted past NETWORK_SHORTLIST, at a start with a higher cap
+    caps: list[int] = []
+    direct_of: dict[int, Chain] = {}  # by id of a shortlisted chain, the direct line that may replace it
     for start, listed in enumerate(per_start):
         listed = list(listed)
         direct: dict[str, Chain] = {}
         for chain in listed:
             if (name := goes_to(chain)) and (name not in direct or chain.length_m < direct[name].length_m):
                 direct[name] = chain
+        caps.append(min(NETWORK_CAP_MAX, max(NETWORK_CAP, len(direct))))
         legs: list[set[int]] = []
-        served: set[str] = set()
-        first = len(shortlist)
+        picked: list[Chain] = []
         for chain in sorted(listed, key=preference):
-            if len(legs) >= NETWORK_SHORTLIST:
+            if len(legs) >= 2 * caps[start]:
                 break
             walked = set(chain.legs)
             # Chains of one network share whole legs, so the share off another is in leg metres.
@@ -606,20 +613,18 @@ def select(
                 for other in legs
             ):
                 legs.append(walked)
-                shortlist.append((start, chain))
-                if (name := goes_to(chain)) and name not in served:
-                    served.add(name)
-                    if direct[name].length_m < chain.length_m:
-                        direct_of[len(shortlist) - 1] = direct[name]
-        # A direct line shortlisted as it is replaces no other line.
-        here = {id(chain) for _, chain in shortlist[first:]}
-        for row in range(first, len(shortlist)):
-            if row in direct_of and id(direct_of[row]) in here:
-                del direct_of[row]
+                (shortlist if len(legs) <= NETWORK_SHORTLIST else extra).append((start, chain))
+                picked.append(chain)
+        # The first line shortlisted to a destination may become its direct line, unless that is shortlisted too.
+        served = {id(chain) for chain in picked}
+        for chain in picked:
+            if (name := goes_to(chain)) and id(direct[name]) not in served and direct[name].length_m < chain.length_m:
+                served.add(id(direct[name]))
+                direct_of[id(chain)] = direct[name]
     given = [_even_points(*np.array(walk).T, TWIN_STEP_M) for walk in relations]
     # A group's root is its first row, so a group holding a relation has a root below len(given).
     groups = twin_groups([*given, *(_route(graph, chain) for _, chain in shortlist)])[len(given) :]
-    kept_rows: list[int] = []
+    kept: list[tuple[int, Chain]] = []
     kept_groups: set[int] = set()
     count: Counter[int] = Counter()
     for row in sorted(range(len(shortlist)), key=lambda row: preference(shortlist[row][1])):
@@ -628,39 +633,54 @@ def select(
             continue
         kept_groups.add(int(groups[row]))
         count[start] += 1
-        kept_rows.append(row)
-    chains = _direct_lines(graph, shortlist, kept_rows, direct_of, given)
-    return [(shortlist[row][0], chain) for row, chain in zip(kept_rows, chains)]
+        kept.append((start, chain))
+    taken = {id(chain) for _, chain in kept}
+    left = [row for row in shortlist if id(row[1]) not in taken] + extra
+    widened = _widened(graph, kept, sorted(left, key=lambda row: preference(row[1])), caps, direct_of, given)
+    return [(start, chain) for start, chain, _ in sorted(widened, key=lambda row: preference(row[2]))]
 
 
-def _direct_lines(
+def _widened(
     graph: LegGraph,
-    shortlist: Sequence[tuple[int, Chain]],
-    kept_rows: Sequence[int],
+    kept: Sequence[tuple[int, Chain]],
+    extra: Sequence[tuple[int, Chain]],
+    caps: Sequence[int],
     direct_of: Mapping[int, Chain],
     given: Sequence[np.ndarray],
-) -> list[Chain]:
-    """The chains of the ``kept_rows`` of ``shortlist``, each replaced by its
-    direct line in ``direct_of`` unless that is a Twin of a relation DayHike's
-    walk (``given``), of another kept chain or of a direct line put in before
-    it. Twins are grouped apart from the kept chains', so a direct line never
-    joins two kept chains into one group."""
-    swaps = [row for row in kept_rows if row in direct_of]
-    kept = [shortlist[row][1] for row in kept_rows]
-    groups = twin_groups(
-        [*given, *(_route(graph, chain) for chain in kept), *(_route(graph, direct_of[row]) for row in swaps)]
-    )
-    kept_groups = [int(group) for group in groups[len(given) : len(given) + len(kept)]]
-    held = Counter(kept_groups)
-    position = {row: at for at, row in enumerate(kept_rows)}
+) -> list[tuple[int, Chain, Chain]]:
+    """The ``kept`` (start, chain) and, best first, the ``extra`` ones up to
+    their start's cap in ``caps``; then each of them replaced by its direct
+    line in ``direct_of``. An extra chain or a direct line is left out when it
+    is a Twin of a relation DayHike's walk (``given``) or of a chain kept or
+    put in before it (but the one a direct line replaces). It is grouped apart
+    from ``kept``, so it never joins two kept chains into one group and never
+    takes the place of one. As (start, chain, the chain it replaced or itself)."""
+    chains = [chain for _, chain in (*kept, *extra)]
+    directs = [direct_of[id(chain)] for chain in chains if id(chain) in direct_of]
+    groups = [int(group) for group in twin_groups([*given, *(_route(graph, chain) for chain in (*chains, *directs))])]
+    group_of = {id(chain): group for chain, group in zip(chains, groups[len(given) :])}
+    direct_group = {id(chain): group for chain, group in zip(directs, groups[len(given) + len(chains) :])}
+    chosen = list(kept)
+    held = Counter(group_of[id(chain)] for _, chain in kept)
+    count = Counter(start for start, _ in kept)
+    for start, chain in extra:
+        group = group_of[id(chain)]
+        if count[start] < caps[start] and group >= len(given) and not held[group]:
+            held[group] += 1
+            count[start] += 1
+            chosen.append((start, chain))
+    widened = []
     taken: set[int] = set()
-    for row, group in zip(swaps, groups[len(given) + len(kept) :]):
-        at, group = position[row], int(group)
-        others = held[group] - (kept_groups[at] == group)
-        if group >= len(given) and not others and group not in taken:
-            taken.add(group)
-            kept[at] = direct_of[row]
-    return kept
+    for start, chain in chosen:
+        line = direct_of.get(id(chain))
+        if line is not None:
+            group = direct_group[id(line)]
+            if group >= len(given) and not held[group] - (group_of[id(chain)] == group) and group not in taken:
+                taken.add(group)
+                widened.append((start, line, chain))
+                continue
+        widened.append((start, chain, chain))
+    return widened
 
 
 def _route(graph: LegGraph, chain: Chain) -> np.ndarray:

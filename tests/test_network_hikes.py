@@ -13,6 +13,7 @@ import weakref
 from dayhike.built import BuildContext, BuiltWalk, built_id, route_of
 from dayhike.network_hikes import (
     NETWORK_CAP,
+    NETWORK_CAP_MAX,
     Start,
     candidates,
     chain_name,
@@ -313,6 +314,40 @@ def test_a_start_keeps_at_most_the_cap_of_distinct_chains():
 
     assert NETWORK_CAP == 4
     assert len(kept) == 4
+
+
+def _star(count: int) -> tuple[Network, list[tuple[float, float, str]]]:
+    # From S, ``count`` 5 km two-leg lines S-Ai-Bi, evenly round; a named peak at every Bi.
+    points = {"S": (0.0, 0.0)}
+    for i in range(count):
+        angle = math.radians(i * 360 / count)
+        points[f"A{i}"] = (2.5 * math.cos(angle), 2.5 * math.sin(angle))
+        points[f"B{i}"] = (5 * math.cos(angle), 5 * math.sin(angle))
+    net = Network(points)
+    for i in range(count):
+        net.leg(10 * i + 1, "S", f"A{i}")
+        net.leg(10 * i + 2, f"A{i}", f"B{i}")
+    return net, [(*net.point(f"B{i}"), f"Vrh {i}") for i in range(count)]
+
+
+def test_a_start_keeps_a_chain_per_destination_it_reaches_up_to_the_highest_cap():
+    for count, kept_count in ((6, 6), (10, NETWORK_CAP_MAX)):
+        net, peaks = _star(count)
+        graph = leg_graph(net.legs, net.ways, net.nodes)
+
+        kept = select(graph, [candidates(graph, _start_at(graph, net.point("S")))], destinations=peaks)
+
+        assert NETWORK_CAP_MAX == 8
+        assert len(kept) == kept_count
+
+
+def test_a_start_reaching_few_destinations_keeps_the_cap():
+    net, peaks = _star(6)
+    graph = leg_graph(net.legs, net.ways, net.nodes)
+
+    kept = select(graph, [candidates(graph, _start_at(graph, net.point("S")))], destinations=peaks[:2])
+
+    assert len(kept) == NETWORK_CAP
 
 
 def test_a_figure_eight_keeps_two_loops_and_no_near_copies():
