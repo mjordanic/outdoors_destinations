@@ -177,3 +177,48 @@ def test_a_dayhike_whose_relation_left_osm_is_not_in_the_extract_to_the_helper(t
     reasons = _main_walk_reasons({RELATION_ID, 999_999}, extract=extract, geometry=geometry)
 
     assert reasons == {RELATION_ID: "under 1 km", 999_999: "not in the extract"}
+
+
+# A 400 m square walked from (0, 0) back to it, a vertex every 100 m: a loop.
+SQUARE = [(0, 0), (0, 1), (0, 2), (0, 3), (0, 4), (1, 4), (2, 4), (3, 4), (4, 4),
+          (4, 3), (4, 2), (4, 1), (4, 0), (3, 0), (2, 0), (1, 0), (0, 0)]  # fmt: skip
+STEP_DEG = 0.0009  # about 100 m
+
+
+def _loop_store(path: Path, parking: list[tuple[float, float]]) -> Path:
+    """A GeometryStore of DayHike 1, the SQUARE loop, and DayHike 2, a line by every parking point."""
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        "CREATE TABLE amenities (latitude REAL, longitude REAL, kind TEXT);"
+        "CREATE TABLE dayhikes (id INTEGER PRIMARY KEY);"
+        "CREATE TABLE vertices (dayhike_id INTEGER, seq INTEGER, node_id INTEGER, latitude REAL, longitude REAL);"
+        "CREATE TABLE ways (dayhike_id INTEGER, node_ids TEXT, walk_order INTEGER);"
+        "INSERT INTO dayhikes VALUES (1), (2);"
+    )
+    connection.executemany("INSERT INTO amenities VALUES (?, ?, 'parking')", parking)
+    connection.executemany(
+        "INSERT INTO vertices VALUES (1, ?, ?, ?, ?)",
+        [(i, 10 + i, row * STEP_DEG, column * STEP_DEG) for i, (row, column) in enumerate(SQUARE)],
+    )
+    line = [(5.0, 0.0), (5.0, 4 * STEP_DEG)]  # far from the square, by no parking point either
+    connection.executemany(
+        "INSERT INTO vertices VALUES (2, ?, ?, ?, ?)", [(i, 100 + i, lat, lon) for i, (lat, lon) in enumerate(line)]
+    )
+    connection.commit()
+    connection.close()
+    return path
+
+
+@pytest.mark.parametrize(
+    ("parking", "near", "failing"),
+    [
+        ([(4 * STEP_DEG + 0.0002, 4 * STEP_DEG)], [1], [1]),  # by the far corner only: starts 566 m off
+        ([(0.0002, 0.0)], [1], []),  # by the start
+        ([(2 * STEP_DEG, 2 * STEP_DEG)], [], []),  # in the middle, 200 m from every vertex
+        ([], [], []),
+    ],
+)
+def test_a_loop_by_a_parking_point_and_where_it_starts(tmp_path, parking, near, failing) -> None:
+    measures = _measure_walks(_loop_store(tmp_path / "loop.sqlite", parking))
+
+    assert (measures["loops"], measures["loops_near_parking"], measures["loops_failing"]) == (1, near, failing)

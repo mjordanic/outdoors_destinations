@@ -46,7 +46,7 @@ import numpy as np
 import osmium
 import pandas as pd
 import pytest
-from sklearn.neighbors import BallTree
+from scipy.spatial import cKDTree
 
 from rebuild_checks import DATA_DIR, KEPT_BY_THE_RULES, REPO, real_data
 
@@ -275,14 +275,31 @@ def _end_joins(walked_ways: list[list[int]], stored: set[int]) -> tuple[set[int]
     return ends, after_dropped
 
 
+def _unit_vectors(lat, lon) -> np.ndarray:
+    lat, lon = np.radians(np.asarray(lat, dtype=float)), np.radians(np.asarray(lon, dtype=float))
+    return np.column_stack([np.cos(lat) * np.cos(lon), np.cos(lat) * np.sin(lon), np.sin(lat)])
+
+
+def _distance_to_parking(tree: cKDTree | None, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
+    """Metres from each vertex to its nearest parking point; inf past LOOP_START_M.
+
+    A k-d tree on unit vectors: the chord is exact and fast, where a haversine
+    BallTree over every vertex of Europe took over an hour (129 M vertices).
+    """
+    if tree is None:
+        return np.full(len(lat), np.inf)
+    bound = 2 * np.sin(LOOP_START_M / EARTH_RADIUS_M / 2)
+    chord = tree.query(_unit_vectors(lat, lon), distance_upper_bound=bound)[0]
+    metres = np.full(len(chord), np.inf)
+    found = np.isfinite(chord)
+    metres[found] = 2 * EARTH_RADIUS_M * np.arcsin(chord[found] / 2)
+    return metres
+
+
 def _measure_walks(geometry: Path) -> dict:
     """One pass over a GeometryStore: long steps and loop starts."""
     parking = _read(geometry, "SELECT latitude, longitude FROM amenities WHERE kind = 'parking'")
-    tree = (
-        BallTree(np.radians(parking[["latitude", "longitude"]].to_numpy()), metric="haversine")
-        if len(parking)
-        else None
-    )
+    tree = cKDTree(_unit_vectors(parking["latitude"], parking["longitude"])) if len(parking) else None
     ids = _read(geometry, "SELECT id FROM dayhikes ORDER BY id")["id"].tolist()
     long_steps: dict[int, float] = {}
     loops_near_parking: list[int] = []
@@ -311,10 +328,6 @@ def _measure_walks(geometry: Path) -> dict:
             for a, b in zip(nodes, nodes[1:]):
                 pairs.add((a, b))
                 pairs.add((b, a))
-        distance_to_parking = np.full(len(vertices), np.inf)
-        if tree is not None:
-            radians = np.radians(vertices[["latitude", "longitude"]].to_numpy())
-            distance_to_parking = tree.query(radians)[0][:, 0] * EARTH_RADIUS_M
         for dayhike_id, rows in vertices.groupby("dayhike_id").indices.items():
             lat = vertices["latitude"].to_numpy()[rows]
             lon = vertices["longitude"].to_numpy()[rows]
@@ -330,7 +343,7 @@ def _measure_walks(geometry: Path) -> dict:
                     long_steps[dayhike_id] = max(long_steps.get(dayhike_id, 0.0), steps[index])
             if _haversine_m(lat[0], lon[0], lat[-1], lon[-1]) <= LOOP_CLOSES_M:
                 loops += 1
-                near = distance_to_parking[rows]
+                near = _distance_to_parking(tree, lat, lon)
                 if near.min() <= LOOP_NEAR_PARKING_M:
                     loops_near_parking.append(dayhike_id)
                     if near[0] > LOOP_START_M:
