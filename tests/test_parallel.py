@@ -1,5 +1,7 @@
 import itertools
 import os
+import subprocess
+import sys
 
 import pytest
 
@@ -79,3 +81,30 @@ def test_parallel_iter_runs_in_other_processes_with_more_than_one_worker(monkeyp
     monkeypatch.setenv(WORKERS_ENV, "2")
 
     assert os.getpid() not in set(parallel_iter(lambda _: os.getpid(), range(50)))
+
+
+def _fresh_python(code: str) -> subprocess.CompletedProcess:
+    env = {key: value for key, value in os.environ.items() if key != "VECLIB_MAXIMUM_THREADS"}
+    env[WORKERS_ENV] = "2"
+    return subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=120)
+
+
+def test_importing_dayhike_first_keeps_numpys_blas_on_one_thread_for_the_workers():
+    done = _fresh_python(
+        "import os, dayhike, numpy as np; from dayhike.parallel import parallel_map\n"
+        "print(os.environ['VECLIB_MAXIMUM_THREADS'], sum(parallel_map(lambda n: float(np.linalg.solve(np.eye(3) * (n + 1), np.ones(3))[0]), range(8))))"
+    )
+
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.split()[0] == "1"
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Apple Accelerate")
+def test_workers_are_refused_when_numpy_loaded_before_dayhike_could_set_up_its_blas():
+    done = _fresh_python(
+        "import numpy; from dayhike.parallel import parallel_map\n"
+        "parallel_map(abs, range(8))"
+    )
+
+    assert done.returncode != 0
+    assert "VECLIB_MAXIMUM_THREADS=1" in done.stderr

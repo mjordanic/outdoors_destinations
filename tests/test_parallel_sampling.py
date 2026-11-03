@@ -91,7 +91,7 @@ def test_the_cli_takes_the_worker_count(tmp_path, monkeypatch, command):
     from dayhike.cli import main
     from dayhike.parallel import workers
 
-    monkeypatch.delenv(WORKERS_ENV, raising=False)
+    monkeypatch.setenv(WORKERS_ENV, "1")  # recorded, so the value main() sets is undone
     catalog_path = tmp_path / "catalog.sqlite"
     build_catalog(FIXTURE, catalog_path)
     dem_dir, landcover_dir = _rasters(tmp_path)

@@ -14,11 +14,21 @@ from __future__ import annotations
 import gc
 import multiprocessing
 import os
+import sys
 from collections import deque
 from collections.abc import Callable, Iterable, Iterator
 from typing import TypeVar
 
 WORKERS_ENV = "DAYHIKE_WORKERS"
+ACCELERATE_THREADS_ENV = "VECLIB_MAXIMUM_THREADS"
+
+# numpy's BLAS on macOS, Apple Accelerate, runs on GCD threads a forked worker
+# cannot use: its first BLAS call there can hang for good. With one thread every
+# call stays on its caller's thread. Accelerate reads this when numpy loads it,
+# so dayhike imports this module before anything imports numpy.
+if "numpy" not in sys.modules:
+    os.environ.setdefault(ACCELERATE_THREADS_ENV, "1")
+_FORK_SAFE_BLAS = sys.platform != "darwin" or os.environ.get(ACCELERATE_THREADS_ENV) == "1"
 IN_FLIGHT_PER_WORKER = 4  # parallel_iter's items sent ahead per worker
 CHUNKS_PER_WORKER = 16  # items go out in chunks this many times the workers, so one slow chunk waits little
 
@@ -49,6 +59,7 @@ def parallel_map(task: Callable[[T], R], items: Iterable[T]) -> list[R]:
     count = min(workers(), len(items))
     if count <= 1:
         return [task(item) for item in items]
+    _check_fork_safe_blas()
     global _task
     _task = task
     # Frozen objects are left out of the workers' garbage collection, so it does
@@ -72,6 +83,7 @@ def parallel_iter(task: Callable[[T], R], items: Iterable[T]) -> Iterator[R]:
     if count <= 1:
         yield from map(task, items)
         return
+    _check_fork_safe_blas()
     global _task
     _task = task
     gc.freeze()
@@ -86,6 +98,14 @@ def parallel_iter(task: Callable[[T], R], items: Iterable[T]) -> Iterator[R]:
                 yield pending.popleft().get()
     finally:
         gc.unfreeze()
+
+
+def _check_fork_safe_blas() -> None:
+    if not _FORK_SAFE_BLAS:
+        raise RuntimeError(
+            f"more than one worker needs {ACCELERATE_THREADS_ENV}=1 before numpy is imported "
+            "(import dayhike first, or set it in the environment); else use one worker"
+        )
 
 
 def _run(item):
