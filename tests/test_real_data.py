@@ -51,7 +51,7 @@ from scipy.spatial import cKDTree
 from rebuild_checks import DATA_DIR, KEPT_BY_THE_RULES, REPO, real_data
 
 from dayhike import SimilarityStore, geometry_store_path_for
-from dayhike.catalog import GAP_JOIN_M, MIN_LENGTH_M, _access_tree, _drop_reason, _haversine_m, assemble_main_walk
+from dayhike.catalog import GAP_JOIN_M, MIN_LENGTH_M, _access_tree, _drop_reason, assemble_main_walk
 from dayhike.network_hikes import START_PARKING_M, START_PLACE_M
 from dayhike.osm import amenity_kind
 from dayhike.similarity import MEASURE_NAMES
