@@ -133,7 +133,7 @@ def run_ingest(
             _dayhike_from_relation,
             named,
             named_points(snapshot.places),
-            walks,
+            walks if sources else None,
         )
         if sources:
             emit_progress(progress, "assemble", "built DayHikes")
