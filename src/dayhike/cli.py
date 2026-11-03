@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import socket
 import sys
+import time
 from pathlib import Path
 
 from dayhike.catalog import (
@@ -503,7 +504,7 @@ def _ingest(
     catalog = build_catalog(
         osm_paths,
         catalog_path,
-        progress=lambda message: print(message, file=sys.stderr, flush=True),
+        progress=_progress,
         fresh=fresh,
         snap_tolerance_m=snap_tolerance_m,
     )
@@ -526,7 +527,7 @@ def _fetch_dem(dest: Path, bounds: Bounds, source: str) -> int:
         dest,
         bounds,
         source=DEM_SOURCES[source],
-        progress=lambda message: print(message, file=sys.stderr, flush=True),
+        progress=_progress,
     )
     for path in paths:
         print(path)
@@ -537,7 +538,7 @@ def _fetch_landcover(dest: Path, bounds: Bounds) -> int:
     paths = fetch_worldcover(
         dest,
         bounds,
-        progress=lambda message: print(message, file=sys.stderr, flush=True),
+        progress=_progress,
     )
     for path in paths:
         print(path)
@@ -548,7 +549,7 @@ def _fetch_climate(dest: Path, bounds: Bounds) -> int:
     paths = fetch_chelsa(
         dest,
         bounds,
-        progress=lambda message: print(message, file=sys.stderr, flush=True),
+        progress=_progress,
     )
     for path in paths:
         print(path)
@@ -560,7 +561,7 @@ def _sample_dem(catalog_path: Path, raster_dir: Path, landcover_dir: Path) -> in
         catalog_path,
         raster_dir,
         landcover_dir=landcover_dir,
-        progress=lambda message: print(message, file=sys.stderr, flush=True),
+        progress=_progress,
     )
     print(sampled)
     return 0
@@ -570,7 +571,7 @@ def _sample_landcover(catalog_path: Path, raster_dir: Path) -> int:
     sampled = sample_landcover(
         catalog_path,
         raster_dir,
-        progress=lambda message: print(message, file=sys.stderr, flush=True),
+        progress=_progress,
     )
     if sampled == 0:
         print(f"no vertices sampled: no usable landcover rasters cover them in {raster_dir}", file=sys.stderr)
@@ -582,7 +583,7 @@ def _sample_climate(catalog_path: Path, raster_dir: Path) -> int:
     sampled = sample_climate(
         catalog_path,
         raster_dir,
-        progress=lambda message: print(message, file=sys.stderr, flush=True),
+        progress=_progress,
     )
     if sampled == 0:
         print(f"no vertices sampled: no usable climate rasters cover them in {raster_dir}", file=sys.stderr)
@@ -599,7 +600,7 @@ def _sample_trailgraph(catalog_path: Path, dem_dir: Path, landcover_dir: Path, c
             dem_dir=dem_dir,
             landcover_dir=landcover_dir,
             climate_dir=climate_dir,
-            progress=lambda message: print(message, file=sys.stderr, flush=True),
+            progress=_progress,
         )
     )
     return 0
@@ -649,16 +650,13 @@ def _compose(
 def _build_similarity(
     catalog_path: Path, dem_dir: Path, landcover_dir: Path, *, calibrate_only: bool
 ) -> int:
-    def progress(message: str) -> None:
-        print(message, file=sys.stderr, flush=True)
-
     try:
         if calibrate_only:
-            print(calibrate_similarity(catalog_path, progress=progress))
+            print(calibrate_similarity(catalog_path, progress=_progress))
         else:
             print(
                 build_similarity(
-                    catalog_path, dem_dir, landcover_dir=landcover_dir, progress=progress
+                    catalog_path, dem_dir, landcover_dir=landcover_dir, progress=_progress
                 )
             )
     except StaleSimilarity as exc:
@@ -677,9 +675,6 @@ def _export_serving(
 ) -> int:
     from dayhike.serving import ServingExportError, export_serving, fetch_geonames
 
-    def progress(message: str) -> None:
-        print(message, file=sys.stderr, flush=True)
-
     try:
         print(
             export_serving(
@@ -689,7 +684,7 @@ def _export_serving(
                 snaps_path=snaps,
                 valhalla_url=valhalla_url,
                 geonames_path=geonames and fetch_geonames(geonames),
-                progress=progress,
+                progress=_progress,
             )
         )
     except (StaleSimilarity, ServingExportError) as exc:
@@ -746,6 +741,11 @@ def _serve(
     socket.setdefaulttimeout(VALHALLA_TIMEOUT_S)
     uvicorn.run(app, host=host, port=port, log_level="info", proxy_headers=False)
     return 0
+
+
+def _progress(message: str) -> None:
+    # Each line says when it was written (UTC), so a long rebuild's log times every step.
+    print(f"{time.strftime('%H:%M:%SZ', time.gmtime())} {message}", file=sys.stderr, flush=True)
 
 
 def _parse_snap_tolerance(value: str) -> float:

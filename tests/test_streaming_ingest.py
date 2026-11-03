@@ -211,3 +211,51 @@ def test_a_work_file_of_an_older_schema_is_not_resumed(
     build_catalog(FIXTURE, catalog_path, progress=messages.append)
 
     assert not any("resumed, already complete" in message for message in messages)
+
+
+def _dump(path: Path) -> list[str]:
+    conn = sqlite3.connect(path)
+    try:
+        return list(conn.iterdump())
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("pass_name", ["relations", "ways", "nodes"])
+def test_ingest_killed_inside_a_pass_resumes_to_the_same_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pass_name: str
+) -> None:
+    import dayhike.ingest as ingest
+
+    whole = tmp_path / "whole" / "catalog.sqlite"
+    build_catalog(FIXTURE, whole)
+    # A checkpoint every 2 objects, a progress line every 3: killed on that line,
+    # the object after the last checkpoint is read again on resume.
+    monkeypatch.setattr(ingest, "INGEST_CHECKPOINT_OBJECTS", 2)
+    monkeypatch.setattr(ingest, "INGEST_PROGRESS_EVERY_OBJECTS", 3)
+    catalog_path = tmp_path / "killed" / "catalog.sqlite"
+
+    def kill_inside_the_pass(message: str) -> None:
+        if message.startswith(f"{pass_name}:") and "scanned" in message:
+            raise RuntimeError("killed")
+
+    with pytest.raises(RuntimeError, match="killed"):
+        build_catalog(FIXTURE, catalog_path, progress=kill_inside_the_pass)
+    build_catalog(FIXTURE, catalog_path)
+
+    for path in (catalog_path, geometry_store_path_for(catalog_path)):
+        assert _dump(path) == _dump(whole.parent / path.name)
+
+
+def test_the_cli_stamps_every_progress_line_with_the_utc_time(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import re
+
+    from dayhike.cli import main
+
+    assert main(["ingest", str(FIXTURE), "--catalog", str(tmp_path / "catalog.sqlite")]) == 0
+
+    lines = capsys.readouterr().err.splitlines()
+    assert any(line.endswith("relations: starting") for line in lines)
+    assert all(re.match(r"\d\d:\d\d:\d\dZ \w", line) for line in lines), lines
