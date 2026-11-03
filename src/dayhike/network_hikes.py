@@ -562,19 +562,40 @@ def select(
     those, at most ``NETWORK_CAP`` per start are kept, none a Twin of a better chain kept or
     of one of the relation DayHikes' walks ``relations`` (Twins of Twins
     count, as in ``twin_groups``).
+
+    A shortlisted line to a destination is replaced by that destination's
+    direct line from the start, its shortest line, when that is shorter and
+    no other line shortlisted there is it or goes to the destination before
+    it. The direct line takes the line's place in the order and needs no
+    share of its own; the line it replaces is kept in its place when the
+    direct line is a Twin of a relation DayHike or of another chain kept
+    (see ``_direct_lines``).
     """
     reached = named_points(destinations)
-    at_destination = {
-        signpost for signpost, point in enumerate(graph.signposts) if _nearest(reached, point, DESTINATION_M)
+    destination_of = {
+        signpost: name
+        for signpost, point in enumerate(graph.signposts)
+        if (name := _nearest(reached, point, DESTINATION_M))
     }
 
+    def goes_to(chain: Chain) -> str | None:
+        return None if chain.loop else destination_of.get(chain.signposts[-1])
+
     def preference(chain: Chain) -> tuple[int, float]:
-        kind = 0 if chain.loop else 1 if chain.signposts[-1] in at_destination else 2
+        kind = 0 if chain.loop else 1 if goes_to(chain) else 2
         return kind, abs(math.log(chain.length_m / NETWORK_TARGET_M))
 
     shortlist: list[tuple[int, Chain]] = []
+    direct_of: dict[int, Chain] = {}  # per shortlist row, the direct line that may replace it
     for start, listed in enumerate(per_start):
+        listed = list(listed)
+        direct: dict[str, Chain] = {}
+        for chain in listed:
+            if (name := goes_to(chain)) and (name not in direct or chain.length_m < direct[name].length_m):
+                direct[name] = chain
         legs: list[set[int]] = []
+        served: set[str] = set()
+        first = len(shortlist)
         for chain in sorted(listed, key=preference):
             if len(legs) >= NETWORK_SHORTLIST:
                 break
@@ -586,10 +607,19 @@ def select(
             ):
                 legs.append(walked)
                 shortlist.append((start, chain))
+                if (name := goes_to(chain)) and name not in served:
+                    served.add(name)
+                    if direct[name].length_m < chain.length_m:
+                        direct_of[len(shortlist) - 1] = direct[name]
+        # A direct line shortlisted as it is replaces no other line.
+        here = {id(chain) for _, chain in shortlist[first:]}
+        for row in range(first, len(shortlist)):
+            if row in direct_of and id(direct_of[row]) in here:
+                del direct_of[row]
     given = [_even_points(*np.array(walk).T, TWIN_STEP_M) for walk in relations]
     # A group's root is its first row, so a group holding a relation has a root below len(given).
     groups = twin_groups([*given, *(_route(graph, chain) for _, chain in shortlist)])[len(given) :]
-    kept: list[tuple[int, Chain]] = []
+    kept_rows: list[int] = []
     kept_groups: set[int] = set()
     count: Counter[int] = Counter()
     for row in sorted(range(len(shortlist)), key=lambda row: preference(shortlist[row][1])):
@@ -598,7 +628,38 @@ def select(
             continue
         kept_groups.add(int(groups[row]))
         count[start] += 1
-        kept.append((start, chain))
+        kept_rows.append(row)
+    chains = _direct_lines(graph, shortlist, kept_rows, direct_of, given)
+    return [(shortlist[row][0], chain) for row, chain in zip(kept_rows, chains)]
+
+
+def _direct_lines(
+    graph: LegGraph,
+    shortlist: Sequence[tuple[int, Chain]],
+    kept_rows: Sequence[int],
+    direct_of: Mapping[int, Chain],
+    given: Sequence[np.ndarray],
+) -> list[Chain]:
+    """The chains of the ``kept_rows`` of ``shortlist``, each replaced by its
+    direct line in ``direct_of`` unless that is a Twin of a relation DayHike's
+    walk (``given``), of another kept chain or of a direct line put in before
+    it. Twins are grouped apart from the kept chains', so a direct line never
+    joins two kept chains into one group."""
+    swaps = [row for row in kept_rows if row in direct_of]
+    kept = [shortlist[row][1] for row in kept_rows]
+    groups = twin_groups(
+        [*given, *(_route(graph, chain) for chain in kept), *(_route(graph, direct_of[row]) for row in swaps)]
+    )
+    kept_groups = [int(group) for group in groups[len(given) : len(given) + len(kept)]]
+    held = Counter(kept_groups)
+    position = {row: at for at, row in enumerate(kept_rows)}
+    taken: set[int] = set()
+    for row, group in zip(swaps, groups[len(given) + len(kept) :]):
+        at, group = position[row], int(group)
+        others = held[group] - (kept_groups[at] == group)
+        if group >= len(given) and not others and group not in taken:
+            taken.add(group)
+            kept[at] = direct_of[row]
     return kept
 
 

@@ -380,6 +380,65 @@ def test_a_line_to_a_named_destination_beats_lines_of_a_better_length():
     assert _kept_lengths_km(graph, kept) == [4, 10, 10, 10]
 
 
+def _hut_by_a_detour() -> Network:
+    # Hut H is 3.5 km from S straight (S-A-H) or 8.4 km by a detour (S-X-A-H)
+    # that ends on the same last leg. Nearer 10 km, the detour comes first and
+    # leaves the direct line too little of its own to be shortlisted too.
+    net = Network({"S": (0, 0), "A": (1.5, 0), "H": (3.5, 0), "X": (0, -3)})
+    net.leg(1, "S", "A")
+    net.leg(2, "A", "H")
+    net.leg(3, "S", "X")
+    net.leg(4, "X", "A")
+    return net
+
+
+def test_a_line_to_a_destination_is_its_direct_line_not_a_detour_nearer_a_days_length():
+    net = _hut_by_a_detour()
+    graph = leg_graph(net.legs, net.ways, net.nodes)
+    lines = [chain for chain in candidates(graph, _start_at(graph, net.point("S"))) if not chain.loop]
+    hut = (*net.point("H"), "Koča")
+
+    kept = select(graph, [lines], destinations=[hut])
+
+    assert [_relations(graph, chain) for _, chain in kept] == [[1, 2]]
+
+
+def test_the_detour_stays_when_the_direct_line_is_a_twin_of_a_relation_dayhike():
+    net = _hut_by_a_detour()
+    graph = leg_graph(net.legs, net.ways, net.nodes)
+    lines = [chain for chain in candidates(graph, _start_at(graph, net.point("S"))) if not chain.loop]
+    hut = (*net.point("H"), "Koča")
+    dayhike = [net.point(name) for name in ("S", "A", "H")]
+
+    kept = select(graph, [lines], destinations=[hut], relations=[dayhike])
+
+    assert [_relations(graph, chain) for _, chain in kept] == [[3, 4, 2]]
+
+
+def test_the_direct_line_to_a_destination_on_a_loop_is_kept_beside_the_loop():
+    # The 8.1 km loop S-A-H-B-S passes hut H; the direct line S-A-H (3.5 km)
+    # lies wholly on it and is still kept, in place of the 8.4 km detour S-X-A-H.
+    net = _hut_by_a_detour()
+    net.nodes[len(net.nodes) + 1] = _lat_lon(2, 1.5)
+    net.node_ids["B"] = len(net.nodes)
+    net.leg(5, "H", "B")
+    net.leg(6, "B", "S")
+    graph = leg_graph(net.legs, net.ways, net.nodes)
+    hut = (*net.point("H"), "Koča")
+    # The one loop through H; the others would take the detour's legs too.
+    chains = [
+        chain
+        for chain in candidates(graph, _start_at(graph, net.point("S")))
+        if not chain.loop or sorted(_relations(graph, chain)) == [1, 2, 5, 6]
+    ]
+
+    kept = select(graph, [chains], destinations=[hut])
+
+    lines = [_relations(graph, chain) for _, chain in kept if not chain.loop]
+    assert [1, 2] in lines
+    assert [3, 4, 2] not in lines
+
+
 def test_a_twin_of_a_relation_dayhike_is_dropped():
     net = _figure_eight()
     graph = leg_graph(net.legs, net.ways, net.nodes)
