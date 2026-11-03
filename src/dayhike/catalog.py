@@ -526,7 +526,7 @@ def build_catalog(
     ``sources`` build DayHikes that are not one relation (ADR-0038); by
     default ingest's own ``BUILT_HIKE_SOURCES``.
     """
-    from dayhike.ingest import BUILT_HIKE_SOURCES, _connect_work, emit_progress, run_ingest, write_geometry_store
+    from dayhike.ingest import BUILT_HIKE_SOURCES, _connect_work, emit_progress, remove_work, run_ingest, write_geometry_store
     from dayhike.trailgraph import check_snap_tolerance, write_trailgraph
 
     check_snap_tolerance(snap_tolerance_m)
@@ -553,7 +553,7 @@ def build_catalog(
             )
         finally:
             work_conn.close()
-        work_path.unlink()
+        remove_work(work_path)
     remove_similarity(catalog_path, progress)
     return Catalog.open(catalog_path)
 

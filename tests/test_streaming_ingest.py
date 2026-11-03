@@ -247,6 +247,46 @@ def test_ingest_killed_inside_a_pass_resumes_to_the_same_catalog(
         assert _dump(path) == _dump(whole.parent / path.name)
 
 
+@pytest.mark.parametrize("fresh", [False, True])
+@pytest.mark.parametrize("pass_name", ["relations", "ways", "nodes"])
+def test_a_work_file_left_by_a_machine_crash_inside_a_pass_builds_the_same_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pass_name: str, fresh: bool
+) -> None:
+    import dayhike.ingest as ingest
+
+    whole = tmp_path / "whole" / "catalog.sqlite"
+    build_catalog(FIXTURE, whole)
+    monkeypatch.setattr(ingest, "INGEST_CHECKPOINT_OBJECTS", 2)
+    monkeypatch.setattr(ingest, "INGEST_PROGRESS_EVERY_OBJECTS", 3)
+    catalog_path = tmp_path / "crashed" / "catalog.sqlite"
+    work_path = catalog_path.with_name(catalog_path.name + ".work")
+    side_files = [Path(f"{work_path}-wal"), Path(f"{work_path}-shm")]
+    on_disk = tmp_path / "on_disk"
+    journal_modes: list[str] = []
+
+    def crash_inside_the_pass(message: str) -> None:
+        if message.startswith(f"{pass_name}:") and "scanned" in message:
+            with sqlite3.connect(work_path) as conn:
+                journal_modes.append(conn.execute("PRAGMA journal_mode").fetchone()[0])
+            # The files as the disk holds them when the machine stops here.
+            on_disk.mkdir()
+            for path in (work_path, side_files[0]):
+                shutil.copy(path, on_disk / path.name)
+            raise RuntimeError("killed")
+
+    with pytest.raises(RuntimeError, match="killed"):
+        build_catalog(FIXTURE, catalog_path, progress=crash_inside_the_pass)
+    for path in on_disk.iterdir():
+        shutil.copy(path, catalog_path.parent / path.name)
+    assert side_files[0].exists()
+    build_catalog(FIXTURE, catalog_path, fresh=fresh)
+
+    assert journal_modes == ["wal"]
+    for path in (catalog_path, geometry_store_path_for(catalog_path)):
+        assert _dump(path) == _dump(whole.parent / path.name)
+    assert not any(path.exists() for path in (work_path, *side_files))
+
+
 def test_the_cli_stamps_every_progress_line_with_the_utc_time(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

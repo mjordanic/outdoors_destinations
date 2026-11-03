@@ -95,10 +95,10 @@ def run_ingest(
     work_path = work_path_for(catalog_path)
     fingerprint = _fingerprint(source_paths)
     if fresh and work_path.exists():
-        work_path.unlink()
+        remove_work(work_path)
     resume = _work_is_resumable(work_path, fingerprint)
     if work_path.exists() and not resume:
-        work_path.unlink()
+        remove_work(work_path)
 
     emit_progress(progress, "filter", "starting")
     scan_paths = _scan_paths(source_paths, progress) if not resume else _stored_scan_paths(
@@ -167,13 +167,22 @@ def run_ingest(
 
 
 def _connect_work(work_path: Path) -> sqlite3.Connection:
-    """The work file, written without waiting on the disk: a crash of the
-    machine (not of ingest) can leave it unusable, and ``--fresh`` starts over."""
+    """The work file, in WAL mode without a sync at each commit: a crash of
+    the machine can lose the last checkpoints, but a checkpoint and the rows
+    written before it are kept or lost together, so a resumed pass never skips
+    an object whose rows were not written."""
     conn = sqlite3.connect(work_path)
-    conn.execute("PRAGMA synchronous = OFF")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
     conn.execute(f"PRAGMA cache_size = -{WORK_CACHE_KIB}")
     conn.execute("PRAGMA temp_store = MEMORY")
     return conn
+
+
+def remove_work(work_path: Path) -> None:
+    """The work file and its WAL side files, so a stale WAL never meets a new work file."""
+    for path in (work_path, Path(f"{work_path}-wal"), Path(f"{work_path}-shm")):
+        path.unlink(missing_ok=True)
 
 
 class _Pending:
