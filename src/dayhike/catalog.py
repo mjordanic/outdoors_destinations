@@ -531,7 +531,7 @@ def build_catalog(
 
     check_snap_tolerance(snap_tolerance_m)
     catalog_path = Path(catalog_path)
-    kept, report, work_path = run_ingest(
+    kept, report, work_path, snapshot = run_ingest(
         _osm_paths(osm_path),
         catalog_path,
         progress=progress,
@@ -543,7 +543,8 @@ def build_catalog(
     if work_path.exists():
         work_conn = _connect_work(work_path)
         try:
-            write_geometry_store(geometry_store_path_for(catalog_path), kept, work_conn)
+            write_geometry_store(geometry_store_path_for(catalog_path), kept, work_conn, snapshot)
+            del snapshot  # the TrailGraph reads the work file on its own
             write_trailgraph(
                 trailgraph_path_for(catalog_path),
                 work_conn,

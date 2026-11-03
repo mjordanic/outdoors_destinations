@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import re
+from array import array
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
+from itertools import islice
 from pathlib import Path
 
+import numpy as np
 import osmium
 
 HUT_TOURISM = frozenset({"alpine_hut", "wilderness_hut"})
@@ -36,15 +40,91 @@ class OsmRelation:
     roles: tuple[str, ...] = ()
 
 
+class NodeStore:
+    """Nodes (id, lat, lon, ele) as sorted arrays, read like the dicts of an
+    ``OsmSnapshot``: ``points`` maps an id to its (lat, lon), ``elevations``
+    an id to its ele where it has one. Europe's work file holds ~62 M nodes:
+    as a dict of tuples about 10 GB, here 32 bytes a node."""
+
+    LOAD_CHUNK = 1_000_000
+
+    def __init__(self, ids: np.ndarray, lat: array, lon: array, ele: np.ndarray) -> None:
+        has_ele = ~np.isnan(ele)
+        self.points = _Points(ids, lat, lon)
+        self.elevations = _Elevations(ids[has_ele], array("d", ele[has_ele].tolist()))
+
+    @classmethod
+    def from_rows(cls, rows: Iterable[tuple[int, float, float, float | None]]) -> NodeStore:
+        """From (id, lat, lon, ele or None) rows in any order, read a chunk at a time."""
+        rows = iter(rows)
+        ids, lat, lon, ele = [], array("d"), array("d"), []
+        while chunk := list(islice(rows, cls.LOAD_CHUNK)):
+            ids.append(np.fromiter((row[0] for row in chunk), dtype=np.int64, count=len(chunk)))
+            values = np.array([row[1:] for row in chunk], dtype=float)
+            lat.extend(values[:, 0].tolist())
+            lon.extend(values[:, 1].tolist())
+            ele.append(values[:, 2])
+        if not ids:
+            return cls(np.empty(0, dtype=np.int64), array("d"), array("d"), np.empty(0))
+        all_ids = np.concatenate(ids)
+        order = np.argsort(all_ids, kind="stable")
+        if np.any(order != np.arange(len(order))):
+            lat = array("d", np.frombuffer(lat, dtype=float)[order].tolist())
+            lon = array("d", np.frombuffer(lon, dtype=float)[order].tolist())
+        return cls(all_ids[order], lat, lon, np.concatenate(ele)[order])
+
+
+class _SortedIds(Mapping):
+    def __init__(self, ids: np.ndarray) -> None:
+        self._ids = ids
+
+    def _at(self, node_id) -> int:
+        at = int(self._ids.searchsorted(node_id))
+        return at if at < len(self._ids) and self._ids[at] == node_id else -1
+
+    def __contains__(self, node_id) -> bool:
+        return self._at(node_id) >= 0
+
+    def __iter__(self) -> Iterator[int]:
+        return iter(self._ids.tolist())
+
+    def __len__(self) -> int:
+        return len(self._ids)
+
+
+class _Points(_SortedIds):
+    def __init__(self, ids: np.ndarray, lat: array, lon: array) -> None:
+        super().__init__(ids)
+        self._lat, self._lon = lat, lon
+
+    def __getitem__(self, node_id) -> tuple[float, float]:
+        at = self._at(node_id)
+        if at < 0:
+            raise KeyError(node_id)
+        return self._lat[at], self._lon[at]
+
+
+class _Elevations(_SortedIds):
+    def __init__(self, ids: np.ndarray, ele: array) -> None:
+        super().__init__(ids)
+        self._ele = ele
+
+    def __getitem__(self, node_id) -> float:
+        at = self._at(node_id)
+        if at < 0:
+            raise KeyError(node_id)
+        return self._ele[at]
+
+
 @dataclass
 class OsmSnapshot:
-    nodes: dict[int, tuple[float, float]] = field(default_factory=dict)
+    nodes: Mapping[int, tuple[float, float]] = field(default_factory=dict)  # a NodeStore's, from a work file
     ways: dict[int, OsmWay] = field(default_factory=dict)
     relations: list[OsmRelation] = field(default_factory=list)
     amenities: list[tuple[str, tuple[tuple[float, float], ...]]] = field(
         default_factory=list
     )
-    node_elevations: dict[int, float] = field(default_factory=dict)
+    node_elevations: Mapping[int, float] = field(default_factory=dict)
     access_points: list[tuple[float, float]] = field(default_factory=list)
     # (lat, lon, name) of named settlements, and of every named point (places and amenities).
     places: list[tuple[float, float, str]] = field(default_factory=list)

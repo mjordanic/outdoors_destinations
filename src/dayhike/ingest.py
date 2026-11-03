@@ -37,6 +37,7 @@ from dayhike.catalog import (
 )
 from dayhike.network_hikes import network_source
 from dayhike.osm import (
+    NodeStore,
     OsmRelation,
     OsmSnapshot,
     OsmWay,
@@ -88,7 +89,7 @@ def run_ingest(
     progress: Progress | None = None,
     fresh: bool = False,
     sources: Sequence[BuiltHikeSource] = BUILT_HIKE_SOURCES,
-) -> tuple[list[DayHike], IngestReport, Path]:
+) -> tuple[list[DayHike], IngestReport, Path, OsmSnapshot]:
     catalog_path = Path(catalog_path)
     catalog_path.parent.mkdir(parents=True, exist_ok=True)
     work_path = work_path_for(catalog_path)
@@ -160,7 +161,7 @@ def run_ingest(
             named_from_to=origin_counts[NAME_ORIGIN_FROM_TO],
             named_place=origin_counts[NAME_ORIGIN_PLACE],
         )
-        return kept, report, work_path
+        return kept, report, work_path, snapshot
     finally:
         conn.close()
 
@@ -711,14 +712,9 @@ def _load_hiking_snapshot(
     conn: sqlite3.Connection, progress: Progress | None = None
 ) -> OsmSnapshot:
     snapshot = OsmSnapshot()
-    loaded = 0
-    for node_id, lat, lon, ele in conn.execute("SELECT id, lat, lon, ele FROM nodes"):
-        snapshot.nodes[node_id] = (lat, lon)
-        if ele is not None:
-            snapshot.node_elevations[node_id] = ele
-        loaded += 1
-        if loaded % INGEST_PROGRESS_EVERY_OBJECTS == 0:
-            emit_progress(progress, "assemble", f"loading nodes {loaded}")
+    emit_progress(progress, "assemble", "loading nodes")
+    store = NodeStore.from_rows(conn.execute("SELECT id, lat, lon, ele FROM nodes ORDER BY id"))
+    snapshot.nodes, snapshot.node_elevations = store.points, store.elevations
     loaded = 0
     for way_id, node_ids_json, tags_json in conn.execute(
         "SELECT id, node_ids, tags FROM ways"
@@ -884,15 +880,18 @@ def write_geometry_store(
     path: Path,
     dayhikes: Sequence[DayHike],
     conn: sqlite3.Connection,
+    snapshot: OsmSnapshot | None = None,
 ) -> None:
     """Write DayHikeGeometry, member ways, and raw amenity points beside the Catalog.
 
     Access points and named points are the work file's, as in ``run_ingest``,
-    so each main walk starts at the same Trailhead as in the Catalog.
+    so each main walk starts at the same Trailhead as in the Catalog;
+    ``snapshot`` is the one ``run_ingest`` loaded from it, else it is loaded again.
     """
     from dayhike.catalog import OSM_ATTRIBUTION
 
-    snapshot = _load_hiking_snapshot(conn)
+    if snapshot is None:
+        snapshot = _load_hiking_snapshot(conn)
     relations = {relation.id: relation for relation in snapshot.relations}
     access_tree = _access_tree(snapshot.access_points)
     named = named_points(snapshot.named_points)
