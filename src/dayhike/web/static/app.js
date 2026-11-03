@@ -38,6 +38,7 @@ const WAKE_AFTER_MS = 1500; // a first answer slower than this is a server start
 const PICK_ZOOM = 12; // the map shows hikes from this zoom on
 const PICK_LINE = { color: "#6b2fa3", weight: 3, opacity: 0.85 };
 const PICK_HOVER = { color: "#c2410c", weight: 5, opacity: 1 };
+const START_PANE = "starts"; // the map pane of the hikes' start and end dots, above every line (overlayPane is 400)
 const COMPOSE_ZOOM = 13; // designing a hike shows the trail segments from this zoom on
 const MAX_COMPOSED_M = 100000; // the longest hike the server measures (trailgraph.MAX_WALK_M)
 const SHORTEST_HIKE_M = 1000; // the shortest catalog hike
@@ -1072,6 +1073,7 @@ const pick = {
         maxZoom: 19,
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
       }).addTo(this.map);
+      this.map.createPane(START_PANE).style.zIndex = 450;
       this.layer = L.layerGroup().addTo(this.map);
       if (state.liked) this.map.setView(state.liked.trailhead, 13);
       else {
@@ -1139,10 +1141,12 @@ const pick = {
     for (const hike of hikes) {
       const latlngs = decodePolyline(hike.line);
       const line = L.polyline(latlngs, PICK_LINE);
-      const ends = [latlngs[0], latlngs.at(-1)].map((at, i) => L.circleMarker(at, {
-        radius: 5, color: "#fff", weight: 1.5, fillColor: i === 0 ? "#2f7d4f" : "#1f2a24", fillOpacity: 1,
+      // A hike that ends where it starts (a loop) draws its start only: its end dot would cover it.
+      const [first, last] = [latlngs[0], latlngs.at(-1)];
+      const dots = (L.latLng(first).equals(last) ? [first] : [first, last]).map((at, i) => L.circleMarker(at, {
+        radius: 5, color: "#fff", weight: 1.5, fillColor: i === 0 ? "#2f7d4f" : "#1f2a24", fillOpacity: 1, pane: START_PANE,
       }));
-      const group = L.featureGroup([line, ...ends]).addTo(this.layer);
+      const group = L.featureGroup([line, ...dots]).addTo(this.layer);
       group.bindTooltip(`<strong>${escapeHtml(hike.name)}</strong><br>${fmt.km(hike.walk_m)}`, { sticky: true });
       group.on("mouseover", () => { line.setStyle(PICK_HOVER); line.bringToFront(); });
       group.on("mouseout", () => line.setStyle(this.style(hike.id)));
