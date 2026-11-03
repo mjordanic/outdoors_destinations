@@ -10,14 +10,16 @@ import socket
 import threading
 import time
 import urllib.request
+import zlib
 from collections.abc import Iterator
 from pathlib import Path
 
+import numpy as np
 import pytest
 import uvicorn
 
 from dayhike import build_catalog, build_similarity, web
-from dayhike.serving import ServingData, export_serving
+from dayhike.serving import ServingData, encode_polyline, export_serving
 from dayhike.web import create_app
 from test_built_hikes import ridge_stage
 
@@ -940,3 +942,53 @@ def test_a_built_hike_found_similar_can_be_edited_on_the_map(browser, built_serv
     page.get_by_text("Chosen: Ridge Walk, stage 2").wait_for()
     assert page.locator("#liked .role").text_content() == "Your hike"
     assert page.evaluate("location.hash").startswith("#compose=2:102.3")
+
+
+START, CROSSING_A, CROSSING_B = (45.0600, 6.5250), (45.0590, 6.5240), (45.0610, 6.5260)
+
+
+def drawn_hike(name: str, *points: tuple[float, float]) -> dict:
+    lat, lon = zip(*points)
+    return {"id": zlib.crc32(name.encode()), "name": name, "walk_m": 1000, "line": encode_polyline(np.array(lat), np.array(lon))}
+
+
+def map_dots(browser, server: str, hikes: list[dict]):
+    """The page's hike map at zoom 15 over START, with the given hikes in view (the /api/hikes read is stubbed)."""
+    page = open_page(browser, server, Api({}))
+    page.route(f"{server}/api/hikes?*", lambda route: route.fulfill(json={"results": hikes, "too_many": False}))
+    page.locator("#map-pick-on").check()
+    page.evaluate("start => pick.map.setView(start, 15)", START)
+    page.wait_for_function("() => pick.layer.getLayers().length > 0")
+    return page
+
+
+DOTS = """() => {
+  const dots = [];
+  const walk = (layer) => layer instanceof L.CircleMarker ? dots.push(layer) : layer.eachLayer?.(walk);
+  pick.layer.eachLayer(walk);
+  const z = (name) => Number(getComputedStyle(pick.map.getPane(name)).zIndex);
+  return dots.map((dot) => ({ fill: dot.options.fillColor, above: z(dot.options.pane) > z("overlayPane") }));
+}"""
+START_FILL, END_FILL = "#2f7d4f", "#1f2a24"
+
+
+def test_the_start_dots_of_the_hikes_on_the_map_are_drawn_above_every_line(browser, server) -> None:
+    # A line crossing the start of a loop is drawn after it, as the 22 lines across Laval's car park are.
+    loop = drawn_hike("Loop", START, CROSSING_A, CROSSING_B, START)
+    crossing = drawn_hike("Crossing", CROSSING_A, START, CROSSING_B)
+    page = map_dots(browser, server, [loop, crossing])
+
+    starts = [dot for dot in page.evaluate(DOTS) if dot["fill"] == START_FILL]
+
+    assert len(starts) == 2
+    assert all(dot["above"] for dot in starts)
+
+
+def test_a_hike_that_ends_where_it_starts_draws_its_start_dot_and_no_end_dot_over_it(browser, server) -> None:
+    loop = drawn_hike("Loop", START, CROSSING_A, CROSSING_B, START)
+    line = drawn_hike("Line", CROSSING_A, START, CROSSING_B)
+    page = map_dots(browser, server, [loop, line])
+
+    fills = [dot["fill"] for dot in page.evaluate(DOTS)]
+
+    assert sorted(fills) == sorted([START_FILL, START_FILL, END_FILL])  # the loop's end dot is the one left out
