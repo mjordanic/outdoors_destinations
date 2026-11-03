@@ -638,6 +638,24 @@ def test_a_network_hike_from_parking_starts_there_when_a_trail_leads_to_its_sign
     route_of(north.vertices, north.way_ids, net.ways)  # every step on a way it names
 
 
+def test_a_loop_ending_beside_its_start_walks_back_to_parking_from_where_it_ends():
+    # The loop's last leg ends at E, 30 m from S (one signpost); path P-Q-S
+    # leads out and E-R-P back: it walks back from E, never jumping E to Q.
+    net = Network(FIGURE_EIGHT | {"E": (0, 0.03), "P": (-0.3, 0.02), "Q": (-0.15, 0), "R": (-0.15, 0.05)})
+    for relation_id, (a, b) in enumerate([("S", "N1"), ("N1", "N2"), ("N2", "N3"), ("N3", "E")], start=1):
+        net.leg(relation_id, a, b)
+    out, back = net.path("P", "Q", "S"), net.path("E", "R", "P")
+    parking = [_lat_lon(-0.31, 0.03)]
+
+    (loop,) = network_hikes(net.legs, net.ways, net.nodes, parking, places=[])
+
+    names = ("P", "Q", "S", "N1", "N2", "N3", "E", "R", "P")
+    assert [node for node, _ in loop.vertices] == [net.node_ids[name] for name in names]
+    assert loop.way_ids == (out, 100, 101, 102, 103, back)
+    route, _ = route_of(loop.vertices, loop.way_ids, net.ways)
+    assert ",g." not in route
+
+
 def _km(net: Network, a: str, b: str) -> float:
     from dayhike.catalog import _haversine_m
 

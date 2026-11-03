@@ -224,7 +224,8 @@ def network_hikes(
 
     A kept chain that starts within ``START_PARKING_M`` of parking starts at
     the parking: it first walks there from it along ``ways`` (see
-    ``_parking_walks``), and a loop walks back to it at the end, not again
+    ``_parking_walks``), and a loop walks back to parking at the end from
+    the node it ends on, where such a walk is found, not again
     along the same trail where the chain itself walks on along it. Where no
     such walk is found, or it would take the hike out of ``NETWORK_MIN_M`` to
     ``NETWORK_MAX_M``, the hike starts at its signpost.
@@ -237,6 +238,10 @@ def network_hikes(
         leg = graph.legs[chain.legs[0]]
         node, point = leg.vertices[0] if leg.ends[0] == chain.signposts[0] else leg.vertices[-1]
         firsts[node] = point
+        if chain.loop:
+            leg = graph.legs[chain.legs[-1]]
+            node, point = leg.vertices[-1] if leg.ends[0] == chain.signposts[-2] else leg.vertices[0]
+            firsts[node] = point
     from_parking = _parking_walks(ways, nodes, access_points, firsts)
     names = signpost_names(graph, guideposts)
     marked, settled = named_points(destinations), named_points(places)
@@ -288,7 +293,8 @@ def network_hikes(
             parts.append(leg.relation_id)
             last = index
         if vertices[0][0] in from_parking:
-            vertices, way_ids = _start_at_parking(vertices, way_ids, *from_parking[vertices[0][0]], chain.loop)
+            back = from_parking.get(vertices[-1][0]) if chain.loop else None
+            vertices, way_ids = _start_at_parking(vertices, way_ids, *from_parking[vertices[0][0]], back)
         hikes.append(
             NetworkHike(
                 chain_name(graph, chain, names, marked, settled),
@@ -384,18 +390,20 @@ def _start_at_parking(
     way_ids: Sequence[int],
     path: Sequence[tuple[int, Point]],
     path_ways: Sequence[int],
-    loop: bool,
+    back: tuple[Sequence[tuple[int, Point]], Sequence[int]] | None,
 ) -> tuple[list[tuple[int, Point]], list[int]]:
     """The hike along ``vertices`` and ``way_ids`` walked first along
-    ``path`` (ways ``path_ways``) from the parking to its first vertex and, for
-    a loop, back along it at the end. Where the hike walks on along the path,
-    it starts (or ends) where the path leaves it. Unchanged when that takes it
-    out of ``NETWORK_MIN_M`` to ``NETWORK_MAX_M``."""
+    ``path`` (ways ``path_ways``) from the parking to its first vertex and
+    then, when given ``back`` (a loop's walk from parking to its last vertex
+    and its ways), back along that at the end. Where the hike walks on along
+    the path, it starts (or ends) where the path leaves it. Unchanged when
+    that takes it out of ``NETWORK_MIN_M`` to ``NETWORK_MAX_M``."""
     walked = [*path[:-1], *vertices]
     ways = [*path_ways, *way_ids]
-    if loop:
-        walked += path[::-1][1:]
-        ways += path_ways[::-1]
+    if back is not None:
+        back_path, back_ways = back
+        walked += back_path[::-1][1:]
+        ways += back_ways[::-1]
         _unretrace(walked, len(path) + len(vertices) - 2)
     _unretrace(walked, len(path) - 1)
     if not NETWORK_MIN_M <= _linestring_length_m([point for _, point in walked]) <= NETWORK_MAX_M:
