@@ -71,7 +71,6 @@ def main(argv: list[str] | None = None) -> int:
         help="TrailGraph: join a dead-end tip to another way this close, at most 50 "
         f"(default: {SNAP_TOLERANCE_M})",
     )
-    _add_workers(ingest)
     fetch = subparsers.add_parser(
         "fetch-extracts",
         help="Download Geofabrik PBFs into data/osm (does not ingest)",
