@@ -69,6 +69,29 @@ def test_leg_ends_within_the_gap_join_one_signpost():
     assert not ends[1] & ends[3]
 
 
+def _knooppunten_close_together() -> Network:
+    # Knooppunten B, K and B3 stand 36 m and 32 m apart in a row (B to B3 68 m),
+    # joined by connector legs B-K and K-B3 shorter than the gap join.
+    net = Network({"A": (0, 0), "B": (2, 0), "K": (2.036, 0), "B3": (2.068, 0), "D": (2.068, -2)})
+    net.leg(1, "A", "B")
+    net.leg(2, "B", "K")
+    net.leg(3, "K", "B3")
+    net.leg(4, "B3", "D")
+    return net
+
+
+def test_a_network_hike_walks_the_connectors_between_knooppunten_close_together():
+    # B and B3 are one signpost (joined through K), 68 m apart: the hike from A
+    # to D walks the connector legs B-K and K-B3, not straight from B to B3.
+    net = _knooppunten_close_together()
+
+    (hike,) = network_hikes(net.legs, net.ways, net.nodes, [net.point("A")], [])
+
+    assert [node for node, _ in hike.vertices] == [net.node_ids[name] for name in ("A", "B", "K", "B3", "D")]
+    assert hike.parts == (1, 2, 3, 4)
+    assert hike.way_ids == (100, 101, 102, 103)
+
+
 FIGURE_EIGHT = {
     "S": (0, 0),
     "N1": (1.5, 1.5), "N2": (0, 3), "N3": (-1.5, 1.5),
