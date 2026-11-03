@@ -526,12 +526,12 @@ def build_catalog(
     ``sources`` build DayHikes that are not one relation (ADR-0038); by
     default ingest's own ``BUILT_HIKE_SOURCES``.
     """
-    from dayhike.ingest import BUILT_HIKE_SOURCES, emit_progress, run_ingest, write_geometry_store
+    from dayhike.ingest import BUILT_HIKE_SOURCES, _connect_work, emit_progress, remove_work, run_ingest, write_geometry_store
     from dayhike.trailgraph import check_snap_tolerance, write_trailgraph
 
     check_snap_tolerance(snap_tolerance_m)
     catalog_path = Path(catalog_path)
-    kept, report, work_path = run_ingest(
+    kept, report, work_path, snapshot = run_ingest(
         _osm_paths(osm_path),
         catalog_path,
         progress=progress,
@@ -541,9 +541,10 @@ def build_catalog(
     emit_progress(progress, "write", str(catalog_path))
     _write_sqlite(catalog_path, kept, report)
     if work_path.exists():
-        work_conn = sqlite3.connect(work_path)
+        work_conn = _connect_work(work_path)
         try:
-            write_geometry_store(geometry_store_path_for(catalog_path), kept, work_conn)
+            write_geometry_store(geometry_store_path_for(catalog_path), kept, work_conn, snapshot)
+            del snapshot  # the TrailGraph reads the work file on its own
             write_trailgraph(
                 trailgraph_path_for(catalog_path),
                 work_conn,
@@ -552,7 +553,7 @@ def build_catalog(
             )
         finally:
             work_conn.close()
-        work_path.unlink()
+        remove_work(work_path)
     remove_similarity(catalog_path, progress)
     return Catalog.open(catalog_path)
 
@@ -854,18 +855,14 @@ def _elevation_stats(
 ) -> tuple[float | None, float | None, float | None]:
     from dayhike.similarity import elevation_gain
 
-    elevations = [
-        node_elevations[node_id]
-        for node_id, _ in vertices
-        if node_id in node_elevations
-    ]
-    if not elevations:
+    ele = np.array([node_elevations.get(node_id, np.nan) for node_id, _ in vertices], dtype=float)
+    elevations = ele[~np.isnan(ele)]
+    if not len(elevations):
         # OSM ele absent: missing, not zero. sample-dem fills this from FABDEM.
         return None, None, None
     # The same gain rule as the similarity facts (spikes dropped, 10 m dead-band).
     lat, lon = np.array([point for _, point in vertices], dtype=float).T
-    ele = np.array([node_elevations.get(node_id, np.nan) for node_id, _ in vertices], dtype=float)
-    return min(elevations), max(elevations), elevation_gain(lat, lon, ele)
+    return float(elevations.min()), float(elevations.max()), elevation_gain(lat, lon, ele)
 
 
 LEFTOVER_ROLES = frozenset(
@@ -959,6 +956,13 @@ def assemble_main_walk(
         listed.append(member_id)
     for way_id in first_listing:
         role_only.pop(way_id, None)
+    # The walk reads its member ways' nodes many times: look each up once (a NodeStore is slower than a dict).
+    nodes = {
+        node_id: point
+        for way in [*(ways[way_id] for way_id in first_listing), *role_only.values()]
+        for node_id in way.node_ids
+        if (point := nodes.get(node_id)) is not None
+    }
 
     way_nodes = {
         way_id: [node_id for node_id in ways[way_id].node_ids if node_id in nodes]

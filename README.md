@@ -1295,8 +1295,9 @@ Geofabrik `europe-latest.osm.pbf`) is a valid input.
 3. **Progress.** Each stage prints to stderr: `filter`, `relations`, `ways`,
    `nodes`, `assemble`, `write`. After nodes, `assemble:` first loads the work
    file, then assembles each relation's main walk. Counts print every 100k
-   objects during a load or scan. `osmium tags-filter` prints its own progress
-   on stderr.
+   objects during a scan or a ways/relations load. The `dayhike` CLI starts
+   every progress line with its UTC time (`HH:MM:SSZ`). `osmium tags-filter`
+   prints its own progress on stderr.
 4. **Resume.** The same `dayhike ingest` command on the same inputs continues
    the work file. `--fresh` (or `build_catalog(..., fresh=True)`) starts over.
    A `progress` callback on `build_catalog` receives the same stage lines.
@@ -2176,7 +2177,7 @@ Bulky local files stay out of git:
 - `data/catalog.geometry.sqlite` — GeometryStore (DayHikeGeometry + raw amenities)
 - `data/catalog.trailgraph.sqlite` — TrailGraph (the marked hiking network and graded paths)
 - `data/catalog.similarity/` — similarity facts and Calibration (`build-similarity`)
-- `data/catalog.sqlite.work` — in-progress ingest (resume handle)
+- `data/catalog.sqlite.work` (and its `-wal` / `-shm` side files) — in-progress ingest (resume handle)
 - `data/osm/` — Geofabrik / osmium extracts
 - `data/dem/` — FABDEM GeoTIFFs
 - `data/landcover/` — ESA WorldCover GeoTIFFs

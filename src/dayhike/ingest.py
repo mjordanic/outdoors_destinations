@@ -37,6 +37,7 @@ from dayhike.catalog import (
 )
 from dayhike.network_hikes import network_source
 from dayhike.osm import (
+    NodeStore,
     OsmRelation,
     OsmSnapshot,
     OsmWay,
@@ -49,6 +50,7 @@ from dayhike.stages import day_stages
 INGEST_WORK_SCHEMA = 9
 INGEST_CHECKPOINT_OBJECTS = 50_000
 INGEST_PROGRESS_EVERY_OBJECTS = 100_000
+WORK_CACHE_KIB = 262_144  # the work file's page cache while ingest runs
 HIKING_ROUTES = ("hiking", "foot")  # route=foot is read as hiking (ADR-0034)
 CATALOG_TAG_FILTERS = (
     "r/route=hiking,foot",
@@ -87,23 +89,21 @@ def run_ingest(
     progress: Progress | None = None,
     fresh: bool = False,
     sources: Sequence[BuiltHikeSource] = BUILT_HIKE_SOURCES,
-) -> tuple[list[DayHike], IngestReport, Path]:
+) -> tuple[list[DayHike], IngestReport, Path, OsmSnapshot]:
     catalog_path = Path(catalog_path)
     catalog_path.parent.mkdir(parents=True, exist_ok=True)
     work_path = work_path_for(catalog_path)
     fingerprint = _fingerprint(source_paths)
-    if fresh and work_path.exists():
-        work_path.unlink()
-    resume = _work_is_resumable(work_path, fingerprint)
-    if work_path.exists() and not resume:
-        work_path.unlink()
+    resume = not fresh and _work_is_resumable(work_path, fingerprint)
+    if not resume:
+        remove_work(work_path)
 
     emit_progress(progress, "filter", "starting")
     scan_paths = _scan_paths(source_paths, progress) if not resume else _stored_scan_paths(
         work_path, source_paths
     )
 
-    conn = sqlite3.connect(work_path)
+    conn = _connect_work(work_path)
     try:
         if not resume:
             _init_work(conn, fingerprint, source_paths, scan_paths)
@@ -159,9 +159,62 @@ def run_ingest(
             named_from_to=origin_counts[NAME_ORIGIN_FROM_TO],
             named_place=origin_counts[NAME_ORIGIN_PLACE],
         )
-        return kept, report, work_path
+        return kept, report, work_path, snapshot
     finally:
         conn.close()
+
+
+def _connect_work(work_path: Path) -> sqlite3.Connection:
+    """The work file, in WAL mode without a sync at each commit: a crash of
+    the machine can lose the last checkpoints, but a checkpoint and the rows
+    written before it are kept or lost together, so a resumed pass never skips
+    an object whose rows were not written."""
+    conn = sqlite3.connect(work_path)
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    conn.execute(f"PRAGMA cache_size = -{WORK_CACHE_KIB}")
+    conn.execute("PRAGMA temp_store = MEMORY")
+    return conn
+
+
+def remove_work(work_path: Path) -> None:
+    """The work file and its WAL side files, so a stale WAL never meets a new work file."""
+    for path in (work_path, Path(f"{work_path}-wal"), Path(f"{work_path}-shm")):
+        path.unlink(missing_ok=True)
+
+
+class _Pending:
+    """Rows a pass has read but not yet written, written together at each
+    checkpoint (``write``) before its progress is marked, so a resumed pass
+    never skips an object whose rows were not written. Rows of one statement
+    are written in the order added; ids for an id-only table once each."""
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self.conn = conn
+        self.rows: dict[str, list[tuple]] = {}
+        self.ids: dict[str, list[int]] = {}
+
+    def add(self, statement: str, *row) -> None:
+        self.rows.setdefault(statement, []).append(row)
+
+    def add_ids(self, table: str, ids: Sequence[int]) -> None:
+        self.ids.setdefault(table, []).extend(ids)
+
+    def write(self) -> None:
+        for statement, rows in self.rows.items():
+            self.conn.executemany(statement, rows)
+        for table, ids in self.ids.items():
+            self.conn.executemany(
+                f"INSERT OR IGNORE INTO {table} (id) VALUES (?)",
+                ((int(osm_id),) for osm_id in np.unique(np.array(ids, dtype=np.int64))),
+            )
+        self.rows.clear()
+        self.ids.clear()
+
+
+def _sorted_ids(conn: sqlite3.Connection, table: str) -> np.ndarray:
+    # A pass's lookup ids as a sorted array (``_sorted_has``), not a set of Python ints.
+    return np.fromiter((row[0] for row in conn.execute(f"SELECT id FROM {table} ORDER BY id")), dtype=np.int64)
 
 
 def _fingerprint(paths: Sequence[Path]) -> str:
@@ -424,6 +477,7 @@ def _pass_relations(
         return
     seen = 0
     hiking = 0
+    pending = _Pending(conn)
     for path in paths:
         last_id, done = _file_state(conn, "relations", path)
         if done:
@@ -440,39 +494,30 @@ def _pass_relations(
             roles = [str(member.role) for member in obj.members]
             osm_id = int(obj.id)
             if tags.get("route") in HIKING_ROUTES:
-                conn.execute(
-                    "INSERT OR REPLACE INTO relations (id, members, roles, tags) "
-                    "VALUES (?, ?, ?, ?)",
-                    (osm_id, json.dumps(members), json.dumps(roles), json.dumps(tags)),
-                )
-                conn.executemany(
-                    "INSERT OR IGNORE INTO needed_ways (id) VALUES (?)",
-                    [(member_id,) for member_type, member_id in members if member_type == "way"],
-                )
+                pending.add(
+                    "INSERT OR REPLACE INTO relations (id, members, roles, tags) VALUES (?, ?, ?, ?)",
+                    osm_id, json.dumps(members), json.dumps(roles), json.dumps(tags),
+                )  # fmt: skip
+                pending.add_ids("needed_ways", [member_id for member_type, member_id in members if member_type == "way"])
                 hiking += 1
             kind = _point_kind(tags)
             if kind is not None:
-                conn.execute(
-                    "INSERT OR REPLACE INTO pending_amenity_relations "
-                    "(id, kind, members, tags) VALUES (?, ?, ?, ?)",
-                    (osm_id, kind, json.dumps(members), json.dumps(tags)),
-                )
-                conn.executemany(
-                    "INSERT OR IGNORE INTO amenity_ways (id) VALUES (?)",
-                    [(member_id,) for member_type, member_id in members if member_type == "way"],
-                )
-                conn.executemany(
-                    "INSERT OR IGNORE INTO needed_nodes (id) VALUES (?)",
-                    [(member_id,) for member_type, member_id in members if member_type == "node"],
-                )
+                pending.add(
+                    "INSERT OR REPLACE INTO pending_amenity_relations (id, kind, members, tags) VALUES (?, ?, ?, ?)",
+                    osm_id, kind, json.dumps(members), json.dumps(tags),
+                )  # fmt: skip
+                pending.add_ids("amenity_ways", [member_id for member_type, member_id in members if member_type == "way"])
+                pending.add_ids("needed_nodes", [member_id for member_type, member_id in members if member_type == "node"])
             seen += 1
             file_last = osm_id
             if seen % INGEST_CHECKPOINT_OBJECTS == 0:
+                pending.write()
                 _mark_progress(conn, "relations", path, file_last)
             if seen % INGEST_PROGRESS_EVERY_OBJECTS == 0:
                 emit_progress(
                     progress, "relations", f"{seen} scanned, {hiking} hiking, last_id={osm_id}"
                 )
+        pending.write()
         _mark_progress(conn, "relations", path, file_last, done=True)
     emit_progress(progress, "relations", f"{hiking} hiking relations")
 
@@ -484,11 +529,12 @@ def _pass_ways(
     if _pass_done(conn, "ways", paths):
         emit_progress(progress, "ways", "resumed, already complete")
         return
-    needed_ways = {row[0] for row in conn.execute("SELECT id FROM needed_ways")}
-    amenity_ways = {row[0] for row in conn.execute("SELECT id FROM amenity_ways")}
+    needed_ways = _sorted_ids(conn, "needed_ways")
+    amenity_ways = _sorted_ids(conn, "amenity_ways")
     seen = 0
     kept = 0
     graded = 0
+    pending = _Pending(conn)
     for path in paths:
         last_id, done = _file_state(conn, "ways", path)
         if done:
@@ -501,44 +547,36 @@ def _pass_ways(
             node_ids = [int(node.ref) for node in obj.nodes]
             tags = dict(obj.tags)
             kind = _point_kind(tags)
-            if osm_id in needed_ways:
-                conn.execute(
+            if _sorted_has(needed_ways, osm_id):
+                pending.add(
                     "INSERT OR REPLACE INTO ways (id, node_ids, tags) VALUES (?, ?, ?)",
-                    (osm_id, json.dumps(node_ids), json.dumps(tags)),
+                    osm_id, json.dumps(node_ids), json.dumps(tags),
                 )
-                conn.executemany(
-                    "INSERT OR IGNORE INTO needed_nodes (id) VALUES (?)",
-                    [(node_id,) for node_id in node_ids],
-                )
+                pending.add_ids("needed_nodes", node_ids)
                 kept += 1
             elif _is_graded_path(tags):
-                conn.execute(
+                pending.add(
                     "INSERT OR REPLACE INTO graded_ways (id, node_ids, tags) VALUES (?, ?, ?)",
-                    (osm_id, json.dumps(node_ids), json.dumps(tags)),
+                    osm_id, json.dumps(node_ids), json.dumps(tags),
                 )
-                conn.executemany(
-                    "INSERT OR IGNORE INTO graded_needed_nodes (id) VALUES (?)",
-                    [(node_id,) for node_id in node_ids],
-                )
+                pending.add_ids("graded_needed_nodes", node_ids)
                 graded += 1
-            if node_ids and (kind is not None or osm_id in amenity_ways):
-                conn.execute(
-                    "INSERT OR REPLACE INTO pending_amenity_ways "
-                    "(id, kind, node_id, tags) VALUES (?, ?, ?, ?)",
-                    (osm_id, kind or "", node_ids[0], json.dumps(tags)),
+            if node_ids and (kind is not None or _sorted_has(amenity_ways, osm_id)):
+                pending.add(
+                    "INSERT OR REPLACE INTO pending_amenity_ways (id, kind, node_id, tags) VALUES (?, ?, ?, ?)",
+                    osm_id, kind or "", node_ids[0], json.dumps(tags),
                 )
-                conn.execute(
-                    "INSERT OR IGNORE INTO needed_nodes (id) VALUES (?)",
-                    (node_ids[0],),
-                )
+                pending.add_ids("needed_nodes", node_ids[:1])
             seen += 1
             file_last = osm_id
             if seen % INGEST_CHECKPOINT_OBJECTS == 0:
+                pending.write()
                 _mark_progress(conn, "ways", path, file_last)
             if seen % INGEST_PROGRESS_EVERY_OBJECTS == 0:
                 emit_progress(
                     progress, "ways", f"{seen} scanned, {kept} hiking ways, last_id={osm_id}"
                 )
+        pending.write()
         _mark_progress(conn, "ways", path, file_last, done=True)
     emit_progress(progress, "ways", f"{kept} hiking ways, {graded} graded paths")
 
@@ -568,13 +606,11 @@ def _pass_nodes(
     if _pass_done(conn, "nodes", paths):
         emit_progress(progress, "nodes", "resumed, already complete")
         return
-    needed_nodes = {row[0] for row in conn.execute("SELECT id FROM needed_nodes")}
-    # Sorted ids, not a set: graded paths may hold as many nodes as the hiking ways.
-    graded_nodes = np.fromiter(
-        (row[0] for row in conn.execute("SELECT id FROM graded_needed_nodes ORDER BY id")), dtype=np.int64
-    )
+    needed_nodes = _sorted_ids(conn, "needed_nodes")
+    graded_nodes = _sorted_ids(conn, "graded_needed_nodes")
     seen = 0
     kept = 0
+    pending = _Pending(conn)
     for path in paths:
         last_id, done = _file_state(conn, "nodes", path)
         if done:
@@ -587,35 +623,36 @@ def _pass_nodes(
             location = obj.location
             tags = dict(obj.tags)
             kind = _point_kind(tags)
-            needed = osm_id in needed_nodes
+            needed = _sorted_has(needed_nodes, osm_id)
             graded = not needed and _sorted_has(graded_nodes, osm_id)
             if location.valid() and (needed or graded or kind is not None):
                 point = (float(location.lat), float(location.lon))
                 if needed:
-                    conn.execute(
+                    pending.add(
                         "INSERT OR REPLACE INTO nodes (id, lat, lon, ele) VALUES (?, ?, ?, ?)",
-                        (osm_id, point[0], point[1], _parse_ele_m(tags.get("ele"))),
+                        osm_id, point[0], point[1], _parse_ele_m(tags.get("ele")),
                     )
                     kept += 1
                 elif graded:
-                    conn.execute(
+                    pending.add(
                         "INSERT OR REPLACE INTO graded_nodes (id, lat, lon, ele) VALUES (?, ?, ?, ?)",
-                        (osm_id, point[0], point[1], _parse_ele_m(tags.get("ele"))),
+                        osm_id, point[0], point[1], _parse_ele_m(tags.get("ele")),
                     )
                 if kind is not None:
-                    conn.execute(
-                        "INSERT OR REPLACE INTO amenities "
-                        "(osm_key, kind, lat, lon, tags) VALUES (?, ?, ?, ?, ?)",
-                        (f"n{osm_id}", kind, point[0], point[1], json.dumps(tags)),
+                    pending.add(
+                        "INSERT OR REPLACE INTO amenities (osm_key, kind, lat, lon, tags) VALUES (?, ?, ?, ?, ?)",
+                        f"n{osm_id}", kind, point[0], point[1], json.dumps(tags),
                     )
             seen += 1
             file_last = osm_id
             if seen % INGEST_CHECKPOINT_OBJECTS == 0:
+                pending.write()
                 _mark_progress(conn, "nodes", path, file_last)
             if seen % INGEST_PROGRESS_EVERY_OBJECTS == 0:
                 emit_progress(
                     progress, "nodes", f"{seen} scanned, {kept} kept, last_id={osm_id}"
                 )
+        pending.write()
         _mark_progress(conn, "nodes", path, file_last, done=True)
     _resolve_pending_amenities(conn)
     emit_progress(progress, "nodes", f"{kept} geometry nodes")
@@ -682,14 +719,9 @@ def _load_hiking_snapshot(
     conn: sqlite3.Connection, progress: Progress | None = None
 ) -> OsmSnapshot:
     snapshot = OsmSnapshot()
-    loaded = 0
-    for node_id, lat, lon, ele in conn.execute("SELECT id, lat, lon, ele FROM nodes"):
-        snapshot.nodes[node_id] = (lat, lon)
-        if ele is not None:
-            snapshot.node_elevations[node_id] = ele
-        loaded += 1
-        if loaded % INGEST_PROGRESS_EVERY_OBJECTS == 0:
-            emit_progress(progress, "assemble", f"loading nodes {loaded}")
+    emit_progress(progress, "assemble", "loading nodes")
+    store = NodeStore.from_rows(conn.execute("SELECT id, lat, lon, ele FROM nodes ORDER BY id"))
+    snapshot.nodes, snapshot.node_elevations = store.points, store.elevations
     loaded = 0
     for way_id, node_ids_json, tags_json in conn.execute(
         "SELECT id, node_ids, tags FROM ways"
@@ -855,15 +887,18 @@ def write_geometry_store(
     path: Path,
     dayhikes: Sequence[DayHike],
     conn: sqlite3.Connection,
+    snapshot: OsmSnapshot | None = None,
 ) -> None:
     """Write DayHikeGeometry, member ways, and raw amenity points beside the Catalog.
 
     Access points and named points are the work file's, as in ``run_ingest``,
-    so each main walk starts at the same Trailhead as in the Catalog.
+    so each main walk starts at the same Trailhead as in the Catalog;
+    ``snapshot`` is the one ``run_ingest`` loaded from it, else it is loaded again.
     """
     from dayhike.catalog import OSM_ATTRIBUTION
 
-    snapshot = _load_hiking_snapshot(conn)
+    if snapshot is None:
+        snapshot = _load_hiking_snapshot(conn)
     relations = {relation.id: relation for relation in snapshot.relations}
     access_tree = _access_tree(snapshot.access_points)
     named = named_points(snapshot.named_points)

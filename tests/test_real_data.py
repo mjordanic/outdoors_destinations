@@ -508,7 +508,7 @@ def _main_walk_reasons(
         )
         if done.returncode not in (0, 1):
             done.check_returncode()
-        _, _, work_path = run_ingest([wanted], folder_path / "catalog.sqlite")
+        _, _, work_path, _ = run_ingest([wanted], folder_path / "catalog.sqlite")
         connection = sqlite3.connect(work_path)
         try:
             snapshot = _load_hiking_snapshot(connection)
