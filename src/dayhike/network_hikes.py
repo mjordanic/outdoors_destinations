@@ -194,7 +194,8 @@ def network_hikes(
     signpost along the legs touching it when their ends lie farther apart than
     ``GAP_JOIN_M`` (see ``_connect``), unless that crossing is more than
     ``CROSSING_MAX_RATIO`` times the straight jump: then it jumps, as when no
-    crossing is found.
+    crossing is found. It favours walking legs over stepping between their
+    ends, and takes the shortest crossing only when that favourite is too long.
     """
     graph = leg_graph(legs, ways, nodes)
     found = starts(graph, access_points, places)
@@ -219,11 +220,17 @@ def network_hikes(
             straight_m = _haversine_m(*vertices[-1][1], *steps[0][1]) if vertices else 0.0
             if straight_m > GAP_JOIN_M:
                 walked = [via for via in touching[at] if via not in (last, index)]
-                connected = _connect(graph, at, touching[at], walked, vertices[-1][0], steps[0][0], ways, nodes)
-                if connected is not None:
-                    crossing = [vertices[-1][1], *(point for _, point in connected[0]), steps[0][1]]
-                    if _linestring_length_m(crossing) > CROSSING_MAX_RATIO * straight_m:
-                        connected = None
+                connected = None
+                for gap_cost in (GAP_JOIN_M, 0.0):
+                    found = _connect(
+                        graph, at, touching[at], walked, vertices[-1][0], steps[0][0], ways, nodes, gap_cost
+                    )
+                    if found is None:
+                        break
+                    crossing = [vertices[-1][1], *(point for _, point in found[0]), steps[0][1]]
+                    if _linestring_length_m(crossing) <= CROSSING_MAX_RATIO * straight_m:
+                        connected = found
+                        break
                 if connected is None:
                     jumps += 1
                 else:
@@ -259,13 +266,14 @@ def _connect(
     target: int,
     ways: Mapping[int, OsmWay],
     nodes: Mapping[int, Point],
+    gap_cost: float,
 ) -> tuple[list[tuple[int, Point]], list[int], list[int]] | None:
     """The shortest walk from node ``source`` to node ``target``, two leg ends
     at ``signpost``, along the ways of the legs ``walked`` (the legs
     ``touching`` it, indexes into ``graph.legs`` with an end joined into it,
     but the chain's own legs either side) and straight gaps of at most
     ``GAP_JOIN_M`` between the ends there of every leg ``touching`` it, a gap costing
-    ``GAP_JOIN_M`` more than its length: the (node id, point) vertices after
+    ``gap_cost`` more than its length: the (node id, point) vertices after
     ``source`` and before ``target``, and the ways and the legs it walks, in
     walking order. None when no such walk joins them.
 
@@ -289,7 +297,7 @@ def _connect(
     for a in ends:
         for b in ends:
             if a != b and (metres := _haversine_m(*nodes[a], *nodes[b])) <= GAP_JOIN_M:
-                edges.setdefault(a, []).append((b, metres + GAP_JOIN_M, None, None))
+                edges.setdefault(a, []).append((b, metres + gap_cost, None, None))
     came: dict[int, tuple[float, int | None, int | None, int] | None] = {source: None}  # cost, way, leg, node before
     done: set[int] = set()
     queue = [(0.0, source)]
