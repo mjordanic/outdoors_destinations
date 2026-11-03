@@ -1209,8 +1209,9 @@ Measure (its permanent-water class). CHELSA V2.1 normals are 1981–2010.
    `tree_fraction` / `shrub_fraction` / `grass_fraction` / `bare_fraction` /
    `snow_fraction` (each GeometryStore vertex counted once; crop, built-up,
    water, wetland, and moss stay in the leftover share).
-2. `sample-climate` reads one raster at a time into memory, looks up every
-   GeometryStore vertex in it at once, and averages per DayHike. A vertex
+2. `sample-climate` finds each GeometryStore vertex's climate cell once (the
+   36 rasters share one grid), reads each raster once, one at a time, keeps
+   its values at those distinct cells, and averages per DayHike. A vertex
    counts only when all 36 rasters have a value there; a DayHike with no
    such vertex gets no climate. It replaces Catalog `climate_months`
    (hike-level means) and the three regime columns of every DayHike:

@@ -929,7 +929,7 @@ def sample_trailgraph(
                 classes = sample_landcover_classes(landcover_dir, points)
                 landcover = np.array([c or 0 for c in classes], dtype=np.uint8)
             if grid is not None:
-                climate = _climate_cells(rasters, grid, lat, lon)
+                climate = _climate_cells(rasters, lat, lon)
                 cells.update(climate[climate >= 0].tolist())
             bounds = np.cumsum([0, *sizes])
             db.executemany(
@@ -994,19 +994,14 @@ def _climate_grid(rasters: Sequence[tuple[str, int, Path]]) -> tuple:
     return grids.pop()
 
 
-def _climate_cells(rasters, grid: tuple, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
+def _climate_cells(rasters, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
     """The climate grid cell of each point (row x width + col), -1 where a raster has no value."""
-    from rasterio import Affine
+    from dayhike.climate import _raster_cells
 
-    from dayhike.climate import _raster_values
-
-    transform, height, width = Affine(*grid[0]), grid[1], grid[2]
-    covered = np.ones(len(lat), dtype=bool)
-    for _, _, raster in rasters:
-        covered &= ~np.isnan(_raster_values(raster, lat, lon))
-    cols, rows = ~transform @ (lon, lat)
-    cell = np.floor(rows).astype(np.int64) * width + np.floor(cols).astype(np.int64)
-    return np.where(covered, cell, -1)
+    grids: dict[tuple, tuple[np.ndarray, np.ndarray]] = {}
+    covered = np.logical_and.reduce([~np.isnan(_raster_cells(raster, lat, lon, grids)[0]) for _, _, raster in rasters])
+    ((cells, point_cell),) = grids.values()  # the rasters share one grid (``_climate_grid``)
+    return np.where(covered[point_cell], cells[point_cell], -1)
 
 
 def _write_climate_cells(db: sqlite3.Connection, rasters, grid: tuple, cells: list[int]) -> None:

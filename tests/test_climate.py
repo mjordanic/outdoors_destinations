@@ -975,6 +975,27 @@ def test_hike_mean_counts_only_vertices_every_raster_covers(tmp_path: Path) -> N
     assert hikes[1002].feature_vector.temperature_c is None
 
 
+def test_sample_climate_reads_each_raster_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from rasterio.io import DatasetReader
+
+    catalog_path = _catalog(tmp_path)
+    rasters = tmp_path / "rasters"
+    rasters.mkdir()
+    _write_climate_tifs(rasters, west=14.99, south=44.99, east=15.05, north=45.12)
+    reads: list[str] = []
+    real_read = DatasetReader.read
+
+    def counted(self, *args, **kwargs):
+        reads.append(Path(self.name).name)
+        return real_read(self, *args, **kwargs)
+
+    monkeypatch.setattr(DatasetReader, "read", counted)
+
+    assert sample_climate(catalog_path, rasters) > 0
+    assert sorted(reads) == sorted(path.name for path in rasters.glob("chelsa_*.tif"))
+    assert len(reads) == 36
+
+
 def test_resampling_clears_climate_of_hikes_no_longer_covered(tmp_path: Path) -> None:
     catalog_path = _catalog(tmp_path)
     wide = tmp_path / "wide"

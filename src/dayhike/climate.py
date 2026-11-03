@@ -116,23 +116,24 @@ def sample_climate(
         progress("climate sample: vertices")
     dayhike_ids, latitudes, longitudes = _read_vertices(store_path)
     hike_ids, hike_index = np.unique(dayhike_ids, return_inverse=True)
-    # Two passes, one raster in memory at a time: which vertices every raster
-    # covers, then per-hike sums over those vertices only.
+    # Each raster read once, at the distinct cells the vertices fall in: which
+    # vertices every raster covers, then per-hike sums over those vertices only.
+    grids: dict[tuple, tuple[np.ndarray, np.ndarray]] = {}
+    cells = [_raster_cells(path, latitudes, longitudes, grids) for _var, _month, path in rasters]
     covered = np.ones(len(dayhike_ids), dtype=bool)
-    for _var, _month, path in rasters:
-        covered &= ~np.isnan(_raster_values(path, latitudes, longitudes))
+    for values, vertex_cell in cells:
+        covered &= ~np.isnan(values)[vertex_cell]
     sampled = int(covered.sum())
     if not sampled:
         return 0
-    counts = np.bincount(hike_index[covered], minlength=len(hike_ids))
+    covered_hike = hike_index[covered]
+    covered_cells = {id(point_cell): point_cell[covered] for _cells, point_cell in grids.values()}
+    counts = np.bincount(covered_hike, minlength=len(hike_ids))
     means = np.full((len(hike_ids), 12, 3), np.nan)
-    for var, month, path in rasters:
+    for (var, month, _path), (values, vertex_cell) in zip(rasters, cells, strict=True):
         if progress is not None:
             progress(f"climate sample: {var} {month:02d}")
-        values = _raster_values(path, latitudes, longitudes)
-        sums = np.bincount(
-            hike_index[covered], weights=values[covered], minlength=len(hike_ids)
-        )
+        sums = np.bincount(covered_hike, weights=values[covered_cells[id(vertex_cell)]], minlength=len(hike_ids))
         with np.errstate(invalid="ignore", divide="ignore"):
             means[:, month - 1, CHELSA_VARIABLES.index(var)] = sums / counts
     if progress is not None:
@@ -195,6 +196,43 @@ def _raster_values(
     data[~np.isfinite(data)] = np.nan
     values[inside] = data[rows - top, cols - left]
     return values
+
+
+def _raster_cells(
+    path: Path, latitudes: np.ndarray, longitudes: np.ndarray, grids: dict[tuple, tuple[np.ndarray, np.ndarray]]
+) -> tuple[np.ndarray, np.ndarray]:
+    """The values ``_raster_values`` gives, as each distinct cell's value and each point's cell.
+
+    Returns the value per distinct cell (float64; NaN off the raster or on
+    nodata) and, per point, the index of its cell in it. The raster is read
+    once. Rasters on one grid share the cells: ``grids`` keeps them by grid.
+    """
+    import rasterio
+    from rasterio.windows import Window
+
+    with rasterio.open(path) as dataset:
+        grid = (tuple(dataset.transform)[:6], dataset.height, dataset.width)
+        if grid not in grids:
+            cols, rows = ~dataset.transform @ (longitudes, latitudes)
+            rows = np.floor(rows).astype(np.int64)
+            cols = np.floor(cols).astype(np.int64)
+            inside = (rows >= 0) & (rows < dataset.height) & (cols >= 0) & (cols < dataset.width)
+            grids[grid] = np.unique(np.where(inside, rows * dataset.width + cols, -1), return_inverse=True)
+        cells, point_cell = grids[grid]
+        values = np.full(len(cells), np.nan)
+        on = cells >= 0
+        if not on.any():
+            return values, point_cell
+        rows, cols = cells[on] // dataset.width, cells[on] % dataset.width
+        top, left = int(rows.min()), int(cols.min())
+        window = Window(left, top, int(cols.max()) - left + 1, int(rows.max()) - top + 1)
+        data = dataset.read(1, window=window)[rows - top, cols - left].astype(np.float64)
+        nodata = dataset.nodata
+    if nodata is not None and not np.isnan(nodata):
+        data[data == nodata] = np.nan
+    data[~np.isfinite(data)] = np.nan
+    values[on] = data
+    return values, point_cell
 
 
 def _drop_vertex_climate(store_path: Path) -> None:
