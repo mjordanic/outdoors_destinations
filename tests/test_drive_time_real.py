@@ -70,4 +70,5 @@ def test_only_the_known_trailheads_have_no_highway(catalog: Catalog, tmp_path: P
     golden = [int(row["dayhike_id"]) for row in _golden("unreachable.tsv")]
 
     assert rc.unreachable_ids(catalog, rc.VALHALLA_URL, tmp_path / "snaps.npz") == golden
-    assert len(golden) == 6
+    # 2026-10-31: + Grande Rota das Flores stages 1 and 2 (7170701, 18052413), new on Flores (Azores).
+    assert len(golden) == 8

@@ -245,7 +245,8 @@ def test_calibration_equals_reference_for_measures_not_touched_by_coverage() -> 
     keys = [
         index for index, key in enumerate(CALIBRATION_KEYS) if key.split("@")[0] not in rc.COVERAGE_MEASURES
     ]
-    assert len(keys) == 22
+    # 22 Measures and the 7 presence Measures' every-pair calibrations.
+    assert len(keys) == 29
     differing = [
         CALIBRATION_KEYS[index]
         for index in keys
