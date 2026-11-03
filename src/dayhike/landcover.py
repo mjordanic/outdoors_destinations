@@ -229,23 +229,22 @@ def _sample_open_datasets(
     points: Sequence[tuple[float, float]],
 ) -> list[int | None]:
     """First-tile-wins sampling over the tiles in sorted file order."""
+    from dayhike.dem import read_cells
+
     out: list[int | None] = [None] * len(points)
-    remaining = set(range(len(points)))
+    lat, lon = np.array(points, dtype=float).reshape(-1, 2).T
+    remaining = np.ones(len(points), dtype=bool)
     for tile in range(len(tiles.paths)):
-        if not remaining:
+        if not remaining.any():
             break
         bounds, nodata = tiles.extent(tile)
-        indices = [
-            index
-            for index in remaining
-            if bounds.left <= points[index][1] <= bounds.right
-            and bounds.bottom <= points[index][0] <= bounds.top
-        ]
-        if not indices:
+        indices = np.flatnonzero(
+            remaining & (bounds.left <= lon) & (lon <= bounds.right) & (bounds.bottom <= lat) & (lat <= bounds.top)
+        )
+        if not len(indices):
             continue
-        coords = [(points[index][1], points[index][0]) for index in indices]
-        for index, sample in zip(indices, tiles.dataset(tile).sample(coords), strict=True):
-            value = float(sample[0])
+        values = read_cells(tiles.dataset(tile), lon[indices], lat[indices]).tolist()
+        for index, value in zip(indices.tolist(), values, strict=True):
             if not math.isfinite(value):
                 continue
             if nodata is not None and value == nodata:
@@ -253,7 +252,7 @@ def _sample_open_datasets(
             if value == _WORLDCOVER_NODATA:
                 continue
             out[index] = int(value)
-            remaining.discard(index)
+            remaining[index] = False
     return out
 
 

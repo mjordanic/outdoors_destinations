@@ -24,6 +24,7 @@ from dayhike.dem import (
     fabdem_tile_url,
     fetch_dem,
     fetch_fabdem,
+    read_cells,
     sample_elevations,
     sample_dem,
     tiles_covering,
@@ -199,6 +200,43 @@ def _write_constant_tif(
         nodata=-9999.0,
     ) as dataset:
         dataset.write(data, 1)
+
+
+@pytest.mark.parametrize(
+    ("dtype", "nodata"), [("float32", -9999.0), ("float32", float("nan")), ("uint8", 0.0), ("int16", None)]
+)
+def test_read_cells_gives_what_rasterio_samples_point_by_point(tmp_path: Path, dtype: str, nodata) -> None:
+    import rasterio
+    from rasterio.transform import from_bounds
+
+    # Not a whole number of 16-cell blocks, with nodata cells, read at random points and at
+    # the grid's edges, inside and outside it.
+    rng = np.random.default_rng(7)
+    height, width = 70, 45
+    data = (rng.random((height, width)) * 200).astype(dtype)
+    if nodata is not None:
+        data[rng.random((height, width)) < 0.1] = nodata
+    path = tmp_path / "grid.tif"
+    with rasterio.open(
+        path, "w", driver="GTiff", height=height, width=width, count=1, dtype=dtype, crs="EPSG:4326",
+        transform=from_bounds(14.0, 46.0, 14.3, 46.5, width, height), nodata=nodata,
+        tiled=True, blockxsize=16, blockysize=16,
+    ) as dataset:  # fmt: skip
+        dataset.write(data, 1)
+    lon = np.concatenate([rng.uniform(13.9, 14.4, 2_000), [14.0, 14.3, 14.0, 14.3, 13.99, 14.31]])
+    lat = np.concatenate([rng.uniform(45.9, 46.6, 2_000), [46.0, 46.5, 46.5, 46.0, 46.2, 46.2]])
+
+    with rasterio.open(path) as dataset:
+        expected = np.array([value[0] for value in dataset.sample(zip(lon.tolist(), lat.tolist()))])
+        got = read_cells(dataset, lon, lat)
+
+    assert got.dtype == expected.dtype == np.dtype(dtype)
+    assert np.array_equal(got, expected, equal_nan=dtype == "float32")
+    assert len(set(got.tolist())) > 100
+    # A tile can hold no point on its grid: a point on its south edge falls one row past the last.
+    with rasterio.open(path) as dataset:
+        off = read_cells(dataset, np.array([13.95, 14.35]), np.array([46.2, 46.2]))
+    assert np.array_equal(off, np.full(2, dataset.nodata or 0, dtype=dtype), equal_nan=True)
 
 
 def test_sample_elevations_reads_covering_raster_and_skips_uncovered(
