@@ -30,10 +30,10 @@ from collections import Counter
 import numpy as np
 import pytest
 import rebuild_checks as rc
+from test_real_data import _main_walk_reasons
 
 from dayhike import SimilarityStore, geometry_store_path_for, similarity_dir_for
 from dayhike.similarity import CALIBRATION_KEYS, FACT_COLUMNS, LANDCOVER_SHARE_COLUMNS
-from test_real_data import _main_walk_reasons
 
 pytestmark = [*rc.real_data, rc.needs_reference]
 SAME_SNAPSHOT = (
@@ -104,7 +104,6 @@ def test_dayhike_ids_names_lengths_and_difficulty_equal_reference(catalogs) -> N
     _assert_equal(rc.compare_tables(*catalogs, "dayhikes", ["id"], ["name", "name_origin", "length_m", "difficulty"]))
 
 
-
 @pytest.mark.skipif(SAME_SNAPSHOT, reason="same snapshot: the exact comparison applies")
 def test_on_a_fresh_snapshot_only_osm_edits_take_hikes_out_of_the_catalog(
     catalogs, capsys: pytest.CaptureFixture[str]
@@ -120,6 +119,7 @@ def test_on_a_fresh_snapshot_only_osm_edits_take_hikes_out_of_the_catalog(
             print(f"left, {reason}: {len(ids)}: {ids[:50]}")
 
     assert unexplained[:20] == []
+
 
 @same_snapshot
 def test_ingest_report_equals_reference(catalogs) -> None:

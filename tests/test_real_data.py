@@ -46,9 +46,8 @@ import numpy as np
 import osmium
 import pandas as pd
 import pytest
-from scipy.spatial import cKDTree
-
 from rebuild_checks import DATA_DIR, KEPT_BY_THE_RULES, REPO, real_data
+from scipy.spatial import cKDTree
 
 from dayhike import SimilarityStore, geometry_store_path_for
 from dayhike.catalog import GAP_JOIN_M, MIN_LENGTH_M, _access_tree, _drop_reason, assemble_main_walk
@@ -505,6 +504,7 @@ def _main_walk_reasons(
         done = subprocess.run(
             ["osmium", "getid", "-r", "-t", str(extract), *(f"r{i}" for i in sorted(ids)),
              "-o", str(wanted), "--no-progress", "--overwrite"],
+            check=False,
         )
         if done.returncode not in (0, 1):
             done.check_returncode()
