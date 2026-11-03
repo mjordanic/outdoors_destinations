@@ -674,8 +674,15 @@ class NamedPoints:
 
     def nearest(self, lat: float, lon: float, radius_m: float) -> str | None:
         """Name of the nearest point within ``radius_m``, or None."""
-        (distance,), (index,) = self.tree.query(np.radians([[lat, lon]]), k=1)
-        return self.labels[int(index[0])] if distance[0] * EARTH_RADIUS_M <= radius_m else None
+        return self.nearest_each([(lat, lon)], radius_m)[0]
+
+    def nearest_each(self, points: Sequence[tuple[float, float]], radius_m: float) -> list[str | None]:
+        """Per (lat, lon) of ``points``, ``nearest``, in one query."""
+        distance, index = self.tree.query(np.radians(points), k=1)
+        return [
+            self.labels[int(i)] if d * EARTH_RADIUS_M <= radius_m else None
+            for d, i in zip(distance[:, 0], index[:, 0])
+        ]
 
     def names_end(self, text: str, lat: float, lon: float) -> bool:
         """Whether a point within ``END_NAME_RADIUS_M`` has the rarest word of ``text``."""

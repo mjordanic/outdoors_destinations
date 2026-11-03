@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from dayhike import Catalog, build_catalog, build_similarity
+import dayhike.ingest as ingest_module
 from dayhike.built import BUILT_ID_MIN, BuiltWalk
 from dayhike.catalog import geometry_store_path_for
 from dayhike.serving import ServingData, export_serving
@@ -72,6 +73,28 @@ def test_a_built_dayhike_keeps_its_id_across_rebuilds_and_leaves_the_relation_da
     assert relations == list(plain.dayhikes)
     assert all(hike.parts == () and hike.route is None for hike in plain.dayhikes)
     assert first.ingest_report.kept == plain.ingest_report.kept + 1
+
+
+def test_a_source_reads_the_main_walks_ingest_already_assembled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    assembled: list[int] = []
+    assemble = ingest_module.assemble_main_walk
+    monkeypatch.setattr(
+        ingest_module, "assemble_main_walk", lambda relation, *args: assembled.append(relation.id) or assemble(relation, *args)
+    )
+    seen = {}
+
+    def reader(context) -> list[BuiltWalk]:
+        before = len(assembled)
+        relations = {relation.id: relation for relation in context.snapshot.relations}
+        for hike in context.dayhikes:
+            seen[hike.id] = (context.main_walk(relations[hike.id]).trailhead, len(assembled) - before)
+        return []
+
+    catalog = build_catalog(FIXTURE, tmp_path / "catalog.sqlite", sources=[reader])
+
+    assert seen == {
+        hike.id: ((hike.trailhead.latitude, hike.trailhead.longitude), 0) for hike in catalog.dayhikes
+    }
 
 
 @pytest.fixture(scope="module")

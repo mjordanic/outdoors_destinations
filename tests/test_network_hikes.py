@@ -576,6 +576,20 @@ def test_a_loop_is_named_from_its_start_via_a_destination_on_it():
     assert plain == "Loop from Briançon via Croix de Toulouse"
 
 
+def test_a_loop_asks_its_destinations_once_for_its_whole_walk():
+    # Only the cairn lies on the loop, nearer its start than its farthest point.
+    net, graph = _named_figure_eight()
+    chains = candidates(graph, _start_at(graph, net.point("S")))
+    loop = next(chain for chain in chains if chain.loop and set(_relations(graph, chain)) == {1, 2, 3, 4})
+    destinations = named_points([(*_lat_lon(1.45, 1.5), "Serre Lan cairn"), (*_lat_lon(5, 5), "Far peak")])
+    queries = []
+    query = destinations.tree.query
+    destinations.tree = type("Spy", (), {"query": lambda self, *args, **kwargs: queries.append(1) or query(*args, **kwargs)})()
+
+    assert chain_name(graph, loop, signpost_names(graph), destinations=destinations) == "Loop from Briançon via Serre Lan cairn"
+    assert len(queries) == 1
+
+
 def test_a_line_is_named_from_its_start_to_where_it_goes():
     net, graph = _named_figure_eight()
     chains = candidates(graph, _start_at(graph, net.point("S")))
