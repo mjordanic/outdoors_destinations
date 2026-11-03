@@ -57,6 +57,7 @@ from dayhike.catalog import (
     remove_similarity,
     trailgraph_path_for,
 )
+from dayhike.parallel import parallel_iter
 
 Progress = Callable[[str], None]
 
@@ -883,8 +884,9 @@ def sample_trailgraph(
     facts read these samples on each way back, so they are deleted, as
     after every sample step. Returns the number of vertices.
     """
+    from dayhike import dem
     from dayhike.climate import _climate_rasters
-    from dayhike.dem import COPERNICUS, dem_source_of, require_worldcover, sample_elevations
+    from dayhike.dem import COPERNICUS, dem_source_of, require_worldcover
     from dayhike.landcover import _raster_paths, sample_landcover_classes
     from dayhike.similarity import slope_southness
 
@@ -902,50 +904,58 @@ def sample_trailgraph(
     db = sqlite3.connect(path)
     sampled = 0
     cells: set[int] = set()
-    try:
-        for ids in segment_chunks(db, _SEGMENT_CHUNK):
-            chunk = [
-                row
-                for start in range(0, len(ids), _IDS_PER_QUERY)
-                for row in db.execute(
-                    "SELECT id, coords, ele, landcover, climate_cell, southness FROM segments "
-                    f"WHERE id IN ({','.join('?' * len(ids[start : start + _IDS_PER_QUERY]))}) ORDER BY id",
-                    ids[start : start + _IDS_PER_QUERY],
-                )
-            ]
-            coords = [decode_coords(row[1]) for row in chunk]
-            sizes = [len(c) for c in coords]
-            lat, lon = np.concatenate(coords).T
-            ele = np.concatenate([np.frombuffer(row[2], dtype="<f4") for row in chunk]).astype(float)
-            landcover = np.concatenate([_blob(row[3], "u1", len(c), 0) for row, c in zip(chunk, coords)])
-            climate = np.concatenate([_blob(row[4], "<i4", len(c), -1) for row, c in zip(chunk, coords)])
-            southness = np.concatenate([_blob(row[5], "<f4", len(c), np.nan) for row, c in zip(chunk, coords)])
-            points = list(zip(lat.tolist(), lon.tolist()))
-            if has_dem:
-                heights = sample_elevations(dem_dir, points, landcover_dir)
-                ele = np.array([e if h is None else h for e, h in zip(ele.tolist(), heights)], dtype=float)
-                southness = slope_southness(dem_dir, lat, lon)
-            if has_landcover:
-                classes = sample_landcover_classes(landcover_dir, points)
-                landcover = np.array([c or 0 for c in classes], dtype=np.uint8)
-            if grid is not None:
-                climate = _climate_cells(rasters, lat, lon)
-                cells.update(climate[climate >= 0].tolist())
-            bounds = np.cumsum([0, *sizes])
-            db.executemany(
-                "UPDATE segments SET ele = ?, landcover = ?, climate_cell = ?, southness = ? WHERE id = ?",
-                [
-                    (
-                        ele[s:e].astype("<f4").tobytes(),
-                        landcover[s:e].astype("u1").tobytes(),
-                        climate[s:e].astype("<i4").tobytes(),
-                        southness[s:e].astype("<f4").tobytes(),
-                        row[0],
-                    )
-                    for row, s, e in zip(chunk, bounds[:-1], bounds[1:])
-                ],
+
+    def read(ids: list[int]) -> list[tuple]:
+        return [
+            row
+            for start in range(0, len(ids), _IDS_PER_QUERY)
+            for row in db.execute(
+                "SELECT id, coords, ele, landcover, climate_cell, southness FROM segments "
+                f"WHERE id IN ({','.join('?' * len(ids[start : start + _IDS_PER_QUERY]))}) ORDER BY id",
+                ids[start : start + _IDS_PER_QUERY],
             )
-            sampled += len(lat)
+        ]
+
+    def sample(chunk: list[tuple]) -> tuple[list[tuple], list[int], int]:
+        # One chunk's Segment updates, its climate cells and vertex count, sampled in a worker.
+        coords = [decode_coords(row[1]) for row in chunk]
+        sizes = [len(c) for c in coords]
+        lat, lon = np.concatenate(coords).T
+        ele = np.concatenate([np.frombuffer(row[2], dtype="<f4") for row in chunk]).astype(float)
+        landcover = np.concatenate([_blob(row[3], "u1", len(c), 0) for row, c in zip(chunk, coords)])
+        climate = np.concatenate([_blob(row[4], "<i4", len(c), -1) for row, c in zip(chunk, coords)])
+        southness = np.concatenate([_blob(row[5], "<f4", len(c), np.nan) for row, c in zip(chunk, coords)])
+        points = list(zip(lat.tolist(), lon.tolist()))
+        if has_dem:
+            heights = dem.sample_elevations(dem_dir, points, landcover_dir)
+            ele = np.array([e if h is None else h for e, h in zip(ele.tolist(), heights)], dtype=float)
+            southness = slope_southness(dem_dir, lat, lon)
+        if has_landcover:
+            classes = sample_landcover_classes(landcover_dir, points)
+            landcover = np.array([c or 0 for c in classes], dtype=np.uint8)
+        if grid is not None:
+            climate = _climate_cells(rasters, lat, lon)
+        bounds = np.cumsum([0, *sizes])
+        updates = [
+            (
+                ele[s:e].astype("<f4").tobytes(),
+                landcover[s:e].astype("u1").tobytes(),
+                climate[s:e].astype("<i4").tobytes(),
+                southness[s:e].astype("<f4").tobytes(),
+                row[0],
+            )
+            for row, s, e in zip(chunk, bounds[:-1], bounds[1:])
+        ]
+        return updates, climate[climate >= 0].tolist(), len(lat)
+
+    try:
+        chunks = (read(ids) for ids in segment_chunks(db, _SEGMENT_CHUNK))
+        for updates, chunk_cells, vertices in parallel_iter(sample, chunks):
+            db.executemany(
+                "UPDATE segments SET ele = ?, landcover = ?, climate_cell = ?, southness = ? WHERE id = ?", updates
+            )
+            cells.update(chunk_cells)
+            sampled += vertices
             _emit(progress, f"sampled {sampled} vertices")
         if grid is not None:
             _write_climate_cells(db, rasters, grid, sorted(cells))

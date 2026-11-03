@@ -86,7 +86,7 @@ def test_the_rasters_are_read_in_the_workers(tmp_path, monkeypatch, module, read
     assert str(os.getpid()) not in pids
 
 
-@pytest.mark.parametrize("command", ["sample-dem", "sample-landcover", "build-similarity"])
+@pytest.mark.parametrize("command", ["sample-dem", "sample-landcover", "sample-trailgraph", "build-similarity"])
 def test_the_cli_takes_the_worker_count(tmp_path, monkeypatch, command):
     from dayhike.cli import main
     from dayhike.parallel import workers
@@ -95,7 +95,11 @@ def test_the_cli_takes_the_worker_count(tmp_path, monkeypatch, command):
     catalog_path = tmp_path / "catalog.sqlite"
     build_catalog(FIXTURE, catalog_path)
     dem_dir, landcover_dir = _rasters(tmp_path)
-    rasters = {"sample-dem": ["--dem", str(dem_dir)], "sample-landcover": ["--landcover", str(landcover_dir)]}
+    rasters = {
+        "sample-dem": ["--dem", str(dem_dir)],
+        "sample-landcover": ["--landcover", str(landcover_dir)],
+        "sample-trailgraph": ["--dem", str(dem_dir), "--landcover", str(landcover_dir), "--climate", str(tmp_path / "climate")],
+    }
 
     main([command, "--catalog", str(catalog_path), *rasters.get(command, ["--dem", str(dem_dir), "--landcover", str(landcover_dir)]), "--workers", "3"])
 

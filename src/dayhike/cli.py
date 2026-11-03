@@ -210,6 +210,7 @@ def main(argv: list[str] | None = None) -> int:
     sample_tg.add_argument(
         "--climate", type=Path, default=DEFAULT_CLIMATE_DIR, help="CHELSA GeoTIFFs (default: data/climate)"
     )
+    _add_workers(sample_tg)
     similarity = subparsers.add_parser(
         "build-similarity",
         help="Build the similarity facts and Calibration next to a Catalog",
