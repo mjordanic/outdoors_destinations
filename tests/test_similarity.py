@@ -1,5 +1,6 @@
 import json
 import math
+import os
 import sqlite3
 from pathlib import Path
 
@@ -7,6 +8,7 @@ import numpy as np
 import pytest
 
 from dayhike import Catalog, StaleSimilarity, build_catalog, build_similarity
+from dayhike.parallel import WORKERS_ENV
 from dayhike.serving import scored_measures
 from dayhike.similarity import (
     CALIBRATION_KEYS,
@@ -931,6 +933,28 @@ def test_rows_near_a_line_are_the_points_within_reach_of_a_line_point(radius_m) 
         within = BallTree(line, metric="haversine").query_radius(np.radians(points), r=reach, count_only=True) > 0
         assert found.tolist() == np.flatnonzero(within).tolist()
         assert 0 < within.sum() < len(points)
+
+def test_twins_are_compared_in_the_workers_and_grouped_alike(monkeypatch, tmp_path: Path) -> None:
+    import dayhike.similarity as similarity_module
+
+    # Ten copies of three routes, shuffled: thirty rows in three groups.
+    shapes = [_route(0, 3_000), _route(0, 3_000, east_m=300), _route(0, 6_000, east_m=600)]
+    routes = [shapes[(7 * row) % 3] for row in range(30)]
+    compared = tmp_path / "compared"
+    are_twins = similarity_module.are_twins
+
+    def recorded(a, b):
+        with compared.open("a") as out:
+            out.write(f"{os.getpid()}\n")
+        return are_twins(a, b)
+
+    monkeypatch.setattr(similarity_module, "are_twins", recorded)
+    monkeypatch.setenv(WORKERS_ENV, "3")
+
+    groups = twin_groups(routes).tolist()
+
+    assert groups == [[0, 1, 2][(7 * row) % 3] for row in range(30)]
+    assert str(os.getpid()) not in compared.read_text().split()
 
 
 def _fixture_catalog(tmp_path: Path) -> Path:

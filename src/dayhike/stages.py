@@ -17,7 +17,8 @@ import numpy as np
 from sklearn.neighbors import BallTree
 
 from dayhike.built import BuildContext, BuiltWalk
-from dayhike.catalog import EARTH_RADIUS_M, named_points
+from dayhike.catalog import EARTH_RADIUS_M, DayHike, named_points
+from dayhike.parallel import parallel_map
 from dayhike.similarity import TWIN_SHARE, TWIN_STEP_M, _even_points, _step_m, twin_groups
 
 Point = tuple[float, float]  # (lat, lon)
@@ -77,8 +78,9 @@ def day_stages(context: BuildContext) -> list[BuiltWalk]:
         return []
     tree = BallTree(np.radians([(point.lat, point.lon) for point in points]), metric="haversine")
     places = named_points(snapshot.places)
-    walks: list[BuiltWalk] = []
-    for tour in tours:
+
+    def tour_stages(tour: DayHike) -> list[BuiltWalk]:
+        walks: list[BuiltWalk] = []
         relation = relations[tour.id]
         walk = context.main_walk(relation).vertices
         near = tree.query_radius(np.radians([point for _, point in walk]), r=max(CUT_RADIUS_M.values()) / EARTH_RADIUS_M)
@@ -102,6 +104,10 @@ def day_stages(context: BuildContext) -> list[BuiltWalk]:
                     parts=(tour.id,),
                 )
             )
+        return walks
+
+    # Each tour is split in a worker.
+    walks = [walk for stages in parallel_map(tour_stages, tours) for walk in stages]
     return _without_twins(walks, context)
 
 
@@ -121,12 +127,15 @@ def _without_twins(walks: list[BuiltWalk], context: BuildContext) -> list[BuiltW
         return []
     relations = {relation.id: relation for relation in context.snapshot.relations}
     walked = {way_id for walk in walks for way_id in walk.way_ids}
-    given = [
-        _route(context.main_walk(relations[hike.id]).vertices)
-        for hike in context.dayhikes
-        if TWIN_SHARE * STAGE_MIN_M <= hike.length_m <= STAGE_MAX_M / TWIN_SHARE
-        and any(kind == "way" and way_id in walked for kind, way_id in relations[hike.id].members)
-    ]
+    given = parallel_map(
+        lambda hike: _route(context.main_walk(relations[hike.id]).vertices),
+        [
+            hike
+            for hike in context.dayhikes
+            if TWIN_SHARE * STAGE_MIN_M <= hike.length_m <= STAGE_MAX_M / TWIN_SHARE
+            and any(kind == "way" and way_id in walked for kind, way_id in relations[hike.id].members)
+        ],
+    )
     # A group's root is its first row, so a group holding a relation has a root below len(given).
     groups = twin_groups([*given, *(_route(walk.vertices) for walk in walks)])[len(given) :]
     kept, kept_groups = [], set()

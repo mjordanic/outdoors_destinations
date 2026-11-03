@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 import numpy as np
 
 from dayhike.catalog import EARTH_RADIUS_M, geometry_store_path_for, remove_similarity
+from dayhike.parallel import parallel_iter
 
 FABDEM_VERSION = "V1-2"
 FABDEM_DATASET = "https://huggingface.co/datasets/pavelzaitsau/fabdem-v12/resolve/main/tiles"
@@ -436,29 +437,31 @@ def sample_dem(
                 "WHERE latitude >= ? AND latitude < ? AND longitude >= ? AND longitude < ?",
                 (south, north, west, east),
             )
-            while True:
-                rows = cursor.fetchmany(_VERTEX_CHUNK)
-                if not rows:
-                    break
+
+            def chunk_updates(rows: list[tuple]) -> list[tuple[float, int, int]]:
+                # A chunk's (elevation, dayhike_id, seq) updates, sampled in a worker.
                 coverable = [
                     (int(dayhike_id), int(seq), float(lat), float(lon))
                     for dayhike_id, seq, lat, lon in rows
                     if fabdem_tile_id(float(lat), float(lon)) in available
                 ]
                 if not coverable:
-                    continue
+                    return []
                 elevations = sample_elevations(
                     raster_dir,
                     [(lat, lon) for _id, _seq, lat, lon in coverable],
                     landcover_dir,
                 )
-                updates = [
+                return [
                     (elevation, dayhike_id, seq)
                     for (dayhike_id, seq, _lat, _lon), elevation in zip(
                         coverable, elevations, strict=True
                     )
                     if elevation is not None
                 ]
+
+            chunks = iter(lambda: cursor.fetchmany(_VERTEX_CHUNK), [])
+            for updates in parallel_iter(chunk_updates, chunks):
                 if not updates:
                     continue
                 write.executemany(
