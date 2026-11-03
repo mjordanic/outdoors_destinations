@@ -67,6 +67,7 @@ WAY_BACK_SEARCH_M = 50_000.0  # the longest trail back searched; past it a walk 
 MAX_WALK_STEPS = 50_000  # the most vertex steps a ComposedHike walks: 500 Segments of Slovenia's mean 72 vertices, and room
 TRAILHEAD_KINDS = ("parking", "restaurant_cafe")
 _SEGMENT_CHUNK = 5_000
+_IDS_PER_QUERY = 900  # below SQLite's oldest limit of 999 bound parameters
 _NEVER = -(2**31)  # level of a bridge or tunnel: never joined
 COORD_SCALE = 10_000_000  # OSM stores coordinates as 1e-7 degree integers
 
@@ -902,13 +903,16 @@ def sample_trailgraph(
     sampled = 0
     cells: set[int] = set()
     try:
-        ids = [row[0] for row in db.execute("SELECT id FROM segments ORDER BY id")]
-        for start in range(0, len(ids), _SEGMENT_CHUNK):
-            chunk = db.execute(
-                "SELECT id, coords, ele, landcover, climate_cell, southness FROM segments "
-                "WHERE id BETWEEN ? AND ? ORDER BY id",
-                (ids[start], ids[min(start + _SEGMENT_CHUNK, len(ids)) - 1]),
-            ).fetchall()
+        for ids in segment_chunks(db, _SEGMENT_CHUNK):
+            chunk = [
+                row
+                for start in range(0, len(ids), _IDS_PER_QUERY)
+                for row in db.execute(
+                    "SELECT id, coords, ele, landcover, climate_cell, southness FROM segments "
+                    f"WHERE id IN ({','.join('?' * len(ids[start : start + _IDS_PER_QUERY]))}) ORDER BY id",
+                    ids[start : start + _IDS_PER_QUERY],
+                )
+            ]
             coords = [decode_coords(row[1]) for row in chunk]
             sizes = [len(c) for c in coords]
             lat, lon = np.concatenate(coords).T
@@ -952,6 +956,23 @@ def sample_trailgraph(
         db.close()
     remove_similarity(catalog_path, progress)  # a way back reads these samples (ADR-0019)
     return sampled
+
+
+def segment_chunks(db: sqlite3.Connection, size: int) -> list[list[int]]:
+    """The TrailGraph's Segment ids in chunks of ``size``, tile by tile.
+
+    Ids follow OSM way order, which scatters a run of them over the whole
+    network; sorted by the 1-degree tile holding the centre of each
+    Segment's box (then by id), a chunk reads the few DEM, WorldCover and
+    climate tiles around it. Each chunk lists its ids in ascending order.
+    """
+    rows = db.execute("SELECT id, south, north, west, east FROM segment_boxes").fetchall()
+    if not rows:
+        return []
+    box = np.array(rows, dtype=float)
+    ids = box[:, 0].astype(np.int64)
+    order = np.lexsort((ids, np.floor((box[:, 3] + box[:, 4]) / 2), np.floor((box[:, 1] + box[:, 2]) / 2)))
+    return [sorted(ids[order[start : start + size]].tolist()) for start in range(0, len(order), size)]
 
 
 def _blob(value: bytes | None, dtype: str, size: int, missing: float) -> np.ndarray:
