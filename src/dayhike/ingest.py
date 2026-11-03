@@ -136,7 +136,10 @@ def run_ingest(
         if sources:
             emit_progress(progress, "assemble", "built DayHikes")
             context = BuildContext(
-                snapshot, tuple(kept), lambda relation: _main_walk(relation, snapshot, access_tree, named)
+                snapshot,
+                tuple(kept),
+                lambda relation: _main_walk(relation, snapshot, access_tree, named),
+                progress,
             )
             kept += _build_hikes(conn, sources, context, amenity_index)
         origin_counts = Counter(hike.name_origin for hike in kept)

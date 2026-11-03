@@ -92,6 +92,39 @@ def test_a_network_hike_walks_the_connectors_between_knooppunten_close_together(
     assert hike.way_ids == (100, 101, 102, 103)
 
 
+def test_a_network_hike_steps_along_leg_ends_across_a_wide_signpost_with_no_connector():
+    # Legs end at P1, P2 and P3, 30 m apart in a row (P1 to P3 60 m), one
+    # signpost with no leg between them: from A to D the hike steps P1, P2, P3,
+    # never straight from P1 to P3.
+    net = Network({"A": (0, 0), "P1": (2, 0), "P2": (2.03, 0), "P3": (2.06, 0), "E": (2.03, 2), "D": (2.06, -2)})
+    net.leg(1, "A", "P1")
+    net.leg(2, "P2", "E")
+    net.leg(3, "P3", "D")
+
+    hikes = network_hikes(net.legs, net.ways, net.nodes, [net.point("A")], [])
+
+    (hike,) = [hike for hike in hikes if hike.parts == (1, 3)]
+    assert [node for node, _ in hike.vertices] == [net.node_ids[name] for name in ("A", "P1", "P2", "P3", "D")]
+    assert hike.way_ids == (100, 102)
+    assert hike.jumps == 0
+
+
+def test_a_network_hike_reaches_a_connector_that_starts_beside_the_leg_end():
+    # Leg A-B ends at B; connector B2-K-B3 starts at B2, 20 m from B, not at
+    # B; B to B3 is 65 m. The hike steps B to B2 and walks the connector.
+    net = Network({"A": (0, 0), "B": (2, 0), "B2": (2.02, 0), "K": (2.04, 0), "B3": (2.065, 0), "D": (2.065, -2)})
+    net.leg(1, "A", "B")
+    net.leg(2, "B2", "K", "B3")
+    net.leg(3, "B3", "D")
+
+    (hike,) = network_hikes(net.legs, net.ways, net.nodes, [net.point("A")], [])
+
+    assert [node for node, _ in hike.vertices] == [net.node_ids[name] for name in ("A", "B", "B2", "K", "B3", "D")]
+    assert hike.parts == (1, 2, 3)
+    assert hike.way_ids == (100, 101, 102)
+    assert hike.jumps == 0
+
+
 FIGURE_EIGHT = {
     "S": (0, 0),
     "N1": (1.5, 1.5), "N2": (0, 3), "N3": (-1.5, 1.5),

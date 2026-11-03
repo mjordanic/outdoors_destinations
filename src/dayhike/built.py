@@ -46,11 +46,13 @@ class BuiltWalk:
 @dataclass(frozen=True)
 class BuildContext:
     """What a source may build from: the snapshot ingest read, the relation
-    DayHikes it kept, and the main walk of any relation."""
+    DayHikes it kept, the main walk of any relation, and where a source
+    reports what it built (one line, like ingest's ``progress``)."""
 
     snapshot: OsmSnapshot
     dayhikes: Sequence[DayHike]
     main_walk: Callable[[OsmRelation], MainWalk]
+    progress: Callable[[str], None] | None = None
 
 
 BuiltHikeSource = Callable[[BuildContext], Iterable[BuiltWalk]]

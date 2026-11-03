@@ -51,3 +51,11 @@ def test_a_named_guidepost_names_a_start_its_legs_leave_unnamed(catalog: Catalog
     loop = _network(catalog)["Loop from Col de Granon via Les Granges"]
 
     assert loop.parts in ((24, 25, 26), (26, 25, 24))
+
+
+def test_ingest_reports_the_straight_jumps_network_hikes_leave(tmp_path: Path) -> None:
+    lines: list[str] = []
+
+    build_catalog(FIXTURE, tmp_path / "catalog.sqlite", progress=lines.append)
+
+    assert "assemble: network hikes: 0 straight jumps over 50 m left" in lines

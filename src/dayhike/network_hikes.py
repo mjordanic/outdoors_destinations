@@ -97,13 +97,15 @@ class LegGraph:
 class NetworkHike:
     """A kept chain as the Catalog takes it: its name, (node id, point)
     vertices from its start, member ways walked and leg relation ids
-    (``parts``) in walking order, and its length."""
+    (``parts``) in walking order, its length, and how many times it still
+    goes straight more than ``GAP_JOIN_M`` from one leg to the next."""
 
     name: str
     vertices: tuple[tuple[int, Point], ...]
     way_ids: tuple[int, ...]
     parts: tuple[int, ...]
     length_m: float
+    jumps: int = 0
 
 
 @dataclass(frozen=True)
@@ -148,6 +150,9 @@ def network_source(context: BuildContext) -> list[BuiltWalk]:
         snapshot.guideposts,
         relations=_relation_walks(context, legs),
     )
+    if context.progress is not None:
+        jumps = sum(hike.jumps for hike in hikes)
+        context.progress(f"assemble: network hikes: {jumps} straight jumps over {GAP_JOIN_M} m left")
     return [BuiltWalk("network", hike.name, hike.vertices, hike.way_ids, hike.parts) for hike in hikes]
 
 
@@ -185,34 +190,37 @@ def network_hikes(
     then ``candidates`` from every one of its ``starts``, ``select`` and
     ``chain_name``. ``relations`` are the relation DayHikes' walks, whose
     Twins are left out. A kept chain walks from one leg to the next across a
-    signpost along that signpost's connector legs when their ends lie farther
-    apart than ``GAP_JOIN_M`` (see ``_connect``).
+    signpost along the legs touching it when their ends lie farther apart than
+    ``GAP_JOIN_M`` (see ``_connect``).
     """
     graph = leg_graph(legs, ways, nodes)
     found = starts(graph, access_points, places)
     kept = select(graph, (candidates(graph, start) for start in found), destinations, relations)
     names = signpost_names(graph, guideposts)
     marked, settled = named_points(destinations), named_points(places)
-    connectors: dict[int, list[int]] = {}  # per signpost, the legs both of whose ends it joined
+    touching: dict[int, list[int]] = {}  # per signpost, the legs with an end joined into it
     for index, leg in enumerate(graph.legs):
-        if leg.ends[0] == leg.ends[1]:
-            connectors.setdefault(leg.ends[0], []).append(index)
+        for at in set(leg.ends):
+            touching.setdefault(at, []).append(index)
     hikes = []
     for _, chain in kept:
         vertices: list[tuple[int, Point]] = []
         way_ids: list[int] = []
         parts: list[int] = []
+        jumps = 0
         for index, at in zip(chain.legs, chain.signposts):
             leg = graph.legs[index]
             forward = leg.ends[0] == at
             steps = list(leg.vertices if forward else leg.vertices[::-1])
             if vertices and _haversine_m(*vertices[-1][1], *steps[0][1]) > GAP_JOIN_M:
-                path, via_ways, via_legs = _connect(
-                    graph, connectors.get(at, []), vertices[-1][0], steps[0][0], ways, nodes
-                )
-                vertices += path
-                way_ids += via_ways
-                parts += [graph.legs[via].relation_id for via in via_legs]
+                connected = _connect(graph, at, touching[at], vertices[-1][0], steps[0][0], ways, nodes)
+                if connected is None:
+                    jumps += 1
+                else:
+                    path, via_ways, via_legs = connected
+                    vertices += path
+                    way_ids += via_ways
+                    parts += [graph.legs[via].relation_id for via in via_legs]
             for vertex in steps:
                 if not vertices or vertices[-1][1] != vertex[1]:
                     vertices.append(vertex)
@@ -225,6 +233,7 @@ def network_hikes(
                 tuple(way_ids),
                 tuple(parts),
                 _linestring_length_m([point for _, point in vertices]),
+                jumps,
             )
         )
     return hikes
@@ -232,53 +241,65 @@ def network_hikes(
 
 def _connect(
     graph: LegGraph,
-    connectors: Sequence[int],
+    signpost: int,
+    touching: Sequence[int],
     source: int,
     target: int,
     ways: Mapping[int, OsmWay],
     nodes: Mapping[int, Point],
-) -> tuple[list[tuple[int, Point]], list[int], list[int]]:
-    """The shortest walk from node ``source`` to node ``target`` along the ways of
-    one signpost's ``connectors``, the legs (indexes into ``graph.legs``) both of
-    whose ends it joined: the (node id, point) vertices after ``source`` and
-    before ``target``, and the ways and the legs it walks, in walking order.
-    Nothing when no such walk joins them.
+) -> tuple[list[tuple[int, Point]], list[int], list[int]] | None:
+    """The shortest walk from node ``source`` to node ``target``, two leg ends
+    at ``signpost``, along the ways of the legs ``touching`` it (indexes into
+    ``graph.legs``, every leg with an end joined into it) and straight gaps of
+    at most ``GAP_JOIN_M`` between those legs' ends there, a gap costing
+    ``GAP_JOIN_M`` more than its length: the (node id, point) vertices after
+    ``source`` and before ``target``, and the ways and the legs it walks, in
+    walking order. None when no such walk joins them.
 
-    Signposts join leg ends link by link, so knooppunten closer than
-    ``GAP_JOIN_M`` to each other, and the short legs between them, are one
-    signpost, whose ends may lie farther apart than that."""
-    edges: dict[int, list[tuple[int, float, int, int]]] = {}
-    for index in connectors:
-        for way_id in graph.legs[index].way_ids:
+    Signposts join leg ends link by link, so leg ends closer than
+    ``GAP_JOIN_M`` to each other are one signpost, whose ends may lie farther
+    apart than that."""
+    edges: dict[int, list[tuple[int, float, int | None, int | None]]] = {}
+    ends: set[int] = set()
+    for index in touching:
+        leg = graph.legs[index]
+        for (node, _), end in ((leg.vertices[0], leg.ends[0]), (leg.vertices[-1], leg.ends[1])):
+            if end == signpost:
+                ends.add(node)
+        for way_id in leg.way_ids:
             on_way = [node for node in ways[way_id].node_ids if node in nodes]
             for a, b in zip(on_way, on_way[1:]):
                 metres = _haversine_m(*nodes[a], *nodes[b])
                 edges.setdefault(a, []).append((b, metres, way_id, index))
                 edges.setdefault(b, []).append((a, metres, way_id, index))
-    came: dict[int, tuple[float, int, int, int] | None] = {source: None}  # metres, way, leg, node before
+    for a in ends:
+        for b in ends:
+            if a != b and (metres := _haversine_m(*nodes[a], *nodes[b])) <= GAP_JOIN_M:
+                edges.setdefault(a, []).append((b, metres + GAP_JOIN_M, None, None))
+    came: dict[int, tuple[float, int | None, int | None, int] | None] = {source: None}  # cost, way, leg, node before
     done: set[int] = set()
     queue = [(0.0, source)]
     while queue:
-        metres, node = heapq.heappop(queue)
+        cost, node = heapq.heappop(queue)
         if node in done:
             continue
         done.add(node)
         if node == target:
             break
         for there, step, way_id, index in edges.get(node, ()):
-            if there not in done and (there not in came or metres + step < came[there][0]):
-                came[there] = (metres + step, way_id, index, node)
-                heapq.heappush(queue, (metres + step, there))
+            if there not in done and (there not in came or cost + step < came[there][0]):
+                came[there] = (cost + step, way_id, index, node)
+                heapq.heappush(queue, (cost + step, there))
     if target not in done:
-        return [], [], []
+        return None
     path, via_ways, via_legs = [], [], []
     node = target
     while came[node] is not None:
         _, way_id, index, node = came[node]
         path.append(node)
-        if not via_ways or via_ways[-1] != way_id:
+        if way_id is not None and (not via_ways or via_ways[-1] != way_id):
             via_ways.append(way_id)
-        if not via_legs or via_legs[-1] != index:
+        if index is not None and (not via_legs or via_legs[-1] != index):
             via_legs.append(index)
     return (
         [(node, nodes[node]) for node in path[::-1][1:]],
