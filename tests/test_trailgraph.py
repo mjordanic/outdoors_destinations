@@ -35,6 +35,7 @@ from dayhike.trailgraph import (
     RouteError,
     TrailGraph,
     decode_coords,
+    encode_coords,
     round_trip,
     sample_trailgraph,
     way_back,
@@ -406,6 +407,46 @@ def test_sampling_again_changes_nothing_but_drops_the_similarity_facts(sampled: 
 
     assert _segments(catalog) == _segments(sampled)
     assert not similarity_dir_for(catalog).exists()  # the ways back read the samples
+
+
+def test_sampling_reads_the_segments_tile_by_tile_whatever_their_ids(
+    sampled: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import dayhike.similarity
+    import dayhike.trailgraph
+
+    # Every other Segment moved a degree north: in id order each chunk would span two DEM tiles.
+    catalog = tmp_path / "catalog.sqlite"
+    shutil.copyfile(trailgraph_path_for(sampled), trailgraph_path_for(catalog))
+    db = sqlite3.connect(trailgraph_path_for(catalog))
+    for (segment_id,) in db.execute("SELECT id FROM segments WHERE id % 2 = 0").fetchall():
+        (coords,) = db.execute("SELECT coords FROM segments WHERE id = ?", (segment_id,)).fetchone()
+        lat, lon = decode_coords(coords).T
+        db.execute("UPDATE segments SET coords = ? WHERE id = ?", (encode_coords(lat + 1, lon), segment_id))
+        db.execute("UPDATE segment_boxes SET south = south + 1, north = north + 1 WHERE id = ?", (segment_id,))
+    db.commit()
+    db.close()
+    whole = tmp_path / "whole.sqlite"
+    shutil.copyfile(trailgraph_path_for(catalog), trailgraph_path_for(whole))
+    root = tmp_path / "rasters"
+    root.mkdir()
+    dem, landcover, climate = _write_rasters(root)
+    sample_trailgraph(whole, dem_dir=dem, landcover_dir=landcover, climate_dir=climate)
+
+    tiles_per_chunk: list[set[tuple[int, int]]] = []
+    real = dayhike.similarity.slope_southness
+
+    def spy(dem_dir, lat, lon):
+        tiles_per_chunk.append(set(zip(np.floor(lat).astype(int).tolist(), np.floor(lon).astype(int).tolist())))
+        return real(dem_dir, lat, lon)
+
+    monkeypatch.setattr(dayhike.similarity, "slope_southness", spy)
+    monkeypatch.setattr(dayhike.trailgraph, "_SEGMENT_CHUNK", 2)
+    sample_trailgraph(catalog, dem_dir=dem, landcover_dir=landcover, climate_dir=climate)
+
+    assert len(tiles_per_chunk) == math.ceil(len(_segments(catalog)) / 2) > 2
+    assert sorted(len(tiles) for tiles in tiles_per_chunk)[-2] == 1  # at most the chunk where the tiles meet spans two
+    assert _segments(catalog) == _segments(whole)
 
 
 def test_copernicus_tiles_are_sampled_like_fabdem_tiles_away_from_trees(sampled: Path, tmp_path: Path) -> None:
