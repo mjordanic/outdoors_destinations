@@ -13,6 +13,7 @@ import weakref
 from dayhike.built import BuildContext, BuiltWalk, built_id, route_of
 from dayhike.network_hikes import (
     NETWORK_CAP,
+    NETWORK_CAP_MAX,
     Start,
     candidates,
     chain_name,
@@ -51,6 +52,12 @@ class Network:
         if name:
             tags["name"] = name
         self.legs.append(OsmRelation(relation_id, (("way", way_id),), tags, ("",)))
+
+    def path(self, *points: str) -> int:
+        """A trail way through ``points`` that is no leg; its way id."""
+        way_id = 100 + len(self.ways)
+        self.ways[way_id] = OsmWay(tuple(self.node_ids[point] for point in points), {"highway": "path"})
+        return way_id
 
     def point(self, name: str) -> tuple[float, float]:
         return self.nodes[self.node_ids[name]]
@@ -315,6 +322,40 @@ def test_a_start_keeps_at_most_the_cap_of_distinct_chains():
     assert len(kept) == 4
 
 
+def _star(count: int) -> tuple[Network, list[tuple[float, float, str]]]:
+    # From S, ``count`` 5 km two-leg lines S-Ai-Bi, evenly round; a named peak at every Bi.
+    points = {"S": (0.0, 0.0)}
+    for i in range(count):
+        angle = math.radians(i * 360 / count)
+        points[f"A{i}"] = (2.5 * math.cos(angle), 2.5 * math.sin(angle))
+        points[f"B{i}"] = (5 * math.cos(angle), 5 * math.sin(angle))
+    net = Network(points)
+    for i in range(count):
+        net.leg(10 * i + 1, "S", f"A{i}")
+        net.leg(10 * i + 2, f"A{i}", f"B{i}")
+    return net, [(*net.point(f"B{i}"), f"Vrh {i}") for i in range(count)]
+
+
+def test_a_start_keeps_a_chain_per_destination_it_reaches_up_to_the_highest_cap():
+    for count, kept_count in ((6, 6), (10, NETWORK_CAP_MAX)):
+        net, peaks = _star(count)
+        graph = leg_graph(net.legs, net.ways, net.nodes)
+
+        kept = select(graph, [candidates(graph, _start_at(graph, net.point("S")))], destinations=peaks)
+
+        assert NETWORK_CAP_MAX == 8
+        assert len(kept) == kept_count
+
+
+def test_a_start_reaching_few_destinations_keeps_the_cap():
+    net, peaks = _star(6)
+    graph = leg_graph(net.legs, net.ways, net.nodes)
+
+    kept = select(graph, [candidates(graph, _start_at(graph, net.point("S")))], destinations=peaks[:2])
+
+    assert len(kept) == NETWORK_CAP
+
+
 def test_a_figure_eight_keeps_two_loops_and_no_near_copies():
     net = _figure_eight()
     graph = leg_graph(net.legs, net.ways, net.nodes)
@@ -378,6 +419,65 @@ def test_a_line_to_a_named_destination_beats_lines_of_a_better_length():
     kept = select(graph, [candidates(graph, start)], destinations=[peak])
 
     assert _kept_lengths_km(graph, kept) == [4, 10, 10, 10]
+
+
+def _hut_by_a_detour() -> Network:
+    # Hut H is 3.5 km from S straight (S-A-H) or 8.4 km by a detour (S-X-A-H)
+    # that ends on the same last leg. Nearer 10 km, the detour comes first and
+    # leaves the direct line too little of its own to be shortlisted too.
+    net = Network({"S": (0, 0), "A": (1.5, 0), "H": (3.5, 0), "X": (0, -3)})
+    net.leg(1, "S", "A")
+    net.leg(2, "A", "H")
+    net.leg(3, "S", "X")
+    net.leg(4, "X", "A")
+    return net
+
+
+def test_a_line_to_a_destination_is_its_direct_line_not_a_detour_nearer_a_days_length():
+    net = _hut_by_a_detour()
+    graph = leg_graph(net.legs, net.ways, net.nodes)
+    lines = [chain for chain in candidates(graph, _start_at(graph, net.point("S"))) if not chain.loop]
+    hut = (*net.point("H"), "Koča")
+
+    kept = select(graph, [lines], destinations=[hut])
+
+    assert [_relations(graph, chain) for _, chain in kept] == [[1, 2]]
+
+
+def test_the_detour_stays_when_the_direct_line_is_a_twin_of_a_relation_dayhike():
+    net = _hut_by_a_detour()
+    graph = leg_graph(net.legs, net.ways, net.nodes)
+    lines = [chain for chain in candidates(graph, _start_at(graph, net.point("S"))) if not chain.loop]
+    hut = (*net.point("H"), "Koča")
+    dayhike = [net.point(name) for name in ("S", "A", "H")]
+
+    kept = select(graph, [lines], destinations=[hut], relations=[dayhike])
+
+    assert [_relations(graph, chain) for _, chain in kept] == [[3, 4, 2]]
+
+
+def test_the_direct_line_to_a_destination_on_a_loop_is_kept_beside_the_loop():
+    # The 8.1 km loop S-A-H-B-S passes hut H; the direct line S-A-H (3.5 km)
+    # lies wholly on it and is still kept, in place of the 8.4 km detour S-X-A-H.
+    net = _hut_by_a_detour()
+    net.nodes[len(net.nodes) + 1] = _lat_lon(2, 1.5)
+    net.node_ids["B"] = len(net.nodes)
+    net.leg(5, "H", "B")
+    net.leg(6, "B", "S")
+    graph = leg_graph(net.legs, net.ways, net.nodes)
+    hut = (*net.point("H"), "Koča")
+    # The one loop through H; the others would take the detour's legs too.
+    chains = [
+        chain
+        for chain in candidates(graph, _start_at(graph, net.point("S")))
+        if not chain.loop or sorted(_relations(graph, chain)) == [1, 2, 5, 6]
+    ]
+
+    kept = select(graph, [chains], destinations=[hut])
+
+    lines = [_relations(graph, chain) for _, chain in kept if not chain.loop]
+    assert [1, 2] in lines
+    assert [3, 4, 2] not in lines
 
 
 def test_a_twin_of_a_relation_dayhike_is_dropped():
@@ -514,6 +614,93 @@ def test_network_hikes_are_the_kept_chains_ready_for_the_catalog():
     assert [node_id for node_id, _ in north.vertices] == [net.node_ids[n] for n in ("S", "N1", "N2", "N3", "S")]
     assert north.way_ids == (100, 101, 102, 103)
     assert round(north.length_m) == round(4 * 2 ** 0.5 * 1500)
+
+
+def test_a_network_hike_from_parking_starts_there_when_a_trail_leads_to_its_signpost():
+    # Parking 300 m west of S, a path P-Q-S from beside it: each loop walks
+    # from P to S, round, and back to P.
+    net = Network(FIGURE_EIGHT | {"P": (-0.3, 0.02), "Q": (-0.15, 0)})
+    for relation_id, (a, b) in enumerate(
+        [("S", "N1"), ("N1", "N2"), ("N2", "N3"), ("N3", "S"), ("S", "S1"), ("S1", "S2"), ("S2", "S3"), ("S3", "S")],
+        start=1,
+    ):
+        net.leg(relation_id, a, b)
+    path = net.path("P", "Q", "S")
+    parking = [_lat_lon(-0.31, 0.03)]
+
+    hikes = network_hikes(net.legs, net.ways, net.nodes, parking, places=[])
+
+    north = next(hike for hike in hikes if hike.parts == (1, 2, 3, 4))
+    names = ("P", "Q", "S", "N1", "N2", "N3", "S", "Q", "P")
+    assert [node for node, _ in north.vertices] == [net.node_ids[name] for name in names]
+    assert north.way_ids == (path, 100, 101, 102, 103, path)
+    assert round(north.length_m) == round(4 * 2**0.5 * 1500 + 2_000 * (_km(net, "P", "Q") + _km(net, "Q", "S")))
+    route_of(north.vertices, north.way_ids, net.ways)  # every step on a way it names
+
+
+def test_a_loop_ending_beside_its_start_walks_back_to_parking_from_where_it_ends():
+    # The loop's last leg ends at E, 30 m from S (one signpost); path P-Q-S
+    # leads out and E-R-P back: it walks back from E, never jumping E to Q.
+    net = Network(FIGURE_EIGHT | {"E": (0, 0.03), "P": (-0.3, 0.02), "Q": (-0.15, 0), "R": (-0.15, 0.05)})
+    for relation_id, (a, b) in enumerate([("S", "N1"), ("N1", "N2"), ("N2", "N3"), ("N3", "E")], start=1):
+        net.leg(relation_id, a, b)
+    out, back = net.path("P", "Q", "S"), net.path("E", "R", "P")
+    parking = [_lat_lon(-0.31, 0.03)]
+
+    (loop,) = network_hikes(net.legs, net.ways, net.nodes, parking, places=[])
+
+    names = ("P", "Q", "S", "N1", "N2", "N3", "E", "R", "P")
+    assert [node for node, _ in loop.vertices] == [net.node_ids[name] for name in names]
+    assert loop.way_ids == (out, 100, 101, 102, 103, back)
+    route, _ = route_of(loop.vertices, loop.way_ids, net.ways)
+    assert ",g." not in route
+
+
+def test_a_loop_walks_back_to_the_parking_it_starts_from_not_a_nearer_one():
+    # As above, but a second parking B lies 200 m from E along E-B, nearer
+    # than P: the loop still walks back E-R-P and ends where it starts.
+    net = Network(
+        FIGURE_EIGHT | {"E": (0, 0.03), "P": (-0.3, 0.02), "Q": (-0.15, 0), "R": (-0.15, 0.05), "B": (0.1, 0.2)}
+    )
+    for relation_id, (a, b) in enumerate([("S", "N1"), ("N1", "N2"), ("N2", "N3"), ("N3", "E")], start=1):
+        net.leg(relation_id, a, b)
+    out, back = net.path("P", "Q", "S"), net.path("E", "R", "P")
+    net.path("E", "B")
+    parking = [_lat_lon(-0.31, 0.03), net.point("B")]
+
+    (loop,) = network_hikes(net.legs, net.ways, net.nodes, parking, places=[])
+
+    names = ("P", "Q", "S", "N1", "N2", "N3", "E", "R", "P")
+    assert [node for node, _ in loop.vertices] == [net.node_ids[name] for name in names]
+    assert loop.way_ids == (out, 100, 101, 102, 103, back)
+
+
+def _km(net: Network, a: str, b: str) -> float:
+    from dayhike.catalog import _haversine_m
+
+    return _haversine_m(*net.point(a), *net.point(b)) / 1000
+
+
+def test_a_network_hike_starts_at_its_signpost_when_no_trail_leads_there_from_parking():
+    net, _ = _named_figure_eight()
+    parking = [_lat_lon(-0.3, 0)]
+
+    hikes = network_hikes(net.legs, net.ways, net.nodes, parking, places=[])
+
+    assert {hike.vertices[0][1] for hike in hikes} == {net.point("S")}
+
+
+def test_a_network_hike_whose_first_leg_passes_the_parking_starts_there_without_walking_back():
+    # The line S-M-A-B passes parking at M, 400 m along its first leg: it starts at M.
+    net = Network({"S": (0, 0), "M": (0.4, 0), "A": (2, 0), "B": (4, 0)})
+    net.leg(1, "S", "M", "A")
+    net.leg(2, "A", "B")
+    parking = [_lat_lon(0.4, 0.02)]
+
+    (hike,) = network_hikes(net.legs, net.ways, net.nodes, parking, places=[])
+
+    assert [node for node, _ in hike.vertices] == [net.node_ids[name] for name in ("M", "A", "B")]
+    assert round(hike.length_m) == 3_600
 
 
 def _grid(size: int = 12) -> Network:

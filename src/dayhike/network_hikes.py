@@ -17,7 +17,7 @@ import heapq
 import logging
 import math
 from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cached_property
 
@@ -49,11 +49,14 @@ logger = logging.getLogger(__name__)
 NETWORK_MIN_M = 3_000.0  # a NetworkHike is day-sized: at least this long ...
 NETWORK_MAX_M = 25_000.0  # ... and at most this
 NETWORK_EXPANSIONS = 20_000  # legs one start's search may try
-NETWORK_CAP = 4  # chains kept per start
-NETWORK_SHORTLIST = 2 * NETWORK_CAP  # distinct chains per start checked for Twins
+NETWORK_CAP = 4  # chains kept per start ...
+NETWORK_CAP_MAX = 8  # ... or one per named destination its lines reach, up to this
+NETWORK_SHORTLIST = 2 * NETWORK_CAP  # distinct chains per start checked for Twins, twice its cap
 START_PARKING_M = 500.0  # a signpost this close to parking starts chains ...
 START_PLACE_M = 300.0  # ... and one this close to a place node
 START_CLUSTER_M = 1_000.0  # signposts this close to a start's first one start with it
+PARKING_ENTRY_M = 50.0  # a trail node this close to parking is where a walk from it begins ...
+PARKING_WALK_M = 2 * START_PARKING_M  # ... and a NetworkHike walks at most this far from there to its start
 DESTINATION_M = 200.0  # a line whose end is this close to a named Peak, Hut, Viewpoint or lake goes there
 NETWORK_TARGET_M = 10_000.0  # a day's walk: of two chains alike otherwise, the one nearer this length is better
 GUIDEPOST_M = 50.0  # a named guidepost this close names a signpost its legs do not
@@ -218,10 +221,30 @@ def network_hikes(
     ``CROSSING_MAX_RATIO`` times the straight jump: then it jumps, as when no
     crossing is found. It favours walking legs over stepping between their
     ends, and takes the shortest crossing only when that favourite is too long.
+
+    A kept chain that starts within ``START_PARKING_M`` of parking starts at
+    the parking: it first walks there from it along ``ways`` (see
+    ``_parking_walks``), and a loop walks back to where it started from the
+    node it ends on, where such a walk is found, not again
+    along the same trail where the chain itself walks on along it. Where no
+    such walk is found, or it would take the hike out of ``NETWORK_MIN_M`` to
+    ``NETWORK_MAX_M``, the hike starts at its signpost.
     """
     graph = leg_graph(legs, ways, nodes)
     found = starts(graph, access_points, places)
     kept = select(graph, (candidates(graph, start) for start in found), destinations, relations)
+    firsts = {}
+    returns = set()  # per loop ending on another node than it starts, (end node, start node)
+    for _, chain in kept:
+        leg = graph.legs[chain.legs[0]]
+        first, point = leg.vertices[0] if leg.ends[0] == chain.signposts[0] else leg.vertices[-1]
+        firsts[first] = point
+        if chain.loop:
+            leg = graph.legs[chain.legs[-1]]
+            end = leg.vertices[-1][0] if leg.ends[0] == chain.signposts[-2] else leg.vertices[0][0]
+            if end != first:
+                returns.add((end, first))
+    from_parking, to_parking = _parking_walks(ways, nodes, access_points, firsts, returns)
     names = signpost_names(graph, guideposts)
     marked, settled = named_points(destinations), named_points(places)
     touching: dict[int, list[int]] = {}  # per signpost, the legs with an end joined into it
@@ -271,6 +294,12 @@ def network_hikes(
             way_ids += leg.way_ids if forward else leg.way_ids[::-1]
             parts.append(leg.relation_id)
             last = index
+        if vertices[0][0] in from_parking:
+            back = None
+            if chain.loop:
+                end = vertices[-1][0]
+                back = from_parking[end] if end == vertices[0][0] else to_parking.get((end, vertices[0][0]))
+            vertices, way_ids = _start_at_parking(vertices, way_ids, *from_parking[vertices[0][0]], back)
         hikes.append(
             NetworkHike(
                 chain_name(graph, chain, names, marked, settled),
@@ -283,6 +312,133 @@ def network_hikes(
             )
         )
     return hikes
+
+
+def _parking_walks(
+    ways: Mapping[int, OsmWay],
+    nodes: Mapping[int, Point],
+    access_points: Sequence[Point],
+    sources: Mapping[int, Point],
+    returns: Iterable[tuple[int, int]],
+) -> tuple[
+    dict[int, tuple[list[tuple[int, Point]], list[int]]],
+    dict[tuple[int, int], tuple[list[tuple[int, Point]], list[int]]],
+]:
+    """Per source node (id to point), the shortest walk to it along ``ways``
+    from a node within ``PARKING_ENTRY_M`` of an access point (parking) that
+    lies within ``START_PARKING_M`` of the source, of at most
+    ``PARKING_WALK_M``: its (node id, point) vertices from there to the
+    source, and the ways it walks, in walking order. A source that close to
+    parking itself, or with no such walk, has none. And per (end node, source)
+    of ``returns``, the shortest such walk to the end node from the node the
+    source's walk starts at, where both are found."""
+    if not access_points or not sources:
+        return {}, {}
+    ids = list(sources)
+    tree = BallTree(np.radians(access_points), metric="haversine")
+    near = tree.query_radius(np.radians([sources[node] for node in ids]), r=START_PARKING_M / EARTH_RADIUS_M)
+    parkings = {node: [access_points[i] for i in found] for node, found in zip(ids, near) if len(found)}
+    # Only ways with a node in a grid cell next to a source's: a cell is PARKING_WALK_M wide or more,
+    # so every node a walk of at most that reaches lies in one.
+    cell_lat = math.degrees(PARKING_WALK_M / EARTH_RADIUS_M)
+    widest = max((abs(sources[node][0]) for node in parkings), default=0.0) + cell_lat
+    cell_lon = cell_lat / math.cos(math.radians(min(widest, 89.0)))
+
+    def cell(point: Point) -> tuple[int, int]:
+        return math.floor(point[0] / cell_lat), math.floor(point[1] / cell_lon)
+
+    returns = [(end, source) for end, source in returns if source in parkings and end in nodes]
+    cells = {
+        (row + dr, column + dc)
+        for row, column in map(cell, [*(sources[node] for node in parkings), *(nodes[end] for end, _ in returns)])
+        for dr in (-1, 0, 1)
+        for dc in (-1, 0, 1)
+    }
+    edges: dict[int, list[tuple[int, float, int]]] = {}
+    for way_id, way in ways.items():
+        on_way = [node for node in way.node_ids if node in nodes]
+        if not any(cell(nodes[node]) in cells for node in on_way):
+            continue
+        for a, b in zip(on_way, on_way[1:]):
+            metres = _haversine_m(*nodes[a], *nodes[b])
+            edges.setdefault(a, []).append((b, metres, way_id))
+            edges.setdefault(b, []).append((a, metres, way_id))
+
+    def at_parking(node: int, near: Sequence[Point]) -> bool:
+        return any(_haversine_m(*nodes[node], *point) <= PARKING_ENTRY_M for point in near)
+
+    def walk(source: int, reached: Callable[[int], bool]) -> tuple[list[tuple[int, Point]], list[int]] | None:
+        came: dict[int, tuple[float, int, int] | None] = {source: None}  # cost, way, node towards the source
+        done: set[int] = set()
+        queue = [(0.0, source)]
+        while queue:
+            cost, node = heapq.heappop(queue)
+            if node in done:
+                continue
+            done.add(node)
+            if reached(node):
+                path, way_ids = [], []
+                while came[node] is not None:
+                    _, way_id, after = came[node]
+                    path.append((node, nodes[node]))
+                    if not way_ids or way_ids[-1] != way_id:
+                        way_ids.append(way_id)
+                    node = after
+                return [*path, (source, nodes[source])], way_ids
+            for there, step, way_id in edges.get(node, ()):
+                walked = cost + step
+                if there not in done and walked <= PARKING_WALK_M and (there not in came or walked < came[there][0]):
+                    came[there] = (walked, way_id, node)
+                    heapq.heappush(queue, (walked, there))
+        return None
+
+    walks = {}
+    for source, near in parkings.items():
+        if not at_parking(source, near):
+            found = walk(source, lambda node, near=near: at_parking(node, near))
+            if found is not None:
+                walks[source] = found
+    backs = {}
+    for end, source in returns:
+        if source in walks:
+            entry = walks[source][0][0][0]
+            found = walk(end, lambda node, entry=entry: node == entry)
+            if found is not None:
+                backs[end, source] = found
+    return walks, backs
+
+
+def _start_at_parking(
+    vertices: Sequence[tuple[int, Point]],
+    way_ids: Sequence[int],
+    path: Sequence[tuple[int, Point]],
+    path_ways: Sequence[int],
+    back: tuple[Sequence[tuple[int, Point]], Sequence[int]] | None,
+) -> tuple[list[tuple[int, Point]], list[int]]:
+    """The hike along ``vertices`` and ``way_ids`` walked first along
+    ``path`` (ways ``path_ways``) from the parking to its first vertex and
+    then, when given ``back`` (a loop's walk from parking to its last vertex
+    and its ways), back along that at the end. Where the hike walks on along
+    the path, it starts (or ends) where the path leaves it. Unchanged when
+    that takes it out of ``NETWORK_MIN_M`` to ``NETWORK_MAX_M``."""
+    walked = [*path[:-1], *vertices]
+    ways = [*path_ways, *way_ids]
+    if back is not None:
+        back_path, back_ways = back
+        walked += back_path[::-1][1:]
+        ways += back_ways[::-1]
+        _unretrace(walked, len(path) + len(vertices) - 2)
+    _unretrace(walked, len(path) - 1)
+    if not NETWORK_MIN_M <= _linestring_length_m([point for _, point in walked]) <= NETWORK_MAX_M:
+        return list(vertices), list(way_ids)
+    return walked, ways
+
+
+def _unretrace(vertices: list[tuple[int, Point]], at: int) -> None:
+    # Drop the walk out and back that turns at vertices[at].
+    while 0 < at < len(vertices) - 1 and vertices[at - 1][0] == vertices[at + 1][0]:
+        del vertices[at : at + 2]
+        at -= 1
 
 
 def _connect(
@@ -558,25 +714,52 @@ def select(
     ``destinations`` (lat, lon, name), then other lines; within each, nearer
     ``NETWORK_TARGET_M`` (by ratio) first. Per start, best first, a chain is
     shortlisted when more than ``VERSION_DIFFERS`` of its length lies on legs
-    that no chain shortlisted there walks, up to ``NETWORK_SHORTLIST``. Of
-    those, at most ``NETWORK_CAP`` per start are kept, none a Twin of a better chain kept or
-    of one of the relation DayHikes' walks ``relations`` (Twins of Twins
-    count, as in ``twin_groups``).
+    that no chain shortlisted there walks, up to twice the start's cap. A
+    start's cap is the number of named destinations its lines reach, at least
+    ``NETWORK_CAP`` and at most ``NETWORK_CAP_MAX``. Of its first
+    ``NETWORK_SHORTLIST``, at most ``NETWORK_CAP`` per start are kept, none a
+    Twin of a better chain kept or of one of the relation DayHikes' walks
+    ``relations`` (Twins of Twins count, as in ``twin_groups``). Then, best
+    first, its other shortlisted chains are kept up to its cap, none a Twin of
+    a relation DayHike or of a chain kept before, so none takes the place of
+    a chain kept before.
+
+    A kept line to a destination is then replaced by that destination's
+    direct line from the start, its shortest line, when that is shorter and
+    no other line shortlisted there is it or goes to the destination before
+    it. The direct line takes the line's place in the order and needs no
+    share of its own; the line it replaces stays when the direct line is a
+    Twin of a relation DayHike or of another chain kept (see ``_widened``).
     """
     reached = named_points(destinations)
-    at_destination = {
-        signpost for signpost, point in enumerate(graph.signposts) if _nearest(reached, point, DESTINATION_M)
+    destination_of = {
+        signpost: name
+        for signpost, point in enumerate(graph.signposts)
+        if (name := _nearest(reached, point, DESTINATION_M))
     }
 
+    def goes_to(chain: Chain) -> str | None:
+        return None if chain.loop else destination_of.get(chain.signposts[-1])
+
     def preference(chain: Chain) -> tuple[int, float]:
-        kind = 0 if chain.loop else 1 if chain.signposts[-1] in at_destination else 2
+        kind = 0 if chain.loop else 1 if goes_to(chain) else 2
         return kind, abs(math.log(chain.length_m / NETWORK_TARGET_M))
 
     shortlist: list[tuple[int, Chain]] = []
+    extra: list[tuple[int, Chain]] = []  # shortlisted past NETWORK_SHORTLIST, at a start with a higher cap
+    caps: list[int] = []
+    direct_of: dict[int, Chain] = {}  # by id of a shortlisted chain, the direct line that may replace it
     for start, listed in enumerate(per_start):
+        listed = list(listed)
+        direct: dict[str, Chain] = {}
+        for chain in listed:
+            if (name := goes_to(chain)) and (name not in direct or chain.length_m < direct[name].length_m):
+                direct[name] = chain
+        caps.append(min(NETWORK_CAP_MAX, max(NETWORK_CAP, len(direct))))
         legs: list[set[int]] = []
+        picked: list[Chain] = []
         for chain in sorted(listed, key=preference):
-            if len(legs) >= NETWORK_SHORTLIST:
+            if len(legs) >= 2 * caps[start]:
                 break
             walked = set(chain.legs)
             # Chains of one network share whole legs, so the share off another is in leg metres.
@@ -585,7 +768,14 @@ def select(
                 for other in legs
             ):
                 legs.append(walked)
-                shortlist.append((start, chain))
+                (shortlist if len(legs) <= NETWORK_SHORTLIST else extra).append((start, chain))
+                picked.append(chain)
+        # The first line shortlisted to a destination may become its direct line, unless that is shortlisted too.
+        served = {id(chain) for chain in picked}
+        for chain in picked:
+            if (name := goes_to(chain)) and id(direct[name]) not in served and direct[name].length_m < chain.length_m:
+                served.add(id(direct[name]))
+                direct_of[id(chain)] = direct[name]
     given = [_even_points(*np.array(walk).T, TWIN_STEP_M) for walk in relations]
     # A group's root is its first row, so a group holding a relation has a root below len(given).
     groups = twin_groups([*given, *(_route(graph, chain) for _, chain in shortlist)])[len(given) :]
@@ -599,7 +789,53 @@ def select(
         kept_groups.add(int(groups[row]))
         count[start] += 1
         kept.append((start, chain))
-    return kept
+    taken = {id(chain) for _, chain in kept}
+    left = [row for row in shortlist if id(row[1]) not in taken] + extra
+    widened = _widened(graph, kept, sorted(left, key=lambda row: preference(row[1])), caps, direct_of, given)
+    return [(start, chain) for start, chain, _ in sorted(widened, key=lambda row: preference(row[2]))]
+
+
+def _widened(
+    graph: LegGraph,
+    kept: Sequence[tuple[int, Chain]],
+    extra: Sequence[tuple[int, Chain]],
+    caps: Sequence[int],
+    direct_of: Mapping[int, Chain],
+    given: Sequence[np.ndarray],
+) -> list[tuple[int, Chain, Chain]]:
+    """The ``kept`` (start, chain) and, best first, the ``extra`` ones up to
+    their start's cap in ``caps``; then each of them replaced by its direct
+    line in ``direct_of``. An extra chain or a direct line is left out when it
+    is a Twin of a relation DayHike's walk (``given``) or of a chain kept or
+    put in before it (but the one a direct line replaces). It is grouped apart
+    from ``kept``, so it never joins two kept chains into one group and never
+    takes the place of one. As (start, chain, the chain it replaced or itself)."""
+    chains = [chain for _, chain in (*kept, *extra)]
+    directs = [direct_of[id(chain)] for chain in chains if id(chain) in direct_of]
+    groups = [int(group) for group in twin_groups([*given, *(_route(graph, chain) for chain in (*chains, *directs))])]
+    group_of = {id(chain): group for chain, group in zip(chains, groups[len(given) :])}
+    direct_group = {id(chain): group for chain, group in zip(directs, groups[len(given) + len(chains) :])}
+    chosen = list(kept)
+    held = Counter(group_of[id(chain)] for _, chain in kept)
+    count = Counter(start for start, _ in kept)
+    for start, chain in extra:
+        group = group_of[id(chain)]
+        if count[start] < caps[start] and group >= len(given) and not held[group]:
+            held[group] += 1
+            count[start] += 1
+            chosen.append((start, chain))
+    widened = []
+    taken: set[int] = set()
+    for start, chain in chosen:
+        line = direct_of.get(id(chain))
+        if line is not None:
+            group = direct_group[id(line)]
+            if group >= len(given) and not held[group] - (group_of[id(chain)] == group) and group not in taken:
+                taken.add(group)
+                widened.append((start, line, chain))
+                continue
+        widened.append((start, chain, chain))
+    return widened
 
 
 def _route(graph: LegGraph, chain: Chain) -> np.ndarray:
