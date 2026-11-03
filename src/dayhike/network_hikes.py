@@ -14,6 +14,7 @@ built-hike source ingest runs it as (ADR-0038, ADR-0039).
 from __future__ import annotations
 
 import heapq
+import logging
 import math
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
@@ -23,7 +24,7 @@ from functools import cached_property
 import numpy as np
 from sklearn.neighbors import BallTree
 
-from dayhike.built import BuildContext, BuiltWalk
+from dayhike.built import BuildContext, BuiltWalk, built_id, route_of
 from dayhike.catalog import (
     EARTH_RADIUS_M,
     GAP_JOIN_M,
@@ -42,6 +43,8 @@ from dayhike.serving import VERSION_DIFFERS
 from dayhike.similarity import CORRIDOR_M, TWIN_STEP_M, _even_points, twin_groups
 
 Point = tuple[float, float]  # (lat, lon)
+
+logger = logging.getLogger(__name__)
 
 NETWORK_MIN_M = 3_000.0  # a NetworkHike is day-sized: at least this long ...
 NETWORK_MAX_M = 25_000.0  # ... and at most this
@@ -99,7 +102,9 @@ class NetworkHike:
     """A kept chain as the Catalog takes it: its name, (node id, point)
     vertices from its start, member ways walked and leg relation ids
     (``parts``) in walking order, its length, and how many times it still
-    goes straight more than ``GAP_JOIN_M`` from one leg to the next."""
+    goes straight more than ``GAP_JOIN_M`` from one leg to the next. ``capped``
+    are the (straight jump, shortest crossing found) metres of those jumps that
+    keep the jump because every crossing is over ``CROSSING_MAX_RATIO`` times it."""
 
     name: str
     vertices: tuple[tuple[int, Point], ...]
@@ -107,6 +112,7 @@ class NetworkHike:
     parts: tuple[int, ...]
     length_m: float
     jumps: int = 0
+    capped: tuple[tuple[float, float], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -154,6 +160,22 @@ def network_source(context: BuildContext) -> list[BuiltWalk]:
     if context.progress is not None:
         jumps = sum(hike.jumps for hike in hikes)
         context.progress(f"assemble: network hikes: {jumps} straight jumps over {GAP_JOIN_M} m left")
+        capped = sum(len(hike.capped) for hike in hikes)
+        context.progress(
+            f"assemble: network hikes: {capped} crossings over {CROSSING_MAX_RATIO} times the straight jump left as jumps"
+        )
+    for hike in hikes:
+        for straight_m, crossing_m in hike.capped:
+            logger.warning(
+                "network hike %d %s keeps a straight jump: straight jump %.0f m, crossing %.0f m, ratio %.2f"
+                " (cap %.1f)",
+                built_id(route_of(hike.vertices, hike.way_ids, snapshot.ways)[0]),
+                hike.name,
+                straight_m,
+                crossing_m,
+                crossing_m / straight_m,
+                CROSSING_MAX_RATIO,
+            )
     return [BuiltWalk("network", hike.name, hike.vertices, hike.way_ids, hike.parts) for hike in hikes]
 
 
@@ -212,6 +234,7 @@ def network_hikes(
         way_ids: list[int] = []
         parts: list[int] = []
         jumps = 0
+        capped: list[tuple[float, float]] = []
         last = None
         for index, at in zip(chain.legs, chain.signposts):
             leg = graph.legs[index]
@@ -221,6 +244,7 @@ def network_hikes(
             if straight_m > GAP_JOIN_M:
                 walked = [via for via in touching[at] if via not in (last, index)]
                 connected = None
+                crossing_m = 0.0
                 for gap_cost in (GAP_JOIN_M, 0.0):
                     found = _connect(
                         graph, at, touching[at], walked, vertices[-1][0], steps[0][0], ways, nodes, gap_cost
@@ -228,11 +252,14 @@ def network_hikes(
                     if found is None:
                         break
                     crossing = [vertices[-1][1], *(point for _, point in found[0]), steps[0][1]]
-                    if _linestring_length_m(crossing) <= CROSSING_MAX_RATIO * straight_m:
+                    crossing_m = _linestring_length_m(crossing)
+                    if crossing_m <= CROSSING_MAX_RATIO * straight_m:
                         connected = found
                         break
                 if connected is None:
                     jumps += 1
+                    if crossing_m:  # a crossing was found, but every one is over the cap
+                        capped.append((straight_m, crossing_m))
                 else:
                     path, via_ways, via_legs = connected
                     vertices += path
@@ -252,6 +279,7 @@ def network_hikes(
                 tuple(parts),
                 _linestring_length_m([point for _, point in vertices]),
                 jumps,
+                tuple(capped),
             )
         )
     return hikes
