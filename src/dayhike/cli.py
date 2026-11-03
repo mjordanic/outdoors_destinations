@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import socket
 import sys
 import time
@@ -18,6 +19,7 @@ from dayhike.catalog import (
 )
 from dayhike.dem import DEM_SOURCES, Bounds, DEFAULT_DEM_BOUNDS, DEFAULT_DEM_DIR, fetch_dem, sample_dem
 from dayhike.landcover import DEFAULT_LANDCOVER_DIR, fetch_worldcover, sample_landcover
+from dayhike.parallel import WORKERS_ENV
 from dayhike.climate import DEFAULT_CLIMATE_DIR, fetch_chelsa, sample_climate
 from dayhike.extracts import fetch_geofabrik_extracts
 from dayhike.highways import HighwayDriveTimeClient, HighwaySnaps
@@ -156,6 +158,7 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_LANDCOVER_DIR,
         help="WorldCover GeoTIFFs; Copernicus GLO-30 needs them for the ground under trees (default: data/landcover)",
     )
+    _add_workers(sample)
     sample_lc = subparsers.add_parser(
         "sample-landcover",
         help="Sample local LandCover rasters onto GeometryStore vertices and Catalog fractions",
@@ -172,6 +175,7 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_LANDCOVER_DIR,
         help="Directory of LandCover GeoTIFFs (default: data/landcover)",
     )
+    _add_workers(sample_lc)
     sample_cl = subparsers.add_parser(
         "sample-climate",
         help="Sample local climate rasters into Catalog hike-level monthly means",
@@ -205,6 +209,7 @@ def main(argv: list[str] | None = None) -> int:
     sample_tg.add_argument(
         "--climate", type=Path, default=DEFAULT_CLIMATE_DIR, help="CHELSA GeoTIFFs (default: data/climate)"
     )
+    _add_workers(sample_tg)
     similarity = subparsers.add_parser(
         "build-similarity",
         help="Build the similarity facts and Calibration next to a Catalog",
@@ -232,6 +237,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Keep the stored facts and only recompute the Calibration",
     )
+    _add_workers(similarity)
     rank = subparsers.add_parser("rank", help="Rank DayHikes by similarity to Seeds")
     rank.add_argument("--catalog", required=True, type=Path)
     rank.add_argument(
@@ -394,6 +400,8 @@ def main(argv: list[str] | None = None) -> int:
         "--out", type=Path, default=Path("src/dayhike/web/static/coverage.svg")
     )
     args = parser.parse_args(argv)
+    if getattr(args, "workers", None) is not None:
+        os.environ[WORKERS_ENV] = str(args.workers)  # the stage's code reads it (dayhike.parallel)
     if args.command == "export-serving":
         return _export_serving(
             args.catalog, args.out, args.valhalla_tiles, args.snaps, args.valhalla_url, args.geonames
@@ -746,6 +754,26 @@ def _serve(
 def _progress(message: str) -> None:
     # Each line says when it was written (UTC), so a long rebuild's log times every step.
     print(f"{time.strftime('%H:%M:%SZ', time.gmtime())} {message}", file=sys.stderr, flush=True)
+
+
+def _add_workers(command: argparse.ArgumentParser) -> None:
+    command.add_argument(
+        "--workers",
+        type=_parse_workers,
+        default=None,
+        metavar="N",
+        help=f"Worker processes to use, the same result with any number (default: ${WORKERS_ENV}, else 1)",
+    )
+
+
+def _parse_workers(value: str) -> int:
+    try:
+        count = int(value)
+    except ValueError:
+        count = 0
+    if count < 1:
+        raise argparse.ArgumentTypeError(f"expected a whole number of at least 1, got {value!r}")
+    return count
 
 
 def _parse_snap_tolerance(value: str) -> float:

@@ -23,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import sqlite3
 import time
 from collections.abc import Callable, Collection, Mapping, Sequence
@@ -46,6 +47,7 @@ from dayhike.catalog import (
 )
 from dayhike.dem import DEFAULT_DEM_DIR, dem_source_of, fabdem_tile_id
 from dayhike.landcover import DEFAULT_LANDCOVER_DIR, _landcover_fractions, worldcover_tile_id
+from dayhike.parallel import parallel_iter, parallel_map
 from dayhike.trailgraph import WAY_BACK_KINDS, ComposedWalk, TrailGraph, WayBack, round_trip, way_back
 
 Progress = Callable[[str], None]
@@ -967,18 +969,37 @@ def _build_facts(
         water_probes: dict[str, list[np.ndarray]] = {"": [], "_back": []}
         water_rows: dict[str, list[np.ndarray]] = {"": [], "_back": []}
         routes: list[np.ndarray | None] = [None] * n
-        for start in range(0, n, _HIKE_CHUNK):
+        if graph is not None:
+            graph._network()  # read once, here, so the workers share it
+        opened = {os.getpid(): geo}  # each process reads the GeometryStore through its own connection
+
+        def measure(start: int) -> tuple:
+            # Rows start.. of every array the facts fill, measured in a worker:
+            # facts, back_facts, profile, back_profile, back_rows, routes, then
+            # per suffix the SolarAspect and WaterSide probes and their rows.
+            if os.getpid() not in opened:
+                opened[os.getpid()] = sqlite3.connect(f"file:{geometry_store_path_for(catalog_path)}?mode=ro", uri=True)
             chunk = ids[start : start + _HIKE_CHUNK]
-            walks = _walks(geo, int(chunk[0]), int(chunk[-1]), has_landcover)
-            for row, dayhike_id in enumerate(chunk, start=start):
+            end = start + len(chunk)
+            part_facts, part_back_facts = facts[:, start:end].copy(), back_facts[:, start:end].copy()
+            part_profile, part_back_profile = profile[start:end].copy(), back_profile[start:end].copy()
+            part_back_rows = back_rows[:, start:end].copy()
+            part_routes: list[np.ndarray | None] = [None] * len(chunk)
+            part_probes: dict[str, list[np.ndarray]] = {"": [], "_back": []}
+            part_probe_rows: dict[str, list[np.ndarray]] = {"": [], "_back": []}
+            part_water_probes: dict[str, list[np.ndarray]] = {"": [], "_back": []}
+            part_water_rows: dict[str, list[np.ndarray]] = {"": [], "_back": []}
+            walks = _walks(opened[os.getpid()], int(chunk[0]), int(chunk[-1]), has_landcover)
+            for local, dayhike_id in enumerate(chunk):
+                row = start + local
                 walk = walks.get(int(dayhike_id))
                 if walk is None:
-                    for target in (facts, back_facts):
-                        target[column["round_trip"], row] = 0.0
+                    for target in (part_facts, part_back_facts):
+                        target[column["round_trip"], local] = 0.0
                         for name in ("peak_summited", "viewpoint_along", "peaks_around"):
-                            target[column[name], row] = 0.0
+                            target[column[name], local] = 0.0
                         for name in FACILITIES_FLAG_COLUMNS[:3]:
-                            target[column[name], row] = 0.0
+                            target[column[name], local] = 0.0
                     continue
                 lat, lon, ele, ways, codes = walk
                 one_way = ComposedWalk(
@@ -988,30 +1009,43 @@ def _build_facts(
                 back = way_back(lat, lon, graph)
                 trip = round_trip(one_way, back)
                 for suffix, measured, target, shapes in (
-                    ("", one_way, facts, profile),
-                    ("_back", trip, back_facts, back_profile),
+                    ("", one_way, part_facts, part_profile),
+                    ("_back", trip, part_back_facts, part_back_profile),
                 ):
                     for name, value in walk_facts(
                         measured.lat, measured.lon, measured.ele, measured.walked, along, peaks
                     ).items():
-                        target[column[name], row] = value
+                        target[column[name], local] = value
                     shape = profile_shape(measured.lat, measured.lon, measured.ele)
                     if shape is not None:
-                        shapes[row] = shape
+                        shapes[local] = shape
                     chosen = solar_aspect_points(len(measured.lat))
-                    probes[suffix].append(np.column_stack([measured.lat[chosen], measured.lon[chosen]]))
-                    probe_rows[suffix].append(np.full(chosen.size, row))
+                    part_probes[suffix].append(np.column_stack([measured.lat[chosen], measured.lon[chosen]]))
+                    part_probe_rows[suffix].append(np.full(chosen.size, row))
                     if len(measured.lat) >= 2:
-                        water_probes[suffix].append(_even_points(measured.lat, measured.lon, WATERSIDE_STEP_M))
-                        water_rows[suffix].append(np.full(len(water_probes[suffix][-1]), row))
+                        part_water_probes[suffix].append(_even_points(measured.lat, measured.lon, WATERSIDE_STEP_M))
+                        part_water_rows[suffix].append(np.full(len(part_water_probes[suffix][-1]), row))
                 if len(lat) >= 2:
-                    routes[row] = _even_points(lat, lon, TWIN_STEP_M).astype(np.float32)
-                _add_way_back(back_facts[:, row], len(lat), back, trip, graph, has_landcover)
-                back_rows[:, row] = (
+                    part_routes[local] = _even_points(lat, lon, TWIN_STEP_M).astype(np.float32)
+                _add_way_back(part_back_facts[:, local], len(lat), back, trip, graph, has_landcover)
+                part_back_rows[:, local] = (
                     back.metres, *climb_and_descent(trip.lat, trip.lon, trip.ele), WAY_BACK_KINDS.index(back.kind)
                 )
+            return (
+                part_facts, part_back_facts, part_profile, part_back_profile, part_back_rows, part_routes,
+                part_probes, part_probe_rows, part_water_probes, part_water_rows,
+            )  # fmt: skip
+
+        for start, measured in zip(range(0, n, _HIKE_CHUNK), parallel_iter(measure, range(0, n, _HIKE_CHUNK))):
+            end = min(start + _HIKE_CHUNK, n)
+            facts[:, start:end], back_facts[:, start:end], profile[start:end], back_profile[start:end] = measured[:4]
+            back_rows[:, start:end] = measured[4]
+            routes[start:end] = measured[5]
+            for gathered, part in zip((probes, probe_rows, water_probes, water_rows), measured[6:]):
+                for suffix in gathered:
+                    gathered[suffix] += part[suffix]
             if progress is not None:
-                progress(f"similarity facts: {min(start + _HIKE_CHUNK, n)}/{n} DayHikes")
+                progress(f"similarity facts: {end}/{n} DayHikes")
     finally:
         geo.close()
     def both_ways(points: dict[str, list[np.ndarray]], rows: dict[str, list[np.ndarray]]) -> tuple[np.ndarray, np.ndarray]:
@@ -1039,7 +1073,7 @@ def _build_facts(
         "ids": ids,
         "facts": facts,
         "profile": profile,
-        "twins": twin_groups(routes),
+        "twins": twin_groups(routes, in_workers=True),
         "facts_back": back_facts,
         "profile_back": back_profile,
         "way_back": back_rows,
@@ -1647,14 +1681,16 @@ class WaterTile:
         return count >= WATERSIDE_MIN_SHARE * (bottom - top) * (right - left)
 
 
-def twin_groups(routes: Sequence[np.ndarray | None]) -> np.ndarray:
+def twin_groups(routes: Sequence[np.ndarray | None], *, in_workers: bool = False) -> np.ndarray:
     """First row of each DayHike's group of Twins (its own row without one).
 
     ``routes`` holds per DayHike row its walk as (lat, lon) rows every
     ``TWIN_STEP_M``, or None. Two DayHikes are Twins (the same route, walked
     either way) when at least ``TWIN_SHARE`` of each one's points lie within
     ``TWIN_M`` of the other's line; Twins of Twins join one group. Only pairs
-    whose lengths and point centres allow that share are compared.
+    whose lengths and point centres allow that share are compared. With
+    ``in_workers`` the pairs are compared in ``parallel_map``'s workers;
+    otherwise in this process, whatever ``DAYHIKE_WORKERS`` says.
     """
     parent = np.arange(len(routes))
 
@@ -1673,13 +1709,21 @@ def twin_groups(routes: Sequence[np.ndarray | None]) -> np.ndarray:
     reach = np.maximum(TWIN_M, (1 - TWIN_SHARE) * length / TWIN_SHARE) / EARTH_RADIUS_M
     near = BallTree(centre, metric="haversine").query_radius(centre, r=reach)
 
-    for i, others in enumerate(near):
-        for j in others[others > i]:
-            if min(length[i], length[j]) < TWIN_SHARE * max(length[i], length[j]):
-                continue
-            if are_twins(routes[have[i]], routes[have[j]]):
-                first, second = sorted((root(have[i]), root(have[j])))
-                parent[second] = first
+    def twins_after(i: int) -> list[int]:
+        # The rows after ``i`` near it that are its Twins.
+        return [
+            have[j]
+            for j in near[i][near[i] > i]
+            if min(length[i], length[j]) >= TWIN_SHARE * max(length[i], length[j])
+            and are_twins(routes[have[i]], routes[have[j]])
+        ]
+
+    # A group's root is its first row whatever order the rows are compared in.
+    rows = range(len(have))
+    for i, twins in enumerate(parallel_map(twins_after, rows) if in_workers else map(twins_after, rows)):
+        for j in twins:
+            first, second = sorted((root(have[i]), root(j)))
+            parent[second] = first
     return np.array([root(row) for row in range(len(routes))])
 
 

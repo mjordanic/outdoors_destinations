@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 import shutil
 import sqlite3
 import time
@@ -16,6 +17,7 @@ import numpy as np
 
 from dayhike.catalog import EARTH_RADIUS_M, LANDCOVER_FEATURE_NAMES, geometry_store_path_for, remove_similarity
 from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS
+from dayhike.parallel import parallel_iter, workers
 
 Progress = Callable[[str], None]
 Retrieve = Callable[[str, str], None]
@@ -265,6 +267,7 @@ def sample_landcover(
     """Write land-cover classes onto covered vertices and Catalog fractions."""
     catalog_path = Path(catalog_path)
     raster_dir = Path(raster_dir)
+    workers()  # a bad DAYHIKE_WORKERS fails here, before the GeometryStore is open
     store_path = geometry_store_path_for(catalog_path)
     if not store_path.is_file():
         raise FileNotFoundError(store_path)
@@ -287,25 +290,31 @@ def sample_landcover(
             cursor = read.execute(
                 "SELECT dayhike_id, seq, latitude, longitude FROM vertices"
             )
-            while True:
-                rows = cursor.fetchmany(_VERTEX_CHUNK)
-                if not rows:
-                    break
+            # Each process reads through rasters it opened itself, never another's.
+            opened = {os.getpid(): tiles}
+
+            def chunk_updates(rows: list[tuple]) -> list[tuple[int, int, int]]:
+                # A chunk's (code, dayhike_id, seq) updates, sampled in a worker.
+                if os.getpid() not in opened:
+                    opened[os.getpid()] = _Tiles(rasters)
                 coverable = [
                     (int(dayhike_id), int(seq), float(lat), float(lon))
                     for dayhike_id, seq, lat, lon in rows
                 ]
                 classes = _sample_open_datasets(
-                    tiles,
+                    opened[os.getpid()],
                     [(lat, lon) for _id, _seq, lat, lon in coverable],
                 )
-                updates = [
+                return [
                     (code, dayhike_id, seq)
                     for (dayhike_id, seq, _lat, _lon), code in zip(
                         coverable, classes, strict=True
                     )
                     if code is not None
                 ]
+
+            chunks = iter(lambda: cursor.fetchmany(_VERTEX_CHUNK), [])
+            for updates in parallel_iter(chunk_updates, chunks):
                 if not updates:
                     continue
                 write.executemany(

@@ -875,3 +875,57 @@ def test_cli_samples_the_trailgraph_and_composes(
     assert len(lines) == 3 and all(str(SUMMIT_LINE) not in line.split("\t")[0] for line in lines[1:])
     assert main(["compose", "--data", str(data.directory), "--limit", "2", "--one-way", str(summit)]) == 0
     assert capsys.readouterr().out.startswith("Summit Line\t2728 m\t")
+
+
+def _sampled_trailgraph(root: Path, workers: int, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    from dayhike.parallel import WORKERS_ENV
+
+    monkeypatch.setenv(WORKERS_ENV, str(workers))
+    root.mkdir()
+    dem, landcover, climate = _write_rasters(root)
+    path = root / "catalog.sqlite"
+    build_catalog(FIXTURE, path)
+    assert sample_trailgraph(path, dem_dir=dem, landcover_dir=landcover, climate_dir=climate) > 0
+    db = sqlite3.connect(trailgraph_path_for(path))
+    try:
+        return list(db.iterdump())
+    finally:
+        db.close()
+
+
+def test_sampling_writes_the_same_trailgraph_with_any_worker_count(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import dayhike.trailgraph as trailgraph_module
+
+    monkeypatch.setattr(trailgraph_module, "_SEGMENT_CHUNK", 3)  # many chunks, so every worker samples some
+    serial = _sampled_trailgraph(tmp_path / "serial", 1, monkeypatch)
+
+    assert _sampled_trailgraph(tmp_path / "workers", 3, monkeypatch) == serial
+
+
+def test_the_segments_are_sampled_in_the_workers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+
+    import dayhike.dem
+    import dayhike.trailgraph as trailgraph_module
+    from dayhike.parallel import WORKERS_ENV
+
+    read = tmp_path / "read"
+    real = dayhike.dem.sample_elevations
+
+    def recorded(*args):
+        with read.open("a") as out:
+            out.write(f"{os.getpid()}\n")
+        return real(*args)
+
+    monkeypatch.setattr(dayhike.dem, "sample_elevations", recorded)
+    monkeypatch.setattr(trailgraph_module, "_SEGMENT_CHUNK", 3)
+    monkeypatch.setenv(WORKERS_ENV, "2")
+    dem, landcover, climate = _write_rasters(tmp_path)
+    path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, path)
+
+    assert sample_trailgraph(path, dem_dir=dem, landcover_dir=landcover, climate_dir=climate) > 0
+
+    pids = read.read_text().split()
+    assert len(pids) > 1
+    assert str(os.getpid()) not in pids
