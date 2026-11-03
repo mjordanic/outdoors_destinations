@@ -69,6 +69,143 @@ def test_leg_ends_within_the_gap_join_one_signpost():
     assert not ends[1] & ends[3]
 
 
+def _knooppunten_close_together() -> Network:
+    # Knooppunten B, K and B3 stand 36 m and 32 m apart in a row (B to B3 68 m),
+    # joined by connector legs B-K and K-B3 shorter than the gap join.
+    net = Network({"A": (0, 0), "B": (2, 0), "K": (2.036, 0), "B3": (2.068, 0), "D": (2.068, -2)})
+    net.leg(1, "A", "B")
+    net.leg(2, "B", "K")
+    net.leg(3, "K", "B3")
+    net.leg(4, "B3", "D")
+    return net
+
+
+def test_a_network_hike_walks_the_connectors_between_knooppunten_close_together():
+    # B and B3 are one signpost (joined through K), 68 m apart: the hike from A
+    # to D walks the connector legs B-K and K-B3, not straight from B to B3.
+    net = _knooppunten_close_together()
+
+    (hike,) = network_hikes(net.legs, net.ways, net.nodes, [net.point("A")], [])
+
+    assert [node for node, _ in hike.vertices] == [net.node_ids[name] for name in ("A", "B", "K", "B3", "D")]
+    assert hike.parts == (1, 2, 3, 4)
+    assert hike.way_ids == (100, 101, 102, 103)
+
+
+def test_a_network_hike_steps_along_leg_ends_across_a_wide_signpost_with_no_connector():
+    # Legs end at P1, P2 and P3, 30 m apart in a row (P1 to P3 60 m), one
+    # signpost with no leg between them: from A to D the hike steps P1, P2, P3,
+    # never straight from P1 to P3.
+    net = Network({"A": (0, 0), "P1": (2, 0), "P2": (2.03, 0), "P3": (2.06, 0), "E": (2.03, 2), "D": (2.06, -2)})
+    net.leg(1, "A", "P1")
+    net.leg(2, "P2", "E")
+    net.leg(3, "P3", "D")
+
+    hikes = network_hikes(net.legs, net.ways, net.nodes, [net.point("A")], [])
+
+    (hike,) = [hike for hike in hikes if hike.parts == (1, 3)]
+    assert [node for node, _ in hike.vertices] == [net.node_ids[name] for name in ("A", "P1", "P2", "P3", "D")]
+    assert hike.way_ids == (100, 102)
+    assert hike.jumps == 0
+
+
+def test_a_network_hike_reaches_a_connector_that_starts_beside_the_leg_end():
+    # Leg A-B ends at B; connector B2-K-B3 starts at B2, 20 m from B, not at
+    # B; B to B3 is 65 m. The hike steps B to B2 and walks the connector.
+    net = Network({"A": (0, 0), "B": (2, 0), "B2": (2.02, 0), "K": (2.04, 0), "B3": (2.065, 0), "D": (2.065, -2)})
+    net.leg(1, "A", "B")
+    net.leg(2, "B2", "K", "B3")
+    net.leg(3, "B3", "D")
+
+    (hike,) = network_hikes(net.legs, net.ways, net.nodes, [net.point("A")], [])
+
+    assert [node for node, _ in hike.vertices] == [net.node_ids[name] for name in ("A", "B", "B2", "K", "B3", "D")]
+    assert hike.parts == (1, 2, 3)
+    assert hike.way_ids == (100, 101, 102)
+    assert hike.jumps == 0
+
+
+def test_a_crossing_does_not_walk_back_along_the_next_leg():
+    # Leg 1 ends at X; leg 2 starts at Y, 60 m on, and its way runs back
+    # through X. Leg 3 ends at Z between them. The hike steps X, Z, Y rather
+    # than walk leg 2's way from X to Y before walking it again.
+    net = Network({"A": (0, 0), "X": (2, 0), "Z": (2.03, 0), "Y": (2.06, 0), "D": (2, -2), "E": (2.03, 2)})
+    net.leg(1, "A", "X")
+    net.leg(2, "Y", "X", "D")
+    net.leg(3, "Z", "E")
+
+    hikes = network_hikes(net.legs, net.ways, net.nodes, [net.point("A")], [])
+
+    (hike,) = [hike for hike in hikes if hike.parts[:2] == (1, 2)]
+    assert hike.parts == (1, 2)
+    assert hike.way_ids == (100, 101)
+    assert [node for node, _ in hike.vertices] == [net.node_ids[name] for name in ("A", "X", "Z", "Y", "X", "D")]
+
+
+def _curved_crossing(bend_km: float) -> Network:
+    # B and B3 are 51 m apart, one signpost through K between them. Leg B-Y-B3
+    # bends out to Y, ``bend_km`` off the line: a crossing cheaper than the two
+    # steps through K, and longer the farther Y lies.
+    net = Network({
+        "A": (0, 0), "B": (2, 0), "K": (2.0255, 0), "B3": (2.051, 0),
+        "Y": (2.0255, bend_km), "E": (2.0255, -2), "D": (2.051, 2),
+    })
+    net.leg(1, "A", "B")
+    net.leg(2, "K", "E")
+    net.leg(3, "B3", "D")
+    net.leg(4, "B", "Y", "B3")
+    return net
+
+
+def _hike_to_d(net: Network):
+    hikes = network_hikes(net.legs, net.ways, net.nodes, [net.point("A")], [])
+    (hike,) = [hike for hike in hikes if hike.vertices[-1][0] == net.node_ids["D"]]
+    return hike
+
+
+def test_a_crossing_at_most_twice_the_straight_jump_is_walked():
+    net = _curved_crossing(0.042)  # 98 m round Y, 1.93 times the 51 m jump
+
+    hike = _hike_to_d(net)
+
+    assert [node for node, _ in hike.vertices] == [net.node_ids[name] for name in ("A", "B", "Y", "B3", "D")]
+    assert hike.jumps == 0
+
+
+def test_a_crossing_within_twice_the_straight_jump_is_walked_when_the_favourite_is_over():
+    # Round Y is 107 m, 2.10 times the 51 m jump; stepping through K is 51 m.
+    net = _curved_crossing(0.047)
+
+    hike = _hike_to_d(net)
+
+    assert [node for node, _ in hike.vertices] == [net.node_ids[name] for name in ("A", "B", "K", "B3", "D")]
+    assert hike.parts == (1, 3)
+    assert hike.jumps == 0
+
+
+def test_a_crossing_over_twice_the_straight_jump_keeps_the_jump():
+    # B and B3 are 51 m apart, one signpost through leg ends K1, K2 and K3
+    # that bend 80 m north (177 m across); leg B-Y-B3 bends 47 m south (107 m).
+    # Every crossing is over 2 times the jump.
+    net = Network({
+        "A": (0, 0), "B": (2, 0), "B3": (2.051, 0), "Y": (2.0255, -0.047), "D": (2.051, -2),
+        "K1": (2, 0.045), "K2": (2.0255, 0.08), "K3": (2.051, 0.045),
+        "E1": (1.5, 2), "E2": (2.0255, 2), "E3": (2.6, 2),
+    })
+    net.leg(1, "A", "B")
+    net.leg(2, "K1", "E1")
+    net.leg(3, "B3", "D")
+    net.leg(4, "B", "Y", "B3")
+    net.leg(5, "K2", "E2")
+    net.leg(6, "K3", "E3")
+
+    hike = _hike_to_d(net)
+
+    assert [node for node, _ in hike.vertices] == [net.node_ids[name] for name in ("A", "B", "B3", "D")]
+    assert hike.parts == (1, 3)
+    assert hike.jumps == 1
+
+
 FIGURE_EIGHT = {
     "S": (0, 0),
     "N1": (1.5, 1.5), "N2": (0, 3), "N3": (-1.5, 1.5),
