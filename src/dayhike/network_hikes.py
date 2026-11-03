@@ -208,12 +208,14 @@ def network_hikes(
         way_ids: list[int] = []
         parts: list[int] = []
         jumps = 0
+        last = None
         for index, at in zip(chain.legs, chain.signposts):
             leg = graph.legs[index]
             forward = leg.ends[0] == at
             steps = list(leg.vertices if forward else leg.vertices[::-1])
             if vertices and _haversine_m(*vertices[-1][1], *steps[0][1]) > GAP_JOIN_M:
-                connected = _connect(graph, at, touching[at], vertices[-1][0], steps[0][0], ways, nodes)
+                walked = [via for via in touching[at] if via not in (last, index)]
+                connected = _connect(graph, at, touching[at], walked, vertices[-1][0], steps[0][0], ways, nodes)
                 if connected is None:
                     jumps += 1
                 else:
@@ -226,6 +228,7 @@ def network_hikes(
                     vertices.append(vertex)
             way_ids += leg.way_ids if forward else leg.way_ids[::-1]
             parts.append(leg.relation_id)
+            last = index
         hikes.append(
             NetworkHike(
                 chain_name(graph, chain, names, marked, settled),
@@ -243,15 +246,17 @@ def _connect(
     graph: LegGraph,
     signpost: int,
     touching: Sequence[int],
+    walked: Sequence[int],
     source: int,
     target: int,
     ways: Mapping[int, OsmWay],
     nodes: Mapping[int, Point],
 ) -> tuple[list[tuple[int, Point]], list[int], list[int]] | None:
     """The shortest walk from node ``source`` to node ``target``, two leg ends
-    at ``signpost``, along the ways of the legs ``touching`` it (indexes into
-    ``graph.legs``, every leg with an end joined into it) and straight gaps of
-    at most ``GAP_JOIN_M`` between those legs' ends there, a gap costing
+    at ``signpost``, along the ways of the legs ``walked`` (the legs
+    ``touching`` it, indexes into ``graph.legs`` with an end joined into it,
+    but the chain's own legs either side) and straight gaps of at most
+    ``GAP_JOIN_M`` between the ends there of every leg ``touching`` it, a gap costing
     ``GAP_JOIN_M`` more than its length: the (node id, point) vertices after
     ``source`` and before ``target``, and the ways and the legs it walks, in
     walking order. None when no such walk joins them.
@@ -266,7 +271,8 @@ def _connect(
         for (node, _), end in ((leg.vertices[0], leg.ends[0]), (leg.vertices[-1], leg.ends[1])):
             if end == signpost:
                 ends.add(node)
-        for way_id in leg.way_ids:
+    for index in walked:
+        for way_id in graph.legs[index].way_ids:
             on_way = [node for node in ways[way_id].node_ids if node in nodes]
             for a, b in zip(on_way, on_way[1:]):
                 metres = _haversine_m(*nodes[a], *nodes[b])

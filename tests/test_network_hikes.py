@@ -125,6 +125,23 @@ def test_a_network_hike_reaches_a_connector_that_starts_beside_the_leg_end():
     assert hike.jumps == 0
 
 
+def test_a_crossing_does_not_walk_back_along_the_next_leg():
+    # Leg 1 ends at X; leg 2 starts at Y, 60 m on, and its way runs back
+    # through X. Leg 3 ends at Z between them. The hike steps X, Z, Y rather
+    # than walk leg 2's way from X to Y before walking it again.
+    net = Network({"A": (0, 0), "X": (2, 0), "Z": (2.03, 0), "Y": (2.06, 0), "D": (2, -2), "E": (2.03, 2)})
+    net.leg(1, "A", "X")
+    net.leg(2, "Y", "X", "D")
+    net.leg(3, "Z", "E")
+
+    hikes = network_hikes(net.legs, net.ways, net.nodes, [net.point("A")], [])
+
+    (hike,) = [hike for hike in hikes if hike.parts[:2] == (1, 2)]
+    assert hike.parts == (1, 2)
+    assert hike.way_ids == (100, 101)
+    assert [node for node, _ in hike.vertices] == [net.node_ids[name] for name in ("A", "X", "Z", "Y", "X", "D")]
+
+
 FIGURE_EIGHT = {
     "S": (0, 0),
     "N1": (1.5, 1.5), "N2": (0, 3), "N3": (-1.5, 1.5),
