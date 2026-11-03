@@ -951,7 +951,7 @@ def test_twins_are_compared_in_the_workers_and_grouped_alike(monkeypatch, tmp_pa
     monkeypatch.setattr(similarity_module, "are_twins", recorded)
     monkeypatch.setenv(WORKERS_ENV, "3")
 
-    groups = twin_groups(routes).tolist()
+    groups = twin_groups(routes, in_workers=True).tolist()
 
     assert groups == [[0, 1, 2][(7 * row) % 3] for row in range(30)]
     assert str(os.getpid()) not in compared.read_text().split()

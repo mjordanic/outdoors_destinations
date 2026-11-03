@@ -2018,7 +2018,8 @@ at the rebuild.
    `--workers N` (or `DAYHIKE_WORKERS=N` for every step): they run their
    independent work in N forked processes and write the same files as with
    one, the default (ADR-0044). Each worker adds memory, so pick N for the
-   machine's free cores and RAM.
+   machine's free cores and RAM. `ingest`, `sample-climate` and
+   `export-serving` run in one process whatever `DAYHIKE_WORKERS` says.
 
    Beside the sample steps, rebuild the highway tiles ([Highway tiles](#highway-tiles-all-of-europe-small-server):
    `prepare-roads.sh`, `prepare-highways.sh`, the `build_tiles` run) and serve

@@ -1,10 +1,13 @@
 import itertools
+import multiprocessing
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
+from dayhike import build_catalog
 from dayhike.parallel import WORKERS_ENV, parallel_iter, parallel_map, workers
 
 
@@ -108,3 +111,23 @@ def test_workers_are_refused_when_numpy_loaded_before_dayhike_could_set_up_its_b
 
     assert done.returncode != 0
     assert "VECLIB_MAXIMUM_THREADS=1" in done.stderr
+
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+@pytest.mark.parametrize("fixture", ["node_network.osm", "long_tour.osm"])
+def test_ingest_stays_in_one_process_and_builds_the_same_catalog_whatever_the_worker_count(
+    monkeypatch, tmp_path, fixture
+):
+    monkeypatch.setenv(WORKERS_ENV, "1")
+    serial = build_catalog(FIXTURES / fixture, tmp_path / "serial" / "catalog.sqlite")
+
+    def no_fork(*_args, **_kwargs):
+        raise AssertionError("ingest forked worker processes")
+
+    monkeypatch.setenv(WORKERS_ENV, "3")
+    monkeypatch.setattr(multiprocessing, "get_context", no_fork)
+    with_workers = build_catalog(FIXTURES / fixture, tmp_path / "workers" / "catalog.sqlite")
+
+    assert with_workers.dayhikes == serial.dayhikes
