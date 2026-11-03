@@ -46,12 +46,12 @@ import numpy as np
 import osmium
 import pandas as pd
 import pytest
-from sklearn.neighbors import BallTree
-
-from rebuild_checks import DATA_DIR, real_data
+from rebuild_checks import DATA_DIR, KEPT_BY_THE_RULES, REPO, real_data
+from scipy.spatial import cKDTree
 
 from dayhike import SimilarityStore, geometry_store_path_for
-from dayhike.catalog import MIN_LENGTH_M, _access_tree, _drop_reason, assemble_main_walk
+from dayhike.catalog import GAP_JOIN_M, MIN_LENGTH_M, _access_tree, _drop_reason, assemble_main_walk
+from dayhike.network_hikes import START_PARKING_M, START_PLACE_M
 from dayhike.osm import amenity_kind
 from dayhike.similarity import MEASURE_NAMES
 
@@ -98,7 +98,8 @@ def test_every_catalog_dayhike_has_a_geometry_of_at_least_two_vertices() -> None
 def test_geometry_store_holds_every_amenity_kind_with_the_water_sources() -> None:
     kinds = set(_read(GEOMETRY, "SELECT DISTINCT kind FROM amenities")["kind"])
 
-    assert kinds == set(OLD_KINDS + NEW_WATER_KINDS)
+    # Place nodes too: NetworkHikes start at them and DayStages are cut at them (ADR-0039, ADR-0040).
+    assert kinds == set(OLD_KINDS + NEW_WATER_KINDS + ("place",))
 
 
 def test_no_stored_water_source_is_tagged_not_drinkable() -> None:
@@ -186,6 +187,8 @@ def test_notebook_05_passes_every_verification_on_the_real_facts(
 ) -> None:
     from test_demonstration_notebooks import NOTEBOOKS, _notebook_text
 
+    if DATA_DIR.resolve() != (REPO / "data").resolve():
+        pytest.skip("the notebook reads data/ of this checkout, not DAYHIKE_DATA_DIR")
     monkeypatch.setenv("MPLBACKEND", "Agg")
     output, _, _ = _notebook_text(NOTEBOOKS / "05_similarity.ipynb")
     lines = [line.split("\t") for line in output.splitlines()]
@@ -249,34 +252,69 @@ def _haversine_m(lat1, lon1, lat2, lon2):
     return 2 * EARTH_RADIUS_M * np.arcsin(np.sqrt(h))
 
 
-def _joins_ends_at_one_point(
-    first: int, second: int, walked_ways: list[list[int]], stored: set[int]
-) -> bool:
-    """Is ``first`` to ``second`` the join of two way ends that share a point?
+def _end_joins(walked_ways: list[list[int]], stored: set[int]) -> tuple[set[int], set[int]]:
+    """Way ends, and the nodes next to an end the GeometryStore dropped, of one DayHike.
 
     The assembly joins the ends of two ways within ``GAP_JOIN_M`` with a gap,
     and the vertex builder drops the second end when it repeats the point
     before it. So the stored step runs from the first way's end to the next
     node of the second way. The GeometryStore holds no coordinates for the
     dropped end, but it is a node of a walked way with no vertex of its own.
+    A step ``first`` to ``second`` is such a join when ``first`` is in the
+    first set and ``second`` in the second. Built once per DayHike, so a long
+    walk's steps are checked in constant time each.
     """
     ends = {nodes[end] for nodes in walked_ways for end in (0, -1)}
-    return first in ends and any(
-        nodes[neighbour] == second and nodes[end] not in stored
+    after_dropped = {
+        nodes[neighbour]
         for nodes in walked_ways
         if len(nodes) >= 2
         for end, neighbour in ((0, 1), (-1, -2))
-    )
+        if nodes[end] not in stored
+    }
+    return ends, after_dropped
+
+
+def _unit_vectors(lat, lon) -> np.ndarray:
+    lat, lon = np.radians(np.asarray(lat, dtype=float)), np.radians(np.asarray(lon, dtype=float))
+    return np.column_stack([np.cos(lat) * np.cos(lon), np.cos(lat) * np.sin(lon), np.sin(lat)])
+
+
+def _distance_to_parking(tree: cKDTree | None, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
+    """Metres from each vertex to its nearest parking point; inf past LOOP_START_M.
+
+    A k-d tree on unit vectors: the chord is exact and fast, where a haversine
+    BallTree over every vertex of Europe took over an hour (129 M vertices).
+    """
+    if tree is None:
+        return np.full(len(lat), np.inf)
+    bound = 2 * np.sin(LOOP_START_M / EARTH_RADIUS_M / 2)
+    chord = tree.query(_unit_vectors(lat, lon), distance_upper_bound=bound)[0]
+    metres = np.full(len(chord), np.inf)
+    found = np.isfinite(chord)
+    metres[found] = 2 * EARTH_RADIUS_M * np.arcsin(chord[found] / 2)
+    return metres
+
+
+def _start_distances(geometry: Path, ids: list[int]) -> tuple[dict[int, float], dict[int, float]]:
+    """Metres from each DayHike's first vertex to the nearest parking point and the nearest place."""
+    starts = _read(geometry, "SELECT dayhike_id, latitude, longitude FROM vertices WHERE seq = 0")
+    starts = starts[starts["dayhike_id"].isin(ids)]
+    found = []
+    for kind in ("parking", "place"):
+        points = _read(geometry, "SELECT latitude, longitude FROM amenities WHERE kind = ?", (kind,))
+        chord = cKDTree(_unit_vectors(points["latitude"], points["longitude"])).query(
+            _unit_vectors(starts["latitude"], starts["longitude"])
+        )[0]
+        metres = 2 * EARTH_RADIUS_M * np.arcsin(np.minimum(chord, 2.0) / 2)
+        found.append(dict(zip(starts["dayhike_id"].tolist(), metres.tolist())))
+    return found[0], found[1]
 
 
 def _measure_walks(geometry: Path) -> dict:
     """One pass over a GeometryStore: long steps and loop starts."""
     parking = _read(geometry, "SELECT latitude, longitude FROM amenities WHERE kind = 'parking'")
-    tree = (
-        BallTree(np.radians(parking[["latitude", "longitude"]].to_numpy()), metric="haversine")
-        if len(parking)
-        else None
-    )
+    tree = cKDTree(_unit_vectors(parking["latitude"], parking["longitude"])) if len(parking) else None
     ids = _read(geometry, "SELECT id FROM dayhikes ORDER BY id")["id"].tolist()
     long_steps: dict[int, float] = {}
     loops_near_parking: list[int] = []
@@ -305,25 +343,22 @@ def _measure_walks(geometry: Path) -> dict:
             for a, b in zip(nodes, nodes[1:]):
                 pairs.add((a, b))
                 pairs.add((b, a))
-        distance_to_parking = np.full(len(vertices), np.inf)
-        if tree is not None:
-            radians = np.radians(vertices[["latitude", "longitude"]].to_numpy())
-            distance_to_parking = tree.query(radians)[0][:, 0] * EARTH_RADIUS_M
         for dayhike_id, rows in vertices.groupby("dayhike_id").indices.items():
             lat = vertices["latitude"].to_numpy()[rows]
             lon = vertices["longitude"].to_numpy()[rows]
             node = vertices["node_id"].to_numpy()[rows]
             steps = _haversine_m(lat[:-1], lon[:-1], lat[1:], lon[1:])
             pairs = edges.get(dayhike_id, set())
-            for index in np.flatnonzero(steps > STEP_MAX_M):
+            long = np.flatnonzero(steps > STEP_MAX_M)
+            if long.size:
+                ends, after_dropped = _end_joins(walked_ways.get(dayhike_id, []), set(node.tolist()))
+            for index in long:
                 first, second = int(node[index]), int(node[index + 1])
-                if (first, second) not in pairs and not _joins_ends_at_one_point(
-                    first, second, walked_ways.get(dayhike_id, []), set(node.tolist())
-                ):
+                if (first, second) not in pairs and not (first in ends and second in after_dropped):
                     long_steps[dayhike_id] = max(long_steps.get(dayhike_id, 0.0), steps[index])
             if _haversine_m(lat[0], lon[0], lat[-1], lon[-1]) <= LOOP_CLOSES_M:
                 loops += 1
-                near = distance_to_parking[rows]
+                near = _distance_to_parking(tree, lat, lon)
                 if near.min() <= LOOP_NEAR_PARKING_M:
                     loops_near_parking.append(dayhike_id)
                     if near[0] > LOOP_START_M:
@@ -334,6 +369,13 @@ def _measure_walks(geometry: Path) -> dict:
         "loops_near_parking": loops_near_parking,
         "loops_failing": loops_failing,
     }
+
+
+def _relation_ids() -> set[int]:
+    """Ids of the Catalog's relation DayHikes; every id in a Catalog of relations only."""
+    columns = _read(CATALOG, "PRAGMA table_info(dayhikes)")["name"].tolist()
+    where = " WHERE kind = 'relation'" if "kind" in columns else ""
+    return set(_read(CATALOG, f"SELECT id FROM dayhikes{where}")["id"].tolist())
 
 
 @pytest.fixture(scope="module")
@@ -395,8 +437,12 @@ def test_a_loop_by_a_parking_point_starts_within_300_m_of_one(
 ) -> None:
     # The PRD's 22.5% "before" measure. Access is parking only, so a loop by a
     # parking point starts near parking; the 2% allowance is for the few loops
-    # that start at a stem's far end instead.
-    near, failing = walk_measures["loops_near_parking"], walk_measures["loops_failing"]
+    # that start at a stem's far end instead. The rule is the main walk's: a
+    # NetworkHike starts at a signpost within 500 m of parking or 300 m of a
+    # place (ADR-0039), a DayStage where its tour's day ends (ADR-0038).
+    relations = _relation_ids()
+    near = [i for i in walk_measures["loops_near_parking"] if i in relations]
+    failing = [i for i in walk_measures["loops_failing"] if i in relations]
     share = len(failing) / len(near) if near else 0.0
     with capsys.disabled():
         print(
@@ -411,10 +457,26 @@ def test_a_loop_by_a_parking_point_starts_within_300_m_of_one(
     )
 
 
+def test_a_networkhike_starts_by_parking_or_a_place() -> None:
+    # ADR-0039: chains start at a signpost within START_PARKING_M of parking or
+    # START_PLACE_M of a place. A signpost stands at the first leg end of its
+    # group, so a chain's first vertex may be GAP_JOIN_M from it.
+    ids = _read(CATALOG, "SELECT id FROM dayhikes WHERE kind = 'network'")["id"].tolist()
+    to_parking, to_place = _start_distances(GEOMETRY, ids)
+
+    far = [
+        i for i in ids
+        if to_parking[i] > START_PARKING_M + GAP_JOIN_M and to_place[i] > START_PLACE_M + GAP_JOIN_M
+    ]  # fmt: skip
+    assert len(to_parking) == len(ids)
+    assert not far, f"{len(far)} NetworkHikes start far from parking and places, {_ids(far)}"
+
+
 # Against data/baseline/: the same OSM snapshot, so only the main walk may move
 # DayHikes in or out.
 
 LEFT_REASONS = ("under 1 km", "container")
+DROP_REASONS = {"container": "container", "length": "under 1 km", "node_network": "node-network leg"}
 
 
 def _ids_of(path: Path) -> set[int]:
@@ -438,11 +500,14 @@ def _main_walk_reasons(
     with tempfile.TemporaryDirectory() as folder:
         folder_path = Path(folder)
         wanted = folder_path / "wanted.osm.pbf"
-        subprocess.run(
+        # Exit 1 means some ids are not in the extract: relations deleted or retagged in OSM.
+        done = subprocess.run(
             ["osmium", "getid", "-r", "-t", str(extract), *(f"r{i}" for i in sorted(ids)),
              "-o", str(wanted), "--no-progress", "--overwrite"],
-            check=True,
+            check=False,
         )
+        if done.returncode not in (0, 1):
+            done.check_returncode()
         _, _, work_path = run_ingest([wanted], folder_path / "catalog.sqlite")
         connection = sqlite3.connect(work_path)
         try:
@@ -453,13 +518,10 @@ def _main_walk_reasons(
             if relation.id not in ids:
                 continue
             walk = assemble_main_walk(relation, snapshot.ways, snapshot.nodes, access_tree)
-            drop = _drop_reason(relation, walk.length_m)
-            if drop == "container":
-                reasons[relation.id] = "container"
-            elif drop == "length":
-                reasons[relation.id] = "under 1 km"
-            else:
-                reasons[relation.id] = "kept by the main-walk rules"
+            points = [point for _, point in walk.vertices]
+            round_trip = bool(points) and _haversine_m(*points[0], *points[-1]) <= GAP_JOIN_M
+            drop = _drop_reason(relation, walk.length_m, round_trip)
+            reasons[relation.id] = DROP_REASONS.get(drop, KEPT_BY_THE_RULES)
     return {i: reasons.get(i, "not in the extract") for i in ids}
 
 

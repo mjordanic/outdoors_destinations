@@ -58,7 +58,9 @@ def test_ingest_report_is_consistent_and_matches_the_snapshot(catalog: sqlite3.C
     report = json.loads(_one(catalog, "SELECT value FROM catalog_meta WHERE key = 'ingest_report'"))
 
     origins = ("named_osm_name", "named_osm_ref", "named_from_to", "named_place", "named_synthetic")
-    assert report["kept"] == sum(report.get(origin, 0) for origin in origins)
+    # Built hikes (NetworkHikes, DayStages) name themselves; the named_* counts are of relations.
+    relations = _one(catalog, "SELECT COUNT(*) FROM dayhikes WHERE kind = 'relation'")
+    assert sum(report.get(origin, 0) for origin in origins) == relations
     assert report["kept"] == _one(catalog, "SELECT COUNT(*) FROM dayhikes")
     if rc.same_snapshot():
         assert report == rc.RECORDED_INGEST_REPORT
@@ -110,7 +112,7 @@ def test_values_are_in_range(catalog: sqlite3.Connection) -> None:
             *(f"{name} NOT BETWEEN 0 AND 1" for name in LANDCOVER),
             f"{fractions} > 1 + 1e-9",
             "temperature_c NOT BETWEEN -15 AND 30",
-            "precipitation_mm NOT BETWEEN 0 AND 400",
+            "precipitation_mm NOT BETWEEN 0 AND 500",  # western Norway (DNT VSB trails): 479 mm
             "solar_radiation NOT BETWEEN 0 AND 30000",
         ],
         "climate_months": [
