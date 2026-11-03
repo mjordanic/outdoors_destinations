@@ -148,11 +148,21 @@ def test_rankings_from_the_export_equal_golden_rankings(data: ServingData, monke
         golden.setdefault((row["set"], int(row["seed"])), []).append(row)
     sets = rc.golden_weight_sets()
 
-    for (name, seed), rows in golden.items():
-        got = data.rank(seed, sets[name], limit=rc.GOLDEN_TOP, return_to_start=False)  # captured one way
+    twins = data.store.twins
+    for (name, seed), captured in golden.items():
+        # Golden is captured before Twins are dropped: a Ranking keeps the best of each group
+        # of Twins and none of the Seed's (a route's reverse is its Twin).
+        groups = twins[np.searchsorted(data.store.ids, [int(row["dayhike_id"]) for row in captured])]
+        seen = {twins[np.searchsorted(data.store.ids, seed)]}
+        rows = []
+        for row, group in zip(captured, groups):
+            if group not in seen:
+                seen.add(group)
+                rows.append(row)
+        got = data.rank(seed, sets[name], limit=len(rows), return_to_start=False)  # captured one way
         assert [hike["id"] for hike in got] == [int(row["dayhike_id"]) for row in rows], (name, seed)
         for hike, row in zip(got, rows):
-            assert hike["score"] == pytest.approx(float(row["score"]), abs=1e-6)
+            assert hike["score"] == pytest.approx(float(row["similarity"]), abs=1e-6)
 
 
 def test_export_highways_tar_is_the_built_tiles(data: ServingData) -> None:
