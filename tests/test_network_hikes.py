@@ -656,6 +656,25 @@ def test_a_loop_ending_beside_its_start_walks_back_to_parking_from_where_it_ends
     assert ",g." not in route
 
 
+def test_a_loop_walks_back_to_the_parking_it_starts_from_not_a_nearer_one():
+    # As above, but a second parking B lies 200 m from E along E-B, nearer
+    # than P: the loop still walks back E-R-P and ends where it starts.
+    net = Network(
+        FIGURE_EIGHT | {"E": (0, 0.03), "P": (-0.3, 0.02), "Q": (-0.15, 0), "R": (-0.15, 0.05), "B": (0.1, 0.2)}
+    )
+    for relation_id, (a, b) in enumerate([("S", "N1"), ("N1", "N2"), ("N2", "N3"), ("N3", "E")], start=1):
+        net.leg(relation_id, a, b)
+    out, back = net.path("P", "Q", "S"), net.path("E", "R", "P")
+    net.path("E", "B")
+    parking = [_lat_lon(-0.31, 0.03), net.point("B")]
+
+    (loop,) = network_hikes(net.legs, net.ways, net.nodes, parking, places=[])
+
+    names = ("P", "Q", "S", "N1", "N2", "N3", "E", "R", "P")
+    assert [node for node, _ in loop.vertices] == [net.node_ids[name] for name in names]
+    assert loop.way_ids == (out, 100, 101, 102, 103, back)
+
+
 def _km(net: Network, a: str, b: str) -> float:
     from dayhike.catalog import _haversine_m
 

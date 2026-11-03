@@ -17,7 +17,7 @@ import heapq
 import logging
 import math
 from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cached_property
 
@@ -224,8 +224,8 @@ def network_hikes(
 
     A kept chain that starts within ``START_PARKING_M`` of parking starts at
     the parking: it first walks there from it along ``ways`` (see
-    ``_parking_walks``), and a loop walks back to parking at the end from
-    the node it ends on, where such a walk is found, not again
+    ``_parking_walks``), and a loop walks back to where it started from the
+    node it ends on, where such a walk is found, not again
     along the same trail where the chain itself walks on along it. Where no
     such walk is found, or it would take the hike out of ``NETWORK_MIN_M`` to
     ``NETWORK_MAX_M``, the hike starts at its signpost.
@@ -234,15 +234,17 @@ def network_hikes(
     found = starts(graph, access_points, places)
     kept = select(graph, (candidates(graph, start) for start in found), destinations, relations)
     firsts = {}
+    returns = set()  # per loop ending on another node than it starts, (end node, start node)
     for _, chain in kept:
         leg = graph.legs[chain.legs[0]]
-        node, point = leg.vertices[0] if leg.ends[0] == chain.signposts[0] else leg.vertices[-1]
-        firsts[node] = point
+        first, point = leg.vertices[0] if leg.ends[0] == chain.signposts[0] else leg.vertices[-1]
+        firsts[first] = point
         if chain.loop:
             leg = graph.legs[chain.legs[-1]]
-            node, point = leg.vertices[-1] if leg.ends[0] == chain.signposts[-2] else leg.vertices[0]
-            firsts[node] = point
-    from_parking = _parking_walks(ways, nodes, access_points, firsts)
+            end = leg.vertices[-1][0] if leg.ends[0] == chain.signposts[-2] else leg.vertices[0][0]
+            if end != first:
+                returns.add((end, first))
+    from_parking, to_parking = _parking_walks(ways, nodes, access_points, firsts, returns)
     names = signpost_names(graph, guideposts)
     marked, settled = named_points(destinations), named_points(places)
     touching: dict[int, list[int]] = {}  # per signpost, the legs with an end joined into it
@@ -293,7 +295,10 @@ def network_hikes(
             parts.append(leg.relation_id)
             last = index
         if vertices[0][0] in from_parking:
-            back = from_parking.get(vertices[-1][0]) if chain.loop else None
+            back = None
+            if chain.loop:
+                end = vertices[-1][0]
+                back = from_parking[end] if end == vertices[0][0] else to_parking.get((end, vertices[0][0]))
             vertices, way_ids = _start_at_parking(vertices, way_ids, *from_parking[vertices[0][0]], back)
         hikes.append(
             NetworkHike(
@@ -314,15 +319,21 @@ def _parking_walks(
     nodes: Mapping[int, Point],
     access_points: Sequence[Point],
     sources: Mapping[int, Point],
-) -> dict[int, tuple[list[tuple[int, Point]], list[int]]]:
+    returns: Iterable[tuple[int, int]],
+) -> tuple[
+    dict[int, tuple[list[tuple[int, Point]], list[int]]],
+    dict[tuple[int, int], tuple[list[tuple[int, Point]], list[int]]],
+]:
     """Per source node (id to point), the shortest walk to it along ``ways``
     from a node within ``PARKING_ENTRY_M`` of an access point (parking) that
     lies within ``START_PARKING_M`` of the source, of at most
     ``PARKING_WALK_M``: its (node id, point) vertices from there to the
     source, and the ways it walks, in walking order. A source that close to
-    parking itself, or with no such walk, has none."""
+    parking itself, or with no such walk, has none. And per (end node, source)
+    of ``returns``, the shortest such walk to the end node from the node the
+    source's walk starts at, where both are found."""
     if not access_points or not sources:
-        return {}
+        return {}, {}
     ids = list(sources)
     tree = BallTree(np.radians(access_points), metric="haversine")
     near = tree.query_radius(np.radians([sources[node] for node in ids]), r=START_PARKING_M / EARTH_RADIUS_M)
@@ -336,9 +347,10 @@ def _parking_walks(
     def cell(point: Point) -> tuple[int, int]:
         return math.floor(point[0] / cell_lat), math.floor(point[1] / cell_lon)
 
+    returns = [(end, source) for end, source in returns if source in parkings and end in nodes]
     cells = {
         (row + dr, column + dc)
-        for row, column in (cell(sources[node]) for node in parkings)
+        for row, column in map(cell, [*(sources[node] for node in parkings), *(nodes[end] for end, _ in returns)])
         for dr in (-1, 0, 1)
         for dc in (-1, 0, 1)
     }
@@ -355,10 +367,7 @@ def _parking_walks(
     def at_parking(node: int, near: Sequence[Point]) -> bool:
         return any(_haversine_m(*nodes[node], *point) <= PARKING_ENTRY_M for point in near)
 
-    walks: dict[int, tuple[list[tuple[int, Point]], list[int]]] = {}
-    for source, near in parkings.items():
-        if at_parking(source, near):
-            continue
+    def walk(source: int, reached: Callable[[int], bool]) -> tuple[list[tuple[int, Point]], list[int]] | None:
         came: dict[int, tuple[float, int, int] | None] = {source: None}  # cost, way, node towards the source
         done: set[int] = set()
         queue = [(0.0, source)]
@@ -367,7 +376,7 @@ def _parking_walks(
             if node in done:
                 continue
             done.add(node)
-            if at_parking(node, near):
+            if reached(node):
                 path, way_ids = [], []
                 while came[node] is not None:
                     _, way_id, after = came[node]
@@ -375,14 +384,28 @@ def _parking_walks(
                     if not way_ids or way_ids[-1] != way_id:
                         way_ids.append(way_id)
                     node = after
-                walks[source] = ([*path, (source, nodes[source])], way_ids)
-                break
+                return [*path, (source, nodes[source])], way_ids
             for there, step, way_id in edges.get(node, ()):
                 walked = cost + step
                 if there not in done and walked <= PARKING_WALK_M and (there not in came or walked < came[there][0]):
                     came[there] = (walked, way_id, node)
                     heapq.heappush(queue, (walked, there))
-    return walks
+        return None
+
+    walks = {}
+    for source, near in parkings.items():
+        if not at_parking(source, near):
+            found = walk(source, lambda node, near=near: at_parking(node, near))
+            if found is not None:
+                walks[source] = found
+    backs = {}
+    for end, source in returns:
+        if source in walks:
+            entry = walks[source][0][0][0]
+            found = walk(end, lambda node, entry=entry: node == entry)
+            if found is not None:
+                backs[end, source] = found
+    return walks, backs
 
 
 def _start_at_parking(
