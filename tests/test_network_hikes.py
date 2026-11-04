@@ -383,6 +383,27 @@ def test_a_start_keeps_its_extra_chains_for_destinations_it_does_not_reach_yet()
     assert len(kept) == NETWORK_CAP_MAX
 
 
+def test_a_start_whose_best_chains_are_twins_fills_its_first_slots_with_any_other_chain():
+    # Its 8 lines to peaks are relation DayHikes' Twins; past them, two lines to no
+    # destination are still kept, as slots 1-4 take any distinct chain.
+    net, peaks = _star(8)
+    for j in range(2):
+        angle = math.radians(22.5 + j * 180)
+        for name, km in (("P", 2.5), ("Q", 5.0)):
+            net.node_ids[f"{name}{j}"] = len(net.nodes) + 1
+            net.nodes[len(net.nodes) + 1] = _lat_lon(km * math.cos(angle), km * math.sin(angle))
+        net.leg(200 + 10 * j + 1, "S", f"P{j}")
+        net.leg(200 + 10 * j + 2, f"P{j}", f"Q{j}")
+    graph = leg_graph(net.legs, net.ways, net.nodes)
+    dayhikes = [[net.point(name) for name in ("S", f"A{i}", f"B{i}")] for i in range(8)]
+
+    kept = select(
+        graph, [candidates(graph, _start_at(graph, net.point("S")))], destinations=peaks, relations=dayhikes
+    )
+
+    assert sorted(_relations(graph, chain) for _, chain in kept) == [[201, 202], [211, 212]]
+
+
 def test_a_start_reaching_few_destinations_keeps_the_cap():
     net, peaks = _star(6)
     graph = leg_graph(net.legs, net.ways, net.nodes)

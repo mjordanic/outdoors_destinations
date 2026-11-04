@@ -1386,8 +1386,8 @@ legs of 3–25 km and keeps a few of them:
 2. **Different enough.** A chain is kept only when more than half of its
    length lies off each better chain at the start, and it is no Twin of a
    relation DayHike or of a better chain.
-3. **Slots 1–4.** Every start keeps up to 4 chains in that order. Two of them
-   may go to the same destination.
+3. **Slots 1–4.** Every start keeps up to 4 chains in that order, whatever
+   they reach. Several of them may go to the same destination.
 4. **Slots 5–8.** A start whose lines reach more named destinations keeps one
    more chain per destination, up to 8. Each of these extra chains must go to
    a named destination that no chain already kept at the start goes to. A

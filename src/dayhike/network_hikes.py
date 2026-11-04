@@ -724,8 +724,9 @@ def select(
     ``NETWORK_SHORTLIST``, at most ``NETWORK_CAP`` per start are kept, none a
     Twin of a better chain kept or of one of the relation DayHikes' walks
     ``relations`` (Twins of Twins count, as in ``twin_groups``). Then, best
-    first, its other shortlisted lines are kept up to its cap, each to a named
-    destination no chain kept there goes to yet, none a Twin of a relation
+    first, its other shortlisted chains are kept up to its cap, past
+    ``NETWORK_CAP`` each a line to a named destination no chain kept there
+    goes to yet, none a Twin of a relation
     DayHike or of a chain kept before, so none takes the place of a chain kept
     before.
 
@@ -851,8 +852,9 @@ def _widened(
     destination_of: Mapping[int, str],
 ) -> list[tuple[int, Chain, Chain]]:
     """The ``kept`` (start, chain) and, best first, the ``extra`` ones up to
-    their start's cap in ``caps``, each a line to a named destination
-    (``destination_of``) that no chain kept or put in at its start goes to yet;
+    their start's cap in ``caps``, past ``NETWORK_CAP`` at a start each a line
+    to a named destination (``destination_of``) that no chain kept or put in
+    there goes to yet;
     then each of them replaced by its direct line in ``direct_of``. An extra
     chain or a direct line is left out when it is a Twin of a relation
     DayHike's walk (``given``) or of a chain kept or put in before it (but the
@@ -871,7 +873,7 @@ def _widened(
     for start, chain in extra:
         group = group_of[id(chain)]
         name = _goes_to(chain, destination_of)
-        new = name is not None and (start, name) not in served
+        new = count[start] < NETWORK_CAP or name is not None and (start, name) not in served
         if count[start] < caps[start] and new and group >= len(given) and not held[group]:
             held[group] += 1
             count[start] += 1
