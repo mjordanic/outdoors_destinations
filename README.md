@@ -1751,6 +1751,16 @@ table, in each column heading); hover, focus, click or tap opens what the score
 means, why alike hikes can score low on one measure, the data each measure
 reads and how the scores are made (ADR-0025).
 
+The list also says what it leaves out (ADR-0045). A row reads, for example,
+"3 versions · 12 more good matches start here": 12 more hikes start in that
+row's area and score within 0.05 of it, but only the row and its versions are
+listed, and later pages do not show them either (a distance limit around that
+start, with its smaller GroupingRadius, lists them). Next to "Show 10 more",
+"24,113 more hikes start in other areas" counts the hikes later pages can
+still list. With loops, the note above the table says what the loop search
+did: how many starts it searched from, how many loops it found and how many
+are listed, and when it stopped at its time limit.
+
 A Hiker with no particular hike in mind presses "No particular hike in mind?
 Describe the one you want" under the search. The weights list then shows only
 the Measures `/api/measures` marks wishable (Advanced ones again only while it is open), each with a value to ask for in its
@@ -1864,7 +1874,13 @@ GroupingRadius, by default from the limits as `grouping` in `/api/info` says;
 lists the next `results` rows, leaving out every hike starting within the
 GroupingRadius of one; the answer echoes `max_hours`, `max_km`, `group_km` and
 how many starts `after` had, `reachable` counts the hikes within the limits, and
-each hike has `drive_hours` and `distance_km`, null without that limit or start), and `POST /api/pair` with `{"a": id, "b": id}` plus the same weights,
+each hike has `drive_hours` and `distance_km`, null without that limit or start;
+ADR-0045: each row has `more_here`, the DayHikes starting in its area that are
+not listed and score within 0.05 of it, the answer has `other_areas`, the
+DayHikes ranked that start in no row's area, and `loop_search`, null without
+loops, `{"starts", "found", "listed", "stopped"}`: the loop search's start
+Junctions, the loops it found and measured, those listed, and whether it
+stopped at its 5 s limit), and `POST /api/pair` with `{"a": id, "b": id}` plus the same weights,
 excluded and month, giving the score a Ranking would show for `b` with `a` as
 the Seed and every Measure's score. Detail, compose, rank and pair take
 `return_to_start` (default true; `?return_to_start=false` on `GET

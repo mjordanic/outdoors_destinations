@@ -70,6 +70,16 @@ class FoundLoop:
     drive_hours: float | None
 
 
+@dataclass(frozen=True)
+class LoopSearch:
+    """What one search did: its loops, best first, how many start Junctions it
+    searched from, and whether it stopped at its deadline."""
+
+    loops: list[FoundLoop]
+    starts: int
+    stopped: bool
+
+
 @dataclass
 class _Read:
     """The Segments read so far in one search, by local index."""
@@ -92,8 +102,8 @@ def find_loops(
     deadline: float,
     reach: Callable[[list[tuple[float, float]]], list[float | None]] | None = None,
     origin: tuple[float, float] | None = None,
-) -> list[FoundLoop]:
-    """The ``limit`` loops most like ``target`` by their guess, from Junctions
+) -> LoopSearch:
+    """The search for the ``limit`` loops most like ``target`` by their guess, from Junctions
     near ``origin`` (lat, lon; within ``LOOP_ORIGIN_M``, searched first) and
     near ``trailheads`` (best first), best first; of loops that share a Twin's
     share of their Segments' length only the best.
@@ -106,7 +116,7 @@ def find_loops(
     low, high = target.length_m * LOOP_BAND[0], min(target.length_m * LOOP_BAND[1], LOOP_MAX_M)
     low = max(low, LOOP_MIN_M)
     if not math.isfinite(target.length_m) or low >= high:
-        return []
+        return LoopSearch([], 0, False)
     with sqlite3.connect(f"file:{graph.path}?mode=ro", uri=True) as db:
         starts = _starts(db, origin, trailheads)
         hours: list[float | None] = [None] * len(starts)
@@ -115,6 +125,7 @@ def find_loops(
         read = _Read({}, [], [], [], [], [], [])
         found: list[FoundLoop] = []
         budget = LOOP_EXPANSIONS
+        searched = 0
         for (junction, lat, lon), drive in zip(starts, hours):
             if (reach is not None and drive is None) or budget <= 0 or time.monotonic() >= deadline:
                 continue
@@ -122,8 +133,10 @@ def find_loops(
             if local is None:
                 continue
             loops, used = _beam(read, local, junction, target, low, high, budget, deadline)
+            searched += 1
             budget -= used
             found += [FoundLoop(junction, path, guess, drive) for path, guess in loops]
+    stopped = time.monotonic() >= deadline
     found.sort(key=lambda loop: -loop.guess)
     # Of loops that share at least a Twin's share of each one's length, keep the best guess.
     metres = {segment: read.length[read.index[segment]] for loop in found for segment in loop.segments}
@@ -138,7 +151,7 @@ def find_loops(
             for _, other, other_total in kept
         ):
             kept.append((loop, walked, total))
-    return [loop for loop, _, _ in kept]
+    return LoopSearch([loop for loop, _, _ in kept], searched, stopped)
 
 
 def _starts(

@@ -650,6 +650,29 @@ def test_show_more_appends_the_next_rows_under_the_table(browser, server, monkey
     assert len(_listed(page)) == 3
 
 
+def test_the_page_says_what_the_ranking_does_not_list(browser, server) -> None:
+    def counted(route) -> None:
+        body = route.fetch().json()
+        body["results"][0]["more_here"] = 12
+        body["other_areas"] = 24_113
+        body["loop_search"] = {"starts": 31, "found": 14, "listed": 3, "stopped": True}
+        route.fulfill(json=body)
+
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.route(f"{server}/api/rank", counted)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+
+    count = page.locator("#results-table tbody tr").first.locator(".more-here")
+    assert count.inner_text() == "12 more good matches start here"
+    assert "later pages do not show them" in count.get_attribute("title")
+    assert page.locator("#other-areas").inner_text() == "24,113 more hikes start in other areas."
+    note = page.locator("#results-note").inner_text()
+    assert "Loops: searched from 31 starts near the best hikes, 14 found, 3 listed" in note
+    assert "stopped at its time limit" in note
+
+
 def test_a_distance_limit_alone_or_with_the_drive_time_is_asked(browser, server) -> None:
     api = Api({})
     page = open_page(browser, server, api, hash=f"#hike={RIDGE_WALK_ID}")

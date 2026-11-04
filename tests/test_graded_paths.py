@@ -107,7 +107,7 @@ def test_a_loop_closes_over_a_graded_path(data) -> None:
     # The Valley Trail and the Ridge Trail are lines: only the graded path closes a loop.
     target = LoopTarget(4_000.0, float("nan"), float("nan"), float("nan"), None)
 
-    found = find_loops(data.trailgraph, target, [(46.05, 14.0629579576)], limit=10, deadline=float("inf"))
+    found = find_loops(data.trailgraph, target, [(46.05, 14.0629579576)], limit=10, deadline=float("inf")).loops
 
     assert found
     walk = data.trailgraph.walk_segments(found[0].start, found[0].segments)
