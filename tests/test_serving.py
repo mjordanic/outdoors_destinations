@@ -593,3 +593,24 @@ def test_geonames_is_downloaded_only_when_missing(tmp_path: Path) -> None:
     assert fetch_geonames(target, urlretrieve) == target
     assert fetch_geonames(target, urlretrieve) == target
     assert asked == [GEONAMES_URL] == ["https://download.geonames.org/export/dump/allCountries.zip"]
+
+
+def test_the_rows_after_leave_out_the_twin_of_a_hike_already_listed(
+    data: ServingData, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 1002 and 1003 are Twins starting 14 km apart, just over the 13 km grouping radius: rows of their own.
+    monkeypatch.setattr(serving, "GROUP_M", 13_000.0)
+    monkeypatch.setattr(serving, "LOOP_SEEDS", 0)
+    rows = data.store.ids.searchsorted([1002, 1003])
+    twins = np.array(data.store.twins)
+    twins[rows[1]] = twins[rows[0]]
+    store = dataclasses.replace(
+        data.store, twins=twins, with_way_back=dataclasses.replace(data.store.with_way_back, twins=twins)
+    )
+    monkeypatch.setattr(data, "store", store)
+    first = data.rank(RIDGE_WALK_ID, {"length": 100}, limit=1)
+
+    following = data.rank(RIDGE_WALK_ID, {"length": 100}, limit=1, after=[tuple(row["trailhead"]) for row in first])
+
+    assert _rows(first) == [(1002, [])]
+    assert _rows(following) == [(1007, [])]
