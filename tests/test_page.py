@@ -1427,9 +1427,16 @@ def test_the_list_names_the_starting_place_and_limit_it_keeps_for_another_hike(b
 
 def test_a_reloaded_page_restores_no_starting_place_or_limit(browser, server) -> None:
     page = open_page(browser, server, Api({}))
+    page.get_by_label("Only hikes near a starting place").check()
+    page.get_by_label("From", exact=True).fill("agram")
+    page.get_by_label("Max drive hours value").fill("3.5")
 
-    for box in ("#drive-on", "#origin", "#hours-on", "#hours", "#km-on", "#km", "#group-km"):
-        assert page.locator(box).get_attribute("autocomplete") == "off", box
+    page.reload()
+    page.wait_for_selector(".weight", state="attached")
+
+    assert not page.get_by_label("Only hikes near a starting place").is_checked()
+    assert page.get_by_label("From", exact=True).input_value() == ""
+    assert page.get_by_label("Max drive hours value").input_value() == "2"
 
 
 @pytest.mark.parametrize("move", ["search", "map"])
@@ -1460,7 +1467,7 @@ def test_the_picked_mark_and_a_greyed_redraw_say_what_they_mean_beside_the_list(
     assert explained.is_visible() == picked
     if picked:
         assert explained.inner_text() == (
-            "picked: a row drawn from lower down the best 3 areas; Strict order lists the best 2 as ranked."
+            "picked: a row drawn from lower down the best areas of its page; Strict order lists each page's best as ranked."
         )
 
     page.get_by_label("Strict order").check()
@@ -1500,6 +1507,35 @@ def test_one_way_and_round_trip_climbs_are_labelled(browser, server) -> None:
     page.wait_for_function("() => state.liked && state.liked.way_back == null")
     badges = page.locator("#liked .badges li").all_inner_texts()
     assert any(re.fullmatch(r"↑ [\d,]+ m ↓ [\d,]+ m one way", b) for b in badges), badges
+
+
+def test_a_loop_s_climb_is_not_labelled_one_way(browser, server) -> None:
+    def as_loop(route) -> None:
+        body = route.fetch().json()
+        body["facts"]["round_trip"] = 1
+        route.fulfill(json=body)
+
+    page = browser.new_page()
+    page.set_default_timeout(5000)
+    page.route(lambda url: not url.startswith(server), lambda route: route.abort())
+    page.route(f"{server}/api/hikes/{RIDGE_WALK_ID}?*", as_loop)
+    page.goto(f"{server}/#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+
+    page.locator("#return-on").uncheck()
+    page.wait_for_function("() => state.liked && state.liked.way_back == null")
+
+    badges = page.locator("#liked .badges li").all_inner_texts()
+    assert any(re.fullmatch(r"↑ [\d,]+ m ↓ [\d,]+ m", b) for b in badges), badges
+    assert "round trip" in badges
+
+
+def test_search_by_name_works_without_abort_signal_any(browser, server) -> None:
+    page = open_page(browser, server, Api({}), init="delete AbortSignal.any;")
+
+    page.locator("#search").fill("Ridge Walk")
+
+    page.locator("#suggestions li", has_text="Ridge Walk").first.wait_for()
 
 
 def test_a_loop_edited_on_the_map_shows_the_climb_its_card_shows(browser, loops_server, monkeypatch) -> None:

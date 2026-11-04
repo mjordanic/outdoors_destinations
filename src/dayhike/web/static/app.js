@@ -101,10 +101,12 @@ const TIMEOUT_S = 60;
 
 async function api(path, options = {}) {
   const timer = new AbortController(), timeout = setTimeout(() => timer.abort(), TIMEOUT_S * 1000);
-  const signals = [timer.signal, options.signal].filter(Boolean);
+  const stop = () => timer.abort();
+  options.signal?.addEventListener("abort", stop);
   let response;
   try {
-    response = await fetch(API_BASE + path, { ...options, signal: signals.length > 1 ? AbortSignal.any(signals) : timer.signal });
+    if (options.signal?.aborted) throw options.signal.reason;
+    response = await fetch(API_BASE + path, { ...options, signal: timer.signal });
   } catch (error) {
     if (options.signal?.aborted) throw error; // a newer request took its place
     // ``reason``: what went wrong, to go into a longer message.
@@ -113,6 +115,7 @@ async function api(path, options = {}) {
       : Object.assign(new Error("The server could not be reached; check your connection, or try again in a minute."), { reason: "the server could not be reached" });
   } finally {
     clearTimeout(timeout);
+    options.signal?.removeEventListener("abort", stop);
   }
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -654,7 +657,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
   const f = hike.facts;
   const badges = [
     f.length_m != null && lengthText(hike),
-    climbText(hike, f.elevation_gain_m, hike.way_back ? (hike.way_back.kind === "none" ? "" : "with the way back") : "one way"),
+    climbText(hike, f.elevation_gain_m, hike.way_back ? (hike.way_back.kind === "none" ? "" : "with the way back") : f.round_trip ? "" : "one way"),
     f.highest_m != null && `top ${fmt.m(f.highest_m)}`,
     f.lowest_m != null && `low ${fmt.m(f.lowest_m)}`,
     f.difficulty_rank != null && SAC[Math.round(f.difficulty_rank)],
@@ -1979,12 +1982,6 @@ function renderResults() {
   const picked = !state.strict && pool.length > shown.length
     ? ` These ${shown.length} are picked from the best ${pool.length} areas, closer matches more often: Redraw for others, or tick Strict order for the exact ranking.`
     : "";
-  // Beside Redraw: what the "picked" mark means, or why Redraw is off.
-  $("#results-draw-note").textContent = state.strict
-    ? "Redraw is off while Strict order is ticked: the list is the exact ranking."
-    : shown.some((result) => state.picked.has(result))
-      ? `picked: a row drawn from lower down the best ${pool.length} areas; Strict order lists the best ${shown.length} as ranked.`
-      : "";
   const tied = pool.filter((result) => result.score === pool[0]?.score).length;
   const ties = tied > 1 ? ` The best ${tied} areas match equally well.` : "";
   $("#results-note").textContent = shown.length
@@ -2023,7 +2020,17 @@ function listRows(from) {
     tbody.appendChild(row);
   });
   noteLoops();
+  noteDraw();
   pick.drawLoops();
+}
+
+// Beside Redraw: what the "picked" mark means, of the rows shown, or why Redraw is off.
+function noteDraw() {
+  $("#results-draw-note").textContent = state.strict
+    ? "Redraw is off while Strict order is ticked: the list is the exact ranking."
+    : state.results.some((result) => state.picked.has(result))
+      ? "picked: a row drawn from lower down the best areas of its page; Strict order lists each page's best as ranked."
+      : "";
 }
 
 // "Show 10 more" while the last answer holds rows not shown and the table may grow,
