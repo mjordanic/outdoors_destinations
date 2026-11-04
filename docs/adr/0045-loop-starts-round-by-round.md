@@ -17,7 +17,7 @@ ADR-0020 took the three nearest Junctions of each of the best 30 DayHikes' Trail
 | round by round, best 20 | 107 | 42 | 1.73 / 4.49 / 7.67 s | 8 of 104 | 3 loops, incl. "Loop near Peyrou" (0.7974) |
 | round by round, all 30 | 107 | 40 | 2.26 / 5.10 / 7.26 s | 14 of 104 | "Loop near Peyrou" (0.7974) |
 
-Twenty is the fewest that brings the Triglav Seed's loop back, from a Junction 340 m from the old loop's start, at about half the budget hits of all 30. A search at the budget lists what it found by then.
+Twenty is the fewest that brings the Triglav Seed's loop back, from a Junction 340 m from the old loop's start, at about half the budget hits of all 30. A search at the budget lists what it found by then, so those Seeds' loops vary from run to run: a second measurement of the committed code, one warm run each, listed 104 loops for 40 Seeds with 3 of 52 runs at the budget, and the Triglav Seed's 3 loops again.
 
 **Considered Options**: all 30 Trailheads (twice the budget hits); the best 15 (Triglav still gets no loop); raising `LOOP_STARTS` (more time on one vCPU, and the ADR-0036 measurement again); merging Trailheads within `LOOP_START_M` before taking starts (still cut by rank at the cap). Rejected.
 
