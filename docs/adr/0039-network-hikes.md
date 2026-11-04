@@ -1,5 +1,5 @@
 ---
-status: accepted (builds on ADR-0038; keeps ADR-0033's node-network rule)
+status: accepted (builds on ADR-0038; keeps ADR-0033's node-network rule; a line's start amended by ADR-0048)
 ---
 
 # NetworkHikes

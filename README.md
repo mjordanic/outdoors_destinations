@@ -59,10 +59,10 @@ Every real file under `data/` is built by a command. This is the order:
 
 ```
 1. OSM snapshot          data/osm/*.osm.pbf          fetch-extracts (or curl)
-2. Ingest                data/catalog.sqlite         dayhike ingest
+2. DEM rasters           data/dem/*_FABDEM_V1-2.tif  dayhike fetch-dem
+3. Ingest                data/catalog.sqlite         dayhike ingest --dem data/dem
                          data/catalog.geometry.sqlite     (always, same ingest)
                          data/catalog.trailgraph.sqlite   (always, same ingest)
-3. DEM rasters           data/dem/*_FABDEM_V1-2.tif  dayhike fetch-dem
 4. Sample heights        updates both SQLite files   dayhike sample-dem
 5. LandCover rasters     data/landcover/*.tif        dayhike fetch-landcover
 6. Sample LandCover      updates both SQLite files   dayhike sample-landcover
@@ -82,11 +82,14 @@ mkdir -p data/osm data/dem data/landcover data/climate
 # 1. Snapshot (Geofabrik PBF). Ranking never talks to OpenStreetMap.
 uv run dayhike fetch-extracts --dest data/osm
 
-# 2. Catalog + GeometryStore + TrailGraph. One command writes the three SQLite files.
-uv run dayhike ingest data/osm --catalog data/catalog.sqlite
-
-# 3–4. Elevation. Skip these if OSM ele on nodes is enough (it usually is not).
+# 2. Elevation tiles. Ingest starts a line whose ends differ by more than 100 m
+#    at its lower end (ADR-0048); without --dem, height orients no line.
 uv run dayhike fetch-dem          # default bbox: Alps + Dinarides
+
+# 3. Catalog + GeometryStore + TrailGraph. One command writes the three SQLite files.
+uv run dayhike ingest data/osm --catalog data/catalog.sqlite --dem data/dem
+
+# 4. Heights. Skip this if OSM ele on nodes is enough (it usually is not).
 uv run dayhike sample-dem         # writes heights into the two SQLite files
 
 # 5–8. LandCover and climate. Skip these if length, elevation, and amenities are enough.
@@ -96,7 +99,7 @@ uv run dayhike fetch-climate      # CHELSA V2.1 monthly normals
 uv run dayhike sample-climate
 uv run dayhike sample-trailgraph  # the same rasters onto the TrailGraph, for composed hikes
 
-# 9. Similarity facts and Calibration of every DayHike, once (rerun after 2–8).
+# 9. Similarity facts and Calibration of every DayHike, once (rerun after 3–8).
 uv run dayhike build-similarity
 
 # 10. Rank by Seed (no Valhalla). Omit --month for the June–August climate regime.
@@ -471,7 +474,7 @@ way instead of with its way back.
 | Measure | Fact | Kind | Constant |
 | --- | --- | --- | --- |
 | `length` | Catalog length | ratio | floor 1 km |
-| `elevation_gain` | metres climbed, larger of climb and descent (direction-free); a one-vertex DEM spike (10 m+ above or below both neighbours at 25 %+ grade) is dropped, then a change counts once it moves 10 m | ratio | floor 100 m |
+| `elevation_gain` | metres climbed, larger of climb and descent (direction-free); a one-vertex DEM spike (10 m+ above or below both neighbours at 25 %+ grade) is dropped, then a change counts once it moves 10 m and the end counts what it moved; climb and descent are the means of the walk both ways (ADR-0048) | ratio | floor 100 m |
 | `difficulty` | Difficulty as SAC rank 1–6 | tolerance | D = 3 |
 | `highest`, `lowest` | highest and lowest point | tolerance | D = 400 m |
 | `profile` | ProfileShape (64 points) | profile | — |
@@ -941,9 +944,12 @@ sections are kept (ADR-0033). A missing OSM `name` is kept: the Seed label is `n
 else `ref` with `from – to` or "near" the nearest place, else `from – to`, else
 "Hike near" the nearest place (a named city, town, village or hamlet within
 5 km of the Trailhead), else `relation:{id}`, with `name_origin` recording
-which (ADR-0017). A line starts at the end its `from`/`to` names point to when
-they name one end (else parking decides); with `roundtrip=yes` a route with a
-loop is walked as a loop when that keeps as much of it.
+which (ADR-0017). A line starts at the end its `from`/`to` tags point to when
+they name one end; else, with `--dem`, at its lower end when its ends differ by
+more than 100 m and something reaches it (ADR-0048); else, when it lacks a
+`from` or `to` tag, at the end its dashed name points to; else parking
+decides. With `roundtrip=yes` a route with a loop is walked as a loop when
+that keeps as much of it.
 If the process
 stops before `write:`, run the same command again; it resumes from
 `data/catalog.sqlite.work`. `--fresh` discards that work file.
@@ -1344,10 +1350,11 @@ tap that is also `amenity=drinking_water` is a drinking-water point.
 
 The geometry is the main walk of the relation's member ways (ADR-0012): each
 distinct way once, side trips and shortcuts left out as Leftovers, and the
-1 km minimum uses its length. The Trailhead is where the walk starts, chosen
-from parking only. A line starts at the end nearer a parking point within 5 km,
-or else at the end where member order starts it. A loop starts at its stem's
-far end, or else at its vertex nearest parking within 5 km.
+1 km minimum uses its length. The Trailhead is where the walk starts. A line
+the tags, its height (ADR-0048) and its name leave open starts at the end
+nearer a parking point within 5 km, or else at the end where member order
+starts it. A loop starts at its stem's far end, or else at its vertex nearest
+parking within 5 km.
 
 After the relations, each built-hike source in `BUILT_HIKE_SOURCES`
 (`dayhike.ingest`) adds built DayHikes: walks that are not one relation, such
@@ -1366,7 +1373,8 @@ earlier DayStage is left out.
 `network_source` (`dayhike.network_hikes`, ADR-0039) is registered too: it
 chains node-network legs into NetworkHikes, day walks of 3–25 km from
 signposts near parking or a place (starting at the parking when a trail leads
-from there), 4 to 8 per start, loops first, then lines to a named Peak, Hut,
+from there; a line whose other end is over 100 m lower may start there instead,
+ADR-0048), 4 to 8 per start, loops first, then lines to a named Peak, Hut,
 Viewpoint or lake, none a Twin of a relation DayHike or of a better chain. Named lakes
 (`water=lake,reservoir,pond`) and named guideposts (`information=guidepost`)
 are read for them alone: they name destinations and signposts, and are no
@@ -1439,7 +1447,7 @@ ingest resets every vertex sample:
 ```bash
 mkdir -p data/baseline   # optional: keep the old Catalog to compare against
 cp -c data/catalog.sqlite data/baseline/
-uv run dayhike ingest data/osm/europe-latest.catalog.osm.pbf --catalog data/catalog.sqlite --fresh
+uv run dayhike ingest data/osm/europe-latest.catalog.osm.pbf --catalog data/catalog.sqlite --fresh --dem data/dem
 uv run dayhike sample-dem
 uv run dayhike sample-landcover
 uv run dayhike sample-climate
@@ -2125,7 +2133,7 @@ at the rebuild.
    uv run dayhike fetch-landcover --bounds $B   # beside ingest: 243 new tiles, 11 GB, 11 min
    uv run dayhike fetch-climate --bounds $B     # beside ingest: 36 global files (about 5.4 GB), clipped
    uv run dayhike fetch-dem --bounds $B         # every tile is a link: proves none is missing
-   uv run dayhike ingest data/osm/europe-latest.osm.pbf --catalog data/catalog.sqlite --fresh  # 2 h 42 min, 5.6 GB
+   uv run dayhike ingest data/osm/europe-latest.osm.pbf --catalog data/catalog.sqlite --fresh --dem data/dem  # 2 h 42 min, 5.6 GB
    uv run dayhike sample-dem                    # 20 min
    uv run dayhike sample-landcover              # 21 min
    uv run dayhike sample-climate                # 5 min, peak 4.4 GB; no per-vertex climate

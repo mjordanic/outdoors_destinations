@@ -24,6 +24,7 @@ from dayhike.dem import (
     fabdem_tile_url,
     fetch_dem,
     fetch_fabdem,
+    point_heights,
     read_cells,
     sample_elevations,
     sample_dem,
@@ -252,6 +253,20 @@ def test_sample_elevations_reads_covering_raster_and_skips_uncovered(
 
     assert samples[0] == pytest.approx(1234.5, abs=0.01)
     assert samples[1] is None
+
+
+def test_point_heights_read_what_sample_elevations_reads_tile_by_tile(tmp_path: Path) -> None:
+    _write_constant_tif(tmp_path / "N45E015_FABDEM_V1-2.tif", west=14.99, south=44.99, east=16.01, north=46.01, z=1234.5)
+    _write_constant_tif(tmp_path / "N46E015_FABDEM_V1-2.tif", west=14.99, south=45.99, east=16.01, north=47.01, z=2000.0)
+    points = [(45.2, 15.1), (47.0, 11.0), (46.5, 15.5), (45.2, 15.1)]
+
+    heights = point_heights(tmp_path)
+
+    assert heights is not None
+    assert heights(points) == sample_elevations(tmp_path, points) == [1234.5, None, 2000.0, 1234.5]
+    (tmp_path / "empty").mkdir()
+    assert point_heights(tmp_path / "empty") is None
+    assert point_heights(tmp_path / "missing") is None
 
 
 def test_sample_elevations_reads_copernicus_tiles(tmp_path: Path) -> None:
@@ -616,4 +631,5 @@ def test_catalog_gain_uses_the_similarity_gain_rule() -> None:
     vertices = [(45 + i * step, 15.0, ele) for i, ele in enumerate(elevations)]
 
     assert _elevation_stats(vertices) == (398.0, 460.0, pytest.approx(30.0))
-    assert _elevation_stats([(45.0, 15.0, math.nan), *vertices[:2]]) == (400.0, 405.0, 0.0)
+    # Two vertices 5 m apart in height: the walk's end counts what it moved (ADR-0048).
+    assert _elevation_stats([(45.0, 15.0, math.nan), *vertices[:2]]) == (400.0, 405.0, 5.0)

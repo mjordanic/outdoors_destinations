@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 from test_main_walk import RELATION_ID, _osm
-from test_real_data import _main_walk_reasons, _measure_walks, _start_distances
+from test_real_data import _end_distances, _main_walk_reasons, _measure_walks, _start_distances
 from test_streaming_ingest import _sorted_pbf
 
 from dayhike import build_catalog, geometry_store_path_for
@@ -235,3 +235,19 @@ def test_a_hike_start_is_measured_to_the_nearest_parking_and_place(tmp_path: Pat
 
     assert to_parking == {1: pytest.approx(400.0, rel=0.01)}
     assert to_place == {1: pytest.approx(100.0, rel=0.01)}
+
+
+def test_a_hike_end_is_measured_to_the_nearest_parking_and_place_and_how_much_higher_it_is(tmp_path: Path) -> None:
+    store = _loop_store(tmp_path / "loop.sqlite", [(5.0, 0.0)])  # parking at line 2's first vertex
+    connection = sqlite3.connect(store)
+    connection.execute("ALTER TABLE vertices ADD COLUMN ele REAL")
+    connection.executemany("UPDATE vertices SET ele = ? WHERE dayhike_id = 2 AND seq = ?", [(900.0, 0), (1150.0, 1)])
+    connection.execute("INSERT INTO amenities VALUES (5.0, ?, 'place')", (4 * STEP_DEG + STEP_DEG,))  # 100 m past its end
+    connection.commit()
+    connection.close()
+
+    to_parking, to_place, rise = _end_distances(store, [2])
+
+    assert to_parking == {2: pytest.approx(400.0, rel=0.01)}
+    assert to_place == {2: pytest.approx(100.0, rel=0.01)}
+    assert rise == {2: 250.0}

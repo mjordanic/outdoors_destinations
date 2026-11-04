@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted (line direction amended by ADR-0048: height outranks a dashed name)
 ---
 
 # Relation tags label and orient a DayHike; node-network legs are not DayHikes

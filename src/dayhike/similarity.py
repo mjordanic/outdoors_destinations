@@ -1367,16 +1367,30 @@ def elevation_gain(lat: np.ndarray, lon: np.ndarray, ele: np.ndarray) -> float:
 def climb_and_descent(lat: np.ndarray, lon: np.ndarray, ele: np.ndarray) -> tuple[float, float]:
     """Metres climbed and metres descended along the vertices in walk order.
 
+    Each is the mean of what one walk counts walked this way and walked back
+    (``_one_way_climb_and_descent``), so walking the other way swaps the two
+    exactly and a walk retraced climbs exactly what it descends (ADR-0048).
     Vertices without elevation are skipped; none with it gives NaN for both.
+    """
+    lat, lon, ele = (np.asarray(values, dtype=float) for values in (lat, lon, ele))
+    climb, descent = _one_way_climb_and_descent(lat, lon, ele)
+    back_climb, back_descent = _one_way_climb_and_descent(lat[::-1], lon[::-1], ele[::-1])
+    return (climb + back_descent) / 2, (descent + back_climb) / 2
+
+
+def _one_way_climb_and_descent(lat: np.ndarray, lon: np.ndarray, ele: np.ndarray) -> tuple[float, float]:
+    """Metres climbed and descended walking the vertices in their order.
+
     First a DEM spike is dropped: a vertex at least ``SPIKE_RISE_M`` above
     or below both its neighbours with a grade of at least ``SPIKE_GRADE`` on
     both sides (the ends stay). Then a change counts only once it moves
     ``GAIN_HYSTERESIS_M`` from the last counted elevation, so DEM jitter
-    between vertices does not add up on long flat or cross-slope walks.
+    between vertices does not add up on long flat or cross-slope walks; the
+    last vertex counts whatever it moved, so climb less descent is the end's
+    height less the start's.
     """
-    ele = np.asarray(ele, dtype=float)
     known = np.isfinite(ele)
-    along = np.concatenate([[0.0], np.cumsum(_step_m(np.asarray(lat, float), np.asarray(lon, float)))])
+    along = np.concatenate([[0.0], np.cumsum(_step_m(lat, lon))])
     at, height = along[known].tolist(), ele[known].tolist()
     if not height:
         return math.nan, math.nan
@@ -1409,7 +1423,8 @@ def climb_and_descent(lat: np.ndarray, lon: np.ndarray, ele: np.ndarray) -> tupl
         elif last - metres >= step:
             descent += last - metres
             last = metres
-    return climb, descent
+    end = kept[-1]
+    return climb + max(end - last, 0.0), descent + max(last - end, 0.0)
 
 
 def profile_shape(

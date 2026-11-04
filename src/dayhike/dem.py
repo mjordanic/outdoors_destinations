@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 import re
 import shutil
 import sqlite3
@@ -308,26 +309,8 @@ def sample_elevations(
         if not path.is_file():
             continue
         with rasterio.open(path) as dataset:
-            nodata = dataset.nodata
-            box = dataset.bounds
-            half_x, half_y = dataset.res[0] / 2, dataset.res[1] / 2
-            # A GLO-30 grid stops half a cell short of its tile's east and south
-            # edges, and outside it a read gives 0, not nodata: read the edge cell.
-            coords = [(points[index][1], points[index][0]) for index in indices]
-            if source is COPERNICUS:
-                coords = [
-                    (
-                        min(max(lon, box.left + half_x), box.right - half_x),
-                        min(max(lat, box.bottom + half_y), box.top - half_y),
-                    )
-                    for lon, lat in coords
-                ]
-            values = read_cells(dataset, *np.array(coords, dtype=float).T).tolist()
-            for index, value in zip(indices, values, strict=True):
-                if not math.isfinite(value):
-                    continue
-                if nodata is not None and value == nodata:
-                    continue
+            coords = _tile_coords(dataset, source, [points[index] for index in indices])
+            for index, value in zip(indices, _read_heights(dataset, coords), strict=True):
                 out[index] = value
             if shares is not None:
                 near = [k for k, index in enumerate(indices) if shares[index] > 0 and out[index] is not None]
@@ -337,6 +320,83 @@ def sample_elevations(
                         index = indices[k]
                         out[index] -= shares[index] * (out[index] - floor)
     return out
+
+
+def _tile_coords(dataset, source: DemSource, points: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
+    """(lon, lat) of (lat, lon) ``points`` on one open tile of ``source``.
+
+    A GLO-30 grid stops half a cell short of its tile's east and south edges,
+    and outside it a read gives 0, not nodata: a point there reads the edge cell.
+    """
+    coords = [(lon, lat) for lat, lon in points]
+    if source is not COPERNICUS:
+        return coords
+    box = dataset.bounds
+    half_x, half_y = dataset.res[0] / 2, dataset.res[1] / 2
+    return [
+        (min(max(lon, box.left + half_x), box.right - half_x), min(max(lat, box.bottom + half_y), box.top - half_y))
+        for lon, lat in coords
+    ]
+
+
+def _read_heights(dataset, coords: Sequence[tuple[float, float]]) -> list[float | None]:
+    """The height under each (lon, lat) of ``coords`` on an open tile, None at nodata."""
+    nodata = dataset.nodata
+    return [
+        value if math.isfinite(value) and (nodata is None or value != nodata) else None
+        for value in read_cells(dataset, *np.array(coords, dtype=float).T).tolist()
+    ]
+
+
+POINT_TILES_OPEN = 16  # tiles ``PointHeights`` keeps open per process
+
+
+class PointHeights:
+    """Heights of a few points at a time on the DEM tiles in ``raster_dir``,
+    each the cell ``sample_elevations`` reads (Copernicus GLO-30 without its
+    canopy correction), None off the tiles. Ingest orients lines by the heights
+    of their ends (ADR-0048). It keeps the last ``POINT_TILES_OPEN`` tiles
+    open, in each process apart, and every height it read."""
+
+    def __init__(self, raster_dir: Path | str, source: DemSource) -> None:
+        self.raster_dir = Path(raster_dir)
+        self.source = source
+        self._pid: int | None = None
+        self._open: dict[str, object] = {}
+        self._read: dict[tuple[float, float], float | None] = {}
+
+    def __call__(self, points: Sequence[tuple[float, float]]) -> list[float | None]:
+        if self._pid != os.getpid():  # a forked worker opens its own tiles
+            self._pid, self._open, self._read = os.getpid(), {}, {}
+        for point in points:
+            if point not in self._read:
+                dataset = self._dataset(fabdem_tile_id(*point))
+                self._read[point] = (
+                    None if dataset is None else _read_heights(dataset, _tile_coords(dataset, self.source, [point]))[0]
+                )
+        return [self._read[point] for point in points]
+
+    def _dataset(self, tile_id: str):
+        if tile_id in self._open:
+            self._open[tile_id] = self._open.pop(tile_id)  # the newest
+            return self._open[tile_id]
+        import rasterio
+
+        path = self.raster_dir / self.source.tile_file(tile_id)
+        dataset = rasterio.open(path) if path.is_file() else None
+        if len(self._open) >= POINT_TILES_OPEN:
+            oldest = self._open.pop(next(iter(self._open)))
+            if oldest is not None:
+                oldest.close()
+        self._open[tile_id] = dataset
+        return dataset
+
+
+def point_heights(raster_dir: Path | str) -> PointHeights | None:
+    """``PointHeights`` on the tiles in ``raster_dir``; None when it holds none."""
+    raster_dir = Path(raster_dir)
+    source = dem_source_of(raster_dir) if raster_dir.is_dir() else None
+    return None if source is None else PointHeights(raster_dir, source)
 
 
 def require_worldcover(landcover_dir: Path | str | None) -> None:

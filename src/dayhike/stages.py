@@ -58,8 +58,10 @@ class DayStage:
 def day_stages(context: BuildContext) -> list[BuiltWalk]:
     """The built-hike source of DayStages (ADR-0038): every relation DayHike
     longer than ``STAGE_SPLIT_M`` ``split`` at the snapshot's huts, places and
-    parking, named "{tour}, stage k: {from} – {to}". A stage that is a Twin of
-    a relation DayHike, or of a stage kept before it, is left out.
+    parking, named "{tour}, stage k: {from} – {to}". A stage walks the tour's
+    way unless the height rule (``context.lower``) starts it at its other end
+    (ADR-0048): then it is walked and named from there. A stage that is a Twin
+    of a relation DayHike, or of a stage kept before it, is left out.
     """
     snapshot = context.snapshot
     tours = [hike for hike in context.dayhikes if hike.length_m > STAGE_SPLIT_M]
@@ -88,7 +90,12 @@ def day_stages(context: BuildContext) -> list[BuiltWalk]:
             if kind == "way" and way_id in snapshot.ways:
                 for node_id in snapshot.ways[way_id].node_ids:
                     ways_at.setdefault(node_id, []).append(way_id)
+        tour_ways = [snapshot.ways[way_id] for kind, way_id in relation.members if kind == "way" and way_id in snapshot.ways]
+        lower = None if context.lower is None else context.lower.choice(tour_ways, snapshot.nodes)
         for k, stage in enumerate(stages, start=1):
+            first, last = stage.vertices[0][1], stage.vertices[-1][1]
+            if lower is not None and first != last and lower(first, last) == last:
+                stage = DayStage(stage.vertices[::-1], stage.length_m, stage.end, stage.start)
             ends = [
                 name or (places and places.nearest(*stage.vertices[at][1], CUT_RADIUS_M["place"]))
                 for name, at in ((stage.start, 0), (stage.end, -1))

@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 from dayhike.catalog import (
     DayHike,
+    LowerStart,
     MainWalk,
     _dayhike,
     _haversine_m,
@@ -46,13 +47,15 @@ class BuiltWalk:
 @dataclass(frozen=True)
 class BuildContext:
     """What a source may build from: the snapshot ingest read, the relation
-    DayHikes it kept, the main walk of any relation, and where a source
-    reports what it built (one line, like ingest's ``progress``)."""
+    DayHikes it kept, the main walk of any relation, where a source reports
+    what it built (one line, like ingest's ``progress``) and the height rule
+    that starts a line at its lower end (ADR-0048), None without heights."""
 
     snapshot: OsmSnapshot
     dayhikes: Sequence[DayHike]
     main_walk: Callable[[OsmRelation], MainWalk]
     progress: Callable[[str], None] | None = None
+    lower: LowerStart | None = None
 
 
 BuiltHikeSource = Callable[[BuildContext], Iterable[BuiltWalk]]
