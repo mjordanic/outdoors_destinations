@@ -1370,7 +1370,8 @@ earlier DayStage is left out.
 `network_source` (`dayhike.network_hikes`, ADR-0039) is registered too: it
 chains node-network legs into NetworkHikes, day walks of 3–25 km from
 signposts near parking or a place (starting at the parking when a trail leads
-from there), 4 to 8 per start, loops first, then lines to a named Peak, Hut,
+from there; a line whose other end is over 100 m lower may start there instead,
+ADR-0048), 4 to 8 per start, loops first, then lines to a named Peak, Hut,
 Viewpoint or lake, none a Twin of a relation DayHike or of a better chain. Named lakes
 (`water=lake,reservoir,pond`) and named guideposts (`information=guidepost`)
 are read for them alone: they name destinations and signposts, and are no
