@@ -1738,7 +1738,12 @@ up and back; off, every hike is compared one way. While it is on, Round trip
 is left out (every hike is then a round trip; ADR-0022). Turning it changes the
 liked hike's figures and ranks again, and an address ends in `&oneway` when
 it is off. Clicking a result shows it the same way, next to the
-liked hike. An optional starting place with a maximum drive (up to 4 h), a
+liked hike. Every shown hike has "Link to this hike" (`#hike=<id>` for a
+catalog or built hike, its `#compose=` link for a composed one, with `&oneway`
+when set) and two buttons: Share sends that address to the phone's share sheet,
+or copies it where there is none, and Download GPX saves the hike as drawn
+(the served, simplified line, not its way back) as a GPX 1.1 track, made in the
+browser, with no elevation and credited to OpenStreetMap under the ODbL. An optional starting place with a maximum drive (up to 4 h), a
 maximum straight-line distance (up to 200 km, from the start to where a hike
 starts, not by road; ADR-0032) or both keeps only hikes within those limits (the
 start is typed as "lat, lon", taken from the
