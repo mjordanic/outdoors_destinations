@@ -137,6 +137,7 @@ svg text { font-size: 11px; fill: var(--muted); }
 #results-table td.cell.left-out { color: var(--muted); background: #fafafa; text-decoration: line-through; }
 #results.stale .table-wrap { opacity: 0.55; }
 .stale-note { font-size: 0.82rem; margin: 6px 0; color: #8a4b08; }
+.stale-note.error { color: #b42318; }
 #results-table td.score { font-weight: 600; }
 #results-table tr.version td { background: #f6faf7; }
 #results-table tr.version td:first-child { color: var(--muted); font-size: 0.75rem; }
