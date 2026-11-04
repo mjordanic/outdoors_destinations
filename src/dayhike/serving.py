@@ -1305,7 +1305,7 @@ class ServingData:
         out. Hikes are taken down the whole Ranking until one starts in a
         ``limit`` + 1st area, so ``limit`` rows are listed where the hikes
         allow; loops are searched near the Hiker's ``origin``, when given, first,
-        and near the best ``LOOP_SEEDS`` DayHikes (ADR-0036).
+        and near the best ``LOOP_TRAILHEADS`` of the ``LOOP_SEEDS`` DayHikes (ADR-0036, ADR-0045).
         ``after`` are the starts (lat, lon) of the rows already listed: every hike
         starting within ``group_m`` (above 0) of one is left out, so the rows
         listed continue the areas of those exactly, none twice and none skipped,
