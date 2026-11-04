@@ -8,6 +8,8 @@ ADR-0020 took the three nearest Junctions of each of the best 30 DayHikes' Trail
 
 **Round by round over the best 20.** After the Origin's starts (ADR-0036, unchanged), each of the best 20 Trailheads (`LOOP_TRAILHEADS`) gets its nearest Junction, in rank order, then each its second nearest, until the 40 starts are taken: two each. `LOOP_STARTS`, `LOOP_SEEDS`, `LOOP_STARTS_PER_TRAILHEAD`, the radii, the expansion and read bounds and `LOOP_BUDGET_S` are unchanged.
 
+`LOOP_SEEDS` still passes the best 30 Trailheads to the loop search, but only the first `LOOP_TRAILHEADS` give starts.
+
 **Why 20.** Starts spread over more areas read more Segments, and on one vCPU that pushes searches into the 5 s budget. Measured on the rebuild 2 export, in-process in a 1-CPU, 2 GiB container, 52 Seeds sampled from both rebuilds, two warm runs each:
 
 | Starts | Loops listed | Seeds with a loop | `_loops` p50 / p90 / max | Runs at the budget | Triglav |

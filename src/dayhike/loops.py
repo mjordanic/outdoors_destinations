@@ -29,7 +29,7 @@ from dayhike.catalog import EARTH_RADIUS_M
 from dayhike.similarity import PROFILE_RANGE_FLOOR_M, TWIN_SHARE
 from dayhike.trailgraph import TrailGraph, decode_coords, _haversine
 
-LOOP_SEEDS = 30  # the best Catalog results whose Trailheads start the search
+LOOP_SEEDS = 30  # the best Catalog results whose Trailheads are passed to the loop search, of which only the first LOOP_TRAILHEADS give starts (ADR-0045)
 LOOP_START_M = 2_000.0  # start Junctions within this of such a Trailhead ...
 LOOP_STARTS_PER_TRAILHEAD = 3  # ... the nearest this many
 LOOP_TRAILHEADS = 20  # of those Trailheads only the best this many, round by round, to bound the reads on one vCPU (ADR-0045)
