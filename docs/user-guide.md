@@ -113,10 +113,33 @@ Each hike has a score, and each thing compared has its own score. Press the
   cover do not cover all of Europe yet). That thing is simply left out of the
   score.
 
+### Why the list changes from visit to visit
+
+The 10 hikes listed are picked, not simply the top 10. Each search looks at
+the best 30 areas and picks 10 of them. A better match is picked more often
+than a weaker one, so the very best are nearly always there, and the rest
+change from one search to the next. Hikes that match about equally well all
+get their turn, instead of the same ones always winning by a hair. The list is
+still in score order. A row that the exact top 10 would not include has a small
+**picked** mark next to its number.
+
+- **Redraw**, above the list, picks again from the same 30 areas. It is
+  instant and keeps any loops already suggested. If no other hike is close
+  enough to come up, it says "No other close matches here; widen the distance
+  or turn on Strict order".
+- Tick **Strict order** to see the best 10 in the exact order of their
+  scores, the same every time. Redraw is off while it is ticked.
+- Redraw and Strict order change the first 10 rows and remove the rows "Show
+  10 more" added; press it again for the next ones.
+- When the best areas score exactly the same, the note above the list says
+  so. Their order among themselves means nothing.
+- A link to a hike or a wish keeps Strict order when it is ticked. Without
+  it, whoever opens the link gets their own pick.
+
 ### "Show 10 more" and the counts
 
 The list shows 10 areas at a time. Press **Show 10 more** for the next 10
-(up to 100 rows). Two counts tell you what is not on the list.
+(up to 100 rows), picked the same way from the areas not shown yet. Two counts tell you what is not on the list.
 
 **"12 more good matches start here"**
 
@@ -159,8 +182,10 @@ A loop that mostly walks your liked hike again is not suggested.
 ### Why loops can change
 
 Searching every possible loop would take too long. So the site picks around
-40 starting points near your start and near the 20 best results, and looks for
-loops from those.
+40 starting points near your start and near 20 of the best 60 results, and
+looks for loops from those. The 20 are picked like the rows of the list, the
+better ones more often, so a new search can find other loops. In Strict order
+they are the 20 best.
 
 - Near-ties matter. Two start areas may score almost the same. After a data
   rebuild, a tiny score change can swap their order, so a different set of

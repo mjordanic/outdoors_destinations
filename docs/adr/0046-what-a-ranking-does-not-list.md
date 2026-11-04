@@ -1,5 +1,5 @@
 ---
-status: accepted (amends ADR-0032)
+status: accepted (amends ADR-0032; counted for the 30 rows of a pool since ADR-0047)
 ---
 
 # A Ranking says what it does not list
