@@ -6,7 +6,7 @@ status: accepted (amends ADR-0020's and ADR-0036's start Junctions)
 
 ADR-0020 took the three nearest Junctions of each of the best 30 DayHikes' Trailheads in rank order, at most 40 starts in all. The cap was reached at about the 14th Trailhead, so a score change of about 1e-4 that reordered near-tied DayHikes could push a Trailhead's every start past the cap and drop the Seed's best loop. That happened to Seed 19787033 "Pot kralja Triglava" between Europe rebuilds 1 and 2: its loop near Source de la Goute Escure starts at the Trailhead ranked 13th in rebuild 1 and 15th in rebuild 2, and rebuild 2 listed no loop for it.
 
-**Round by round over the best 20.** After the Origin's starts (ADR-0036, unchanged), each of the best 20 Trailheads (`LOOP_TRAILHEADS`) gets its nearest Junction, in rank order, then each its second nearest, until the 40 starts are taken: two each. `LOOP_STARTS`, `LOOP_SEEDS`, `LOOP_STARTS_PER_TRAILHEAD`, the radii, the expansion and read bounds and `LOOP_BUDGET_S` are unchanged.
+**Round by round over the best 20.** After the Origin's starts (ADR-0036, unchanged), each of the best 20 Trailheads (`LOOP_TRAILHEADS`) gets its nearest Junction, in rank order, then each its second nearest, until the 40 starts are taken: two each without an Origin, one each when the Origin's 20 are taken. `LOOP_STARTS`, `LOOP_SEEDS`, `LOOP_STARTS_PER_TRAILHEAD`, the radii, the expansion and read bounds and `LOOP_BUDGET_S` are unchanged.
 
 `LOOP_SEEDS` still passes the best 30 Trailheads to the loop search, but only the first `LOOP_TRAILHEADS` give starts.
 
