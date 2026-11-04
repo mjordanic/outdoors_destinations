@@ -1930,7 +1930,7 @@ that starts in its area, so the page adds the areas of the rows it did not draw
 to the hikes in other areas; the answer has `other_areas`, the
 DayHikes ranked that start in no row's area, and `loop_search`, null without
 loops, `{"starts", "found", "listed", "stopped"}`: the loop search's start
-Junctions, the loops it found and measured, those listed, and whether it
+Junctions, the loops it found and measured, those listed in all its rows and their versions (the whole pool; the page counts those in the rows it shows), and whether it
 stopped at its 5 s limit), and `POST /api/pair` with `{"a": id, "b": id}` plus the same weights,
 excluded and month, giving the score a Ranking would show for `b` with `a` as
 the Seed and every Measure's score. Detail, compose, rank and pair take
