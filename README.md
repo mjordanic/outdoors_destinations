@@ -1751,7 +1751,7 @@ table, in each column heading); hover, focus, click or tap opens what the score
 means, why alike hikes can score low on one measure, the data each measure
 reads and how the scores are made (ADR-0025).
 
-The list also says what it leaves out (ADR-0045). A row reads, for example,
+The list also says what it leaves out (ADR-0046). A row reads, for example,
 "3 versions · 12 more good matches start here": 12 more hikes start in that
 row's area and score within 0.05 of it, but only the row and its versions are
 listed, and later pages do not show them either (a distance limit around that
@@ -1875,7 +1875,7 @@ lists the next `results` rows, leaving out every hike starting within the
 GroupingRadius of one; the answer echoes `max_hours`, `max_km`, `group_km` and
 how many starts `after` had, `reachable` counts the hikes within the limits, and
 each hike has `drive_hours` and `distance_km`, null without that limit or start;
-ADR-0045: each row has `more_here`, the DayHikes starting in its area that are
+ADR-0046: each row has `more_here`, the DayHikes starting in its area that are
 not listed and score within 0.05 of it, the answer has `other_areas`, the
 DayHikes ranked that start in no row's area, and `loop_search`, null without
 loops, `{"starts", "found", "listed", "stopped"}`: the loop search's start

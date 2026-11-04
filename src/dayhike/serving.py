@@ -1330,7 +1330,7 @@ class ServingData:
         Each row has ``more_here``: the DayHikes ranked that start in its area (within
         ``group_m`` of its start and of no better row's) and score at most ``GOOD_MATCH``
         below it, but are not listed; no later page lists them. The Ranking counts the
-        DayHikes ranked that start in no row's area (ADR-0045).
+        DayHikes ranked that start in no row's area (ADR-0046).
         """
         group_m = GROUP_M if group_m is None else group_m
         store = self.store.mode(return_to_start)
