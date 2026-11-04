@@ -128,6 +128,8 @@ svg text { font-size: 11px; fill: var(--muted); }
 #results-table th.measure.excluded { color: var(--nodata); }
 #results-table td.name, #results-table th.name { position: sticky; left: 0; background: #fff; max-width: 220px; overflow: hidden; text-overflow: ellipsis; text-align: left; }
 #results-table thead th.name { background: #f3f6f2; }
+#results-table td.name .hike-name { display: block; overflow: hidden; text-overflow: ellipsis; }
+#results-table td.name .badge-line { display: block; white-space: normal; }
 #results-table tbody tr { cursor: pointer; }
 #results-table tbody tr:hover td, #results-table tbody tr.active td { background: #e8f1ea; }
 #results-table td.cell { text-align: center; min-width: 30px; color: #1f2a24; font-variant-numeric: tabular-nums; }

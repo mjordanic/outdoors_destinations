@@ -164,9 +164,9 @@ def test_hikes_starting_near_each_other_share_a_row_of_versions(data) -> None:
     assert [v["id"] for v in row["versions"]] == [2004, None]
     assert _segments(data, row["versions"][1]) != _segments(data, row)
     assert row["score"] > apart[2008]["score"] > apart[LAKE_LOOP]["score"] > row["versions"][0]["score"]
-    for version in row["versions"]:  # each as it is listed in a row of its own, but for versions
+    for version in row["versions"]:  # each as it is listed in a row of its own, but for a row's versions and count
         key = version["id"] if version["id"] is not None else version["route"]["text"]
-        assert version == {k: v for k, v in apart[key].items() if k != "versions"}
+        assert version == {k: v for k, v in apart[key].items() if k not in ("versions", "more_here")}
 
 
 def _rows_apart(data) -> list[dict]:
@@ -238,6 +238,24 @@ def test_loops_also_start_near_the_origin_when_no_good_dayhike_does(data) -> Non
     assert (straight_line_distances_m(origin, [r["trailhead"] for r in loops]) <= 5_000).all()
     far = Origin(*_fixture_point(1_500, 10_000))  # 9 km from every Junction
     assert data.rank(wish, {"length": 100}, allowed_rows=none, loops=True, origin=far) == []
+
+
+@pytest.mark.usefixtures("rows_apart")
+def test_a_ranking_says_what_its_loop_search_did(data) -> None:
+    results = data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True)
+
+    search = results.loop_search
+    assert search["listed"] == len(_loops(results)) == 2
+    assert search["found"] >= 2 and search["starts"] > 0 and search["stopped"] is False
+    assert data.rank(MEADOW_PATH, DEFAULT_WEIGHTS).loop_search is None  # no search, nothing to say
+
+
+def test_a_loop_search_cut_by_its_time_limit_says_so(data, monkeypatch) -> None:
+    monkeypatch.setattr("dayhike.serving.LOOP_BUDGET_S", 0.0)
+
+    search = data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True).loop_search
+
+    assert search == {"starts": 0, "found": 0, "listed": 0, "stopped": True}
 
 
 def test_the_next_rows_leave_out_loops_of_an_area_already_listed(data) -> None:
@@ -365,7 +383,7 @@ def test_a_found_loop_names_whole_segments_from_its_start(data) -> None:
     loop = _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True))[0]
     target = LoopTarget(3_100.0, float("nan"), float("nan"), float("nan"), None)
 
-    found = find_loops(data.trailgraph, target, [tuple(loop["trailhead"])], limit=10, deadline=float("inf"))
+    found = find_loops(data.trailgraph, target, [tuple(loop["trailhead"])], limit=10, deadline=float("inf")).loops
 
     assert found and all(f.drive_hours is None for f in found)
     walk = data.trailgraph.walk_segments(found[0].start, found[0].segments)

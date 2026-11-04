@@ -592,6 +592,8 @@ def create_app(
             "weights": {name: weight for name, weight in weights.items() if weight > 0},
             "reachable": None if reachable is None else len(reachable),
             "results": results,
+            "other_areas": results.other_areas,
+            "loop_search": results.loop_search,
             "elapsed_ms": round((time.monotonic() - started) * 1000),
         }
 

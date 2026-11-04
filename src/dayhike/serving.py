@@ -148,6 +148,7 @@ GROUP_MIN_M = 500.0
 GROUP_KMH = 50.0  # the 4 h longest drive (web.MAX_DRIVE_HOURS) then groups as no limit does
 VERSIONS = 3  # versions per row, the row's own included
 VERSION_DIFFERS = 0.5  # a version walks more than this share of its length off every other one
+GOOD_MATCH = 0.05  # a hike scoring at most this below a row's leader is a good match, counted when not listed
 LOOP_NAME_M = 2_000.0  # a loop is named after a named point this near its start
 TRAIL_NAME_SHARE = 0.3  # a trail names a walk only when it is at least this share of the walk's length (ADR-0037)
 UNNAMING_KINDS = ("restaurant_cafe", "parking")  # amenity points that name no hike: a cafe, a car park
@@ -905,6 +906,19 @@ def _geonames_lines(path: Path) -> Iterator[str]:
                 yield line.decode("utf-8")
 
 
+class Ranking(list):
+    """``ServingData.rank``'s rows, best first, and what they leave out: ``other_areas``,
+    the hikes ranked that start in no row's area (later pages list them), and
+    ``loop_search``, what the SuggestedLoop search did (None when none ran):
+    ``starts`` searched from, loops ``found`` and measured, ``listed``, and whether
+    it ``stopped`` at ``LOOP_BUDGET_S``."""
+
+    def __init__(self, rows: list[dict], other_areas: int, loop_search: dict | None) -> None:
+        super().__init__(rows)
+        self.other_areas = other_areas
+        self.loop_search = loop_search
+
+
 class ServingData:
     """A serving export, opened read-only and memory-mapped."""
 
@@ -1278,7 +1292,7 @@ class ServingData:
         group_m: float | None = None,
         after: Sequence[tuple[float, float]] = (),
         origin: Origin | None = None,
-    ) -> list[dict]:
+    ) -> Ranking:
         """The ``limit`` hikes most similar to one Seed, with every Measure's score.
 
         The Seed is a DayHike id, a ComposedHike's Route (the DayHikes it
@@ -1312,6 +1326,11 @@ class ServingData:
         and the DayHike rows match one longer Ranking. With ``loops`` each page
         searches loops anew near its own best DayHikes, so its loops can differ
         from those one longer Ranking would list (ADR-0032).
+
+        Each row has ``more_here``: the DayHikes ranked that start in its area (within
+        ``group_m`` of its start and of no better row's) and score at most ``GOOD_MATCH``
+        below it, but are not listed; no later page lists them. The Ranking counts the
+        DayHikes ranked that start in no row's area (ADR-0046).
         """
         group_m = GROUP_M if group_m is None else group_m
         store = self.store.mode(return_to_start)
@@ -1322,7 +1341,7 @@ class ServingData:
             allowed_rows = kept_rows if allowed_rows is None else np.intersect1d(allowed_rows, kept_rows)
         allowed = None if allowed_rows is None else self.store.ids[allowed_rows]
         rows, scores = rank_rows(store, [seed_row], weights, month=month, allowed_ids=allowed)
-        found_loops = []
+        found_loops, loop_search = [], None
         if loops and self.trailgraph is not None and LOOP_SEEDS:
             seed_line = (
                 None
@@ -1331,7 +1350,7 @@ class ServingData:
                 if seed_walk is None
                 else np.column_stack([seed_walk.lat, seed_walk.lon])
             )
-            found_loops = self._loops(
+            found_loops, loop_search = self._loops(
                 store, seed_row, seed_line, weights, month, rows[:LOOP_SEEDS], return_to_start, reach, origin
             )
             starts = np.array([loop["trailhead"] for loop, _ in found_loops]).reshape(-1, 2)
@@ -1363,7 +1382,33 @@ class ServingData:
             for hike, summary, scored in zip(listed, summaries, measures)
         }
         results = [[hike[2] if hike[1] is None else dayhikes[hike[1]] for hike in group] for group in groups]
-        return [{**group[0], "versions": group[1:]} for group in results]
+        more_here, other_areas = self._unlisted(rows, scores, groups, listed_rows, group_m)
+        if loop_search is not None:
+            loop_search["listed"] = sum(hike[1] is None for group in groups for hike in group)
+        return Ranking(
+            [{**group[0], "versions": group[1:], "more_here": more} for group, more in zip(results, more_here)],
+            other_areas,
+            loop_search,
+        )
+
+    def _unlisted(
+        self, rows: np.ndarray, scores: np.ndarray, groups: list[list[list]], listed_rows: list[int], group_m: float
+    ) -> tuple[list[int], int]:
+        """Of the DayHikes ranked (store ``rows``, ``scores`` best first) and not listed, per
+        row of ``rank``'s ``groups`` those starting in its area, within ``group_m`` of its start and
+        of no better row's, that score at most ``GOOD_MATCH`` below it; and how many start in no
+        row's area."""
+        starts = self.trailheads[rows]
+        area = np.full(len(rows), -1)
+        band = math.degrees(group_m / EARTH_RADIUS_M)  # no nearer than this in latitude alone
+        for i, group in enumerate(groups):
+            lat, lon = self._start(group[0])
+            free = np.flatnonzero((area < 0) & (np.abs(starts[:, 0] - lat) <= band))
+            area[free[straight_line_distances_m(Origin(lat, lon), starts[free]) < group_m]] = i
+        hidden = np.flatnonzero((area >= 0) & ~np.isin(rows, listed_rows))
+        floors = np.array([group[0][0] - GOOD_MATCH for group in groups])
+        good = hidden[scores[hidden] >= floors[area[hidden]]]
+        return np.bincount(area[good], minlength=len(groups)).tolist(), int(np.count_nonzero(area < 0))
 
     @staticmethod
     def _far_and_near(
@@ -1408,9 +1453,10 @@ class ServingData:
         return_to_start: bool,
         reach: Reach | None,
         origin: Origin | None = None,
-    ) -> list[tuple[dict, np.ndarray]]:
+    ) -> tuple[list[tuple[dict, np.ndarray]], dict]:
         """SuggestedLoops from Junctions near ``origin`` and the Trailheads of ``rows``, as
-        ``rank`` lists them, each with its walk every ``TWIN_STEP_M``: the
+        ``rank`` lists them, each with its walk every ``TWIN_STEP_M``, and what the search did
+        (``starts``, loops ``found`` and measured, whether it ``stopped`` at the deadline): the
         ``LOOP_MEASURED`` best guesses of ``find_loops`` measured (with their
         way back when the Seed is) and scored like a DayHike. A loop is left out
         that shares more than ``LOOP_SEED_SHARE`` of its walk with the Seed's
@@ -1424,7 +1470,7 @@ class ServingData:
             fact["length_m"], fact["highest_m"], fact["lowest_m"], fact["elevation_gain_m"], seed.profile
         )
         trailheads = [(float(lat), float(lon)) for lat, lon in self.trailheads[rows]]
-        found = find_loops(
+        search = find_loops(
             self.trailgraph,
             target,
             trailheads,
@@ -1433,16 +1479,18 @@ class ServingData:
             reach=reach,
             origin=None if origin is None else (origin.latitude, origin.longitude),
         )
-        measured = []
-        for loop in found:
+        measured, stopped = [], search.stopped
+        for loop in search.loops:
             if time.monotonic() >= deadline:
+                stopped = True
                 break
             walk = self.trailgraph.walk_segments(loop.start, loop.segments)
             trip = self._trip(walk, return_to_start)[0]
             facts, shape = self.trailgraph.facts(trip)
             measured.append((loop, walk, trip, facts, shape))
+        done = {"starts": search.starts, "found": len(measured), "stopped": stopped}
         if not measured:
-            return []
+            return [], done
         loops = SimilarityStore(
             ids=np.zeros(len(measured), dtype=np.int64),
             facts=np.array([[facts[c] for c in FACT_COLUMNS] for *_, facts, _ in measured], dtype=np.float32).T,
@@ -1492,7 +1540,7 @@ class ServingData:
                 },
                 kept[i],
             ))
-        return listed
+        return listed, done
 
     def _served_lines(self, ids: list[int]) -> dict[int, str]:
         """DayHikes' served lines, encoded, what their Twins are found on, by id."""

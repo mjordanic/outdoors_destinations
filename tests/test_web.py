@@ -486,6 +486,30 @@ def test_rank_says_how_near_hikes_are_grouped_by_default_and_as_asked(client: Te
     assert len(rank(group_km=0.1)["results"]) == 3
 
 
+def test_a_row_counts_the_good_matches_starting_in_its_area_that_are_not_listed(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Like 1002, 1003 and 1007 score 0.5 and the Ridge Walk 0; within 50 km of 1003 start 1007 (41 km)
+    # and the Ridge Walk (37 km). With no versions, both are left out of 1003's row.
+    monkeypatch.setattr(serving, "VERSIONS", 1)
+
+    body = client.post("/api/rank", json={"seed": 1002, "group_km": 50}).json()
+
+    assert [(r["id"], r["versions"], r["more_here"]) for r in body["results"]] == [(1003, [], 1)]  # the Ridge Walk scores 0.5 lower
+    assert body["other_areas"] == 0
+
+
+def test_rank_counts_the_hikes_starting_in_other_areas_than_the_rows_shown(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(web, "RESULTS", 1)
+
+    body = client.post("/api/rank", json={"seed": 1002, "group_km": 0.1}).json()
+
+    assert [(r["id"], r["more_here"]) for r in body["results"]] == [(1003, 0)]
+    assert body["other_areas"] == 2  # 1007 and the Ridge Walk, of the 3 hikes ranked
+
+
 def test_info_gives_the_rule_of_the_default_grouping_and_the_limits(client: TestClient) -> None:
     info = client.get("/api/info").json()
 

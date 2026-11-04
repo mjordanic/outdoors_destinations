@@ -167,7 +167,7 @@ def _found_loops(data: ServingData, km: float, starts: tuple[tuple[float, float]
         return 0
     target = LoopTarget(km * 1000, math.nan, math.nan, math.nan, None)
     deadline = time.monotonic() + LOOP_SEARCH_S
-    return len(find_loops(data.trailgraph, target, list(starts), limit=LOOP_MEASURED, deadline=deadline))
+    return len(find_loops(data.trailgraph, target, list(starts), limit=LOOP_MEASURED, deadline=deadline).loops)
 
 
 def build(pbf: Path, bbox: str | None, data: Path, out: Path) -> dict:

@@ -1725,7 +1725,7 @@ async function rank(query, liked, stale = false) {
     if (request !== ranked || liked !== rankBasis()) return;
     state.query = {
       weights: body.weights, month: body.month, drive: Boolean(query.max_hours), km: Boolean(query.max_km),
-      return_to_start: body.return_to_start, wish: query.wish ?? null,
+      return_to_start: body.return_to_start, wish: query.wish ?? null, group_km: body.group_km,
     };
     state.asked = { query, basis: liked };
     state.results = body.results;
@@ -1768,10 +1768,15 @@ function renderResults(body) {
   const versions = body.results.some((result) => result.versions.length)
     ? ` Hikes starting within ${body.group_km} km of a better one are its versions: click a row with versions to list the others (var 2, 3) under it and see each on the map.`
     : "";
+  const search = body.loop_search;
+  const others = state.query.wish ? "a listed hike" : "a listed hike or the hike you like";
+  const loops = search
+    ? ` Loops: searched from ${search.starts} start${search.starts === 1 ? "" : "s"} near the best hikes, ${search.found} found, ${search.listed} listed${search.found > search.listed ? ` (the others rank lower, or walk mostly the same trails as ${others})` : ""}.${search.stopped ? " The search stopped at its time limit, so it may have missed some loops." : ""}`
+    : "";
   $("#wish-card").hidden = true;
   $("#results-title").textContent = state.query.wish ? "Hikes closest to the one you want" : "Most similar hikes";
   $("#results-note").textContent = body.results.length
-    ? `${state.query.wish ? "Closest to the hike you want" : `Like “${state.liked.name}”`}, out of ${considered}${body.loops ? " and loops composed near the best of them" : ""}, ${mode}. Click a row to see it.${composed}${searched}${versions}`
+    ? `${state.query.wish ? "Closest to the hike you want" : `Like “${state.liked.name}”`}, out of ${considered}${body.loops ? " and loops composed near the best of them" : ""}, ${mode}. Click a row to see it.${composed}${searched}${versions}${loops}`
     : `No hike matched, out of ${considered}. Try a longer drive, a longer distance or other weights.`;
   $("#results-loops").hidden = !state.info.compose || body.loops; // SuggestedLoops on request (ADR-0028)
   const table = $("#results-table");
@@ -1782,7 +1787,7 @@ function renderResults(body) {
   state.expanded = null;
   table.appendChild(document.createElement("tbody"));
   listRows(0);
-  showMoreButton(body.results.length);
+  showMoreButton(body.results.length, body.other_areas);
   section.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -1798,10 +1803,15 @@ function listRows(from) {
   pick.drawLoops();
 }
 
-// "Show 10 more" while the last answer filled its page and the table may grow.
-function showMoreButton(answered) {
+// "Show 10 more" while the last answer filled its page and the table may grow,
+// beside how many hikes start in other areas than the rows shown.
+function showMoreButton(answered, otherAreas) {
   $("#show-more").textContent = `Show ${state.info.results} more`;
-  $("#results-more").hidden = answered < state.info.results || state.results.length >= state.info.max_rows;
+  $("#show-more").hidden = answered < state.info.results || state.results.length >= state.info.max_rows;
+  $("#other-areas").textContent = otherAreas
+    ? `${otherAreas.toLocaleString("en")} more hike${otherAreas === 1 ? " starts" : "s start"} in other areas.`
+    : "";
+  $("#results-more").hidden = $("#show-more").hidden && !otherAreas;
 }
 
 // The next rows of the shown Ranking: its query again, leaving out the areas of the rows shown (ADR-0032).
@@ -1819,7 +1829,7 @@ async function showMore() {
     if (asked !== state.asked || results !== state.results) return;
     results.push(...body.results);
     listRows(after.length);
-    showMoreButton(body.results.length);
+    showMoreButton(body.results.length, body.other_areas);
     setStatus(body.results.length ? `Done in ${(body.elapsed_ms / 1000).toFixed(1)} s.` : "No more hikes in other areas.");
   } catch (error) {
     if (asked === state.asked && results === state.results) setStatus(error.message, true);
@@ -1845,7 +1855,10 @@ function resultRow(result, number, open) {
   const versions = result.versions?.length
     ? ` <span class="versions" title="Click to see each on the map and in this table">${result.versions.length + 1} versions</span>`
     : "";
-  row.innerHTML = `<td>${number}</td><td class="name" title="${escapeHtml(result.name)}">${tag}${escapeHtml(result.name)}${versions}</td>
+  const more = result.more_here
+    ? `${versions ? " ·" : ""} <span class="versions more-here" title="${escapeHtml(moreHereNote(result.more_here))}">${result.more_here} more good match${result.more_here === 1 ? " starts" : "es start"} here</span>`
+    : "";
+  row.innerHTML = `<td>${number}</td><td class="name" title="${escapeHtml(result.name)}"><span class="hike-name">${tag}${escapeHtml(result.name)}</span>${versions || more ? `<span class="badge-line">${versions}${more}</span>` : ""}</td>
     <td class="score">${result.score.toFixed(3)}</td>
     ${drive ? `<td>${result.drive_hours.toFixed(1)} h</td>` : ""}
     ${km ? `<td>${result.distance_km.toFixed(1)} km</td>` : ""}
@@ -1856,6 +1869,11 @@ function resultRow(result, number, open) {
     if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); }
   });
   return row;
+}
+
+// Why a row's good matches starting in its area are not listed (ADR-0046).
+function moreHereNote(count) {
+  return `Only the best hike of each area (hikes starting within ${state.query.group_km} km of it) is listed, with up to 2 versions that walk mostly other trails. ${count === 1 ? "This one scores" : `These ${count} score`} within 0.05 of it but ${count === 1 ? "is" : "are"} not listed, and later pages do not show ${count === 1 ? "it" : "them"}.`;
 }
 
 // The versions of a row, catalog or composed, on the map, and under it as rows var 2 and 3:
