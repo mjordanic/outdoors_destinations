@@ -1719,7 +1719,11 @@ since ADR-0028): loops drawn on the marked network and graded paths near the
 start, when one is given, and near the best Catalog results (ADR-0036), found as the query runs, named after a hiking place near
 where they start, else by the trails they walk (ADR-0022), marked "composed" and
 drawn dashed green on the "Select hike on map" map. Each opens like a composed hike, with its
-link, and "Edit on the map" makes it the liked hike in the composer. The list
+link, and "Edit on the map" makes it the liked hike in the composer. Loops are
+searched only from a limited number of starting points (at most 40) near the
+start and the best 20 results, each result's nearest first (ADR-0045), so they
+are not every loop there is and can change when the catalog is rebuilt; the
+list's note says so. The list
 holds one row per area: hikes, catalog or composed, starting within the
 GroupingRadius of a better one are its versions; clicking the row lists up to three versions
 (var 1, 2, 3), each more than half a different route, under it and on the map,
