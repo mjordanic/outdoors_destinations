@@ -1754,8 +1754,7 @@ reads and how the scores are made (ADR-0025).
 The list also says what it leaves out (ADR-0046). A row reads, for example,
 "3 versions · 12 more good matches start here": 12 more hikes start in that
 row's area and score within 0.05 of it, but only the row and its versions are
-listed, and later pages do not show them either (a distance limit around that
-start, with its smaller GroupingRadius, lists them). Next to "Show 10 more",
+listed, and later pages do not show them either. Next to "Show 10 more",
 "24,113 more hikes start in other areas" counts the hikes later pages can
 still list. With loops, the note above the table says what the loop search
 did: how many starts it searched from, how many loops it found and how many

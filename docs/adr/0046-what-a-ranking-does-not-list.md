@@ -18,8 +18,7 @@ two rows counts for the better one, as the grouping takes it. Counting every hik
 be honest but inflated Europe-wide, often a hundred or more per row; the floor keeps the count to
 hikes a Hiker would want (the captain's choice). Versions dropped by the cap or as walking the same
 trails count here too. The page reads "3 versions · 12 more good matches start here". The tooltip says
-why they are not listed and that a distance limit around that start, with its smaller GroupingRadius,
-lists them.
+why they are not listed.
 
 **Under the table, the hikes in other areas.** The answer has `other_areas`: the DayHikes ranked that
 start in no row's area. These are the hikes later pages can still list. It equals the hikes ranked

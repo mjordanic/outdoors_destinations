@@ -1873,7 +1873,7 @@ function resultRow(result, number, open) {
 
 // Why a row's good matches starting in its area are not listed (ADR-0046).
 function moreHereNote(count) {
-  return `Only the best hike of each area (hikes starting within ${state.query.group_km} km of it) is listed, with up to 2 versions that walk mostly other trails. ${count === 1 ? "This one scores" : `These ${count} score`} within 0.05 of it but ${count === 1 ? "is" : "are"} not listed, and later pages do not show ${count === 1 ? "it" : "them"}; a distance limit around this start lists ${count === 1 ? "it" : "them"}.`;
+  return `Only the best hike of each area (hikes starting within ${state.query.group_km} km of it) is listed, with up to 2 versions that walk mostly other trails. ${count === 1 ? "This one scores" : `These ${count} score`} within 0.05 of it but ${count === 1 ? "is" : "are"} not listed, and later pages do not show ${count === 1 ? "it" : "them"}.`;
 }
 
 // The versions of a row, catalog or composed, on the map, and under it as rows var 2 and 3:
