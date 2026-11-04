@@ -1321,7 +1321,9 @@ class ServingData:
         allow; loops are searched near the Hiker's ``origin``, when given, first,
         and near the best ``LOOP_TRAILHEADS`` of the ``LOOP_SEEDS`` DayHikes (ADR-0036, ADR-0045).
         ``after`` are the starts (lat, lon) of the rows already listed: every hike
-        starting within ``group_m`` (above 0) of one is left out, so the rows
+        starting within ``group_m`` (above 0) of one is left out (a DayHike
+        after its Twins are chosen, so a Twin of one listed is not listed in its
+        place; ``near`` and ``allowed_rows`` come first), so the rows
         listed continue the areas of those exactly, none twice and none skipped,
         and the DayHike rows match one longer Ranking. With ``loops`` each page
         searches loops anew near its own best DayHikes, so its loops can differ
@@ -1335,12 +1337,16 @@ class ServingData:
         group_m = GROUP_M if group_m is None else group_m
         store = self.store.mode(return_to_start)
         seed_row, seed_walk = self._seed(seed, return_to_start)
-        kept = self._far_and_near(self.trailheads, near, group_m, after)
+        kept = self._far_and_near(self.trailheads, near, group_m, ())
         if kept is not None:
             kept_rows = np.flatnonzero(kept)
             allowed_rows = kept_rows if allowed_rows is None else np.intersect1d(allowed_rows, kept_rows)
         allowed = None if allowed_rows is None else self.store.ids[allowed_rows]
         rows, scores = rank_rows(store, [seed_row], weights, month=month, allowed_ids=allowed)
+        # After the Twins are chosen: a Twin of a hike listed stays out, not stands in for it.
+        kept = self._far_and_near(self.trailheads[rows], None, group_m, after)
+        if kept is not None:
+            rows, scores = rows[kept], scores[kept]
         found_loops, loop_search = [], None
         if loops and self.trailgraph is not None and LOOP_SEEDS:
             seed_line = (
