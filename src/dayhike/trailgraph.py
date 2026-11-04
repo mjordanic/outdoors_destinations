@@ -42,6 +42,7 @@ import json
 import math
 import re
 import sqlite3
+import threading
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -1284,6 +1285,7 @@ class TrailGraph:
             raise FileNotFoundError(self.path)
         self._uri = f"file:{self.path}?mode=ro"
         self._graph: tuple | None = None  # what ``trail_back`` searches, read once
+        self._graph_lock = threading.Lock()  # one build at a time; the others wait for it
 
     def _db(self) -> sqlite3.Connection:
         return sqlite3.connect(self._uri, uri=True)
@@ -1568,30 +1570,35 @@ class TrailGraph:
         the first entry per Junction, then per entry the neighbour, metres
         and that Segment's id."""
         if self._graph is None:
-            chunks = []
-            with self._db() as db:
-                cursor = db.execute("SELECT id, a, b, length_m FROM segments WHERE kind != 'link'")
-                while rows := cursor.fetchmany(100_000):  # arrays chunk by chunk, not a million tuples at once
-                    chunks.append(np.array(rows, dtype=float))
-            found = np.concatenate(chunks) if chunks else np.empty((0, 4))
-            ids = found[:, 0].astype(np.int64)  # ids and OSM node ids are far below 2**53
-            ends = found[:, 1:3].astype(np.int64)
-            metres = found[:, 3].copy()
-            nodes = np.unique(ends)
-            low, high = np.sort(np.searchsorted(nodes, ends), axis=1).T
-            shortest = np.argsort(metres, kind="stable")
-            shortest = shortest[low[shortest] != high[shortest]]
-            _, first = np.unique(low[shortest] * len(nodes) + high[shortest], return_index=True)
-            keep = shortest[first]
-            weight = np.maximum(metres[keep], 1e-3)
-            here = np.concatenate([low[keep], high[keep]])
-            order = np.argsort(here, kind="stable")
-            start_of = np.concatenate([[0], np.cumsum(np.bincount(here, minlength=len(nodes)))]).astype(np.int64)
-            neighbour = np.concatenate([high[keep], low[keep]])[order].astype(np.int32)
-            step_m = np.concatenate([weight, weight])[order].astype(np.float32)
-            segment_of = np.concatenate([ids[keep], ids[keep]])[order]
-            self._graph = (nodes, start_of, neighbour, step_m, segment_of)
+            with self._graph_lock:  # a request arriving during a build waits for it, not a build of its own
+                if self._graph is None:
+                    self._graph = self._build_network()
         return self._graph
+
+    def _build_network(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        chunks = []
+        with self._db() as db:
+            cursor = db.execute("SELECT id, a, b, length_m FROM segments WHERE kind != 'link'")
+            while rows := cursor.fetchmany(100_000):  # arrays chunk by chunk, not a million tuples at once
+                chunks.append(np.array(rows, dtype=float))
+        found = np.concatenate(chunks) if chunks else np.empty((0, 4))
+        ids = found[:, 0].astype(np.int64)  # ids and OSM node ids are far below 2**53
+        ends = found[:, 1:3].astype(np.int64)
+        metres = found[:, 3].copy()
+        nodes = np.unique(ends)
+        low, high = np.sort(np.searchsorted(nodes, ends), axis=1).T
+        shortest = np.argsort(metres, kind="stable")
+        shortest = shortest[low[shortest] != high[shortest]]
+        _, first = np.unique(low[shortest] * len(nodes) + high[shortest], return_index=True)
+        keep = shortest[first]
+        weight = np.maximum(metres[keep], 1e-3)
+        here = np.concatenate([low[keep], high[keep]])
+        order = np.argsort(here, kind="stable")
+        start_of = np.concatenate([[0], np.cumsum(np.bincount(here, minlength=len(nodes)))]).astype(np.int64)
+        neighbour = np.concatenate([high[keep], low[keep]])[order].astype(np.int32)
+        step_m = np.concatenate([weight, weight])[order].astype(np.float32)
+        segment_of = np.concatenate([ids[keep], ids[keep]])[order]
+        return (nodes, start_of, neighbour, step_m, segment_of)
 
     def amenities_near(self, lat: np.ndarray, lon: np.ndarray, radius_m: float) -> list[tuple]:
         """(id, kind, lat, lon, name, ele tag) of the amenity points in the walk's

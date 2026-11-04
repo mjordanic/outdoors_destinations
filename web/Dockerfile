@@ -24,7 +24,8 @@ COPY --from=serving . /data
 COPY web/start.sh /app/start.sh
 
 USER valhalla
-ENV PORT=8080 DAYHIKE_DATA=/data
+# Two malloc arenas, not one per worker thread: each arena keeps its own high-water mark (~0.4 GB at 8 visitors).
+ENV PORT=8080 DAYHIKE_DATA=/data MALLOC_ARENA_MAX=2
 EXPOSE 8080
 ENTRYPOINT []
 CMD ["/app/start.sh"]
