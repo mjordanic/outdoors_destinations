@@ -1693,7 +1693,7 @@ where they start, else by the trails they walk (ADR-0022), marked "composed" and
 drawn dashed green on the "Select hike on map" map. Each opens like a composed hike, with its
 link, and "Edit on the map" makes it the liked hike in the composer. Loops are
 searched only from a limited number of starting points (at most 40) near the
-start and the best 30 results, each result's nearest first (ADR-0045), so they
+start and the best 20 results, each result's nearest first (ADR-0045), so they
 are not every loop there is and can change when the catalog is rebuilt; the
 list's note says so. The list
 holds one row per area: hikes, catalog or composed, starting within the

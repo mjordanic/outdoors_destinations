@@ -32,6 +32,7 @@ from dayhike.trailgraph import TrailGraph, decode_coords, _haversine
 LOOP_SEEDS = 30  # the best Catalog results whose Trailheads start the search
 LOOP_START_M = 2_000.0  # start Junctions within this of such a Trailhead ...
 LOOP_STARTS_PER_TRAILHEAD = 3  # ... the nearest this many
+LOOP_TRAILHEADS = 20  # of those Trailheads only the best this many, round by round, to bound the reads on one vCPU (ADR-0045)
 LOOP_ORIGIN_M = 5_000.0  # start Junctions within this of the Origin, searched first (ADR-0036) ...
 LOOP_ORIGIN_STARTS = 20  # ... the nearest this many
 LOOP_STARTS = 40  # and at most this many in all
@@ -145,11 +146,11 @@ def _starts(
 ) -> list[tuple[int, float, float]]:
     """(Junction id, lat, lon) of the start Junctions where two trail Segments
     meet, at most ``LOOP_STARTS`` in all: the ``LOOP_ORIGIN_STARTS`` nearest
-    ``origin`` within ``LOOP_ORIGIN_M`` first, then round by round each
-    Trailhead's next nearest within ``LOOP_START_M``, in the Trailheads' order,
-    for ``LOOP_STARTS_PER_TRAILHEAD`` rounds. So every Trailhead gets a start
-    before any gets a second, and a near-tie in the Ranking cannot push a
-    Trailhead's every start past the cap."""
+    ``origin`` within ``LOOP_ORIGIN_M`` first, then round by round each of the
+    first ``LOOP_TRAILHEADS`` Trailheads' next nearest within ``LOOP_START_M``,
+    in the Trailheads' order, for ``LOOP_STARTS_PER_TRAILHEAD`` rounds. So each
+    of them gets a start before any gets a second, and a near-tie in the
+    Ranking cannot push a Trailhead's every start past the cap."""
     starts: dict[int, tuple[float, float]] = {}
 
     def take(nearest: Iterator[tuple[int, float, float]]) -> None:
@@ -162,7 +163,7 @@ def _starts(
         nearest = _nearest(db, origin, LOOP_ORIGIN_M)
         for _ in range(min(LOOP_ORIGIN_STARTS, LOOP_STARTS)):
             take(nearest)
-    queues = [_nearest(db, trailhead, LOOP_START_M) for trailhead in trailheads]
+    queues = [_nearest(db, trailhead, LOOP_START_M) for trailhead in trailheads[:LOOP_TRAILHEADS]]
     for _ in range(LOOP_STARTS_PER_TRAILHEAD):
         for nearest in queues:
             if len(starts) >= LOOP_STARTS:
