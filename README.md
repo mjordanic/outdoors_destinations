@@ -1374,6 +1374,34 @@ A hike that is neither a `route=hiking` or `route=foot` relation nor a built Day
 Unnamed forest paths (`highway=path` without a hiking relation) never appear.
 Filter `name_origin = 'synthetic'` if you want to drop ingest-assigned labels.
 
+### How NetworkHikes are chosen at a start
+
+A start is a signpost near parking (500 m) or a place (300 m), together with
+the signposts within 1 km of it. From each start, ingest lists every chain of
+legs of 3–25 km and keeps a few of them:
+
+1. **Order.** Loops come first, then lines that end at a named Peak, Hut,
+   Viewpoint or lake (within 200 m), then other lines. Within each group, the
+   chain nearer 10 km comes first.
+2. **Different enough.** A chain is kept only when more than half of its
+   length lies off each better chain at the start, and it is no Twin of a
+   relation DayHike or of a better chain.
+3. **Slots 1–4.** Every start keeps up to 4 chains in that order. Two of them
+   may go to the same destination.
+4. **Slots 5–8.** A start whose lines reach more named destinations keeps one
+   more chain per destination, up to 8. Each of these extra chains must go to
+   a named destination that no chain already kept at the start goes to. A
+   loop or a line to no named destination never takes slots 5–8.
+5. **Shortest route first.** A kept line to a destination is replaced by that
+   destination's direct line from the start (its shortest line, still at least
+   3 km), so the hike goes there straight, not by a detour. The detour stays
+   only when the direct line is a Twin of a relation DayHike or of another
+   kept chain.
+
+So one start shows at most 8 NetworkHikes, and the 5th to 8th each reach a
+place the first ones do not. There is no limit per car park: a car park near
+two starts can show more than 8 hikes, as long as each start's are different.
+
 ### Ingest replaces the Catalog
 
 Each `dayhike ingest` (and `build_catalog`) writes a **new** Catalog and

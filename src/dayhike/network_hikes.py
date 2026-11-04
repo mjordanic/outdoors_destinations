@@ -51,7 +51,7 @@ NETWORK_MIN_M = 3_000.0  # a NetworkHike is day-sized: at least this long ...
 NETWORK_MAX_M = 25_000.0  # ... and at most this
 NETWORK_EXPANSIONS = 20_000  # legs one start's search may try
 NETWORK_CAP = 4  # chains kept per start ...
-NETWORK_CAP_MAX = 8  # ... or one per named destination its lines reach, up to this
+NETWORK_CAP_MAX = 8  # ... or one per named destination its lines reach, up to this, the rest each to a new one
 NETWORK_SHORTLIST = 2 * NETWORK_CAP  # distinct chains per start checked for Twins, twice its cap
 START_PARKING_M = 500.0  # a signpost this close to parking starts chains ...
 START_PLACE_M = 300.0  # ... and one this close to a place node
@@ -724,9 +724,10 @@ def select(
     ``NETWORK_SHORTLIST``, at most ``NETWORK_CAP`` per start are kept, none a
     Twin of a better chain kept or of one of the relation DayHikes' walks
     ``relations`` (Twins of Twins count, as in ``twin_groups``). Then, best
-    first, its other shortlisted chains are kept up to its cap, none a Twin of
-    a relation DayHike or of a chain kept before, so none takes the place of
-    a chain kept before.
+    first, its other shortlisted lines are kept up to its cap, each to a named
+    destination no chain kept there goes to yet, none a Twin of a relation
+    DayHike or of a chain kept before, so none takes the place of a chain kept
+    before.
 
     A kept line to a destination is then replaced by that destination's
     direct line from the start, its shortest line, when that is shorter and
@@ -834,7 +835,9 @@ def _selected(
         kept.append((start, chain))
     taken = {id(chain) for _, chain in kept}
     left = [row for row in shortlist if id(row[1]) not in taken] + extra
-    widened = _widened(graph, kept, sorted(left, key=lambda row: preference(row[1])), caps, direct_of, given)
+    widened = _widened(
+        graph, kept, sorted(left, key=lambda row: preference(row[1])), caps, direct_of, given, destination_of
+    )
     return [(start, chain) for start, chain, _ in sorted(widened, key=lambda row: preference(row[2]))]
 
 
@@ -845,12 +848,15 @@ def _widened(
     caps: Sequence[int],
     direct_of: Mapping[int, Chain],
     given: Sequence[np.ndarray],
+    destination_of: Mapping[int, str],
 ) -> list[tuple[int, Chain, Chain]]:
     """The ``kept`` (start, chain) and, best first, the ``extra`` ones up to
-    their start's cap in ``caps``; then each of them replaced by its direct
-    line in ``direct_of``. An extra chain or a direct line is left out when it
-    is a Twin of a relation DayHike's walk (``given``) or of a chain kept or
-    put in before it (but the one a direct line replaces). It is grouped apart
+    their start's cap in ``caps``, each a line to a named destination
+    (``destination_of``) that no chain kept or put in at its start goes to yet;
+    then each of them replaced by its direct line in ``direct_of``. An extra
+    chain or a direct line is left out when it is a Twin of a relation
+    DayHike's walk (``given``) or of a chain kept or put in before it (but the
+    one a direct line replaces). It is grouped apart
     from ``kept``, so it never joins two kept chains into one group and never
     takes the place of one. As (start, chain, the chain it replaced or itself)."""
     chains = [chain for _, chain in (*kept, *extra)]
@@ -861,11 +867,15 @@ def _widened(
     chosen = list(kept)
     held = Counter(group_of[id(chain)] for _, chain in kept)
     count = Counter(start for start, _ in kept)
+    served = {(start, _goes_to(chain, destination_of)) for start, chain in kept}
     for start, chain in extra:
         group = group_of[id(chain)]
-        if count[start] < caps[start] and group >= len(given) and not held[group]:
+        name = _goes_to(chain, destination_of)
+        new = name is not None and (start, name) not in served
+        if count[start] < caps[start] and new and group >= len(given) and not held[group]:
             held[group] += 1
             count[start] += 1
+            served.add((start, name))
             chosen.append((start, chain))
     widened = []
     taken: set[int] = set()

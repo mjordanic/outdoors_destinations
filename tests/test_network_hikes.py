@@ -347,6 +347,42 @@ def test_a_start_keeps_a_chain_per_destination_it_reaches_up_to_the_highest_cap(
         assert len(kept) == kept_count
 
 
+def _six_ways_to_one_viewpoint() -> tuple[Network, list[tuple[float, float, str]]]:
+    # From S, six two-leg lines S-Ci-Ei to one viewpoint at (6, 0), each ending at
+    # its own signpost Ei 150 m from it; they share only S, so none is a loop or a
+    # Twin. Their 6.7-12.5 km beat seven 5 km lines S-Ai-Bi westwards to other peaks.
+    points = {"S": (0.0, 0.0)}
+    for i, y_km in enumerate((1.5, -1.5, 3.5, -3.5, 5.5, -5.5)):
+        angle = math.radians(i * 60)
+        points[f"C{i}"] = (3.0, y_km)
+        points[f"E{i}"] = (6.0 - 0.15 * math.cos(angle), 0.15 * math.sin(angle))
+    for i in range(7):
+        angle = math.radians(100 + i * 160 / 6)
+        points[f"A{i}"] = (2.5 * math.cos(angle), 2.5 * math.sin(angle))
+        points[f"B{i}"] = (5 * math.cos(angle), 5 * math.sin(angle))
+    net = Network(points)
+    for i in range(6):
+        net.leg(10 * i + 1, "S", f"C{i}")
+        net.leg(10 * i + 2, f"C{i}", f"E{i}")
+    for i in range(7):
+        net.leg(100 + 10 * i + 1, "S", f"A{i}")
+        net.leg(100 + 10 * i + 2, f"A{i}", f"B{i}")
+    viewpoint = (*_lat_lon(6.0, 0.0), "Pogled")
+    return net, [viewpoint, *((*net.point(f"B{i}"), f"Vrh {i}") for i in range(7))]
+
+
+def test_a_start_keeps_its_extra_chains_for_destinations_it_does_not_reach_yet():
+    net, destinations = _six_ways_to_one_viewpoint()
+    graph = leg_graph(net.legs, net.ways, net.nodes)
+
+    kept = select(graph, [candidates(graph, _start_at(graph, net.point("S")))], destinations=destinations)
+
+    ends = [graph.signposts[chain.signposts[-1]] for _, chain in kept]
+    to_viewpoint = [end for end in ends if end[1] > net.point("S")[1]]
+    assert len(to_viewpoint) == NETWORK_CAP
+    assert len(kept) == NETWORK_CAP_MAX
+
+
 def test_a_start_reaching_few_destinations_keeps_the_cap():
     net, peaks = _star(6)
     graph = leg_graph(net.legs, net.ways, net.nodes)
