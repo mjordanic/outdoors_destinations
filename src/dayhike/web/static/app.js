@@ -63,7 +63,12 @@ const state = {
   kept: {}, // the weights of the mode not shown: { seed, wish }
   query: null, // the weights, month and return to start of the last Ranking
   asked: null, // what the shown Ranking asked the server, and of which liked hike or wish: { query, basis }
-  results: [],
+  results: [], // the rows shown, every page's
+  answer: null, // the answer of the shown Ranking's first page
+  pools: [], // per page shown, the rows the server answered with, best first: its rows are drawn from them
+  picked: new Set(), // the rows shown that Strict order would not list on their page
+  draw: 0, // the draw number of the rows shown: a random one per Find, one more per Redraw (ADR-0047)
+  strict: false, // Strict order: each page lists its best rows as ranked, not drawn
   expanded: null, // the result row whose versions (var 1, 2, 3) are shown
   selected: null, // the hike shown against the liked one: { key } of a result, or { pair } a DayHike id
   origin: null,
@@ -285,7 +290,18 @@ function returnToStart() {
 }
 
 function modeHash() {
-  return returnToStart() ? "" : "&oneway";
+  return `${returnToStart() ? "" : "&oneway"}${state.strict ? "&strict" : ""}`;
+}
+
+// An address without its mode flags, and the flags: "&oneway", and "&strict" for Strict order.
+function linkParts(hash) {
+  const flags = new Set();
+  let base = hash, flag;
+  while ((flag = ["&oneway", "&strict"].find((f) => base.endsWith(f)))) {
+    flags.add(flag);
+    base = base.slice(0, -flag.length);
+  }
+  return { base, oneWay: flags.has("&oneway"), strict: flags.has("&strict") };
 }
 
 const WAY_BACK = { trail: "along the trails", retrace: "the same way", step: "a short step", none: "" };
@@ -1703,6 +1719,77 @@ function showGroupDefault() {
 
 // ---------- ranking ----------
 
+const REDRAW_TRIES = 5; // a Redraw draws again at most this many times while page 1 comes out the same
+
+// Gumbel noise of the row named ``key`` in draw ``draw``: a hash of "draw:key", as serving.draw_noise.
+function drawNoise(draw, key) {
+  let h = 0x811c9dc5;
+  for (const byte of new TextEncoder().encode(`${draw}:${key}`)) h = Math.imul(h ^ byte, 0x01000193);
+  h ^= h >>> 16;
+  h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return -Math.log(-Math.log(((h >>> 0) + 0.5) / 2 ** 32));
+}
+
+// The indices of ``count`` rows drawn by score, each next one with probability rising as
+// exp(score / t), in their given order: Gumbel-top-k, as serving.drawn (ADR-0047).
+function drawn(scores, keys, draw, count, t) {
+  const keyed = scores.map((score, i) => [score / t + drawNoise(draw, keys[i]), i]);
+  keyed.sort((a, b) => b[0] - a[0] || a[1] - b[1]);
+  return keyed.slice(0, count).map(([, i]) => i).sort((a, b) => a - b);
+}
+
+// The rows a page lists of its pool: in Strict order its best, as ranked, else drawn by score with
+// the draw number; in score order either way. Drawn rows Strict order would not list are marked.
+function pageOf(pool) {
+  const count = state.info.results;
+  const picked = state.strict || pool.length <= count
+    ? pool.slice(0, count).map((_, i) => i)
+    : drawn(pool.map((row) => row.score), pool.map(resultKey), state.draw, count, state.info.draw.t);
+  picked.filter((i) => i >= count).forEach((i) => state.picked.add(pool[i]));
+  return picked.map((i) => pool[i]);
+}
+
+// The request for a Ranking: with the draw number, which draws the loop starts too, unless in Strict order.
+function asking(query, draw = state.draw) {
+  return state.strict ? query : { ...query, draw };
+}
+
+// Page 1 of the shown Ranking again, for a new draw or Strict order: no request, and later pages dropped.
+function relist() {
+  state.pools = state.pools.slice(0, 1);
+  state.picked = new Set();
+  state.results = pageOf(state.pools[0]);
+  renderResults();
+}
+
+// Strict order on or off: the address says so, and a shown Ranking lists page 1 again.
+function setStrict(on) {
+  state.strict = on;
+  $("#strict").checked = on;
+  $("#redraw").disabled = on;
+  const { base } = linkParts(location.hash);
+  if (/^#(hike|compose|wish)=/.test(base)) history.replaceState(null, "", base + modeHash());
+  if (state.pools.length) relist();
+}
+
+// Page 1 drawn again from the same answer, until it lists another hike, a few times at most.
+function redraw() {
+  const shown = new Set(pageOf(state.pools[0]).map(resultKey)), was = state.draw;
+  for (let tries = 0; tries < REDRAW_TRIES; tries++) {
+    state.draw = (state.draw + 1) >>> 0;
+    if (pageOf(state.pools[0]).some((row) => !shown.has(resultKey(row)))) {
+      relist();
+      setStatus("");
+      return;
+    }
+  }
+  state.draw = was;
+  setStatus("No other close matches here; widen the distance or turn on Strict order.");
+}
+
 // What a Ranking is like: the liked hike, or the wish while the Hiker describes the hike they want.
 function rankBasis() {
   return state.wishing ? "wish" : state.liked;
@@ -1758,12 +1845,12 @@ async function findSimilar() {
   }
   // A GoatCounter event when the server set analytics up; without them there is no goatcounter.
   window.goatcounter?.count?.({ path: "find", event: true });
-  await rank(query, liked);
+  await rank(query, liked, false, crypto.getRandomValues(new Uint32Array(1))[0]);
 }
 
 // Ask for a Ranking and show it, unless a later one was asked or the liked hike changed meanwhile;
-// ``stale``: the query on the left is no longer this one.
-async function rank(query, liked, stale = false) {
+// ``stale``: the query on the left is no longer this one; ``draw``: the draw number of its rows.
+async function rank(query, liked, stale = false, draw = state.draw) {
   const request = ++ranked;
   $("#find").disabled = $("#suggest-loops").disabled = true;
   setStatus(query.loops ? "Suggesting loops near these hikes…"
@@ -1772,7 +1859,7 @@ async function rank(query, liked, stale = false) {
     const body = await api("/api/rank", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(query),
+      body: JSON.stringify(asking(query, draw)),
     });
     if (request !== ranked || liked !== rankBasis()) return;
     state.query = {
@@ -1780,8 +1867,11 @@ async function rank(query, liked, stale = false) {
       return_to_start: body.return_to_start, wish: query.wish ?? null, group_km: body.group_km,
     };
     state.asked = { query, basis: liked };
-    state.results = body.results;
-    renderResults(body);
+    state.answer = body;
+    state.draw = draw;
+    state.pools = [body.results];
+    relist();
+    $("#results").scrollIntoView({ behavior: "smooth", block: "start" });
     if (stale) markStale();
     setStatus(`Done in ${(body.elapsed_ms / 1000).toFixed(1)} s.`);
   } catch (error) {
@@ -1800,7 +1890,9 @@ function markStale() {
   $("#results-stale").hidden = false;
 }
 
-function renderResults(body) {
+// The shown Ranking's table, of its first answer and the rows shown.
+function renderResults() {
+  const body = state.answer, pool = state.pools[0], shown = state.results;
   const section = $("#results");
   section.hidden = false;
   section.classList.remove("stale");
@@ -1811,25 +1903,26 @@ function renderResults(body) {
     ? `${state.info.dayhikes.toLocaleString("en")} hikes`
     : `${body.reachable.toLocaleString("en")} hikes within ${limits}`;
   const mode = body.return_to_start ? "each with its way back to the start" : "each one way";
-  const composed = body.results.some((result) => result.route)
+  const composed = shown.some((result) => result.route)
     ? " Rows marked composed are loops drawn from trail segments, not catalog hikes; with Select hike on map ticked, that map shows them dashed green."
     : "";
   const searched = body.loops
     ? " Loops are searched from a limited number of starting points near the most similar hikes, so they are not every loop there is and can change when the catalog is rebuilt."
     : "";
-  const versions = body.results.some((result) => result.versions.length)
+  const versions = shown.some((result) => result.versions.length)
     ? ` Hikes starting within ${body.group_km} km of a better one are its versions: click a row with versions to list the others (var 2, 3) under it and see each on the map.`
-    : "";
-  const search = body.loop_search;
-  const others = state.query.wish ? "a listed hike" : "a listed hike or the hike you like";
-  const loops = search
-    ? ` Loops: searched from ${search.starts} start${search.starts === 1 ? "" : "s"} near the best hikes, ${search.found} found, ${search.listed} listed${search.found > search.listed ? ` (the others rank lower, or walk mostly the same trails as ${others})` : ""}.${search.stopped ? " The search stopped at its time limit, so it may have missed some loops." : ""}`
     : "";
   $("#wish-card").hidden = true;
   $("#results-title").textContent = state.query.wish ? "Hikes closest to the one you want" : "Most similar hikes";
-  $("#results-note").textContent = body.results.length
-    ? `${state.query.wish ? "Closest to the hike you want" : `Like “${state.liked.name}”`}, out of ${considered}${body.loops ? " and loops composed near the best of them" : ""}, ${mode}. Click a row to see it.${composed}${searched}${versions}${loops}`
+  const picked = !state.strict && pool.length > shown.length
+    ? ` These ${shown.length} are picked from the best ${pool.length} areas, closer matches more often: Redraw for others, or tick Strict order for the exact ranking.`
+    : "";
+  const tied = pool.filter((result) => result.score === pool[0]?.score).length;
+  const ties = tied > 1 ? ` The best ${tied} areas match equally well.` : "";
+  $("#results-note").textContent = shown.length
+    ? `${state.query.wish ? "Closest to the hike you want" : `Like “${state.liked.name}”`}, out of ${considered}${body.loops ? " and loops composed near the best of them" : ""}, ${mode}.${picked}${ties} Click a row to see it.${composed}${searched}${versions}`
     : `No hike matched, out of ${considered}. Try a longer drive, a longer distance or other weights.`;
+  $("#results-draw").hidden = !shown.length;
   $("#results-loops").hidden = !state.info.compose || body.loops; // SuggestedLoops on request (ADR-0028)
   const table = $("#results-table");
   const measureHeads = comparedMeasures(body.return_to_start).map((m) =>
@@ -1839,8 +1932,17 @@ function renderResults(body) {
   state.expanded = null;
   table.appendChild(document.createElement("tbody"));
   listRows(0);
-  showMoreButton(body.results.length, body.other_areas);
-  section.scrollIntoView({ behavior: "smooth", block: "start" });
+  showMoreButton(body);
+}
+
+// What the loop search did, of the loops in the rows shown, with their versions.
+function noteLoops() {
+  const search = state.answer.loop_search;
+  const listed = state.results.reduce((sum, result) => sum + [result, ...result.versions].filter((row) => row.route).length, 0);
+  const others = state.query.wish ? "a listed hike" : "a listed hike or the hike you like";
+  $("#results-loops-note").textContent = search && state.results.length
+    ? ` Loops: searched from ${search.starts} start${search.starts === 1 ? "" : "s"} near the best hikes, ${search.found} found, ${listed} listed${search.found > listed ? ` (the others rank lower, or walk mostly the same trails as ${others})` : ""}.${search.stopped ? " The search stopped at its time limit, so it may have missed some loops." : ""}`
+    : "";
 }
 
 // Rows for the results from ``from`` on, at the end of the table.
@@ -1852,14 +1954,19 @@ function listRows(from) {
     row.dataset.index = i;
     tbody.appendChild(row);
   });
+  noteLoops();
   pick.drawLoops();
 }
 
-// "Show 10 more" while the last answer filled its page and the table may grow,
-// beside how many hikes start in other areas than the rows shown.
-function showMoreButton(answered, otherAreas) {
+// "Show 10 more" while the last answer holds rows not shown and the table may grow,
+// beside how many hikes start in other areas than the rows shown: of the last answer, also
+// every hike in the areas of its rows not shown.
+function showMoreButton(answer) {
+  const pool = state.pools.at(-1), shown = pageOf(pool);
+  const otherAreas = answer.other_areas
+    + pool.filter((row) => !shown.includes(row)).reduce((sum, row) => sum + (row.in_area ?? 0), 0);
   $("#show-more").textContent = `Show ${state.info.results} more`;
-  $("#show-more").hidden = answered < state.info.results || state.results.length >= state.info.max_rows;
+  $("#show-more").hidden = pool.length <= shown.length || state.results.length >= state.info.max_rows;
   $("#other-areas").textContent = otherAreas
     ? `${otherAreas.toLocaleString("en")} more hike${otherAreas === 1 ? " starts" : "s start"} in other areas.`
     : "";
@@ -1876,12 +1983,13 @@ async function showMore() {
     const body = await api("/api/rank", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...asked.query, after }),
+      body: JSON.stringify(asking({ ...asked.query, after })),
     });
     if (asked !== state.asked || results !== state.results) return;
-    results.push(...body.results);
+    state.pools.push(body.results);
+    results.push(...pageOf(body.results));
     listRows(after.length);
-    showMoreButton(body.results.length, body.other_areas);
+    showMoreButton(body);
     setStatus(body.results.length ? `Done in ${(body.elapsed_ms / 1000).toFixed(1)} s.` : "No more hikes in other areas.");
   } catch (error) {
     if (asked === state.asked && results === state.results) setStatus(error.message, true);
@@ -1910,7 +2018,10 @@ function resultRow(result, number, open) {
   const more = result.more_here
     ? `${versions ? " ·" : ""} <span class="versions more-here" title="${escapeHtml(moreHereNote(result.more_here))}">${result.more_here} more good match${result.more_here === 1 ? " starts" : "es start"} here</span>`
     : "";
-  row.innerHTML = `<td>${number}</td><td class="name" title="${escapeHtml(result.name)}"><span class="hike-name">${tag}${escapeHtml(result.name)}</span>${versions || more ? `<span class="badge-line">${versions}${more}</span>` : ""}</td>
+  const picked = state.picked.has(result)
+    ? ' <span class="picked" title="Drawn from further down this page\'s areas: Strict order lists the best as ranked instead">picked</span>'
+    : "";
+  row.innerHTML = `<td><span class="number">${number}</span>${picked}</td><td class="name" title="${escapeHtml(result.name)}"><span class="hike-name">${tag}${escapeHtml(result.name)}</span>${versions || more ? `<span class="badge-line">${versions}${more}</span>` : ""}</td>
     <td class="score">${result.score.toFixed(3)}</td>
     ${drive ? `<td>${result.drive_hours.toFixed(1)} h</td>` : ""}
     ${km ? `<td>${result.distance_km.toFixed(1)} km</td>` : ""}
@@ -1934,13 +2045,13 @@ function expandVersions(index) {
   document.querySelectorAll("#results-table tr.version").forEach((row) => row.remove());
   document.querySelectorAll("#results-table tr[data-version]").forEach((row) => {
     delete row.dataset.version;
-    row.firstElementChild.textContent = Number(row.dataset.index) + 1;
+    row.querySelector(".number").textContent = Number(row.dataset.index) + 1;
   });
   state.expanded = index;
   const result = state.results[index];
   let after = document.querySelector(`#results-table tr[data-index="${index}"]`);
   after.dataset.version = `${index}-0`;
-  after.firstElementChild.textContent = `${index + 1}, var 1`;
+  after.querySelector(".number").textContent = `${index + 1}, var 1`;
   result.versions.forEach((version, k) => {
     const row = resultRow(version, `var ${k + 2}`, () => showResult(index, k + 1));
     row.classList.add("version");
@@ -2105,6 +2216,8 @@ async function start() {
   });
   $("#find").addEventListener("click", findSimilar);
   $("#show-more").addEventListener("click", showMore);
+  $("#redraw").addEventListener("click", redraw);
+  $("#strict").addEventListener("change", (event) => setStrict(event.target.checked));
   // The shown Ranking again, with loops near its best hikes, though the query on the left changed since.
   $("#suggest-loops").addEventListener("click", () =>
     rank({ ...state.asked.query, loops: true }, state.asked.basis, $("#results").classList.contains("stale")));
@@ -2127,11 +2240,11 @@ async function start() {
     if (selected && (!shown || !$("#results").hidden)) reopenSelected(selected);
   });
   const openLinked = () => {
-    const oneWay = location.hash.endsWith("&oneway");
-    const hash = oneWay ? location.hash.slice(0, -"&oneway".length) : location.hash;
+    const { base: hash, oneWay, strict } = linkParts(location.hash);
     const modeChanged = returnToStart() === oneWay;
     $("#return-on").checked = !oneWay;
     syncRoundTrip();
+    if (strict !== state.strict) setStrict(strict);
     const linked = hash.match(/^#hike=(\d+)$/);
     if (linked && (modeChanged || Number(linked[1]) !== state.liked?.id)) choose(Number(linked[1]), { fromLink: true });
     const drawn = hash.match(/^#compose=([^&]+)(?:&name=(.*))?$/);

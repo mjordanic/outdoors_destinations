@@ -48,6 +48,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from dayhike.catalog import MatrixClient, Origin, straight_line_distances_m
 from dayhike.serving import (
+    DRAW_T,
     GEONAMES_ATTRIBUTION,
     GROUP_KMH,
     GROUP_M,
@@ -67,6 +68,7 @@ from dayhike.trailgraph import Route, RouteError
 
 STATIC_DIR = Path(__file__).parent / "static"
 RESULTS = 10  # rows a Ranking lists; "Show 10 more" asks the next ones (ADR-0032)
+POOL = 30  # rows a Ranking answers with: the page draws RESULTS of them, or shows the first in Strict order (ADR-0047)
 MAX_ROWS = 100  # the most rows a Ranking may list in all, the rows shown before included
 MAX_DRIVE_HOURS = 4.0
 MAX_KM = 200.0  # the longest straight-line distance limit: 4 h at GROUP_KMH, so it groups as no limit does
@@ -198,6 +200,8 @@ class RankRequest(Weighted):
     # At least 0.1 km, so the rows after those shown leave the rows shown out.
     group_km: float | None = Field(default=None, ge=0.1, le=MAX_GROUP_KM)
     after: list[Place] = Field(default=[], max_length=MAX_ROWS - RESULTS)  # the starts of the rows already shown
+    # The page's draw number: loop starts are drawn by score with it; none takes the best (Strict order, ADR-0047).
+    draw: int | None = Field(default=None, ge=0, lt=2**32)
 
     @field_validator("wish")
     @classmethod
@@ -354,7 +358,7 @@ def create_app(
     limiters = {"rank": RateLimiter(rank_rate, RATE_WINDOW_S), "api": RateLimiter(api_rate, RATE_WINDOW_S)}
     one_ranking = threading.Semaphore(1)
     # The API reads change only with the export (its meta.json holds facts_version, places.sqlite may come later), the code and the settings.
-    settings = f"{BUILD} {drive_client is not None} {MAX_DRIVE_HOURS} {RESULTS} {data.places is not None}".encode()
+    settings = f"{BUILD} {drive_client is not None} {MAX_DRIVE_HOURS} {RESULTS} {POOL} {data.places is not None}".encode()
     etag = f'W/"{hashlib.sha256((data.directory / "meta.json").read_bytes() + settings).hexdigest()[:16]}"'
     attribution = data.meta["attribution"]
     measures = [
@@ -441,6 +445,8 @@ def create_app(
             "max_km": MAX_KM,
             "results": RESULTS,
             "max_rows": MAX_ROWS,
+            # The page draws its rows from a pool of this many with probability rising as exp(score / t) (ADR-0047).
+            "draw": {"pool": POOL, "t": DRAW_T},
             # The default grouping radius (ADR-0032): share of the limit, a drive hour as kmh km, at least min_km, km with none.
             "grouping": {"km": GROUP_M / 1000, "share": GROUP_SHARE, "min_km": GROUP_MIN_M / 1000, "kmh": GROUP_KMH},
         }
@@ -551,7 +557,7 @@ def create_app(
                 weights,
                 month=body.month,
                 allowed_rows=None if hours is None else sorted(hours),
-                limit=RESULTS,
+                limit=POOL,
                 return_to_start=body.return_to_start,
                 reach=reach,
                 loops=body.loops,
@@ -559,6 +565,7 @@ def create_app(
                 group_m=group_m,
                 after=[(place.lat, place.lon) for place in body.after],
                 origin=origin,
+                draw=body.draw,
             )
         except (urllib.error.URLError, ConnectionError, TimeoutError):
             raise HTTPException(503, "the drive-time service is not answering; try again") from None
@@ -589,6 +596,7 @@ def create_app(
             "max_km": body.max_km,
             "group_km": round(group_m / 1000, 3),
             "after": len(body.after),
+            "draw": body.draw,
             "weights": {name: weight for name, weight in weights.items() if weight > 0},
             "reachable": None if reachable is None else len(reachable),
             "results": results,

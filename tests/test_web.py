@@ -502,7 +502,7 @@ def test_a_row_counts_the_good_matches_starting_in_its_area_that_are_not_listed(
 def test_rank_counts_the_hikes_starting_in_other_areas_than_the_rows_shown(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(web, "RESULTS", 1)
+    monkeypatch.setattr(web, "POOL", 1)
 
     body = client.post("/api/rank", json={"seed": 1002, "group_km": 0.1}).json()
 
@@ -515,10 +515,32 @@ def test_info_gives_the_rule_of_the_default_grouping_and_the_limits(client: Test
 
     assert info["grouping"] == {"km": 10, "share": 0.05, "min_km": 0.5, "kmh": 50}
     assert (info["max_km"], info["max_rows"], info["results"]) == (web.MAX_KM, web.MAX_ROWS, RESULTS)
+    # The page draws RESULTS rows of the POOL a Ranking answers with, as the server draws loop starts.
+    assert info["draw"] == {"pool": web.POOL, "t": serving.DRAW_T} == {"pool": 30, "t": 0.005}
+
+
+def test_rank_answers_with_a_pool_of_rows_for_the_page_to_draw_from(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    query = {"seed": RIDGE_WALK_ID, "group_km": 0.1}
+    monkeypatch.setattr(web, "RESULTS", 1)
+    assert len(client.post("/api/rank", json=query).json()["results"]) == 3  # every area, up to POOL
+
+    monkeypatch.setattr(web, "POOL", 2)
+    body = client.post("/api/rank", json={**query, "draw": 4_000_000_000}).json()
+
+    assert [(r["id"], r["in_area"]) for r in body["results"]] == [(1002, 1), (1003, 1)]
+    assert body["other_areas"] == 1 and body["draw"] == 4_000_000_000
+    assert client.post("/api/rank", json=query).json()["draw"] is None  # Strict order
+
+
+@pytest.mark.parametrize("draw", [-1, 2**32, 1.5])
+def test_rank_refuses_a_draw_number_that_is_not_32_bits(client: TestClient, draw) -> None:
+    assert client.post("/api/rank", json={"seed": RIDGE_WALK_ID, "draw": draw}).status_code == 422
 
 
 def test_the_next_rows_follow_the_rows_already_shown(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(web, "RESULTS", 1)
+    monkeypatch.setattr(web, "POOL", 1)
     query = {"seed": RIDGE_WALK_ID, "group_km": 20}
 
     first = client.post("/api/rank", json=query).json()["results"]

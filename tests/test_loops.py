@@ -168,9 +168,9 @@ def test_hikes_starting_near_each_other_share_a_row_of_versions(data) -> None:
     assert [v["id"] for v in row["versions"]] == [2004, None]
     assert _segments(data, row["versions"][1]) != _segments(data, row)
     assert row["score"] > apart[2008]["score"] > apart[LAKE_LOOP]["score"] > row["versions"][0]["score"]
-    for version in row["versions"]:  # each as it is listed in a row of its own, but for a row's versions and count
+    for version in row["versions"]:  # each as it is listed in a row of its own, but for a row's versions and counts
         key = version["id"] if version["id"] is not None else version["route"]["text"]
-        assert version == {k: v for k, v in apart[key].items() if k not in ("versions", "more_here")}
+        assert version == {k: v for k, v in apart[key].items() if k not in ("versions", "more_here", "in_area")}
 
 
 def _rows_apart(data) -> list[dict]:
@@ -252,6 +252,36 @@ def test_a_ranking_says_what_its_loop_search_did(data) -> None:
     assert search["listed"] == len(_loops(results)) == 2
     assert search["found"] >= 2 and search["starts"] > 0 and search["stopped"] is False
     assert data.rank(MEADOW_PATH, DEFAULT_WEIGHTS).loop_search is None  # no search, nothing to say
+
+
+@pytest.mark.usefixtures("rows_apart")
+def test_a_drawn_search_takes_its_loop_starts_by_score_from_the_best_dayhikes(data, monkeypatch) -> None:
+    import dayhike.serving as serving
+    from dayhike.serving import drawn
+
+    asked: list[list[tuple[float, float]]] = []
+
+    def spy(graph, target, trailheads, **kwargs):
+        asked.append([tuple(place) for place in trailheads])
+        return serving.find_loops.__wrapped__(graph, target, trailheads, **kwargs)
+
+    spy.__wrapped__ = serving.find_loops
+    monkeypatch.setattr(serving, "find_loops", spy)
+    monkeypatch.setattr(serving, "LOOP_TRAILHEADS", 2)  # of the fixture's few DayHikes, draw 2 ...
+    monkeypatch.setattr(serving, "DRAW_T", 10.0)  # ... nearly evenly, so draws differ
+    ranked = [r for r in data.rank(MEADOW_PATH, DEFAULT_WEIGHTS) if r["id"] is not None]
+    starts = [tuple(data.trailheads[data.row_of(r["id"])].tolist()) for r in ranked]
+
+    data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True)  # Strict order: the best, as before
+    for draw in range(12):
+        data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True, draw=draw)
+        data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True, draw=draw)
+
+    assert asked[0] == starts[: serving.LOOP_SEEDS]
+    scores, keys = [r["score"] for r in ranked], [str(r["id"]) for r in ranked]
+    expected = [[starts[i] for i in drawn(scores, keys, draw, 2, 10.0)] for draw in range(12)]
+    assert asked[1::2] == asked[2::2] == expected  # the same draw number, the same starts, in rank order
+    assert len({tuple(found) for found in expected}) > 1
 
 
 def test_a_loop_search_cut_by_its_time_limit_says_so(data, monkeypatch) -> None:

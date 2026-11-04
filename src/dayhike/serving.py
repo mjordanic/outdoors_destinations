@@ -76,7 +76,7 @@ from dayhike.catalog import (
 )
 from dayhike.dem import FABDEM_ATTRIBUTION
 from dayhike.extracts import UrlRetrieve
-from dayhike.loops import LOOP_SEEDS, LoopTarget, find_loops
+from dayhike.loops import LOOP_SEEDS, LOOP_TRAILHEADS, LoopTarget, find_loops
 from dayhike.similarity import (
     ALONG_KINDS,
     CALIBRATION_PAIRS,
@@ -149,6 +149,8 @@ GROUP_KMH = 50.0  # the 4 h longest drive (web.MAX_DRIVE_HOURS) then groups as n
 VERSIONS = 3  # versions per row, the row's own included
 VERSION_DIFFERS = 0.5  # a version walks more than this share of its length off every other one
 GOOD_MATCH = 0.05  # a hike scoring at most this below a row's leader is a good match, counted when not listed
+DRAW_T = 0.005  # a draw takes a row with probability rising as exp(score / DRAW_T) (ADR-0047)
+LOOP_DRAW_RANKS = 60  # a drawn loop search takes its LOOP_TRAILHEADS Trailheads from this many best DayHikes
 LOOP_NAME_M = 2_000.0  # a loop is named after a named point this near its start
 TRAIL_NAME_SHARE = 0.3  # a trail names a walk only when it is at least this share of the walk's length (ADR-0037)
 UNNAMING_KINDS = ("restaurant_cafe", "parking")  # amenity points that name no hike: a cafe, a car park
@@ -910,7 +912,8 @@ class Ranking(list):
     """``ServingData.rank``'s rows, best first, and what they leave out: ``other_areas``,
     the hikes ranked that start in no row's area (later pages list them), and
     ``loop_search``, what the SuggestedLoop search did (None when none ran):
-    ``starts`` searched from, loops ``found`` and measured, ``listed``, and whether
+    ``starts`` searched from, loops ``found`` and measured, ``listed`` in all its rows and
+    their versions (the whole pool; the page counts those in the rows it shows), and whether
     it ``stopped`` at ``LOOP_BUDGET_S``."""
 
     def __init__(self, rows: list[dict], other_areas: int, loop_search: dict | None) -> None:
@@ -1292,6 +1295,7 @@ class ServingData:
         group_m: float | None = None,
         after: Sequence[tuple[float, float]] = (),
         origin: Origin | None = None,
+        draw: int | None = None,
     ) -> Ranking:
         """The ``limit`` hikes most similar to one Seed, with every Measure's score.
 
@@ -1319,7 +1323,9 @@ class ServingData:
         out. Hikes are taken down the whole Ranking until one starts in a
         ``limit`` + 1st area, so ``limit`` rows are listed where the hikes
         allow; loops are searched near the Hiker's ``origin``, when given, first,
-        and near the best ``LOOP_TRAILHEADS`` of the ``LOOP_SEEDS`` DayHikes (ADR-0036, ADR-0045).
+        and near the best ``LOOP_TRAILHEADS`` of the ``LOOP_SEEDS`` DayHikes (ADR-0036, ADR-0045);
+        with a ``draw`` number, near ``LOOP_TRAILHEADS`` of the best ``LOOP_DRAW_RANKS``
+        DayHikes ``drawn`` by score with it, in rank order (ADR-0047).
         ``after`` are the starts (lat, lon) of the rows already listed: every hike
         starting within ``group_m`` (above 0) of one is left out (a DayHike
         after its Twins are chosen, so a Twin of one listed is not listed in its
@@ -1331,7 +1337,8 @@ class ServingData:
 
         Each row has ``more_here``: the DayHikes ranked that start in its area (within
         ``group_m`` of its start and of no better row's) and score at most ``GOOD_MATCH``
-        below it, but are not listed; no later page lists them. The Ranking counts the
+        below it, but are not listed; no later page lists them. Each row has ``in_area``,
+        every DayHike ranked that starts in its area, listed or not. The Ranking counts the
         DayHikes ranked that start in no row's area (ADR-0046).
         """
         group_m = GROUP_M if group_m is None else group_m
@@ -1356,8 +1363,13 @@ class ServingData:
                 if seed_walk is None
                 else np.column_stack([seed_walk.lat, seed_walk.lon])
             )
+            best = rows[:LOOP_SEEDS]
+            if draw is not None:
+                ranks = rows[:LOOP_DRAW_RANKS]
+                keys = [str(dayhike_id) for dayhike_id in self.store.ids[ranks].tolist()]
+                best = ranks[drawn(scores[: len(ranks)].tolist(), keys, draw, LOOP_TRAILHEADS, DRAW_T)]
             found_loops, loop_search = self._loops(
-                store, seed_row, seed_line, weights, month, rows[:LOOP_SEEDS], return_to_start, reach, origin
+                store, seed_row, seed_line, weights, month, best, return_to_start, reach, origin
             )
             starts = np.array([loop["trailhead"] for loop, _ in found_loops]).reshape(-1, 2)
             kept = self._far_and_near(starts, near, group_m, after)
@@ -1388,22 +1400,25 @@ class ServingData:
             for hike, summary, scored in zip(listed, summaries, measures)
         }
         results = [[hike[2] if hike[1] is None else dayhikes[hike[1]] for hike in group] for group in groups]
-        more_here, other_areas = self._unlisted(rows, scores, groups, listed_rows, group_m)
+        more_here, in_area, other_areas = self._unlisted(rows, scores, groups, listed_rows, group_m)
         if loop_search is not None:
             loop_search["listed"] = sum(hike[1] is None for group in groups for hike in group)
         return Ranking(
-            [{**group[0], "versions": group[1:], "more_here": more} for group, more in zip(results, more_here)],
+            [
+                {**group[0], "versions": group[1:], "more_here": more, "in_area": area}
+                for group, more, area in zip(results, more_here, in_area)
+            ],
             other_areas,
             loop_search,
         )
 
     def _unlisted(
         self, rows: np.ndarray, scores: np.ndarray, groups: list[list[list]], listed_rows: list[int], group_m: float
-    ) -> tuple[list[int], int]:
+    ) -> tuple[list[int], list[int], int]:
         """Of the DayHikes ranked (store ``rows``, ``scores`` best first) and not listed, per
         row of ``rank``'s ``groups`` those starting in its area, within ``group_m`` of its start and
-        of no better row's, that score at most ``GOOD_MATCH`` below it; and how many start in no
-        row's area."""
+        of no better row's, that score at most ``GOOD_MATCH`` below it; per row every DayHike ranked
+        starting in its area, listed or not; and how many start in no row's area."""
         starts = self.trailheads[rows]
         area = np.full(len(rows), -1)
         band = math.degrees(group_m / EARTH_RADIUS_M)  # no nearer than this in latitude alone
@@ -1414,7 +1429,11 @@ class ServingData:
         hidden = np.flatnonzero((area >= 0) & ~np.isin(rows, listed_rows))
         floors = np.array([group[0][0] - GOOD_MATCH for group in groups])
         good = hidden[scores[hidden] >= floors[area[hidden]]]
-        return np.bincount(area[good], minlength=len(groups)).tolist(), int(np.count_nonzero(area < 0))
+        return (
+            np.bincount(area[good], minlength=len(groups)).tolist(),
+            np.bincount(area[area >= 0], minlength=len(groups)).tolist(),
+            int(np.count_nonzero(area < 0)),
+        )
 
     @staticmethod
     def _far_and_near(
@@ -1622,6 +1641,29 @@ class ServingData:
             if seconds is not None and math.isfinite(seconds) and 0 <= seconds <= max_hours * 3600:
                 hours[row] = seconds / 3600
         return hours
+
+
+def draw_noise(draw: int, key: str) -> float:
+    """Gumbel noise for the row named ``key`` (a DayHike id, a loop's route text) in draw number
+    ``draw``: a hash of "draw:key" (FNV-1a, then MurmurHash3's finalizer), the same as the page's
+    (``drawNoise`` in app.js), so a draw needs no random state."""
+    h = 0x811C9DC5
+    for byte in f"{draw}:{key}".encode():
+        h = ((h ^ byte) * 0x01000193) & 0xFFFFFFFF
+    h ^= h >> 16
+    h = (h * 0x85EBCA6B) & 0xFFFFFFFF
+    h ^= h >> 13
+    h = (h * 0xC2B2AE35) & 0xFFFFFFFF
+    h ^= h >> 16
+    return -math.log(-math.log((h + 0.5) / 2**32))
+
+
+def drawn(scores: Sequence[float], keys: Sequence[str], draw: int, count: int, t: float = DRAW_T) -> list[int]:
+    """The indices of ``count`` rows drawn without replacement, each next one with probability
+    rising as exp(score / ``t``) (Gumbel-top-k: the largest score / ``t`` plus ``draw_noise``),
+    in their given order; all of them when there are no more (ADR-0047)."""
+    keyed = sorted(range(len(scores)), key=lambda i: (-(scores[i] / t + draw_noise(draw, keys[i])), i))
+    return sorted(keyed[:count])
 
 
 def group_radius_m(max_hours: float | None, max_km: float | None) -> float:

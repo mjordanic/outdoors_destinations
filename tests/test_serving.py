@@ -16,6 +16,8 @@ from dayhike.serving import (
     _fold,
     _relevance,
     decode_polyline,
+    draw_noise,
+    drawn,
     drawn_profile,
     encode_polyline,
     export_serving,
@@ -393,6 +395,45 @@ def test_the_grouping_radius_is_asked_per_ranking(data: ServingData, monkeypatch
     assert _rows(data.rank(RIDGE_WALK_ID, {"length": 100})) == [(1002, []), (1003, []), (1007, [])]
 
 
+def test_a_row_counts_every_dayhike_ranked_that_starts_in_its_area(data: ServingData) -> None:
+    # Within 20 km 1002 leads 1003 (a version) and 1007 its own area; within 100 m each its own.
+    listed = data.rank(RIDGE_WALK_ID, {"length": 100}, group_m=20_000.0)
+    alone = data.rank(RIDGE_WALK_ID, {"length": 100}, group_m=100.0)
+
+    assert [(r["id"], r["in_area"]) for r in listed] == [(1002, 2), (1007, 1)]
+    assert [(r["id"], r["in_area"]) for r in alone] == [(1002, 1), (1003, 1), (1007, 1)]
+
+
+def test_a_draw_is_the_same_for_the_same_draw_number_and_lists_its_rows_in_their_order() -> None:
+    scores, keys = [0.9, 0.8, 0.8, 0.7, 0.6], ["11", "12", "13", "14", "15"]
+
+    first = drawn(scores, keys, 7, 3)
+
+    assert first == drawn(scores, keys, 7, 3) == sorted(first) and len(set(first)) == 3
+    assert drawn(scores, keys, 7, 9) == [0, 1, 2, 3, 4]  # a pool no larger than the page is the page
+    assert drawn(scores, keys, 7, 0) == []
+    equal = [0.5] * 6
+    assert len({tuple(drawn(equal, [str(k) for k in range(6)], draw, 2)) for draw in range(20)}) > 5
+
+
+def test_a_draw_takes_a_row_with_probability_rising_as_exp_of_its_score_over_t() -> None:
+    # Scores T ln 3 apart: the first is drawn 3 times as often as the second.
+    scores = [0.6, 0.6 - serving.DRAW_T * np.log(3)]
+
+    first = sum(drawn(scores, ["a", "b"], draw, 1) == [0] for draw in range(4_000))
+
+    assert first / 4_000 == pytest.approx(0.75, abs=0.025)
+    assert all(drawn([0.9, 0.5], ["a", "b"], draw, 1) == [0] for draw in range(1_000))  # 80 T apart: never
+
+
+def test_draw_noise_is_gumbel_noise_from_the_draw_number_and_the_row_key() -> None:
+    noise = [draw_noise(draw, "19787033") for draw in range(20_000)]
+
+    assert draw_noise(5, "19787033") == noise[5] and draw_noise(5, "19787034") != noise[5]
+    assert np.mean(noise) == pytest.approx(np.euler_gamma, abs=0.03)  # a Gumbel(0, 1)'s mean
+    assert np.var(noise) == pytest.approx(np.pi**2 / 6, abs=0.08)
+
+
 @pytest.mark.parametrize(
     ("max_hours", "max_km", "metres"),
     [
@@ -418,7 +459,9 @@ def test_a_distance_limit_keeps_hikes_starting_within_it_in_a_straight_line(data
 
     assert [r["id"] for r in data.rank(RIDGE_WALK_ID, {"length": 100}, near=near, group_m=0.0)] == [1002, 1003]
     assert data.rank(RIDGE_WALK_ID, {"length": 100}, near=(Origin(45.2, 15.1), 1.0)) == [
-        r for r in data.rank(RIDGE_WALK_ID, {"length": 100}, near=near, group_m=0.0) if r["id"] == 1002
+        {**r, "in_area": 1}  # 0 m groups no hike in its area, not even its own
+        for r in data.rank(RIDGE_WALK_ID, {"length": 100}, near=near, group_m=0.0)
+        if r["id"] == 1002
     ]
 
 

@@ -1,5 +1,5 @@
 ---
-status: accepted (amends ADR-0020's and ADR-0036's start Junctions)
+status: accepted (amends ADR-0020's and ADR-0036's start Junctions; the 20 Trailheads drawn by score from the best 60 since ADR-0047, the best 20 in Strict order)
 ---
 
 # Loop starts are taken round by round over the best 20 Trailheads

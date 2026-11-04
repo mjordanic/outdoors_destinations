@@ -39,7 +39,7 @@ source, Europe where OpenStreetMap maps hiking routes) is in the
 - [Rank by Seed](#3-rank-by-seed): [Measures](#measures), [what the score means](#what-the-score-means), [rebuilding the facts](#rebuilding-the-facts), [Europe scale](#similarity-at-europe-scale)
 - [Origin and max hours](#4-optional-origin-and-max-hours)
 - [Pulling a real extract](#pulling-a-real-extract): [ingest](#how-ingest-runs), [NetworkHikes](#how-networkhikes-are-chosen-at-a-start), [Valhalla](#valhalla-drivetime-only)
-- [Web demo](#web-demo): [what the page does](#what-the-page-does), [what the list leaves out](#what-the-list-leaves-out), [Wish](#describing-a-hike-instead-of-a-seed-wish), [serving](#serving-export-and-running-it), [site pages](#site-pages-and-settings), [export](#what-the-export-holds), [API](#api), [measurements](#web-demo-measurements), [deployment](#deployment-and-the-coverage-map)
+- [Web demo](#web-demo): [what the page does](#what-the-page-does), [what the list leaves out](#what-the-list-leaves-out), [drawn rows](#drawn-rows-redraw-and-strict-order), [Wish](#describing-a-hike-instead-of-a-seed-wish), [serving](#serving-export-and-running-it), [site pages](#site-pages-and-settings), [export](#what-the-export-holds), [API](#api), [measurements](#web-demo-measurements), [deployment](#deployment-and-the-coverage-map)
 - [Tests](#tests), [Clean rebuild](#clean-rebuild), [Python API](#python-api), [Notebooks](#notebook-walkthrough), [Attribution](#attribution)
 
 ## Install
@@ -1724,7 +1724,8 @@ where they start, else by the trails they walk (ADR-0022), marked "composed" and
 drawn dashed green on the "Select hike on map" map. Each opens like a composed hike, with its
 link, and "Edit on the map" makes it the liked hike in the composer. Loops are
 searched only from a limited number of starting points (at most 40) near the
-start and the best 20 results, each result's nearest first (ADR-0045), so they
+start and 20 results, each result's nearest first (ADR-0045): 20 of the best 60
+drawn by score with the list's draw number, or in Strict order the best 20 (ADR-0047), so they
 are not every loop there is and can change when the catalog is rebuilt; the
 list's note says so. The list
 holds one row per area: hikes, catalog or composed, starting within the
@@ -1769,6 +1770,26 @@ listed, and later pages do not show them either. Next to "Show 10 more",
 still list. With loops, the note above the table says what the loop search
 did: how many starts it searched from, how many loops it found and how many
 are listed, and when it stopped at its time limit.
+
+### Drawn rows, Redraw and Strict order
+
+A page lists 10 rows drawn from a pool of the Ranking's best 30 (ADR-0047),
+not the best 10: Gumbel-top-k with probability rising as exp(score / 0.005),
+the noise a hash of the draw number and the row's DayHike id or loop route text
+(`serving.drawn`, the same as `drawn` in `app.js`), listed in score order. The
+page takes a draw number from `crypto.getRandomValues` per Find and adds one per
+Redraw; the server stays deterministic and only answers with the pool. A row the
+first 10 of its pool would not hold is marked "picked". Redraw draws page 1
+again in the browser, with no request and the loops already found, again while
+it lists the same hikes, at most 5 times, else says "No other close matches
+here; widen the distance or turn on Strict order". The "Strict order" tick box
+lists each pool's first 10, the Ranking as before, and turns Redraw off. Redraw
+and the tick box change page 1 and drop later pages; "Show 10 more" sends
+`after` as before and draws from the next pool with the same draw number. When
+the best rows of a pool score exactly the same, the note says they match
+equally. The draw number also picks the loop search's 20 Trailheads from the
+best 60 DayHikes (the best 20 in Strict order). Links end in `&strict` while
+Strict order is ticked; they never carry the draw number.
 
 ### Describing a hike instead of a Seed (Wish)
 
@@ -1879,26 +1900,37 @@ and encoded line; when the box holds more than 100, none are listed and
 `GET /api/measures`, `GET /api/info`
 (with the Trailheads' box, `coverage`, for the page's swapped "lat, lon"
 warning, `place_search`, true when the export has `places.sqlite`, `results`
-and `max_rows`, the rows a page and a whole list hold, `max_km`, and `grouping`,
-the rule of the default GroupingRadius),
+and `max_rows`, the rows a page and a whole list hold, `max_km`, `grouping`,
+the rule of the default GroupingRadius, and `draw`, `{"pool", "t"}`: the rows a
+Ranking answers with and the temperature the page draws its `results` rows of
+them with),
 `GET /api/place?q=&limit=` (GeoNames places with a name starting with the
 query, folded like search: the place named exactly that, then one with it as an
 alternate name, then the most populous; 404 without `places.sqlite`), `POST /api/rank` with `{"seed": id, "weights": {measure: 0-100},
 "excluded": [measure], "month": 1-12, "origin": {"lat", "lon"}, "max_hours":
-0-4, "max_km": 0-200, "group_km": 0.1-50, "after": [{"lat", "lon"}]}` (ADR-0032:
+0-4, "max_km": 0-200, "group_km": 0.1-50, "after": [{"lat", "lon"}], "draw":
+0-4294967295}` (ADR-0032:
 an `origin` needs `max_hours`, `max_km` or both, and a hike must be within each
 one given, `max_km` in a straight line to its start; `group_km` is the
 GroupingRadius, by default from the limits as `grouping` in `/api/info` says;
 `after`, at most 90, are the starts of the rows already shown, and the answer
-lists the next `results` rows, leaving out every hike starting within the
-GroupingRadius of one; the answer echoes `max_hours`, `max_km`, `group_km` and
+lists the next `draw.pool` rows (30), leaving out every hike starting within the
+GroupingRadius of one; ADR-0047: the page shows `results` of them, drawn by
+score with probability rising as exp(score / `draw.t`) by Gumbel-top-k with
+noise hashed from the draw number and each row's DayHike id or loop route text
+(`serving.drawn`, `drawNoise` in `app.js`), or the first `results` in Strict
+order; `draw`, the page's draw number, draws the loop search's 20 Trailheads
+from the best 60 DayHikes the same way, and without it they are the best 20;
+the answer echoes `max_hours`, `max_km`, `group_km`, `draw` and
 how many starts `after` had, `reachable` counts the hikes within the limits, and
 each hike has `drive_hours` and `distance_km`, null without that limit or start;
 ADR-0046: each row has `more_here`, the DayHikes starting in its area that are
-not listed and score within 0.05 of it, the answer has `other_areas`, the
+not listed and score within 0.05 of it, and `in_area`, every DayHike ranked
+that starts in its area, so the page adds the areas of the rows it did not draw
+to the hikes in other areas; the answer has `other_areas`, the
 DayHikes ranked that start in no row's area, and `loop_search`, null without
 loops, `{"starts", "found", "listed", "stopped"}`: the loop search's start
-Junctions, the loops it found and measured, those listed, and whether it
+Junctions, the loops it found and measured, those listed in all its rows and their versions (the whole pool; the page counts those in the rows it shows), and whether it
 stopped at its 5 s limit), and `POST /api/pair` with `{"a": id, "b": id}` plus the same weights,
 excluded and month, giving the score a Ranking would show for `b` with `a` as
 the Seed and every Measure's score. Detail, compose, rank and pair take

@@ -141,6 +141,10 @@ svg text { font-size: 11px; fill: var(--muted); }
 #results-table tr.version td { background: #f6faf7; }
 #results-table tr.version td:first-child { color: var(--muted); font-size: 0.75rem; }
 .versions { color: var(--muted); font-size: 0.75rem; }
+#results-table .picked { color: var(--muted); font-size: 0.7rem; margin-left: 3px; }
+#results-draw { display: flex; gap: 12px; align-items: center; }
+#results-draw[hidden] { display: none; }
+#results-draw .check { margin-top: 0; }
 .composed-tag { background: #dcfce7; color: #15803d; border-radius: 999px; padding: 0 6px; font-size: 0.75rem; font-weight: 600; }
 
 .credits { max-width: 1600px; margin: 0 auto; padding: 8px 16px 32px; font-size: 0.85rem; color: var(--muted); }

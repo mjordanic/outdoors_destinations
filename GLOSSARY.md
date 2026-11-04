@@ -200,6 +200,14 @@ _Avoid_: embedding, description, tags
 An ordered list of Catalog DayHikes by similarity to the Seed set, or to a Wish. A DayHike's similarity to one Seed is the MeasureWeights-weighted mean of its calibrated Measure scores; with several Seeds the best Seed counts. Its score is that similarity. Of a group of Twins only the best is listed, and none of a Seed's Twins. An optional QueryMonth selects the ClimateNormal slice. The Seed carries the climate being matched. With ReturnToStart every hike in it is measured with its WayBack. From a serving export it lists one row per area: a hike, DayHike or SuggestedLoop, starting within the GroupingRadius of a better row's start is a version of that row, and a row holds at most three versions, each more than half off the others (ADR-0020).
 _Avoid_: recommendation, unsupervised clustering, prediction, climate target
 
+**Draw**:
+The rows a page lists of a Ranking's best 30, picked without replacement with probability rising as exp(score / 0.005) and listed in score order (ADR-0047). A draw number names it: the page takes a random one per Find and one more per Redraw. The same draw number picks the Trailheads a SuggestedLoop search starts near, 20 of the best 60.
+_Avoid_: shuffle, random results, sample
+
+**Strict order**:
+The rows of a page as the Ranking has them, its best first, with nothing drawn: the Ranking before ADR-0047.
+_Avoid_: deterministic mode, exact mode
+
 **Measure**:
 One fact compared between two DayHikes, giving 1 (alike) to 0 (unlike), or nothing when either DayHike lacks the fact: length, the Hut along the way, the ProfileShape, and 24 more. Each has a kind (ratio, tolerance, mix, agree, profile) and is the unit the Hiker weights. There is no grouping of Measures into themes.
 _Avoid_: Facet, feature, dimension, criterion

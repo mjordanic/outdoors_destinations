@@ -20,7 +20,7 @@ import pytest
 import uvicorn
 
 from dayhike import build_catalog, build_similarity, web
-from dayhike.serving import ServingData, decode_polyline, encode_polyline, export_serving
+from dayhike.serving import ServingData, decode_polyline, draw_noise, drawn, encode_polyline, export_serving
 from dayhike.web import create_app
 from test_built_hikes import ridge_stage
 from test_loops import MEADOW_PATH, loops_export
@@ -119,11 +119,16 @@ class Api:
         route.fulfill(json={**body, "seed": None, "wish": asked["wish"]})
 
 
-def open_page(browser, server: str, api: Api, *, width: int = 1280, hash: str = "", init: str = ""):
+def open_page(
+    browser, server: str, api: Api, *, width: int = 1280, hash: str = "", init: str = "", draw: int | None = None
+):
+    """``draw``: the draw number each Find takes, in place of a random one."""
     page = browser.new_page(viewport={"width": width, "height": 900})
     if init:
         page.add_init_script(init)
     page.set_default_timeout(5000)
+    if draw is not None:
+        page.add_init_script(f"crypto.getRandomValues = (numbers) => numbers.fill({draw});")
     page.route(lambda url: not url.startswith(server), lambda route: route.abort())  # no tiles
     page.route(f"{server}/api/measures", api.measures)
     page.route(f"{server}/api/rank", api.rank)
@@ -629,7 +634,7 @@ def _listed(page) -> list[str]:
 def test_show_more_appends_the_next_rows_under_the_table(browser, server, monkeypatch) -> None:
     monkeypatch.setattr(web, "RESULTS", 1)  # three areas hold the other hikes: three pages of one row
     api = Api({})
-    page = open_page(browser, server, api, hash=f"#hike={RIDGE_WALK_ID}")
+    page = open_page(browser, server, api, hash=f"#hike={RIDGE_WALK_ID}&strict")
     page.get_by_text("Chosen: Ridge Walk").wait_for()
     page.get_by_role("button", name="Find similar").click()
     page.locator("#results-table tbody tr").first.wait_for()
@@ -645,13 +650,183 @@ def test_show_more_appends_the_next_rows_under_the_table(browser, server, monkey
     assert api.ranked[-1] == {**api.ranked[0], "after": [{"lat": lat, "lon": lon}]}
     assert _listed(page)[0] == first[0] and len(set(_listed(page))) == 2
     assert page.locator("#results-table tbody tr td:first-child").all_inner_texts() == ["1", "2"]
-    more.click()
+    with page.expect_response(f"{server}/api/rank"):
+        more.click()
     page.locator("#results-table tbody tr").nth(2).wait_for()
     assert len(set(_listed(page))) == 3
-    with page.expect_response(f"{server}/api/rank"):
-        more.click()  # no fourth area
-    page.wait_for_function("() => document.querySelector('#results-more').hidden")
-    assert len(_listed(page)) == 3
+    assert page.locator("#results-more").is_hidden()  # the last answer held the last area
+
+
+def _names(page) -> list[str]:
+    return page.locator("#results-table tbody tr:not(.version) .hike-name").all_inner_texts()
+
+
+class Pool:
+    """The real answers to /api/rank, every row's score set by ``scores`` (best first), kept as asked."""
+
+    def __init__(self, scores=None) -> None:
+        self.scores = scores
+        self.asked: list[dict] = []
+        self.answers: list[list[dict]] = []
+
+    def __call__(self, route) -> None:
+        self.asked.append(json.loads(route.request.post_data))
+        body = route.fetch().json()
+        if self.scores is not None:
+            for row, score in zip(body["results"], self.scores):
+                row["score"] = score
+        self.answers.append(body["results"])
+        route.fulfill(json=body)
+
+    def drawn(self, draw: int, count: int, answer: int = -1) -> list[int]:
+        rows = self.answers[answer]
+        return drawn([r["score"] for r in rows], [str(r["id"] or r["route"]["text"]) for r in rows], draw, count)
+
+    def names(self, indices, answer: int = -1) -> list[str]:
+        return [self.answers[answer][i]["name"] for i in indices]
+
+
+def _find(page) -> None:
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+
+
+def test_the_page_draws_as_the_server_does(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+    keys = ["1002", "19787033", "n1w2n3", "Loop near Peyrou"]
+
+    for draw in (0, 7, 4_294_967_295):
+        for key in keys:
+            assert page.evaluate("([d, k]) => drawNoise(d, k)", [draw, key]) == pytest.approx(draw_noise(draw, key))
+        scores = [0.81, 0.8, 0.8, 0.79]
+        assert page.evaluate("([s, k, d]) => drawn(s, k, d, 2, 0.005)", [scores, keys, draw]) == drawn(scores, keys, draw, 2)
+
+
+def test_the_page_lists_hikes_drawn_by_score_from_the_answer_and_marks_those_strict_order_would_not(
+    browser, server, monkeypatch
+) -> None:
+    monkeypatch.setattr(web, "RESULTS", 2)  # 2 rows drawn from the 3 areas
+    pool = Pool([0.5, 0.5, 0.5])
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", draw=11)
+    page.route(f"{server}/api/rank", pool)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+
+    _find(page)
+
+    assert pool.asked[-1]["draw"] == page.evaluate("state.draw") == 11  # the server draws loop starts with it
+    shown = pool.drawn(11, 2)
+    assert _names(page) == pool.names(shown)
+    marks = page.locator("#results-table tbody tr td:first-child").evaluate_all(
+        "cells => cells.map(c => Boolean(c.querySelector('.picked')))")  # fmt: skip
+    assert marks == [i >= 2 for i in shown]
+    note = page.locator("#results-note").inner_text()
+    assert "picked from the best 3 areas, closer matches more often" in note
+    assert "The best 3 areas match equally well" in note  # ties: the order among them says nothing
+    assert page.get_by_role("button", name="Redraw").is_enabled()
+    assert not page.get_by_label("Strict order").is_checked()
+
+
+def test_strict_order_lists_the_ranking_as_it_is_without_asking_again(browser, server, monkeypatch) -> None:
+    monkeypatch.setattr(web, "RESULTS", 2)
+    pool = Pool([0.5, 0.5, 0.5])
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", draw=11)
+    page.route(f"{server}/api/rank", pool)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+    drawn_names = _names(page)
+
+    page.get_by_label("Strict order").check()
+
+    assert _names(page) == pool.names([0, 1]) and len(pool.asked) == 1
+    assert page.get_by_role("button", name="Redraw").is_disabled()
+    assert "picked" not in page.locator("#results-note").inner_text()
+    assert page.locator("#results-table .picked").count() == 0
+    assert page.evaluate("location.hash") == f"#hike={RIDGE_WALK_ID}&strict"
+
+    page.get_by_label("Strict order").uncheck()
+
+    assert _names(page) == drawn_names and len(pool.asked) == 1  # the same draw again
+    assert page.evaluate("location.hash") == f"#hike={RIDGE_WALK_ID}"
+    page.get_by_label("Strict order").check()
+    _find(page)
+    assert "draw" not in pool.asked[-1]  # loop starts as ranked too
+
+
+def test_redraw_draws_page_one_again_from_the_answer_and_drops_later_pages(browser, server, monkeypatch) -> None:
+    monkeypatch.setattr(web, "RESULTS", 1)
+    pool = Pool([0.5, 0.5, 0.5])
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", draw=11)
+    page.route(f"{server}/api/rank", pool)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+    first = _names(page)
+    page.get_by_role("button", name="Show 1 more").click()
+    page.locator("#results-table tbody tr").nth(1).wait_for()
+    asked = len(pool.asked)
+
+    page.get_by_role("button", name="Redraw").click()
+
+    draw = page.evaluate("state.draw")
+    assert 11 < draw <= 11 + 5 and len(pool.asked) == asked  # drawn again here, a few times at most
+    assert _names(page) == pool.names(pool.drawn(draw, 1, answer=0), answer=0) != first
+    assert page.get_by_role("button", name="Show 1 more").is_visible()
+    page.get_by_role("button", name="Suggest loops near these hikes (takes a few seconds)").click()
+    page.wait_for_function("() => document.querySelector('#results-note').textContent.includes('loops composed')")
+    assert pool.asked[-1]["draw"] == draw and pool.asked[-1]["loops"]  # the draw goes on with loops
+
+
+def test_redraw_says_so_when_no_other_hike_is_close_enough_to_be_drawn(browser, server, monkeypatch) -> None:
+    monkeypatch.setattr(web, "RESULTS", 1)
+    pool = Pool([0.9, 0.5, 0.1])  # 80 T apart: the best is drawn every time
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", draw=11)
+    page.route(f"{server}/api/rank", pool)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+
+    page.get_by_role("button", name="Redraw").click()
+
+    assert _names(page) == pool.names([0])
+    assert page.locator("#status").inner_text() == "No other close matches here; widen the distance or turn on Strict order."
+
+
+def test_each_next_page_is_drawn_from_the_areas_not_shown_with_the_same_draw_number(
+    browser, server, monkeypatch
+) -> None:
+    monkeypatch.setattr(web, "RESULTS", 1)
+    pool = Pool([0.5, 0.5, 0.5])
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", draw=11)
+    page.route(f"{server}/api/rank", pool)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+    for shown in (1, 2):
+        page.get_by_role("button", name="Show 1 more").click()
+        page.locator("#results-table tbody tr").nth(shown).wait_for()
+
+    names = _names(page)
+    starts = page.evaluate("state.results.map(r => ({lat: r.trailhead[0], lon: r.trailhead[1]}))")
+    assert len(set(names)) == 3  # no area twice, none skipped
+    assert [asked.get("after", []) for asked in pool.asked] == [starts[:0], starts[:1], starts[:2]]
+    assert {asked["draw"] for asked in pool.asked} == {11}
+    assert names == [pool.names(pool.drawn(11, 1, answer=k), answer=k)[0] for k in range(3)]
+    assert page.locator("#results-more").is_hidden()
+
+
+def test_a_strict_link_opens_in_strict_order_and_the_address_follows_the_tick(browser, server) -> None:
+    pool = Pool()
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}&oneway&strict")
+    page.route(f"{server}/api/rank", pool)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+
+    assert page.get_by_label("Strict order").is_checked() and not page.locator("#return-on").is_checked()
+    _find(page)
+    assert "draw" not in pool.asked[-1] and pool.asked[-1]["return_to_start"] is False
+    page.get_by_label("Strict order").uncheck()
+    assert page.evaluate("location.hash") == f"#hike={RIDGE_WALK_ID}&oneway"
+    page.get_by_label("Strict order").check()
+    assert page.evaluate("location.hash") == f"#hike={RIDGE_WALK_ID}&oneway&strict"
+    page.goto(f"{server}/#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    assert not page.get_by_label("Strict order").is_checked()  # a link without it draws
 
 
 def test_the_page_says_what_the_ranking_does_not_list(browser, server) -> None:
@@ -672,9 +847,39 @@ def test_the_page_says_what_the_ranking_does_not_list(browser, server) -> None:
     assert count.inner_text() == "12 more good matches start here"
     assert "later pages do not show them" in count.get_attribute("title")
     assert page.locator("#other-areas").inner_text() == "24,113 more hikes start in other areas."
-    note = page.locator("#results-note").inner_text()
-    assert "Loops: searched from 31 starts near the best hikes, 14 found, 3 listed" in note
+    note = page.locator("#results-loops-note").inner_text()
+    assert "Loops: searched from 31 starts near the best hikes, 14 found, 0 listed (the others rank lower" in note
     assert "stopped at its time limit" in note
+
+
+def test_the_loop_note_counts_the_loops_in_the_rows_shown(browser, server, monkeypatch) -> None:
+    monkeypatch.setattr(web, "RESULTS", 1)  # three areas: page 1 shows one row of a three-row pool
+
+    def loops(route) -> None:
+        body = route.fetch().json()
+        for row in body["results"]:
+            row["route"] = {"text": f"loop {row['id']}"}
+            row["versions"] = [dict(row, versions=[], route={"text": f"version {row['id']}"})]
+        body["loop_search"] = {"starts": 20, "found": 4, "listed": 6, "stopped": False}
+        route.fulfill(json=body)
+
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}&strict")
+    page.route(f"{server}/api/rank", loops)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+    note = page.locator("#results-loops-note")
+    fewer = "Loops: searched from 20 starts near the best hikes, 4 found, 2 listed (the others rank lower"
+    assert fewer in note.inner_text()
+
+    with page.expect_response(f"{server}/api/rank"):
+        page.get_by_role("button", name="Show 1 more").click()
+    page.locator("#results-table tbody tr:not(.version)").nth(1).wait_for()
+    assert "4 found, 4 listed." in note.inner_text()
+
+    page.get_by_label("Strict order").uncheck()  # page 1 again, drawn, later pages dropped
+    assert fewer in note.inner_text()
+    page.get_by_role("button", name="Redraw").click()
+    assert fewer in note.inner_text()
 
 
 # Whether every line of an element lies inside its cell, and a pointer on its first line finds it (its tooltip shows).
