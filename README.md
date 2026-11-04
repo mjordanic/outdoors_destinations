@@ -4,6 +4,8 @@
 
 # HikesAlike
 
+> **Using the site?** Read the plain-language [user guide](docs/user-guide.md). This README is the technical one: setup, how to run it and how it works.
+
 <p>
   <img src="src/dayhike/web/static/coverage.svg" alt="Map of Europe; the shaded land has DayHikes in the Catalog" width="360">
 </p>
@@ -25,23 +27,20 @@ serves a trimmed export of them ([Web demo](#web-demo)).
 The map shows the coverage of the current Catalog: land with at least 10
 Trailheads and 0.2 per 1,000 km² is shaded (`dayhike coverage-map`, below).
 
-## Why HikesAlike
+Why use it, and what it covers (any length of route, weather, free and open
+source, Europe where OpenStreetMap maps hiking routes) is in the
+[user guide](docs/user-guide.md#what-hikesalike-does).
 
-- Start from a hike you liked, and it finds the ones most like it. No hike in
-  mind? Describe the one you want.
-- Day hikes and multi-day tours: routes of any length, long tours also cut
-  into day stages of 8–25 km (DayStages), and hikes joined from signpost
-  networks (NetworkHikes). Over about 25 km is usually more than a day.
-- It weighs the weather too: the typical temperature in the month you pick,
-  and under Advanced search rain and sunshine, alongside length, climbing and
-  landscape.
-- A few plain measures to start with, and more, grouped by topic, under
-  Advanced search. You choose how much each one matters.
-- Free, with no ads, no account and no cookies. The code is open source
-  ([MIT](LICENSE)), and the open data it uses is credited
-  ([Attribution](#attribution), [DATA-LICENSES.md](DATA-LICENSES.md)).
-- It covers Europe where OpenStreetMap maps hiking routes: dense in the Alps
-  and central Europe, thin in much of the east and south-east.
+## Contents
+
+- [Install](#install) and [How data is created](#how-data-is-created-command-order)
+- [Where files live](#where-files-live) and [the fixture](#the-fixture-is-slim-on-purpose)
+- [Build a Catalog](#1-build-a-catalog-from-the-fixture), [GeometryStore](#geometrystore-written-at-ingest-not-downloaded), [TrailGraph](#trailgraph-written-at-ingest-for-composed-hikes)
+- [Rank by Seed](#3-rank-by-seed): [Measures](#measures), [what the score means](#what-the-score-means), [rebuilding the facts](#rebuilding-the-facts), [Europe scale](#similarity-at-europe-scale)
+- [Origin and max hours](#4-optional-origin-and-max-hours)
+- [Pulling a real extract](#pulling-a-real-extract): [ingest](#how-ingest-runs), [NetworkHikes](#how-networkhikes-are-chosen-at-a-start), [Valhalla](#valhalla-drivetime-only)
+- [Web demo](#web-demo): [what the page does](#what-the-page-does), [what the list leaves out](#what-the-list-leaves-out), [Wish](#describing-a-hike-instead-of-a-seed-wish), [serving](#serving-export-and-running-it), [site pages](#site-pages-and-settings), [export](#what-the-export-holds), [API](#api), [measurements](#web-demo-measurements), [deployment](#deployment-and-the-coverage-map)
+- [Tests](#tests), [Clean rebuild](#clean-rebuild), [Python API](#python-api), [Notebooks](#notebook-walkthrough), [Attribution](#attribution)
 
 ## Install
 
@@ -1692,6 +1691,10 @@ tiles.
 
 ## Web demo
 
+How to use the page, in plain words, is in the [user guide](docs/user-guide.md). Below is the technical reference.
+
+### What the page does
+
 A public, read-only page over the Catalog: search a hike you liked by name, or
 tick "Select hike on map", zoom in (hikes show from zoom 12, once the view
 holds at most 100, as lines with both ends marked) and click one, or press
@@ -1756,6 +1759,8 @@ table, in each column heading); hover, focus, click or tap opens what the score
 means, why alike hikes can score low on one measure, the data each measure
 reads and how the scores are made (ADR-0025).
 
+### What the list leaves out
+
 The list also says what it leaves out (ADR-0046). A row reads, for example,
 "3 versions · 12 more good matches start here": 12 more hikes start in that
 row's area and score within 0.05 of it, but only the row and its versions are
@@ -1764,6 +1769,8 @@ listed, and later pages do not show them either. Next to "Show 10 more",
 still list. With loops, the note above the table says what the loop search
 did: how many starts it searched from, how many loops it found and how many
 are listed, and when it stopped at its time limit.
+
+### Describing a hike instead of a Seed (Wish)
 
 A Hiker with no particular hike in mind presses "No particular hike in mind?
 Describe the one you want" under the search. The weights list then shows only
@@ -1779,6 +1786,8 @@ and a result opens with what the Hiker asked for in place of the liked hike. The
 address, `#wish=elevation_gain:800:100,hut_along:1:50` (Measure, value in the
 Measure's fact units, metres for a length typed in km, weight), keeps the form for a reload or a shared link. "Back to a hike you liked" returns
 to the search. A server whose Measures are not wishable shows no such button.
+
+### Serving export and running it
 
 It answers from a serving export, not from the Catalog: `dayhike
 export-serving` writes it once where the data lives, and `dayhike serve` (a
@@ -1799,6 +1808,8 @@ uv run python web/smoke.py --data data/web-serving --valhalla-url http://127.0.0
 # the same container Cloud Run runs (app + Valhalla + data):
 DAYHIKE_SERVING="$PWD/data/web-serving" docker compose -f web/compose.yaml up --build
 ```
+
+### Site pages and settings
 
 Beside the demo the site has About, Support, Data and credits, Privacy and
 Terms and safety pages (`about.html`, `support.html`, `credits.html`,
@@ -1825,6 +1836,8 @@ a Try again button. The page asks the API at its own origin, or at the one its
 (repeatable; container: `DAYHIKE_CORS_ORIGINS`, space-separated) lets such a
 page call the API; unset, no other origin may.
 
+### What the export holds
+
 What the export holds (`src/dayhike/serving.py`): a copy of
 `catalog.similarity/`, Trailheads as a numpy array, and `hikes.sqlite` with per
 DayHike its name, DayHikeGeometry simplified at 10 m (encoded polyline), its
@@ -1850,6 +1863,8 @@ data/web-serving` adds it beside an existing export, which needs no other
 change (ADR-0029). Rerun it
 after any rebuild; `meta.json` is written last, so a half-written export never
 opens.
+
+### API
 
 API (JSON): `GET /api/search?q=` (every word in any order, at least one of
 two letters or more; case, accents
@@ -1921,6 +1936,8 @@ area (DayHikes or loops starting within the GroupingRadius of it, at most three 
 row) in the same shape. With `max_km` only loops starting within it are listed. Loop work stops at 5 s. The GET routes also answer HEAD. Each client gets 20 Rankings and
 300 other calls a minute; one Ranking runs at a time per process.
 
+### Web demo measurements
+
 Measured on the Europe Catalog (161,614 DayHikes), 8-core Mac, the container
 limited to 2 GiB and 1 CPU like Cloud Run (`web/smoke.py`):
 
@@ -1941,6 +1958,8 @@ The app starts at about 260 MB; the 4 h drive queries take it to about
 allocations peak at only 100–130 MB per query (tracemalloc), so the rest is
 native memory (numpy, GEOS) the allocator does not hand back; where exactly is
 not pinned down. `MALLOC_ARENA_MAX=2` did not change it.
+
+### Deployment and the coverage map
 
 Deployment to Google Cloud Run (EU region, instance cap, budget alert, rate
 limit) is in [docs/deploy.md](docs/deploy.md); nothing is deployed by this
