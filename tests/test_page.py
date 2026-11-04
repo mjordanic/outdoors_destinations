@@ -603,6 +603,7 @@ def test_loops_are_suggested_only_when_the_hiker_asks_for_them(browser, server) 
 
     assert "loops" not in api.ranked[-1]
     assert "loops composed" not in page.locator("#results-note").inner_text()
+    assert "starting points" not in page.locator("#results-note").inner_text()
 
     page.get_by_label("Length weight, 0 to 100").fill("10")  # the shown Ranking's query is the one asked again
     with page.expect_response(f"{server}/api/rank"):
@@ -610,6 +611,8 @@ def test_loops_are_suggested_only_when_the_hiker_asks_for_them(browser, server) 
     page.wait_for_function("() => document.querySelector('#results-note').textContent.includes('loops composed')")
 
     assert api.ranked[-1] == {**api.ranked[-2], "loops": True}
+    # Searched from a few starts only (ADR-0045), so the page says the loops are not all there are.
+    assert "not every loop there is and can change when the catalog is rebuilt" in page.locator("#results-note").inner_text()
     assert page.locator("#results-table tbody tr").count() > 0
     assert page.locator("#results-stale").is_visible()  # still not the query on the left
     assert not suggest.is_visible()

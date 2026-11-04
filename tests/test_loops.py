@@ -382,3 +382,30 @@ def test_a_loop_with_no_hiking_place_near_its_start_is_named_by_its_trails(data,
     names = {loop["name"] for loop in _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True))}
 
     assert names and all(name.startswith("Loop on ") for name in names), names
+
+
+def test_loop_starts_take_each_trailheads_nearest_junction_before_any_second() -> None:
+    import sqlite3
+
+    from dayhike.loops import LOOP_STARTS, _starts
+
+    # 16 Trailheads 10 km apart, each with three Junctions 100, 200 and 300 m north of it.
+    db = sqlite3.connect(":memory:")
+    db.executescript(
+        "CREATE TABLE junctions (id INTEGER PRIMARY KEY, latitude REAL, longitude REAL, degree INTEGER);"
+        "CREATE TABLE segments (id INTEGER PRIMARY KEY, a INTEGER, b INTEGER, kind TEXT);"
+        "CREATE VIRTUAL TABLE segment_boxes USING rtree(id, south, north, west, east);"
+    )
+    trailheads = [(46.0, 14.0 + 0.13 * place) for place in range(16)]
+    for place, (lat, lon) in enumerate(trailheads):
+        for nth in range(3):
+            junction, north = 100 * place + nth, lat + (nth + 1) * 0.0009
+            db.execute("INSERT INTO junctions VALUES (?, ?, ?, 2)", (junction, north, lon))
+            db.execute("INSERT INTO segments VALUES (?, ?, ?, 'trail')", (junction, junction, junction))
+            db.execute("INSERT INTO segment_boxes VALUES (?, ?, ?, ?, ?)", (junction, north, north, lon, lon))
+
+    starts = [junction for junction, _, _ in _starts(db, None, trailheads)]
+
+    # Round by round: every Trailhead's nearest, then every second nearest, up to LOOP_STARTS.
+    assert starts == [100 * place + nth for nth in range(3) for place in range(16)][:LOOP_STARTS]
+    assert 1500 in starts  # the 16th Trailhead gets a start

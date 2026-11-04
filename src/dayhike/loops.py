@@ -18,7 +18,7 @@ from __future__ import annotations
 import math
 import sqlite3
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -107,8 +107,7 @@ def find_loops(
     if not math.isfinite(target.length_m) or low >= high:
         return []
     with sqlite3.connect(f"file:{graph.path}?mode=ro", uri=True) as db:
-        near = [] if origin is None else [(origin, LOOP_ORIGIN_M, LOOP_ORIGIN_STARTS)]
-        starts = _starts(db, near + [(trailhead, LOOP_START_M, LOOP_STARTS_PER_TRAILHEAD) for trailhead in trailheads])
+        starts = _starts(db, origin, trailheads)
         hours: list[float | None] = [None] * len(starts)
         if reach is not None and starts:
             hours = reach([(lat, lon) for _, lat, lon in starts])
@@ -142,36 +141,58 @@ def find_loops(
 
 
 def _starts(
-    db: sqlite3.Connection, places: Sequence[tuple[tuple[float, float], float, int]]
+    db: sqlite3.Connection, origin: tuple[float, float] | None, trailheads: Sequence[tuple[float, float]]
 ) -> list[tuple[int, float, float]]:
-    """(Junction id, lat, lon) of the start Junctions: per place ((lat, lon),
-    metres, count) in order, the count nearest within its metres where two
-    trail Segments meet, at most ``LOOP_STARTS`` in all."""
+    """(Junction id, lat, lon) of the start Junctions where two trail Segments
+    meet, at most ``LOOP_STARTS`` in all: the ``LOOP_ORIGIN_STARTS`` nearest
+    ``origin`` within ``LOOP_ORIGIN_M`` first, then round by round each
+    Trailhead's next nearest within ``LOOP_START_M``, in the Trailheads' order,
+    for ``LOOP_STARTS_PER_TRAILHEAD`` rounds. So every Trailhead gets a start
+    before any gets a second, and a near-tie in the Ranking cannot push a
+    Trailhead's every start past the cap."""
     starts: dict[int, tuple[float, float]] = {}
-    for (lat, lon), radius_m, count in places:
-        if len(starts) >= LOOP_STARTS:
-            break
-        grow_lat = math.degrees(radius_m / EARTH_RADIUS_M)
-        grow_lon = grow_lat / max(math.cos(math.radians(lat)), 1e-6)
-        near = db.execute(
-            "SELECT DISTINCT j.id, j.latitude, j.longitude FROM segment_boxes b JOIN segments s ON s.id = b.id "
-            "JOIN junctions j ON j.id IN (s.a, s.b) WHERE s.kind != 'link' AND j.degree >= 2 "
-            "AND b.north >= ? AND b.south <= ? AND b.east >= ? AND b.west <= ?",
-            (lat - grow_lat, lat + grow_lat, lon - grow_lon, lon + grow_lon),
-        ).fetchall()
-        if not near:
-            continue
-        points = np.array([row[1:] for row in near], dtype=float)
-        metres = _haversine(np.full(len(near), lat), np.full(len(near), lon), points[:, 0], points[:, 1])
-        taken = 0
-        for at in np.argsort(metres, kind="stable").tolist():
-            if metres[at] > radius_m or taken >= count or len(starts) >= LOOP_STARTS:
-                break
-            junction = int(near[at][0])
+
+    def take(nearest: Iterator[tuple[int, float, float]]) -> None:
+        for junction, lat, lon in nearest:
             if junction not in starts:
-                starts[junction] = (float(near[at][1]), float(near[at][2]))
-                taken += 1
+                starts[junction] = (lat, lon)
+                return
+
+    if origin is not None:
+        nearest = _nearest(db, origin, LOOP_ORIGIN_M)
+        for _ in range(min(LOOP_ORIGIN_STARTS, LOOP_STARTS)):
+            take(nearest)
+    queues = [_nearest(db, trailhead, LOOP_START_M) for trailhead in trailheads]
+    for _ in range(LOOP_STARTS_PER_TRAILHEAD):
+        for nearest in queues:
+            if len(starts) >= LOOP_STARTS:
+                break
+            take(nearest)
     return [(junction, lat, lon) for junction, (lat, lon) in starts.items()]
+
+
+def _nearest(
+    db: sqlite3.Connection, point: tuple[float, float], radius_m: float
+) -> Iterator[tuple[int, float, float]]:
+    """(Junction id, lat, lon) of the Junctions where two trail Segments meet
+    within ``radius_m`` of the point, nearest first; read at the first ask."""
+    lat, lon = point
+    grow_lat = math.degrees(radius_m / EARTH_RADIUS_M)
+    grow_lon = grow_lat / max(math.cos(math.radians(lat)), 1e-6)
+    near = db.execute(
+        "SELECT DISTINCT j.id, j.latitude, j.longitude FROM segment_boxes b JOIN segments s ON s.id = b.id "
+        "JOIN junctions j ON j.id IN (s.a, s.b) WHERE s.kind != 'link' AND j.degree >= 2 "
+        "AND b.north >= ? AND b.south <= ? AND b.east >= ? AND b.west <= ?",
+        (lat - grow_lat, lat + grow_lat, lon - grow_lon, lon + grow_lon),
+    ).fetchall()
+    if not near:
+        return
+    points = np.array([row[1:] for row in near], dtype=float)
+    metres = _haversine(np.full(len(near), lat), np.full(len(near), lon), points[:, 0], points[:, 1])
+    for at in np.argsort(metres, kind="stable").tolist():
+        if metres[at] > radius_m:
+            return
+        yield int(near[at][0]), float(near[at][1]), float(near[at][2])
 
 
 def _local(db: sqlite3.Connection, read: _Read, lat: float, lon: float, radius_m: float) -> np.ndarray | None:

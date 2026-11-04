@@ -1,5 +1,5 @@
 ---
-status: accepted (amends ADR-0020's start Junctions and ADR-0028's loop budget)
+status: accepted (amends ADR-0020's start Junctions and ADR-0028's loop budget; the Trailheads' starts taken round by round since ADR-0045)
 ---
 
 # Loops also start near the Origin; the loop budget stays 5 s
