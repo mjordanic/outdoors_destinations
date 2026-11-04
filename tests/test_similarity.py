@@ -350,6 +350,32 @@ def test_a_hike_without_a_grade_ranks_below_one_with_the_wished_grade_when_diffi
     assert no_grade == pytest.approx(only_length)
 
 
+def test_a_hike_with_no_data_for_a_wished_measure_ranks_below_hikes_with_that_data(tmp_path: Path) -> None:
+    # Hike 0 has the wished length but no climb data (no elevation there); hike 1 has the wished climb
+    # and is 2 km longer, as the Georgian hikes with no climb ranked first on length alone.
+    gains = [np.nan, 600, *np.linspace(0, 2_000, 98)]
+    lengths = [10_000, 12_000, *np.linspace(5_000, 20_000, 98)]
+    store = _calibrated(tmp_path, 100, elevation_gain_m=gains, length_m=lengths)
+    wish = OutsideSeed.wished({"elevation_gain": 600, "length": 10_000})
+    rows = np.array([0, 1])
+
+    weighted, _ = score_rows(store, [wish], rows, {"elevation_gain": 100, "length": 100})
+    length_only, _ = score_rows(store, [wish], rows, {"length": 100})
+    measures = scored_measures(store, wish, rows, None)
+
+    assert weighted[1] > weighted[0]
+    # Still listed, scored 0 on the climb it has no data for: not dropped from its mean.
+    assert weighted[0] == pytest.approx(length_only[0] / 2)
+    assert measures[0]["elevation_gain"]["raw"] == 0.0
+    assert measures[0]["elevation_gain"]["note"] == "No data for this hike: counts as 0 against the value you asked for"
+    # Climbing not weighted: the hike with no climb data and the better length wins as before.
+    assert length_only[0] > length_only[1]
+    # A Seed hike, not a wish, still leaves the measure out of a pair either side lacks.
+    seeded, _ = score_rows(store, [1], np.array([0]), {"elevation_gain": 100, "length": 100})
+    seeded_length, _ = score_rows(store, [1], np.array([0]), {"length": 100})
+    assert seeded == pytest.approx(seeded_length)
+
+
 def test_weighted_mean_renormalizes_over_the_scored_columns() -> None:
     scores = np.array([[1.0, 0.0], [1.0, np.nan], [np.nan, np.nan]])
     mean = weighted_mean(scores, np.array([100.0, 50.0]))

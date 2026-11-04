@@ -81,7 +81,9 @@ the hut slider to 100. Turn Length down to 30.
   Only hikes that start within those limits are kept. Type the place as
   "lat, lon", use your browser's location, or use "Find place" to look up a
   town or village. The drive time is an estimate based on main roads, so
-  treat it as a rough guide.
+  treat it as a rough guide. The limits stay set when you open another hike
+  in the same tab, and the note above the results always names them, for
+  example "within a 2 h drive of Munich, DE". A fresh page starts with none.
 - **More options.** Under the limits, this sets how close hikes must start to
   be grouped as one area (see "Reading the results" below).
 
@@ -111,7 +113,9 @@ Each hike has a score, and each thing compared has its own score. Press the
   It can mean they share something common, like not passing a lake.
 - "No data" means we don't know that fact for the hike (climate and land
   cover do not cover all of Europe yet). That thing is simply left out of the
-  score.
+  score. When you describe the hike you want, a hike with no data for
+  something you asked for scores 0 on it instead, so it is listed below the
+  hikes that have that data.
 
 ### Why the list changes from visit to visit
 
@@ -121,14 +125,16 @@ than a weaker one, so the very best are nearly always there, and the rest
 change from one search to the next. Hikes that match about equally well all
 get their turn, instead of the same ones always winning by a hair. The list is
 still in score order. Some rows have a small **picked** mark next to their
-number. A row marked picked would not appear in Strict order.
+number. A row marked picked would not appear in Strict order; a line beside
+Redraw says so whenever the list has one.
 
 - **Redraw**, above the list, picks again from the same 30 areas. It is
   instant and keeps any loops already suggested. If no other hike is close
   enough to come up, it says "No other close matches here; widen the distance
   or turn on Strict order".
 - Tick **Strict order** to see the best 10 in the exact order of their
-  scores, the same every time. Redraw is off while it is ticked.
+  scores, the same every time. Redraw is off while it is ticked, and a line
+  beside it says why.
 - Redraw and Strict order change the first 10 rows and remove the rows "Show
   10 more" added; press it again for the next ones.
 - When the best areas score exactly the same, the note above the list says
@@ -208,8 +214,8 @@ Open any hike from the results. It has a **Link to this hike**, and two
 buttons.
 
 - **Share** sends the link to your friends. On a phone it opens the share
-  sheet. Where there is none, it copies the link, and the button says "Link
-  copied".
+  sheet. Where there is none, or it does not open, it copies the link, and the
+  button says "Link copied".
 - **Download GPX** saves the hike as a file you can open in most hiking and GPS
   apps.
 
@@ -218,6 +224,26 @@ The link opens the same hike. A walk you drew opens the same walk, too.
 Good to know: the GPX file holds the line of the hike as you see it on the
 map, without heights, and not the walk back to the start. The route data comes
 from OpenStreetMap, and the file says so.
+
+## One way or with the way back
+
+The search box lists every hike one way, as it is walked: "5.3 km one way,
+↑ 860 m ↓ 51 m". With Return to start on, the hike's panel and the results
+count the walk back to the start too, and say so: "↑ 860 m ↓ 854 m with the
+way back". With it off they say "one way". A hike that ends where it starts
+has no way back to add.
+
+In the route designer, the climb of a walk you are drawing is an estimate
+from its segments ("about ↑ 52 m ↓ 86 m"). Once you use it, or open a loop
+with **Edit on the map**, the designer shows the same measured climb as the
+hike's panel ("↑ 54 m ↓ 59 m, as measured").
+
+## When something goes wrong
+
+If the server does not answer within a minute, or cannot be reached, the
+page says so instead of waiting forever. A search that fails says so above
+the list it leaves, which is still the list from before: press **Find
+similar** to try again.
 
 ## Tips
 

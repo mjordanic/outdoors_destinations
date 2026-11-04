@@ -111,6 +111,7 @@ from dayhike.similarity import (
     random_pair_shares,
     rank_rows,
     ranked_scores,
+    wish_unmeasured,
     score_rows,
 )
 from dayhike.trailgraph import (
@@ -229,6 +230,10 @@ WISH_INPUTS: dict[str, tuple[str | None, float, float, float, float]] = {
 WISH_DISPLAY: dict[str, tuple[str, float]] = {"length": ("km", 1_000), "dry_stretch": ("km", 1_000)}
 
 
+# A DayHike with no data for a Measure a Wish asks a value of scores 0 there (ADR-0048).
+UNMEASURED_NOTE = "No data for this hike: counts as 0 against the value you asked for"
+
+
 def score_note(
     score: float | None, tied: float | None, same: str | None = None, pairs: str = "random hike pairs"
 ) -> str | None:
@@ -319,7 +324,9 @@ SCORE_HELP = {
         {
             "title": "The overall score",
             "text": "The overall score is the average of the measure scores, weighted as you set them: only "
-            "their ratios matter, and a measure with no data on either hike, or not compared, drops out. A "
+            "their ratios matter, and a measure with no data on either hike, or not compared, drops out; "
+            "when you describe the hike you want, a hike with no data for a measure you asked for scores 0 "
+            "on it instead. A "
             "typical random pair of hikes scores about 0.41. With the default weights, 0.72 beats 99 random "
             "pairs in 100, and the best match for a hike usually scores about 0.82.",
         },
@@ -1687,15 +1694,20 @@ def scored_measures(
         same = _sameness(store, measure, seed, rows, month, raw)
         calibrated = calibrate(store, key, raw, measure_rarity(store, measure, seed, rows, month=month))
         pairs = "random hike pairs where either has one" if key == measure.name and measure.presence else "random hike pairs"
-        measures[measure.name] = (raw, calibrated, random_pair_shares(store, key, raw)[1], same, pairs)
+        unmeasured = (
+            wish_unmeasured(store, measure, seed, rows, month)
+            if isinstance(seed, OutsideSeed) and seed.stated
+            else np.zeros(len(rows), dtype=bool)
+        )
+        measures[measure.name] = (raw, calibrated, random_pair_shares(store, key, raw)[1], same, pairs, unmeasured)
     return [
         {
             name: {
                 "score": _value(calibrated[i]),
                 "raw": _value(raw[i]),
-                "note": score_note(_value(calibrated[i]), _value(tied[i]), same[i], pairs),
+                "note": UNMEASURED_NOTE if unmeasured[i] else score_note(_value(calibrated[i]), _value(tied[i]), same[i], pairs),
             }
-            for name, (raw, calibrated, tied, same, pairs) in measures.items()
+            for name, (raw, calibrated, tied, same, pairs, unmeasured) in measures.items()
         }
         for i in range(len(rows))
     ]

@@ -503,7 +503,10 @@ absolute difference of two ProfileShapes, walked either way. A Measure whose
 fact is missing on either DayHike drops out of that pair and the other weights
 renormalize; a candidate with no weighted Measure scored is left out. One
 exception: a DayHike with no Difficulty grade scores 0 on Difficulty against a
-Seed that has one, so it ranks below a hike with the grade asked for (ADR-0043).
+Seed that has one, so it ranks below a hike with the grade asked for (ADR-0043);
+against a Wish, a DayHike with no data for any Measure the Wish asks a value of
+scores 0 on it the same way, so it ranks below the hikes that have that data
+(ADR-0048).
 
 ### What the score means
 
@@ -1703,7 +1706,10 @@ network and graded paths (Segments show from zoom 13; click a Junction or a Segm
 then a Segment to walk along it; one away from the walk's end is reached the
 shortest way over trail Segments, drawn dashed in amber, never over a gap or
 Link the Hiker did not take; "connect here" crosses a Link; the walk may repeat
-a Segment and is measured as drawn; it gets a proposed name, from the trails
+a Segment and is measured as drawn; while drawn, its readout estimates the
+climb from the Segments ("about"), and once it is the hike shown below (after
+"Use this hike" or "Edit on the map") it shows that hike's measured climb,
+"as measured", so the two agree; it gets a proposed name, from the trails
 walked longest (each at least 30 % of it) and a named place at the start, that the Hiker may change; its
 link, `#compose=1:104.11,105.13`, shares it as the OSM ways it walks from node
 to node (and `&name=…` when the Hiker named it), so it opens the same walk after
@@ -1745,17 +1751,27 @@ it is off. Clicking a result shows it the same way, next to the
 liked hike. Every shown hike has "Link to this hike" (`#hike=<id>` for a
 catalog or built hike, its `#compose=` link for a composed one, with `&oneway`
 when set) and two buttons: Share sends that address to the phone's share sheet,
-or copies it where there is none, and Download GPX saves the hike as drawn
+or copies it where there is none or it fails (the button then says "Link
+copied"), and Download GPX saves the hike as drawn
 (the served, simplified line, not its way back) as a GPX 1.1 track, made in the
 browser, with no elevation and credited to OpenStreetMap under the ODbL. An optional starting place with a maximum drive (up to 4 h), a
 maximum straight-line distance (up to 200 km, from the start to where a hike
 starts, not by road; ADR-0032) or both keeps only hikes within those limits (the
 start is typed as "lat, lon", taken from the
 browser, or found by "Find place" among the GeoNames towns and villages in the
-export, ADR-0029, ADR-0042). The DriveTime is estimated on highways-only tiles as in
+export, ADR-0029, ADR-0042); the note above the results names the limits and
+the place, "within a 2 h drive of Munich, DE", as they stay set when another
+hike opens in the same tab, and the limit inputs are not restored by the
+browser on a reload. The DriveTime is estimated on highways-only tiles as in
 **Highway tiles** above; the distance needs no routing engine. Measures with no data for a hike (climate and land
 cover do not cover all of Europe yet) show "no data" and drop out of that
-pair's score (a missing Difficulty grade scores 0 instead, ADR-0043). Every score has a short line and a "?" beside it (in the results
+pair's score (a missing Difficulty grade scores 0 instead, ADR-0043, and so
+does missing data for a Measure a Wish asks a value of, ADR-0048). Climb and
+descent say "with the way back" or "one way" in the hike's panel and the
+results table (a loop's panel says neither); the search list gives every hike one way. Every API request the
+page makes ends after 60 s with "The server did not answer within 60 s", and
+one that cannot connect says "The server could not be reached"; a failed Find
+says so above the list it leaves. Every score has a short line and a "?" beside it (in the results
 table, in each column heading); hover, focus, click or tap opens what the score
 means, why alike hikes can score low on one measure, the data each measure
 reads and how the scores are made (ADR-0025).
@@ -1779,7 +1795,8 @@ the noise a hash of the draw number and the row's DayHike id or loop route text
 (`serving.drawn`, the same as `drawn` in `app.js`), listed in score order. The
 page takes a draw number from `crypto.getRandomValues` per Find and adds one per
 Redraw; the server stays deterministic and only answers with the pool. A row the
-first 10 of its pool would not hold is marked "picked". Redraw draws page 1
+first 10 of its pool would not hold is marked "picked", and a line beside
+Redraw says what the mark means (in Strict order, why Redraw is off). Redraw draws page 1
 again in the browser, with no request and the loops already found, again while
 it lists the same hikes, at most 5 times, else says "No other close matches
 here; widen the distance or turn on Strict order". The "Strict order" tick box

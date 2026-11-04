@@ -6,6 +6,7 @@ Needs Chromium for Playwright: ``uv run playwright install chromium``.
 """
 
 import json
+import re
 import socket
 import threading
 import time
@@ -1371,3 +1372,183 @@ def test_share_and_download_fit_a_phone(browser, server) -> None:
     assert page.locator("#liked").get_by_role("button", name="Share").is_visible()
     assert page.locator("#liked").get_by_role("button", name="Download GPX").is_visible()
     assert page.evaluate("document.documentElement.scrollWidth") <= 390
+
+
+# ---------- what the visitor test of rebuild 3 found ----------
+
+
+def test_a_find_that_cannot_reach_the_server_says_so_beside_the_list_it_leaves(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+    page.route(f"{server}/api/rank", lambda route: route.abort("connectionrefused"))
+
+    page.get_by_role("button", name="Find similar").click()
+
+    stale = page.locator("#results-stale")
+    stale.get_by_text("This search failed: the server could not be reached.").wait_for()
+    assert "The list below is from before; press Find similar to try again." in stale.inner_text()
+    assert "error" in stale.get_attribute("class")
+    assert "Failed to fetch" not in page.locator("body").inner_text()
+
+
+def test_a_find_the_server_never_answers_ends_with_a_message(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.clock.install()
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.route(f"{server}/api/rank", lambda route: None)  # never answered
+
+    page.get_by_role("button", name="Find similar").click()
+    page.get_by_text("Ranking every hike…").wait_for()
+    page.clock.fast_forward("01:01")
+
+    page.get_by_text("The server did not answer within 60 s; try again in a minute.").wait_for()
+    assert page.get_by_role("button", name="Find similar").is_enabled()
+
+
+def test_the_list_names_the_starting_place_and_limit_it_keeps_for_another_hike(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_label("Only hikes near a starting place").check()
+    page.get_by_label("From", exact=True).fill("agram")
+    page.get_by_role("button", name="Find place").click()
+    page.get_by_text("Start: Zagreb, HR (45.8144, 15.9780)").wait_for()
+    _find(page)
+
+    assert "within a 2 h drive of Zagreb, HR" in page.locator("#results-note").inner_text()
+
+    # Another hike's link in the same tab keeps the limit: the list says so.
+    other = page.evaluate("state.results[0].id")
+    page.evaluate("id => { location.hash = `#hike=${id}`; }", other)
+    page.wait_for_function("id => state.liked?.id === id", arg=other)
+    _find(page)
+    assert "within a 2 h drive of Zagreb, HR" in page.locator("#results-note").inner_text()
+
+
+def test_a_reloaded_page_restores_no_starting_place_or_limit(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+    page.get_by_label("Only hikes near a starting place").check()
+    page.get_by_label("From", exact=True).fill("agram")
+    page.get_by_label("Max drive hours value").fill("3.5")
+
+    page.reload()
+    page.wait_for_selector(".weight", state="attached")
+
+    assert not page.get_by_label("Only hikes near a starting place").is_checked()
+    assert page.get_by_label("From", exact=True).input_value() == ""
+    assert page.get_by_label("Max drive hours value").input_value() == "2"
+
+
+@pytest.mark.parametrize("move", ["search", "map"])
+def test_the_broken_link_message_goes_once_the_hiker_looks_for_another_hike(browser, server, move) -> None:
+    page = open_page(browser, server, Api({}), hash="#hike=999999999")
+    message = page.get_by_text("This link doesn't match the current trail data, so it shows no hike.")
+    message.wait_for()
+
+    if move == "search":
+        page.locator("#search").fill("Ridge")
+    else:
+        page.locator("#map-pick-on").check()
+
+    message.wait_for(state="detached")
+    assert page.get_by_text("Search for a hike on the left, or select one on the map.").is_visible()
+
+
+def test_the_picked_mark_and_a_greyed_redraw_say_what_they_mean_beside_the_list(browser, server, monkeypatch) -> None:
+    monkeypatch.setattr(web, "RESULTS", 2)
+    pool = Pool([0.5, 0.5, 0.5])
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", draw=11)
+    page.route(f"{server}/api/rank", pool)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+    picked = any(i >= 2 for i in pool.drawn(11, 2))
+    explained = page.locator("#results-draw-note")
+
+    assert explained.is_visible() == picked
+    if picked:
+        assert explained.inner_text() == (
+            "picked: a row drawn from lower down the best areas of its page; Strict order lists each page's best as ranked."
+        )
+
+    page.get_by_label("Strict order").check()
+
+    assert explained.inner_text() == "Redraw is off while Strict order is ticked: the list is the exact ranking."
+    assert page.get_by_role("button", name="Redraw").get_attribute("title").startswith("Off in Strict order")
+
+
+SHARE_REFUSED = COPIED.replace(
+    "delete Navigator.prototype.share; delete navigator.share;",
+    'navigator.share = async () => { throw new DOMException("No share sheet here", "NotAllowedError"); };',
+)
+
+
+def test_share_copies_the_link_when_the_share_sheet_fails(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", init=SHARE_REFUSED)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+
+    page.locator("#liked").get_by_role("button", name="Share").click()
+
+    page.locator("#liked").get_by_role("button", name="Link copied").wait_for()
+    assert page.evaluate("window.copied") == [f"{server}/#hike={RIDGE_WALK_ID}"]
+
+
+def test_one_way_and_round_trip_climbs_are_labelled(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+    page.locator("#search").fill("Ridge Walk")
+    meta = page.locator("#suggestions li", has_text="Ridge Walk").first.locator(".meta").inner_text()
+    assert re.search(r"km one way, ↑ [\d,]+ m ↓ [\d,]+ m", meta), meta
+
+    page.locator("#suggestions li", has_text="Ridge Walk").first.dispatch_event("mousedown")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    badges = page.locator("#liked .badges li").all_inner_texts()
+    assert any(re.fullmatch(r"↑ [\d,]+ m ↓ [\d,]+ m with the way back", b) for b in badges), badges
+
+    page.locator("#return-on").uncheck()
+    page.wait_for_function("() => state.liked && state.liked.way_back == null")
+    badges = page.locator("#liked .badges li").all_inner_texts()
+    assert any(re.fullmatch(r"↑ [\d,]+ m ↓ [\d,]+ m one way", b) for b in badges), badges
+
+
+def test_a_loop_s_climb_is_not_labelled_one_way(browser, server) -> None:
+    def as_loop(route) -> None:
+        body = route.fetch().json()
+        body["facts"]["round_trip"] = 1
+        route.fulfill(json=body)
+
+    page = browser.new_page()
+    page.set_default_timeout(5000)
+    page.route(lambda url: not url.startswith(server), lambda route: route.abort())
+    page.route(f"{server}/api/hikes/{RIDGE_WALK_ID}?*", as_loop)
+    page.goto(f"{server}/#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+
+    page.locator("#return-on").uncheck()
+    page.wait_for_function("() => state.liked && state.liked.way_back == null")
+
+    badges = page.locator("#liked .badges li").all_inner_texts()
+    assert any(re.fullmatch(r"↑ [\d,]+ m ↓ [\d,]+ m", b) for b in badges), badges
+    assert "round trip" in badges
+
+
+def test_search_by_name_works_without_abort_signal_any(browser, server) -> None:
+    page = open_page(browser, server, Api({}), init="delete AbortSignal.any;")
+
+    page.locator("#search").fill("Ridge Walk")
+
+    page.locator("#suggestions li", has_text="Ridge Walk").first.wait_for()
+
+
+def test_a_loop_edited_on_the_map_shows_the_climb_its_card_shows(browser, loops_server, monkeypatch) -> None:
+    monkeypatch.setattr("dayhike.serving.GROUP_M", 0.0)
+    page = open_page(browser, loops_server, Api({}), hash=f"#hike={MEADOW_PATH}")
+    page.get_by_text("Chosen: Meadow Path").wait_for()
+    _find(page)
+    page.get_by_role("button", name="Suggest loops near these hikes (takes a few seconds)").click()
+    page.locator("#results-table tbody tr", has=page.locator(".composed-tag")).first.click()
+    page.locator("#selected").get_by_role("button", name="Edit on the map").click()
+    page.wait_for_function("() => compose.on && state.liked?.route")
+
+    readout = page.locator("#compose-readout")
+    measured = page.evaluate("upDown(state.liked.climb_m, state.liked.descent_m)")
+    readout.get_by_text(measured).wait_for()
+    assert "as measured" in readout.inner_text() and "about" not in readout.inner_text()
