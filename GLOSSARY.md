@@ -25,7 +25,7 @@ Whether a DayHike label came from OSM `name`, OSM `ref`, the `from`/`to` tags, t
 _Avoid_: unnamed as a drop reason, title, display name
 
 **Trailhead**:
-The point where a DayHike's main walk starts, so it is the first vertex of DayHikeGeometry. A line starts at the end its `from`/`to` names point to (ADR-0017), else at the end nearer an access point within 5 km, else at the end where member order starts it. A loop starts at the far end of the one dead end it keeps (its stem), else at its vertex nearest an access point within 5 km. An access point is a parking point and nothing else. Drive time and nearby amenities are measured from here.
+The point where a DayHike's main walk starts, so it is the first vertex of DayHikeGeometry. A line starts at the end its `from`/`to` tags point to (ADR-0017); else at its lower end when its ends differ by more than 100 m, unless nothing reaches the lower end while something reaches the upper one (ADR-0048: parking or a place within 300 m, or a road through the end); else at the end its dashed name points to; else at the end nearer an access point within 5 km; else at the end where member order starts it. A DayStage or a NetworkHike line starts at its lower end by the same height rule, else as it is built (ADR-0040, ADR-0039). A loop starts at the far end of the one dead end it keeps (its stem), else at its vertex nearest an access point within 5 km. An access point is a parking point and nothing else. Drive time and nearby amenities are measured from here.
 _Avoid_: start, parking (parking is an amenity near a Trailhead)
 
 **Catalog**:

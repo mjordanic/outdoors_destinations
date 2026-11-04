@@ -9,7 +9,7 @@ newer filters read) with ``osmium extract -s smart``, so relations come out comp
 PBF is such a cut already. The cut is linked into OUT/osm, so ingest's catalog extract,
 cut with this checkout's filter list, lands there and a shared cut is never written. Then
 ``ingest --fresh``, ``sample-dem``, ``sample-landcover``, ``sample-climate``,
-``sample-trailgraph`` and ``build-similarity`` on the rasters in DATA/dem, DATA/landcover
+``sample-trailgraph`` and ``build-similarity`` on the rasters in DATA/dem (ingest's too), DATA/landcover
 and DATA/climate (only read), and ``export-serving`` without Valhalla, into
 OUT/web-serving. Each step logs to OUT/logs/<step>.log; OUT/build.json holds its seconds
 and, under ``sizes``, the export's sizes (``export_sizes``).
@@ -197,7 +197,7 @@ def build(pbf: Path, bbox: str | None, data: Path, out: Path) -> dict:
     catalog = out / "catalog.sqlite"
     dayhike = [sys.executable, "-m", "dayhike"]
     dem, landcover, climate = (str(data / name) for name in ("dem", "landcover", "climate"))
-    step("ingest", [*dayhike, "ingest", str(region), "--catalog", str(catalog), "--fresh"])
+    step("ingest", [*dayhike, "ingest", str(region), "--catalog", str(catalog), "--fresh", "--dem", dem])
     step("sample-dem", [*dayhike, "sample-dem", "--catalog", str(catalog), "--dem", dem, "--landcover", landcover])
     step("sample-landcover", [*dayhike, "sample-landcover", "--catalog", str(catalog), "--landcover", landcover])
     step("sample-climate", [*dayhike, "sample-climate", "--catalog", str(catalog), "--climate", climate])

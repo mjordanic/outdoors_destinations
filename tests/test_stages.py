@@ -8,6 +8,8 @@ little east of the line. Ingest builds DayStages from ``long_tour.osm``.
 import math
 from pathlib import Path
 
+from dem_tiles import write_dem_tile
+
 from dayhike import build_catalog
 from dayhike.stages import CutPoint, day_stages, split
 
@@ -116,3 +118,22 @@ def test_ingest_builds_daystages_by_default(tmp_path: Path) -> None:
         "Tour des Refuges, stage 1: Saint-Départ – Refuge du Lac",
         "Tour des Refuges, stage 2: Refuge du Lac – Refuge du Col",
     ]
+
+
+def test_a_stage_whose_ends_differ_by_over_100_m_starts_at_its_lower_end_and_names_it_first(tmp_path: Path) -> None:
+    # ADR-0048. Heights fall 1,000 m from the tour's start north to its end. Stage 2 runs
+    # down from Refuge du Lac to Refuge du Col, neither reached by a place, road or
+    # parking, so it starts at the lower Col. Stage 1 runs down from Saint-Départ to
+    # Refuge du Lac: its lower end is reached by nothing and its top by the village, so
+    # it keeps the tour's direction.
+    dem = write_dem_tile(tmp_path / "dem", 46.0, 16.0, lambda lat: 2_000.0 - (lat - 46.0) / 0.36 * 1_000.0)
+
+    catalog = build_catalog(LONG_TOUR, tmp_path / "catalog.sqlite", sources=[day_stages], dem_dir=dem.parent)
+
+    stages = {hike.name: hike for hike in catalog.dayhikes if hike.kind == "stage"}
+    assert sorted(stages) == [
+        "Tour des Refuges, stage 1: Saint-Départ – Refuge du Lac",
+        "Tour des Refuges, stage 2: Refuge du Col – Refuge du Lac",
+    ]
+    second = stages["Tour des Refuges, stage 2: Refuge du Col – Refuge du Lac"]
+    assert (round(second.trailhead.latitude, 4), round(second.length_m)) == (round(46.0 + 27 * KM_LAT, 4), 14_000)

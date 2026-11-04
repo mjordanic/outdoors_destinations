@@ -496,7 +496,8 @@ def _digest(path: Path, query: str) -> str:
 
 def test_fabdem_heights_and_drawn_profiles_stay_byte_identical(sampled: Path, data) -> None:
     # Digests taken before Copernicus got its canopy floor and smoothed profile (ADR-0030):
-    # FABDEM, on tree cover too, gives the same bytes from the same inputs.
+    # FABDEM, on tree cover too, gives the same bytes from the same inputs. The gain and the
+    # climb and descent drawn were taken again when they became the mean of both ways (ADR-0048).
     store = geometry_store_path_for(sampled)
     assert _rows(store, "SELECT count(*) FROM vertices WHERE landcover = 10")[0][0] > 0
     assert {
@@ -508,9 +509,9 @@ def test_fabdem_heights_and_drawn_profiles_stay_byte_identical(sampled: Path, da
         "drawn": _digest(data.directory / "hikes.sqlite", "SELECT id, elevation, climb_m, descent_m FROM hikes ORDER BY id"),
     } == {
         "vertices": "13c1f97740c5700bdabf68ed559c0fab883f54d3a2a64877efd038a6acc203d6",
-        "catalog": "c0ddfd2ec479bd82ff0e7684a41f930e71fd3f6601022697f981f5a56c1f4d01",
+        "catalog": "46944fe72520606560aca02020de649be686d05a27af0bbed7ea8d5d5094a558",
         "segments": "5b7fa9c9287a9a5af0f8c7988a00d4bbe901b1350d6153be53eb9873ffd8548b",
-        "drawn": "2c8077dc35f2b2d4fede7e3f9f975e49ce207d0a66b9b2ca7f4de1936f8e05f2",
+        "drawn": "bb6b43ee3c041eb70d24cd100ca9b0718d811c8d6563a70dcee5b7e98ee6869a",
     }
 
 

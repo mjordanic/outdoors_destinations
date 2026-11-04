@@ -33,6 +33,12 @@ LOOP_SHARE = 0.5  # a piece whose closed loop is at least this share of its leng
 STEM_ACCESS_RADIUS_M = 200  # a loop's dead end ending this close to parking is its stem
 STEM_MIN_LENGTH_M = 1_000  # else a loop's only dead end at least this long is its stem
 END_NAME_RADIUS_M = 1_000  # a named point this close to a line end can name that end
+LOWER_START_M = 100.0  # a line whose ends differ by more than this starts at the lower one (ADR-0048) ...
+END_ACCESS_M = 300.0  # ... unless no parking or place this close, nor a road, reaches it while one reaches the top
+ACCESS_ROADS = frozenset(
+    ("trunk", "primary", "secondary", "tertiary", "unclassified", "residential", "service", "living_street",
+     "pedestrian", "road")
+)  # fmt: skip
 PLACE_RADIUS_M = 5_000  # a label without name, ref or from/to names the nearest place this close
 OSM_ATTRIBUTION = "© OpenStreetMap contributors"
 AMENITY_KINDS = ("hut", "parking", "restaurant_cafe", "drinking_water")
@@ -506,6 +512,7 @@ def build_catalog(
     fresh: bool = False,
     snap_tolerance_m: float = SNAP_TOLERANCE_M,
     sources: Sequence[BuiltHikeSource] | None = None,
+    dem_dir: Path | str | None = None,
 ) -> Catalog:
     """Ingest OSM XML or PBF snapshot(s) into a Catalog of DayHikes.
 
@@ -524,26 +531,33 @@ def build_catalog(
     snapshots keep one row per OSM id. The GeometryStore and the TrailGraph
     (``snap_tolerance_m``, see ``dayhike.trailgraph``) are written beside it.
     ``sources`` build DayHikes that are not one relation (ADR-0038); by
-    default ingest's own ``BUILT_HIKE_SOURCES``.
+    default ingest's own ``BUILT_HIKE_SOURCES``. The DEM tiles in ``dem_dir``
+    give the heights of line ends that orient lines (``LowerStart``); without
+    tiles there, height orients none.
     """
+    from dayhike.dem import point_heights
     from dayhike.ingest import BUILT_HIKE_SOURCES, _connect_work, emit_progress, remove_work, run_ingest, write_geometry_store
     from dayhike.trailgraph import check_snap_tolerance, write_trailgraph
 
     check_snap_tolerance(snap_tolerance_m)
     catalog_path = Path(catalog_path)
+    heights = None if dem_dir is None else point_heights(dem_dir)
+    if dem_dir is not None and heights is None:
+        emit_progress(progress, "assemble", f"no DEM tiles in {dem_dir}: height orients no line")
     kept, report, work_path, snapshot = run_ingest(
         _osm_paths(osm_path),
         catalog_path,
         progress=progress,
         fresh=fresh,
         sources=BUILT_HIKE_SOURCES if sources is None else sources,
+        heights=heights,
     )
     emit_progress(progress, "write", str(catalog_path))
     _write_sqlite(catalog_path, kept, report)
     if work_path.exists():
         work_conn = _connect_work(work_path)
         try:
-            write_geometry_store(geometry_store_path_for(catalog_path), kept, work_conn, snapshot)
+            write_geometry_store(geometry_store_path_for(catalog_path), kept, work_conn, snapshot, heights)
             del snapshot  # the TrailGraph reads the work file on its own
             write_trailgraph(
                 trailgraph_path_for(catalog_path),
@@ -711,9 +725,17 @@ def declared_ends(tags: Mapping[str, str]) -> tuple[str, str] | None:
     """The (from, to) names a hiking relation declares: its ``from`` and ``to``
     tags, else a name of exactly two parts joined by a spaced dash ("Dolič - Triglav").
     """
+    return tagged_ends(tags) or dashed_ends(tags)
+
+
+def tagged_ends(tags: Mapping[str, str]) -> tuple[str, str] | None:
+    """A hiking relation's ``from`` and ``to`` tags, when it has both."""
     start, end = ((tags.get(key) or "").strip() for key in ("from", "to"))
-    if start and end:
-        return start, end
+    return (start, end) if start and end else None
+
+
+def dashed_ends(tags: Mapping[str, str]) -> tuple[str, str] | None:
+    """The two parts of a name joined by a spaced dash ("Dolič - Triglav"), when it has exactly two."""
     parts = _NAME_DASH.split((tags.get("name") or "").strip())
     return (parts[0], parts[1]) if len(parts) == 2 and all(parts) else None
 
@@ -721,14 +743,25 @@ def declared_ends(tags: Mapping[str, str]) -> tuple[str, str] | None:
 EndChoice = Callable[[tuple[float, float], tuple[float, float]], "tuple[float, float] | None"]
 
 
-def declared_start(tags: Mapping[str, str], named: NamedPoints | None) -> EndChoice | None:
-    """Which of a line's two ends its ``from``/``to`` names make the start, or None.
+def first_choice(*choices: EndChoice | None) -> EndChoice | None:
+    """The end the first of ``choices`` that chooses one chooses, or None."""
+    given = [choice for choice in choices if choice is not None]
+    if not given:
+        return None
+
+    def choose(a: tuple[float, float], b: tuple[float, float]) -> tuple[float, float] | None:
+        return next((start for choice in given if (start := choice(a, b)) is not None), None)
+
+    return choose
+
+
+def declared_start(ends: tuple[str, str] | None, named: NamedPoints | None) -> EndChoice | None:
+    """Which of a line's two ends its (from, to) names ``ends`` make the start, or None.
 
     An end is the start when ``from`` names it and not the other end, or
     ``to`` names the other end and not it; when the names point both ways
-    or nowhere, there is no choice and parking decides (``_pick_trailhead``).
+    or nowhere, there is no choice and the next rule decides (ADR-0048).
     """
-    ends = declared_ends(tags)
     if ends is None or named is None:
         return None
     start_name, end_name = ends
@@ -743,6 +776,53 @@ def declared_start(tags: Mapping[str, str], named: NamedPoints | None) -> EndCho
         return a if starts_a else b
 
     return choose
+
+
+Heights = Callable[[Sequence[tuple[float, float]]], Sequence["float | None"]]
+
+
+class LowerStart:
+    """Where height starts a one-way line (ADR-0048): at its lower end when its
+    two ends differ by more than ``LOWER_START_M``, unless nothing reaches the
+    lower end while something reaches the upper one. An end is reached when an
+    ``access`` point (parking or a place) lies within ``END_ACCESS_M`` of it or
+    a road (``ACCESS_ROADS``) of the line's ways passes through it.
+    ``heights`` gives the height of each point, None where unknown; with an
+    end's height unknown, height chooses nothing.
+    """
+
+    def __init__(self, heights: Heights, access: Sequence[tuple[float, float]]) -> None:
+        self.heights = heights
+        self.tree = _access_tree(access)
+
+    def choice(self, ways: Sequence[OsmWay], nodes: Mapping[int, tuple[float, float]]) -> EndChoice:
+        """The choice for a line walking ``ways`` (their nodes at ``nodes``)."""
+
+        def choose(a: tuple[float, float], b: tuple[float, float]) -> tuple[float, float] | None:
+            height_a, height_b = self.heights([a, b])
+            if height_a is None or height_b is None or abs(height_a - height_b) <= LOWER_START_M:
+                return None
+            low, high = (a, b) if height_a < height_b else (b, a)
+            roads = {
+                nodes[node_id]
+                for way in ways
+                if way.tags.get("highway") in ACCESS_ROADS
+                for node_id in way.node_ids
+                if node_id in nodes
+            }
+            if not self._reached(low, roads) and self._reached(high, roads):
+                return None
+            return low
+
+        return choose
+
+    def _reached(self, end: tuple[float, float], roads: set[tuple[float, float]]) -> bool:
+        if end in roads:
+            return True
+        if self.tree is None:
+            return False
+        distance, _ = self.tree.query(np.radians([end]), k=1)
+        return float(distance[0, 0]) * EARTH_RADIUS_M <= END_ACCESS_M
 
 
 def _access_tree(
@@ -931,8 +1011,9 @@ def assemble_main_walk(
     then its shortest odd-junction cycle paths until it can be walked once.
     When neither can be shed, it sheds the smaller side of a bridge (see
     ``_shed_bridge_side``) and both steps run again. It is walked from the end
-    its ``from``/``to`` names choose (``declared``, see ``declared_start``),
-    else from the end ``_pick_trailhead`` chooses with ``access_tree``.
+    ``declared`` chooses (its ``from``/``to`` tags, its height and its dashed
+    name, see ``declared_start`` and ``LowerStart``), else from the end
+    ``_pick_trailhead`` chooses with ``access_tree``.
     """
     listed: list[int] = []  # way id per member-way listing in the snapshot
     leftovers: list[str | None] = []

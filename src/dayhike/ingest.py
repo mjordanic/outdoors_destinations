@@ -22,7 +22,9 @@ from dayhike.catalog import (
     NAME_ORIGIN_PLACE,
     NAME_ORIGIN_SYNTHETIC,
     DayHike,
+    Heights,
     IngestReport,
+    LowerStart,
     MainWalk,
     SAC_SCALE_RANK,
     NamedPoints,
@@ -32,8 +34,11 @@ from dayhike.catalog import (
     _drop_reason,
     _haversine_m,
     assemble_main_walk,
+    dashed_ends,
     declared_start,
+    first_choice,
     named_points,
+    tagged_ends,
 )
 from dayhike.network_hikes import network_source
 from dayhike.osm import (
@@ -90,6 +95,7 @@ def run_ingest(
     progress: Progress | None = None,
     fresh: bool = False,
     sources: Sequence[BuiltHikeSource] = BUILT_HIKE_SOURCES,
+    heights: Heights | None = None,
 ) -> tuple[list[DayHike], IngestReport, Path, OsmSnapshot]:
     catalog_path = Path(catalog_path)
     catalog_path.parent.mkdir(parents=True, exist_ok=True)
@@ -125,6 +131,7 @@ def run_ingest(
         access_tree = _access_tree(snapshot.access_points)
         amenity_index = _amenity_index(snapshot.amenities)
         named = named_points(snapshot.named_points)
+        lower = _lower_start(snapshot, heights)
         walks: dict[int, _StoredWalk] = {}
         kept, report_counts = _keep_dayhikes(
             snapshot,
@@ -135,6 +142,7 @@ def run_ingest(
             named,
             named_points(snapshot.places),
             walks if sources else None,
+            lower,
         )
         if sources:
             emit_progress(progress, "assemble", "built DayHikes")
@@ -143,8 +151,9 @@ def run_ingest(
                 tuple(kept),
                 lambda relation: _stored_walk(walks[relation.id], snapshot.nodes)
                 if relation.id in walks
-                else _main_walk(relation, snapshot, access_tree, named),
+                else _main_walk(relation, snapshot, access_tree, named, lower),
                 progress,
+                lower,
             )
             kept += _build_hikes(conn, sources, context, amenity_index)
         origin_counts = Counter(hike.name_origin for hike in kept)
@@ -773,6 +782,7 @@ def _keep_dayhikes(
     named: NamedPoints | None = None,
     places: NamedPoints | None = None,
     walks: dict[int, _StoredWalk] | None = None,
+    lower: LowerStart | None = None,
 ):
     """The relation DayHikes, by id, and per drop reason how many relations
     it left out. ``walks``, when given, gets each kept DayHike's main walk
@@ -789,7 +799,7 @@ def _keep_dayhikes(
 
     def keep(relation: OsmRelation) -> tuple[DayHike, _StoredWalk | None] | str:
         # The relation's DayHike and its stored main walk, or why it is dropped.
-        walk = _main_walk(relation, snapshot, access_tree, named)
+        walk = _main_walk(relation, snapshot, access_tree, named, lower)
         vertices = walk.vertices
         points = [point for _, point in vertices]
         length_m = walk.length_m
@@ -878,13 +888,31 @@ def _stored_walk(stored: _StoredWalk, nodes) -> MainWalk:
     )
 
 
+def _lower_start(snapshot: OsmSnapshot, heights: Heights | None) -> LowerStart | None:
+    """The height rule of ingest's lines (ADR-0048): parking and places reach an end."""
+    if heights is None:
+        return None
+    return LowerStart(heights, [*snapshot.access_points, *((lat, lon) for lat, lon, _ in snapshot.places)])
+
+
 def _main_walk(
-    relation: OsmRelation, snapshot: OsmSnapshot, access_tree, named: NamedPoints | None
+    relation: OsmRelation,
+    snapshot: OsmSnapshot,
+    access_tree,
+    named: NamedPoints | None,
+    lower: LowerStart | None = None,
 ) -> MainWalk:
-    """The relation's main walk, its line started where its from/to names say if they can."""
-    return assemble_main_walk(
-        relation, snapshot.ways, snapshot.nodes, access_tree, declared_start(relation.tags, named)
+    """The relation's main walk, its line started where its from/to tags say if
+    they can, else at its lower end if ``lower`` can tell (ADR-0048), else where
+    its dashed name says if it can."""
+    tags = relation.tags
+    ways = [snapshot.ways[way_id] for kind, way_id in relation.members if kind == "way" and way_id in snapshot.ways]
+    declared = first_choice(
+        declared_start(tagged_ends(tags), named),
+        None if lower is None else lower.choice(ways, snapshot.nodes),
+        declared_start(dashed_ends(tags), named),
     )
+    return assemble_main_walk(relation, snapshot.ways, snapshot.nodes, access_tree, declared)
 
 
 def write_geometry_store(
@@ -892,10 +920,11 @@ def write_geometry_store(
     dayhikes: Sequence[DayHike],
     conn: sqlite3.Connection,
     snapshot: OsmSnapshot | None = None,
+    heights: Heights | None = None,
 ) -> None:
     """Write DayHikeGeometry, member ways, and raw amenity points beside the Catalog.
 
-    Access points and named points are the work file's, as in ``run_ingest``,
+    Access points, named points and ``heights`` are those of ``run_ingest``,
     so each main walk starts at the same Trailhead as in the Catalog;
     ``snapshot`` is the one ``run_ingest`` loaded from it, else it is loaded again.
     """
@@ -906,6 +935,7 @@ def write_geometry_store(
     relations = {relation.id: relation for relation in snapshot.relations}
     access_tree = _access_tree(snapshot.access_points)
     named = named_points(snapshot.named_points)
+    lower = _lower_start(snapshot, heights)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     if tmp.exists():
@@ -966,7 +996,7 @@ def write_geometry_store(
         relation_hikes = [hike for hike in dayhikes if hike.kind == KIND_RELATION]
         # The main walks are assembled again in the workers; the rows are written here, in hike order.
         relation_rows = parallel_iter(
-            lambda hike: _relation_geometry_rows(hike, relations[hike.id], snapshot, access_tree, named),
+            lambda hike: _relation_geometry_rows(hike, relations[hike.id], snapshot, access_tree, named, lower),
             relation_hikes,
         )
         for hike in dayhikes:
@@ -1012,11 +1042,16 @@ def write_geometry_store(
 
 
 def _relation_geometry_rows(
-    hike: DayHike, relation: OsmRelation, snapshot: OsmSnapshot, access_tree, named: NamedPoints | None
+    hike: DayHike,
+    relation: OsmRelation,
+    snapshot: OsmSnapshot,
+    access_tree,
+    named: NamedPoints | None,
+    lower: LowerStart | None = None,
 ) -> tuple[tuple, list[tuple], list[tuple]]:
     """A relation DayHike's rows of the GeometryStore: its dayhikes row, its
     main walk's vertices and its member ways."""
-    walk = _main_walk(relation, snapshot, access_tree, named)
+    walk = _main_walk(relation, snapshot, access_tree, named, lower)
     dayhike_row = (
         hike.id,
         hike.name,

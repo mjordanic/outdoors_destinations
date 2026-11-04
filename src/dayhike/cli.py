@@ -71,6 +71,13 @@ def main(argv: list[str] | None = None) -> int:
         help="TrailGraph: join a dead-end tip to another way this close, at most 50 "
         f"(default: {SNAP_TOLERANCE_M})",
     )
+    ingest.add_argument(
+        "--dem",
+        type=Path,
+        default=None,
+        help="Directory of FABDEM (or Copernicus GLO-30) GeoTIFFs: a line whose ends differ by more than "
+        "100 m starts at its lower end (ADR-0048). Without it, height orients no line",
+    )
     _add_workers(ingest)
     fetch = subparsers.add_parser(
         "fetch-extracts",
@@ -436,6 +443,7 @@ def main(argv: list[str] | None = None) -> int:
             fresh=args.fresh,
             list_dayhikes=args.list_dayhikes,
             snap_tolerance_m=args.snap_tolerance,
+            dem_dir=args.dem,
         )
     if args.command == "sample-trailgraph":
         try:
@@ -509,6 +517,7 @@ def _ingest(
     fresh: bool = False,
     list_dayhikes: bool = False,
     snap_tolerance_m: float = SNAP_TOLERANCE_M,
+    dem_dir: Path | None = None,
 ) -> int:
     catalog = build_catalog(
         osm_paths,
@@ -516,6 +525,7 @@ def _ingest(
         progress=_progress,
         fresh=fresh,
         snap_tolerance_m=snap_tolerance_m,
+        dem_dir=dem_dir,
     )
     print(catalog.path)
     print(catalog.ingest_report)

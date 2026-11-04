@@ -50,7 +50,7 @@ from rebuild_checks import DATA_DIR, KEPT_BY_THE_RULES, REPO, real_data
 from scipy.spatial import cKDTree
 
 from dayhike import SimilarityStore, geometry_store_path_for
-from dayhike.catalog import GAP_JOIN_M, MIN_LENGTH_M, _access_tree, _drop_reason, assemble_main_walk
+from dayhike.catalog import GAP_JOIN_M, LOWER_START_M, MIN_LENGTH_M, _access_tree, _drop_reason, assemble_main_walk
 from dayhike.network_hikes import START_PARKING_M, START_PLACE_M
 from dayhike.osm import amenity_kind
 from dayhike.similarity import MEASURE_NAMES
@@ -299,15 +299,30 @@ def _distance_to_parking(tree: cKDTree | None, lat: np.ndarray, lon: np.ndarray)
 def _start_distances(geometry: Path, ids: list[int]) -> tuple[dict[int, float], dict[int, float]]:
     """Metres from each DayHike's first vertex to the nearest parking point and the nearest place."""
     starts = _read(geometry, "SELECT dayhike_id, latitude, longitude FROM vertices WHERE seq = 0")
-    starts = starts[starts["dayhike_id"].isin(ids)]
+    return _distances(geometry, starts[starts["dayhike_id"].isin(ids)])
+
+
+def _end_distances(geometry: Path, ids: list[int]) -> tuple[dict[int, float], dict[int, float], dict[int, float]]:
+    """Metres from each DayHike's last vertex to the nearest parking point and the
+    nearest place, and how much higher its last vertex is than its first (NaN unknown)."""
+    lasts, rise = [], {}
+    for i in ids:
+        walk = _read(geometry, "SELECT latitude, longitude, ele FROM vertices WHERE dayhike_id = ? ORDER BY seq", (i,))
+        lasts.append((i, walk["latitude"].iloc[-1], walk["longitude"].iloc[-1]))
+        rise[i] = float(walk["ele"].iloc[-1]) - float(walk["ele"].iloc[0])
+    return (*_distances(geometry, pd.DataFrame(lasts, columns=["dayhike_id", "latitude", "longitude"])), rise)
+
+
+def _distances(geometry: Path, at: pd.DataFrame) -> tuple[dict[int, float], dict[int, float]]:
+    # Metres from each (dayhike_id, latitude, longitude) row of ``at`` to the nearest parking point and place.
     found = []
     for kind in ("parking", "place"):
         points = _read(geometry, "SELECT latitude, longitude FROM amenities WHERE kind = ?", (kind,))
         chord = cKDTree(_unit_vectors(points["latitude"], points["longitude"])).query(
-            _unit_vectors(starts["latitude"], starts["longitude"])
+            _unit_vectors(at["latitude"], at["longitude"])
         )[0]
         metres = 2 * EARTH_RADIUS_M * np.arcsin(np.minimum(chord, 2.0) / 2)
-        found.append(dict(zip(starts["dayhike_id"].tolist(), metres.tolist())))
+        found.append(dict(zip(at["dayhike_id"].tolist(), metres.tolist())))
     return found[0], found[1]
 
 
@@ -460,14 +475,19 @@ def test_a_loop_by_a_parking_point_starts_within_300_m_of_one(
 def test_a_networkhike_starts_by_parking_or_a_place() -> None:
     # ADR-0039: chains start at a signpost within START_PARKING_M of parking or
     # START_PLACE_M of a place. A signpost stands at the first leg end of its
-    # group, so a chain's first vertex may be GAP_JOIN_M from it.
+    # group, so a chain's first vertex may be GAP_JOIN_M from it. ADR-0048: a
+    # line more than LOWER_START_M lower at its far end is walked from there, so
+    # it ends by parking or a place and starts that much lower.
     ids = _read(CATALOG, "SELECT id FROM dayhikes WHERE kind = 'network'")["id"].tolist()
     to_parking, to_place = _start_distances(GEOMETRY, ids)
 
-    far = [
-        i for i in ids
-        if to_parking[i] > START_PARKING_M + GAP_JOIN_M and to_place[i] > START_PLACE_M + GAP_JOIN_M
-    ]  # fmt: skip
+    def near(parking: dict[int, float], place: dict[int, float], i: int) -> bool:
+        return parking[i] <= START_PARKING_M + GAP_JOIN_M or place[i] <= START_PLACE_M + GAP_JOIN_M
+
+    far = [i for i in ids if not near(to_parking, to_place, i)]
+    end_parking, end_place, rise = _end_distances(GEOMETRY, far)
+    turned = [i for i in far if near(end_parking, end_place, i) and rise[i] > LOWER_START_M]
+    far = [i for i in far if i not in turned]
     assert len(to_parking) == len(ids)
     assert not far, f"{len(far)} NetworkHikes start far from parking and places, {_ids(far)}"
 

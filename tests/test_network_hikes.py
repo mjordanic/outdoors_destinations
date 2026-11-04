@@ -25,7 +25,7 @@ from dayhike.network_hikes import (
     starts,
 )
 import dayhike.network_hikes as network_hikes_module
-from dayhike.catalog import named_points
+from dayhike.catalog import LowerStart, named_points
 from dayhike.osm import OsmRelation, OsmSnapshot, OsmWay
 
 KM_LAT = 1_000.0 / 6_371_000 * 180 / math.pi
@@ -872,3 +872,36 @@ def test_network_hikes_take_time_in_proportion_to_the_networks():
     small, large = seconds(1_000), seconds(4_000)
 
     assert large < 8 * small  # 4 times the networks: 4 times the time, not 16
+
+
+def _down_to_charlie(rise_m: float = 300.0):
+    # Heights falling east: Alpha at x 0 km, Charlie at x 4 km ``rise_m`` lower.
+    return lambda points: [1_000.0 - (lon - 15.0) / (_lat_lon(4, 0)[1] - 15.0) * rise_m for _, lon in points]
+
+
+def _alpha_bravo_charlie() -> Network:
+    # Legs Alpha-Bravo-Charlie, 4 km east from parking at Alpha; the place Charlie stands
+    # 400 m past C, too far to start chains; the leg from B ends at C on a street.
+    net = Network({"A": (0, 0), "B": (2, 0), "C": (4, 0)})
+    net.leg(1, "A", "B")
+    net.leg(2, "B", "C")
+    net.ways[101] = OsmWay(net.ways[101].node_ids, {"highway": "unclassified"})
+    return net
+
+
+def test_a_network_line_whose_ends_differ_by_over_100_m_starts_at_its_lower_end_and_names_it_first():
+    # ADR-0048: it starts at the lower end C, reached by its street, and the name swaps its ends.
+    net = _alpha_bravo_charlie()
+    places = [(*_lat_lon(0.1, 0.1), "Alpha"), (*_lat_lon(4.4, 0), "Charlie")]
+    parking = [net.point("A")]
+    lower = LowerStart(_down_to_charlie(), [*parking, *((lat, lon) for lat, lon, _ in places)])
+
+    (hike,) = network_hikes(net.legs, net.ways, net.nodes, parking, places, lower=lower)
+    (kept,) = network_hikes(net.legs, net.ways, net.nodes, parking, places)
+
+    assert kept.name == "Alpha – Charlie"
+    assert hike.name == "Charlie – Alpha"
+    assert [node for node, _ in hike.vertices] == [net.node_ids[name] for name in ("C", "B", "A")]
+    assert (hike.way_ids, hike.parts) == ((101, 100), (2, 1))
+    flat = LowerStart(_down_to_charlie(rise_m=90.0), [*parking, *((lat, lon) for lat, lon, _ in places)])
+    assert network_hikes(net.legs, net.ways, net.nodes, parking, places, lower=flat)[0].name == "Alpha – Charlie"

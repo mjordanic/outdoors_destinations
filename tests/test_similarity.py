@@ -432,20 +432,21 @@ def test_elevation_gain_drops_dem_spikes_but_keeps_a_steep_summit() -> None:
     # 60 m up and down within 30 m of trail on a flat walk is the DEM, not the trail.
     spiky = [400.0, 402.0, 462.0, 401.0, 403.0, 340.0, 404.0, 400.0]
     assert elevation_gain(*_north_line(spiky, step_m=30.0)) == 0.0
-    # A spike next to a spike goes too, once the first is dropped.
-    assert elevation_gain(*_north_line([400.0, 401.0, 460.0, 345.0, 402.0], step_m=30.0)) == 0.0
+    # A spike next to a spike goes too, once the first is dropped: left is the 2 m the walk ends higher.
+    assert elevation_gain(*_north_line([400.0, 401.0, 460.0, 345.0, 402.0], step_m=30.0)) == 2.0
     # A summit 100 m above both neighbours 500 m away is a 20 % grade: real.
     assert elevation_gain(*_north_line([1000.0, 1100.0, 1000.0], step_m=500.0)) == 100.0
-    # The ends are never spikes.
-    assert elevation_gain(*_north_line([460.0, 400.0, 401.0], step_m=30.0)) == 60.0
+    # The ends are never spikes. Walked down, 60 m down and the last metre up; walked up,
+    # 59 m up from the start's 401 m: the mean of the two.
+    assert climb_and_descent(*_north_line([460.0, 400.0, 401.0], step_m=30.0)) == (0.5, 59.5)
 
 
 def _stepwise_climb_and_descent(along, ele):
-    """Climb and descent by the GLOSSARY.md rules, one vertex at a time: a
-    vertex at least 10 m above or below both kept neighbours and at least a
-    25 % grade on both sides is dropped (and the one before it is looked at
-    again), then a change counts once it moves 10 m from the last counted
-    elevation."""
+    """Climb and descent by the GLOSSARY.md rules, one vertex at a time, one
+    walking direction: a vertex at least 10 m above or below both kept
+    neighbours and at least a 25 % grade on both sides is dropped (and the one
+    before it is looked at again), then a change counts once it moves 10 m from
+    the last counted elevation, and the last kept vertex counts whatever it moved."""
     kept = []
     for here in ((m, e) for m, e in zip(along, ele) if math.isfinite(e)):
         while len(kept) >= 2:
@@ -469,7 +470,18 @@ def _stepwise_climb_and_descent(along, ele):
             climb, last = climb + (e - last), e
         elif last - e >= 10.0:
             descent, last = descent + (last - e), e
-    return climb, descent
+    end = kept[-1][1]
+    return climb + max(end - last, 0.0), descent + max(last - end, 0.0)
+
+
+def _both_ways(lat, lon, ele):
+    """The mean of the stepwise climb and descent walked forward and walked back (ADR-0048)."""
+    def stepwise(lat, lon, ele):
+        along = np.concatenate([[0.0], np.cumsum(_step_m(np.asarray(lat, float), np.asarray(lon, float)))])
+        return _stepwise_climb_and_descent(along.tolist(), list(ele))
+
+    (climb, descent), (back_climb, back_descent) = stepwise(lat, lon, ele), stepwise(lat[::-1], lon[::-1], ele[::-1])
+    return (climb + back_descent) / 2, (descent + back_climb) / 2
 
 
 def test_climb_and_descent_match_the_stepwise_rules_on_noisy_spiky_walks() -> None:
@@ -482,9 +494,35 @@ def test_climb_and_descent_match_the_stepwise_rules_on_noisy_spiky_walks() -> No
         spikes = rng.random(count) < rng.uniform(0.0, 0.3)
         ele[spikes] += rng.choice([-1.0, 1.0], spikes.sum()) * rng.uniform(5.0, 80.0, spikes.sum())
         ele[rng.random(count) < rng.uniform(0.0, 0.2)] = math.nan
-        along = np.concatenate([[0.0], np.cumsum(_step_m(np.asarray(lat, float), np.asarray(lon, float)))])
-        expected = _stepwise_climb_and_descent(along.tolist(), ele.tolist())
+        expected = _both_ways(lat, lon, ele)
         assert climb_and_descent(lat, lon, ele) == pytest.approx(expected, rel=0, abs=0, nan_ok=True)
+
+
+def _noisy_spiky_walks(seed: int, count: int = 300):
+    rng = np.random.default_rng(seed)
+    for _ in range(count):
+        size = int(rng.integers(2, 400))
+        lat, lon, _ = _north_line([0.0] * size, step_m=rng.uniform(5.0, 120.0))
+        lon = lon + np.cumsum(rng.normal(0.0, 1e-4, size))  # not due north: a step's metres depend on its ends
+        ele = 500.0 + np.cumsum(rng.normal(0.0, rng.uniform(0.5, 15.0), size))
+        spikes = rng.random(size) < rng.uniform(0.0, 0.3)
+        ele[spikes] += rng.choice([-1.0, 1.0], spikes.sum()) * rng.uniform(5.0, 80.0, spikes.sum())
+        ele[1:-1][rng.random(size - 2) < rng.uniform(0.0, 0.2)] = math.nan
+        yield lat, lon, ele
+
+
+def test_climb_and_descent_swap_exactly_when_the_walk_is_reversed() -> None:
+    for lat, lon, ele in _noisy_spiky_walks(20261104):
+        climb, descent = climb_and_descent(lat, lon, ele)
+
+        assert climb_and_descent(lat[::-1], lon[::-1], ele[::-1]) == (descent, climb)
+
+
+def test_a_walk_retraced_climbs_exactly_what_it_descends() -> None:
+    for lat, lon, ele in _noisy_spiky_walks(20261105):
+        climb, descent = climb_and_descent(*(np.concatenate([v, v[::-1][1:]]) for v in (lat, lon, ele)))
+
+        assert climb == descent
 
 
 def test_climb_grade_is_the_gain_over_the_climbing_length() -> None:

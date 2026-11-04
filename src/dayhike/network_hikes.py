@@ -30,6 +30,7 @@ from dayhike.catalog import (
     GAP_JOIN_M,
     KIND_RELATION,
     PLACE_RADIUS_M,
+    LowerStart,
     MainWalk,
     NamedPoints,
     _haversine_m,
@@ -160,6 +161,7 @@ def network_source(context: BuildContext) -> list[BuiltWalk]:
         snapshot.destinations,
         snapshot.guideposts,
         relations=_relation_walks(context, legs),
+        lower=context.lower,
     )
     if context.progress is not None:
         jumps = sum(hike.jumps for hike in hikes)
@@ -212,6 +214,7 @@ def network_hikes(
     destinations: Sequence[tuple[float, float, str]] = (),
     guideposts: Sequence[tuple[float, float, str]] = (),
     relations: Sequence[Sequence[Point]] = (),
+    lower: LowerStart | None = None,
 ) -> list[NetworkHike]:
     """The NetworkHikes of node-network ``legs``, best first: ``leg_graph``,
     then ``candidates`` from every one of its ``starts``, ``select`` and
@@ -222,6 +225,8 @@ def network_hikes(
     ``CROSSING_MAX_RATIO`` times the straight jump: then it jumps, as when no
     crossing is found. It favours walking legs over stepping between their
     ends, and takes the shortest crossing only when that favourite is too long.
+    A line the height rule ``lower`` starts at its far end (ADR-0048) is walked
+    from there, back to its start, and named the other way round.
 
     A kept chain that starts within ``START_PARKING_M`` of parking starts at
     the parking: it first walks there from it along ``ways`` (see
@@ -304,9 +309,17 @@ def network_hikes(
                 end = vertices[-1][0]
                 back = from_parking[end] if end == vertices[0][0] else to_parking.get((end, vertices[0][0]))
             vertices, way_ids = _start_at_parking(vertices, way_ids, *from_parking[vertices[0][0]], back)
+        first, last = vertices[0][1], vertices[-1][1]
+        reverse = (
+            not chain.loop
+            and lower is not None
+            and lower.choice([ways[way_id] for way_id in dict.fromkeys(way_ids)], nodes)(first, last) == last
+        )
+        if reverse:
+            vertices, way_ids, parts = vertices[::-1], way_ids[::-1], parts[::-1]
         hikes.append(
             NetworkHike(
-                chain_name(graph, chain, names, marked, settled),
+                chain_name(graph, chain, names, marked, settled, reverse),
                 tuple(vertices),
                 tuple(way_ids),
                 tuple(parts),
@@ -905,8 +918,10 @@ def chain_name(
     names: Sequence[str | None],
     destinations: NamedPoints | None = None,
     places: NamedPoints | None = None,
+    reverse: bool = False,
 ) -> str:
-    """"Loop from {start} via {destination}" or "{start} – {destination}".
+    """"Loop from {start} via {destination}" or "{start} – {destination}"; a
+    line walked from its destination (``reverse``, ADR-0048) "{destination} – {start}".
 
     The start is its signpost's name (``names``, see ``signpost_names``),
     else the nearest of ``places`` within ``PLACE_RADIUS_M``. A loop goes via
@@ -924,6 +939,8 @@ def chain_name(
         end = _nearest(destinations, last, DESTINATION_M) or names[chain.signposts[-1]]
         if end is None and (place := _nearest(places, last, PLACE_RADIUS_M)) != start:
             end = place
+        if reverse:
+            start, end = end, start
         if start and end:
             return f"{start} – {end}"
         return f"Hike from {start}" if start else f"Hike to {end}" if end else "Network hike"

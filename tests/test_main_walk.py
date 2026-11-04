@@ -9,6 +9,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
+from dem_tiles import write_dem_tile
 
 from dayhike import build_catalog, geometry_store_path_for
 
@@ -39,6 +40,7 @@ def _osm(
     roles: Mapping[int, str] = {},
     tags: Mapping[str, str] = {"name": "Shape"},
     points: Sequence[tuple[float, float, Mapping[str, str]]] = (),
+    way_tags: Mapping[int, Mapping[str, str]] = {},
 ) -> str:
     """Nodes by one-letter name at (x_km, y_km); ways as strings of node names.
 
@@ -46,7 +48,8 @@ def _osm(
     from one (x_km, y_km) to another, not a member. ``roles`` maps a member
     way to its role; every other member has role "". ``tags`` are the
     relation's tags besides type and route; ``points`` are tagged nodes
-    (peaks, huts, places) at (x_km, y_km).
+    (peaks, huts, places) at (x_km, y_km). ``way_tags`` replaces a member
+    way's tags (``highway=path`` otherwise).
     """
     node_ids = {name: 100 + index for index, name in enumerate(nodes)}
     xml = '<?xml version="1.0" encoding="UTF-8"?>\n<osm version="0.6">\n'
@@ -73,7 +76,8 @@ def _osm(
         )
     for way_id, names in ways.items():
         refs = "".join(f'<nd ref="{node_ids[name]}"/>' for name in names)
-        xml += f'<way id="{way_id}" version="1">{refs}<tag k="highway" v="path"/></way>\n'
+        way_xml = "".join(f'<tag k="{k}" v="{v}"/>' for k, v in way_tags.get(way_id, {"highway": "path"}).items())
+        xml += f'<way id="{way_id}" version="1">{refs}{way_xml}</way>\n'
     listed = "".join(
         f'<member type="way" ref="{way_id}" role="{roles.get(way_id, "")}"/>'
         for way_id in members
@@ -89,13 +93,13 @@ def _osm(
 class Walk:
     def __init__(
         self, tmp_path: Path, nodes, ways, members, parking=(), road=None, roles={},
-        tags={"name": "Shape"}, points=(),
+        tags={"name": "Shape"}, points=(), way_tags={}, dem=None,
     ) -> None:
         tmp_path.mkdir(exist_ok=True)
         osm = tmp_path / "shape.osm"
-        osm.write_text(_osm(nodes, ways, members, parking, road, roles, tags, points))
+        osm.write_text(_osm(nodes, ways, members, parking, road, roles, tags, points, way_tags))
         catalog_path = tmp_path / "catalog.sqlite"
-        catalog = build_catalog(osm, catalog_path)
+        catalog = build_catalog(osm, catalog_path, dem_dir=dem)
         self.hike = next((hike for hike in catalog.dayhikes if hike.id == RELATION_ID), None)
         if self.hike is None:
             return
@@ -709,6 +713,82 @@ def test_without_a_from_or_to_name_at_one_end_parking_picks_the_start(tmp_path: 
     walk = Walk(tmp_path, LINE, LINE_WAYS, [1, 2, 3], parking=[(0, 6.1)], tags=tags, points=[PEAK_AT_D, HUT_AT_A])
 
     assert walk.vertices == "dcba"
+
+
+# ADR-0048: a line whose ends differ by more than 100 m starts at its lower end.
+BORCEC_BY_A = (0.2, 0, {"place": "village", "name": "Borčec"})
+
+
+def _dem_rising_to_d(tmp_path: Path, rise_m: float = 195.0) -> Path:
+    """A FABDEM tile under LINE: a at 276 m, d ``rise_m`` higher, as Medvednica 5's ends."""
+    return write_dem_tile(tmp_path / "dem", 45.0, 15.0, lambda lat: 276.0 + (lat - 45.0) / (6 * KM_LAT) * rise_m).parent
+
+
+def test_a_line_parked_at_both_ends_starts_at_its_lower_end_by_a_village(tmp_path: Path) -> None:
+    # Medvednica 5: parking 100 m from the top d and 600 m from the bottom a, a village by a.
+    walk = Walk(
+        tmp_path, LINE, LINE_WAYS, [1, 2, 3], parking=[(0, 6.1), (0, -0.6)], points=[BORCEC_BY_A],
+        dem=_dem_rising_to_d(tmp_path),
+    )  # fmt: skip
+
+    _assert_line_abcd(walk)
+
+
+def test_without_heights_the_same_line_starts_at_the_nearer_parking(tmp_path: Path) -> None:
+    walk = Walk(tmp_path, LINE, LINE_WAYS, [1, 2, 3], parking=[(0, 6.1), (0, -0.6)], points=[BORCEC_BY_A])
+
+    assert walk.vertices == "dcba"
+
+
+def test_a_line_whose_lower_end_nothing_reaches_starts_at_the_parked_top(tmp_path: Path) -> None:
+    # Medvednica 15: the low end a is a forest junction, no place, road or parking within 300 m.
+    walk = Walk(tmp_path, LINE, LINE_WAYS, [1, 2, 3], parking=[(0, 6.1), (0, -1.0)], dem=_dem_rising_to_d(tmp_path))
+
+    assert walk.vertices == "dcba"
+
+
+@pytest.mark.parametrize(
+    ("parking", "way_tags"),
+    [
+        ([(0, 6.1), (0, -0.25)], {}),  # parking 250 m from a
+        ([(0, 6.1), (0, -1.0)], {1: {"highway": "residential"}}),  # a is on a street
+    ],
+)
+def test_parking_or_a_road_at_the_lower_end_reaches_it(tmp_path: Path, parking, way_tags) -> None:
+    walk = Walk(
+        tmp_path, LINE, LINE_WAYS, [1, 2, 3], parking=parking, way_tags=way_tags, dem=_dem_rising_to_d(tmp_path)
+    )
+
+    _assert_line_abcd(walk)
+
+
+def test_a_line_whose_ends_differ_by_100_m_or_less_starts_where_parking_says(tmp_path: Path) -> None:
+    walk = Walk(
+        tmp_path, LINE, LINE_WAYS, [1, 2, 3], parking=[(0, 6.1), (0, -0.6)], points=[BORCEC_BY_A],
+        dem=_dem_rising_to_d(tmp_path, rise_m=80.0),
+    )  # fmt: skip
+
+    assert walk.vertices == "dcba"
+
+
+def test_a_descent_its_from_and_to_tags_declare_keeps_their_direction(tmp_path: Path) -> None:
+    walk = Walk(
+        tmp_path, LINE, LINE_WAYS, [1, 2, 3], parking=[(0, 6.1), (0, -0.6)],
+        tags={"name": "Path 12", "from": "Triglav", "to": "Dolič"}, points=[PEAK_AT_D, HUT_AT_A, BORCEC_BY_A],
+        dem=_dem_rising_to_d(tmp_path),
+    )  # fmt: skip
+
+    assert walk.vertices == "dcba"
+
+
+def test_height_outranks_a_descent_its_dashed_name_declares(tmp_path: Path) -> None:
+    walk = Walk(
+        tmp_path, LINE, LINE_WAYS, [1, 2, 3], parking=[(0, 6.1), (0, -0.6)],
+        tags={"name": "Triglav - Dolič"}, points=[PEAK_AT_D, HUT_AT_A, BORCEC_BY_A],
+        dem=_dem_rising_to_d(tmp_path),
+    )  # fmt: skip
+
+    _assert_line_abcd(walk)
 
 
 # A stem a-b from parking at a, two branches b-m-c and b-n-c, and a short spur c-d:
