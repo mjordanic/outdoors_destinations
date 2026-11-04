@@ -120,8 +120,8 @@ the best 30 areas and picks 10 of them. A better match is picked more often
 than a weaker one, so the very best are nearly always there, and the rest
 change from one search to the next. Hikes that match about equally well all
 get their turn, instead of the same ones always winning by a hair. The list is
-still in score order. A row that the exact top 10 would not include has a small
-**picked** mark next to its number.
+still in score order. Some rows have a small **picked** mark next to their
+number. A row marked picked would not appear in Strict order.
 
 - **Redraw**, above the list, picks again from the same 30 areas. It is
   instant and keeps any loops already suggested. If no other hike is close

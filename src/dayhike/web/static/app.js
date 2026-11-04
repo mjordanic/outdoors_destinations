@@ -1912,11 +1912,6 @@ function renderResults() {
   const versions = shown.some((result) => result.versions.length)
     ? ` Hikes starting within ${body.group_km} km of a better one are its versions: click a row with versions to list the others (var 2, 3) under it and see each on the map.`
     : "";
-  const search = body.loop_search;
-  const others = state.query.wish ? "a listed hike" : "a listed hike or the hike you like";
-  const loops = search
-    ? ` Loops: searched from ${search.starts} start${search.starts === 1 ? "" : "s"} near the best hikes, ${search.found} found, ${search.listed} listed${search.found > search.listed ? ` (the others rank lower, or walk mostly the same trails as ${others})` : ""}.${search.stopped ? " The search stopped at its time limit, so it may have missed some loops." : ""}`
-    : "";
   $("#wish-card").hidden = true;
   $("#results-title").textContent = state.query.wish ? "Hikes closest to the one you want" : "Most similar hikes";
   const picked = !state.strict && pool.length > shown.length
@@ -1925,7 +1920,7 @@ function renderResults() {
   const tied = pool.filter((result) => result.score === pool[0]?.score).length;
   const ties = tied > 1 ? ` The best ${tied} areas match equally well.` : "";
   $("#results-note").textContent = shown.length
-    ? `${state.query.wish ? "Closest to the hike you want" : `Like “${state.liked.name}”`}, out of ${considered}${body.loops ? " and loops composed near the best of them" : ""}, ${mode}.${picked}${ties} Click a row to see it.${composed}${searched}${versions}${loops}`
+    ? `${state.query.wish ? "Closest to the hike you want" : `Like “${state.liked.name}”`}, out of ${considered}${body.loops ? " and loops composed near the best of them" : ""}, ${mode}.${picked}${ties} Click a row to see it.${composed}${searched}${versions}`
     : `No hike matched, out of ${considered}. Try a longer drive, a longer distance or other weights.`;
   $("#results-draw").hidden = !shown.length;
   $("#results-loops").hidden = !state.info.compose || body.loops; // SuggestedLoops on request (ADR-0028)
@@ -1940,6 +1935,16 @@ function renderResults() {
   showMoreButton(body);
 }
 
+// What the loop search did, of the loops in the rows shown, with their versions.
+function noteLoops() {
+  const search = state.answer.loop_search;
+  const listed = state.results.reduce((sum, result) => sum + [result, ...result.versions].filter((row) => row.route).length, 0);
+  const others = state.query.wish ? "a listed hike" : "a listed hike or the hike you like";
+  $("#results-loops-note").textContent = search && state.results.length
+    ? ` Loops: searched from ${search.starts} start${search.starts === 1 ? "" : "s"} near the best hikes, ${search.found} found, ${listed} listed${search.found > listed ? ` (the others rank lower, or walk mostly the same trails as ${others})` : ""}.${search.stopped ? " The search stopped at its time limit, so it may have missed some loops." : ""}`
+    : "";
+}
+
 // Rows for the results from ``from`` on, at the end of the table.
 function listRows(from) {
   const tbody = $("#results-table tbody");
@@ -1949,6 +1954,7 @@ function listRows(from) {
     row.dataset.index = i;
     tbody.appendChild(row);
   });
+  noteLoops();
   pick.drawLoops();
 }
 

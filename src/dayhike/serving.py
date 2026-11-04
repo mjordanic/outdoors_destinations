@@ -912,7 +912,8 @@ class Ranking(list):
     """``ServingData.rank``'s rows, best first, and what they leave out: ``other_areas``,
     the hikes ranked that start in no row's area (later pages list them), and
     ``loop_search``, what the SuggestedLoop search did (None when none ran):
-    ``starts`` searched from, loops ``found`` and measured, ``listed``, and whether
+    ``starts`` searched from, loops ``found`` and measured, ``listed`` in all its rows and
+    their versions (the whole pool; the page counts those in the rows it shows), and whether
     it ``stopped`` at ``LOOP_BUDGET_S``."""
 
     def __init__(self, rows: list[dict], other_areas: int, loop_search: dict | None) -> None:

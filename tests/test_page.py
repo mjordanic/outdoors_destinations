@@ -847,9 +847,39 @@ def test_the_page_says_what_the_ranking_does_not_list(browser, server) -> None:
     assert count.inner_text() == "12 more good matches start here"
     assert "later pages do not show them" in count.get_attribute("title")
     assert page.locator("#other-areas").inner_text() == "24,113 more hikes start in other areas."
-    note = page.locator("#results-note").inner_text()
-    assert "Loops: searched from 31 starts near the best hikes, 14 found, 3 listed" in note
+    note = page.locator("#results-loops-note").inner_text()
+    assert "Loops: searched from 31 starts near the best hikes, 14 found, 0 listed (the others rank lower" in note
     assert "stopped at its time limit" in note
+
+
+def test_the_loop_note_counts_the_loops_in_the_rows_shown(browser, server, monkeypatch) -> None:
+    monkeypatch.setattr(web, "RESULTS", 1)  # three areas: page 1 shows one row of a three-row pool
+
+    def loops(route) -> None:
+        body = route.fetch().json()
+        for row in body["results"]:
+            row["route"] = {"text": f"loop {row['id']}"}
+            row["versions"] = [dict(row, versions=[], route={"text": f"version {row['id']}"})]
+        body["loop_search"] = {"starts": 20, "found": 4, "listed": 6, "stopped": False}
+        route.fulfill(json=body)
+
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}&strict")
+    page.route(f"{server}/api/rank", loops)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+    note = page.locator("#results-loops-note")
+    fewer = "Loops: searched from 20 starts near the best hikes, 4 found, 2 listed (the others rank lower"
+    assert fewer in note.inner_text()
+
+    with page.expect_response(f"{server}/api/rank"):
+        page.get_by_role("button", name="Show 1 more").click()
+    page.locator("#results-table tbody tr:not(.version)").nth(1).wait_for()
+    assert "4 found, 4 listed." in note.inner_text()
+
+    page.get_by_label("Strict order").uncheck()  # page 1 again, drawn, later pages dropped
+    assert fewer in note.inner_text()
+    page.get_by_role("button", name="Redraw").click()
+    assert fewer in note.inner_text()
 
 
 # Whether every line of an element lies inside its cell, and a pointer on its first line finds it (its tooltip shows).

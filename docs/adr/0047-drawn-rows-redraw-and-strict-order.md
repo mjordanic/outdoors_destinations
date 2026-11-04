@@ -134,5 +134,7 @@ Rejected.
   The CLI and `dayhike rank` stay deterministic.
 - A Find's answer is about 3 times larger. Versions are decided in the 30-row grouping, so a row's
   versions can include a lower one that the 10-row grouping stopped before reaching.
+- `loop_search.listed` counts the loops in all 30 pool rows. The page's loop note counts the loops in
+  the rows it shows, with their versions, and follows Redraw, Strict order and "Show 10 more".
 - Loops suggested under one draw stay listed after ticking Strict order. The loop search runs only on
   request.
