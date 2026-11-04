@@ -1858,7 +1858,7 @@ function resultRow(result, number, open) {
   const more = result.more_here
     ? `${versions ? " ·" : ""} <span class="versions more-here" title="${escapeHtml(moreHereNote(result.more_here))}">${result.more_here} more good match${result.more_here === 1 ? " starts" : "es start"} here</span>`
     : "";
-  row.innerHTML = `<td>${number}</td><td class="name" title="${escapeHtml(result.name)}">${tag}${escapeHtml(result.name)}${versions}${more}</td>
+  row.innerHTML = `<td>${number}</td><td class="name" title="${escapeHtml(result.name)}"><span class="hike-name">${tag}${escapeHtml(result.name)}</span>${versions || more ? `<span class="badge-line">${versions}${more}</span>` : ""}</td>
     <td class="score">${result.score.toFixed(3)}</td>
     ${drive ? `<td>${result.drive_hours.toFixed(1)} h</td>` : ""}
     ${km ? `<td>${result.distance_km.toFixed(1)} km</td>` : ""}

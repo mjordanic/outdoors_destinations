@@ -673,6 +673,42 @@ def test_the_page_says_what_the_ranking_does_not_list(browser, server) -> None:
     assert "stopped at its time limit" in note
 
 
+# Whether every line of an element lies inside its cell, and a pointer on its first line finds it (its tooltip shows).
+SHOWN_WHOLE = """e => {
+  const cell = e.closest("td").getBoundingClientRect();
+  const lines = [...e.getClientRects()];
+  const hit = document.elementFromPoint((lines[0].left + lines[0].right) / 2, (lines[0].top + lines[0].bottom) / 2);
+  return lines.every((r) => r.left >= cell.left && r.right <= cell.right) && e.contains(hit);
+}"""
+
+
+@pytest.mark.parametrize("width", [1280, 390])
+def test_the_versions_and_more_here_line_is_not_cut_off(browser, server, width) -> None:
+    def counted(route) -> None:
+        body = route.fetch().json()
+        first = body["results"][0]
+        first["name"] = "A very long hike name that does not fit in the hike column of the table"
+        first["more_here"] = 12
+        first["versions"] = first["versions"] or [dict(first, versions=[])] * 2
+        route.fulfill(json=body)
+
+    page = open_page(browser, server, Api({}), width=width, hash=f"#hike={RIDGE_WALK_ID}")
+    page.route(f"{server}/api/rank", counted)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_role("button", name="Find similar").click()
+    row = page.locator("#results-table tbody tr").first
+    row.wait_for()
+
+    count = row.locator(".more-here")
+    assert count.inner_text() == "12 more good matches start here"
+    count.scroll_into_view_if_needed()
+    assert count.evaluate(SHOWN_WHOLE)
+    assert row.locator(".versions").first.evaluate(SHOWN_WHOLE)
+    name = row.locator(".hike-name")
+    assert name.evaluate("e => getComputedStyle(e).textOverflow") == "ellipsis"
+    assert name.evaluate("e => e.scrollWidth > e.clientWidth")  # the long name itself is still cut
+
+
 def test_a_distance_limit_alone_or_with_the_drive_time_is_asked(browser, server) -> None:
     api = Api({})
     page = open_page(browser, server, api, hash=f"#hike={RIDGE_WALK_ID}")
