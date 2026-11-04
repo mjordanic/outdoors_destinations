@@ -1768,7 +1768,7 @@ cover do not cover all of Europe yet) show "no data" and drop out of that
 pair's score (a missing Difficulty grade scores 0 instead, ADR-0043, and so
 does missing data for a Measure a Wish asks a value of, ADR-0048). Climb and
 descent say "with the way back" or "one way" in the hike's panel and the
-results table; the search list gives every hike one way. Every API request the
+results table (a loop's panel says neither); the search list gives every hike one way. Every API request the
 page makes ends after 60 s with "The server did not answer within 60 s", and
 one that cannot connect says "The server could not be reached"; a failed Find
 says so above the list it leaves. Every score has a short line and a "?" beside it (in the results
