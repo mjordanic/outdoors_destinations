@@ -229,6 +229,55 @@ function likedHash(hike) {
   return `${hike.route ? routeHash(hike) : `#hike=${hike.id}`}${modeHash()}`;
 }
 
+// The full address that opens ``hike`` as the liked one, to send to a friend.
+function hikeAddress(hike) {
+  return `${location.origin}${location.pathname}${likedHash(hike)}`;
+}
+
+// ``hike`` as a GPX 1.1 track for hiking and GPS apps: its line as served, without
+// elevation (the DEM's licence stays out of the file), credited to OpenStreetMap.
+function gpxText(hike) {
+  const name = escapeHtml(hike.name), url = escapeHtml(hikeAddress(hike));
+  const points = decodePolyline(hike.line).map(([lat, lon]) => `<trkpt lat="${lat}" lon="${lon}"/>`);
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="HikesAlike" xmlns="http://www.topografix.com/GPX/1/1">
+<metadata><name>${name}</name><desc>Route data © OpenStreetMap contributors, ODbL 1.0.</desc>
+<copyright author="OpenStreetMap contributors"><license>https://opendatacommons.org/licenses/odbl/</license></copyright>
+<link href="${url}"><text>${name}</text></link></metadata>
+<trk><name>${name}</name><trkseg>
+${points.join("\n")}
+</trkseg></trk>
+</gpx>
+`;
+}
+
+// Saves ``hike`` as a GPX file named after it.
+function downloadGpx(hike) {
+  const base = hike.name.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(new Blob([gpxText(hike)], { type: "application/gpx+xml" }));
+  link.download = `${base || "hike"}.gpx`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+}
+
+// Sends ``hike``'s address to a friend: through the phone's share sheet, else copied for pasting.
+async function shareHike(hike, button) {
+  const url = hikeAddress(hike);
+  if (navigator.share) {
+    try { await navigator.share({ title: hike.name, url }); } catch { /* the Hiker closed the share sheet */ }
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    button.textContent = "Link copied";
+    setTimeout(() => { button.textContent = "Share"; }, 2000);
+  } catch {
+    setStatus(`Copy this link to share the hike: ${url}`);
+  }
+}
+
 // Whether every hike is measured with its way back to its start; an address ends in
 // "&oneway" when every hike is compared one way.
 function returnToStart() {
@@ -583,8 +632,9 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
       ${hike.route
         ? `<span><a href="${routeHash(hike)}${modeHash()}" title="This address opens this hike as your hike">Link to this hike</a>${compare ? ' <button type="button" class="secondary edit-composed">Edit on the map</button>' : ""}</span>`
         : hike.built ? builtLinks(hike, compare)
-        : `<a href="https://www.openstreetmap.org/relation/${hike.id}" target="_blank" rel="noopener">OpenStreetMap relation ${hike.id}</a>`}
+        : `<span><a href="https://www.openstreetmap.org/relation/${hike.id}" target="_blank" rel="noopener">OpenStreetMap relation ${hike.id}</a> · <a href="${likedHash(hike)}" title="This address opens this hike">Link to this hike</a></span>`}
     </div>
+    ${hike.line ? '<p class="hike-actions"><button type="button" class="secondary share-hike">Share</button> <button type="button" class="secondary download-gpx">Download GPX</button></p>' : ""}
     ${scoreLine}
     ${hike.route ? `<p class="hint">Drawn from trail segments${hike.routes?.length ? ` along ${escapeHtml(hike.routes.slice(0, 5).join(", "))}${hike.routes.length > 5 ? " and more" : ""}` : ""}; measured as drawn${hike.way_back ? ", with its way back" : ""}.</p>` : ""}
     ${hike.way_back && hike.way_back.kind !== "none" ? `<p class="hint">Length, climb, descent and every measure include the way back to the start (${escapeHtml(wayBackText(hike.way_back))}); the map and profile show the hike itself.</p>` : ""}
@@ -595,6 +645,8 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     <div class="charts"></div>
     <h3>${compare ? `Every measure: this hike against the ${compare.wish ? "one you want" : "liked one"}` : "The facts behind every measure"}</h3>
     <div class="table-wrap"><table class="facts"></table></div>`;
+  card.querySelector(".share-hike")?.addEventListener("click", (event) => shareHike(hike, event.currentTarget));
+  card.querySelector(".download-gpx")?.addEventListener("click", () => downloadGpx(hike));
   card.querySelector(".edit-composed")?.addEventListener("click", () => editComposed(
     hike.built ? { route: { text: hike.built.route }, name: hike.name } : hike,
   ));

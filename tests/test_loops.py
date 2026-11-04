@@ -23,9 +23,13 @@ MIDDLE_PATH = 2008
 
 @pytest.fixture(scope="module")
 def data(tmp_path_factory: pytest.TempPathFactory):
+    return loops_export(tmp_path_factory.mktemp("loops"))
+
+
+def loops_export(root):
+    """The serving export of the network with the Middle Path, written under ``root``."""
     from dayhike.serving import ServingData, export_serving
 
-    root = tmp_path_factory.mktemp("loops")
     text = FIXTURE.read_text()
     text = text.replace("  <way ", '  <node id="61" lat="46.0562952512" lon="14.0564789788" version="1"/>\n  <way ', 1)
     text = text.replace(

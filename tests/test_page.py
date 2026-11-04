@@ -10,6 +10,7 @@ import socket
 import threading
 import time
 import urllib.request
+import xml.etree.ElementTree as ET
 import zlib
 from collections.abc import Iterator
 from pathlib import Path
@@ -19,9 +20,10 @@ import pytest
 import uvicorn
 
 from dayhike import build_catalog, build_similarity, web
-from dayhike.serving import ServingData, encode_polyline, export_serving
+from dayhike.serving import ServingData, decode_polyline, encode_polyline, export_serving
 from dayhike.web import create_app
 from test_built_hikes import ridge_stage
+from test_loops import MEADOW_PATH, loops_export
 
 sync_api = pytest.importorskip("playwright.sync_api")
 
@@ -117,8 +119,10 @@ class Api:
         route.fulfill(json={**body, "seed": None, "wish": asked["wish"]})
 
 
-def open_page(browser, server: str, api: Api, *, width: int = 1280, hash: str = ""):
+def open_page(browser, server: str, api: Api, *, width: int = 1280, hash: str = "", init: str = ""):
     page = browser.new_page(viewport={"width": width, "height": 900})
+    if init:
+        page.add_init_script(init)
     page.set_default_timeout(5000)
     page.route(lambda url: not url.startswith(server), lambda route: route.abort())  # no tiles
     page.route(f"{server}/api/measures", api.measures)
@@ -1054,3 +1058,111 @@ def test_a_hike_that_ends_where_it_starts_draws_its_start_dot_and_no_end_dot_ove
     fills = [dot["fill"] for dot in page.evaluate(DOTS)]
 
     assert sorted(fills) == sorted([START_FILL, START_FILL, END_FILL])  # the loop's end dot is the one left out
+
+
+GPX = "{http://www.topografix.com/GPX/1/1}"
+
+
+def downloaded_gpx(page, card: str):
+    """The GPX file the card's Download GPX button saves: its suggested name and its parsed root."""
+    with page.expect_download() as caught:
+        page.locator(card).get_by_role("button", name="Download GPX").click()
+    return caught.value.suggested_filename, ET.parse(caught.value.path()).getroot()
+
+
+def test_a_liked_hike_downloads_as_a_gpx_track_that_credits_openstreetmap_and_links_back(browser, server) -> None:
+    with urllib.request.urlopen(f"{server}/api/hikes/{RIDGE_WALK_ID}") as response:
+        line = json.load(response)["line"]
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+
+    name, gpx = downloaded_gpx(page, "#liked")
+
+    assert name == "ridge-walk.gpx"
+    assert gpx.tag == f"{GPX}gpx" and gpx.get("version") == "1.1"
+    meta = gpx.find(f"{GPX}metadata")
+    assert meta.findtext(f"{GPX}name") == "Ridge Walk"
+    assert meta.findtext(f"{GPX}desc") == "Route data © OpenStreetMap contributors, ODbL 1.0."
+    assert meta.find(f"{GPX}copyright").get("author") == "OpenStreetMap contributors"
+    assert meta.findtext(f"{GPX}copyright/{GPX}license") == "https://opendatacommons.org/licenses/odbl/"
+    assert meta.find(f"{GPX}link").get("href") == f"{server}/#hike={RIDGE_WALK_ID}"
+    assert gpx.findtext(f"{GPX}trk/{GPX}name") == "Ridge Walk"
+    points = [coordinate for p in gpx.iter(f"{GPX}trkpt") for coordinate in (float(p.get("lat")), float(p.get("lon")))]
+    assert points == pytest.approx([coordinate for point in decode_polyline(line) for coordinate in point], abs=1e-9)
+    assert len(points) > 1
+    assert not list(gpx.iter(f"{GPX}ele"))  # no elevation, so no DEM licence in the file
+
+
+def test_a_catalog_hike_and_a_hike_found_similar_each_link_to_themselves(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+
+    assert page.locator("#liked").get_by_role("link", name="Link to this hike").get_attribute("href") == f"#hike={RIDGE_WALK_ID}"
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.click()
+    link = page.locator("#selected").get_by_role("link", name="Link to this hike")
+    shared = open_page(browser, server, Api({}), hash=link.get_attribute("href"))
+    shared.get_by_text(f"Chosen: {page.locator('#selected h2').text_content()}").wait_for()
+
+
+SHARED = "window.shared = []; navigator.share = async (data) => { window.shared.push(data); };"
+COPIED = """window.copied = []; delete Navigator.prototype.share; delete navigator.share;
+Object.defineProperty(navigator, "clipboard", { value: { writeText: async (text) => { window.copied.push(text); } } });"""
+
+
+def test_share_hands_the_hike_address_to_the_phone_share_sheet(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", init=SHARED)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+
+    page.locator("#liked").get_by_role("button", name="Share").click()
+
+    page.wait_for_function("() => window.shared.length")
+    assert page.evaluate("window.shared") == [{"title": "Ridge Walk", "url": f"{server}/#hike={RIDGE_WALK_ID}"}]
+
+
+def test_share_copies_the_hike_address_where_there_is_no_share_sheet(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}&oneway", init=COPIED)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+
+    page.locator("#liked").get_by_role("button", name="Share").click()
+
+    page.locator("#liked").get_by_role("button", name="Link copied").wait_for()
+    assert page.evaluate("window.copied") == [f"{server}/#hike={RIDGE_WALK_ID}&oneway"]
+
+
+@pytest.fixture(scope="module")
+def loops_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    """The app on the TrailGraph network where a Ranking from the Meadow Path suggests two loops (ADR-0020)."""
+    data = loops_export(tmp_path_factory.mktemp("loops-page"))
+    yield from serve(create_app(data, lambda max_hours: Matrix(), rank_rate=1_000))
+
+
+def test_a_suggested_loop_shared_opens_the_same_route_for_a_friend(browser, loops_server, monkeypatch) -> None:
+    monkeypatch.setattr("dayhike.serving.GROUP_M", 0.0)  # every hike in its own row, the loops too
+    page = open_page(browser, loops_server, Api({}), hash=f"#hike={MEADOW_PATH}", init=SHARED)
+    page.get_by_text("Chosen: Meadow Path").wait_for()
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+    page.get_by_role("button", name="Suggest loops near these hikes (takes a few seconds)").click()
+    page.locator("#results-table tbody tr", has=page.locator(".composed-tag")).first.click()
+    page.locator("#selected").get_by_role("button", name="Share").click()
+    page.wait_for_function("() => window.shared.length")
+    (shared,) = page.evaluate("window.shared")
+    _, gpx = downloaded_gpx(page, "#selected")
+
+    assert shared["url"].startswith(f"{loops_server}/#compose=")
+    assert gpx.find(f"{GPX}metadata/{GPX}link").get("href") == shared["url"]
+    friend = open_page(browser, loops_server, Api({}), hash=shared["url"].removeprefix(f"{loops_server}/"))
+    friend.get_by_text(f"Chosen: {shared['title']}").wait_for()
+    _, opened = downloaded_gpx(friend, "#liked")
+    assert [p.attrib for p in opened.iter(f"{GPX}trkpt")] == [p.attrib for p in gpx.iter(f"{GPX}trkpt")]
+    assert len(list(gpx.iter(f"{GPX}trkpt"))) > 1
+
+
+def test_share_and_download_fit_a_phone(browser, server) -> None:
+    page = open_page(browser, server, Api({}), width=390, hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+
+    assert page.locator("#liked").get_by_role("button", name="Share").is_visible()
+    assert page.locator("#liked").get_by_role("button", name="Download GPX").is_visible()
+    assert page.evaluate("document.documentElement.scrollWidth") <= 390
