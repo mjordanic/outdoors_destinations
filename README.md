@@ -943,9 +943,10 @@ else `ref` with `from – to` or "near" the nearest place, else `from – to`, e
 5 km of the Trailhead), else `relation:{id}`, with `name_origin` recording
 which (ADR-0017). A line starts at the end its `from`/`to` tags point to when
 they name one end; else, with `--dem`, at its lower end when its ends differ by
-more than 100 m and something reaches it (ADR-0048); else at the end its dashed
-name points to; else parking decides. With `roundtrip=yes` a route with a
-loop is walked as a loop when that keeps as much of it.
+more than 100 m and something reaches it (ADR-0048); else, when it lacks a
+`from` or `to` tag, at the end its dashed name points to; else parking
+decides. With `roundtrip=yes` a route with a loop is walked as a loop when
+that keeps as much of it.
 If the process
 stops before `write:`, run the same command again; it resumes from
 `data/catalog.sqlite.work`. `--fresh` discards that work file.

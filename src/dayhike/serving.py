@@ -594,7 +594,7 @@ def _write_trailgraph(source: Path, path: Path, progress: Progress | None) -> bo
         for segment_id, coords, ele in db.execute("SELECT id, coords, ele FROM segments"):
             lat, lon = decode_coords(coords).T
             ele = np.frombuffer(ele, dtype="<f4").astype(float)
-            climb_ab, climb_ba = climb_and_descent(lat, lon, ele)[0], climb_and_descent(lat[::-1], lon[::-1], ele[::-1])[0]
+            climb_ab, climb_ba = climb_and_descent(lat, lon, ele)
             updates.append(
                 (
                     encode_polyline(*simplify_line(lat, lon, LINE_TOLERANCE_M)),

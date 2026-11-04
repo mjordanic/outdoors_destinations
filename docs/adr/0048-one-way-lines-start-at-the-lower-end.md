@@ -15,7 +15,7 @@ one-way lines (12.9 %) started more than 100 m higher than they ended (od-hike-d
 
 1. at the end its OSM `from`/`to` **tags** name (ADR-0017); a tagged descent, such as a hut-to-valley Alta Via stage, keeps its direction;
 2. else, when its ends differ by more than **100 m** (`LOWER_START_M`), at its **lower end**, unless nothing reaches the lower end while something reaches the upper one;
-3. else at the end its dashed name ("Dolič - Triglav") names (ADR-0017), then at the end with the nearer parking within 5 km, then at its member-order end (ADR-0012 Round 2).
+3. else, for a relation without both `from` and `to` tags, at the end its dashed name ("Dolič - Triglav") names (ADR-0017); then at the end with the nearer parking within 5 km, then at its member-order end (ADR-0012 Round 2).
 
 So a height difference over 100 m now outranks the dashed name, the nearer parking and member order. Dashed names
 are weaker than tags: "Gaflei - Planken" often lists two places, not a direction.

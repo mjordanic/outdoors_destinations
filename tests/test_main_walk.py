@@ -791,6 +791,19 @@ def test_height_outranks_a_descent_its_dashed_name_declares(tmp_path: Path) -> N
     _assert_line_abcd(walk)
 
 
+@pytest.mark.parametrize("rise_m", [None, 80.0])
+def test_from_and_to_tags_that_name_no_end_leave_the_start_to_parking_not_the_dashed_name(
+    tmp_path: Path, rise_m
+) -> None:
+    walk = Walk(
+        tmp_path, LINE, LINE_WAYS, [1, 2, 3], parking=[(0, 6.1)],
+        tags={"name": "Dolič - Triglav", "from": "Planinarski dom", "to": "Sljeme"}, points=[PEAK_AT_D, HUT_AT_A],
+        dem=None if rise_m is None else _dem_rising_to_d(tmp_path, rise_m=rise_m),
+    )  # fmt: skip
+
+    assert walk.vertices == "dcba"
+
+
 # A stem a-b from parking at a, two branches b-m-c and b-n-c, and a short spur c-d:
 # four odd nodes, so without roundtrip=yes one branch is shed and it is a line to d.
 LOLLIPOP = {"a": (0, -1), "b": (0, 3), "m": (0.6, 3.6), "c": (0, 4.2), "n": (-0.6, 3.6), "d": (0, 4.5)}

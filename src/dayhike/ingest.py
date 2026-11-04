@@ -903,14 +903,15 @@ def _main_walk(
     lower: LowerStart | None = None,
 ) -> MainWalk:
     """The relation's main walk, its line started where its from/to tags say if
-    they can, else at its lower end if ``lower`` can tell (ADR-0048), else where
-    its dashed name says if it can."""
+    they can, else at its lower end if ``lower`` can tell (ADR-0048), else,
+    when it lacks a from or to tag, where its dashed name says if it can."""
     tags = relation.tags
+    tagged = tagged_ends(tags)
     ways = [snapshot.ways[way_id] for kind, way_id in relation.members if kind == "way" and way_id in snapshot.ways]
     declared = first_choice(
-        declared_start(tagged_ends(tags), named),
+        declared_start(tagged, named),
         None if lower is None else lower.choice(ways, snapshot.nodes),
-        declared_start(dashed_ends(tags), named),
+        None if tagged else declared_start(dashed_ends(tags), named),
     )
     return assemble_main_walk(relation, snapshot.ways, snapshot.nodes, access_tree, declared)
 
