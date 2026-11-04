@@ -94,6 +94,9 @@ near-copies of the same walk. The row shows the best one. Click the row to see
 up to three other versions of it (var 1, 2, 3). Each is more than half a
 different route.
 
+The same walk is not listed twice. If a hike is already on an earlier page,
+a near-identical copy of it does not turn up again on a later page.
+
 How close counts as close? By default, 5 % of your distance or drive limit,
 and at least 0.5 km. With no limit it is 10 km. "More options" lets you change
 it from 0.1 to 50 km.
@@ -173,6 +176,23 @@ many loops it found and how many are listed.
 Example: "Loops: searched from 31 starts near the best hikes, 14 found, 3
 listed". Not all 14 are listed. The others rank lower, or walk mostly the
 same trails as a listed hike.
+
+## Download and share a hike
+
+Open any hike from the results. It has a **Link to this hike**, and two
+buttons.
+
+- **Share** sends the link to your friends. On a phone it opens the share
+  sheet. Where there is none, it copies the link, and the button says "Link
+  copied".
+- **Download GPX** saves the hike as a file you can open in most hiking and GPS
+  apps.
+
+The link opens the same hike. A walk you drew opens the same walk, too.
+
+Good to know: the GPX file holds the line of the hike as you see it on the
+map, without heights, and not the walk back to the start. The route data comes
+from OpenStreetMap, and the file says so.
 
 ## Tips
 
