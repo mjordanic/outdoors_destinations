@@ -98,7 +98,7 @@ def smoke(base: str, drive: bool, pid: int | None) -> None:
         ranked, ms = call(base, "/api/rank", body)
         top = ranked["results"][0]
         check(
-            len(ranked["results"]) == 10 and 0 <= top["score"] <= 1,
+            info["results"] <= len(ranked["results"]) <= info["draw"]["pool"] and 0 <= top["score"] <= 1,
             f"rank {label}: top {top['name']!r} score {top['score']:.3f} ({ms:.0f} ms)",
         )
     if drive:
