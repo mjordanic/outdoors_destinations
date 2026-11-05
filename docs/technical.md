@@ -612,10 +612,11 @@ Reading a score, as the web demo explains it beside every score (ADR-0025):
 The page's words live in `SCORE_HELP` and `MEASURE_INFO` in
 `dayhike.serving` and reach the page through `/api/measures`, so a change to
 the scoring rule changes them in one place. Their example numbers (a typical
-pair 0.41, 0.72 beating 99 in 100, a hut 0.95, WaterSide 0.16, the Kattegat
-pair's 0.10 and 0.74) are fixed text measured on the 135,588-hike Catalog of
-ADR-0031: a rebuild does not recompute them, and the tests check the strings,
-not the numbers.
+pair 0.43, 0.75 beating 99 in 100, a hut 0.95, WaterSide 0.16, the Kattegat
+pair's 0.13 and 0.75, near climbs 1.00 against both under the floor 0.88) are
+fixed text measured on the Catalog of ADR-0050 (the rebuild-4 export): a
+rebuild does not recompute them, and the tests check the strings, not the
+numbers.
 
 Omit `--month` to compare climate as the default regime (June–August mean
 temperature, the mean of all twelve monthly precipitations, June–August solar
@@ -667,6 +668,8 @@ NetworkHikes and 33,646 DayStages). The README rounds the live one.
 - SolarAspect samples about 32 vertices, takes the slope from the cells
   2″ east and 2″ north, skips points flatter than 5°, scores each point
   (1 + northward rise / grade) / 2 (1 faces south, 0 north) and averages them.
+  A DayHike with heights but no point that steep is flat and scores 0.5 (faces
+  no way, as east or west); one with no heights at all has no data.
   With Copernicus it reads the raw surface model.
 - WaterSide puts a probe every 200 m, reads WorldCover at 40 m (4 × its 10 m
   cells) in a square of ±200 m around it (so up to 283 m at the corners, cut at
