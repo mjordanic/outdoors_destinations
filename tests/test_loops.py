@@ -251,6 +251,8 @@ def test_a_ranking_says_what_its_loop_search_did(data) -> None:
     search = results.loop_search
     assert search["listed"] == len(_loops(results)) == 2
     assert search["found"] >= 2 and search["starts"] > 0 and search["stopped"] is False
+    # The best loop found, for the page to say how it scores when none is listed (ADR-0053).
+    assert search["best"] == max(r["score"] for r in _loops(results))
     assert data.rank(MEADOW_PATH, DEFAULT_WEIGHTS).loop_search is None  # no search, nothing to say
 
 
@@ -289,7 +291,7 @@ def test_a_loop_search_cut_by_its_time_limit_says_so(data, monkeypatch) -> None:
 
     search = data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True).loop_search
 
-    assert search == {"starts": 0, "found": 0, "listed": 0, "stopped": True}
+    assert search == {"starts": 0, "found": 0, "listed": 0, "best": None, "stopped": True}
 
 
 @pytest.mark.usefixtures("rows_apart")

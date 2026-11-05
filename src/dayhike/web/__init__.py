@@ -5,7 +5,8 @@ search when the export has GeoNames places (ADR-0029), the hikes in a map view,
 hike detail, the Measure list, the score of any two hikes, and Ranking with an
 optional highways-only DriveTime pre-filter and a straight-line distance limit, ten rows at a time (ADR-0032). Every client gets a request budget per minute, and one Ranking
 runs at a time per instance, so a small container holds its memory, first come first served and at most one
-per client queued or running, so no client holds it for everyone; the trail network the way back is
+per browser tab queued or running (a few per address, so people behind one address do not wait on each other
+and no address holds it for everyone); the trail network the way back is
 searched on is memory-mapped from the export (built once, a request arriving during that build waiting for it, in an export without it). When the export has a TrailGraph,
 it also serves the Segments in a map view and the detail of a ComposedHike, which can then be the
 Seed of a Ranking or of a pair, and a Ranking lists SuggestedLoops beside the DayHikes (ADR-0020).
@@ -38,6 +39,7 @@ from collections import deque
 from collections.abc import Callable
 from pathlib import Path
 
+import numpy as np
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -58,6 +60,7 @@ from dayhike.serving import (
     MEASURE_GROUPS,
     MEASURE_INFO,
     SCORE_HELP,
+    TYPICAL_PAIR,
     WISH_DISPLAY,
     WISH_INPUTS,
     ServingData,
@@ -87,6 +90,12 @@ RATE_WINDOW_S = 60.0
 # A Ranking waits this long for its turn: with the slowest run (a 4 h drive, about 31 s on 1 vCPU, docs/deploy.md)
 # it still ends before Cloud Run's 60 s request timeout, so a visitor gets the app's 503, not Cloud Run's 504.
 RANK_WAIT_S = 25.0
+# The page names its tab in this header: one Ranking queued or running per tab, at most PER_ADDRESS per address.
+TAB_HEADER = "X-HikesAlike-Tab"
+TAB_NAME = re.compile(r"[A-Za-z0-9-]{1,64}")
+PER_ADDRESS = 4
+# The page opens its map of hikes on the box of the middle CORE_SHARE of Trailheads, where most hikes are.
+CORE_SHARE = 0.8
 # The API reads a browser keeps API_MAX_AGE_S seconds; after that the ETag revalidates them.
 CACHED_READS = ("/api/info", "/api/measures", "/api/search", "/api/hikes", "/api/segments")
 # The metadata the page's shape depends on: a browser revalidates it every time, so new code never reads old metadata.
@@ -283,8 +292,11 @@ def site_pages(
     *,
     copernicus: bool = False,
     site_url: str | None = None,
+    dayhikes: int | None = None,
 ) -> dict[str, str]:
     """Each page's HTML with the GoatCounter tag where a code is set.
+
+    ``dayhikes``, the export's count, fills in ``<!--dayhikes-->`` (the page's own count where none is given).
 
     With ``place_search`` (the export has GeoNames places) the place-search credit names GeoNames, not Nominatim,
     and the privacy page keeps its ``places`` text, not its ``nominatim`` text.
@@ -308,6 +320,8 @@ def site_pages(
     pages = {}
     for name in PAGES:
         html = (STATIC_DIR / f"{name}.html").read_text(encoding="utf-8").replace("<!--analytics-->", analytics)
+        if dayhikes is not None:
+            html = re.sub(r"<!--dayhikes-->.*?<!--/dayhikes-->", f"{dayhikes:,}", html, flags=re.S)
         settings = {
             "goatcounter": goatcounter is not None,
             "places": place_search,
@@ -362,30 +376,38 @@ class RateLimiter:
 
 
 class RankingQueue:
-    """One Ranking runs at a time, in the order they came, and a client has at most one queued or running.
+    """One Ranking runs at a time, in the order they came; a client (a browser tab at an address) has at
+    most one queued or running, and an address at most ``per_address``.
 
     So a client within its rate limit cannot keep the Ranking busy for everyone: it waits its turn
-    behind every other client queued before its next Ranking.
+    behind every other client queued before its next Ranking. People behind one address (a home, an
+    office, a phone network) each have their own turn, up to ``per_address`` at once.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, per_address: int = PER_ADDRESS) -> None:
+        self.per_address = per_address
         self._turn = threading.Condition()
-        self._queue: deque[str] = deque()  # the clients waiting, first in line first
-        self._running: str | None = None  # the client whose Ranking runs
+        self._queue: deque[tuple[str, str]] = deque()  # the (address, tab) clients waiting, first in line first
+        self._running: tuple[str, str] | None = None  # the client whose Ranking runs
 
-    def enter(self, key: str, timeout: float) -> bool | None:
-        """Wait for this client's turn: True once it runs, False after ``timeout`` seconds,
-        None at once when the client already has a Ranking queued or running."""
+    def enter(self, address: str, tab: str, timeout: float) -> str:
+        """Wait for this client's turn: "run" once it runs, "timeout" after ``timeout`` seconds; at once
+        "own" when the client already has a Ranking queued or running, "address" when its address has
+        ``per_address``."""
+        key = (address, tab)
         with self._turn:
             if key in self._queue or key == self._running:
-                return None
+                return "own"
+            held = [client for client in (*self._queue, self._running) if client is not None and client[0] == address]
+            if len(held) >= self.per_address:
+                return "address"
             self._queue.append(key)
             if self._turn.wait_for(lambda: self._running is None and self._queue[0] == key, timeout):
                 self._running = self._queue.popleft()
-                return True
+                return "run"
             self._queue.remove(key)
             self._turn.notify_all()  # it may have been first in line
-            return False
+            return "timeout"
 
     def leave(self) -> None:
         """The running Ranking ended: the next in line runs."""
@@ -417,7 +439,11 @@ def create_app(
     (``https://host``) whose pages may call the API.
     """
     pages = site_pages(
-        goatcounter, data.places is not None, copernicus="copernicus" in data.meta["attribution"], site_url=site_url
+        goatcounter,
+        data.places is not None,
+        copernicus="copernicus" in data.meta["attribution"],
+        site_url=site_url,
+        dayhikes=data.meta["dayhikes"],
     )
     app = FastAPI(title="HikesAlike", docs_url="/api/docs", openapi_url="/api/openapi.json")
     limiters = {"rank": RateLimiter(rank_rate, RATE_WINDOW_S), "api": RateLimiter(api_rate, RATE_WINDOW_S)}
@@ -485,7 +511,7 @@ def create_app(
     if cors_origins:  # outermost: a preflight is answered before the limiter, and a 429 is readable
         app.add_middleware(
             CORSMiddleware, allow_origins=list(cors_origins), allow_methods=["GET", "HEAD", "POST"],
-            allow_headers=["Content-Type"], max_age=3600,
+            allow_headers=["Content-Type", TAB_HEADER], max_age=3600,
         )
 
     # A refusal leaves out the input it refuses: a NaN or Infinity in the body cannot be written back as JSON.
@@ -502,12 +528,19 @@ def create_app(
     # The Trailheads' box (south, west, north, east): the page warns when a typed
     # "lat, lon" is outside it but its swap is inside.
     coverage = [*map(float, data.trailheads.min(axis=0)), *map(float, data.trailheads.max(axis=0))]
+    # Where most hikes are: the page's map of hikes opens on it when it has no hike or place to show.
+    edge = (1 - CORE_SHARE) / 2 * 100
+    low, high = np.percentile(data.trailheads, [edge, 100 - edge], axis=0) if len(data.trailheads) else ([0, 0], [0, 0])
+    core = [*map(float, low), *map(float, high)]
 
     @app.api_route("/api/info", methods=["GET", "HEAD"])
     def info() -> dict:
         return {
             "dayhikes": data.meta["dayhikes"],
             "coverage": coverage,
+            "core": core,
+            # A list whose best row scores below this holds nothing much alike: the page says so.
+            "typical_pair": TYPICAL_PAIR,
             "attribution": data.meta["attribution"] | ({"geonames": GEONAMES_ATTRIBUTION} if data.places else {}),
             "place_search": data.places is not None,
             "drive_time": drive_client is not None,
@@ -621,11 +654,13 @@ def create_app(
         near = None if body.max_km is None else (origin, body.max_km * 1000)
         group_m = group_radius_m(body.max_hours, body.max_km) if body.group_km is None else body.group_km * 1000
         seed = seed_of(body.seed, body.composed) if body.wish is None else body.wish
-        key = client_key(request)
-        turn = rankings.enter(key, RANK_WAIT_S)
-        if turn is None:
+        tab = request.headers.get(TAB_HEADER, "")
+        turn = rankings.enter(client_key(request), tab if TAB_NAME.fullmatch(tab) else "", RANK_WAIT_S)
+        if turn == "own":
             raise HTTPException(409, "Your previous search is still running; try again when it ends.")
-        if not turn:
+        if turn == "address":
+            raise HTTPException(409, f"{PER_ADDRESS} searches from your network are already waiting; try again when they end.")
+        if turn == "timeout":
             raise HTTPException(503, "busy; try again in a moment")
         try:
             hours = reach = None

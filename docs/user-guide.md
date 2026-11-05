@@ -38,14 +38,30 @@ Pick one of three ways:
    finds Triglav. When no name has every word as you typed it, the list says
    so and marks each name that is only like it "similar name". So does a name
    that holds your word only inside a longer word ("Rappenloch" in
-   "Krappenlochklamm"): check that it is the hike you meant.
+   "Krappenlochklamm"): check that it is the hike you meant. **Enter** picks a
+   hike only when one is named exactly as you typed, or it is the only hike
+   found; the line beside the chosen hike then says so. Otherwise the list
+   stays open and says how many hikes match, so you pick one (or use the arrow
+   keys, then Enter). It works the same on a phone and a computer.
+   Once picked, the page moves to the hike's panel.
 2. **Tick "Select hike on map"**, zoom in and click a hike. Hikes appear once
-   you zoom in far enough that fewer than about 100 are in view.
+   you zoom in far enough that fewer than about 100 are in view. The map opens
+   on your liked hike, or else on your starting place, or else where most
+   hikes are. Where two hikes run along the same trail (a day hike and a long
+   tour's stage, say), a click lists both, and you choose one.
 3. **Press "Design your own from segments"** and draw a walk along the marked
    trails. You can then use that walk as your liked hike.
 
 Then press **Find similar**. You get 10 hikes from among the most similar
-(see "Why the list changes from visit to visit" below).
+(see "Why the list changes from visit to visit" below), and the page moves to
+the list. On a phone the list is wider than the screen: a line above it says to
+scroll it sideways for every measure's score.
+
+If hikes on the list score below 0.43, what a typical pair of random hikes
+scores, a note above the list says from which row down the matches are weak,
+or that all are when even the best one is. This
+happens most with a tight distance or drive limit: there is simply nothing
+much like your hike nearby. A long tour can then show up on the list too.
 
 ### Or describe the hike you want
 
@@ -97,6 +113,9 @@ the hut slider to 100. Turn Length down to 30.
 - **More options.** Under the limits, this sets how close hikes must start to
   be grouped as one area (see "Reading the results" below).
 
+On a phone, "2. What similar means" starts folded away; like Advanced search and
+More options, its title has an arrow and the word "show" while it is closed.
+
 The filters a list was found with show as labels just above it: "Within 50 km
 of Bled", "Weather in Jan", "One way, without the way back", "Grouped within
 3 km". Press the × on a label to drop that filter; the list is found again
@@ -114,7 +133,17 @@ buttons.
 - **Download GPX** saves the hike as a file you can open in most hiking and GPS
   apps.
 
-The link opens the same hike. A walk you drew opens the same walk, too.
+The link opens the same hike. A walk you drew opens the same walk, too. The
+link also carries your search settings: the month, the weights you changed,
+Advanced search being open, Return to start, Strict order, the starting place
+with its limits, and the grouping distance. Whoever opens it sees the same
+search, ready for **Find similar**. A link to a hike you described works the
+same way. The address in your browser keeps them up to date, so a reload
+keeps them too. Older links without settings still open the hike.
+
+A link that has been cut short or changed by hand says "This link could not be
+opened" beside the search box. A part of a link the page does not know is
+ignored, and the hike still opens.
 
 Good to know: the GPX file holds the line of the hike as you see it on the
 map, with a height at every point. With Return to start on, it also holds the
@@ -143,6 +172,16 @@ If the server does not answer within a minute, or cannot be reached, the
 page says so instead of waiting forever. A search that fails says so above
 the list it leaves, which is still the list from before: press **Find
 similar** to try again.
+
+Each browser tab runs one search at a time. If you press Find again while your
+earlier search is still running on the server, the page says "Waiting for your
+earlier search to end…" and runs yours once it has. People on one network
+(at home, in an office) do not wait for each other's searches. If it still
+cannot run after a minute, the page says so, and the old list goes, so it is
+never taken for an answer to the new search.
+
+The **?** next to a score opens a longer explanation. While there is more of it
+below the box's edge, the box says "More below ↓ scroll".
 
 ## Tips
 
@@ -209,8 +248,9 @@ than a weaker one, so the very best are nearly always there, and the rest
 change from one search to the next. Hikes that match about equally well all
 get their turn, instead of the same ones always winning by a hair. The list is
 still in score order. Some rows have a small **picked** mark next to their
-number. A row marked picked would not appear in Strict order; a line beside
-Redraw says so whenever the list has one.
+number: that row is not one of the 10 best areas, but was drawn in for variety
+from the best 30. Strict order would not list it; a line beside Redraw says so
+whenever the list has one.
 
 - **Redraw**, above the list, picks again from the same 30 areas. It is
   instant and keeps any loops already suggested. If no other hike is close
@@ -265,7 +305,12 @@ start you gave (if any) and near the best results. They are marked
 place near its start, or else the trails it walks.
 
 Press **Edit on the map** to take a loop into the route designer and change
-it.
+it. The designer opens zoomed in on the loop. Your liked hike and the list stay
+as they are until you press **Use this hike**, which measures the drawing and
+makes it your hike. **Undo** takes back only your own clicks, never a segment of
+the loop you opened; **Clear** starts over. When the drawing is your liked hike
+itself, Clear removes that hike too, so Find similar never uses a walk that is
+no longer drawn.
 
 A loop that mostly walks your liked hike again is not suggested.
 
@@ -281,6 +326,9 @@ they are the 20 best.
   rebuild, a tiny score change can swap their order, so a different set of
   starts gets searched, and a different loop can show up (or one can
   disappear).
+- Loops are searched for the first 10 rows only. "Show 10 more" adds hikes,
+  not more loops, so no later row's loop scores above the rows before it.
+  Suggest loops keeps as many rows as you had.
 - The search has a time limit of 5 seconds. The search for loops stops after
   3.5 of them, so the rest is left to measure the loops it found; if it hits
   that limit, it lists the best of what it found so far.
@@ -290,5 +338,6 @@ the list says this too, and tells you how many starts it searched from, how
 many loops it found and how many are listed.
 
 Example: "Loops: searched from 31 starts near the best hikes, 14 found, 3
-listed". Not all 14 are listed. The others rank lower, or walk mostly the
-same trails as a listed hike.
+listed: #2, #5 (marked composed)". Not all 14 are listed. The others rank lower,
+or walk mostly the same trails as a listed hike. When none makes the list, the
+note says how the best loop found scores against the last row.

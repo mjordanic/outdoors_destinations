@@ -53,7 +53,7 @@
   <a class="home" href="/" tabindex="-1" aria-hidden="true"><img class="mark" src="mark.svg" alt="" width="44" height="44"></a>
   <div class="brand">
     <h1><a class="home" href="/">HikesAlike</a></h1>
-    <p class="tagline">Hikes like the ones you love, out of <span id="count">160,000</span> hikes across Europe.</p>
+    <p class="tagline">Hikes like the ones you love, out of <span id="count"><!--dayhikes-->160,000<!--/dayhikes--></span> hikes across Europe.</p>
   </div>
   <img class="coverage" src="coverage.svg" alt="Map of Europe with the covered countries shaded" width="120" height="68"
        title="Shaded: the countries this demo covers">
@@ -175,7 +175,7 @@
     </section>
 
     <article id="liked" class="card empty">
-      <p>Search for a hike on the left, or select one on the map. Its route, elevation, water, huts, landscape and weather appear here — everything the similarity looks at.</p>
+      <p>Search for a hike by name, or select one on the map. Its route, elevation, water, huts, landscape and weather appear here — everything the similarity looks at.</p>
     </article>
 
     <article id="wish-card" class="card empty" hidden>
@@ -185,9 +185,11 @@
     <section id="results" class="card" hidden>
       <h2 id="results-title">Most similar hikes</h2>
       <ul id="results-filters" class="filter-chips" aria-label="Filters on this list" hidden></ul>
+      <p class="poor-note" id="results-poor" hidden></p>
       <p class="hint"><span id="results-note"></span><span id="results-loops-note"></span></p>
       <p id="results-draw" hidden><button type="button" class="secondary" id="redraw" title="Draw other hikes from the same results, closer matches more often">Redraw</button> <label class="check" title="List the best hikes in the exact order of their scores, with nothing drawn"><input type="checkbox" id="strict" autocomplete="off"> Strict order</label> <span class="hint" id="results-draw-note"></span></p>
       <p class="stale-note" id="results-stale" hidden>The query changed since this ranking; press Find again to update it.</p>
+      <p class="hint swipe-cue" id="results-swipe" hidden>Scroll the table sideways for every measure's score →</p>
       <div class="table-wrap"><table id="results-table"></table></div>
       <p id="results-more" hidden><button type="button" class="secondary" id="show-more">Show 10 more</button> <span class="hint" id="other-areas"></span></p>
       <p id="results-loops" hidden><button type="button" class="secondary" id="suggest-loops">Suggest loops near these hikes (takes a few seconds)</button></p>

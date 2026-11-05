@@ -292,9 +292,12 @@ def _percent(share: float) -> int:
 # beside the Measure scores, and the fuller sections behind the page's "?" (ADR-0025).
 # Every explanation of the score lives here and in MEASURE_INFO, so a change of the
 # scoring rule changes the words in one place.
+# What a typical random pair of hikes scores under the default weights: the page says a list whose best row
+# scores below it holds nothing much alike (ADR-0053).
+TYPICAL_PAIR = 0.43
 SCORE_HELP = {
     "overall": "Average of the measure scores below, under your weights. Each one is the share of random hike "
-    "pairs less alike than these two. A typical pair scores about 0.43; with the default weights, 0.75 beats "
+    f"pairs less alike than these two. A typical pair scores about {TYPICAL_PAIR}; with the default weights, 0.75 beats "
     "99 random pairs in 100.",
     "measure": "Share of random hike pairs less alike than these two on this measure: 0.9 means only 1 pair "
     "in 10 is as alike; 0 means nothing in common.",
@@ -306,7 +309,7 @@ SCORE_HELP = {
             "that are less alike than these two. So it says how close the two hikes are, and also how rare it "
             "is to be that close: a match counts for more when fewer random pairs manage it. Two hikes whose "
             "lengths are within 2 % score 0.99 on length. Two hikes that are both never near open water score "
-            "only 0.16 on Lake or sea: they are identical there, but 84 % of random pairs are too, so it tells "
+            "only 0.21 on Lake or sea: they are identical there, but 79 % of random pairs are too, so it tells "
             "little. A score of 0.5 means half of random pairs are at least as alike: an ordinary match. 0.9 "
             "means only 1 pair in 10 is; 0.99 means 1 in 100. 0 means the hikes have nothing in common on that "
             "measure: one passes a hut and the other does not, or their highest points are 400 m or more apart. "
@@ -317,7 +320,7 @@ SCORE_HELP = {
         {
             "title": "Rare shared values tell more",
             "text": "When two hikes have the same value, the score says how rare that value is: two hikes that "
-            "both pass a mountain hut score 0.95, two that are both never near water 0.16. Values a measure "
+            "both pass a mountain hut score 0.95, two that are both never near water 0.21. Values a measure "
             "counts as the same are one value: Lake or sea shares under 0.15, Water sources 3 or more, values at "
             "or under a measure's floor (walks under 1 km on Length). Many hikes share such a value, so it says "
             "little: two climbs of 166 m and 167 m are a closer match (1.00) than two climbs both under 100 m (0.88).",
@@ -957,8 +960,8 @@ class Ranking(list):
     the hikes ranked that start in no row's area (later pages list them), and
     ``loop_search``, what the SuggestedLoop search did (None when none ran):
     ``starts`` searched from, loops ``found`` and measured, ``listed`` in all its rows and
-    their versions (the whole pool; the page counts those in the rows it shows), and whether
-    it ``stopped`` at ``LOOP_BUDGET_S``."""
+    their versions (the whole pool; the page counts those in the rows it shows), the ``best``
+    score of a loop found within the limits (None: none), and whether it ``stopped`` at ``LOOP_BUDGET_S``."""
 
     def __init__(self, rows: list[dict], other_areas: int, loop_search: dict | None) -> None:
         super().__init__(rows)
@@ -1511,6 +1514,7 @@ class ServingData:
         more_here, in_area, other_areas = self._unlisted(rows, scores, groups, listed_rows, group_m)
         if loop_search is not None:
             loop_search["listed"] = sum(hike[1] is None for group in groups for hike in group)
+            loop_search["best"] = max((loop["score"] for loop, _ in found_loops), default=None)
         return Ranking(
             [
                 {**group[0], "versions": group[1:], "more_here": more, "in_area": area}

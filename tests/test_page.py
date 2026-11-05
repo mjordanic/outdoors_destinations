@@ -62,8 +62,8 @@ def data(tmp_path_factory: pytest.TempPathFactory) -> ServingData:
 
 @pytest.fixture(scope="module")
 def server(data: ServingData) -> Iterator[str]:
-    # Every test here ranks from one address: the Ranking budget per minute (RANK_RATE) is not under test.
-    yield from serve(create_app(data, lambda max_hours: Matrix(), rank_rate=1_000))
+    # Every test here asks from one address: the budgets per minute (RANK_RATE, API_RATE) are not under test.
+    yield from serve(create_app(data, lambda max_hours: Matrix(), rank_rate=1_000, api_rate=100_000))
 
 
 @pytest.fixture(scope="module")
@@ -722,7 +722,8 @@ def test_show_more_appends_the_next_rows_under_the_table(browser, server, monkey
     page.locator("#results-table tbody tr").nth(1).wait_for()
 
     lat, lon = page.evaluate("state.results[0].trailhead")
-    assert api.ranked[-1] == {**api.ranked[0], "after": [{"lat": lat, "lon": lon}]}
+    # Loops are searched for the first rows only (ADR-0053).
+    assert api.ranked[-1] == {**api.ranked[0], "loops": False, "after": [{"lat": lat, "lon": lon}]}
     assert _listed(page)[0] == first[0] and len(set(_listed(page))) == 2
     assert page.locator("#results-table tbody tr td:first-child").all_inner_texts() == ["1", "2"]
     with page.expect_response(f"{server}/api/rank"):
@@ -923,7 +924,7 @@ def test_the_page_says_what_the_ranking_does_not_list(browser, server) -> None:
     assert "later pages do not show them" in count.get_attribute("title")
     assert page.locator("#other-areas").inner_text() == "24,113 more hikes start in other areas."
     note = page.locator("#results-loops-note").inner_text()
-    assert "Loops: searched from 31 starts near the best hikes, 14 found, 0 listed (the others rank lower" in note
+    assert "Loops: searched from 31 starts near the best hikes, 14 found, none listed." in note
     assert "stopped at its time limit" in note
 
 
@@ -943,13 +944,13 @@ def test_the_loop_note_counts_the_loops_in_the_rows_shown(browser, server, monke
     page.get_by_text("Chosen: Ridge Walk").wait_for()
     _find(page)
     note = page.locator("#results-loops-note")
-    fewer = "Loops: searched from 20 starts near the best hikes, 4 found, 2 listed (the others rank lower"
+    fewer = "Loops: searched from 20 starts near the best hikes, 4 found, 2 listed: #1 (marked composed); the others rank lower"
     assert fewer in note.inner_text()
 
     with page.expect_response(f"{server}/api/rank"):
         page.get_by_role("button", name="Show 1 more").click()
     page.locator("#results-table tbody tr:not(.version)").nth(1).wait_for()
-    assert "4 found, 4 listed." in note.inner_text()
+    assert "4 found, 4 listed: #1, #2 (marked composed)." in note.inner_text()
 
     page.get_by_label("Strict order").uncheck()  # page 1 again, drawn, later pages dropped
     assert fewer in note.inner_text()
@@ -1284,10 +1285,15 @@ def test_a_built_hike_found_similar_can_be_edited_on_the_map(browser, built_serv
     page.get_by_role("button", name="Find similar").click()
     page.locator("#results-table tbody tr", has_text="stage 2").first.click()
     page.locator("#selected").get_by_role("button", name="Edit on the map").click()
+    page.wait_for_function("() => compose.on && pick.map.getZoom() >= 13")  # zoomed in, so the segments load
 
-    page.get_by_text("Chosen: Ridge Walk, stage 2").wait_for()
-    assert page.locator("#liked .role").text_content() == "Your hike"
-    assert page.evaluate("location.hash").startswith("#compose=2:102.3")
+    # The liked hike and the list stay until Use this hike measures a drawing (ADR-0053). This fixture's
+    # stage cuts a Segment, so the designer says it cannot draw it, where it is.
+    assert page.locator("#liked-name").inner_text().startswith("Chosen: Ridge Walk,")
+    assert page.locator("#results").is_visible()
+    assert "cannot be drawn here" in page.locator("#map-pick-hint").inner_text()
+    centre = page.evaluate("[pick.map.getCenter().lat, pick.map.getCenter().lng]")
+    assert centre == pytest.approx(page.evaluate("state.results.find(r => /stage 2/.test(r.name)).trailhead"), abs=1e-4)
 
 
 START, CROSSING_A, CROSSING_B = (45.0600, 6.5250), (45.0590, 6.5240), (45.0610, 6.5260)
@@ -1587,8 +1593,9 @@ def test_a_reloaded_page_restores_no_starting_place_or_limit(browser, server) ->
 @pytest.mark.parametrize("move", ["search", "map"])
 def test_the_broken_link_message_goes_once_the_hiker_looks_for_another_hike(browser, server, move) -> None:
     page = open_page(browser, server, Api({}), hash="#hike=999999999")
-    message = page.get_by_text("This link doesn't match the current trail data, so it shows no hike.")
+    message = page.get_by_text("This link could not be opened: it doesn't match the current trail data, so it shows no hike.")
     message.wait_for()
+    assert page.locator("#liked-name").inner_text() == "This link could not be opened; no hike chosen yet."
 
     if move == "search":
         page.locator("#search").fill("Ridge")
@@ -1596,7 +1603,8 @@ def test_the_broken_link_message_goes_once_the_hiker_looks_for_another_hike(brow
         page.locator("#map-pick-on").check()
 
     message.wait_for(state="detached")
-    assert page.get_by_text("Search for a hike on the left, or select one on the map.").is_visible()
+    assert page.get_by_text("Search for a hike by name, or select one on the map.").is_visible()
+    assert page.locator("#liked-name").inner_text() == "No hike chosen yet."
 
 
 def test_the_picked_mark_and_a_greyed_redraw_say_what_they_mean_beside_the_list(browser, server, monkeypatch) -> None:
@@ -1612,7 +1620,7 @@ def test_the_picked_mark_and_a_greyed_redraw_say_what_they_mean_beside_the_list(
     assert explained.is_visible() == picked
     if picked:
         assert explained.inner_text() == (
-            "picked: a row drawn from lower down the best areas of its page; Strict order lists each page's best as ranked."
+            "picked: not one of this page's 2 best areas, drawn in for variety from its best 30. Strict order lists the 2 best in order."
         )
 
     page.get_by_label("Strict order").check()
@@ -1691,10 +1699,10 @@ def test_a_loop_edited_on_the_map_shows_the_climb_its_card_shows(browser, loops_
     page.get_by_role("button", name="Suggest loops near these hikes (takes a few seconds)").click()
     page.locator("#results-table tbody tr", has=page.locator(".composed-tag")).first.click()
     page.locator("#selected").get_by_role("button", name="Edit on the map").click()
-    page.wait_for_function("() => compose.on && state.liked?.route")
+    page.wait_for_function("() => compose.on && compose.source?.route")
 
     readout = page.locator("#compose-readout")
-    measured = page.evaluate("upDown(state.liked.climb_m, state.liked.descent_m)")
+    measured = page.evaluate("upDown(compose.source.climb_m, compose.source.descent_m)")
     readout.get_by_text(measured).wait_for()
     assert "as measured" in readout.inner_text() and "about" not in readout.inner_text()
 
@@ -1841,24 +1849,54 @@ def test_the_designer_says_a_route_ending_a_few_metres_from_its_start_is_back_th
     assert "2.4 km one way" in far and "ends" not in far
 
 
-def test_using_an_edited_loop_after_undo_measures_the_route_drawn_and_says_so(browser, loops_server, monkeypatch) -> None:
-    monkeypatch.setattr("dayhike.serving.GROUP_M", 0.0)
-    page = open_page(browser, loops_server, Api({}), hash=f"#hike={MEADOW_PATH}")
+def _edit_a_loop(page) -> int:
+    """Finds loops for Meadow Path, edits the first on the map: the segments it opens with."""
     page.get_by_text("Chosen: Meadow Path").wait_for()
     _find(page)
     page.get_by_role("button", name="Suggest loops near these hikes (takes a few seconds)").click()
     page.locator("#results-table tbody tr", has=page.locator(".composed-tag")).first.click()
     page.locator("#selected").get_by_role("button", name="Edit on the map").click()
-    page.wait_for_function("() => compose.on && state.liked?.route")
-    drawn = page.evaluate("compose.route.length")
+    page.wait_for_function("() => compose.on && compose.source?.route")
+    return page.evaluate("compose.route.length")
+
+
+def test_an_edited_loop_keeps_its_segments_from_undo_and_the_liked_hike_until_used(browser, loops_server, monkeypatch) -> None:
+    monkeypatch.setattr("dayhike.serving.GROUP_M", 0.0)
+    page = open_page(browser, loops_server, Api({}), hash=f"#hike={MEADOW_PATH}")
+    drawn = _edit_a_loop(page)
     assert drawn > 1
 
-    page.get_by_role("button", name="Undo").click()
+    # Undo takes back only the Hiker's own clicks: none yet (ADR-0053).
+    undo = page.get_by_role("button", name="Undo")
+    assert undo.is_disabled()
+    assert page.evaluate("compose.undo(), compose.route.length") == drawn
+    assert "the segments of the hike you opened stay" in page.locator("#map-pick-hint").inner_text()
+    assert page.evaluate("state.liked.name") == "Meadow Path" and page.locator("#results").is_visible()
+
     page.get_by_role("button", name="Use this hike").click()
 
-    page.get_by_text(f"Your hike of {drawn - 1} segment").wait_for()
-    assert page.evaluate("state.liked.route.segments.length") == drawn - 1
+    page.get_by_text(f"Your hike of {drawn} segment").wait_for()
     assert page.evaluate("state.liked.route.text === compose.text()")
+
+
+def test_clear_on_the_liked_composed_hike_clears_it_and_on_an_edited_one_keeps_the_liked(browser, loops_server, monkeypatch) -> None:
+    monkeypatch.setattr("dayhike.serving.GROUP_M", 0.0)
+    page = open_page(browser, loops_server, Api({}), hash=f"#hike={MEADOW_PATH}")
+    _edit_a_loop(page)
+
+    page.get_by_role("button", name="Clear").click()  # an edited loop: the liked hike stays
+    assert page.evaluate("state.liked.name") == "Meadow Path"
+    page.locator("#compose-readout").get_by_text("No hike drawn yet.").wait_for()
+
+    _edit_a_loop(page)
+    page.get_by_role("button", name="Use this hike").click()
+    page.wait_for_function("() => state.liked?.route")
+    page.get_by_role("button", name="Clear").click()  # the liked hike is the drawing: it goes too
+
+    assert page.evaluate("state.liked") is None
+    assert page.get_by_role("button", name="Find similar").is_disabled()
+    assert page.locator("#liked-name").inner_text() == "No hike chosen yet."
+    assert page.evaluate("location.hash") == ""
 
 
 # ---------- the wishes of the second visitor test ----------
@@ -2062,3 +2100,241 @@ def test_a_result_that_loads_after_a_later_compared_hike_does_not_replace_its_ca
 
     assert page.locator("#selected").get_by_text("Compared with the liked hike").is_visible()
     assert page.locator("#selected h2, #selected h3").first.inner_text().startswith("Valley Path")
+
+
+# ---------- what the visitor check of round 3 found (ADR-0053) ----------
+
+
+def test_a_shared_hike_link_carries_the_search_settings_and_opens_them(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", init=COPIED)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_label("Weather month").select_option("1")
+    page.get_by_label("Length weight, 0 to 100").fill("50")
+    page.get_by_label("Only hikes near a starting place").check()
+    page.get_by_label("From", exact=True).fill("agram")
+    page.get_by_role("button", name="Find place").click()
+    page.get_by_text("Start: Zagreb, HR (45.8144, 15.9780)").wait_for()
+    page.get_by_label("Max km, straight line").check()
+    page.get_by_label("Max km value").fill("200")
+    page.get_by_label("Max km value").dispatch_event("change")
+
+    page.locator("#liked").get_by_role("button", name="Share").click()
+    page.locator("#liked").get_by_role("button", name="Link copied").wait_for()
+    link = page.evaluate("window.copied[0]")
+    assert link.startswith(f"{server}/#hike={RIDGE_WALK_ID}&month=1&w=length:50")
+    assert "from=45.81444,15.97798&place=Zagreb%2C%20HR&hours=2&km=200" in link
+    assert page.evaluate("location.hash") == link.removeprefix(server + "/")  # a reload opens it too
+
+    friend = open_page(browser, server, Api({}), hash=link.removeprefix(server + "/"))
+    friend.get_by_text("Chosen: Ridge Walk").wait_for()
+    assert friend.get_by_label("Weather month").input_value() == "1"
+    assert friend.get_by_label("Length weight, 0 to 100").input_value() == "50"
+    assert friend.get_by_label("Only hikes near a starting place").is_checked()
+    assert friend.get_by_label("From", exact=True).input_value() == "Zagreb, HR"
+    assert friend.get_by_label("Max km value").input_value() == "200"
+    assert friend.get_by_text("Start: Zagreb, HR (45.8144, 15.9780)").is_visible()
+
+
+def test_a_wish_link_opens_its_month_and_starting_place_too(browser, server) -> None:
+    hash = "#wish=elevation_gain:800:100&month=7&from=45.81444,15.97798&place=Zagreb%2C%20HR&km=60"
+    page = open_page(browser, server, Api(WISHABLE), hash=hash)
+    page.get_by_text("1. The hike you want").wait_for()
+
+    assert page.get_by_label("Weather month").input_value() == "7"
+    assert page.get_by_label("From", exact=True).input_value() == "Zagreb, HR"
+    assert page.get_by_label("Max km value").input_value() == "60"
+    assert page.evaluate("location.hash").startswith("#wish=elevation_gain:800:100&month=7&from=45.81444,15.97798")
+
+
+@pytest.mark.parametrize("hash", [f"#hike={RIDGE_WALK_ID}&foo=bar", f"#foo=bar&hike={RIDGE_WALK_ID}", f"#HIKE={RIDGE_WALK_ID}%20"])
+def test_a_hike_link_with_a_part_the_page_does_not_know_still_opens_the_hike(browser, server, hash) -> None:
+    page = open_page(browser, server, Api({}), hash=hash)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+
+
+@pytest.mark.parametrize("hash", ["#hike=abc", "#hike=-5&strict", f"#hike={RIDGE_WALK_ID},{RIDGE_WALK_ID}", "#compose=12:4.5,-"])
+def test_a_link_cut_short_or_changed_says_plainly_it_could_not_be_opened(browser, loops_server, hash) -> None:
+    page = open_page(browser, loops_server, Api({}), hash=hash)
+
+    page.get_by_text("This link could not be opened: it looks cut short or changed, so it shows no hike.").wait_for()
+    assert page.locator("#liked-name").inner_text() == "This link could not be opened; no hike chosen yet."
+
+
+SEARCHED = [
+    {"id": RIDGE_WALK_ID, "name": "Ridge Walk", "length_m": 5000, "round_trip": False, "climb_m": 400,
+     "descent_m": 400, "elevation_gain_m": 400, "highest_m": 1800, "trailhead": [45.04, 15.0], "match": "words"},
+    {"id": 2, "name": "Ridge Walk extension", "length_m": 9000, "round_trip": False, "climb_m": 600,
+     "descent_m": 600, "elevation_gain_m": 600, "highest_m": 1900, "trailhead": [45.05, 15.0], "match": "words"},
+]  # fmt: skip
+
+
+@pytest.mark.parametrize("touch", [False, True])
+def test_enter_picks_only_an_exact_name_and_else_leaves_the_list_open_saying_so(browser, server, touch) -> None:
+    page = open_page(browser, server, Api({}), touch=touch, width=390 if touch else 1280)
+    page.route(f"{server}/api/search?*", lambda route: route.fulfill(json={"results": SEARCHED}))
+    search = page.locator("#search")
+
+    search.fill("ridge")
+    search.press("Enter")  # pressed before the list is in: it is decided once it is
+
+    page.get_by_text("2 hikes match; pick one (or use ↑ ↓, then Enter).").wait_for()
+    assert page.locator("#liked-name").inner_text() == "No hike chosen yet."
+
+    search.fill("ridge walk")
+    search.press("Enter")
+
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    assert "(Enter picked the hike with exactly that name)" in page.locator("#liked-name").inner_text()
+
+
+def test_find_and_a_picked_hike_bring_their_card_into_view_on_a_phone(browser, server) -> None:
+    page = open_page(browser, server, Api({}), width=390, touch=True)
+    page.route(f"{server}/api/search?*", lambda route: route.fulfill(json={"results": SEARCHED[:1]}))
+    page.locator("#search").fill("ridge walk")
+    page.locator("#suggestions li[role=option]").first.click()
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.wait_for_function("() => Math.abs(document.querySelector('#liked').getBoundingClientRect().top) < 2")
+
+    page.evaluate("scrollTo(0, 0)")
+    _find(page)
+
+    page.wait_for_function("() => Math.abs(document.querySelector('#results').getBoundingClientRect().top) < 2")
+
+
+def test_a_find_refused_while_this_tab_s_last_search_runs_waits_for_it_and_names_the_tab(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    asked: list[str | None] = []
+
+    def busy_once(route) -> None:
+        asked.append(route.request.headers.get("x-hikesalike-tab"))
+        if len(asked) == 1:
+            route.fulfill(status=409, json={"detail": "Your previous search is still running; try again when it ends."})
+        else:
+            route.continue_()
+
+    page.route(f"{server}/api/rank", busy_once)
+    page.get_by_role("button", name="Find similar").click()
+    page.get_by_text("Waiting for your earlier search to end…").wait_for()
+    page.locator("#results-table tbody tr").first.wait_for(timeout=10_000)
+
+    assert len(asked) == 2 and asked[0] and asked[0] == asked[1]
+
+
+def test_a_list_left_under_still_running_goes(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.clock.install()
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+    page.route(f"{server}/api/rank", lambda route: route.fulfill(
+        status=409, json={"detail": "Your previous search is still running; try again when it ends."}))
+
+    page.get_by_role("button", name="Find similar").click()
+    page.get_by_text("Waiting for your earlier search to end…").wait_for()
+    for _ in range(45):  # each wait is a timer, each ask a real request: step the clock past TIMEOUT_S
+        page.clock.run_for(1_500)
+        page.wait_for_timeout(20)
+
+    page.locator("#results-stale").get_by_text("This search did not run").wait_for()
+    assert not page.locator("#results-table").is_visible()
+
+
+def test_a_list_whose_best_scores_below_a_typical_pair_says_the_matches_are_weak(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.route(f"{server}/api/rank", Pool([0.31, 0.29, 0.25]))
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+
+    poor = page.locator("#results-poor")
+    assert poor.is_visible()
+    assert poor.inner_text().startswith("Weak matches: the best of these scores 0.310, below the 0.43 of a typical pair")
+
+    page.unroute(f"{server}/api/rank")
+    page.route(f"{server}/api/rank", Pool([0.8, 0.3, 0.2]))
+    page.get_by_label("Strict order").check()
+    _find(page)
+    page.locator("#results-poor").get_by_text("From #2 down, these score below the 0.43").wait_for()
+
+    page.unroute(f"{server}/api/rank")
+    page.route(f"{server}/api/rank", Pool([0.8, 0.7, 0.6]))
+    _find(page)
+    page.wait_for_function("() => document.querySelector('#results-poor').hidden")
+
+
+def test_a_click_where_two_hikes_run_along_one_trail_offers_both(browser, server) -> None:
+    day = drawn_hike("Day hike", WEST, EAST)
+    stage = {**drawn_hike("Long tour, stage 4", (45.0600, 6.5100), EAST), "walk_m": 30_000}
+    page = map_dots(browser, server, [stage, day])
+
+    assert click_map(page, START, 0) == []  # on the shared trail: nothing chosen yet, a choice offered
+    offer = page.locator(".pick-offer")
+    assert offer.locator("strong").inner_text() == "2 hikes run here; choose one:"
+    assert offer.get_by_role("button").all_inner_texts() == ["Day hike (1.0 km)", "Long tour, stage 4 (30 km)"]
+    offer.get_by_role("button", name="Day hike (1.0 km)").click()
+    assert page.evaluate("window.chosen") == [day["id"]]
+
+
+def test_the_hike_map_opens_where_most_hikes_are_then_on_the_liked_hike(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+    page.locator("#map-pick-on").check()
+    south, west, north, east = page.evaluate("state.info.core")
+    centre = page.evaluate("[pick.map.getCenter().lat, pick.map.getCenter().lng]")
+    assert south <= centre[0] <= north and west <= centre[1] <= east
+    page.locator("#map-pick-on").uncheck()
+
+    page.goto(f"{server}/#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.locator("#map-pick-on").check()
+
+    assert page.evaluate("pick.map.getZoom()") >= 12  # the hikes there show as lines
+    assert page.evaluate("pick.map.getBounds().contains(state.liked.trailhead)")
+
+
+def test_the_score_explanation_says_while_there_is_more_below(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+    page.locator("#results-table thead .help").first.click()
+
+    cue = page.locator("#score-help .help-more")
+    assert cue.is_visible()
+    page.evaluate("const box = document.querySelector('#score-help'); box.scrollTop = box.scrollHeight")
+    page.wait_for_function("() => !document.querySelector('#score-help').classList.contains('more')")
+    assert not cue.is_visible()
+
+
+def test_on_a_phone_folds_show_they_open_the_table_says_it_scrolls_and_share_keeps_the_map(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", width=390, touch=True, init=COPIED)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+
+    fold = page.locator("#weights-panel > summary")
+    assert page.evaluate("s => getComputedStyle(s, '::after').content", fold.element_handle()) == '"show"'
+    assert page.evaluate("s => getComputedStyle(s, '::before').content", fold.element_handle()) == '"▸"'
+    assert "on the left" not in page.locator("body").inner_text()
+
+    top = "() => document.querySelector('#liked .map').getBoundingClientRect().top + scrollY"
+    before = page.evaluate(top)
+    page.locator("#liked").get_by_role("button", name="Share").click()
+    page.locator("#liked .share-note").wait_for()
+    assert page.evaluate(top) == before
+
+    _find(page)
+    assert page.get_by_text("Scroll the table sideways for every measure's score →").is_visible()
+
+
+def test_suggest_loops_keeps_the_rows_shown_and_says_where_the_loops_are(browser, loops_server, monkeypatch) -> None:
+    monkeypatch.setattr("dayhike.serving.GROUP_M", 0.0)
+    monkeypatch.setattr(web, "RESULTS", 2)
+    api = Api({})
+    page = open_page(browser, loops_server, api, hash=f"#hike={MEADOW_PATH}&strict")
+    page.get_by_text("Chosen: Meadow Path").wait_for()
+    _find(page)
+    page.get_by_role("button", name="Show 2 more").click()
+    page.wait_for_function("() => state.results.length === 4")
+
+    page.get_by_role("button", name="Suggest loops near these hikes (takes a few seconds)").click()
+
+    page.wait_for_function("() => state.answer.loops && state.results.length === 4")
+    assert [asked.get("loops") for asked in api.ranked[-2:]] == [True, False]  # later rows search no loops
+    note = page.locator("#results-loops-note").inner_text()
+    assert re.search(r"listed: #\d", note) or "none listed" in note
