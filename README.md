@@ -2014,7 +2014,9 @@ The app starts at about 260 MB; the 4 h drive queries take it to about
 0.7–0.9 GB resident, which it keeps for the next query. Python's own
 allocations peak at only 100–130 MB per query (tracemalloc), so the rest is
 native memory (numpy, GEOS) the allocator does not hand back; where exactly is
-not pinned down. `MALLOC_ARENA_MAX=2` did not change it.
+not pinned down. `MALLOC_ARENA_MAX=2` did not change it for one query at a time; the
+image sets it anyway, as it caps the arenas many concurrent visitors grow
+([docs/deploy.md](docs/deploy.md)).
 
 ### Deployment and the coverage map
 

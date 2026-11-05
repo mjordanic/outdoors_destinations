@@ -4,7 +4,8 @@
 search when the export has GeoNames places (ADR-0029), the hikes in a map view,
 hike detail, the Measure list, the score of any two hikes, and Ranking with an
 optional highways-only DriveTime pre-filter and a straight-line distance limit, ten rows at a time (ADR-0032). Every client gets a request budget per minute, and one Ranking
-runs at a time per instance, so a small container holds its memory. When the export has a TrailGraph,
+runs at a time per instance, so a small container holds its memory; the trail network the way back is
+searched on is built once, and a request arriving during that build waits for it. When the export has a TrailGraph,
 it also serves the Segments in a map view and the detail of a ComposedHike, which can then be the
 Seed of a Ranking or of a pair, and a Ranking lists SuggestedLoops beside the DayHikes (ADR-0020).
 A Ranking may start from a Wish instead of a Seed, and the Measure list says how each Measure takes

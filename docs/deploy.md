@@ -114,7 +114,7 @@ What the flags do:
 
 | Flag | Why |
 | --- | --- |
-| `--memory 2Gi` | Measured peak of app plus Valhalla in the README table, **Web demo**; raise to 4Gi if the logs show out-of-memory restarts. |
+| `--memory 2Gi` | Measured peak of app plus Valhalla in the README table, **Web demo**. The trail network for the way back is built once per instance (a request arriving during the build waits for it), and the image sets `MALLOC_ARENA_MAX=2`; with both, 8 visitors on 1 vCPU peak near 1.1 GB. Raise to 4Gi if the logs show out-of-memory restarts. |
 | `--min-instances 0` | Scale to zero; the captain accepted the cold start. |
 | `--max-instances 2` | The instance cap: at most two containers ever bill at once. |
 | `--concurrency 8` | Searches and hike pages run side by side; Rankings queue one at a time per instance (in the app). |

@@ -12,7 +12,10 @@ import math
 import re
 import shutil
 import sqlite3
+import threading
+import time
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -793,6 +796,31 @@ def test_a_line_takes_a_shorter_way_back_where_one_exists(data) -> None:
 
     assert hike["walk_m"] == pytest.approx(3000, abs=5)
     assert hike["way_back"]["kind"] == "trail" and hike["way_back"]["m"] == pytest.approx(1000, abs=2)
+
+
+def test_the_network_is_built_once_when_many_requests_need_it_at_once(catalog_path: Path, monkeypatch) -> None:
+    # Over all of Europe one build takes seconds and ~0.4 GB: a request arriving during it waits for it.
+    graph = TrailGraph(trailgraph_path_for(catalog_path))
+    opened = []
+    db = TrailGraph._db
+
+    def slow_db(self):
+        opened.append(1)
+        time.sleep(0.2)  # every thread reaches the build while the first is still in it
+        return db(self)
+
+    monkeypatch.setattr(TrailGraph, "_db", slow_db)
+    start = threading.Barrier(8)
+
+    def build():
+        start.wait()
+        return graph._network()
+
+    with ThreadPoolExecutor(8) as pool:
+        built = list(pool.map(lambda _: build(), range(8)))
+
+    assert len(opened) == 1
+    assert all(network is built[0] for network in built)
 
 
 def test_a_line_doubles_and_climbs_its_descent_back(data, sampled: Path, monkeypatch) -> None:
