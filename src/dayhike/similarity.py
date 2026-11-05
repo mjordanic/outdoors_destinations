@@ -541,9 +541,9 @@ def score_rows(
             [
                 calibrate(
                     store,
-                    _calibration_key(measure, month, seed),
+                    key := _calibration_key(measure, month, seed),
                     raw[:, j],
-                    measure_rarity(store, measure, seed, rows, month=month),
+                    _calibrated_rarity(store, measure, key, seed, rows, raw[:, j], month),
                 )
                 for j, measure in enumerate(measures)
             ]
@@ -665,6 +665,27 @@ def measure_rarity(
     between = np.searchsorted(values, high, side="right") - np.searchsorted(values, low, side="left")
     with np.errstate(invalid="ignore", divide="ignore"):
         return np.where(np.isnan(low) | np.isnan(high) | (values.size == 0), np.nan, between / values.size)
+
+
+def _calibrated_rarity(
+    store: SimilarityStore,
+    measure: Measure,
+    key: str,
+    seed: int | OutsideSeed,
+    rows: np.ndarray,
+    raw: np.ndarray,
+    month: int | None,
+) -> np.ndarray:
+    """``measure_rarity`` of the rows whose calibration reads it, NaN elsewhere: every row
+    on a floored Measure, else only the rows at raw 1 (``calibrate``). A Ranking scores
+    every DayHike, and most are not at raw 1."""
+    if key.split("@")[0] in _FLOORED:
+        return measure_rarity(store, measure, seed, rows, month=month)
+    rarity = np.full(len(rows), np.nan)
+    at_one = raw == 1.0
+    if at_one.any():
+        rarity[at_one] = measure_rarity(store, measure, seed, rows[at_one], month=month)
+    return rarity
 
 
 def calibrate(

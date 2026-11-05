@@ -327,3 +327,24 @@ def test_cli_rank_on_a_missing_catalog_says_not_found(tmp_path: Path) -> None:
     assert result.returncode == 2
     assert f"Catalog not found: {path}" in result.stderr
     assert not path.exists()
+
+
+def test_a_ranking_reads_rarity_only_where_the_calibration_does_and_scores_alike(tmp_path: Path) -> None:
+    from dayhike.similarity import MEASURES, _calibration_key, calibrate, measure_rarity, ranked_scores, weighted_mean
+
+    catalog = _catalog(tmp_path, LENGTHS)
+    weights = dict.fromkeys(MEASURE_NAMES, 100.0)
+    for return_to_start in (True, False):
+        store = catalog.similarity.mode(return_to_start)
+        rows = np.arange(1, len(store.ids))
+        similarity, _ = score_rows(store, [0], rows, weights)
+
+        # Every row's rarity, as before: the scores are the same to the bit.
+        raw = np.column_stack([ranked_scores(store, measure, 0, rows) for measure in MEASURES])
+        calibrated = np.column_stack(
+            [
+                calibrate(store, _calibration_key(measure, None, 0), raw[:, j], measure_rarity(store, measure, 0, rows))
+                for j, measure in enumerate(MEASURES)
+            ]
+        )
+        assert np.array_equal(similarity, weighted_mean(calibrated, np.full(len(MEASURES), 100.0)), equal_nan=True)
