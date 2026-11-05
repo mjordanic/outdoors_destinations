@@ -161,6 +161,17 @@ def test_valhalla_compose_is_tracked_and_tiles_are_ignored() -> None:
     assert ignore_code("data/valhalla/croatia-latest-roads.osm.pbf") == 0
 
 
+def test_the_valhalla_that_builds_tiles_is_the_pinned_one_that_serves_them() -> None:
+    import re
+
+    repo = Path(__file__).resolve().parents[1]
+    served = re.search(r"^FROM (\S+)", (repo / "web" / "Dockerfile").read_text(), re.MULTILINE)[1]
+    built = re.search(r"^\s*image: (\S+)", (repo / "data" / "valhalla" / "compose.yaml").read_text(), re.MULTILINE)[1]
+
+    assert "@sha256:" in served
+    assert built == served
+
+
 def test_ingest_work_file_is_gitignored() -> None:
     repo = Path(__file__).resolve().parents[1]
 
@@ -260,3 +271,12 @@ def test_a_dem_directory_that_does_not_exist_is_refused(tmp_path: Path) -> None:
         build_catalog(FIXTURE, catalog_path, dem_dir=tmp_path / "typo")
 
     assert not catalog_path.exists()
+
+
+def test_opening_a_missing_catalog_says_not_found_and_creates_no_file(tmp_path: Path) -> None:
+    path = tmp_path / "catalgo.sqlite"
+
+    with pytest.raises(FileNotFoundError, match="Catalog not found"):
+        Catalog.open(path)
+
+    assert not path.exists()

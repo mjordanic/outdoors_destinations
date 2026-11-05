@@ -300,3 +300,75 @@ def test_the_cli_stamps_every_progress_line_with_the_utc_time(
     lines = capsys.readouterr().err.splitlines()
     assert any(line.endswith("relations: starting") for line in lines)
     assert all(re.match(r"\d\d:\d\d:\d\dZ \w", line) for line in lines), lines
+
+
+def _negative_ids_fixture(tmp_path: Path) -> Path:
+    # The fixture as a JOSM file of new objects: every id negative, sorted as osmium sorts them.
+    import re
+
+    negated = tmp_path / "negated.osm"
+    negated.write_text(re.sub(r'\b(id|ref)="(\d+)"', r'\1="-\2"', FIXTURE.read_text()))
+    josm = tmp_path / "josm.osm"
+    subprocess.run(["osmium", "sort", str(negated), "-o", str(josm)], check=True)
+    return josm
+
+
+@pytest.mark.skipif(shutil.which("osmium") is None, reason="needs osmium-tool")
+def test_a_file_of_negative_ids_builds_the_same_dayhikes(tmp_path: Path) -> None:
+    positive = build_catalog(FIXTURE, tmp_path / "positive" / "catalog.sqlite")
+
+    negative = build_catalog(_negative_ids_fixture(tmp_path), tmp_path / "negative" / "catalog.sqlite")
+
+    assert negative.ingest_report.kept == positive.ingest_report.kept == 4
+    # An unnamed hike is named after its relation id: "relation:-1003" for "relation:1003".
+    names = sorted(hike.name.replace(":-", ":") for hike in negative.dayhikes)
+    assert names == sorted(hike.name for hike in positive.dayhikes)
+
+
+@pytest.mark.skipif(shutil.which("osmium") is None, reason="needs osmium-tool")
+@pytest.mark.parametrize("pass_name", ["relations", "ways", "nodes"])
+def test_ingest_of_negative_ids_killed_inside_a_pass_resumes_to_the_same_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pass_name: str
+) -> None:
+    import dayhike.ingest as ingest
+
+    source = _negative_ids_fixture(tmp_path)
+    whole = tmp_path / "whole" / "catalog.sqlite"
+    build_catalog(source, whole)
+    monkeypatch.setattr(ingest, "INGEST_CHECKPOINT_OBJECTS", 2)
+    monkeypatch.setattr(ingest, "INGEST_PROGRESS_EVERY_OBJECTS", 3)
+    catalog_path = tmp_path / "killed" / "catalog.sqlite"
+
+    def kill_inside_the_pass(message: str) -> None:
+        if message.startswith(f"{pass_name}:") and "scanned" in message:
+            raise RuntimeError("killed")
+
+    with pytest.raises(RuntimeError, match="killed"):
+        build_catalog(source, catalog_path, progress=kill_inside_the_pass)
+    build_catalog(source, catalog_path)
+
+    for path in (catalog_path, geometry_store_path_for(catalog_path)):
+        assert _dump(path) == _dump(whole.parent / path.name)
+
+
+def test_a_run_stopped_while_writing_the_trailgraph_leaves_the_previous_set_whole(tmp_path: Path) -> None:
+    from dayhike.trailgraph import trailgraph_path_for
+
+    other = Path(__file__).parent / "fixtures" / "trailgraph.osm"
+    catalog_path = tmp_path / "catalog.sqlite"
+    files = (catalog_path, geometry_store_path_for(catalog_path), trailgraph_path_for(catalog_path))
+    build_catalog(FIXTURE, catalog_path)
+    before = [_dump(path) for path in files]
+
+    def kill_in_the_trailgraph(message: str) -> None:
+        if message.startswith("trailgraph:"):
+            raise RuntimeError("killed")
+
+    with pytest.raises(RuntimeError, match="killed"):
+        build_catalog(other, catalog_path, progress=kill_in_the_trailgraph)
+
+    assert [_dump(path) for path in files] == before
+    build_catalog(other, tmp_path / "whole" / "catalog.sqlite")
+    build_catalog(other, catalog_path)
+    assert [_dump(path) for path in files] == [_dump(tmp_path / "whole" / path.name) for path in files]
+    assert not list(tmp_path.glob("*.new"))

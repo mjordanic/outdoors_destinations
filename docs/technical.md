@@ -911,12 +911,12 @@ them is an **estimate**.
 ./data/valhalla/prepare-highways.sh data/valhalla/europe-latest-roads.osm.pbf data/valhalla/highways-eu
 cp data/valhalla/mjolnir.drive-time.json data/valhalla/highways-eu/
 docker run --rm -v "$PWD/data/valhalla/highways-eu:/custom_files" -e serve_tiles=False \
-  --entrypoint /bin/bash ghcr.io/gis-ops/docker-valhalla/valhalla:latest -c \
+  --entrypoint /bin/bash ghcr.io/gis-ops/docker-valhalla/valhalla:latest@sha256:060da5b92e6024a67f65135c236d918b021d63e73d1808a0d55b7e7cbd17240c -c \
   'cp /custom_files/mjolnir.drive-time.json /custom_files/valhalla.json && exec /valhalla/scripts/run.sh build_tiles'
 
 # serve on 8002; the merge applies the limits and the matrix algorithm below
 docker run -d -p 8002:8002 -v "$PWD/data/valhalla/highways-eu:/custom_files:ro" \
-  --entrypoint /bin/bash ghcr.io/gis-ops/docker-valhalla/valhalla:latest -c \
+  --entrypoint /bin/bash ghcr.io/gis-ops/docker-valhalla/valhalla:latest@sha256:060da5b92e6024a67f65135c236d918b021d63e73d1808a0d55b7e7cbd17240c -c \
   'jq -s ".[0] * .[1]" /custom_files/valhalla.json /custom_files/mjolnir.drive-time.json > /tmp/valhalla.json && exec valhalla_service /tmp/valhalla.json 2'
 
 uv run dayhike nearby --catalog data/catalog.sqlite --origin 48.137,11.575 --max-hours 4 --highways
@@ -1519,10 +1519,11 @@ Geofabrik `europe-latest.osm.pbf`) is a valid input.
 4. **Resume.** The same `dayhike ingest` command on the same inputs continues
    the work file. `--fresh` (or `build_catalog(..., fresh=True)`) starts over.
    A `progress` callback on `build_catalog` receives the same stage lines.
-5. **Replace.** The new Catalog is written to a temp file and renamed onto
-   `catalog.sqlite` only when it is complete. Then ingest writes the
-   GeometryStore sidecar and deletes the work file. A kill during ingest
-   leaves the previous Catalog in place.
+5. **Replace.** The new Catalog, GeometryStore and TrailGraph are each
+   written under a staging name (`catalog.sqlite.new` and so on) and renamed
+   onto the old ones together, only when all three are complete. Then ingest
+   deletes the work file. A kill during ingest leaves the previous three in
+   place, and the work file to resume from.
 
 See [`docs/adr/0005-streaming-ingest.md`](adr/0005-streaming-ingest.md).
 
@@ -1689,7 +1690,8 @@ Ranking by Seed does **not** need Valhalla. Valhalla is only for `--origin` /
 
 It is a **Docker** service, not a Python package. `uv sync` does not install
 it. The image is
-[`ghcr.io/gis-ops/docker-valhalla/valhalla:latest`](https://github.com/gis-ops/docker-valhalla).
+[`ghcr.io/gis-ops/docker-valhalla/valhalla`](https://github.com/gis-ops/docker-valhalla),
+Valhalla 3.5.1, pinned to the digest `web/Dockerfile` serves (tiles are version-sensitive).
 Compose file: [`data/valhalla/compose.yaml`](../data/valhalla/compose.yaml).
 API used: `POST /sources_to_targets` (matrix, costing `auto`). On the detailed
 car tiles that is all; on the highways-only tiles (`--highways`, what the live

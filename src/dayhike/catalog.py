@@ -193,7 +193,9 @@ class Catalog:
     @classmethod
     def open(cls, path: Path | str) -> Catalog:
         path = Path(path)
-        connection = sqlite3.connect(path)
+        if not path.is_file():
+            raise FileNotFoundError(f"Catalog not found: {path}")
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
         try:
             meta = dict(connection.execute("SELECT key, value FROM catalog_meta"))
             report_data = json.loads(meta["ingest_report"])
@@ -529,7 +531,8 @@ def build_catalog(
     with the Catalog. DriveTime is not computed at ingest. Replaces the
     SQLite file if it exists, only after the new file is complete; overlapping
     snapshots keep one row per OSM id. The GeometryStore and the TrailGraph
-    (``snap_tolerance_m``, see ``dayhike.trailgraph``) are written beside it.
+    (``snap_tolerance_m``, see ``dayhike.trailgraph``) are written beside it,
+    and replace the old ones together with the Catalog, once all three are complete.
     ``sources`` build DayHikes that are not one relation (ADR-0038); by
     default ingest's own ``BUILT_HIKE_SOURCES``. The DEM tiles in ``dem_dir``
     give the heights of line ends that orient lines (``LowerStart``); without
@@ -556,21 +559,32 @@ def build_catalog(
         heights=heights,
     )
     emit_progress(progress, "write", str(catalog_path))
-    _write_sqlite(catalog_path, kept, report)
+    # Each file is written under a staging name and all are renamed together once
+    # every one is complete: a run stopped while writing leaves the previous set
+    # whole, and the work file to resume from.
+    staged: list[tuple[Path, Path]] = []
+
+    def stage(path: Path) -> Path:
+        staged.append((path.with_name(path.name + ".new"), path))
+        return staged[-1][0]
+
+    _write_sqlite(stage(catalog_path), kept, report)
     if work_path.exists():
         work_conn = _connect_work(work_path)
         try:
-            write_geometry_store(geometry_store_path_for(catalog_path), kept, work_conn, snapshot, heights)
+            write_geometry_store(stage(geometry_store_path_for(catalog_path)), kept, work_conn, snapshot, heights)
             del snapshot  # the TrailGraph reads the work file on its own
             write_trailgraph(
-                trailgraph_path_for(catalog_path),
+                stage(trailgraph_path_for(catalog_path)),
                 work_conn,
                 snap_tolerance_m=snap_tolerance_m,
                 progress=progress,
             )
         finally:
             work_conn.close()
-        remove_work(work_path)
+    for new, path in reversed(staged):  # the Catalog last
+        new.replace(path)
+    remove_work(work_path)
     remove_similarity(catalog_path, progress)
     return Catalog.open(catalog_path)
 

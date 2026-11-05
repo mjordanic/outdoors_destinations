@@ -230,7 +230,9 @@ Elevation gain (the `elevation_gain_m` fact, the web page's climb and descent,
 and the Catalog's `feature_vectors.elevation_gain_m`) drops DEM spikes (a
 vertex, or a run of vertices up to 60 m long, all 10 m or more above or all
 below both sides at a 25 % or steeper grade in and out), then counts a climb or
-descent only once it moves 10 m. The numbers below were measured with one-vertex
+descent only once it moves 10 m. Each drop tests the new last kept vertex
+again, so it can drop several in a row, and a real short dip or hump between
+steep sides (500 m, 400 m, 500 m, 100 m apart) is dropped too. The numbers below were measured with one-vertex
 spikes only; the run rule leaves the median DayHike unchanged and moves 9 % by
 more than 5 % (a sample of 1,348). Against
 2,973 OSM `ascent` tags the median error is 12 %, and 5 % of DayHikes are over

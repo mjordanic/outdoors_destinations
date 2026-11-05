@@ -234,7 +234,8 @@ def network_hikes(
     node it ends on, where such a walk is found, not again
     along the same trail where the chain itself walks on along it. Where no
     such walk is found, or it would take the hike out of ``NETWORK_MIN_M`` to
-    ``NETWORK_MAX_M``, the hike starts at its signpost.
+    ``NETWORK_MAX_M``, the hike starts at its signpost. A chain the crossings
+    between its legs take over ``NETWORK_MAX_M`` is left out.
     """
     graph = leg_graph(legs, ways, nodes)
     found = starts(graph, access_points, places)
@@ -317,13 +318,16 @@ def network_hikes(
         )
         if reverse:
             vertices, way_ids, parts = vertices[::-1], way_ids[::-1], parts[::-1]
+        length_m = _linestring_length_m([point for _, point in vertices])
+        if length_m > NETWORK_MAX_M:  # the crossings between its legs took it over
+            continue
         hikes.append(
             NetworkHike(
                 chain_name(graph, chain, names, marked, settled, reverse),
                 tuple(vertices),
                 tuple(way_ids),
                 tuple(parts),
-                _linestring_length_m([point for _, point in vertices]),
+                length_m,
                 jumps,
                 tuple(capped),
             )

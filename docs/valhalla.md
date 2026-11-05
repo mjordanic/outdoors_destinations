@@ -18,7 +18,7 @@ do not commit them). Ranking without `--origin` never talks to Valhalla.
 | --- | --- |
 | Does `uv sync` install Valhalla? | **No.** The Python package has no Valhalla dependency. |
 | Is Valhalla a Python library in this repo? | **No.** `ValhallaMatrixClient` is an HTTP client (`urllib`) that POSTs JSON. |
-| How do you get the engine? | Docker image `ghcr.io/gis-ops/docker-valhalla/valhalla:latest`. |
+| How do you get the engine? | Docker image `ghcr.io/gis-ops/docker-valhalla/valhalla` (Valhalla 3.5.1), pinned to the digest `web/Dockerfile` serves. |
 | Where does it run? | Container, port **8002** on localhost. Compose file: `data/valhalla/compose.yaml`. |
 | When does `dayhike` use it? | Only `rank` with `--origin` and `--max-hours`, `nearby`, or `filter_by_drive_time` with `ValhallaMatrixClient`. |
 | Do tests start it? | **No.** Tests stub the matrix client or stand up a tiny fake HTTP server. |

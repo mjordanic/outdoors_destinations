@@ -1,6 +1,7 @@
 services:
   valhalla:
-    image: ghcr.io/gis-ops/docker-valhalla/valhalla:latest
+    # Valhalla 3.5.1, pinned to the digest web/Dockerfile serves: tiles are version-sensitive.
+    image: ghcr.io/gis-ops/docker-valhalla/valhalla:latest@sha256:060da5b92e6024a67f65135c236d918b021d63e73d1808a0d55b7e7cbd17240c
     ports:
       - "8002:8002"
     volumes:

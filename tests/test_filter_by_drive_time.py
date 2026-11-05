@@ -462,3 +462,31 @@ def test_valhalla_client_raises_other_bad_requests_without_splitting() -> None:
         server.server_close()
 
     assert len(bodies) == 1
+
+
+def test_a_stalled_valhalla_times_out_instead_of_hanging(monkeypatch: pytest.MonkeyPatch) -> None:
+    import socket
+
+    import dayhike.valhalla as valhalla
+
+    # A Valhalla that takes the connection and never answers.
+    stalled = socket.socket()
+    stalled.bind(("127.0.0.1", 0))
+    stalled.listen()
+    monkeypatch.setattr(valhalla, "VALHALLA_TIMEOUT_S", 0.2)
+    client = ValhallaMatrixClient(f"http://127.0.0.1:{stalled.getsockname()[1]}")
+    raised: list[BaseException] = []
+
+    def ask() -> None:
+        try:
+            client.seconds_to_places(Origin(latitude=45.0, longitude=15.0), [(45.1, 15.1)])
+        except BaseException as exc:
+            raised.append(exc)
+
+    call = threading.Thread(target=ask, daemon=True)
+    call.start()
+    call.join(5)
+    stalled.close()
+
+    assert not call.is_alive(), "the Valhalla call is still waiting"
+    assert isinstance(raised[0], (TimeoutError, urllib.error.URLError))
