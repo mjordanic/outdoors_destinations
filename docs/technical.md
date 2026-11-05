@@ -12,10 +12,52 @@ This is a Python package plus SQLite files on disk. There is no live Overpass
 query and no database server to start. You ingest an OSM snapshot once,
 optionally sample a DEM, LandCover, and climate onto the geometries, build the
 similarity facts once, then rank from those files. A small read-only web demo
-serves a trimmed export of them ([Web demo](#web-demo)).
+serves a trimmed export of them ([Web demo](#web-demo)). It runs live at
+<https://dayhike-445079235401.europe-west1.run.app> on Google Cloud Run, which
+stops the server when idle, so the first visit after a quiet spell can take up
+to about 20 seconds ([docs/deploy.md](deploy.md)).
+
+## Run it yourself (quick start)
+
+From a clean machine, you need:
+
+- `git`, to clone the repository.
+- [uv](https://docs.astral.sh/uv/getting-started/installation/). It installs
+  Python 3.13 (the project needs 3.13 or later) and every package; nothing
+  else needs installing for the steps below.
+- Docker, only for the drive-time filter (a local Valhalla) and for building
+  the demo's container. Everything below runs without it.
+
+On the small committed fixture (4 DayHikes, a few seconds):
+
+```bash
+git clone https://github.com/mjordanic/outdoors_destinations.git
+cd outdoors_destinations
+uv sync                       # Python 3.13 and the packages
+uv run pytest                 # optional: the test suite, a few minutes
+
+mkdir -p data
+uv run dayhike ingest tests/fixtures/catalog.osm --catalog data/catalog.sqlite
+uv run dayhike build-similarity --catalog data/catalog.sqlite
+uv run dayhike rank --catalog data/catalog.sqlite "Ridge Walk"
+
+# the web demo on the fixture, at http://127.0.0.1:8000
+uv run dayhike export-serving --catalog data/catalog.sqlite --out data/web-serving
+uv run --extra web dayhike serve --data data/web-serving
+```
+
+The fixture has no heights, land cover or climate, so its scores only show that
+the pipeline runs. A real Catalog (one country or all of
+Europe) needs the OSM, height, land-cover and climate downloads and the full
+command order: [How data is created](#how-data-is-created-command-order), then
+[Pulling a real extract](#pulling-a-real-extract) (Walkthrough A, one country,
+is the place to start). Drive time needs Valhalla:
+[Valhalla (DriveTime only)](#valhalla-drivetime-only). Serving and deploying
+the demo: [Web demo](#web-demo) and [docs/deploy.md](deploy.md).
 
 ## Contents
 
+- [Run it yourself (quick start)](#run-it-yourself-quick-start)
 - [Install](#install) and [How data is created](#how-data-is-created-command-order)
 - [Where files live](#where-files-live) and [the fixture](#the-fixture-is-slim-on-purpose)
 - [Build a Catalog](#1-build-a-catalog-from-the-fixture), [GeometryStore](#geometrystore-written-at-ingest-not-downloaded), [TrailGraph](#trailgraph-written-at-ingest-for-composed-hikes)

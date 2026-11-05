@@ -40,17 +40,8 @@ Shaded areas are where we have hikes.
 **More:** [How to use the site](docs/user-guide.md) · **For developers:**
 [Technical docs](docs/technical.md)
 
-## Run it yourself
-
-You can also run it on your own computer. With [uv](https://docs.astral.sh/uv/):
-
-```bash
-uv sync
-uv run pytest
-```
-
-Building the hike data and starting the web demo are in the
-[technical docs](docs/technical.md).
+To run it on your own computer, see the
+[technical docs](docs/technical.md#run-it-yourself-quick-start).
 
 ## Licence
 
