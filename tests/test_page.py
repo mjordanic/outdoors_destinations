@@ -66,8 +66,8 @@ def server(data: ServingData) -> Iterator[str]:
 
 @pytest.fixture(scope="module")
 def counted_server(data: ServingData) -> Iterator[str]:
-    """The app with GoatCounter and Ko-fi set, so every page loads the real count.js."""
-    yield from serve(create_app(data, goatcounter="gofindmeahike", kofi="gofindmeahike"))
+    """The app with GoatCounter set, so every page loads the real count.js."""
+    yield from serve(create_app(data, goatcounter="gofindmeahike"))
 
 
 def serve(app) -> Iterator[str]:
@@ -1005,7 +1005,7 @@ def test_no_page_asks_for_analytics_while_no_goatcounter_code_is_set(browser, se
     asked: list[str] = []
     page.on("request", lambda request: asked.append(request.url))
     page.route(lambda url: not url.startswith(server), lambda route: route.abort())  # no tiles
-    for path in ("/", "/about.html", "/support.html", "/credits.html"):
+    for path in ("/", "/about.html", "/credits.html"):
         page.goto(f"{server}{path}")
         page.wait_for_load_state("load")
         assert page.evaluate("typeof window.goatcounter") == "undefined", path
@@ -1167,7 +1167,7 @@ def test_no_page_leaves_a_cookie_or_anything_in_browser_storage_even_with_analyt
     context = browser.new_context()
     page = context.new_page()
     page.route(lambda url: not url.startswith(counted_server), lambda route: route.abort())  # no tiles, no counting
-    for path in ("/", "/about.html", "/support.html", "/credits.html", "/privacy.html", "/terms.html"):
+    for path in ("/", "/about.html", "/credits.html", "/privacy.html", "/terms.html"):
         page.goto(f"{counted_server}{path}")
         page.wait_for_load_state("load")
         page.wait_for_function("() => window.goatcounter && window.goatcounter.count")  # count.js has run
