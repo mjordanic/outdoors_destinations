@@ -4,7 +4,8 @@
 search when the export has GeoNames places (ADR-0029), the hikes in a map view,
 hike detail, the Measure list, the score of any two hikes, and Ranking with an
 optional highways-only DriveTime pre-filter and a straight-line distance limit, ten rows at a time (ADR-0032). Every client gets a request budget per minute, and one Ranking
-runs at a time per instance, so a small container holds its memory; the trail network the way back is
+runs at a time per instance, so a small container holds its memory, first come first served and at most one
+per client queued or running, so no client holds it for everyone; the trail network the way back is
 searched on is built once, and a request arriving during that build waits for it. When the export has a TrailGraph,
 it also serves the Segments in a map view and the detail of a ComposedHike, which can then be the
 Seed of a Ranking or of a pair, and a Ranking lists SuggestedLoops beside the DayHikes (ADR-0020).
@@ -83,7 +84,9 @@ MAX_BODY_BYTES = 256 * 1024  # the largest request body; a Route of ROUTE_STEPS 
 RANK_RATE = 20
 API_RATE = 300
 RATE_WINDOW_S = 60.0
-RANK_WAIT_S = 30.0  # a Ranking waits this long for the one running before it
+# A Ranking waits this long for its turn: with the slowest run (a 4 h drive, about 31 s on 1 vCPU, docs/deploy.md)
+# it still ends before Cloud Run's 60 s request timeout, so a visitor gets the app's 503, not Cloud Run's 504.
+RANK_WAIT_S = 25.0
 # The API reads a browser keeps API_MAX_AGE_S seconds; after that the ETag revalidates them.
 CACHED_READS = ("/api/info", "/api/measures", "/api/search", "/api/hikes", "/api/segments")
 # The metadata the page's shape depends on: a browser revalidates it every time, so new code never reads old metadata.
@@ -344,6 +347,39 @@ class RateLimiter:
             return True
 
 
+class RankingQueue:
+    """One Ranking runs at a time, in the order they came, and a client has at most one queued or running.
+
+    So a client within its rate limit cannot keep the Ranking busy for everyone: it waits its turn
+    behind every other client queued before its next Ranking.
+    """
+
+    def __init__(self) -> None:
+        self._turn = threading.Condition()
+        self._queue: deque[str] = deque()  # the clients waiting, first in line first
+        self._running: str | None = None  # the client whose Ranking runs
+
+    def enter(self, key: str, timeout: float) -> bool | None:
+        """Wait for this client's turn: True once it runs, False after ``timeout`` seconds,
+        None at once when the client already has a Ranking queued or running."""
+        with self._turn:
+            if key in self._queue or key == self._running:
+                return None
+            self._queue.append(key)
+            if self._turn.wait_for(lambda: self._running is None and self._queue[0] == key, timeout):
+                self._running = self._queue.popleft()
+                return True
+            self._queue.remove(key)
+            self._turn.notify_all()  # it may have been first in line
+            return False
+
+    def leave(self) -> None:
+        """The running Ranking ended: the next in line runs."""
+        with self._turn:
+            self._running = None
+            self._turn.notify_all()
+
+
 def create_app(
     data: ServingData,
     drive_client: DriveClientFactory | None = None,
@@ -367,7 +403,7 @@ def create_app(
     pages = site_pages(goatcounter, data.places is not None, copernicus="copernicus" in data.meta["attribution"])
     app = FastAPI(title="HikesAlike", docs_url="/api/docs", openapi_url="/api/openapi.json")
     limiters = {"rank": RateLimiter(rank_rate, RATE_WINDOW_S), "api": RateLimiter(api_rate, RATE_WINDOW_S)}
-    one_ranking = threading.Semaphore(1)
+    rankings = RankingQueue()
     # The API reads change only with the export (its meta.json holds facts_version, places.sqlite may come later), the code and the settings.
     settings = f"{BUILD} {drive_client is not None} {MAX_DRIVE_HOURS} {RESULTS} {POOL} {data.places is not None}".encode()
     etag = f'W/"{hashlib.sha256((data.directory / "meta.json").read_bytes() + settings).hexdigest()[:16]}"'
@@ -556,7 +592,7 @@ def create_app(
             raise HTTPException(404, f"no DayHike {dayhike_id}") from None
 
     @app.post("/api/rank")
-    def rank(body: RankRequest) -> dict:
+    def rank(body: RankRequest, request: Request) -> dict:
         started = time.monotonic()
         weights = body.measure_weights()
         if (body.origin is None) != (body.max_hours is None and body.max_km is None):
@@ -567,7 +603,11 @@ def create_app(
         near = None if body.max_km is None else (origin, body.max_km * 1000)
         group_m = group_radius_m(body.max_hours, body.max_km) if body.group_km is None else body.group_km * 1000
         seed = seed_of(body.seed, body.composed) if body.wish is None else body.wish
-        if not one_ranking.acquire(timeout=RANK_WAIT_S):
+        key = client_key(request)
+        turn = rankings.enter(key, RANK_WAIT_S)
+        if turn is None:
+            raise HTTPException(409, "Your previous search is still running; try again when it ends.")
+        if not turn:
             raise HTTPException(503, "busy; try again in a moment")
         try:
             hours = reach = None
@@ -599,7 +639,7 @@ def create_app(
         except ValueError as error:  # a RouteError too
             raise HTTPException(400, str(error)) from None
         finally:
-            one_ranking.release()
+            rankings.leave()
         listed = [hike for row in results for hike in (row, *row["versions"])]
         for result in listed:
             if result["id"] is not None:  # a SuggestedLoop has the hours to its own start

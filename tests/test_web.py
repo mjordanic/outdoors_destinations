@@ -1,3 +1,5 @@
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -1158,3 +1160,41 @@ def test_the_rate_limiter_forgets_an_idle_client_within_a_window() -> None:
     now[0] = 121.0
     assert limiter.allow("9.9.9.9")
     assert len(limiter) == 1
+
+
+def test_a_client_with_a_ranking_running_waits_its_turn_behind_the_others() -> None:
+    queue = web.RankingQueue()
+    order: list[str] = []
+
+    def rank(key: str) -> None:
+        assert queue.enter(key, 5.0)
+        order.append(key)
+        queue.leave()
+
+    assert queue.enter("busy", 5.0)
+    assert queue.enter("busy", 5.0) is None  # one queued or running per client: its next is refused at once
+    other = threading.Thread(target=rank, args=("other",))
+    other.start()
+    while "other" not in queue._queue:
+        time.sleep(0.001)
+    queue.leave()
+    again = threading.Thread(target=rank, args=("busy",))  # its next Ranking, sent the moment the first ended
+    again.start()
+    other.join(5)
+    again.join(5)
+
+    assert order == ["other", "busy"]
+
+
+def test_a_ranking_that_waits_too_long_gives_up_its_place_in_line() -> None:
+    queue = web.RankingQueue()
+    assert queue.enter("running", 5.0)
+
+    assert queue.enter("late", 0.01) is False
+    queue.leave()
+    assert queue.enter("late", 0.01)
+
+
+def test_a_ranking_that_waited_its_longest_still_ends_before_cloud_runs_timeout() -> None:
+    slowest_run_s = 31  # a 4 h drive Ranking on 1 vCPU (docs/deploy.md)
+    assert web.RANK_WAIT_S + slowest_run_s < 60  # Cloud Run's --timeout: else the visitor gets its 504, not our 503

@@ -2247,7 +2247,8 @@ loops also start near it (ADR-0036), and with `max_hours` only loops starting
 within the drive, each with its `drive_hours`. Every row has its `line` and `versions`, the other hikes of its
 area (DayHikes or loops starting within the GroupingRadius of it, at most three hikes per
 row) in the same shape. With `max_km` only loops starting within it are listed. Loop work stops at 5 s. The GET routes also answer HEAD. Each client gets 20 Rankings and
-300 other calls a minute; one Ranking runs at a time per process. A request body over 256 KB, or one sent
+300 other calls a minute; one Ranking runs at a time per process, in the order they came, waiting at most 25 s
+(then 503), and a client has at most one queued or running (another is a 409). A request body over 256 KB, or one sent
 without a `Content-Length`, is refused unread (413, 411); `weights` and `excluded` name each Measure at most once,
 and an unknown Measure name in `weights` is a 422.
 

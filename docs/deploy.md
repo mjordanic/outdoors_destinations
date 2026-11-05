@@ -141,9 +141,13 @@ curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
 The app limits each client to **20 Rankings and 300 other API calls per
 minute per instance** (`HTTP 429` past that; the counter lives in each
 instance's memory, so with `--max-instances 2` a client whose requests reach
-both instances gets up to 2x that), runs one Ranking at a time per instance (others
-wait up to 30 s, then get `503`; a Valhalla call stalled past 50 s also ends
-in `503` and frees the slot), refuses a request body over 256 KB unread (`413`), and caps the drive filter at 4 hours. With
+both instances gets up to 2x that), runs one Ranking at a time per instance, in
+the order they came (others wait up to 25 s, then get `503`; with the slowest
+4 h drive Ranking of about 31 s that still ends inside the 60 s request timeout,
+so a visitor gets the app's `503` rather than Cloud Run's `504`; a Valhalla call
+stalled past 50 s also ends in `503` and frees the slot), lets a client have one
+Ranking queued or running at a time (its next gets `409` until it ends, so one
+client cannot hold the Ranking for everyone), refuses a request body over 256 KB unread (`413`), and caps the drive filter at 4 hours. With
 `--max-instances 2` the most the service can ever bill is two instances busy
 around the clock: about 5.3 million vCPU-seconds and 10.5 million GiB-seconds a
 month, roughly **$150 per month at list price** after the free tier (verify the
