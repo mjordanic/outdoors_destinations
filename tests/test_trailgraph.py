@@ -1080,3 +1080,114 @@ def test_the_segments_are_sampled_in_the_workers(tmp_path: Path, monkeypatch: py
     pids = read.read_text().split()
     assert len(pids) > 1
     assert str(os.getpid()) not in pids
+
+
+# Way 500 passes node 2 twice: 1 - 2 - 3 - 4 - 2 - 5, a lollipop with its loop at 2 (km east, north of 46.05, 14.05).
+LOLLIPOP_NODES = {1: (0, 0), 2: (1, 0), 3: (1.5, 0.5), 4: (1.5, -0.5), 5: (2, 0)}
+
+
+def _place(east: float, north: float) -> tuple[float, float]:
+    """(lat, lon) of a node km east and north of 46.05, 14.05, as the fixture writes it."""
+    return round(46.05 + north / 111.2, 7), round(14.05 + east / 77.2, 7)
+
+
+LOLLIPOP = "\n".join(
+    [
+        '<?xml version="1.0" encoding="UTF-8"?>\n<osm version="0.6" generator="dayhike-fixture">',
+        *(
+            f'  <node id="{node}" lat="{_place(*at)[0]:.7f}" lon="{_place(*at)[1]:.7f}" version="1"/>'
+            for node, at in LOLLIPOP_NODES.items()
+        ),
+        '  <way id="500" version="1">',
+        *(f'    <nd ref="{node}"/>' for node in (1, 2, 3, 4, 2, 5)),
+        '    <tag k="highway" v="path"/>\n  </way>',
+        '  <relation id="5000" version="1">\n    <member type="way" ref="500" role=""/>',
+        '    <tag k="type" v="route"/>\n    <tag k="route" v="hiking"/>\n    <tag k="name" v="Lollipop"/>',
+        "  </relation>\n</osm>\n",
+    ]
+)
+
+
+def test_a_walk_along_a_way_that_passes_a_node_twice_opens_again(tmp_path: Path) -> None:
+    (tmp_path / "lollipop.osm").write_text(LOLLIPOP)
+    build_catalog(tmp_path / "lollipop.osm", tmp_path / "catalog.sqlite")
+    graph = TrailGraph(trailgraph_path_for(tmp_path / "catalog.sqlite"))
+    ends = {(s["a"], s["b"]): s["id"] for s in _segments(tmp_path / "catalog.sqlite")}
+    stem, out, back, tail = ends[1, 2], ends[2, 4], ends[4, 2], ends[2, 5]  # the loop is two Segments, 2 - 3 - 4 and 4 - 2
+
+    for walked in ([stem, out, back, tail], [stem, tail], [stem, out, back, out, back, tail], [stem, back, out, tail]):
+        walk = graph.walk_segments(1, walked)
+        again = graph.walk(Route.parse(str(walk.route)))
+
+        assert again.segments == walked
+        assert graph.facts(again)[0]["length_m"] == pytest.approx(graph.facts(walk)[0]["length_m"])
+
+
+def test_a_built_walk_that_comes_back_to_a_node_of_its_way_opens_whole(tmp_path: Path) -> None:
+    from dayhike.built import route_of
+    from dayhike.osm import OsmWay
+
+    (tmp_path / "lollipop.osm").write_text(LOLLIPOP)
+    build_catalog(tmp_path / "lollipop.osm", tmp_path / "catalog.sqlite")
+    graph = TrailGraph(trailgraph_path_for(tmp_path / "catalog.sqlite"))
+    ways = {500: OsmWay((1, 2, 3, 4, 2, 5), {"highway": "path"})}
+    nodes = (1, 2, 3, 4, 2)  # up the stem and round the loop, back to 2
+    vertices = [(node, _place(*LOLLIPOP_NODES[node])) for node in nodes]
+
+    route, _ = route_of(vertices, [500] * (len(nodes) - 1), ways)
+    walk = graph.walk(Route.parse(route))
+
+    # One merged step "500.2" would stop at the first arrival at 2, a third of the walk.
+    assert route == "1:500.4,500.2"
+    length = sum(_haversine(*a[1], *b[1]) for a, b in zip(vertices, vertices[1:]))
+    assert graph.facts(walk)[0]["length_m"] == pytest.approx(length, rel=1e-3)
+
+
+# Way 500 passes nodes 5 and 7 twice: 5 - 7 - 8 - 1 - 5 - 6 - 7 - 9, so from 5 it leads to 7 both directly and by 6.
+TWICE_NODES = {5: (1, 0), 7: (2, 0), 8: (1.5, 1), 1: (0, 0.5), 6: (1.5, -0.5), 9: (3, 0)}
+
+
+def test_a_built_walk_with_a_shorter_way_round_on_its_way_opens_whole(tmp_path: Path) -> None:
+    from dayhike.built import route_of
+    from dayhike.osm import OsmWay
+
+    osm = "\n".join(
+        [
+            '<?xml version="1.0" encoding="UTF-8"?>\n<osm version="0.6" generator="dayhike-fixture">',
+            *(
+                f'  <node id="{node}" lat="{_place(*at)[0]:.7f}" lon="{_place(*at)[1]:.7f}" version="1"/>'
+                for node, at in TWICE_NODES.items()
+            ),
+            '  <way id="500" version="1">',
+            *(f'    <nd ref="{node}"/>' for node in (5, 7, 8, 1, 5, 6, 7, 9)),
+            '    <tag k="highway" v="path"/>\n  </way>',
+            '  <relation id="5000" version="1">\n    <member type="way" ref="500" role=""/>',
+            '    <tag k="type" v="route"/>\n    <tag k="route" v="hiking"/>\n    <tag k="name" v="Twice"/>',
+            "  </relation>\n</osm>\n",
+        ]
+    )
+    (tmp_path / "twice.osm").write_text(osm)
+    build_catalog(tmp_path / "twice.osm", tmp_path / "catalog.sqlite")
+    graph = TrailGraph(trailgraph_path_for(tmp_path / "catalog.sqlite"))
+    ways = {500: OsmWay((5, 7, 8, 1, 5, 6, 7, 9), {"highway": "path"})}
+    nodes = (1, 5, 6, 7, 9)
+    vertices = [(node, _place(*TWICE_NODES[node])) for node in nodes]
+
+    route, _ = route_of(vertices, [500] * (len(nodes) - 1), ways)
+    walk = graph.walk(Route.parse(route))
+
+    # One merged step "500.9" would reopen as 1 - 5 - 7 - 9, dropping 5 - 6 - 7.
+    length = sum(_haversine(*a[1], *b[1]) for a, b in zip(vertices, vertices[1:]))
+    assert graph.facts(walk)[0]["length_m"] == pytest.approx(length, rel=1e-3)
+
+
+def test_the_export_saves_the_way_back_network_for_a_server_to_memory_map(data, sampled: Path) -> None:
+    built = TrailGraph(trailgraph_path_for(sampled))._network()  # the Catalog's: built from its Segments
+
+    saved = data.trailgraph._network()
+
+    assert data.trailgraph.network_dir == data.directory / "trailgraph.network"
+    assert all(isinstance(array, np.memmap) for array in saved)
+    for array, expected in zip(saved, built, strict=True):
+        assert array.dtype == expected.dtype
+        np.testing.assert_array_equal(array, expected)

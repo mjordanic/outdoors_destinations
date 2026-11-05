@@ -93,14 +93,23 @@ def route_of(
 ) -> tuple[str, dict[int, float]]:
     """The Route text of the walk along ``vertices`` (``start:step,...``, a step
     ``{way}.{node}`` along one of ``way_ids``, negative against its node order,
-    or ``g.{node}`` over a joined gap) and the metres it walks on each way."""
+    or ``g.{node}`` over a joined gap) and the metres it walks on each way.
+
+    Consecutive steps on one way merge into one only while the run so far is
+    the one walk of fewest steps along that way to its node: a step reopens as
+    that walk (``TrailGraph.walk``), so otherwise it starts a new step there."""
     on_ways: dict[int, list[tuple[int, int]]] = {}
     for way_id in dict.fromkeys(way_ids):
         for position, node_id in enumerate(ways[way_id].node_ids):
             on_ways.setdefault(node_id, []).append((way_id, position))
+    forks = {
+        way_id: _next_nodes(ways[way_id].node_ids)
+        for way_id in dict.fromkeys(way_ids)
+        if len(set(ways[way_id].node_ids)) < len(ways[way_id].node_ids)
+    }
     steps: list[str] = []
     walked: dict[int, float] = {}
-    last = None
+    last, run = None, []  # the step before, and the nodes its run passed
     for (here, at), (there, to) in zip(vertices, vertices[1:]):
         way = _way_between(on_ways.get(here, []), on_ways.get(there, []))
         if way is None:
@@ -108,12 +117,45 @@ def route_of(
         else:
             walked[abs(way)] = walked.get(abs(way), 0.0) + _haversine_m(*at, *to)
             step = str(way)
-        if step == last and step != "g":
+        if step == last and step != "g" and _only_walk(forks.get(abs(way)), way > 0, [*run, there]):
             steps[-1] = f"{step}.{there}"
+            run.append(there)
         else:
             steps.append(f"{step}.{there}")
+            run = [here, there]
         last = step
     return f"{vertices[0][0]}:{','.join(steps)}", walked
+
+
+def _next_nodes(node_ids: Sequence[int]) -> tuple[dict[int, list[int]], dict[int, list[int]]]:
+    """The nodes next to each node of a way, along and against its node order."""
+    along: dict[int, list[int]] = {}
+    against: dict[int, list[int]] = {}
+    for a, b in zip(node_ids, node_ids[1:]):
+        along.setdefault(a, []).append(b)
+        against.setdefault(b, []).append(a)
+    return along, against
+
+
+def _only_walk(forks: tuple[dict, dict] | None, forward: bool, run: list[int]) -> bool:
+    """Whether ``run`` is the one walk of fewest steps along a way from its
+    first node to its last; always so on a way that passes no node twice."""
+    if forks is None:
+        return True
+    following = forks[0 if forward else 1]
+    steps, ways, frontier = {run[0]: 0}, {run[0]: 1}, [run[0]]
+    while frontier and run[-1] not in steps:
+        reached: list[int] = []
+        for node in frontier:
+            for after in following.get(node, ()):
+                if after not in steps:
+                    steps[after] = steps[node] + 1
+                    ways[after] = 0
+                    reached.append(after)
+                if steps[after] == steps[node] + 1:
+                    ways[after] = min(2, ways[after] + ways[node])
+        frontier = reached
+    return steps.get(run[-1]) == len(run) - 1 and ways[run[-1]] == 1
 
 
 def _way_between(here: list[tuple[int, int]], there: list[tuple[int, int]]) -> int | None:

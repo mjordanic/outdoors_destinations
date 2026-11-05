@@ -2013,3 +2013,52 @@ def test_every_control_on_a_phone_takes_a_tap_44_px_across(browser, server) -> N
     # The "?" beside a score stays small but takes a tap 44 px across.
     assert page.locator("button.help").first.evaluate("b => getComputedStyle(b, '::after').inset") == "-12px"
     assert page.evaluate("document.documentElement.scrollWidth") <= 390
+
+
+def test_a_name_search_still_pending_when_the_hiker_leaves_the_box_does_not_open_the_list(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+    searched = []
+    page.on("request", lambda request: searched.append(request.url) if "/api/search" in request.url else None)
+
+    page.locator("#search").fill("Ridge")
+    page.locator("#search").blur()  # before the search goes out
+    page.wait_for_timeout(800)
+
+    assert page.locator("#suggestions").is_hidden()
+    assert page.locator("#search").get_attribute("aria-expanded") == "false"
+    assert not searched
+
+
+def test_a_new_suggestion_list_drops_the_option_the_keys_chose_before(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+    search = page.locator("#search")
+    search.fill("Ridge")
+    page.locator("#suggestions li[role=option]").first.wait_for()
+    search.press("ArrowDown")
+    assert search.get_attribute("aria-activedescendant") == "suggestions-0"
+    assert search.get_attribute("aria-expanded") == "true"
+
+    search.fill("Ridge W")
+    page.wait_for_function("document.querySelector('#search').getAttribute('aria-activedescendant') === null")
+    page.locator("#suggestions li[role=option]").first.wait_for()
+    assert search.get_attribute("aria-activedescendant") is None  # no option is chosen in the new list
+
+
+def test_a_result_that_loads_after_a_later_compared_hike_does_not_replace_its_card(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+    held = []
+    page.route(f"{server}/api/hikes/*", lambda route: held.append(route) if not held else route.continue_())
+
+    page.locator("#results-table tbody tr").first.click()  # its hike is held back
+    while not held:
+        page.wait_for_timeout(50)
+    page.locator("#pair-search").fill("Valley Path")
+    page.locator("#pair-suggestions li", has_text="Valley Path").first.dispatch_event("mousedown")
+    page.locator("#selected").get_by_text("Compared with the liked hike").wait_for()
+    held[0].continue_()
+    page.wait_for_timeout(500)
+
+    assert page.locator("#selected").get_by_text("Compared with the liked hike").is_visible()
+    assert page.locator("#selected h2, #selected h3").first.inner_text().startswith("Valley Path")

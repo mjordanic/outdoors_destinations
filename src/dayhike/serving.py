@@ -17,6 +17,8 @@ similarity directory live. It writes a directory a server memory-maps:
   with its line simplified like the hikes' and the metres it climbs each way,
   when the Catalog has one: the page composes hikes from it, and its OSM node
   and way ids resolve a shared link.
+- ``trailgraph.network/``: the network a way back is searched on (``TrailGraph.write_network``),
+  as ``.npy`` arrays a server memory-maps, with the TrailGraph.
 - ``snaps.npz``: highway snaps of every Trailhead (``HighwaySnaps``), when a
   snap file or a Valhalla URL is given.
 - ``valhalla/``: the highways-only tile extract and a ``valhalla.json`` that
@@ -214,7 +216,7 @@ MEASURE_INFO: dict[str, tuple[str, str, str, str]] = {
 # lowest, highest, step and default, in the units of the Measure's fact.
 WISH_INPUTS: dict[str, tuple[str | None, float, float, float, float]] = {
     "length": ("m", 1_000, 2_000_000, 500, 10_000),
-    "elevation_gain": ("m", 0, 3_000, 50, 600),
+    "elevation_gain": ("m", 0, 100_000, 50, 600),  # multi-day tours climb tens of km (ADR-0035)
     "difficulty": ("SAC grade", 1, 6, 1, 2),
     "highest": ("m", 0, 5_000, 50, 1_500),
     "lowest": ("m", 0, 4_000, 50, 500),
@@ -598,8 +600,10 @@ def _check_trailgraph_sampled(source: Path, store: SimilarityStore) -> None:
 
 def _write_trailgraph(source: Path, path: Path, progress: Progress | None) -> bool:
     """Copy the TrailGraph, adding each Segment's display line and
-    its climb each way; False (and no file) when the Catalog has no TrailGraph."""
+    its climb each way, and save the network its way back is searched on
+    (``TrailGraph.write_network``); False (and no file) when the Catalog has no TrailGraph."""
     path.unlink(missing_ok=True)
+    shutil.rmtree(path.with_name(f"{path.stem}.network"), ignore_errors=True)
     if not source.is_file():
         return False
     if progress is not None:
@@ -634,6 +638,7 @@ def _write_trailgraph(source: Path, path: Path, progress: Progress | None) -> bo
         db.execute("VACUUM")
     finally:
         db.close()
+    TrailGraph(path).write_network()
     return True
 
 
@@ -1444,6 +1449,7 @@ class ServingData:
         DayHikes ranked that start in no row's area (ADR-0046).
         """
         group_m = GROUP_M if group_m is None else group_m
+        weights = _measure_weights(weights, return_to_start)  # Round trip is left out with the way back
         store = self.store.mode(return_to_start)
         seed_row, seed_walk = self._seed(seed, return_to_start)
         kept = self._far_and_near(self.trailheads, near, group_m, ())
@@ -1707,7 +1713,7 @@ class ServingData:
         store = self.store.mode(return_to_start)
         a_row, _ = self._seed(a, return_to_start)
         b = self.row_of(b_id)
-        chosen = _measure_weights(weights)
+        chosen = _measure_weights(weights, return_to_start)
         _check_climate(store, month)
         rows = np.array([b])
         similarity, _ = score_rows(store, [a_row], rows, chosen, month=month)

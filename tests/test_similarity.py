@@ -1245,3 +1245,14 @@ def test_quantiles_are_monotone_and_in_unit_interval(tmp_path: Path) -> None:
     assert not np.isnan(scored).any()
     assert (np.diff(scored, axis=1) >= 0).all()
     assert ((scored >= 0) & (scored <= 1)).all()
+
+
+def test_a_walk_that_comes_back_past_a_water_source_passes_it_again() -> None:
+    # 10 km out and back the same way, a spring 1 km out: the DryStretch is 1 km to 19 km (GLOSSARY.md).
+    out = np.array([_metres_north(250 * i) for i in range(41)])
+    lat = np.concatenate([out, out[::-1][1:]])
+
+    facts = _walk(("spring", 1_000, 10), lat=lat, lon=np.full(len(lat), 15.0))
+
+    assert facts["water_count"] == 1  # one WaterSource, passed twice
+    assert facts["dry_stretch_m"] == pytest.approx(18_000.0, abs=5.0)

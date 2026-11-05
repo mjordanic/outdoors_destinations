@@ -1095,7 +1095,9 @@ function nameSearch(input, list, onPick) {
       list.appendChild(li);
     });
     list.hidden = found.length === 0 && !nothingFor;
-    input.setAttribute("aria-expanded", String(found.length > 0));
+    input.setAttribute("aria-expanded", String(!list.hidden));
+    input.removeAttribute("aria-activedescendant"); // its option is gone
+
   };
   const move = (step) => {
     if (!items.length) return;
@@ -1135,12 +1137,18 @@ function nameSearch(input, list, onPick) {
     else if (event.key === "Enter" && items.length) { event.preventDefault(); pick(items[Math.max(active, 0)].id); }
     else if (event.key === "Escape") show([]);
   });
-  input.addEventListener("blur", () => setTimeout(() => show([]), 150));
+  // A search still pending would open the list again after the Hiker left the box.
+  input.addEventListener("blur", () => {
+    clearTimeout(timer);
+    abort?.abort();
+    setTimeout(() => show([]), 150);
+  });
 }
 
 let LIKED_EMPTY = ""; // the liked-hike card's words while no hike is chosen, as the page opens
 
 let chosen = 0, shown = 0, ranked = 0, paired = 0, boxed = 0, placed = 0; // the latest of each request; an older response that lands later is dropped
+let selecting = 0; // the latest request to fill the hike card, a result or a compared hike: only it fills it
 
 // ``fromLink``: the hike an address names; when it cannot be opened, the page shows no hike.
 async function choose(id, { fromLink = false } = {}) {
@@ -1799,14 +1807,14 @@ async function comparePair(id) {
     setStatus(error.message, true);
     return;
   }
-  const request = ++paired, liked = state.liked;
+  const request = ++paired, filling = ++selecting, liked = state.liked;
   setStatus("Scoring the pair…");
   try {
     const [pair, hike] = await Promise.all([
       api("/api/pair", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(query) }),
       api(`/api/hikes/${id}?return_to_start=${query.return_to_start}`),
     ]);
-    if (request !== paired || liked !== state.liked) return;
+    if (request !== paired || filling !== selecting || liked !== state.liked) return;
     $("#pair-search").value = hike.name;
     document.querySelectorAll("#results-table tr.active").forEach((r) => r.classList.remove("active"));
     const card = $("#selected");
@@ -1818,7 +1826,7 @@ async function comparePair(id) {
     card.scrollIntoView({ behavior: "smooth", block: "start" });
     setStatus("");
   } catch (error) {
-    if (request === paired && liked === state.liked) setStatus(error.message, true);
+    if (request === paired && filling === selecting && liked === state.liked) setStatus(error.message, true);
   }
 }
 
@@ -2369,7 +2377,7 @@ async function showResult(index, version = 0) {
   document.querySelectorAll("#results-table tr.active").forEach((r) => r.classList.remove("active"));
   const selector = versions ? `tr[data-version="${index}-${version}"]` : `tr[data-index="${index}"]`;
   document.querySelector(`#results-table ${selector}`)?.classList.add("active");
-  const request = ++shown;
+  const request = ++shown, filling = ++selecting;
   setStatus("Loading the hike…");
   try {
     const hike = result.route
@@ -2379,7 +2387,7 @@ async function showResult(index, version = 0) {
         body: JSON.stringify({ route: result.route.text, name: result.name, return_to_start: state.query.return_to_start }),
       })
       : await api(`/api/hikes/${result.id}?return_to_start=${state.query.return_to_start}`);
-    if (request !== shown || results !== state.results || liked !== rankBasis()) return;
+    if (request !== shown || filling !== selecting || results !== state.results || liked !== rankBasis()) return;
     const card = $("#selected");
     state.selected = { key: resultKey(result) };
     const which = versions ? `, var ${version + 1} of ${versions.length}` : "";
@@ -2388,7 +2396,7 @@ async function showResult(index, version = 0) {
     card.scrollIntoView({ behavior: "smooth", block: "start" });
     setStatus("");
   } catch (error) {
-    if (request === shown && results === state.results && liked === rankBasis()) setStatus(error.message, true);
+    if (request === shown && filling === selecting && results === state.results && liked === rankBasis()) setStatus(error.message, true);
   }
 }
 

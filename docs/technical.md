@@ -210,12 +210,10 @@ call on your machine.
 
 `uv sync` does **not** download OSM and does **not** install Valhalla. Tests
 never start Docker. They rebuild a Catalog in a temp directory from the
-committed fixture, with one exception today: the tests that build similarity
-facts read land cover from `data/landcover/` when it holds WorldCover tiles
-(they pass a temporary DEM folder but no land-cover folder, so the default
-applies). After you have built real data, move `data/landcover/` aside before
-`uv run pytest`, or about 220 tests fail or error with "the TrailGraph has no
-raster samples"
+committed fixture, and run from an empty temp directory (`tests/conftest.py`),
+so the default raster folders (`data/dem/`, `data/landcover/`, `data/climate/`)
+never point at real data you built: the suite stays green after a build. Only
+the real-data tests read `data/`, by its absolute path, and skip without it.
 
 ## The fixture is slim on purpose
 
@@ -682,15 +680,12 @@ NetworkHikes and 33,646 DayStages). The README rounds the live one.
   Leftovers (ways the main walk does not use) included. A hike drawn from
   Segments takes it only from the Segments it walks, so the same walk drawn by
   hand can grade lower than as a relation DayHike.
-- DryStretch with the way back: each WaterSource is placed once, at its nearest
-  point on the walk, so on a retraced walk the water is never passed again on
-  the return. A 10 km out-and-back with one spring at 1 km gets 19,000 m, where
-  the glossary's "longest distance walked without passing a WaterSource" gives
-  18,000 m. This is a known bug, fixed separately.
+- DryStretch counts a WaterSource at every pass of it: a walk that comes back
+  within 100 m of one (a retraced way back, a hike that repeats a Segment)
+  passes it again. A 10 km out-and-back with one spring at 1 km gets 18,000 m.
 - With the way back (the CLI default), every hike is a round trip, so
-  `round_trip` gives every pair raw 1 and calibrates to 0. The page leaves it
-  out; `dayhike rank --weight round_trip=100` accepts it and only pulls every
-  score toward 0.
+  `round_trip` would give every pair raw 1; the page, the API, `dayhike rank`
+  and `dayhike compose` leave it out (ADR-0022).
 
 **Calibration.** 100,000 pairs of DayHike rows drawn uniformly at random with
 seed 20261024 (`CALIBRATION_SEED`), self-pairs dropped. Each of 70 keys (the 27
@@ -2052,7 +2047,7 @@ A Hiker with no particular hike in mind presses "No particular hike in mind?
 Describe the one you want" under the search. The weights list then shows only
 the Measures `/api/measures` marks wishable (Advanced ones again only while it is open), each with a value to ask for in its
 unit and range (a yes/no Measure as a tick box) beside its weight. Length and
-dry stretch are typed in km, up to 2,000 km, with a hint under Length that over
+dry stretch are typed in km, up to 2,000 km, and climb up to 100,000 m, with a hint under Length that over
 about 25 km is usually more than a day (ADR-0035). The form
 starts asking nothing: every weight is 0, and setting a value weighs that
 Measure 100; a Measure weighted 0 asks nothing. The liked-hike
@@ -2101,6 +2096,10 @@ proxies sit in front of the server, so it keys on the visitor's address in
 privacy page names GoatCounter only once it is set. No page sets a cookie or writes browser storage
 (GoatCounter's script writes localStorage only when a visitor opens a page with
 `#toggle-goatcounter` to stop counting their own visits). A code other than letters, digits, `-` and `_` is refused at start.
+`--site-url https://HOST` (`DAYHIKE_SITE_URL`) is the site's public address:
+each page then names itself in `og:url` and its share preview image by full
+address, which link previews need; unset, the image address stays relative. A
+value other than `https://host` is refused at start.
 
 The page opens behind a loading screen, the logo and "Loading…", which says
 "Waking the server" when the first answer is slow (a start from zero), and that
@@ -2129,7 +2128,9 @@ metres each climbs either way, the Junctions, amenity points and sampled
 values, with the OSM node and way ids a shared link names (export format 4), and
 each hike's `kind`, `parts` and `route`, so the page links what a built DayHike is built from
 (export format 5; `dayhike serve` refuses an
-older export, so rerun `export-serving` once). With `--valhalla-tiles` it also links the
+older export, so rerun `export-serving` once), and beside it `trailgraph.network/`, the trail network a way back
+is searched on as `.npy` arrays the server memory-maps (about 75 MB for Europe; without it the first way back
+builds the network from the Segments, reading about half of `trailgraph.sqlite`, 10-20 s). With `--valhalla-tiles` it also links the
 tile extract and writes a `valhalla.json` that serves it inside the container;
 with `--valhalla-url` it snaps every Trailhead once (`snaps.npz`). With
 `--geonames` (GeoNames `allCountries.zip`, downloaded there when missing) it
@@ -2247,7 +2248,8 @@ loops also start near it (ADR-0036), and with `max_hours` only loops starting
 within the drive, each with its `drive_hours`. Every row has its `line` and `versions`, the other hikes of its
 area (DayHikes or loops starting within the GroupingRadius of it, at most three hikes per
 row) in the same shape. With `max_km` only loops starting within it are listed. Loop work stops at 5 s. The GET routes also answer HEAD. Each client gets 20 Rankings and
-300 other calls a minute; one Ranking runs at a time per process. A request body over 256 KB, or one sent
+300 other calls a minute; one Ranking runs at a time per process, in the order they came, waiting at most 25 s
+(then 503), and a client has at most one queued or running (another is a 409). A request body over 256 KB, or one sent
 without a `Content-Length`, is refused unread (413, 411); `weights` and `excluded` name each Measure at most once,
 and an unknown Measure name in `weights` is a 422.
 

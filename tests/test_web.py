@@ -1,3 +1,5 @@
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -124,6 +126,10 @@ def test_lengths_are_wished_in_km_up_to_multi_day_tours(client: TestClient) -> N
     }  # fmt: skip
     assert measures["elevation_gain"]["wish"]["display"] is None
     assert client.post("/api/rank", json={"wish": {"length": 66_000}}).status_code == 200
+    # Climb goes as far: the longest tours climb over 70 km.
+    assert measures["elevation_gain"]["wish"]["max"] == 100_000
+    assert client.post("/api/rank", json={"wish": {"elevation_gain": 73_000}}).status_code == 200
+    assert client.post("/api/rank", json={"wish": {"elevation_gain": 100_001}}).status_code == 422
 
 
 def test_shares_are_wished_in_percent_as_the_facts_show_them(client: TestClient) -> None:
@@ -1158,3 +1164,58 @@ def test_the_rate_limiter_forgets_an_idle_client_within_a_window() -> None:
     now[0] = 121.0
     assert limiter.allow("9.9.9.9")
     assert len(limiter) == 1
+
+
+def test_a_client_with_a_ranking_running_waits_its_turn_behind_the_others() -> None:
+    queue = web.RankingQueue()
+    order: list[str] = []
+
+    def rank(key: str) -> None:
+        assert queue.enter(key, 5.0)
+        order.append(key)
+        queue.leave()
+
+    assert queue.enter("busy", 5.0)
+    assert queue.enter("busy", 5.0) is None  # one queued or running per client: its next is refused at once
+    other = threading.Thread(target=rank, args=("other",))
+    other.start()
+    while "other" not in queue._queue:
+        time.sleep(0.001)
+    queue.leave()
+    again = threading.Thread(target=rank, args=("busy",))  # its next Ranking, sent the moment the first ended
+    again.start()
+    other.join(5)
+    again.join(5)
+
+    assert order == ["other", "busy"]
+
+
+def test_a_ranking_that_waits_too_long_gives_up_its_place_in_line() -> None:
+    queue = web.RankingQueue()
+    assert queue.enter("running", 5.0)
+
+    assert queue.enter("late", 0.01) is False
+    queue.leave()
+    assert queue.enter("late", 0.01)
+
+
+def test_a_ranking_that_waited_its_longest_still_ends_before_cloud_runs_timeout() -> None:
+    slowest_run_s = 31  # a 4 h drive Ranking on 1 vCPU (docs/deploy.md)
+    assert web.RANK_WAIT_S + slowest_run_s < 60  # Cloud Run's --timeout: else the visitor gets its 504, not our 503
+
+
+def test_with_the_site_url_each_page_names_itself_and_its_preview_image_by_full_address(data: ServingData) -> None:
+    client = TestClient(create_app(data, site_url="https://hikes.example"))
+    plain = TestClient(create_app(data)).get("/about.html").text
+
+    home, about = client.get("/").text, client.get("/about.html").text
+
+    # Link previews need a full address: a relative og:image shows no picture.
+    assert '<meta property="og:url" content="https://hikes.example/">' in home
+    assert '<meta property="og:url" content="https://hikes.example/about.html">' in about
+    for page in (home, about):
+        assert '<meta property="og:image" content="https://hikes.example/social-preview.png">' in page
+        assert '<meta name="twitter:image" content="https://hikes.example/social-preview.png">' in page
+    assert "og:url" not in plain and 'content="social-preview.png"' in plain
+    with pytest.raises(ValueError, match="https://host"):
+        create_app(data, site_url="https://hikes.example/path")

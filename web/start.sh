@@ -7,6 +7,7 @@ if [ -f "$DATA/valhalla/valhalla.json" ] && [ -f "$DATA/snaps.npz" ]; then
   set -- --valhalla-url http://127.0.0.1:8002
 fi
 if [ -n "${DAYHIKE_GOATCOUNTER:-}" ]; then set -- "$@" --goatcounter "$DAYHIKE_GOATCOUNTER"; fi
+if [ -n "${DAYHIKE_SITE_URL:-}" ]; then set -- "$@" --site-url "$DAYHIKE_SITE_URL"; fi
 for origin in ${DAYHIKE_CORS_ORIGINS:-}; do set -- "$@" --cors-origin "$origin"; done  # space-separated
 exec /opt/venv/bin/dayhike serve --data "$DATA" --host 0.0.0.0 --port "${PORT:-8080}" \
   --forwarded-hops "${DAYHIKE_FORWARDED_HOPS:-0}" "$@"

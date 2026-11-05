@@ -31,11 +31,8 @@ uv run playwright install chromium   # once, to run tests/test_page.py locally t
 The suite prints a few thousand warnings, mostly Python's `fork()`
 DeprecationWarning; they are expected.
 
-Tests build their own small Catalogs in a temporary directory, but the ones
-that build similarity facts read land cover from `data/landcover/` when that
-folder holds WorldCover tiles. After you have built real data, move
-`data/landcover/` aside before running the suite, or about 220 tests fail or error
-with "the TrailGraph has no raster samples". Checks on real data are opt-in:
+Tests build their own small Catalogs in a temporary directory and never read
+data you built. Checks on real data are opt-in:
 `DAYHIKE_REAL_DATA=1 uv run pytest -m real_data` (see
 [Tests](docs/technical.md#tests)).
 

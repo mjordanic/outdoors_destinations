@@ -95,7 +95,7 @@ gcloud run deploy dayhike --image "$IMAGE" --region europe-west1 \
   --allow-unauthenticated \
   --cpu 1 --memory 2Gi --execution-environment gen2 --cpu-boost \
   --min-instances 0 --max-instances 2 --concurrency 8 --timeout 60 \
-  --set-env-vars DAYHIKE_FORWARDED_HOPS=1
+  --set-env-vars DAYHIKE_FORWARDED_HOPS=1,DAYHIKE_SITE_URL=https://SERVICE.run.app
 ```
 
 Artifact Registry storage is not covered by the Cloud Run spend cap (section 5),
@@ -115,12 +115,13 @@ What the flags do:
 
 | Flag | Why |
 | --- | --- |
-| `--memory 2Gi` | Measured peak of app plus Valhalla in the technical docs table, **Web demo measurements** ([technical.md](technical.md#web-demo-measurements)). The trail network for the way back is built once per instance (a request arriving during the build waits for it), and the image sets `MALLOC_ARENA_MAX=2`; with both, 8 visitors on 1 vCPU peak near 1.1 GB. Raise to 4Gi if the logs show out-of-memory restarts. |
+| `--memory 2Gi` | Measured peak of app plus Valhalla in the technical docs table, **Web demo measurements** ([technical.md](technical.md#web-demo-measurements)). The trail network for the way back is memory-mapped from the export's `trailgraph.network/` (an export without it builds it once per instance, a request arriving during the build waiting for it), and the image sets `MALLOC_ARENA_MAX=2`; with both, 8 visitors on 1 vCPU peak near 1.1 GB. Raise to 4Gi if the logs show out-of-memory restarts. |
 | `--min-instances 0` | Scale to zero; the captain accepted the cold start. |
 | `--max-instances 2` | The instance cap: at most two containers ever bill at once. |
 | `--concurrency 8` | Searches and hike pages run side by side; Rankings queue one at a time per instance (in the app). |
 | `--timeout 60` | No request may run longer; a 4 h drive query from the densest origin takes 23-31 s on 1 vCPU. |
 | `DAYHIKE_FORWARDED_HOPS=1` | The rate limit keys on the last `X-Forwarded-For` entry, the one Google's front end adds. Earlier entries are client-supplied and ignored, so the limit cannot be dodged by sending a fake header. If that last entry turns out to be a Google proxy address rather than the visitor, the limit becomes one shared budget per instance: stricter, never looser. |
+| `DAYHIKE_SITE_URL=https://HOST` (optional) | The site's public address (the Cloud Run URL, or the custom domain once there is one). Each page then names itself in `og:url` and its preview image by full address, so a shared link shows the preview; unset, the image address stays relative and most link previews show none. |
 | `DAYHIKE_GOATCOUNTER=CODE` (optional) | Cookieless visit counts at `https://CODE.goatcounter.com`: every page loads the self-hosted `vendor/goatcounter/count.js`, and "Find" is counted as an event. Unset, no page loads analytics. Not set yet: no GoatCounter account. |
 | `DAYHIKE_CORS_ORIGINS="https://HOST ..."` (optional) | The origins whose pages may call the API (CORS): the loading shell of section 8. Unset, no other origin may. Not set yet: no shell. |
 
@@ -141,9 +142,13 @@ curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
 The app limits each client to **20 Rankings and 300 other API calls per
 minute per instance** (`HTTP 429` past that; the counter lives in each
 instance's memory, so with `--max-instances 2` a client whose requests reach
-both instances gets up to 2x that), runs one Ranking at a time per instance (others
-wait up to 30 s, then get `503`; a Valhalla call stalled past 50 s also ends
-in `503` and frees the slot), refuses a request body over 256 KB unread (`413`), and caps the drive filter at 4 hours. With
+both instances gets up to 2x that), runs one Ranking at a time per instance, in
+the order they came (others wait up to 25 s, then get `503`; with the slowest
+4 h drive Ranking of about 31 s that still ends inside the 60 s request timeout,
+so a visitor gets the app's `503` rather than Cloud Run's `504`; a Valhalla call
+stalled past 50 s also ends in `503` and frees the slot), lets a client have one
+Ranking queued or running at a time (its next gets `409` until it ends, so one
+client cannot hold the Ranking for everyone), refuses a request body over 256 KB unread (`413`), and caps the drive filter at 4 hours. With
 `--max-instances 2` the most the service can ever bill is two instances busy
 around the clock: about 5.3 million vCPU-seconds and 10.5 million GiB-seconds a
 month, roughly **$150 per month at list price** after the free tier (verify the
@@ -348,8 +353,10 @@ The steps, once there is a domain and a host account:
    sed -i '' 's|<meta name="api-base" content="">|<meta name="api-base" content="https://SERVICE.run.app">|' "$SHELL_DIR/index.html"
    ```
 
-   The server fills in the GoatCounter tag (`<!--analytics-->`); a shell copy
-   keeps the placeholder, so fill it the same way if that setting is on.
+   The server fills in the GoatCounter tag (`<!--analytics-->`) and, with
+   `DAYHIKE_SITE_URL`, the pages' `og:url` and full preview image address; a
+   shell copy keeps the placeholder and the relative image, so fill them the
+   same way if those settings are on.
 3. Publish `$SHELL_DIR` on the static host after every `gcloud run deploy`, so
    the shell and the API stay the same version (on Cloudflare Pages:
    `wrangler pages deploy "$SHELL_DIR" --project-name gofindmeahike`).
