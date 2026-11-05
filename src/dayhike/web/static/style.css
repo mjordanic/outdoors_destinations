@@ -140,6 +140,15 @@ svg text { font-size: 11px; fill: var(--muted); }
 #results-table td.cell.none { color: var(--muted); background: #fafafa; }
 #results-table td.cell.left-out { color: var(--muted); background: #fafafa; text-decoration: line-through; }
 #results.stale .table-wrap { opacity: 0.55; }
+/* A search that did not run: the list from before goes, so it never reads as this search's. */
+#results.failed > :not(h2):not(#results-stale) { display: none !important; }
+.poor-note { margin: 8px 0 0; padding: 6px 10px; border-left: 3px solid #b45309; background: #fff7ed; color: #7c2d12; font-size: 0.86rem; }
+.poor-note[hidden], .swipe-cue[hidden] { display: none; }
+.swipe-cue { margin: 4px 0; text-align: right; }
+.suggestions li.enter-note { color: var(--muted); font-size: 0.85rem; }
+.pick-offer { display: flex; flex-direction: column; gap: 4px; }
+.pick-offer button { text-align: left; }
+.page .lede { text-align: center; margin: -4px auto 14px; color: var(--ink); }
 .stale-note { font-size: 0.82rem; margin: 6px 0; color: #8a4b08; }
 .stale-note.error { color: #b42318; }
 #results-table td.score { font-weight: 600; }
@@ -147,7 +156,8 @@ svg text { font-size: 11px; fill: var(--muted); }
 #results-table tr.version td:first-child { color: var(--muted); font-size: 0.75rem; }
 .versions { color: var(--muted); font-size: 0.75rem; }
 #results-table .picked { color: var(--muted); font-size: 0.7rem; margin-left: 3px; }
-#results-draw { display: flex; gap: 12px; align-items: center; }
+#results-draw { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
+#results-draw .hint { flex: 1 1 16em; margin: 0; }
 #results-draw[hidden] { display: none; }
 #results-draw .check { margin-top: 0; }
 .filter-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; }
@@ -157,7 +167,11 @@ svg text { font-size: 11px; fill: var(--muted); }
 .filter-chips .chip-clear { border: none; background: none; padding: 2px 8px; border-radius: 999px; font-size: 1rem; line-height: 1; color: var(--muted); }
 .filter-chips .chip-clear:hover { background: #dbe7de; color: var(--ink); }
 .similar-tag { white-space: nowrap; color: #8a4b08; font-size: 0.75rem; margin-left: 4px; }
-.share-note { font-size: 0.85rem; color: var(--green-dark); }
+/* Over the map below, not in the line: the note does not push the map down. */
+.hike-actions { position: relative; }
+.share-note { position: absolute; left: 0; top: 100%; z-index: 1000; max-width: min(100%, 420px); margin-top: 4px;
+  padding: 6px 10px; font-size: 0.85rem; color: var(--green-dark); background: var(--card);
+  border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 4px 14px rgba(31, 42, 36, 0.15); }
 .share-note[hidden] { display: none; }
 .share-note input { margin-top: 4px; }
 .composed-tag { background: #dcfce7; color: #15803d; border-radius: 999px; padding: 0 6px; font-size: 0.75rem; font-weight: 600; }
@@ -180,6 +194,16 @@ svg text { font-size: 11px; fill: var(--muted); }
   .pick-map { height: 380px; }
 }
 summary.panel-title { cursor: pointer; }
+/* Every fold shows that it opens: an arrow before its title, and "show" after it while closed. */
+summary.panel-title, #advanced > summary, #more-options > summary { list-style: none; }
+summary.panel-title::-webkit-details-marker, #advanced > summary::-webkit-details-marker,
+#more-options > summary::-webkit-details-marker { display: none; }
+summary.panel-title::before, #advanced > summary::before, #more-options > summary::before {
+  content: "▸"; display: inline-block; width: 1em; color: var(--green-dark); }
+details[open] > summary.panel-title::before, #advanced[open] > summary::before, #more-options[open] > summary::before { content: "▾"; }
+details:not([open]) > summary.panel-title::after, #advanced:not([open]) > summary::after,
+#more-options:not([open]) > summary::after { content: "show"; margin-left: auto; padding-left: 8px; font-size: 0.8rem; font-weight: 400; color: var(--muted); }
+summary.panel-title, #advanced > summary, #more-options > summary { display: flex; align-items: center; }
 #advanced { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 8px; }
 #advanced > summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; }
 #advanced > .hint { margin: 4px 0 0; }
@@ -219,6 +243,9 @@ button.help:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 .score-help h4 { margin: 10px 0 2px; font-size: 0.84rem; }
 .score-help p { margin: 4px 0; }
 .score-help .help-close { position: absolute; top: 6px; right: 6px; padding: 0 6px; border: none; font-size: 1.1rem; line-height: 1.2; }
+.score-help .help-more { display: none; position: sticky; bottom: -10px; margin: 6px -14px -10px; padding: 22px 0 6px;
+  text-align: center; font-weight: 600; color: var(--green-dark); background: linear-gradient(rgba(255, 255, 255, 0), var(--card) 55%); }
+.score-help.more .help-more { display: block; }
 
 .page { max-width: 900px; margin: 16px auto; }
 .page p, .page li { max-width: 75ch; }

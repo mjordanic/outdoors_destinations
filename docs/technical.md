@@ -1976,7 +1976,9 @@ liked hike's figures and ranks again, and an address ends in `&oneway` when
 it is off. Clicking a result shows it the same way, next to the
 liked hike. Every shown hike has "Link to this hike" (`#hike=<id>` for a
 catalog or built hike, its `#compose=` link for a composed one, with `&oneway`
-when set) and two buttons: Share sends that address to a touch screen's share
+when set, and the search settings: `&month=`, `&w=` (the weights moved from their defaults, `name:weight`
+comma-separated), `&adv`, `&from=lat,lon`, `&place=`, `&hours=`, `&km=` and `&group=`; a wish link carries the
+same but its own weights; ADR-0054) and two buttons: Share sends that address to a touch screen's share
 sheet, or copies it on a computer or where the sheet fails (a line beside the
 button then says "Link copied", or shows the link when it cannot be copied),
 and Download GPX saves the hike as drawn (the served, simplified line) as a GPX
@@ -2038,8 +2040,11 @@ and the tick box change page 1 and drop later pages; "Show 10 more" sends
 `after` as before and draws from the next pool with the same draw number. When
 the best rows of a pool score exactly the same, the note says they match
 equally. The draw number also picks the loop search's 20 Trailheads from the
-best 60 DayHikes (the best 20 in Strict order). Links end in `&strict` while
-Strict order is ticked; they never carry the draw number.
+best 60 DayHikes (the best 20 in Strict order). Links carry `&strict` while
+Strict order is ticked; they never carry the draw number. An address's parts are read in any order, a
+part the page does not know is ignored, and a link cut short or changed says it could not be opened
+(ADR-0054). "Show 10 more" asks with `loops: false`: loops are searched for page 1 only, and Suggest loops
+keeps as many rows as were shown.
 
 ### Describing a hike instead of a Seed (Wish)
 
@@ -2155,7 +2160,7 @@ short:
 | Method | Path | Answers |
 | --- | --- | --- |
 | GET | `/api/health` | that the server is up |
-| GET | `/api/info` | hike count, coverage box, attribution, which features are on |
+| GET | `/api/info` | hike count, coverage box, `core` (the box of the middle 80 % of Trailheads, where the map opens), `typical_pair` (0.43: below it the page calls a list's matches weak), attribution, which features are on |
 | GET | `/api/measures` | the Measures, grouped, with their plain descriptions |
 | GET | `/api/search?q=` | hikes by name |
 | GET | `/api/place?q=` | places by name, for the drive-time Origin |
@@ -2219,8 +2224,8 @@ not listed and score within 0.05 of it, and `in_area`, every DayHike ranked
 that starts in its area, so the page adds the areas of the rows it did not draw
 to the hikes in other areas; the answer has `other_areas`, the
 DayHikes ranked that start in no row's area, and `loop_search`, null without
-loops, `{"starts", "found", "listed", "stopped"}`: the loop search's start
-Junctions, the loops it found and measured, those listed in all its rows and their versions (the whole pool; the page counts those in the rows it shows), and whether it
+loops, `{"starts", "found", "listed", "best", "stopped"}`: the loop search's start
+Junctions, the loops it found and measured, those listed in all its rows and their versions (the whole pool; the page counts those in the rows it shows), the best score of a loop found within the limits (null: none), and whether it
 stopped at its 5 s limit), and `POST /api/pair` with `{"a": id, "b": id}` plus the same weights,
 excluded and month, giving the score a Ranking would show for `b` with `a` as
 the Seed and every Measure's score. Detail, compose, rank and pair take
@@ -2258,7 +2263,8 @@ within the drive, each with its `drive_hours`. Every row has its `line` and `ver
 area (DayHikes or loops starting within the GroupingRadius of it, at most three hikes per
 row) in the same shape. With `max_km` only loops starting within it are listed. Loop work stops at 5 s. The GET routes also answer HEAD. Each client gets 20 Rankings and
 300 other calls a minute; one Ranking runs at a time per process, in the order they came, waiting at most 25 s
-(then 503), and a client has at most one queued or running (another is a 409). A request body over 256 KB, or one sent
+(then 503), and a client, a browser tab at an address (the page names its tab in `X-HikesAlike-Tab`), has
+at most one queued or running (another is a 409, which the page waits out), and an address at most 4 (ADR-0054). A request body over 256 KB, or one sent
 without a `Content-Length`, is refused unread (413, 411); `weights` and `excluded` name each Measure at most once,
 and an unknown Measure name in `weights` is a 422.
 
