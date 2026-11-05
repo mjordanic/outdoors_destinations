@@ -248,7 +248,7 @@ FLOOR_TEXT = {
     "steepest_km": "both 50 m or less",
 }
 
-# A DayHike with no data for a Measure a Wish asks a value of scores 0 there (ADR-0048).
+# A DayHike with no data for a Measure a Wish asks a value of scores 0 there (ADR-0052).
 UNMEASURED_NOTE = "No data for this hike: counts as 0 against the value you asked for"
 
 

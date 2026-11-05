@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from dayhike.catalog import CLIMATE_FEATURE_NAMES, geometry_store_path_for, remove_similarity
+from dayhike.catalog import CLIMATE_FEATURE_NAMES, ensure_column, geometry_store_path_for, remove_similarity
 from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS
 from dayhike.download import download as _download
 
@@ -254,7 +254,7 @@ def _write_catalog_climate(
     catalog = sqlite3.connect(catalog_path)
     try:
         for name in CLIMATE_FEATURE_NAMES:
-            _ensure_column(catalog, "feature_vectors", name, "REAL")
+            ensure_column(catalog, "feature_vectors", name, "REAL")
         _ensure_climate_months(catalog)
         month_rows: list[tuple[int, int, float, float, float]] = []
         regime_rows: list[tuple[float, float, float, int]] = []
@@ -265,7 +265,7 @@ def _write_catalog_climate(
                 month_rows.append(
                     (dayhike_id, month, temperature_c, precipitation_mm, solar_radiation)
                 )
-            regime_rows.append((*_regime(hike_means), dayhike_id))
+            regime_rows.append((*regime(hike_means), dayhike_id))
         catalog.execute("DELETE FROM climate_months")
         catalog.execute(
             "UPDATE feature_vectors SET temperature_c = NULL, precipitation_mm = NULL, "
@@ -286,9 +286,11 @@ def _write_catalog_climate(
         catalog.close()
 
 
-def _regime(
+def regime(
     months: Sequence[Sequence[float]],
 ) -> tuple[float, float, float]:
+    """The default climate regime of 12 months of (temperature, precipitation,
+    radiation): June–August temperature and radiation, all-year precipitation."""
     return (
         (months[5][0] + months[6][0] + months[7][0]) / 3.0,
         sum(month[1] for month in months) / 12.0,
@@ -309,14 +311,6 @@ def _ensure_climate_months(connection: sqlite3.Connection) -> None:
         )
         """
     )
-
-
-def _ensure_column(
-    connection: sqlite3.Connection, table: str, column: str, decl: str
-) -> None:
-    existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
-    if column not in existing:
-        connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
 def _month_tif(dest: Path, variable: str, month: int) -> Path:

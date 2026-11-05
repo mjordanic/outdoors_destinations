@@ -1730,13 +1730,13 @@ class TrailGraph:
             facts.update(zip(LANDCOVER_SHARE_COLUMNS, shares))
         cells = walk.climate_cell[walk.climate_cell >= 0]
         if cells.size:
+            from dayhike.climate import regime
+
             months = self._climate(cells).mean(axis=0)  # 12 x 3
             for month in range(12):
                 for index, name in enumerate(CLIMATE_NAMES):
                     facts[f"{name}_{month + 1:02d}"] = float(months[month, index])
-            facts["temperature_c"] = float(months[5:8, 0].mean())
-            facts["precipitation_mm"] = float(months[:, 1].mean())
-            facts["solar_radiation"] = float(months[5:8, 2].mean())
+            facts.update(zip(CLIMATE_NAMES, map(float, regime(months))))
         chosen = solar_aspect_points(len(lat))
         southness = walk.southness[chosen]
         southness = southness[~np.isnan(southness)]

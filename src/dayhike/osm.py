@@ -6,10 +6,8 @@ from bisect import bisect_left
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from itertools import islice
-from pathlib import Path
 
 import numpy as np
-import osmium
 
 HUT_TOURISM = frozenset({"alpine_hut", "wilderness_hut"})
 PLACE_KINDS = frozenset({"city", "town", "village", "hamlet"})
@@ -167,52 +165,6 @@ class OsmSnapshot:
     # (lat, lon, name) of named guideposts: they name signposts (ADR-0039).
     guideposts: list[tuple[float, float, str]] = field(default_factory=list)
 
-    def merge(self, other: OsmSnapshot) -> None:
-        self.nodes.update(other.nodes)
-        self.ways.update(other.ways)
-        relations = {rel.id: rel for rel in self.relations}
-        relations.update({rel.id: rel for rel in other.relations})
-        self.relations = list(relations.values())
-        amenities = dict.fromkeys(self.amenities)
-        amenities.update(dict.fromkeys(other.amenities))
-        self.amenities = list(amenities)
-        self.node_elevations.update(other.node_elevations)
-        access_points = dict.fromkeys(self.access_points)
-        access_points.update(dict.fromkeys(other.access_points))
-        self.access_points = list(access_points)
-        self.places = list(dict.fromkeys(self.places + other.places))
-        self.named_points = list(dict.fromkeys(self.named_points + other.named_points))
-        self.destinations = list(dict.fromkeys(self.destinations + other.destinations))
-        self.guideposts = list(dict.fromkeys(self.guideposts + other.guideposts))
-
-
-def parse_osm(path: Path) -> OsmSnapshot:
-    snapshot = OsmSnapshot()
-    pending_relation_amenities: list[tuple[str, tuple[tuple[str, int], ...]]] = []
-    for obj in osmium.FileProcessor(str(path)).with_locations():
-        if obj.is_node():
-            _take_node(snapshot, obj)
-        elif obj.is_way():
-            _take_way(snapshot, obj)
-        elif obj.is_relation():
-            members = tuple(
-                (_MEMBER_TYPE.get(str(member.type), str(member.type)), int(member.ref))
-                for member in obj.members
-            )
-            roles = tuple(str(member.role) for member in obj.members)
-            tags = dict(obj.tags)
-            snapshot.relations.append(OsmRelation(int(obj.id), members, tags, roles))
-            kind = amenity_kind(tags)
-            if kind is not None:
-                pending_relation_amenities.append((kind, members))
-    for kind, members in pending_relation_amenities:
-        points = _member_points(snapshot, members)
-        if points:
-            snapshot.amenities.append((kind, points))
-            if kind == "parking":
-                snapshot.access_points.extend(points)
-    return snapshot
-
 
 def amenity_kind(tags: dict[str, str]) -> str | None:
     if tags.get("tourism") in HUT_TOURISM:
@@ -254,58 +206,3 @@ def _parse_ele_m(raw: str | None) -> float | None:
     else:
         value = float(match["plain"].replace(",", "."))
     return value * FOOT_M if _ELE_FEET.match(raw, match.end()) else value
-
-
-def _take_node(snapshot: OsmSnapshot, obj: object) -> None:
-    location = obj.location
-    if not location.valid():
-        return
-    point = (float(location.lat), float(location.lon))
-    node_id = int(obj.id)
-    snapshot.nodes[node_id] = point
-    tags = dict(obj.tags)
-    kind = amenity_kind(tags)
-    if kind is not None:
-        snapshot.amenities.append((kind, (point,)))
-        if kind == "parking":
-            snapshot.access_points.append(point)
-    elevation_m = _parse_ele_m(tags.get("ele"))
-    if elevation_m is not None:
-        snapshot.node_elevations[node_id] = elevation_m
-
-
-def _take_way(snapshot: OsmSnapshot, obj: object) -> None:
-    node_ids: list[int] = []
-    points: list[tuple[float, float]] = []
-    for node in obj.nodes:
-        node_ids.append(int(node.ref))
-        loc = node.location
-        if loc.valid():
-            points.append((float(loc.lat), float(loc.lon)))
-    tags = dict(obj.tags)
-    snapshot.ways[int(obj.id)] = OsmWay(tuple(node_ids), tags)
-    kind = amenity_kind(tags)
-    if kind is not None and points:
-        snapshot.amenities.append((kind, tuple(points)))
-        if kind == "parking":
-            snapshot.access_points.extend(points)
-
-
-def _member_points(
-    snapshot: OsmSnapshot, members: tuple[tuple[str, int], ...]
-) -> tuple[tuple[float, float], ...]:
-    points: list[tuple[float, float]] = []
-    for member_type, member_id in members:
-        if member_type == "node":
-            point = snapshot.nodes.get(member_id)
-            if point is not None:
-                points.append(point)
-        elif member_type == "way":
-            way = snapshot.ways.get(member_id)
-            if way is None:
-                continue
-            for node_id in way.node_ids:
-                point = snapshot.nodes.get(node_id)
-                if point is not None:
-                    points.append(point)
-    return tuple(points)
