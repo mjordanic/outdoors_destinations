@@ -240,7 +240,19 @@ def test_every_built_hike_walks_its_route_on_the_trailgraph(name: str, tmp_path:
         assert [hike.route for hike in built] == ["1:101.2,g.3,102.4,g.5,103.1"]
 
 
-@pytest.mark.parametrize("text", ["", "1:x.2", "1:104", "1:104.11,", "a:104.11"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "1:x.2",
+        "1:104",
+        "1:104.11,",
+        "a:104.11",
+        "1:9223372036854775808.11",  # a way id past SQLite's 64-bit integer
+        "1:\u0661\u0660\u0664.11",  # Arabic-Indic digits: int() reads them, OSM ids are ASCII
+        "\u0661:104.11",
+    ],
+)
 def test_a_route_that_is_not_one_is_refused_as_text(text: str) -> None:
     with pytest.raises(RouteError, match="not a composed hike"):
         Route.parse(text)
@@ -624,6 +636,24 @@ def test_the_export_keeps_the_trailgraph_with_display_lines(data, sampled: Path)
     assert {j[0] for j in found["junctions"]} >= {A, D, P, F, Z2, -1}
     assert [j[4] for j in found["junctions"] if j[0] == D] == ["11"]
     assert data.segments_in_box(46.04, 14.0, 46.07, 14.1, 3) == ({"junctions": [], "segments": []}, True)
+    assert [s[0] for s in found["segments"]] == sorted(s[0] for s in found["segments"])
+
+
+def test_a_box_over_the_limit_reads_the_box_index_alone(data, monkeypatch) -> None:
+    statements: list[str] = []
+    connect = sqlite3.connect
+
+    def traced(*args, **kwargs):
+        db = connect(*args, **kwargs)
+        db.set_trace_callback(statements.append)
+        return db
+
+    monkeypatch.setattr(sqlite3, "connect", traced)
+
+    assert data.segments_in_box(46.04, 14.0, 46.07, 14.1, 3) == ({"junctions": [], "segments": []}, True)
+    # No Segment row is read and nothing sorted: a box over all Europe answers from the R*Tree at once.
+    assert "SELECT id FROM segment_boxes WHERE north >= 46.04 AND south <= 46.07 AND east >= 14.0 AND west <= 14.1 LIMIT 4" in statements
+    assert not [s for s in statements if re.search(r"\bsegments\b|ORDER BY", s)]
 
 
 def test_a_composed_hike_has_the_detail_shape_of_a_dayhike(data, summit: Route) -> None:
@@ -690,6 +720,8 @@ def test_api_segments_compose_rank_and_pair(client, summit: Route) -> None:
     assert response.headers["cache-control"] == "public, max-age=3600" and response.headers["etag"]
     box = response.json()
     assert box["too_many"] is False and box["segments"] and box["junctions"]
+    wide = client.get("/api/segments", params={"south": 44.0, "west": 13.0, "north": 47.0, "east": 14.1}).json()
+    assert wide == {"junctions": [], "segments": [], "too_many": True}  # a box over 2 degrees reads nothing
     hike = client.post("/api/compose", json=composed).json()
     assert hike["route"]["text"] == str(summit) and hike["facts"]["round_trip"] == 1.0  # with its way back
     assert client.post("/api/compose", json={**composed, "return_to_start": False}).json()["facts"]["round_trip"] == 0.0

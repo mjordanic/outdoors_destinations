@@ -105,6 +105,32 @@ def test_snaps_look_farther_for_remote_places_and_are_kept_on_disk(tmp_path: Pat
     assert len(cutoffs) == calls  # the second HighwaySnaps read the file, not Valhalla
 
 
+def test_snaps_kept_in_memory_are_capped_least_recently_asked_first(tmp_path: Path) -> None:
+    asked: list[float] = []
+
+    def snap(lat, lon, cutoff):
+        asked.append(lat)
+        return (lat, lon)
+
+    server, url = _serve({"/locate": _locate(snap)})
+    path = tmp_path / "snaps.npz"
+    try:
+        HighwaySnaps(url, path).of([(40.0, 15.0)])
+        snaps = HighwaySnaps(url, path, keep=2)
+        snaps.path = None
+        snaps.of([(45.0, 15.0), (46.0, 15.0)])
+        snaps.of([(45.0, 15.0)])  # 46 is now the least recently asked
+        snaps.of([(47.0, 15.0)])  # and is dropped for 47
+        asked.clear()
+        found = snaps.of([(40.0, 15.0), (45.0, 15.0), (47.0, 15.0), (46.0, 15.0)])
+    finally:
+        _stop(server)
+
+    assert asked == [46.0]  # the place from the file is never dropped
+    assert [s[:2] for s in found] == [(40.0, 15.0), (45.0, 15.0), (47.0, 15.0), (46.0, 15.0)]
+    assert len(snaps._learned) == 2
+
+
 def test_client_bands_by_isochrone_and_asks_the_matrix_only_near_the_limit() -> None:
     asked: list[list[dict]] = []
 

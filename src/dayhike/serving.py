@@ -978,7 +978,7 @@ class ServingData:
         needle = _fold(query.strip())
         words = needle.split()
         rows: list[int] = []
-        if needle.isdigit():
+        if needle.isascii() and needle.isdigit():
             try:
                 rows.append(self.row_of(int(needle)))
             except KeyError:
@@ -1126,14 +1126,24 @@ class ServingData:
         """
         empty = {"junctions": [], "segments": []}
         with sqlite3.connect(f"file:{self.trailgraph.path}?mode=ro", uri=True) as db:
-            found = db.execute(
-                "SELECT s.id, s.kind, s.a, s.b, s.length_m, s.climb_ab, s.climb_ba, s.line, s.sac_scale, "
-                "s.relation_ids, s.step_ab, s.step_ba FROM segment_boxes b JOIN segments s ON s.id = b.id "
-                "WHERE b.north >= ? AND b.south <= ? AND b.east >= ? AND b.west <= ? ORDER BY s.id LIMIT ?",
-                (south, north, west, east, limit + 1),
-            ).fetchall()
-            if len(found) > limit:
+            # The R*Tree alone first: a box over more than ``limit`` reads no Segment row and sorts nothing.
+            ids = [
+                row[0]
+                for row in db.execute(
+                    "SELECT id FROM segment_boxes WHERE north >= ? AND south <= ? AND east >= ? AND west <= ? LIMIT ?",
+                    (south, north, west, east, limit + 1),
+                )
+            ]
+            if len(ids) > limit:
                 return empty, True
+            found = sorted(
+                _in_chunks(
+                    db,
+                    "SELECT id, kind, a, b, length_m, climb_ab, climb_ba, line, sac_scale, relation_ids, step_ab, "
+                    "step_ba FROM segments WHERE id IN ({})",
+                    ids,
+                )
+            )
             relation_ids = sorted({rel for row in found for rel in json.loads(row[9])})
             labels = dict(
                 _in_chunks(db, "SELECT id, coalesce(name, ref) FROM relations WHERE id IN ({})", relation_ids)

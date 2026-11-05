@@ -1105,7 +1105,8 @@ _WATER_STEP_M = 5.0  # well under a WorldCover overview cell (40 m by about 28 m
 
 
 _JUNCTION_KEY = r"\d+|c-?\d+_-?\d+"
-_STEP = re.compile(rf"(?:-?\d+|g|l)\.(?:{_JUNCTION_KEY})")
+# A way id fits SQLite's 64-bit integer; ASCII digits only.
+_STEP = re.compile(rf"(?:-?[0-9]{{1,18}}|g|l)\.(?:{_JUNCTION_KEY})", re.ASCII)
 
 
 @dataclass(frozen=True)
@@ -1130,7 +1131,7 @@ class Route:
     def parse(cls, text: str) -> Route:
         start, _, steps = text.partition(":")
         route = cls(start, tuple(steps.split(",")) if steps else ())
-        if not re.fullmatch(_JUNCTION_KEY, start) or not all(_STEP.fullmatch(step) for step in route.steps):
+        if not re.fullmatch(_JUNCTION_KEY, start, re.ASCII) or not all(_STEP.fullmatch(step) for step in route.steps):
             raise RouteError(f"not a composed hike: {text[:80]!r}")
         return route
 

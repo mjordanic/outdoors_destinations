@@ -13,6 +13,7 @@ to its own snap point.
 from __future__ import annotations
 
 import math
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Sequence
@@ -46,6 +47,7 @@ LOCATE_BATCH_SIZE = 1_000
 LOCATE_WORKERS = 4
 
 Snap = tuple[float, float, float]  # highway latitude, longitude, metres from the place
+_UNKNOWN = object()  # a place not snapped yet
 
 
 def _approach_seconds(metres: float) -> float:
@@ -56,13 +58,17 @@ class HighwaySnaps:
     """Where each place snaps onto the highway tiles. None: no highway within 100 km.
 
     Asking Valhalla is the slow part of a query, so answers are kept, and written
-    to `path` when one is given.
+    to `path` when one is given. With `keep`, at most that many places beyond those
+    read from `path` are kept, the least recently asked dropped first: for a cache
+    held only in memory (`path` None), so a long-running server does not grow it without bound.
     """
 
-    def __init__(self, base_url: str = DEFAULT_VALHALLA_URL, path: Path | None = None) -> None:
+    def __init__(self, base_url: str = DEFAULT_VALHALLA_URL, path: Path | None = None, keep: int | None = None) -> None:
         self.base_url = base_url
         self.path = path
-        self._known: dict[Place, Snap | None] = {}
+        self.keep = keep
+        self._known: dict[Place, Snap | None] = {}  # read from path
+        self._learned: OrderedDict[Place, Snap | None] = OrderedDict()  # asked of Valhalla since, least recent first
         if path is not None and path.exists():
             with np.load(path) as saved:
                 for row in zip(*(saved[name] for name in ("lat", "lon", "snap_lat", "snap_lon", "metres"))):
@@ -70,14 +76,26 @@ class HighwaySnaps:
                     self._known[(lat, lon)] = None if math.isnan(snap_lat) else (snap_lat, snap_lon, metres)
 
     def of(self, places: Sequence[Place]) -> list[Snap | None]:
-        missing = [p for p in dict.fromkeys(places) if p not in self._known]
+        answers = {p: self._lookup(p) for p in dict.fromkeys(places)}
+        missing = [p for p, snap in answers.items() if snap is _UNKNOWN]
         if missing:
             batches = [missing[i : i + LOCATE_BATCH_SIZE] for i in range(0, len(missing), LOCATE_BATCH_SIZE)]
             with ThreadPoolExecutor(LOCATE_WORKERS) as pool:
                 for batch, snapped in zip(batches, pool.map(self._snap, batches)):
-                    self._known.update(zip(batch, snapped))
+                    answers.update(zip(batch, snapped))
+            self._learned.update((p, answers[p]) for p in missing)
+            while self.keep is not None and len(self._learned) > self.keep:
+                self._learned.popitem(last=False)
             self._save()
-        return [self._known[p] for p in places]
+        return [answers[p] for p in places]
+
+    def _lookup(self, place: Place) -> Snap | None | object:
+        if place in self._known:
+            return self._known[place]
+        if place in self._learned:
+            self._learned.move_to_end(place)
+            return self._learned[place]
+        return _UNKNOWN
 
     def _snap(self, places: Sequence[Place]) -> list[Snap | None]:
         snapped = locate(self.base_url, places)
@@ -100,7 +118,7 @@ class HighwaySnaps:
         if self.path is None:
             return
         nan = float("nan")
-        rows = [(p, s or (nan, nan, nan)) for p, s in self._known.items()]
+        rows = [(p, s or (nan, nan, nan)) for p, s in {**self._known, **self._learned}.items()]
         np.savez_compressed(
             self.path,
             lat=[p[0] for p, _ in rows],

@@ -2195,7 +2195,7 @@ the Seed and every Measure's score. Detail, compose, rank and pair take
 `way_back` `{"m", "kind"}` in a detail), false every hike one way; the line
 and ElevationProfile stay the hike's own. With a TrailGraph (`compose` true in
 `/api/info`): `GET /api/segments?south=&west=&north=&east=` (the Segments and
-Junctions in that box, none and `too_many` true above 1,500), `POST
+Junctions in that box, none and `too_many` true above 1,500 or in a box over 2 degrees either way), `POST
 /api/compose` with `{"route": "start:step,...", "name": optional}` (the
 Route as its link holds it, up to 2,000 steps, 100 km and 50,000 vertex steps; see `dayhike.trailgraph.Route`),
 giving the same detail as `GET /api/hikes/{id}` with `id` null, the proposed or
@@ -2205,7 +2205,7 @@ a step whose way is gone, whose node is off the way, or whose way no longer
 leads there is refused with a message saying which. `"composed": {"route"}` stands in place of
 `seed` (rank) or `a` (pair). The DayHikes a composed Seed retraces (its Twins)
 are not listed. `"wish": {measure: value}` stands in place of `seed` on rank
-(ADR-0024): a value in the units of the Measure's fact, true or false for a
+(ADR-0024): a value in the units of the Measure's fact within its `wish` `min` to `max` (else 422), true or false for a
 yes/no Measure; only the Measures with a value weigh (100 each without
 `weights`), and no hike is left out. Exactly one of `seed`, `composed` and
 `wish` (else 422). `GET /api/measures` gives each Measure's `wish` input:
@@ -2221,7 +2221,9 @@ loops also start near it (ADR-0036), and with `max_hours` only loops starting
 within the drive, each with its `drive_hours`. Every row has its `line` and `versions`, the other hikes of its
 area (DayHikes or loops starting within the GroupingRadius of it, at most three hikes per
 row) in the same shape. With `max_km` only loops starting within it are listed. Loop work stops at 5 s. The GET routes also answer HEAD. Each client gets 20 Rankings and
-300 other calls a minute; one Ranking runs at a time per process.
+300 other calls a minute; one Ranking runs at a time per process. A request body over 256 KB, or one sent
+without a `Content-Length`, is refused unread (413, 411); `weights` and `excluded` name each Measure at most once,
+and an unknown Measure name in `weights` is a 422.
 
 ### Web demo measurements
 
