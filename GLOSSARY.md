@@ -84,6 +84,10 @@ _Avoid_: road distance, range, radius (the GroupingRadius is another thing)
 How near the start of a better row's hike a hike must start to be one of that row's versions rather than a row of its own (ADR-0020). Unless the Hiker sets it, it follows the query's limits: 5 % of the DistanceLimit, or of the DriveTime limit at 50 km per hour, the smaller, at least 500 m; 10 km with no limit (ADR-0032).
 _Avoid_: area size, cluster radius
 
+**Landmark**:
+A named place the hike search finds hikes by (ADR-0053): an OSM Peak, Hut, Shelter or Viewpoint on a DayHike, a GeoNames lake or pass a DayHike passes within 2 km of, or a GeoNames town or village a DayHike's Trailhead is within 5 km of; it lists its nearest DayHikes.
+_Avoid_: spot, POI, place (that is the Origin's "Find place")
+
 **Hut**:
 An OSM alpine or mountain hut near a Trailhead or along the DayHike geometry.
 _Avoid_: hotel, shelter (unless tagged as such and counted separately)

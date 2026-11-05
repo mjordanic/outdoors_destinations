@@ -2062,3 +2062,59 @@ def test_a_result_that_loads_after_a_later_compared_hike_does_not_replace_its_ca
 
     assert page.locator("#selected").get_by_text("Compared with the liked hike").is_visible()
     assert page.locator("#selected h2, #selected h3").first.inner_text().startswith("Valley Path")
+
+
+SHOWS = "([lat, lon]) => !!pick.map && pick.map.getZoom() >= PICK_ZOOM && pick.map.getBounds().contains([lat, lon])"
+
+
+def test_search_lists_the_hikes_near_a_peak_apart_from_hike_names(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+    assert "peak or place" in page.locator("#search").get_attribute("placeholder")
+
+    page.locator("#search").fill("Ridge Peak")
+
+    head = page.locator("#suggestions li.landmark").first
+    head.wait_for()
+    assert head.inner_text().startswith("Hikes near Ridge Peak (peak)")
+    hike = page.locator("#suggestions li.landmark + li[role=option]").first
+    assert hike.locator(".meta").inner_text().startswith("reaches the top · ")
+    hike.dispatch_event("mousedown")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+
+
+def test_show_on_map_opens_the_hike_map_at_the_landmark(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+    page.locator("#search").fill("Ridge Lake")
+
+    page.locator("#suggestions li.landmark").get_by_role("button", name="Show on map").dispatch_event("mousedown")
+
+    assert page.locator("#map-pick-on").is_checked()
+    page.wait_for_function(SHOWS, arg=[45.05, 15.01])
+    page.get_by_text("Click a line to choose it").wait_for()
+
+
+def test_a_landmark_or_start_place_found_moves_the_open_hike_map(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+    page.locator("#map-pick-on").check()
+
+    page.locator("#search").fill("Vrh")
+    page.wait_for_function(SHOWS, arg=[45.21, 15.11])
+
+    page.locator("#search").fill("")
+    page.locator("#drive-on").check()
+    page.locator("#origin").fill("Ogulin")
+    page.locator("#origin-find").click()
+    page.get_by_text("Start: Ogulin").wait_for()
+    page.wait_for_function(SHOWS, arg=[45.26611, 15.22861])
+
+
+def test_a_start_place_found_with_the_map_closed_opens_it_there(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+    page.locator("#drive-on").check()
+    page.locator("#origin").fill("Ogulin")
+    page.locator("#origin-find").click()
+    page.get_by_text("Start: Ogulin").wait_for()
+
+    page.locator("#map-pick-on").check()
+
+    page.wait_for_function(SHOWS, arg=[45.26611, 15.22861])

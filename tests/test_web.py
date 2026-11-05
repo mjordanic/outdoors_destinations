@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from dayhike import build_catalog, build_similarity, serving, web
-from dayhike.serving import ServingData, export_places, export_serving
+from dayhike.serving import ServingData, export_landmarks, export_places, export_serving
 from dayhike.similarity import CORE_MEASURES, FACILITIES_FLAG_COLUMNS, MEASURE_NAMES
 from dayhike.web import RESULTS, create_app
 
@@ -1113,6 +1113,37 @@ def test_adding_places_to_an_export_changes_the_etag(tmp_path: Path) -> None:
     before = etag()
     export_places(Path(__file__).parent / "fixtures" / "geonames.txt", out)
     assert etag() != before
+
+
+def test_landmark_search_answers_the_hikes_near_a_named_point(client: TestClient) -> None:
+    assert client.get("/api/info").json()["landmark_search"] is True
+    [peak] = client.get("/api/landmarks", params={"q": "ridge peak"}).json()["results"]
+
+    assert (peak["name"], peak["kind"], peak["hike_count"]) == ("Ridge Peak", "peak", 1)
+    assert [(hike["id"], hike["name"], hike["off_m"]) for hike in peak["hikes"]] == [(1001, "Ridge Walk", 0)]
+    assert len(client.get("/api/landmarks", params={"q": "ridge", "limit": 1}).json()["results"]) == 1
+    assert client.get("/api/landmarks", params={"q": "ridge", "limit": 11}).status_code == 422
+    assert client.get("/api/landmarks", params={"q": "x" * 101}).status_code == 422
+    assert "public" in client.get("/api/landmarks", params={"q": "ridge"}).headers["cache-control"]
+
+
+def test_an_export_from_before_landmarks_searches_hike_names_only(tmp_path: Path) -> None:
+    path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, path)
+    build_similarity(path, tmp_path / "dem")
+    out = export_serving(path, tmp_path / "web")
+    (out / "landmarks.sqlite").unlink()
+
+    def app() -> TestClient:
+        return TestClient(create_app(ServingData(out)))
+
+    older = app()
+    assert older.get("/api/info").json()["landmark_search"] is False
+    assert older.get("/api/landmarks", params={"q": "ridge"}).status_code == 404
+    assert older.get("/api/search", params={"q": "ridge"}).json()["results"][0]["name"] == "Ridge Walk"
+    before = older.get("/api/info").headers["etag"]
+    export_landmarks(out)
+    assert app().get("/api/info").headers["etag"] != before
 
 
 def test_an_export_without_places_says_so(client: TestClient) -> None:

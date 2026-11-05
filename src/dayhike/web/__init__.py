@@ -88,7 +88,7 @@ RATE_WINDOW_S = 60.0
 # it still ends before Cloud Run's 60 s request timeout, so a visitor gets the app's 503, not Cloud Run's 504.
 RANK_WAIT_S = 25.0
 # The API reads a browser keeps API_MAX_AGE_S seconds; after that the ETag revalidates them.
-CACHED_READS = ("/api/info", "/api/measures", "/api/search", "/api/hikes", "/api/segments")
+CACHED_READS = ("/api/info", "/api/measures", "/api/search", "/api/landmarks", "/api/hikes", "/api/segments")
 # The metadata the page's shape depends on: a browser revalidates it every time, so new code never reads old metadata.
 REVALIDATED_READS = ("/api/info", "/api/measures")
 API_MAX_AGE_S = 3600
@@ -422,8 +422,12 @@ def create_app(
     app = FastAPI(title="HikesAlike", docs_url="/api/docs", openapi_url="/api/openapi.json")
     limiters = {"rank": RateLimiter(rank_rate, RATE_WINDOW_S), "api": RateLimiter(api_rate, RATE_WINDOW_S)}
     rankings = RankingQueue()
-    # The API reads change only with the export (its meta.json holds facts_version, places.sqlite may come later), the code and the settings.
-    settings = f"{BUILD} {drive_client is not None} {MAX_DRIVE_HOURS} {RESULTS} {POOL} {data.places is not None}".encode()
+    # The API reads change only with the export (its meta.json holds facts_version; places.sqlite and landmarks.sqlite
+    # may come later), the code and the settings.
+    settings = (
+        f"{BUILD} {drive_client is not None} {MAX_DRIVE_HOURS} {RESULTS} {POOL} {data.places is not None} "
+        f"{data.landmarks is not None}"
+    ).encode()
     etag = f'W/"{hashlib.sha256((data.directory / "meta.json").read_bytes() + settings).hexdigest()[:16]}"'
     attribution = data.meta["attribution"]
     measures = [
@@ -510,6 +514,7 @@ def create_app(
             "coverage": coverage,
             "attribution": data.meta["attribution"] | ({"geonames": GEONAMES_ATTRIBUTION} if data.places else {}),
             "place_search": data.places is not None,
+            "landmark_search": data.landmarks is not None,
             "drive_time": drive_client is not None,
             "compose": data.trailgraph is not None,
             "max_drive_hours": MAX_DRIVE_HOURS,
@@ -534,6 +539,13 @@ def create_app(
     @app.api_route("/api/search", methods=["GET", "HEAD"])
     def search(q: str = Query(max_length=100), limit: int = Query(20, ge=1, le=50)) -> dict:
         return {"results": data.search(q, limit)}
+
+    # The hike search's Landmarks: peaks, huts, lakes, passes and towns, each with its nearest hikes (ADR-0053).
+    @app.api_route("/api/landmarks", methods=["GET", "HEAD"])
+    def landmarks(q: str = Query(max_length=100), limit: int = Query(5, ge=1, le=10)) -> dict:
+        if data.landmarks is None:
+            raise HTTPException(404, "no landmark search in this export")
+        return {"results": data.find_landmarks(q, limit)}
 
     # The page's "Find place": a start for the drive filter, without asking Nominatim.
     @app.api_route("/api/place", methods=["GET", "HEAD"])

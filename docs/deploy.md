@@ -34,7 +34,8 @@ downloaded there when missing, so delete it before a refresh to fetch the
 current GeoNames list. An export written without it falls back to public
 Nominatim. To add place search to an export already built, without exporting
 again, run `uv run dayhike export-places --out data/web-serving` (it reads
-only `trailheads.npy` and leaves `meta.json` as it is), then rebuild the image. Rerun the
+only `trailheads.npy` and `hikes.sqlite` and leaves `meta.json` as it is; it also writes
+`landmarks.sqlite`, the peaks, huts, lakes and towns the hike search finds hikes by, ADR-0053), then rebuild the image. Rerun the
 command after any rebuild of the Catalog, the similarity facts or the tiles:
 it rewrites the directory and writes `meta.json` last, so a half-written export
 never opens.

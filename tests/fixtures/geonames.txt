@@ -10,3 +10,6 @@
 3186004	Daleka	Daleka		46.5	17.5	P	PPL	HR		01				120		300	Europe/Zagreb	2026-01-01
 3186005	Kapelica	Kapelica		45.001	15.001	T	MT	HR		01				0		300	Europe/Zagreb	2026-01-01
 3186006	Gornji Kraj	Gornji Kraj		45.002	15.002	P	PPLX	HR		01				0		300	Europe/Zagreb	2026-01-01
+3186007	Ridge Lake	Ridge Lake	Grebensko jezero,Ridge Lake	45.05	15.01	H	LK	HR		01				0		300	Europe/Zagreb	2026-01-01
+3186008	Ridge Saddle	Ridge Saddle		45.08	15.0	T	PASS	HR		01				0		300	Europe/Zagreb	2026-01-01
+3186009	Far Lake	Far Lake		46.5	17.5	H	LK	HR		01				0		300	Europe/Zagreb	2026-01-01
