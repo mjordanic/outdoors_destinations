@@ -254,7 +254,8 @@ def test_the_score_explanation_says_what_a_score_means_and_how_it_is_made(client
     assert "Share of random hike pairs less alike" in help_["measure"]
     assert "0.9 means only 1 pair in 10" in help_["measure"]
     assert "about 0.43" in help_["overall"] and "0.75 beats 99" in help_["overall"]  # under the basic set (ADR-0031)
-    assert "0.16 on Lake or sea" in text and "84 %" in text  # two dry hikes: identical, but it tells little
+    # Two dry hikes: identical, but it tells little; as the rebuild 4 Calibration scores them (0.208).
+    assert "0.21 on Lake or sea" in text and "79 %" in text and "never near water 0.21" in text
     assert "not compared" in text and "0.95" in text  # a shared absence; both passing a hut
     assert "What does 0.1 mean" in " ".join(section["title"] for section in help_["sections"])
     assert "Kattegat" in text and "0.13" in text
@@ -880,6 +881,25 @@ def test_the_mark_is_the_square_hikesalike_tile(client: TestClient) -> None:
     assert width == height
 
 
+def test_the_about_page_and_the_header_count_the_hikes_of_this_export(data: ServingData) -> None:
+    client = TestClient(create_app(data))
+    count = f"{data.meta['dayhikes']:,}"
+
+    assert f"the closest matches among {count} hikes across Europe" in client.get("/about.html").text
+    assert f'<span id="count">{count}</span>' in client.get("/").text
+    assert "160,000" not in client.get("/about.html").text + client.get("/").text
+    assert b"160" not in client.get("/wordmark.svg").content.split(b"<path")[0]  # the art no longer says a count
+
+
+def test_info_gives_where_most_hikes_are_and_what_a_typical_pair_scores(client: TestClient) -> None:
+    info = client.get("/api/info").json()
+    south, west, north, east = info["core"]
+    box = info["coverage"]
+
+    assert box[0] <= south <= north <= box[2] and box[1] <= west <= east <= box[3]
+    assert info["typical_pair"] == serving.TYPICAL_PAIR == 0.43
+
+
 def test_the_about_page_shows_the_wordmark_and_the_tagline(client: TestClient) -> None:
     about = client.get("/about.html").text
 
@@ -1202,15 +1222,15 @@ def test_a_client_with_a_ranking_running_waits_its_turn_behind_the_others() -> N
     order: list[str] = []
 
     def rank(key: str) -> None:
-        assert queue.enter(key, 5.0)
+        assert queue.enter(key, "", 5.0) == "run"
         order.append(key)
         queue.leave()
 
-    assert queue.enter("busy", 5.0)
-    assert queue.enter("busy", 5.0) is None  # one queued or running per client: its next is refused at once
+    assert queue.enter("busy", "", 5.0) == "run"
+    assert queue.enter("busy", "", 5.0) == "own"  # one queued or running per client: its next is refused at once
     other = threading.Thread(target=rank, args=("other",))
     other.start()
-    while "other" not in queue._queue:
+    while ("other", "") not in queue._queue:
         time.sleep(0.001)
     queue.leave()
     again = threading.Thread(target=rank, args=("busy",))  # its next Ranking, sent the moment the first ended
@@ -1223,11 +1243,51 @@ def test_a_client_with_a_ranking_running_waits_its_turn_behind_the_others() -> N
 
 def test_a_ranking_that_waits_too_long_gives_up_its_place_in_line() -> None:
     queue = web.RankingQueue()
-    assert queue.enter("running", 5.0)
+    assert queue.enter("running", "", 5.0) == "run"
 
-    assert queue.enter("late", 0.01) is False
+    assert queue.enter("late", "", 0.01) == "timeout"
     queue.leave()
-    assert queue.enter("late", 0.01)
+    assert queue.enter("late", "", 0.01) == "run"
+
+
+def test_tabs_behind_one_address_each_take_their_own_turn_up_to_a_few() -> None:
+    # Visitors behind one address (a home, an office, a test machine) do not wait on each other's
+    # searches, but one address cannot fill the line (ADR-0054).
+    queue = web.RankingQueue(per_address=3)
+    assert queue.enter("1.2.3.4", "tab-a", 5.0) == "run"
+    waiting = [threading.Thread(target=queue.enter, args=("1.2.3.4", tab, 5.0)) for tab in ("tab-b", "tab-c")]
+    for thread in waiting:
+        thread.start()
+    while len(queue._queue) < 2:
+        time.sleep(0.001)
+
+    assert queue.enter("1.2.3.4", "tab-a", 5.0) == "own"  # its own previous search still runs
+    assert queue.enter("1.2.3.4", "tab-d", 5.0) == "address"  # three from this address already
+    assert queue.enter("5.6.7.8", "tab-a", 0.01) == "timeout"  # another address queues as before
+    for _ in range(3):
+        queue.leave()
+        time.sleep(0.01)
+    for thread in waiting:
+        thread.join(5)
+
+
+def test_a_ranking_names_its_tab_so_another_tab_at_one_address_is_not_refused(data: ServingData) -> None:
+    entered: list[tuple] = []
+    queue = web.RankingQueue
+
+    class Spy(queue):
+        def enter(self, address: str, tab: str, timeout: float) -> str:
+            entered.append((address, tab))
+            return super().enter(address, tab, timeout)
+
+    web.RankingQueue = Spy
+    try:
+        client = TestClient(create_app(data))
+        for tab in ("tab-1", "bad tab!", ""):
+            assert client.post("/api/rank", json={"seed": 1001}, headers={web.TAB_HEADER: tab}).status_code == 200
+    finally:
+        web.RankingQueue = queue
+    assert [tab for _, tab in entered] == ["tab-1", "", ""]  # a name that is no plain name counts as none
 
 
 def test_a_ranking_that_waited_its_longest_still_ends_before_cloud_runs_timeout() -> None:
