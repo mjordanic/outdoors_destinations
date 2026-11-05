@@ -1,5 +1,5 @@
 ---
-status: accepted (searched only on request since ADR-0028; GroupingRadius and pages of rows since ADR-0032; the 40 km band a search bound since ADR-0035; starts near the Origin too since ADR-0036; Trailheads take their starts round by round since ADR-0045; those Trailheads drawn by score, and the rows listed drawn, since ADR-0047)
+status: accepted (searched only on request since ADR-0028; GroupingRadius and pages of rows since ADR-0032; the 40 km band a search bound since ADR-0035; starts near the Origin too since ADR-0036; Trailheads take their starts round by round since ADR-0045; those Trailheads drawn by score, and the rows listed drawn, since ADR-0047; what the page says amended by ADR-0022; Wish Rankings by ADR-0024)
 ---
 
 # SuggestedLoops: similar hikes composed from the TrailGraph

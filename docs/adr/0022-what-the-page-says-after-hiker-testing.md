@@ -1,5 +1,5 @@
 ---
-status: accepted (amends ADR-0019, ADR-0020, ADR-0021)
+status: accepted (amends ADR-0019, ADR-0020, ADR-0021; the score explanation amended by ADR-0025; ties no longer count half since ADR-0026)
 ---
 
 # What the page says, after two testers used it as hikers
