@@ -1673,7 +1673,9 @@ const pick = {
     if (!found.length) return [];
     found.sort((a, b) => a.off - b.off || a.start - b.start);
     const shared = found.filter((hike) => hike.inside && hike.along <= found[0].off + SHARED_LINE_PX);
-    return shared.length > 1 ? shared.sort((a, b) => a.walk - b.walk).map((hike) => hike.id) : [found[0].id];
+    if (shared.length < 2) return [found[0].id];
+    if (!shared.includes(found[0])) shared.push(found[0]);
+    return shared.sort((a, b) => a.walk - b.walk).map((hike) => hike.id);
   },
 
   // The hike under the pointer stands out, named in a tooltip beside the pointer.
@@ -2441,7 +2443,11 @@ async function rank(query, liked, stale = false, draw = state.draw, place = stat
     $("#results").scrollIntoView({ block: "start" });
     if (stale) markStale();
     setStatus(`Done in ${(body.elapsed_ms / 1000).toFixed(1)} s.`);
-    while (state.results.length < rows && !$("#show-more").hidden && request === ranked) await showMore();
+    while (state.results.length < rows && !$("#show-more").hidden && request === ranked) {
+      const shown = state.results.length;
+      await showMore();
+      if (state.results.length === shown) break;
+    }
   } catch (error) {
     if (request !== ranked || liked !== rankBasis()) return;
     if (!query.loops || stale) markStale();

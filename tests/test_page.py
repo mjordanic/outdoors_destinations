@@ -702,6 +702,32 @@ def test_loops_are_suggested_only_when_the_hiker_asks_for_them(browser, server) 
     assert not suggest.is_visible()
 
 
+def test_suggest_loops_stops_asking_for_the_rows_shown_once_a_page_of_them_fails(browser, loops_server, monkeypatch) -> None:
+    monkeypatch.setattr("dayhike.serving.GROUP_M", 0.0)
+    monkeypatch.setattr(web, "RESULTS", 2)
+    page = open_page(browser, loops_server, Api({}), hash=f"#hike={MEADOW_PATH}&strict")
+    page.get_by_text("Chosen: Meadow Path").wait_for()
+    _find(page)
+    page.get_by_role("button", name="Show 2 more").click()
+    page.wait_for_function("() => state.results.length === 4")
+    refused = []
+
+    def too_many(route) -> None:
+        if "after" not in json.loads(route.request.post_data):
+            route.fallback()
+            return
+        refused.append(route.request)
+        route.fulfill(status=429, json={"detail": "Too many searches from your address; wait a minute."})
+
+    page.route(f"{loops_server}/api/rank", too_many)
+    page.get_by_role("button", name="Suggest loops near these hikes (takes a few seconds)").click()
+
+    page.wait_for_function("() => state.answer.loops")
+    page.wait_for_timeout(500)
+    assert len(refused) == 1
+    assert page.evaluate("state.results.length") == 2
+
+
 def _listed(page) -> list[str]:
     return page.locator("#results-table tbody tr td.name").all_inner_texts()
 
@@ -2327,6 +2353,20 @@ def test_a_click_where_two_hikes_run_along_one_trail_offers_both(browser, server
     offer = page.locator(".pick-offer")
     assert offer.locator("strong").inner_text() == "2 hikes run here; choose one:"
     assert offer.get_by_role("button").all_inner_texts() == ["Day hike (1.0 km)", "Long tour, stage 4 (30 km)"]
+    offer.get_by_role("button", name="Day hike (1.0 km)").click()
+    assert page.evaluate("window.chosen") == [day["id"]]
+
+
+def test_a_click_on_the_end_of_a_hike_where_others_run_along_one_trail_offers_it_with_them(browser, server) -> None:
+    day = drawn_hike("Day hike", START, EAST)  # starts on the trail the other two follow
+    stage = {**drawn_hike("Long tour, stage 4", WEST, EAST), "walk_m": 30_000}
+    other = {**drawn_hike("Other hike", (45.0600, 6.5100), EAST), "walk_m": 20_000}
+    page = map_dots(browser, server, [stage, other, day])
+
+    assert click_map(page, START, -3) == []  # on the day hike's start dot, just off its line
+    offer = page.locator(".pick-offer")
+    assert offer.get_by_role("button").all_inner_texts() == [
+        "Day hike (1.0 km)", "Other hike (20 km)", "Long tour, stage 4 (30 km)"]
     offer.get_by_role("button", name="Day hike (1.0 km)").click()
     assert page.evaluate("window.chosen") == [day["id"]]
 
