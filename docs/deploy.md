@@ -3,16 +3,17 @@
 The HikesAlike demo is one container: the FastAPI app (`dayhike serve`) and a
 highways-only Valhalla for the drive-time filter, with the serving export baked
 into the image. Nothing is written at run time; Cloud Run scales it to zero
-when idle and starts it again on the next visit (a cold start of about 10-12 s).
+when idle and starts it again on the next visit (a cold start of up to about 20 s).
 
-The demo runs on Cloud Run today (the README links it). Every `gcloud`
+The demo runs on Cloud Run today (the README links it; setup and measurements are in
+[technical.md](technical.md)). Every `gcloud`
 command below creates or changes cloud resources and costs money, so run them
 only once the deployment is approved.
 
 ## 1. Build the serving export (on the machine with the data)
 
 The export needs the Catalog, its GeometryStore, its similarity directory
-(`dayhike build-similarity`), and the highways-only Valhalla tiles (README,
+(`dayhike build-similarity`), and the highways-only Valhalla tiles ([technical docs](technical.md#highway-tiles-all-of-europe-small-server),
 **Highway tiles**). Start Valhalla on those tiles first, so every Trailhead is
 snapped once at export time instead of on a visitor's query:
 
@@ -114,7 +115,7 @@ What the flags do:
 
 | Flag | Why |
 | --- | --- |
-| `--memory 2Gi` | Measured peak of app plus Valhalla in the README table, **Web demo**. The trail network for the way back is built once per instance (a request arriving during the build waits for it), and the image sets `MALLOC_ARENA_MAX=2`; with both, 8 visitors on 1 vCPU peak near 1.1 GB. Raise to 4Gi if the logs show out-of-memory restarts. |
+| `--memory 2Gi` | Measured peak of app plus Valhalla in the technical docs table, **Web demo measurements** ([technical.md](technical.md#web-demo-measurements)). The trail network for the way back is built once per instance (a request arriving during the build waits for it), and the image sets `MALLOC_ARENA_MAX=2`; with both, 8 visitors on 1 vCPU peak near 1.1 GB. Raise to 4Gi if the logs show out-of-memory restarts. |
 | `--min-instances 0` | Scale to zero; the captain accepted the cold start. |
 | `--max-instances 2` | The instance cap: at most two containers ever bill at once. |
 | `--concurrency 8` | Searches and hike pages run side by side; Rankings queue one at a time per instance (in the app). |

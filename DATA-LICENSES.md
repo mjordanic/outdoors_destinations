@@ -13,6 +13,6 @@ builds from those inputs, keep the licences of their sources:
 | GeoNames `allCountries` | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | The towns and villages of the web demo's place search ("Find place"), served from `places.sqlite` in the serving export. |
 | Natural Earth | Public domain | Country shapes of the coverage map. |
 
-The full citations and notices are in the README's
-[Attribution](README.md#attribution) section and on the web demo's Data and
+The full citations and notices are in the technical docs'
+[Attribution](docs/technical.md#attribution) section and on the web demo's Data and
 credits page (`credits.html`).

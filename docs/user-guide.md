@@ -1,7 +1,7 @@
 # HikesAlike user guide
 
 How to use the site, in plain words. For setup, running it yourself and how
-the scores are worked out, see the [technical README](../README.md).
+the scores are worked out, see the [technical docs](technical.md).
 
 ## What HikesAlike does
 
@@ -25,8 +25,8 @@ hikes that fit.
   ([credits](../src/dayhike/web/static/credits.html),
   [DATA-LICENSES.md](../DATA-LICENSES.md)).
 
-The first visit after a quiet spell can take 10 to 12 seconds, while the
-server wakes up.
+The first visit after a quiet spell can take up to about 20 seconds, while
+the server wakes up.
 
 ## How to search
 
@@ -88,127 +88,6 @@ the hut slider to 100. Turn Length down to 30.
 - **More options.** Under the limits, this sets how close hikes must start to
   be grouped as one area (see "Reading the results" below).
 
-## Reading the results
-
-### Every row is an area
-
-Hikes that start close together are grouped into one row, so you don't see ten
-near-copies of the same walk. The row shows the best one. Click the row to see
-up to three other versions of it (var 1, 2, 3). Each is more than half a
-different route.
-
-The same walk is not listed twice. If a hike is already on an earlier page,
-a near-identical copy of it does not turn up again on a later page.
-
-How close counts as close? By default, 5 % of your distance or drive limit,
-and at least 0.5 km. With no limit it is 10 km. "More options" lets you change
-it from 0.1 to 50 km.
-
-### Scores
-
-Each hike has a score, and each thing compared has its own score. Press the
-**?** next to a score to see what it means.
-
-- A higher score means more alike.
-- A low score on one thing does not mean the hikes are different overall.
-  It can mean they share something common, like not passing a lake.
-- "No data" means we don't know that fact for the hike (climate and land
-  cover do not cover all of Europe yet). That thing is simply left out of the
-  score. When you describe the hike you want, a hike with no data for
-  something you asked for scores 0 on it instead, so it is listed below the
-  hikes that have that data.
-
-### Why the list changes from visit to visit
-
-The 10 hikes listed are picked, not simply the top 10. Each search looks at
-the best 30 areas and picks 10 of them. A better match is picked more often
-than a weaker one, so the very best are nearly always there, and the rest
-change from one search to the next. Hikes that match about equally well all
-get their turn, instead of the same ones always winning by a hair. The list is
-still in score order. Some rows have a small **picked** mark next to their
-number. A row marked picked would not appear in Strict order; a line beside
-Redraw says so whenever the list has one.
-
-- **Redraw**, above the list, picks again from the same 30 areas. It is
-  instant and keeps any loops already suggested. If no other hike is close
-  enough to come up, it says "No other close matches here; widen the distance
-  or turn on Strict order".
-- Tick **Strict order** to see the best 10 in the exact order of their
-  scores, the same every time. Redraw is off while it is ticked, and a line
-  beside it says why.
-- Redraw and Strict order change the first 10 rows and remove the rows "Show
-  10 more" added; press it again for the next ones.
-- When the best areas score exactly the same, the note above the list says
-  so. Their order among themselves means nothing.
-- A link to a hike or a wish keeps Strict order when it is ticked. Without
-  it, whoever opens the link gets their own pick.
-
-### "Show 10 more" and the counts
-
-The list shows 10 areas at a time. Press **Show 10 more** for the next 10
-(up to 100 rows), picked the same way from the areas not shown yet. Two counts tell you what is not on the list.
-
-**"12 more good matches start here"**
-
-Example: a row reads "3 versions · 12 more good matches start here".
-That means 12 more hikes start in the same area as this row, and score
-nearly as well. They are not listed, and later pages will not list them
-either. They are there so you know the area has plenty to offer.
-
-**"24,113 more hikes start in other areas"**
-
-This is next to "Show 10 more". It is how many hikes the next pages can
-still show you, all from other areas.
-
-### Why one start can show 4 to 8 hikes
-
-Many hikes in the signpost networks start from the same place. Each start
-keeps 4 of them. Slots 5 to 8 are not filled with more of the same.
-Each of them is kept only when it leads to a new named place (a peak, a hut, a
-viewpoint or a lake) that the other hikes there don't reach.
-
-Example: from one car park, four hikes cover the nearby lake and two peaks. A
-fifth is added only if it goes to a hut none of the four reaches. If there is
-no such hut, you see 4.
-
-## Loops
-
-### What a loop suggestion is
-
-Under the list, a button says **"Suggest loops near these hikes (takes a few
-seconds)"**. It looks for loops drawn on the marked trail network, near the
-start you gave (if any) and near the best results. They are marked
-"composed" and drawn dashed green on the map. A loop is named after a hiking
-place near its start, or else the trails it walks.
-
-Press **Edit on the map** to take a loop into the route designer and change
-it.
-
-A loop that mostly walks your liked hike again is not suggested.
-
-### Why loops can change
-
-Searching every possible loop would take too long. So the site picks around
-40 starting points near your start and near 20 of the best 60 results, and
-looks for loops from those. The 20 are picked like the rows of the list, the
-better ones more often, so a new search can find other loops. In Strict order
-they are the 20 best.
-
-- Near-ties matter. Two start areas may score almost the same. After a data
-  rebuild, a tiny score change can swap their order, so a different set of
-  starts gets searched, and a different loop can show up (or one can
-  disappear).
-- The search has a time limit of 5 seconds. If it hits that limit, it lists
-  what it found so far.
-
-So the loops are a good list of ideas, not every loop there is. A note above
-the list says this too, and tells you how many starts it searched from, how
-many loops it found and how many are listed.
-
-Example: "Loops: searched from 31 starts near the best hikes, 14 found, 3
-listed". Not all 14 are listed. The others rank lower, or walk mostly the
-same trails as a listed hike.
-
 ## Download and share a hike
 
 Open any hike from the results. It has a **Link to this hike**, and two
@@ -266,3 +145,126 @@ Routes, huts, water and the like come from OpenStreetMap. Heights come from
 FABDEM, land cover from ESA WorldCover and climate from CHELSA. The full
 credits are on the site's credits page and in
 [DATA-LICENSES.md](../DATA-LICENSES.md).
+
+## More details
+
+### Reading the results
+
+#### Every row is an area
+
+Hikes that start close together are grouped into one row, so you don't see ten
+near-copies of the same walk. The row shows the best one. Click the row to see
+up to three other versions of it (var 1, 2, 3). Each is more than half a
+different route.
+
+The same walk is not listed twice. If a hike is already on an earlier page,
+a near-identical copy of it does not turn up again on a later page.
+
+How close counts as close? By default, 5 % of your distance or drive limit,
+and at least 0.5 km. With no limit it is 10 km. "More options" lets you change
+it from 0.1 to 50 km.
+
+#### Scores
+
+Each hike has a score, and each thing compared has its own score. Press the
+**?** next to a score to see what it means.
+
+- A higher score means more alike.
+- A low score on one thing does not mean the hikes are different overall.
+  It can mean they share something common, like not passing a lake.
+- "No data" means we don't know that fact for the hike (climate and land
+  cover do not cover all of Europe yet). That thing is simply left out of the
+  score. When you describe the hike you want, a hike with no data for
+  something you asked for scores 0 on it instead, so it is listed below the
+  hikes that have that data.
+
+#### Why the list changes from visit to visit
+
+The 10 hikes listed are picked, not simply the top 10. Each search looks at
+the best 30 areas and picks 10 of them. A better match is picked more often
+than a weaker one, so the very best are nearly always there, and the rest
+change from one search to the next. Hikes that match about equally well all
+get their turn, instead of the same ones always winning by a hair. The list is
+still in score order. Some rows have a small **picked** mark next to their
+number. A row marked picked would not appear in Strict order; a line beside
+Redraw says so whenever the list has one.
+
+- **Redraw**, above the list, picks again from the same 30 areas. It is
+  instant and keeps any loops already suggested. If no other hike is close
+  enough to come up, it says "No other close matches here; widen the distance
+  or turn on Strict order".
+- Tick **Strict order** to see the best 10 in the exact order of their
+  scores, the same every time. Redraw is off while it is ticked, and a line
+  beside it says why.
+- Redraw and Strict order change the first 10 rows and remove the rows "Show
+  10 more" added; press it again for the next ones.
+- When the best areas score exactly the same, the note above the list says
+  so. Their order among themselves means nothing.
+- A link to a hike or a wish keeps Strict order when it is ticked. Without
+  it, whoever opens the link gets their own pick.
+
+#### "Show 10 more" and the counts
+
+The list shows 10 areas at a time. Press **Show 10 more** for the next 10
+(up to 100 rows), picked the same way from the areas not shown yet. Two counts tell you what is not on the list.
+
+**"12 more good matches start here"**
+
+Example: a row reads "3 versions · 12 more good matches start here".
+That means 12 more hikes start in the same area as this row, and score
+nearly as well. They are not listed, and later pages will not list them
+either. They are there so you know the area has plenty to offer.
+
+**"24,113 more hikes start in other areas"**
+
+This is next to "Show 10 more". It is how many hikes the next pages can
+still show you, all from other areas.
+
+#### Why one start can show 4 to 8 hikes
+
+Many hikes in the signpost networks start from the same place. Each start
+keeps 4 of them. Slots 5 to 8 are not filled with more of the same.
+Each of them is kept only when it leads to a new named place (a peak, a hut, a
+viewpoint or a lake) that the other hikes there don't reach.
+
+Example: from one car park, four hikes cover the nearby lake and two peaks. A
+fifth is added only if it goes to a hut none of the four reaches. If there is
+no such hut, you see 4.
+
+### Loops
+
+#### What a loop suggestion is
+
+Under the list, a button says **"Suggest loops near these hikes (takes a few
+seconds)"**. It looks for loops drawn on the marked trail network, near the
+start you gave (if any) and near the best results. They are marked
+"composed" and drawn dashed green on the map. A loop is named after a hiking
+place near its start, or else the trails it walks.
+
+Press **Edit on the map** to take a loop into the route designer and change
+it.
+
+A loop that mostly walks your liked hike again is not suggested.
+
+#### Why loops can change
+
+Searching every possible loop would take too long. So the site picks around
+40 starting points near your start and near 20 of the best 60 results, and
+looks for loops from those. The 20 are picked like the rows of the list, the
+better ones more often, so a new search can find other loops. In Strict order
+they are the 20 best.
+
+- Near-ties matter. Two start areas may score almost the same. After a data
+  rebuild, a tiny score change can swap their order, so a different set of
+  starts gets searched, and a different loop can show up (or one can
+  disappear).
+- The search has a time limit of 5 seconds. If it hits that limit, it lists
+  what it found so far.
+
+So the loops are a good list of ideas, not every loop there is. A note above
+the list says this too, and tells you how many starts it searched from, how
+many loops it found and how many are listed.
+
+Example: "Loops: searched from 31 starts near the best hikes, 14 found, 3
+listed". Not all 14 are listed. The others rank lower, or walk mostly the
+same trails as a listed hike.
