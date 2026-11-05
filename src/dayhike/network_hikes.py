@@ -22,7 +22,6 @@ from dataclasses import dataclass
 from functools import cached_property
 
 import numpy as np
-from sklearn.neighbors import BallTree
 
 from dayhike.built import BuildContext, BuiltWalk, built_id, route_of
 from dayhike.catalog import (
@@ -199,6 +198,7 @@ def _relation_walks(context: BuildContext, legs: Sequence[OsmRelation]) -> list[
     if not ends or not hikes:
         return []
     trailheads = np.radians([(hike.trailhead.latitude, hike.trailhead.longitude) for hike in hikes])
+    from sklearn.neighbors import BallTree
     distance, _ = BallTree(np.radians(ends), metric="haversine").query(trailheads, k=1)
     near = {hike.id for hike, d in zip(hikes, distance[:, 0]) if d * EARTH_RADIUS_M <= TWIN_REACH_M}
     walks = (context.main_walk(relation) for relation in snapshot.relations if relation.id in near)
@@ -356,6 +356,7 @@ def _parking_walks(
     if not access_points or not sources:
         return {}, {}
     ids = list(sources)
+    from sklearn.neighbors import BallTree
     tree = BallTree(np.radians(access_points), metric="haversine")
     near = tree.query_radius(np.radians([sources[node] for node in ids]), r=START_PARKING_M / EARTH_RADIUS_M)
     parkings = {node: [access_points[i] for i in found] for node, found in zip(ids, near) if len(found)}
@@ -611,6 +612,7 @@ def _join(points: Sequence[Point]) -> tuple[list[int], tuple[Point, ...]]:
             i = parent[i]
         return i
 
+    from sklearn.neighbors import BallTree
     tree = BallTree(np.radians(points), metric="haversine")
     for i, near in enumerate(tree.query_radius(np.radians(points), r=GAP_JOIN_M / EARTH_RADIUS_M)):
         for j in near:
@@ -635,6 +637,7 @@ def starts(
     for points, radius_m in ((access_points, START_PARKING_M), ([(lat, lon) for lat, lon, _ in places], START_PLACE_M)):
         if not points or not graph.signposts:
             continue
+        from sklearn.neighbors import BallTree
         tree = BallTree(np.radians(points), metric="haversine")
         distance, _ = tree.query(np.radians(graph.signposts), k=1)
         near = [was or float(d[0]) * EARTH_RADIUS_M <= radius_m for was, d in zip(near, distance)]

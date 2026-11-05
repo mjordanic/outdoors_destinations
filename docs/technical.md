@@ -40,7 +40,7 @@ while the native libraries load for the first time):
 git clone https://github.com/mjordanic/outdoors_destinations.git
 cd outdoors_destinations
 uv sync                       # Python 3.13 and the packages
-uv run pytest                 # optional: the test suite, 3 to 7 minutes (see Tests)
+uv run pytest -n 4            # optional: the test suite, about 70 to 80 seconds (see Tests)
 
 mkdir -p data
 uv run dayhike ingest tests/fixtures/catalog.osm --catalog data/catalog.sqlite
@@ -79,7 +79,7 @@ the demo: [Web demo](#web-demo) and [docs/deploy.md](deploy.md).
 uv sync
 ```
 
-The package is `dayhike`. Tests: `uv run pytest`. Checks on the real data in
+The package is `dayhike`. Tests: `uv run pytest -n 4`. Checks on the real data in
 `data/` are opt-in: `DAYHIKE_REAL_DATA=1 uv run pytest -m real_data`
 (see [Tests](#tests) and [Clean rebuild](#clean-rebuild)).
 
@@ -2320,7 +2320,8 @@ The mark (two mountains and a trail) is drawn by hand for this project.
 
 Two tiers.
 
-**Fast** (`uv run pytest`, about 3 to 7 minutes on an 8-core Mac; a few
+**Fast** (`uv run pytest -n 4`, about 70 to 80 seconds on an 8-core Mac, or
+about 2.5 minutes on one core with plain `uv run pytest`; a few
 thousand warnings, mostly Python's `fork()` DeprecationWarning, are expected):
 everything runs on the committed OSM fixture and small synthetic rasters (but
 see the `data/landcover/` exception under [Where files live](#where-files-live)).
@@ -2444,7 +2445,7 @@ at the rebuild.
 5. **Check**, from the new checkout:
 
    ```bash
-   uv run pytest                                # 3 to 7 min
+   uv run pytest -n 4                           # 70 to 80 s
    DAYHIKE_REAL_DATA=1 DAYHIKE_REFERENCE_DIR=$SNAP DAYHIKE_VALHALLA_URL=http://127.0.0.1:8003 \
      uv run pytest -m real_data                 # 1 h 36 min, most of it tests/test_real_data.py
    ```

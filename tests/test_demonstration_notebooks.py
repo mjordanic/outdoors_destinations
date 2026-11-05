@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import io
 import json
 import os
@@ -47,6 +48,7 @@ def _notebook_text(path: Path) -> tuple[str, str, str]:
     return stdout.getvalue(), "\n".join(markdown), "\n".join(sources)
 
 
+@functools.cache
 def _run_notebooks() -> tuple[str, str, str]:
     outputs: list[str] = []
     markdown: list[str] = []

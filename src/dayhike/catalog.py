@@ -15,11 +15,12 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Iterable, Iterator, Mapping, Protocol, Sequence
 
 import numpy as np
-from sklearn.neighbors import BallTree
 
 from dayhike.osm import OsmRelation, OsmSnapshot, OsmWay
 
 if TYPE_CHECKING:
+    from sklearn.neighbors import BallTree
+
     from dayhike.built import BuiltHikeSource
     from dayhike.similarity import SimilarityStore
 
@@ -717,6 +718,7 @@ class NamedPoints:
     def __init__(self, points: Sequence[tuple[float, float, str]]) -> None:
         self.names = [_name_words(name) for _, _, name in points]
         self.labels = [name for _, _, name in points]
+        from sklearn.neighbors import BallTree
         self.tree = BallTree(np.radians([(lat, lon) for lat, lon, _ in points]), metric="haversine")
         # How many points use each word: the rarest word of a from/to name identifies it.
         self.word_counts = Counter(word for words in self.names for word in set(words))
@@ -864,6 +866,7 @@ def _access_tree(
 ) -> BallTree | None:
     if not access_points:
         return None
+    from sklearn.neighbors import BallTree
     return BallTree(np.radians(np.asarray(access_points, dtype=float)), metric="haversine")
 
 
@@ -889,6 +892,7 @@ def _amenity_index(
             kinds.append(kind)
     if not lats:
         return None
+    from sklearn.neighbors import BallTree
     tree = BallTree(
         np.radians(np.column_stack([lats, lons])), metric="haversine"
     )
@@ -1269,6 +1273,7 @@ def _pairs_within_gap(
     if len(node_ids) < 2:
         return []
     points = np.radians([nodes[node_id] for node_id in node_ids])
+    from sklearn.neighbors import BallTree
     tree = BallTree(points, metric="haversine")
     near, distances = tree.query_radius(
         points, r=GAP_JOIN_M / EARTH_RADIUS_M, return_distance=True
