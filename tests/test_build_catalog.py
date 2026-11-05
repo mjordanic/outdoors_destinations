@@ -305,3 +305,9 @@ def test_ensure_column_adds_a_missing_column_once() -> None:
 
     columns = [(row[1], row[2]) for row in connection.execute("PRAGMA table_info(feature_vectors)")]
     assert columns == [("dayhike_id", "INTEGER"), ("snow_fraction", "REAL")]
+
+
+def test_tests_run_away_from_the_repositorys_data() -> None:
+    # A default raster folder (data/landcover ...) is relative: built real data must not reach the fixtures.
+    assert not (Path.cwd() / "data").exists()
+    assert Path.cwd() != Path(__file__).resolve().parents[1]

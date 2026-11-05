@@ -210,12 +210,10 @@ call on your machine.
 
 `uv sync` does **not** download OSM and does **not** install Valhalla. Tests
 never start Docker. They rebuild a Catalog in a temp directory from the
-committed fixture, with one exception today: the tests that build similarity
-facts read land cover from `data/landcover/` when it holds WorldCover tiles
-(they pass a temporary DEM folder but no land-cover folder, so the default
-applies). After you have built real data, move `data/landcover/` aside before
-`uv run pytest`, or about 220 tests fail or error with "the TrailGraph has no
-raster samples"
+committed fixture, and run from an empty temp directory (`tests/conftest.py`),
+so the default raster folders (`data/dem/`, `data/landcover/`, `data/climate/`)
+never point at real data you built: the suite stays green after a build. Only
+the real-data tests read `data/`, by its absolute path, and skip without it.
 
 ## The fixture is slim on purpose
 
