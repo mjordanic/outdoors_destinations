@@ -66,6 +66,7 @@ SNAP_DETOUR_FACTOR = 3  # a tip joins only a node more than this x the tolerance
 LINK_DETOUR_M = 100.0  # ways passing this much farther apart along the network get a Link
 MAX_WALK_M = 100_000.0  # the longest ComposedHike
 WAY_BACK_SEARCH_M = 50_000.0  # the longest trail back searched; past it a walk is retraced (ADR-0035)
+GAP_CROSS_M = 3 * GAP_JOIN_M  # the longest trail a gap step walks where no gap Segment joins its ends (ADR-0049)
 MAX_WALK_STEPS = 50_000  # the most vertex steps a ComposedHike walks: 500 Segments of Slovenia's mean 72 vertices, and room
 TRAILHEAD_KINDS = ("parking", "restaurant_cafe")
 _SEGMENT_CHUNK = 5_000
@@ -1116,8 +1117,8 @@ class Route:
     ``c{lat}_{lon}`` in 1e-7 degrees for a crossing ingest added. Each step
     walks one OSM way from the node reached so far, ``{way}.{node}``: the way
     id (negative against the way's node order) and the key of the node where
-    the walk leaves that way; ``g.{node}`` crosses a gap Segment and
-    ``l.{node}`` a Link. Steps name no Junction or Segment, so a rebuild that
+    the walk leaves that way; ``g.{node}`` crosses a gap (see ``TrailGraph._cross``)
+    and ``l.{node}`` a Link. Steps name no Junction or Segment, so a rebuild that
     adds or drops Junctions along the way still finds the same walk. As text
     (``str``, ``parse``) it is ``start:step,step,...``.
     """
@@ -1317,7 +1318,7 @@ class TrailGraph:
                     walked = self._cross(db, rows, "gap" if way == "g" else "link", here, end, where)
                 else:
                     walked = self._follow(db, rows, ways, keys, int(way), here, end, where)
-                total += len(walked)
+                total += sum(abs(last - first) for _, first, last in walked)
                 if total > MAX_WALK_STEPS:
                     raise RouteError(
                         f"{where}: a composed hike may walk at most {MAX_WALK_STEPS:,} vertex steps; draw a shorter one"
@@ -1359,18 +1360,41 @@ class TrailGraph:
     def _cross(
         self, db: sqlite3.Connection, rows: dict[int, tuple], kind: str, here: str, end: str, where: str
     ) -> list[tuple[int, int, int]]:
+        """The steps over a Link or a gap from Junction ``here`` to ``end``. A
+        Link step walks only its Link. A gap step walks the gap Segment, else
+        the shortest other Segment (never a Link) between the two, else the
+        shortest walk over trails and gaps, either at most ``GAP_CROSS_M``: a built
+        hike jumps from one of its ways to the next, and the TrailGraph may
+        join those ways only along another way (ADR-0049)."""
         ids = dict(db.execute("SELECT key, id FROM junctions WHERE key IN (?, ?)", (here, end)))
-        found = []
         if here in ids and end in ids:
+            pair = (ids[here], ids[end], ids[end], ids[here])
             found = self._load(
-                db, rows, "WHERE kind = ? AND ((a = ? AND b = ?) OR (a = ? AND b = ?)) ORDER BY id LIMIT 1",
-                (kind, ids[here], ids[end], ids[end], ids[here]),
+                db, rows,
+                "WHERE kind = 'link' AND ((a = ? AND b = ?) OR (a = ? AND b = ?)) ORDER BY id LIMIT 1"
+                if kind == "link" else
+                "WHERE kind != 'link' AND ((a = ? AND b = ?) OR (a = ? AND b = ?)) "
+                "AND (kind = 'gap' OR length_m <= ?) ORDER BY kind != 'gap', length_m, id LIMIT 1",
+                pair if kind == "link" else (*pair, GAP_CROSS_M),
             )  # fmt: skip
-        if not found:
-            what = "the gap" if kind == "gap" else "the connect-here link"
-            raise RouteError(f"{where}: {what} from {_describe(here)} to {_describe(end)} is no longer on the marked network")
-        segment, a = found[0][0], found[0][2]
-        return [(segment, 0, 1) if a == ids[here] else (segment, 1, 0)]
+            if found:
+                last = len(found[0][7]) // 8 - 1
+                return [(found[0][0], 0, last) if found[0][2] == ids[here] else (found[0][0], last, 0)]
+            if kind == "gap":
+                nodes = self._network()[0]
+                at = np.minimum(np.searchsorted(nodes, [ids[here], ids[end]]), len(nodes) - 1)
+                path = None
+                if (nodes[at] == [ids[here], ids[end]]).all():  # both on trails or gaps, not only Links
+                    path = self._shortest([(int(at[0]), 0.0)], [(int(at[1]), 0.0)], GAP_CROSS_M)
+                if path is not None:
+                    return [tuple(piece) for piece in self._along(db, rows, path[3], path[4])]
+        if kind == "link":
+            raise RouteError(
+                f"{where}: the connect-here link from {_describe(here)} to {_describe(end)} is no longer on the marked network"
+            )
+        raise RouteError(
+            f"{where}: this hike jumps a gap from {_describe(here)} to {_describe(end)} that the trail network does not join"
+        )
 
     def _follow(
         self,
@@ -1490,7 +1514,7 @@ class TrailGraph:
             start = self._locate(db, rows, lat[0], lon[0])
             if end is None or start is None:
                 return None
-            nodes, start_of, neighbour, weight, segment_of = self._network()
+            nodes = self._network()[0]
 
             def ends(segment: int, vertex: int, along: np.ndarray) -> list[tuple[int, float, int]]:
                 """(node, metres to it, its vertex) for both ends of the Segment."""
@@ -1498,51 +1522,73 @@ class TrailGraph:
                 return [(int(a), along[vertex], 0), (int(b), along[-1] - along[vertex], len(along) - 1)]
 
             sources, targets = ends(*end), ends(*start)
-            best, via = limit_m, None
-            if end[0] == start[0] and abs(end[2][end[1]] - start[2][start[1]]) < best:
-                best, via = abs(end[2][end[1]] - start[2][start[1]]), ()
-            # Dijkstra from both ends of the end's Segment, each with its metres to it.
-            reach: dict[int, list[tuple[int, float]]] = {}
-            for t, (node, to_target, _) in enumerate(targets):
-                reach.setdefault(node, []).append((t, to_target))
-            settled: dict[int, tuple[int, int, int]] = {}  # node: (Junction before it, source, entry to it)
-            heap = [(to_source, node, -1, s, -1) for s, (node, to_source, _) in enumerate(sources)]
-            heapq.heapify(heap)
-            while heap:
-                metres, node, before, s, k = heapq.heappop(heap)
-                if metres >= best:
-                    break
-                if node in settled:
-                    continue
-                settled[node] = (before, s, k)
-                for t, to_target in reach.get(node, ()):
-                    if metres + to_target < best:
-                        best, via = metres + to_target, (node, t)
-                first, after = int(start_of[node]), int(start_of[node + 1])
-                for k, other, step_m in zip(
-                    range(first, after), neighbour[first:after].tolist(), weight[first:after].tolist()
-                ):
-                    if other not in settled:
-                        heapq.heappush(heap, (metres + step_m, other, node, s, k))
-            if via is None:
-                return None
-            if not via:
-                return self._stitch(None, rows, [[end[0], end[1], start[1]]])
-            reached, t = via
-            chain = [reached]
-            while settled[chain[-1]][0] != -1:
-                chain.append(settled[chain[-1]][0])
-            s = settled[reached][1]
-            chain.reverse()
-            middle = [int(segment_of[settled[y][2]]) for y in chain[1:]]
-            if middle:
-                self._load(db, rows, f"WHERE id IN ({','.join('?' * len(middle))})", tuple(middle))
-        pieces = [[end[0], end[1], sources[s][2]]]
-        for x, segment in zip(chain, middle):
-            last = len(rows[segment][7]) // 8 - 1
-            pieces.append([segment, 0, last] if np.searchsorted(nodes, rows[segment][2]) == x else [segment, last, 0])
+            best = limit_m
+            same = end[0] == start[0] and abs(end[2][end[1]] - start[2][start[1]]) < best
+            if same:
+                best = abs(end[2][end[1]] - start[2][start[1]])
+            found = self._shortest([(n, m) for n, m, _ in sources], [(n, m) for n, m, _ in targets], best)
+            if found is None:
+                return self._stitch(None, rows, [[end[0], end[1], start[1]]]) if same else None
+            _, s, t, chain, middle = found
+            pieces = [[end[0], end[1], sources[s][2]], *self._along(db, rows, chain, middle)]
         pieces.append([start[0], targets[t][2], start[1]])
         return self._stitch(None, rows, [piece for piece in pieces if piece[1] != piece[2]])
+
+    def _shortest(
+        self, sources: list[tuple[int, float]], targets: list[tuple[int, float]], limit_m: float
+    ) -> tuple[float, int, int, list[int], list[int]] | None:
+        """The shortest walk over the network (``_network``) from one of the
+        ``sources`` to one of the ``targets``, each a Junction index and the
+        metres to it or on from it, when shorter than ``limit_m``: its metres,
+        the source and target it joins, the Junction indices it passes and the
+        Segment from each to the next; else None. The search stops at the best
+        way found, so its work grows with the ground within that distance."""
+        _, start_of, neighbour, weight, segment_of = self._network()
+        best, via = limit_m, None
+        reach: dict[int, list[tuple[int, float]]] = {}
+        for t, (node, to_target) in enumerate(targets):
+            reach.setdefault(node, []).append((t, to_target))
+        settled: dict[int, tuple[int, int, int]] = {}  # node: (Junction before it, source, entry to it)
+        heap = [(to_source, node, -1, s, -1) for s, (node, to_source) in enumerate(sources)]
+        heapq.heapify(heap)
+        while heap:
+            metres, node, before, s, k = heapq.heappop(heap)
+            if metres >= best:
+                break
+            if node in settled:
+                continue
+            settled[node] = (before, s, k)
+            for t, to_target in reach.get(node, ()):
+                if metres + to_target < best:
+                    best, via = metres + to_target, (node, t)
+            first, after = int(start_of[node]), int(start_of[node + 1])
+            for k, other, step_m in zip(
+                range(first, after), neighbour[first:after].tolist(), weight[first:after].tolist()
+            ):
+                if other not in settled:
+                    heapq.heappush(heap, (metres + step_m, other, node, s, k))
+        if via is None:
+            return None
+        reached, t = via
+        chain = [reached]
+        while settled[chain[-1]][0] != -1:
+            chain.append(settled[chain[-1]][0])
+        chain.reverse()
+        return best, settled[reached][1], t, chain, [int(segment_of[settled[y][2]]) for y in chain[1:]]
+
+    def _along(
+        self, db: sqlite3.Connection, rows: dict[int, tuple], chain: list[int], segments: list[int]
+    ) -> list[list[int]]:
+        """The pieces walking each Segment whole, from Junction index ``chain[i]`` to the next."""
+        if not segments:
+            return []
+        self._load(db, rows, f"WHERE id IN ({','.join('?' * len(segments))})", tuple(segments))
+        nodes = self._network()[0]
+        pieces = []
+        for x, segment in zip(chain, segments):
+            last = len(rows[segment][7]) // 8 - 1
+            pieces.append([segment, 0, last] if np.searchsorted(nodes, rows[segment][2]) == x else [segment, last, 0])
+        return pieces
 
     def _locate(
         self, db: sqlite3.Connection, rows: dict[int, tuple], lat: float, lon: float

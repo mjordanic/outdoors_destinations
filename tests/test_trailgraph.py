@@ -188,13 +188,56 @@ def test_a_walk_follows_segments_end_to_end_and_may_reuse_one(catalog_path: Path
         # Way 104 runs from A to D: walked against its node order it does not leave A.
         ("1:-104.11", "step 1 of this hike: OSM way 104 no longer leads from OSM node 1 to OSM node 11"),
         ("1:104.11,104.11", "step 2 of this hike: OSM way 104 no longer leads from OSM node 11 to OSM node 11"),
-        ("1:g.4", "step 1 of this hike: the gap from OSM node 1 to OSM node 4 is no longer"),
+        # A gap step whose ends no gap joins and whose trail between them is far longer.
+        ("1:g.4", "step 1 of this hike: this hike jumps a gap from OSM node 1 to OSM node 4 that the trail network does not join"),
+        # Q2 is a vertex inside the Summit Line's Segment D - P, not a Junction.
+        ("1:g.12", "step 1 of this hike: this hike jumps a gap from OSM node 1 to OSM node 12 that the trail network does not join"),
         ("c460000000_140000000:l.1", "the connect-here link from the trail crossing at 46.0000000, 14.0000000"),
     ],
 )
 def test_a_walk_refuses_what_is_not_one_walk(catalog_path: Path, route: str, message: str) -> None:
     with pytest.raises(RouteError, match=re.escape(message)):
         TrailGraph(trailgraph_path_for(catalog_path)).walk(Route.parse(route))
+
+
+@pytest.fixture(scope="module")
+def gap_steps_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    path = tmp_path_factory.mktemp("gap_steps") / "catalog.sqlite"
+    build_catalog(FIXTURE.with_name("gap_steps.osm"), path)
+    return path
+
+
+def test_a_gap_step_walks_the_trail_segment_between_its_ends(gap_steps_path: Path) -> None:
+    # A1 (2) and A2 (3) are 30 m apart with no gap Segment: the Spur joins them.
+    walk = TrailGraph(trailgraph_path_for(gap_steps_path)).walk(Route.parse("2:g.3"))
+
+    assert walk.segments == [_segment(_segments(gap_steps_path), 2, 3)["id"]]
+    assert walk.steps == ["201.3"]
+
+
+def test_a_gap_step_no_segment_joins_walks_the_shortest_trail_between_its_ends(gap_steps_path: Path) -> None:
+    # B1 (4) and B2 (5) are 40 m apart; the Combe paths join them through C (6) in 72 m.
+    segments = _segments(gap_steps_path)
+
+    walk = TrailGraph(trailgraph_path_for(gap_steps_path)).walk(Route.parse("4:g.5"))
+
+    assert walk.segments == [_segment(segments, 4, 6)["id"], _segment(segments, 6, 5)["id"]]
+    assert TrailGraph(trailgraph_path_for(gap_steps_path)).facts(walk)[0]["length_m"] == pytest.approx(72, abs=0.5)
+
+
+@pytest.mark.parametrize("name", ["gap_steps.osm", "node_network.osm", "long_tour.osm"])
+def test_every_built_hike_walks_its_route_on_the_trailgraph(name: str, tmp_path: Path) -> None:
+    catalog = build_catalog(FIXTURE.with_name(name), tmp_path / "catalog.sqlite")
+    graph = TrailGraph(trailgraph_path_for(tmp_path / "catalog.sqlite"))
+    built = [hike for hike in catalog.dayhikes if hike.route is not None]
+
+    assert built
+    for hike in built:
+        walk = graph.walk(Route.parse(hike.route))
+        # A gap step walks the trail rather than jumping straight: a little longer, never shorter.
+        assert hike.length_m - 0.01 <= graph.facts(walk)[0]["length_m"] <= hike.length_m * 1.02
+    if name == "gap_steps.osm":
+        assert [hike.route for hike in built] == ["1:101.2,g.3,102.4,g.5,103.1"]
 
 
 @pytest.mark.parametrize("text", ["", "1:x.2", "1:104", "1:104.11,", "a:104.11"])

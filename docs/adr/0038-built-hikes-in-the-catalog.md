@@ -1,5 +1,5 @@
 ---
-status: accepted (amends ADR-0002, ADR-0006 and ADR-0014)
+status: accepted (amends ADR-0002, ADR-0006 and ADR-0014; a gap step opens over the trail between its ends since ADR-0049)
 ---
 
 # Built DayHikes in the Catalog
