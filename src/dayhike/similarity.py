@@ -26,7 +26,7 @@ import math
 import os
 import sqlite3
 import time
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -247,6 +247,7 @@ _FACTS_VERSION = hashlib.sha256(
             WATERSIDE_STEP_M, WATERSIDE_MIN_SHARE, WATERSIDE_OVERVIEW, WORLDCOVER_WATER,
             TWIN_STEP_M, TWIN_M, TWIN_SHARE, sorted(_SURFACE_TAG_CLASS.items()), sorted(_ROAD_HIGHWAYS),
             sorted(_TRACKTYPE_CLASS.items()), GAP_JOIN_M, WAY_BACK_KINDS, WAY_BACK_COLUMNS,
+            "dry-stretch-every-pass",  # a WaterSource ends a DryStretch at every pass of it (``walk_facts``)
         ]
     ).encode()
 ).hexdigest()[:16]  # fmt: skip
@@ -1219,8 +1220,8 @@ class AmenityPoints:
     def near_line(
         self, lat: np.ndarray, lon: np.ndarray, line: np.ndarray, radius_m: float
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Kind, distance to the line and position along it of the points that
-        may lie within ``radius_m`` of the line (filter on the distance).
+        """Kind, distance to the line, position along it and (lat, lon) of the
+        points that may lie within ``radius_m`` of the line (filter on the distance).
 
         ``line`` points (radians) are at most ``SEARCH_STEP_M`` apart, so every
         point within ``radius_m`` of the line is within hypot(radius, step / 2)
@@ -1230,7 +1231,7 @@ class AmenityPoints:
         distance, position = nearest_on_line(
             lat, lon, self.points[hits, 0], self.points[hits, 1]
         )
-        return self.kinds[hits], distance, position
+        return self.kinds[hits], distance, position, self.points[hits]
 
 
 def _walks(
@@ -1302,19 +1303,22 @@ def walk_facts(
         **dict(zip(("climb_grade", "steepest_km_m"), steepness(lat, lon, ele))),
         **trail_facts(walked, loop=round_trip),
     }
-    kinds, distance, position = np.empty(0, dtype=object), np.empty(0), np.empty(0)
+    kinds, distance, position, points = np.empty(0, dtype=object), np.empty(0), np.empty(0), np.empty((0, 2))
     peak_distance = np.empty(0)
     length = _path_length_m(lat, lon)
     if len(lat) >= 2:
         line = np.radians(_densify(lat, lon, SEARCH_STEP_M))
-        kinds, distance, position = along.near_line(lat, lon, line, CORRIDOR_M)
-        _, peak_distance, _ = peaks.near_line(lat, lon, line, PEAKS_AROUND_M)
+        kinds, distance, position, points = along.near_line(lat, lon, line, CORRIDOR_M)
+        _, peak_distance, _, _ = peaks.near_line(lat, lon, line, PEAKS_AROUND_M)
 
     def within(kind: str, radius_m: float) -> np.ndarray:
         return position[(kinds == kind) & (distance <= radius_m)]
 
     water = np.concatenate([within(kind, CORRIDOR_M) for kind in WATER_SOURCE_KINDS])
-    edges = np.concatenate([[0.0], np.sort(water), [length]])
+    # The DryStretch ends at every pass of a WaterSource: a walk that comes back by one passes it again.
+    wet = np.isin(kinds, WATER_SOURCE_KINDS) & (distance <= CORRIDOR_M)
+    passed = passes_on_line(lat, lon, points[wet, 0], points[wet, 1], CORRIDOR_M)
+    edges = np.concatenate([[0.0], np.sort(passed), [length]])
     facts.update(
         hut_along=float(within("hut", CORRIDOR_M).size > 0),
         restaurant_cafe_along=float(within("restaurant_cafe", CORRIDOR_M).size > 0),
@@ -1340,12 +1344,51 @@ def nearest_on_line(
     Closeness is measured on a flat plane around the chain; positions use
     haversine along the chain, so they add up to the chain length.
     """
+    distance, position = np.empty(0), np.empty(0)
+    for miss, place in _misses(chain_lat, chain_lon, point_lat, point_lon):
+        nearest = miss.argmin(axis=1)
+        rows = np.arange(len(miss))
+        distance = np.concatenate([distance, miss[rows, nearest]])
+        position = np.concatenate([position, place[rows, nearest]])
+    return distance, position
+
+
+def passes_on_line(
+    chain_lat: Sequence[float],
+    chain_lon: Sequence[float],
+    point_lat: Sequence[float],
+    point_lon: Sequence[float],
+    radius_m: float,
+) -> np.ndarray:
+    """Positions along a vertex chain (metres from its first vertex) where it
+    passes each point within ``radius_m``: per run of consecutive chain steps
+    within it, the closest place of the run (``nearest_on_line``'s, for a chain
+    that passes the point once). Sorted by point, then along the chain."""
+    passes = []
+    for miss, place in _misses(chain_lat, chain_lon, point_lat, point_lon):
+        for row in range(len(miss)):
+            near = np.flatnonzero(miss[row] <= radius_m)
+            for run in np.split(near, np.flatnonzero(np.diff(near) > 1) + 1) if near.size else ():
+                passes.append(place[row, run[miss[row, run].argmin()]])
+    return np.array(passes, dtype=float)
+
+
+def _misses(
+    chain_lat: Sequence[float],
+    chain_lon: Sequence[float],
+    point_lat: Sequence[float],
+    point_lon: Sequence[float],
+) -> Iterator[tuple[np.ndarray, np.ndarray]]:
+    """Per slice of the points, per (point, chain step) the
+    distance (m) from the point to the step and the position of the closest
+    place on it (metres from the chain's first vertex). Nothing for no points
+    or a chain of fewer than two vertices."""
     lat = np.asarray(chain_lat, dtype=float)
     lon = np.asarray(chain_lon, dtype=float)
     plat = np.asarray(point_lat, dtype=float)
     plon = np.asarray(point_lon, dtype=float)
     if plat.size == 0 or lat.size < 2:
-        return np.empty(0), np.empty(0)
+        return
     segment = _step_m(lat, lon)
     start = np.concatenate([[0.0], np.cumsum(segment)])
     lat0, lon0 = lat.mean(), lon.mean()
@@ -1356,7 +1399,6 @@ def nearest_on_line(
     py = np.radians(plat - lat0) * EARTH_RADIUS_M
     dx, dy = np.diff(x), np.diff(y)
     flat = dx**2 + dy**2
-    distance, position = np.empty(len(px)), np.empty(len(px))
     # Points a slice at a time, so (point, segment) matrices stay small.
     step = max(1, _NEAREST_CELLS // len(dx))
     for first in range(0, len(px), step):
@@ -1369,11 +1411,7 @@ def nearest_on_line(
             1.0,
         )
         miss = np.hypot(x[:-1] + along * dx - cx[:, None], y[:-1] + along * dy - cy[:, None])
-        nearest = miss.argmin(axis=1)
-        rows = np.arange(len(cx))
-        distance[first : first + step] = miss[rows, nearest]
-        position[first : first + step] = start[nearest] + along[rows, nearest] * segment[nearest]
-    return distance, position
+        yield miss, start[:-1] + along * segment
 
 
 def _densify(lat: np.ndarray, lon: np.ndarray, step_m: float) -> np.ndarray:

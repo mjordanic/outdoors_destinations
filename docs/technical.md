@@ -680,15 +680,12 @@ NetworkHikes and 33,646 DayStages). The README rounds the live one.
   Leftovers (ways the main walk does not use) included. A hike drawn from
   Segments takes it only from the Segments it walks, so the same walk drawn by
   hand can grade lower than as a relation DayHike.
-- DryStretch with the way back: each WaterSource is placed once, at its nearest
-  point on the walk, so on a retraced walk the water is never passed again on
-  the return. A 10 km out-and-back with one spring at 1 km gets 19,000 m, where
-  the glossary's "longest distance walked without passing a WaterSource" gives
-  18,000 m. This is a known bug, fixed separately.
+- DryStretch counts a WaterSource at every pass of it: a walk that comes back
+  within 100 m of one (a retraced way back, a hike that repeats a Segment)
+  passes it again. A 10 km out-and-back with one spring at 1 km gets 18,000 m.
 - With the way back (the CLI default), every hike is a round trip, so
-  `round_trip` gives every pair raw 1 and calibrates to 0. The page leaves it
-  out; `dayhike rank --weight round_trip=100` accepts it and only pulls every
-  score toward 0.
+  `round_trip` would give every pair raw 1; the page, the API, `dayhike rank`
+  and `dayhike compose` leave it out (ADR-0022).
 
 **Calibration.** 100,000 pairs of DayHike rows drawn uniformly at random with
 seed 20261024 (`CALIBRATION_SEED`), self-pairs dropped. Each of 70 keys (the 27
