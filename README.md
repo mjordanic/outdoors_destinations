@@ -1,50 +1,47 @@
-<p align="center">
-  <img src="src/dayhike/web/static/wordmark.svg" alt="HikesAlike: Hikes like the ones you love." width="560">
-</p>
+# HikesAlike: hikes like the ones you love
 
-# HikesAlike
-
-**Hikes like the ones you love.**
-
-Tell HikesAlike about a hike you enjoyed, and it finds other hikes across
-Europe that feel the same: similar length, climb, scenery and weather. No hike
-in mind? Describe the one you want instead.
+Pick a hike you loved. HikesAlike finds other hikes in Europe that feel the
+same: similar length, climb, scenery and weather. No hike in mind? Describe the
+one you want instead, for example about 10 km with 800 m of climbing. You can
+also say where you start from and how far you will drive, such as "within
+2 hours of Munich".
 
 **[Try it now](https://dayhike-445079235401.europe-west1.run.app)**: free, no
 account, no ads. If nobody has used it lately, the first page can take up to
-about 20 seconds while the server wakes up.
+about 20 seconds to load.
 
 <p>
-  <img src="docs/images/search-results.png" alt="The ten hikes most like Dolič - Triglav, each with its score and how alike it is on length, climbing, highest point and landscape" width="720">
+  <img src="docs/images/search-results.png" alt="Ten hikes like the climb to Triglav from the Dolič hut, each with a score and how alike it is on length and climbing" width="688">
 </p>
 
-*Loved the climb from Dolič to Triglav? Here are the 10 most similar hikes, out
-of over 130,000 in Europe.*
+*Loved the climb to Triglav, Slovenia's highest peak, from the Dolič hut? Here
+are 10 of the most similar hikes, out of about 135,000 across Europe. A score
+of 1 would mean exactly alike; the green cells show how alike each hike is on
+length and on climbing, out of 100.*
 
-- **Where:** Europe, wherever OpenStreetMap maps hiking routes: very good in
-  the Alps and central Europe, thinner in the east and south-east.
-- **Finding ideas, not navigating:** always check conditions and maps before
-  you go ([safety](src/dayhike/web/static/terms.html)).
-- **Open source,** made by [mjordanic](https://github.com/mjordanic).
-  Questions? [Open an issue](https://github.com/mjordanic/outdoors_destinations/issues).
-
-You can also say where you are starting from and how far you are willing to
-drive, for example "within 2 hours of Munich".
+- **Day hikes and longer tours.** Long tours are also cut into day stages of
+  8 to 25 km.
+- **Where:** Europe, wherever volunteers have mapped hiking routes on
+  [OpenStreetMap](https://www.openstreetmap.org/about), the free map of the
+  world that anyone can edit. Many hikes in the Alps and central Europe, fewer
+  in the east and south-east. The shaded countries on the map below have hikes.
+- **Finding ideas, not navigating.** Check the trail, the weather and a proper
+  map before you go
+  ([terms and safety](https://dayhike-445079235401.europe-west1.run.app/terms.html)).
+- **Open source,** made by [mjordanic](https://github.com/mjordanic). Questions
+  or problems: [open an issue on GitHub](https://github.com/mjordanic/outdoors_destinations/issues)
+  (needs a free GitHub account).
 
 <p>
-  <img src="src/dayhike/web/static/coverage.svg" alt="Map of Europe; the shaded land is where there are hikes" width="360">
+  <img src="src/dayhike/web/static/coverage.svg" alt="Map of Europe; the shaded countries have hikes" width="360">
 </p>
 
-Shaded areas are where we have hikes.
-
-**More:** [How to use the site](docs/user-guide.md) · **For developers:**
-[Technical docs](docs/technical.md)
-
-To run it on your own computer, see the
-[technical docs](docs/technical.md#run-it-yourself-quick-start).
+**More:** [How to use the site](docs/user-guide.md) · **Developers:**
+[technical docs](docs/technical.md) (running it on your own computer, and how
+it works) · [contributing](CONTRIBUTING.md)
 
 ## Licence
 
-The code is under the MIT licence ([LICENSE](LICENSE)). The data has its own
-licences ([DATA-LICENSES.md](DATA-LICENSES.md),
-[Attribution](docs/technical.md#attribution)).
+The code is free to reuse under the MIT licence ([LICENSE](LICENSE)). The map
+and the other data come from open sources, each with its own licence
+([DATA-LICENSES.md](DATA-LICENSES.md)).

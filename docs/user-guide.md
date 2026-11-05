@@ -10,9 +10,9 @@ You give it a hike you liked. It finds the hikes most like it.
 Don't have a hike in mind? Describe the one you want instead, and it finds
 hikes that fit.
 
-- It looks at length, climbing, the highest point, the landscape and the
-  typical temperature in the month you pick. If you ask for more, it also
-  looks at rain and sunshine.
+- It looks at length, climbing, the highest point, the landscape, the
+  typical temperature in the month you pick, and whether the hike runs beside
+  a lake or the sea. If you ask for more, it also looks at rain and sunshine.
 - It lists day hikes and longer tours. A long tour is also cut into day
   stages (8 to 25 km each). Hikes joined from signpost networks are included
   too. Anything over about 25 km is usually more than a day.
@@ -22,7 +22,7 @@ hikes that fit.
 - It is free: no ads, no account, no cookies, and no tips or donations asked
   for. The code is open source
   ([MIT](../LICENSE)) and the data it uses is credited
-  ([credits](../src/dayhike/web/static/credits.html),
+  ([credits](https://dayhike-445079235401.europe-west1.run.app/credits.html),
   [DATA-LICENSES.md](../DATA-LICENSES.md)).
 
 The first visit after a quiet spell can take up to about 20 seconds, while
@@ -40,7 +40,8 @@ Pick one of three ways:
 3. **Press "Design your own from segments"** and draw a walk along the marked
    trails. You can then use that walk as your liked hike.
 
-Then press **Find similar**. You get the 10 most similar hikes.
+Then press **Find similar**. You get 10 hikes from among the most similar
+(see "Why the list changes from visit to visit" below).
 
 ### Or describe the hike you want
 
@@ -72,7 +73,8 @@ the hut slider to 100. Turn Length down to 30.
 
 - **Month.** Pick the month you plan to hike. Temperature (and, in Advanced
   search, rain and sunshine) are compared for that month. If you leave it
-  out, the site uses June to August.
+  out, the site uses June to August for temperature and sunshine, and the
+  whole year for rain.
 - **Return to start** (on by default). Every hike is compared with its walk
   back to where it started. A hike that goes up to a summit and the same way
   down counts as there and back. Switch it off to compare every hike one way
@@ -135,7 +137,7 @@ similar** to try again.
 - Narrow with a drive limit if a result list is huge and far away.
 - The address in your browser holds your hike or your drawn walk, so you can
   bookmark it.
-- Hiking is risky. Read the [terms and safety](../src/dayhike/web/static/terms.html)
+- Hiking is risky. Read the [terms and safety](https://dayhike-445079235401.europe-west1.run.app/terms.html)
   page before you go. Trails change, and the map is OpenStreetMap, which anyone
   can edit.
 
@@ -147,6 +149,9 @@ credits are on the site's credits page and in
 [DATA-LICENSES.md](../DATA-LICENSES.md).
 
 ## More details
+
+Optional reading: how the result list is put together, and how loops are
+found. You do not need it to use the site.
 
 ### Reading the results
 
