@@ -1855,6 +1855,17 @@ def test_a_wish_weight_brought_back_after_a_reset_asks_the_shown_default(browser
     assert api.ranked[-1]["weights"] == {"elevation_gain": 50}
 
 
+def test_going_back_to_a_liked_hike_leaves_the_wish_values_empty(browser, server) -> None:
+    page = open_page(browser, server, Api(WISHABLE))
+    page.get_by_label("Length weight, 0 to 100").fill("70")
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    page.get_by_role("button", name="Back to a hike you liked").click()
+
+    page.get_by_role("button", name="No particular hike in mind?").click()
+
+    assert set(page.locator("input.wish[type=number]").evaluate_all("inputs => inputs.map(i => i.value)")) == {""}
+
+
 def test_a_wish_address_with_a_weight_and_no_value_asks_the_shown_default(browser, server) -> None:
     page = open_page(browser, server, Api(WISHABLE), hash="#wish=elevation_gain::100")
 

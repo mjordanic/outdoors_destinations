@@ -853,7 +853,10 @@ function buildWeights() {
         row.insertAdjacentHTML("beforeend", '<p class="hint weight-note">Left out with Return to start: every hike is then a round trip.</p>');
       }
       const slider = row.querySelector("input:not(.wish)"), value = row.querySelector("input.wish");
-      slider.addEventListener("input", () => setWeight(row, slider.value));
+      slider.addEventListener("input", () => {
+        showWeight(row);
+        if (state.wishing) askDefault(row);
+      });
       // Typing a value of a Measure left at 0 asks it in full.
       for (const event of ["input", "change"]) {
         value?.addEventListener(event, () => {
@@ -877,12 +880,15 @@ function showWeight(row) {
   row.classList.toggle("excluded", text === "off");
 }
 
-// A weight given to a Measure with no value yet asks its default value.
 function setWeight(row, weight) {
   row.querySelector("input:not(.wish)").value = weight;
-  const value = row.querySelector("input.wish");
-  if (value?.value === "" && Number(weight) > 0) value.value = value.placeholder;
   showWeight(row);
+}
+
+// A wish weight given to a Measure with no value yet asks its default value.
+function askDefault(row) {
+  const value = row.querySelector("input.wish");
+  if (value?.value === "" && Number(row.querySelector("input:not(.wish)").value) > 0) value.value = value.placeholder;
 }
 
 // Round trip tells no hike from another while every hike returns to its start: greyed out then.
@@ -998,6 +1004,7 @@ function applyWish(text) {
       if (row.closest("#advanced")) $("#advanced").open = true;
     }
     setWeight(row, Number(weight) > 0 ? Math.max(Number(weight), 10) : 0);
+    askDefault(row);
   }
   syncRoundTrip();
 }
@@ -1008,7 +1015,10 @@ function swapWeights(on) {
   const rows = [...document.querySelectorAll(".weight")];
   state.kept[on ? "seed" : "wish"] = rows.map((row) => row.querySelector("input:not(.wish)").value);
   const back = state.kept[on ? "wish" : "seed"] ?? rows.map(() => "0");
-  rows.forEach((row, i) => setWeight(row, back[i]));
+  rows.forEach((row, i) => {
+    setWeight(row, back[i]);
+    if (on) askDefault(row);
+  });
   syncRoundTrip();
 }
 
