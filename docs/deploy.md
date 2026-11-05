@@ -122,7 +122,6 @@ What the flags do:
 | `DAYHIKE_FORWARDED_HOPS=1` | The rate limit keys on the last `X-Forwarded-For` entry, the one Google's front end adds. Earlier entries are client-supplied and ignored, so the limit cannot be dodged by sending a fake header. If that last entry turns out to be a Google proxy address rather than the visitor, the limit becomes one shared budget per instance: stricter, never looser. |
 | `DAYHIKE_GOATCOUNTER=CODE` (optional) | Cookieless visit counts at `https://CODE.goatcounter.com`: every page loads the self-hosted `vendor/goatcounter/count.js`, and "Find" is counted as an event. Unset, no page loads analytics. Not set yet: no GoatCounter account. |
 | `DAYHIKE_CORS_ORIGINS="https://HOST ..."` (optional) | The origins whose pages may call the API (CORS): the loading shell of section 8. Unset, no other origin may. Not set yet: no shell. |
-| `DAYHIKE_KOFI=HANDLE` (optional) | The Support page links `https://ko-fi.com/HANDLE`. Unset, it says the tip link is not set up yet. Not set yet: no Ko-fi handle. While FABDEM is in use, email Fathom / the University of Bristol about the donation link before setting it, unless the Copernicus swap has landed. |
 
 The service also carries a service-level `scaling.maxInstanceCount` of 20 in
 the Cloud Run v2 API, next to the revision-level `template.scaling.maxInstanceCount`
@@ -293,7 +292,7 @@ If an alert fires and the traffic is abuse, close the public access at once:
   `europe-west1`), says the request logs are kept by Google Cloud Logging in
   Google's default storage location (not pinned to the EU), the 30-day log
   retention, the map tile and place-search
-  providers, and GoatCounter and Ko-fi once they are set. Change it with any of
+  providers, and GoatCounter once it is set. Change it with any of
   these: a new host or a CDN in front (the `host-recipient` item), a shorter
   log retention, or a different tile or place-search provider.
 - **FABDEM is non-commercial (CC BY-NC-SA 4.0):** the demo must stay
@@ -348,9 +347,8 @@ The steps, once there is a domain and a host account:
    sed -i '' 's|<meta name="api-base" content="">|<meta name="api-base" content="https://SERVICE.run.app">|' "$SHELL_DIR/index.html"
    ```
 
-   The server fills in the GoatCounter tag and the Ko-fi link (`<!--analytics-->`,
-   `<!--ko-fi-->`); a shell copy keeps the placeholders, so fill them the same way
-   if those settings are on.
+   The server fills in the GoatCounter tag (`<!--analytics-->`); a shell copy
+   keeps the placeholder, so fill it the same way if that setting is on.
 3. Publish `$SHELL_DIR` on the static host after every `gcloud run deploy`, so
    the shell and the API stay the same version (on Cloudflare Pages:
    `wrangler pages deploy "$SHELL_DIR" --project-name gofindmeahike`).

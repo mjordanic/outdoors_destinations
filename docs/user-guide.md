@@ -19,7 +19,8 @@ hikes that fit.
 - It covers Europe wherever OpenStreetMap maps hiking routes. That is dense
   in the Alps and central Europe, and thin in much of the east and
   south-east.
-- It is free: no ads, no account, no cookies. The code is open source
+- It is free: no ads, no account, no cookies, and no tips or donations asked
+  for. The code is open source
   ([MIT](../LICENSE)) and the data it uses is credited
   ([credits](../src/dayhike/web/static/credits.html),
   [DATA-LICENSES.md](../DATA-LICENSES.md)).

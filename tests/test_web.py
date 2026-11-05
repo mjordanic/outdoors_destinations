@@ -10,7 +10,7 @@ from dayhike.web import RESULTS, create_app
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
 RIDGE_WALK_ID = 1001
-SITE_PAGES = ("/", "/index.html", "/about.html", "/support.html", "/credits.html", "/privacy.html", "/terms.html")
+SITE_PAGES = ("/", "/index.html", "/about.html", "/credits.html", "/privacy.html", "/terms.html")
 
 
 @pytest.fixture(scope="module")
@@ -720,7 +720,7 @@ def test_every_site_page_has_the_home_link_and_the_footer_navigation(client: Tes
         assert page.headers["content-type"].startswith("text/html"), path
         assert '<a class="home" href="/">HikesAlike</a>' in page.text, path
         for link in (
-            'href="about.html"', 'href="support.html"', 'href="credits.html"', 'href="privacy.html"', 'href="terms.html"'
+            'href="about.html"', 'href="credits.html"', 'href="privacy.html"', 'href="terms.html"'
         ):
             assert link in page.text, (path, link)
 
@@ -817,7 +817,7 @@ def test_no_served_static_file_names_the_owner(data: ServingData) -> None:
         if path.is_file() and path.suffix in (".html", ".js", ".css", ".svg")
     ]
     assert paths
-    served = TestClient(create_app(data, goatcounter="gofindmeahike", kofi="gofindmeahike"))
+    served = TestClient(create_app(data, goatcounter="gofindmeahike"))
     for path in paths:
         response = served.get(path)
         assert response.status_code == 200, path
@@ -827,18 +827,19 @@ def test_no_served_static_file_names_the_owner(data: ServingData) -> None:
             assert personal not in text, (path, personal)
 
 
-def test_the_support_page_links_no_tip_jar_until_a_ko_fi_handle_is_set(data: ServingData) -> None:
-    unset = TestClient(create_app(data)).get("/support.html").text
-    assert "ko-fi.com" not in unset
-    assert "not set up yet" in unset
-    assert "only cover hosting" in unset
-    assert "The link opens Ko-fi" not in unset
+def test_the_site_has_no_support_page_and_no_page_asks_for_tips_or_donations(data: ServingData) -> None:
+    client = TestClient(create_app(data, goatcounter="gofindmeahike"))
+    assert client.get("/support.html").status_code == 404
+    for path in SITE_PAGES:
+        page = client.get(path).text.lower()
+        for word in ("ko-fi", "kofi", "donat", "support.html", "leave a tip", "tips cover"):
+            assert word not in page, (path, word)
+    assert 'href="support.html"' not in client.get("/").text
 
-    support = TestClient(create_app(data, kofi="gofindmeahike")).get("/support.html").text
-    assert '<a href="https://ko-fi.com/gofindmeahike">' in support
-    assert support.count("ko-fi.com") == 1  # a plain link: no widget script
-    assert "not set up yet" not in support
-    assert "The link opens Ko-fi, which takes the tip" in support
+
+def test_a_ko_fi_handle_is_no_longer_a_setting(data: ServingData) -> None:
+    with pytest.raises(TypeError):
+        create_app(data, kofi="gofindmeahike")  # type: ignore[call-arg]
 
 
 def test_the_credits_page_credits_every_source_with_the_fabdem_dataset(client: TestClient) -> None:
@@ -880,16 +881,15 @@ def test_the_privacy_page_says_who_runs_the_site_what_is_kept_who_gets_it_and_wh
     assert "no cookies" in privacy and "no consent banner" in privacy
 
 
-def test_the_privacy_page_names_goatcounter_and_ko_fi_only_once_they_are_set(data: ServingData) -> None:
+def test_the_privacy_page_names_goatcounter_only_once_it_is_set(data: ServingData) -> None:
     unset = TestClient(create_app(data)).get("/privacy.html").text
     assert "GoatCounter" not in unset
     assert "Ko-fi" not in unset
 
-    privacy = TestClient(create_app(data, goatcounter="gofindmeahike", kofi="gofindmeahike")).get("/privacy.html").text
+    privacy = TestClient(create_app(data, goatcounter="gofindmeahike")).get("/privacy.html").text
     assert "GoatCounter" in privacy
     assert "#toggle-goatcounter" in privacy  # the one thing its script may store, and only when asked
-    assert "Ko-fi" in privacy
-    assert "after you click" in privacy
+    assert "Ko-fi" not in privacy
 
 
 def test_the_terms_page_warns_hikers_and_restricts_no_reuse_beyond_the_data_licences(client: TestClient) -> None:
@@ -904,7 +904,7 @@ def test_the_terms_page_warns_hikers_and_restricts_no_reuse_beyond_the_data_lice
 
 
 def test_no_response_sets_a_cookie(data: ServingData) -> None:
-    client = TestClient(create_app(data, goatcounter="gofindmeahike", kofi="gofindmeahike"))
+    client = TestClient(create_app(data, goatcounter="gofindmeahike"))
     for path in (*SITE_PAGES, "/app.js", "/api/info", "/api/measures"):
         assert "set-cookie" not in client.get(path).headers, path
 
@@ -928,8 +928,8 @@ def test_every_page_counts_with_the_self_hosted_goatcounter_script_once_a_code_i
     assert client.get("/vendor/goatcounter/LICENSE").status_code == 200
 
 
-@pytest.mark.parametrize("setting", [{"goatcounter": 'x" onload="alert(1)'}, {"goatcounter": ""}, {"kofi": "a/b"}])
-def test_a_goatcounter_code_or_ko_fi_handle_that_is_not_a_plain_name_is_refused(
+@pytest.mark.parametrize("setting", [{"goatcounter": 'x" onload="alert(1)'}, {"goatcounter": ""}, {"goatcounter": "a/b"}])
+def test_a_goatcounter_code_that_is_not_a_plain_name_is_refused(
     data: ServingData, setting: dict
 ) -> None:
     with pytest.raises(ValueError):

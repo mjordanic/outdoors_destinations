@@ -390,7 +390,6 @@ def main(argv: list[str] | None = None) -> int:
     serve.add_argument(
         "--goatcounter", help="GoatCounter code: count visits at https://CODE.goatcounter.com; omit for no analytics"
     )
-    serve.add_argument("--kofi", help="Ko-fi handle for the Support page's tip link; omit for no link")
     serve.add_argument(
         "--cors-origin",
         action="append",
@@ -427,7 +426,6 @@ def main(argv: list[str] | None = None) -> int:
             args.valhalla_url,
             args.forwarded_hops,
             args.goatcounter,
-            args.kofi,
             tuple(args.cors_origin),
         )
     if args.command == "coverage-map":
@@ -719,7 +717,6 @@ def _serve(
     valhalla_url: str | None,
     forwarded_hops: int,
     goatcounter: str | None,
-    kofi: str | None,
     cors_origins: tuple[str, ...],
 ) -> int:
     try:
@@ -749,7 +746,6 @@ def _serve(
             drive_client,
             forwarded_hops=forwarded_hops,
             goatcounter=goatcounter,
-            kofi=kofi,
             cors_origins=cors_origins,
         )
     except ValueError as exc:

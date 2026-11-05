@@ -16,10 +16,9 @@ A browser keeps the API reads an hour and then revalidates them by an ETag of th
 and the drive-time settings; the page, the API info and the Measure list always revalidate, so a
 redeploy shows at once. Responses are
 gzipped for a browser that takes it.
-The site's pages (the demo, About, Support, Credits, Privacy, Terms) are served with two optional
-settings filled in: a GoatCounter code adds the cookieless analytics tag, and a Ko-fi handle the tip
-link; the privacy page names each only once it is set. Unset, a page loads no analytics and links no
-tip jar.
+The site's pages (the demo, About, Credits, Privacy, Terms) are served with an optional setting
+filled in: a GoatCounter code adds the cookieless analytics tag, and the privacy page names GoatCounter
+only once it is set. Unset, a page loads no analytics.
 The page may load from another origin, a loading shell on a static host (docs/deploy.md): the origins
 given may then call the API (CORS). Their preflights are answered before the request budget, so
 they use none of it. With none given, no other origin may.
@@ -98,7 +97,7 @@ BUILD = hashlib.sha256(
     )
 ).hexdigest()
 
-PAGES = ("index", "about", "support", "credits", "privacy", "terms")  # the site's pages, served with its settings filled in
+PAGES = ("index", "about", "credits", "privacy", "terms")  # the site's pages, served with its settings filled in
 # The elevation credits of an export sampled from Copernicus GLO-30 (ADR-0030), in place of
 # FABDEM's between <!--elevation--> and <!--/elevation--> on each page that names it.
 COPERNICUS_CREDITS = {
@@ -116,7 +115,7 @@ COPERNICUS_CREDITS = {
     "gain, profile shape, steepness, slope aspect) are computed from it; it maps the surface, so tree tops and roofs "
     "are included.",
 }
-PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")  # a GoatCounter code or Ko-fi handle
+PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")  # a GoatCounter code
 
 DriveClientFactory = Callable[[float], MatrixClient]
 MEASURE_KINDS = {measure.name: measure.kind for measure in MEASURES}
@@ -255,22 +254,21 @@ def wish_input(measure: Measure) -> dict | None:
 
 
 def site_pages(
-    goatcounter: str | None, kofi: str | None, place_search: bool = False, *, copernicus: bool = False
+    goatcounter: str | None, place_search: bool = False, *, copernicus: bool = False
 ) -> dict[str, str]:
-    """Each page's HTML with the GoatCounter tag where a code is set, and the Ko-fi link where a handle is.
+    """Each page's HTML with the GoatCounter tag where a code is set.
 
     With ``place_search`` (the export has GeoNames places) the place-search credit names GeoNames, not Nominatim,
     and the privacy page keeps its ``places`` text, not its ``nominatim`` text.
     With ``copernicus`` (an export sampled from Copernicus GLO-30), the pages credit it instead of FABDEM.
 
-    Text between ``<!--if-goatcounter-->`` and ``<!--/if-goatcounter-->`` (or ``kofi``, ``places``,
+    Text between ``<!--if-goatcounter-->`` and ``<!--/if-goatcounter-->`` (or ``places``,
     ``nominatim``) is kept only when that setting is on.
 
     The tag loads the self-hosted ``count.js``, which counts at ``https://<code>.goatcounter.com/count``.
     """
-    for setting, value in (("GoatCounter code", goatcounter), ("Ko-fi handle", kofi)):
-        if value is not None and not PLAIN_NAME.fullmatch(value):
-            raise ValueError(f"a {setting} is letters, digits, - and _, not {value!r}")
+    if goatcounter is not None and not PLAIN_NAME.fullmatch(goatcounter):
+        raise ValueError(f"a GoatCounter code is letters, digits, - and _, not {goatcounter!r}")
     analytics = "" if goatcounter is None else (
         f'<script data-goatcounter="https://{goatcounter}.goatcounter.com/count"'
         ' async src="vendor/goatcounter/count.js"></script>'
@@ -280,19 +278,12 @@ def site_pages(
         html = (STATIC_DIR / f"{name}.html").read_text(encoding="utf-8").replace("<!--analytics-->", analytics)
         settings = {
             "goatcounter": goatcounter is not None,
-            "kofi": kofi is not None,
             "places": place_search,
             "nominatim": not place_search,
         }
         for setting, on in settings.items():  # text true only once it is set
             block = rf"<!--if-{setting}-->(.*?)<!--/if-{setting}-->"
             html = re.sub(block, (lambda m: m[1]) if on else "", html, flags=re.S)
-        if kofi is not None:
-            tip = (
-                f'<p class="tip"><a href="https://ko-fi.com/{kofi}">Leave a tip on Ko-fi</a></p>\n'
-                '  <p class="hint">The link opens Ko-fi, which takes the tip; this site handles no payments.</p>'
-            )
-            html = re.sub(r"<!--ko-fi-->.*?<!--/ko-fi-->", tip, html, flags=re.S)
         if place_search:
             credit = (
                 '<span id="place-credit">Place search: towns and villages from <a href="https://www.geonames.org/">GeoNames</a>'
@@ -341,7 +332,6 @@ def create_app(
     rank_rate: int = RANK_RATE,
     api_rate: int = API_RATE,
     goatcounter: str | None = None,
-    kofi: str | None = None,
     cors_origins: tuple[str, ...] = (),
 ) -> FastAPI:
     """The app over one serving export.
@@ -350,11 +340,11 @@ def create_app(
     turns the drive-time filter off. ``forwarded_hops`` is how many proxies
     append to ``X-Forwarded-For`` in front of the app (1 on Cloud Run): the
     client is that many entries from the end. 0 uses the socket peer.
-    ``goatcounter`` and ``kofi`` fill in the pages (``site_pages``); a value that
+    ``goatcounter`` fills in the pages (``site_pages``); a value that
     is not a plain name is a ValueError. ``cors_origins`` are the other origins
     (``https://host``) whose pages may call the API.
     """
-    pages = site_pages(goatcounter, kofi, data.places is not None, copernicus="copernicus" in data.meta["attribution"])
+    pages = site_pages(goatcounter, data.places is not None, copernicus="copernicus" in data.meta["attribution"])
     app = FastAPI(title="HikesAlike", docs_url="/api/docs", openapi_url="/api/openapi.json")
     limiters = {"rank": RateLimiter(rank_rate, RATE_WINDOW_S), "api": RateLimiter(api_rate, RATE_WINDOW_S)}
     one_ranking = threading.Semaphore(1)

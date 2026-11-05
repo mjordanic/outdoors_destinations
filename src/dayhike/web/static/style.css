@@ -211,6 +211,5 @@ button.help:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 .page ul { padding-left: 18px; }
 .page li { margin: 6px 0; }
 .page .wordmark { display: block; width: 100%; max-width: 560px; height: auto; margin: 4px auto 12px; }
-.tip { font-size: 1.05rem; font-weight: 600; }
 .site-nav { margin-top: 10px; }
 .page + .credits { max-width: 900px; }
