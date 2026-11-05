@@ -1883,6 +1883,8 @@ def _edit_a_loop(page) -> int:
     page.locator("#results-table tbody tr", has=page.locator(".composed-tag")).first.click()
     page.locator("#selected").get_by_role("button", name="Edit on the map").click()
     page.wait_for_function("() => compose.on && compose.source?.route")
+    # Its segments loaded (the hint says what to click next): a load still due would replace a later hint.
+    page.locator("#map-pick-hint").get_by_text("Click a segment to walk on it").wait_for()
     return page.evaluate("compose.route.length")
 
 
