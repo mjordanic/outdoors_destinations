@@ -1011,6 +1011,7 @@ def test_an_export_without_places_says_so(client: TestClient) -> None:
     privacy = client.get("/privacy.html").text
     assert "sends the name and your IP address to the OpenStreetMap Foundation's" in privacy
     assert "looked up with Nominatim" not in privacy and "the place search" not in privacy
+    assert "The coordinates sent with the search are not in the request logs." in privacy
 
 
 SHELL = "https://gofindmeahike.example"  # a loading shell on a static host, calling the API from its own origin
