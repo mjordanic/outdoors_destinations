@@ -3,7 +3,7 @@
     uv run python tests/rebuild/capture_golden.py REFERENCE_DIR \
         --index data/osm/geofabrik-index-v1.json --valhalla-url http://127.0.0.1:8002
 
-REFERENCE_DIR holds frozen copies of the old outputs (README "Clean rebuild"):
+REFERENCE_DIR holds frozen copies of the old outputs (docs/technical.md "Clean rebuild"):
 catalog.sqlite, catalog.geometry.sqlite, catalog.similarity/ and
 valhalla/{valhalla_tiles.tar,file_hashes.txt}. They are only read. The
 reference Valhalla serves the old highway tiles. Writes REFERENCE_DIR/golden/:
