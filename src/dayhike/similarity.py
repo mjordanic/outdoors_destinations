@@ -213,6 +213,8 @@ MEASURES = (
     Measure("steepest_km", "ratio", ("steepest_km_m",), 50),
 )
 MEASURE_NAMES = tuple(measure.name for measure in MEASURES)
+# Ratio Measures: a floor counts every value under it as one; a near pair above it meets that block by rarity.
+_FLOORED = frozenset(measure.name for measure in MEASURES if measure.kind == "ratio")
 # On by default: the page's basic set, the Measures a Hiker sees without
 # opening Advanced search (ADR-0031); the others are off until the Hiker
 # weights them.
@@ -256,6 +258,7 @@ _CALIBRATION_VERSION = hashlib.sha256(
             "rarity-rank-strict",  # the share strictly less alike, rarer agreements closer (``calibrate``)
             "dead-band-one-value",  # a dead band is one value for rarity (``measure_rarity``)
             "mix-rounded",  # equal float32 shares sum to a raw 1 (``measure_scores``)
+            "near-pairs-meet-the-floor-by-rarity",  # a ratio's raw-1 block by rarity below raw 1 (ADR-0050)
         ]
     ).encode()
 ).hexdigest()[:16]  # fmt: skip
@@ -431,7 +434,7 @@ def rank_dayhikes(
     candidate's similarity to one Seed is the weighted mean of its calibrated
     Measure scores over the Measures both DayHikes have; with several Seeds the
     best Seed counts. Ties break on the same weighted mean of raw scores, then
-    on DayHike id. ``score`` is that similarity: about 0.42 for a typical
+    on DayHike id. ``score`` is that similarity: about 0.43 for a typical
     random pair under the default weights, 1.0 when no random pair is as alike
     on any weighted Measure. Of a group of
     Twins only the best is kept, and none of a Seed's Twins. Seeds are
@@ -671,9 +674,12 @@ def calibrate(
 
     A random pair is less alike when it scores lower, or when both score 1
     and its shared values are more common (a larger ``measure_rarity``, given
-    as ``rarity``). Every other tie is as alike, so 0 is a pair no random
-    pair is less alike than. NaN stays NaN; a key without random-pair scores
-    gives NaN.
+    as ``rarity``). On a ``ratio`` Measure a random pair at raw 1 is also less
+    alike than a pair below raw 1 whose values span a rarer stretch than its
+    shared value: two climbs of 166 and 167 m beat two that are both under the
+    100 m floor (ADR-0050). Every other tie is as alike, so 0 is a pair no
+    random pair is less alike than. NaN stays NaN; a key without random-pair
+    scores gives NaN.
     """
     index = CALIBRATION_KEYS.index(key)
     below, ties = _below_and_ties(store.quantiles[index], scores)
@@ -681,7 +687,10 @@ def calibrate(
         return below
     rarer, as_rare = _below_and_ties(store.rarity[index], rarity)
     commoner = np.nan_to_num(1.0 - rarer - as_rare)
-    return np.where(scores == 1.0, below + ties * commoner, below)
+    if key.split("@")[0] not in _FLOORED:
+        return np.where(scores == 1.0, below + ties * commoner, below)
+    at_one = _below_and_ties(store.quantiles[index], np.array(1.0))[1]
+    return np.where(scores == 1.0, below + ties * commoner, below + at_one * commoner)
 
 
 def random_pair_shares(

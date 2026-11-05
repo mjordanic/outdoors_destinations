@@ -182,7 +182,7 @@ _SIMILARITY_FILES = (
 # shows the "basic" group and folds the others away behind Advanced search (ADR-0031).
 MEASURE_INFO: dict[str, tuple[str, str, str, str]] = {
     "length": ("basic", "Length", "Walk length; scored by the shorter over the longer (floor 1 km), against random hike pairs.", "OpenStreetMap: the hike's line, from the ways of its hiking relation."),
-    "elevation_gain": ("basic", "Climbing", "Metres climbed, the larger of climb and descent; scored by the smaller over the larger (floor 100 m), against random hike pairs.", "FABDEM elevation along the line."),
+    "elevation_gain": ("basic", "Climbing", "Metres climbed, the larger of climb and descent; scored by the smaller over the larger (floor 100 m), against random hike pairs. Any climb of 100 m or less counts as the same: so many hikes share that, it says little, and two hikes that match closely on a less common climb, like 166 m and 167 m, are the closer match.", "FABDEM elevation along the line."),
     "difficulty": ("effort", "Difficulty", "Strictest SAC grade, 1-6; scored by the gap against random hike pairs, lowest from 3 grades apart.", "OpenStreetMap: the sac_scale grade of the hike's ways."),
     "highest": ("basic", "Highest point", "Highest elevation; scored by the gap against random hike pairs, lowest from 400 m apart.", "FABDEM elevation along the line."),
     "lowest": ("altitude", "Lowest point", "Lowest elevation; scored by the gap against random hike pairs, lowest from 400 m apart.", "FABDEM elevation along the line."),
@@ -190,14 +190,14 @@ MEASURE_INFO: dict[str, tuple[str, str, str, str]] = {
     "landcover": ("basic", "Landscape", "Shared share of tree, shrub, grass, bare, snow and other cover.", "ESA WorldCover 2021 land cover along the line."),
     "peak_summited": ("scenery", "Summit", "A Peak within 50 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap peaks."),
     "viewpoint_along": ("scenery", "Viewpoint along", "A Viewpoint within 100 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap viewpoints."),
-    "peaks_around": ("scenery", "Peaks around", "Peaks within 2 km of the line; scored by the fewer over the more (floor 1), against random hike pairs.", "OpenStreetMap peaks."),
+    "peaks_around": ("scenery", "Peaks around", "Peaks within 2 km of the line; scored by the fewer over the more (floor 1), against random hike pairs. No peak and 1 peak count as the same: so many hikes share that, it says little, and two hikes that match closely on a less common count, like 12 and 13 peaks, are the closer match.", "OpenStreetMap peaks."),
     "temperature": ("basic", "Typical temperature", "Mean temperature (June-August, or the chosen month); scored by the gap against random hike pairs, lowest from 10 °C apart.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
     "precipitation": ("weather", "Precipitation", "Mean monthly precipitation (or the chosen month's); scored by the smaller over the larger (floor 10 mm), against random hike pairs.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
     "solar_radiation": ("weather", "Solar radiation", "Solar radiation (June-August, or the chosen month), kJ/m²/day; scored by the gap against random hike pairs, lowest from 5,000 apart.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
     "southness": ("weather", "Sun-facing slopes", "Which way the slopes face: 1 south, 0 north, 0.5 east or west; a flat walk faces no way and counts 0.5 (from FABDEM); scored by the gap against random hike pairs.", "FABDEM slopes along the line."),
     "water_count": ("water", "Water sources", "WaterSources within 100 m of the line, counted up to 3; scored by the gap against random hike pairs.", "OpenStreetMap drinking water, springs, taps and water points."),
     "dry_stretch": ("water", "Dry stretch", "Longest walk between WaterSources; scored by the shorter over the longer (floor 1 km), against random hike pairs.", "OpenStreetMap drinking water, springs, taps and water points."),
-    "waterside": ("basic", "Lake or sea", "Share of the walk within 200 m of sea, lake or wide river (WorldCover); scored by the gap against random hike pairs, a gap under 0.15 counting as none, lowest from 0.5 apart.", "ESA WorldCover 2021 permanent water (sea, lakes, wide rivers)."),
+    "waterside": ("basic", "Lake or sea", "Share of the walk within 200 m of sea, lake or wide river (WorldCover); scored by the gap against random hike pairs, a gap under 0.15 counting as none, lowest from 0.5 apart. Any share under 15 % counts as dry, the same as none: so many hikes are dry, it says little, and two hikes that match closely on a less common share, like 50 % and 55 %, are the closer match.", "ESA WorldCover 2021 permanent water (sea, lakes, wide rivers)."),
     "hut_along": ("facilities", "Hut along", "A Hut within 100 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap huts."),
     "restaurant_cafe_along": ("facilities", "Restaurant or cafe along", "A restaurant or cafe within 100 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap restaurants and cafes."),
     "shelter_along": ("facilities", "Shelter along", "A Shelter within 100 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap shelters."),
@@ -206,8 +206,8 @@ MEASURE_INFO: dict[str, tuple[str, str, str, str]] = {
     "surface": ("trail", "Surface", "Shared share of paved, gravel, natural and rock surface.", "OpenStreetMap surface tags, else the kind of path or road."),
     "tarmac_approach": ("trail", "Tarmac approach", "Paved metres before the trail leaves the road; scored by the gap against random hike pairs, lowest from 2 km apart.", "OpenStreetMap surface tags, else the kind of path or road."),
     "round_trip": ("trail", "Round trip", "Ends within 50 m of the Trailhead, or not (always, with the way back).", "OpenStreetMap: the hike's line, from the ways of its hiking relation."),
-    "climb_grade": ("effort", "Climb grade", "Gain over the length of the stretches that climb; scored by the smaller over the larger (floor 3 %), against random hike pairs.", "FABDEM elevation along the line."),
-    "steepest_km": ("effort", "Steepest km", "Largest height change over 1 km; scored by the smaller over the larger (floor 50 m), against random hike pairs.", "FABDEM elevation along the line."),
+    "climb_grade": ("effort", "Climb grade", "Gain over the length of the stretches that climb; scored by the smaller over the larger (floor 3 %), against random hike pairs. Any grade of 3 % or less counts as the same: so many hikes share that, it says little, and two hikes that match closely on a less common grade, like 12 % and 12.1 %, are the closer match.", "FABDEM elevation along the line."),
+    "steepest_km": ("effort", "Steepest km", "Largest height change over 1 km; scored by the smaller over the larger (floor 50 m), against random hike pairs. Any change of 50 m or less counts as the same: so many hikes share that, it says little, and two hikes that match closely on a less common change, like 180 m and 182 m, are the closer match.", "FABDEM elevation along the line."),
 }
 
 # The Wish form's input for each Measure that takes a number (``WISHABLE`` but yes/no): unit,
@@ -236,6 +236,17 @@ WISH_DISPLAY: dict[str, tuple[str, float]] = {
     "length": ("km", 1_000), "dry_stretch": ("km", 1_000), "waterside": ("%", 0.01), "climb_grade": ("%", 0.01),
 }
 
+
+# Why a ratio Measure counts two values as the same: both at or under its floor, in words.
+FLOOR_TEXT = {
+    "length": "both 1 km or shorter",
+    "elevation_gain": "both 100 m or less",
+    "peaks_around": "both 1 peak or none",
+    "precipitation": "both 10 mm or less",
+    "dry_stretch": "both 1 km or shorter",
+    "climb_grade": "both 3 % or less",
+    "steepest_km": "both 50 m or less",
+}
 
 # A DayHike with no data for a Measure a Wish asks a value of scores 0 there (ADR-0048).
 UNMEASURED_NOTE = "No data for this hike: counts as 0 against the value you asked for"
@@ -281,7 +292,7 @@ def _percent(share: float) -> int:
 # scoring rule changes the words in one place.
 SCORE_HELP = {
     "overall": "Average of the measure scores below, under your weights. Each one is the share of random hike "
-    "pairs less alike than these two. A typical pair scores about 0.42; with the default weights, 0.74 beats "
+    "pairs less alike than these two. A typical pair scores about 0.43; with the default weights, 0.75 beats "
     "99 random pairs in 100.",
     "measure": "Share of random hike pairs less alike than these two on this measure: 0.9 means only 1 pair "
     "in 10 is as alike; 0 means nothing in common.",
@@ -306,7 +317,8 @@ SCORE_HELP = {
             "text": "When two hikes have the same value, the score says how rare that value is: two hikes that "
             "both pass a mountain hut score 0.95, two that are both never near water 0.16. Values a measure "
             "counts as the same are one value: Lake or sea shares under 0.15, Water sources 3 or more, values at "
-            "or under a measure's floor (walks under 1 km on Length).",
+            "or under a measure's floor (walks under 1 km on Length). Many hikes share such a value, so it says "
+            "little: two climbs of 166 m and 167 m are a closer match (1.00) than two climbs both under 100 m (0.88).",
         },
         {
             "title": "Having nothing mapped in common is not evidence",
@@ -324,9 +336,9 @@ SCORE_HELP = {
             "text": "A low number on one measure does not mean the hikes are unalike overall. It means that what "
             "they share on that measure is common, or that they are further apart on it than most pairs of "
             "hikes. For example, Kattegatstien and Kattegatkysten are both Danish coast walks, 56 % and 30 % "
-            "of the way beside water. On Lake or sea they score 0.10. Most hikes never come near water, and two "
-            "such hikes count as alike, so 90 % of random pairs are at least as alike there. Their overall "
-            "score is still 0.74, better than 99 random pairs in 100, because every other measure matches.",
+            "of the way beside water. On Lake or sea they score 0.13. Most hikes never come near water, and two "
+            "such hikes count as alike, so 87 % of random pairs are at least as alike there. Their overall "
+            "score is still 0.75, as high as only 1 random pair in 100, because every other measure matches.",
         },
         {
             "title": "The overall score",
@@ -334,8 +346,8 @@ SCORE_HELP = {
             "their ratios matter, and a measure with no data on either hike, or not compared, drops out; "
             "when you describe the hike you want, a hike with no data for a measure you asked for scores 0 "
             "on it instead. A "
-            "typical random pair of hikes scores about 0.42. With the default weights, 0.74 beats 99 random "
-            "pairs in 100, and the best match for a hike usually scores about 0.82.",
+            "typical random pair of hikes scores about 0.43. With the default weights, 0.75 beats 99 random "
+            "pairs in 100, and the best match for a hike usually scores about 0.84.",
         },
         {
             "title": "Where the facts come from",
@@ -1814,11 +1826,11 @@ def _sameness(
         left = seed.facts[index] if isinstance(seed, OutsideSeed) else store.facts[index, seed]
         identical = (store.facts[index][:, rows] == np.asarray(left)[:, None]).all(axis=0)
         if measure.dead_band is not None:
-            reason = "within the dead band"
+            reason = f"less than {measure.dead_band * 100:g} % of the walk apart"
         elif measure.cap is not None:
             reason = f"both {measure.cap:g} or more"
         elif measure.kind == "ratio":
-            reason = "both at or under the floor"
+            reason = FLOOR_TEXT[measure.name]
         else:
             reason = "close enough to score the same"
     absent = np.isnan(raw) & identical & (store.facts[index[0]][rows] == 0) if measure.presence else np.zeros(len(rows), bool)

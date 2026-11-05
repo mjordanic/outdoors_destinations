@@ -566,12 +566,15 @@ once from the whole Catalog) strictly less alike on that Measure, so every
 Measure pulls with the weight it is given. A random pair is less alike when it
 scores lower, or when it scores the same raw 1 on a commoner value: among equal
 pairs the rarer shared value is the closer match (the rarity rank, ADR-0026).
+On a ratio Measure a near pair meets the pairs counted the same under the floor
+by rarity too: two climbs of 166 and 167 m beat two that are both under 100 m
+(ADR-0050).
 Ties never count half. On the seven OSM flags (Peak summited, Viewpoint, Hut,
 restaurant or cafe along, Shelter, restaurant or cafe at the Trailhead,
 parking) two DayHikes that both lack the feature are not compared, and the
 Measure drops out of that pair's mean. The printed score is the similarity
 itself, the weighted mean of the calibrated Measure scores: a typical random
-pair scores about 0.42 under the default weights, 0.74 beats 99 random pairs in
+pair scores about 0.43 under the default weights, 0.75 beats 99 random pairs in
 100, and 1.0 needs a pair no random pair is as alike as on every weighted
 Measure, so the best matches stay apart instead of all reading 1.000. Ties in
 order break on the uncalibrated weighted mean, then on DayHike id.

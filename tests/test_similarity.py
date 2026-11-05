@@ -326,6 +326,32 @@ def test_two_dry_hikes_score_low_on_waterside_and_the_dead_band_is_one_value(tmp
     assert dry[2] < dry[0]
 
 
+def test_two_close_climbs_beat_two_flat_walks_counted_the_same_under_the_floor(tmp_path: Path) -> None:
+    # ADR-0050. 40 of 100 hikes climb 100 m or less (one value under the floor: 16 % of random pairs);
+    # the others spread from 150 to 1,500 m, 166 m and 167 m among them.
+    climbs = [*np.linspace(5, 95, 40), 166, 167, 600, 599, *np.linspace(150, 1_500, 56)]
+    store = _calibrated(tmp_path, 100, elevation_gain_m=climbs)
+
+    flat, _ = score_rows(store, [0], np.array([39]), {"elevation_gain": 100})
+    close, _ = score_rows(store, [40], np.array([41, 43]), {"elevation_gain": 100})
+    far, _ = score_rows(store, [40], np.array([99]), {"elevation_gain": 100})
+
+    assert flat[0] == pytest.approx(0.84, abs=0.02)  # 16 % of random pairs are as alike: both flat
+    assert close[0] > 0.97 and close[0] > flat[0]  # 166 m and 167 m: the flat pairs share a commoner value
+    assert far[0] < close[1] < close[0]  # still closeness first: 166 m against 1,500, 599 and 167 m
+
+
+def test_a_near_pair_on_a_tolerance_measure_stays_below_its_dead_band(tmp_path: Path) -> None:
+    # Lake or sea keeps ADR-0026: a gap past the dead band is below every pair counted the same (the Kattegat pair).
+    shares = [0.0] * 82 + [0.1] * 10 + [0.3, 0.3, 0.5, 0.5, 0.7, 0.7, 0.9, 0.9]
+    store = _calibrated(tmp_path, 100, waterside_share=shares)
+
+    dry, _ = score_rows(store, [0], np.array([1]), {"waterside": 100})
+    apart, _ = score_rows(store, [94], np.array([96]), {"waterside": 100})  # 0.5 and 0.7
+
+    assert apart[0] < dry[0]
+
+
 def test_a_hike_without_a_grade_ranks_below_one_with_the_wished_grade_when_difficulty_weighs(tmp_path: Path) -> None:
     # Hike 0 has no grade and the wished length; hike 1 has the wished T4 and is 2 km longer.
     grades = [np.nan, 4, *[1, 2, 3, 4, 5, 6] * 16, 2, 3]

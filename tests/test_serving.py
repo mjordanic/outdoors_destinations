@@ -12,6 +12,7 @@ from dayhike import serving
 from dayhike.catalog import Origin
 from dayhike.serving import (
     ELEVATION_POINTS,
+    FLOOR_TEXT,
     ServingData,
     ServingExportError,
     _fold,
@@ -352,8 +353,14 @@ def test_score_note_says_the_score_in_words(score, tied, note) -> None:
         (0.58, "both 3 or more", "Counted as the same (both 3 or more); 42% of random hike pairs are this alike"),
         (
             0.16,
-            "within the dead band",
-            "Counted as the same (within the dead band); 84% of random hike pairs are this alike, so it counts little",
+            "less than 15 % of the walk apart",
+            "Counted as the same (less than 15 % of the walk apart); 84% of random hike pairs are this alike, "
+            "so it counts little",
+        ),
+        (
+            0.88,
+            "both 100 m or less",
+            "Counted as the same (both 100 m or less); 12% of random hike pairs are this alike",
         ),
     ],
 )
@@ -383,6 +390,7 @@ def test_compare_notes_tell_identical_values_and_values_counted_the_same(data: S
     facts[column["waterside_share"], :2] = (0.41, 0.53)
     facts[column["water_count"], :2] = (3, 5)  # both "3 or more"
     facts[column["length_m"], :2] = (4000, 9000)
+    facts[column["elevation_gain_m"], :2] = (11, 65)  # both under Climbing's 100 m floor
     facts[column["shelter_along"], :2] = 0  # neither has one mapped
     profile = np.repeat(data.store.profile[:1], len(facts[0]), 0)
     # Random-pair scores for every Measure, as a Catalog with land cover has them.
@@ -391,7 +399,8 @@ def test_compare_notes_tell_identical_values_and_values_counted_the_same(data: S
 
     (notes,) = scored_measures(store, 0, np.array([1]), None)
 
-    assert notes["waterside"]["note"].startswith("Counted as the same (within the dead band); ")
+    assert notes["waterside"]["note"].startswith("Counted as the same (less than 15 % of the walk apart); ")
+    assert notes["elevation_gain"]["note"].startswith("Counted as the same (both 100 m or less); ")
     assert notes["water_count"]["note"].startswith("Counted as the same (both 3 or more); ")
     assert notes["highest"]["note"].startswith("Identical; ")
     assert notes["round_trip"]["note"].startswith("Identical; ")
@@ -720,3 +729,12 @@ def test_the_rows_after_leave_out_the_twin_of_a_hike_already_listed(
 
     assert _rows(first) == [(1002, [])]
     assert _rows(following) == [(1007, [])]
+
+
+def test_every_ratio_measure_says_its_floor_in_words() -> None:
+    from dayhike.similarity import MEASURES
+
+    ratio = {measure.name: measure.constant for measure in MEASURES if measure.kind == "ratio"}
+    assert set(FLOOR_TEXT) == set(ratio)
+    assert FLOOR_TEXT["elevation_gain"] == "both 100 m or less"
+    assert FLOOR_TEXT["climb_grade"] == "both 3 % or less"
