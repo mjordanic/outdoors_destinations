@@ -117,7 +117,9 @@ svg text { font-size: 11px; fill: var(--muted); }
 .facts { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
 .facts th, .facts td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #eef0ec; vertical-align: middle; }
 .facts th[scope="rowgroup"] { background: #f3f6f2; text-transform: uppercase; font-size: 0.72rem; letter-spacing: 0.04em; color: var(--muted); }
-.facts td.num { white-space: nowrap; }
+/* A long value wraps, so the Score column stays in view (ADR-0055); a score's bar stays beside its number. */
+.facts td.num { overflow-wrap: anywhere; }
+.facts td.score { white-space: nowrap; overflow: hidden; } /* and a "?" tap area wider than it stays inside */
 .facts td.score .note { display: block; white-space: normal; font-size: 0.72rem; color: var(--muted); }
 .facts .nodata, .nodata { color: var(--muted); font-style: italic; }
 .bar { display: inline-block; width: 70px; height: 9px; background: #eef0ec; border-radius: 4px; vertical-align: middle; margin-right: 6px; overflow: hidden; }
@@ -175,6 +177,8 @@ svg text { font-size: 11px; fill: var(--muted); }
 .share-note[hidden] { display: none; }
 .share-note input { margin-top: 4px; }
 .composed-tag { background: #dcfce7; color: #15803d; border-radius: 999px; padding: 0 6px; font-size: 0.75rem; font-weight: 600; }
+.multi-day-tag { background: #fef3c7; color: #92400e; border-radius: 999px; padding: 0 6px; font-size: 0.75rem; font-weight: 600; white-space: nowrap; }
+.status .retry { margin-left: 6px; padding: 2px 10px; }
 
 .credits { max-width: 1600px; margin: 0 auto; padding: 8px 16px 32px; font-size: 0.85rem; color: var(--muted); }
 .credits h2 { color: var(--ink); font-size: 1rem; margin-bottom: 6px; }
@@ -192,6 +196,9 @@ svg text { font-size: 11px; fill: var(--muted); }
   .tagline { font-size: 0.82rem; }
   .map { height: 260px; }
   .pick-map { height: 380px; }
+  /* The Score column fits a phone too. */
+  .facts td:first-child, .facts thead th:first-child { width: auto; }
+  .facts .bar { width: 36px; margin-right: 4px; }
 }
 summary.panel-title { cursor: pointer; }
 /* Every fold shows that it opens: an arrow before its title, and "show" after it while closed. */

@@ -16,6 +16,10 @@ _Avoid_: composed DayHike, generated hike, virtual relation, synthetic hike
 A built DayHike that is one day of a long tour: a piece of 8–25 km of a relation DayHike over 25 km, cut where a day can end, at a hut, else a place, else parking near the line, as near 16 km as those allow. It is named "{tour}, stage k: {from} – {to}" and the tour stays listed too. Tours that share a stretch cut it at the same points; a DayStage that is a Twin of a relation DayHike, such as a stage relation, is left out (ADR-0040).
 _Avoid_: stage (a stage is a relation), section, leg, day stage relation
 
+**Multi-day route**:
+A DayHike longer than 40 km one way, more than a day's walk: marked "multi-day" with its length, and listed after the day-length hikes of a Ranking unless its Seed or Wish is one too (ADR-0056).
+_Avoid_: tour (any long DayHike), long hike
+
 **NetworkHike**:
 A built DayHike that chains node-network legs (`network:type=node_network` relations, signpost to signpost) into a day's walk of 3–25 km and at least two legs: a loop back to its first signpost, or a line that passes no signpost twice. It starts from a signpost within 500 m of parking or 300 m of a place; near parking it starts at the parking when a trail leads from there to the signpost. Every start (its signposts within 1 km) keeps 4, or one per named destination its lines reach, up to 8: loops first, then lines to a named Peak, Hut, Viewpoint or lake, then the rest, each nearer 10 km first, each more than half off the better ones there; the 5th to 8th each go to a named destination none of the others there reaches; a line to a destination is its shortest one from the start. None is a Twin of a relation DayHike or of a better NetworkHike. Its label is "Loop from {start} via {destination}" or "{start} – {destination}", from its legs' end names, named guideposts, destinations and places (ADR-0039).
 _Avoid_: network DayHike, knooppunt route, chain, leg
@@ -85,7 +89,7 @@ How near the start of a better row's hike a hike must start to be one of that ro
 _Avoid_: area size, cluster radius
 
 **Landmark**:
-A named place the hike search finds hikes by (ADR-0053): an OSM Peak, Hut, Shelter or Viewpoint on a DayHike, a GeoNames lake or pass a DayHike passes within 2 km of, or a GeoNames town or village a DayHike's Trailhead is within 5 km of; it lists its nearest DayHikes.
+A named place the hike search finds hikes by (ADR-0053, ADR-0055): an OSM Peak, Hut, Shelter or Viewpoint on a DayHike, a GeoNames lake, pass, mountain, ridge or range a DayHike passes within 2 km of (else within 10 km), or a GeoNames town or village a DayHike's Trailhead is within 5 km of; it lists its nearest DayHikes. Among equal matches the one with the most names (in other languages) comes first.
 _Avoid_: spot, POI, place (that is the Origin's "Find place")
 
 **Hut**:

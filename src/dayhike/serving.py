@@ -179,8 +179,16 @@ SEAT_CODES = ("PPLC", "PPLA", "PPLA2", "PPLA3")  # GeoNames capitals and seats o
 VILLAGE_M = 5_000  # a smaller populated place is kept this close to a Trailhead: a village a hike starts from
 NOT_VILLAGE_CODES = ("PPLX", "PPLH", "PPLQ", "PPLW", "PPLCH")  # a section of a place; historical, abandoned, gone
 LANDMARK_KINDS = ("peak", "hut", "shelter", "viewpoint")  # the named points on hikes a Landmark is made of (ADR-0053)
-GEONAMES_LANDMARKS = {"LK": "lake", "LKS": "lake", "RSV": "lake", "PASS": "pass"}  # GeoNames codes the points lack
-LANDMARK_NEAR_M = 2_000.0  # a lake or pass is on the hikes passing this close to its GeoNames point
+# GeoNames codes a Landmark is made of too (ADR-0055): lakes and passes the points lack, and the mountains
+# the points miss (a summit no hike passes within 2 km of, a ridge or massif no OSM Peak names)
+GEONAMES_LANDMARKS = {
+    "LK": "lake", "LKS": "lake", "RSV": "lake", "PASS": "pass",
+    "MT": "peak", "PK": "peak", "PKS": "peak", "RDGE": "ridge", "MTS": "range",
+}  # fmt: skip
+LANDMARK_NEAR_M = 2_000.0  # a GeoNames Landmark is on the hikes passing this close to its GeoNames point ...
+LANDMARK_FAR_M = 10_000.0  # ... else, with none, on those passing this close: a big lake's shore, a summit no trail reaches
+LANDMARK_MERGE_M = 1_500.0  # a GeoNames peak this near an OSM Peak of one of its names is that Peak, under all its names
+MULTI_DAY_M = 40_000.0  # a hike longer than this one way is a multi-day route (ADR-0056)
 LANDMARK_HIKES = 5  # the hikes a Landmark lists, nearest first
 LANDMARK_TOWN_M = 30_000.0  # a Landmark is told apart by the nearest town this close
 _HIKE_CHUNK = 2_000
@@ -975,13 +983,16 @@ def export_landmarks(out_dir: Path | str, geonames_path: Path | str | None = Non
     ``hikes.sqlite`` (a Peak within ``PEAKS_AROUND_M`` of the line, the rest
     within ``CORRIDOR_M``), with the hikes it is on; a place of
     ``places.sqlite``, when there is one, with the hikes starting within
-    ``VILLAGE_M`` of it; and, from a GeoNames dump, a lake or pass
-    (``GEONAMES_LANDMARKS``) with the hikes passing within ``LANDMARK_NEAR_M``.
+    ``VILLAGE_M`` of it; and, from a GeoNames dump, a lake, pass or mountain
+    (``GEONAMES_LANDMARKS``) with the hikes passing within ``LANDMARK_NEAR_M``,
+    else within ``LANDMARK_FAR_M``; a GeoNames peak that is an OSM Peak
+    (``LANDMARK_MERGE_M``) adds its names to that Peak's.
     Each keeps its ``LANDMARK_HIKES`` nearest hikes and how many it has, a Peak its height, the
-    nearest town (``LANDMARK_TOWN_M``) to tell equal names apart, and an index
+    nearest town (``LANDMARK_TOWN_M``) to tell equal names apart, how many
+    names it has (a famous place has one in many languages: ADR-0055), and an index
     of every folded name it has from each word on (Sorapiss finds Punta
     Sorapiss), marked whether it is the whole name: a point's OSM name, a
-    place's names in ``places.sqlite``, a lake's or pass's GeoNames names.
+    place's names in ``places.sqlite``, a GeoNames Landmark's GeoNames names.
     Written to a temporary file first, like ``places.sqlite``.
     """
     from scipy.spatial import cKDTree
@@ -1001,7 +1012,7 @@ def export_landmarks(out_dir: Path | str, geonames_path: Path | str | None = Non
         for key in found:
             names[key] = {key[1]}
         if geonames_path is not None:
-            _geonames_landmarks(Path(geonames_path), db, found, names)
+            _geonames_landmarks(Path(geonames_path), db, found, names, heights)
     towns, town_names = np.empty((0, 2)), []
     places = out / "places.sqlite"
     if places.is_file():
@@ -1034,7 +1045,7 @@ def export_landmarks(out_dir: Path | str, geonames_path: Path | str | None = Non
     try:
         db.executescript(
             "CREATE TABLE landmarks (id INTEGER PRIMARY KEY, name TEXT, kind TEXT, town TEXT,"
-            " lat REAL, lon REAL, ele REAL, hikes INTEGER);"
+            " lat REAL, lon REAL, ele REAL, hikes INTEGER, names INTEGER);"
             "CREATE TABLE landmark_hikes (landmark INTEGER, hike INTEGER, off_m INTEGER, PRIMARY KEY (landmark, off_m, hike))"
             " WITHOUT ROWID;"
             "CREATE TABLE landmark_names (name TEXT, landmark INTEGER, whole INTEGER, PRIMARY KEY (name, landmark))"
@@ -1046,9 +1057,10 @@ def export_landmarks(out_dir: Path | str, geonames_path: Path | str | None = Non
             if town_tree is not None and kind not in ("town", "village"):
                 distance, nearest = town_tree.query(_unit(lat, lon)[0], distance_upper_bound=town_chord)
                 town = town_names[nearest] if math.isfinite(distance) else None
+            folded_names = {_fold(spelled_name).strip() for spelled_name in names[key]} - {""}
             db.execute(
-                "INSERT INTO landmarks VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (landmark, name, kind, town, lat, lon, heights.get(key), len(hikes)),
+                "INSERT INTO landmarks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (landmark, name, kind, town, lat, lon, heights.get(key), len(hikes), len(folded_names)),
             )
             nearest_hikes = sorted(hikes.items(), key=lambda item: (item[1], item[0]))[:LANDMARK_HIKES]
             db.executemany(
@@ -1056,8 +1068,7 @@ def export_landmarks(out_dir: Path | str, geonames_path: Path | str | None = Non
                 [(landmark, dayhike_id, round(off_m)) for dayhike_id, off_m in nearest_hikes],
             )
             keys: dict[str, bool] = {}
-            for spelled_name in names[key]:
-                folded = _fold(spelled_name).strip()
+            for folded in folded_names:
                 for match in re.finditer(r"\w+", folded):
                     tail = folded[match.start() :]
                     keys[tail] = keys.get(tail, False) or match.start() == 0
@@ -1072,32 +1083,78 @@ def export_landmarks(out_dir: Path | str, geonames_path: Path | str | None = Non
 
 
 def _geonames_landmarks(
-    path: Path, hikes: sqlite3.Connection, found: dict[tuple, dict[int, float]], names: dict[tuple, set[str]]
+    path: Path,
+    hikes: sqlite3.Connection,
+    found: dict[tuple, dict[int, float]],
+    names: dict[tuple, set[str]],
+    heights: dict[tuple, float],
 ) -> None:
-    """Add the GeoNames lakes and passes within ``LANDMARK_NEAR_M`` of a hike's line to ``found``:
-    the hikes whose line's box is that near, then those whose line is."""
-    reach = math.degrees(LANDMARK_NEAR_M / EARTH_RADIUS_M)
+    """Add the GeoNames Landmarks (``GEONAMES_LANDMARKS``) to ``found``: each with the hikes passing
+    within ``LANDMARK_NEAR_M`` of it, else within ``LANDMARK_FAR_M``, none left out with neither. A
+    peak within ``LANDMARK_MERGE_M`` of an OSM Peak of ``found`` named as one of its names is that Peak:
+    its names join the Peak's (Monte Bianco, Gardasee), and its height is the Peak's when the Peak has none."""
+    from scipy.spatial import cKDTree
+
+    peaks = [key for key in found if key[0] == "peak"]
+    peak_tree = cKDTree(_unit([key[2] for key in peaks], [key[3] for key in peaks])) if peaks else None
+    merge_chord = 2 * math.sin(LANDMARK_MERGE_M / (2 * EARTH_RADIUS_M))
+    lines: dict[int, np.ndarray] = {}  # decoded hike lines, kept while the GeoNames lines near them come
     for line in _geonames_lines(path):
         fields = line.rstrip("\n").split("\t")
         if fields[6] not in ("H", "T") or fields[7] not in GEONAMES_LANDMARKS:
             continue
-        lat, lon = float(fields[4]), float(fields[5])
-        across = reach / max(math.cos(math.radians(lat)), 0.01)
-        candidates = hikes.execute(
-            "SELECT h.id, h.line FROM hike_boxes b JOIN hikes h ON h.id = b.id "
-            "WHERE b.north >= ? AND b.south <= ? AND b.east >= ? AND b.west <= ?",
-            (lat - reach, lat + reach, lon - across, lon + across),
-        ).fetchall()
-        near = {}
-        for dayhike_id, encoded in candidates:
-            chain = np.array(decode_polyline(encoded))
-            (off_m,), _ = nearest_on_line(chain[:, 0], chain[:, 1], [lat], [lon])
-            if off_m <= LANDMARK_NEAR_M:
-                near[dayhike_id] = float(off_m)
+        kind, lat, lon = GEONAMES_LANDMARKS[fields[7]], float(fields[4]), float(fields[5])
+        spelled = {fields[1], fields[2], *(name for name in fields[3].split(",") if name)}
+        # Its height, else the elevation model's at its point (-9999 off the model)
+        ele = _number(fields[15]) if fields[15] else _number(fields[16]) if fields[16] not in ("", "-9999") else None
+        if kind == "peak" and peak_tree is not None:
+            folded = {_fold(name).strip() for name in spelled}
+            same = [
+                peaks[i]
+                for i in peak_tree.query_ball_point(_unit(lat, lon)[0], merge_chord)
+                if _fold(peaks[i][1]).strip() in folded
+            ]
+            for key in same:
+                names[key] |= spelled
+                if ele is not None:
+                    heights.setdefault(key, ele)
+            if same:
+                continue
+        near = _hikes_near(hikes, lat, lon, LANDMARK_NEAR_M, lines) or _hikes_near(hikes, lat, lon, LANDMARK_FAR_M, lines)
         if near:
-            key = (GEONAMES_LANDMARKS[fields[7]], fields[1], lat, lon)
+            key = (kind, fields[1], lat, lon)
             found[key] = near
-            names[key] = {fields[1], fields[2], *(name for name in fields[3].split(",") if name)}
+            names[key] = spelled
+            if ele is not None and kind in ("peak", "ridge"):
+                heights[key] = ele
+        if len(lines) > 100_000:  # a few hundred MB: start again rather than keep every hike's line
+            lines.clear()
+
+
+def _hikes_near(
+    hikes: sqlite3.Connection, lat: float, lon: float, metres: float, lines: dict[int, np.ndarray]
+) -> dict[int, float]:
+    """The hikes whose line passes within ``metres`` of a point, and how far, read from ``hikes.sqlite``:
+    those whose line's box is that near, then those whose line is; their lines decoded once into ``lines``."""
+    reach = math.degrees(metres / EARTH_RADIUS_M)
+    across = reach / max(math.cos(math.radians(lat)), 0.01)
+    ids = [
+        dayhike_id
+        for (dayhike_id,) in hikes.execute(
+            "SELECT id FROM hike_boxes WHERE north >= ? AND south <= ? AND east >= ? AND west <= ?",
+            (lat - reach, lat + reach, lon - across, lon + across),
+        )
+    ]
+    missing = [dayhike_id for dayhike_id in ids if dayhike_id not in lines]
+    for dayhike_id, encoded in _in_chunks(hikes, "SELECT id, line FROM hikes WHERE id IN ({})", missing):
+        lines[dayhike_id] = np.array(decode_polyline(encoded))
+    near = {}
+    for dayhike_id in ids:
+        chain = lines[dayhike_id]
+        (off_m,), _ = nearest_on_line(chain[:, 0], chain[:, 1], [lat], [lon])
+        if off_m <= metres:
+            near[dayhike_id] = float(off_m)
+    return near
 
 
 class Ranking(list):
@@ -1106,12 +1163,14 @@ class Ranking(list):
     ``loop_search``, what the SuggestedLoop search did (None when none ran):
     ``starts`` searched from, loops ``found`` and measured, ``listed`` in all its rows and
     their versions (the whole pool; the page counts those in the rows it shows), the ``best``
-    score of a loop found within the limits (None: none), and whether it ``stopped`` at ``LOOP_BUDGET_S``."""
+    score of a loop found within the limits (None: none), and whether it ``stopped`` at ``LOOP_BUDGET_S``;
+    and ``day_first``, whether its multi-day routes come after its day hikes (ADR-0056)."""
 
-    def __init__(self, rows: list[dict], other_areas: int, loop_search: dict | None) -> None:
+    def __init__(self, rows: list[dict], other_areas: int, loop_search: dict | None, day_first: bool = False) -> None:
         super().__init__(rows)
         self.other_areas = other_areas
         self.loop_search = loop_search
+        self.day_first = day_first
 
 
 class ServingData:
@@ -1144,8 +1203,13 @@ class ServingData:
         # An export from before Landmarks (ADR-0053) opens without them: the page searches hike names only.
         landmarks = self.directory / "landmarks.sqlite"
         self.landmarks = f"file:{landmarks}?mode=ro&immutable=1" if landmarks.is_file() else None
+        self._landmark_names = "NULL"  # how many names a Landmark has: none in a file from before ADR-0055
         if self.landmarks is not None:  # about 2 s for Europe: read beside the first requests, not in one of them
+            with sqlite3.connect(self.landmarks, uri=True) as db:
+                if "names" in {row[1] for row in db.execute("PRAGMA table_info(landmarks)")}:
+                    self._landmark_names = "l.names"
             threading.Thread(target=lambda: self._landmark_spellings, daemon=True).start()
+        self._one_way_m = self.store.mode(False).column("length_m")  # what makes a hike multi-day (ADR-0056)
 
     def _db(self) -> sqlite3.Connection:
         return sqlite3.connect(self._db_uri, uri=True)
@@ -1237,19 +1301,23 @@ class ServingData:
         Folded like ``search``. The Landmark named exactly the query comes
         first, then one with it as its last words (Punta Sorapiss for
         Sorapiss), then names starting with it, then the rest. Within each
-        the highest Peak comes first, then the most hikes: Kleiner Watzmann
-        in the Alps before Märkischer Watzmann, a hill near Berlin. When none is named
+        the one with the most names comes first (a famous place has one in many
+        languages: Lake Constance before the tarns named Bodensee, ADR-0055), then the
+        highest, then the most hikes: Kleiner Watzmann in the Alps before Märkischer
+        Watzmann, a hill near Berlin. When none is named
         so, the query is respelled as ``search`` respells it, from the
         Landmarks' words, and those found are marked ``"match": "similar"``.
+        Each says where it is: the nearest town other than itself (``town``) and that town's
+        ``country``, from ``places.sqlite`` (without it, the town the export named and no country).
         """
         needle = _fold(query).strip()
         if self.landmarks is None or len(needle) < 2:
             return []
         with sqlite3.connect(self.landmarks, uri=True) as db:
-            found, match = self._landmarks_named(db, needle, limit), "words"
+            found, match = self._landmarks_named(db, needle, limit, self._landmark_names), "words"
             if not found:
                 for spelled in self._landmark_spellings.respelled(needle.split()):
-                    found, match = self._landmarks_named(db, " ".join(spelled), limit), "similar"
+                    found, match = self._landmarks_named(db, " ".join(spelled), limit, self._landmark_names), "similar"
                     if found:
                         break
             hikes: dict[int, list[tuple[int, int]]] = {}
@@ -1262,24 +1330,69 @@ class ServingData:
         for landmark, name, kind, town, lat, lon, count in found:
             nearest = hikes.get(landmark, [])
             summaries = self._summaries([self.row_of(dayhike_id) for dayhike_id, _ in nearest])
+            country = None
+            if self._towns[1] is not None:
+                near = self._near_town(lat, lon)
+                country = near and near[1]
+                itself = near and near[0] == name and near[2] <= TRAILHEAD_M  # a town is near no other
+                town = None if not near or itself else near[0]
             results.append(
                 {
-                    "name": name, "kind": kind, "town": town, "lat": lat, "lon": lon, "match": match,
-                    "hike_count": count,
+                    "name": name, "kind": kind, "town": town, "country": country, "lat": lat, "lon": lon,
+                    "match": match, "hike_count": count,
                     "hikes": [{**summary, "off_m": off_m} for summary, (_, off_m) in zip(summaries, nearest, strict=True)],
                 }
             )  # fmt: skip
         return results
 
     @staticmethod
-    def _landmarks_named(db: sqlite3.Connection, needle: str, limit: int) -> list[tuple]:
+    def _landmarks_named(db: sqlite3.Connection, needle: str, limit: int, names: str = "NULL") -> list[tuple]:
+        """``names``: the column of how many names each has, or NULL (a file from before ADR-0055)."""
         return db.execute(
             "SELECT l.id, l.name, l.kind, l.town, l.lat, l.lon, l.hikes FROM landmark_names n "
             "JOIN landmarks l ON l.id = n.landmark WHERE n.name >= ? AND n.name < ? "
             "GROUP BY l.id ORDER BY MIN(CASE WHEN n.name = ? THEN 1 - n.whole ELSE 3 - n.whole END), "
-            "l.ele IS NULL, l.ele DESC, l.hikes DESC, l.id LIMIT ?",
+            f"{names} DESC, l.ele IS NULL, l.ele DESC, l.hikes DESC, l.id LIMIT ?",
             (needle, needle + "\U0010ffff", needle, limit),
         ).fetchall()
+
+    @functools.cached_property
+    def _towns(self) -> tuple[list[tuple[str, str]], object | None]:
+        """The towns of ``places.sqlite`` (``TOWN_POPULATION`` people or more), name and country,
+        and a tree of where they are; none and None without the file."""
+        from scipy.spatial import cKDTree
+
+        if self.places is None:
+            return [], None
+        with sqlite3.connect(self.places, uri=True) as db:
+            rows = db.execute(
+                "SELECT name, country, lat, lon FROM places WHERE population >= ? ORDER BY id", (TOWN_POPULATION,)
+            ).fetchall()
+        if not rows:
+            return [], None
+        where = np.array([(lat, lon) for *_, lat, lon in rows])
+        return [(name, country) for name, country, *_ in rows], cKDTree(_unit(where[:, 0], where[:, 1]))
+
+    def _near_town(self, lat: float, lon: float) -> tuple[str, str, float] | None:
+        """The town nearest a point within ``LANDMARK_TOWN_M``: name, country, metres; None with none."""
+        towns, tree = self._towns
+        if tree is None:
+            return None
+        chord, i = tree.query(_unit(lat, lon)[0], distance_upper_bound=2 * math.sin(LANDMARK_TOWN_M / (2 * EARTH_RADIUS_M)))
+        return (*towns[i], 2 * EARTH_RADIUS_M * math.asin(chord / 2)) if math.isfinite(chord) else None
+
+    def _region(self, row: int) -> str | None:
+        """Where a hike starts, as the town nearest its Trailhead and its country ("Bovec, SI"); None with no town near."""
+        return self._place_near(*map(float, self.trailheads[row]))
+
+    def _place_near(self, lat: float, lon: float) -> str | None:
+        """The town nearest a point and its country ("Bovec, SI"); None with no town near."""
+        near = self._near_town(lat, lon)
+        return f"{near[0]}, {near[1]}" if near else None
+
+    def multi_day(self, row: int) -> bool:
+        """Whether a hike is a multi-day route: longer than ``MULTI_DAY_M`` one way (ADR-0056)."""
+        return bool(self._one_way_m[row] > MULTI_DAY_M)
 
     @functools.cached_property
     def _landmark_spellings(self) -> _Spellings:
@@ -1308,6 +1421,10 @@ class ServingData:
                 "difficulty_rank": _value(store.column("difficulty_rank")[row]),
                 "round_trip": _value(store.column("round_trip")[row]),
                 "trailhead": [float(v) for v in self.trailheads[row]],
+                # One way, what makes it multi-day (ADR-0056), and where it starts: twins of a name told apart
+                "walk_m": _value(self._one_way_m[row]),
+                "multi_day": self.multi_day(row),
+                "region": self._region(row),
             }
             for row in rows
         ]
@@ -1333,7 +1450,7 @@ class ServingData:
         if len(found) > limit:
             return [], True
         return [
-            {"id": i, "name": _shown_name(i, name, origin), "walk_m": walk_m, "line": line}
+            {"id": i, "name": _shown_name(i, name, origin), "walk_m": walk_m, "multi_day": self.multi_day(self.row_of(i)), "line": line}
             for i, name, origin, walk_m, line in found
         ], False
 
@@ -1371,6 +1488,8 @@ class ServingData:
             "sac_scale": sac_scale,
             "trailhead": [float(v) for v in self.trailheads[row]],
             "walk_m": walk_m,
+            "multi_day": self.multi_day(row),
+            "region": self._region(row),
             **self._climb(row, (climb_m, descent_m), return_to_start),
             "line": line,
             "elevation": None
@@ -1481,6 +1600,8 @@ class ServingData:
             "sac_scale": walk.sac_scale,
             "trailhead": [float(lat[0]), float(lon[0])],
             "walk_m": walk_m,
+            "multi_day": walk_m > MULTI_DAY_M,
+            "region": self._place_near(float(lat[0]), float(lon[0])),
             "climb_m": climb_m,
             "descent_m": descent_m,
             "line": line,
@@ -1633,7 +1754,9 @@ class ServingData:
         leaves out every hike, DayHike or loop, starting farther from it in a
         straight line.
 
-        One row per area: best first, a hike starting within ``group_m``
+        Unless the Seed is a multi-day route (longer than ``MULTI_DAY_M`` one way) or a Wish asks a
+        length over it, every multi-day route comes after every day-length hike, best first in each
+        (ADR-0056). One row per area: best first, a hike starting within ``group_m``
         (``GROUP_M`` when None) of a better row's start is a version of that row, listed in its
         ``versions`` (at most ``VERSIONS`` - 1, each walking more than
         ``VERSION_DIFFERS`` of its length off every version kept), else left
@@ -1672,6 +1795,16 @@ class ServingData:
         kept = self._far_and_near(self.trailheads[rows], None, group_m, after)
         if kept is not None:
             rows, scores = rows[kept], scores[kept]
+        # Unless the Seed is one, the multi-day routes come after every day-length hike (ADR-0056).
+        day_first = not self._multi_day_seed(seed, seed_row, seed_walk)
+        if day_first:
+            order = np.argsort(self._one_way_m[rows] > MULTI_DAY_M, kind="stable")
+            rows, scores = rows[order], scores[order]
+
+        def place(candidate: list) -> tuple[bool, float]:
+            """Where a hike comes in the Ranking: by score, a multi-day route after the day hikes."""
+            return day_first and candidate[1] is not None and self.multi_day(candidate[1]), -candidate[0]
+
         found_loops, loop_search = [], None
         if loops and self.trailgraph is not None and LOOP_SEEDS:
             seed_line = (
@@ -1697,7 +1830,7 @@ class ServingData:
         catalog = ([float(score), row, None, None] for row, score in zip(rows.tolist(), scores.tolist()))
         found = sorted(([loop["score"], None, loop, points] for loop, points in found_loops), key=lambda c: -c[0])
         groups: list[list[list]] = []  # the best first in each
-        for hike in heapq.merge(catalog, found, key=lambda candidate: -candidate[0]):
+        for hike in heapq.merge(catalog, found, key=place):
             start = self._start(hike)
             group = next((g for g in groups if _haversine_m(*start, *self._start(g[0])) < group_m), None)
             if group is None:
@@ -1729,7 +1862,16 @@ class ServingData:
             ],
             other_areas,
             loop_search,
+            day_first,
         )
+
+    def _multi_day_seed(self, seed: Seed, seed_row: int | OutsideSeed, seed_walk: ComposedWalk | None) -> bool:
+        """Whether a Ranking looks for multi-day routes: its Seed is one, or its Wish asks a length over ``MULTI_DAY_M``."""
+        if isinstance(seed, Mapping):
+            return seed.get("length", 0) > MULTI_DAY_M
+        if seed_walk is not None:
+            return float(_step_m(seed_walk.lat, seed_walk.lon).sum()) > MULTI_DAY_M
+        return self.multi_day(seed_row)
 
     def _unlisted(
         self, rows: np.ndarray, scores: np.ndarray, groups: list[list[list]], listed_rows: list[int], group_m: float

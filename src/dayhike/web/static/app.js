@@ -23,7 +23,7 @@ const LEGEND = [
 ];
 // A Landmark's kind as the hike search says it (serving.export_landmarks).
 const LANDMARK_KINDS = { peak: "peak", hut: "hut", shelter: "shelter", viewpoint: "viewpoint", lake: "lake",
-  pass: "pass", town: "town", village: "village" };
+  pass: "pass", ridge: "ridge", range: "mountain range", town: "town", village: "village" };
 const PEAK_SUMMITED_M = 50; // a hike this near a peak reaches its top (similarity.PEAK_SUMMITED_M)
 const SAC = ["", "T1 hiking", "T2 mountain hiking", "T3 demanding mountain", "T4 alpine hiking",
   "T5 demanding alpine", "T6 difficult alpine"];
@@ -43,9 +43,9 @@ const PICK_ZOOM = 12; // the map shows hikes from this zoom on
 const PICK_LINE = { color: "#6b2fa3", weight: 3, opacity: 0.85 };
 const PICK_HOVER = { color: "#c2410c", weight: 5, opacity: 1 };
 const PICK_TOLERANCE_PX = 10; // a click this far off a hike's line or dot still chooses it
-const SHARED_LINE_PX = 3; // hikes this much farther off than the nearest run along the same trail: a click offers them all
 const START_PANE = "starts"; // the map pane of the hikes' start and end dots, above every line (overlayPane is 400)
 const COMPOSE_ZOOM = 13; // designing a hike shows the trail segments from this zoom on
+const JUNCTION_PX = 8; // a click this near a junction's dot is for the junction, not the segment under it
 const MAX_COMPOSED_M = 100000; // the longest hike the server measures (trailgraph.MAX_WALK_M)
 const SHORTEST_HIKE_M = 1000; // the shortest catalog hike
 const ROUND_TRIP_M = 50; // a hike ending this near its start is a round trip, its way back a short step (catalog.GAP_JOIN_M)
@@ -101,6 +101,25 @@ function setStatus(text, isError = false) {
   const status = $("#status");
   status.textContent = text;
   status.classList.toggle("error", isError);
+}
+
+// A request that failed, said in ``host``, the line beside the button that asked it, so a phone shows it
+// where the Hiker looks; with a Try again button (``again``) when the server was busy or did not answer
+// (ADR-0055).
+function sayFailed(host, error, again) {
+  host.textContent = error.message;
+  host.classList.add("error");
+  if (error.status && ![409, 503].includes(error.status)) return;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "secondary retry";
+  button.textContent = "Try again";
+  button.addEventListener("click", () => {
+    host.textContent = "";
+    host.classList.remove("error");
+    again();
+  });
+  host.append(" ", button);
 }
 
 // A request ends after this long, so a server that does not answer never leaves the page waiting:
@@ -200,6 +219,11 @@ function lengthText(hike) {
   const back = hike.way_back;
   if (!back || back.kind === "none") return fmt.km(hike.facts.length_m ?? hike.walk_m);
   return `${fmt.km(hike.walk_m)} one way (${fmt.km(hike.facts.length_m ?? hike.walk_m + back.m)} with the way back)`;
+}
+
+// A multi-day route's mark, with its length one way: "multi-day, 1,073 km" (ADR-0056).
+function multiDayText(hike) {
+  return `multi-day, ${Math.round(hike.walk_m / 1000).toLocaleString("en")} km`;
 }
 
 function factColumn(column, month) {
@@ -361,6 +385,7 @@ async function shareHike(hike, button, note) {
     note.timer = setTimeout(() => { note.hidden = true; }, 6000);
   };
   if (navigator.share && matchMedia("(pointer: coarse)").matches) {
+    say("Opening your phone's share menu…");
     try {
       await navigator.share({ title: hike.name, url });
       say("Shared.");
@@ -448,9 +473,23 @@ function linkBase(hash) {
 
 // The address keeps the search settings as they change, so a reload or a shared link opens them again.
 function syncAddress() {
+  refreshHikeLinks();
   if (state.wishing) { history.replaceState(null, "", wishHash()); return; }
   const base = linkBase(location.hash);
   if (base) history.replaceState(null, "", base + modeHash());
+}
+
+// Every "Link to this hike" shown carries the search settings as they are now, the same address Share
+// sends (ADR-0055).
+function refreshHikeLinks() {
+  for (const card of [$("#liked"), $("#selected")]) {
+    for (const link of card.querySelectorAll("a.hike-link")) link.setAttribute("href", likedHash(card._hike));
+  }
+}
+
+// The address of what the page shows now: the wish, or the liked hike, with the search settings.
+function shownAddress() {
+  return state.wishing ? wishHash() : state.liked ? likedHash(state.liked) : "";
 }
 
 // Fills the search settings an address's ``parts`` (readLink) name; those it does not name stay as they
@@ -490,6 +529,28 @@ function applySettings(parts, weights) {
   if (parts.has("group")) $("#group-km").value = group >= 0.1 && group <= 50 ? String(group) : "";
   showGroupDefault();
   syncRoundTrip();
+}
+
+// The limits as the page opens, before an address fills them (``start``), for ``resetSettings``.
+const OPENED = {};
+
+// The settings an address can name, as the page opens: the home page's address, gone back to, names none.
+function resetSettings() {
+  $("#month").value = "";
+  for (const row of document.querySelectorAll(".weight")) {
+    setWeight(row, state.measures.find((m) => m.name === row.dataset.measure).default_weight);
+  }
+  $("#advanced").open = false;
+  $("#drive-on").checked = false;
+  $("#drive").hidden = true;
+  placed++; // drops a place lookup still running
+  $("#origin").value = $("#origin-found").textContent = "";
+  state.origin = state.missed = null;
+  for (const [id, { value, checked }] of Object.entries(OPENED)) {
+    $(id).value = value;
+    $(id).checked = checked;
+  }
+  $("#group-km").value = "";
 }
 
 const WAY_BACK = { trail: "along the trails", retrace: "the same way", step: "a short step", none: "" };
@@ -821,11 +882,14 @@ function drawMap(node, hike) {
 // ``query``: the weights and month the compare scores were made with (a Ranking's, or a pair's).
 function renderDetail(card, hike, { role, compare = null, result = null, query = state.query }) {
   if (card._map) card._map.remove();
+  card._hike = hike; // its "Link to this hike" follows the settings (refreshHikeLinks)
   card.hidden = false;
   card.classList.remove("empty");
   const month = compare ? query?.month : Number($("#month").value) || null;
   const f = hike.facts;
   const badges = [
+    hike.multi_day && multiDayText(hike),
+    hike.region && `near ${hike.region}`,
     f.length_m != null && lengthText(hike),
     climbText(hike, f.elevation_gain_m, hike.way_back ? (hike.way_back.kind === "none" ? "" : "with the way back") : f.round_trip ? "" : "one way"),
     f.highest_m != null && `top ${fmt.m(f.highest_m)}`,
@@ -842,9 +906,9 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     <div class="detail-head">
       <div><div class="role">${escapeHtml(role)}</div><h2>${escapeHtml(hike.name)}</h2></div>
       ${hike.route
-        ? `<span><a href="${routeHash(hike)}${modeHash()}" title="This address opens this hike as your hike">Link to this hike</a>${compare ? ' <button type="button" class="secondary edit-composed">Edit on the map</button>' : ""}</span>`
+        ? `<span><a class="hike-link" href="${likedHash(hike)}" title="This address opens this hike as your hike">Link to this hike</a>${compare ? ' <button type="button" class="secondary edit-composed">Edit on the map</button>' : ""}</span>`
         : hike.built ? builtLinks(hike, compare)
-        : `<span><a href="https://www.openstreetmap.org/relation/${hike.id}" target="_blank" rel="noopener">OpenStreetMap relation ${hike.id}</a> · <a href="${likedHash(hike)}" title="This address opens this hike">Link to this hike</a></span>`}
+        : `<span><a href="https://www.openstreetmap.org/relation/${hike.id}" target="_blank" rel="noopener">OpenStreetMap relation ${hike.id}</a> · <a class="hike-link" href="${likedHash(hike)}" title="This address opens this hike">Link to this hike</a></span>`}
     </div>
     ${hike.line ? '<p class="hike-actions"><button type="button" class="secondary share-hike">Share</button> <button type="button" class="secondary download-gpx">Download GPX</button> <span class="share-note" role="status" hidden></span></p>' : ""}
     ${scoreLine}
@@ -879,7 +943,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
 function builtLinks(hike, compare) {
   const parts = hike.built.parts.map((id) => `<a href="https://www.openstreetmap.org/relation/${id}" target="_blank" rel="noopener">${id}</a>`);
   const edit = compare && state.info.compose ? ' <button type="button" class="secondary edit-composed">Edit on the map</button>' : "";
-  return `<span>Built from OSM relation${parts.length === 1 ? "" : "s"} ${parts.join(", ")} · <a href="#hike=${hike.id}${modeHash()}" title="This address opens this hike">Link to this hike</a>${edit}</span>`;
+  return `<span>Built from OSM relation${parts.length === 1 ? "" : "s"} ${parts.join(", ")} · <a class="hike-link" href="${likedHash(hike)}" title="This address opens this hike">Link to this hike</a>${edit}</span>`;
 }
 
 // The Measures a comparison shows: with the way back every hike is a round trip, so not Round trip.
@@ -1207,9 +1271,11 @@ function nameSearch(input, list, onPick, onLandmark = null) {
     const meta = [
       extra,
       // A hit is walked one way, so its climb is too: the liked hike's panel adds the way back.
-      [item.length_m != null && `${fmt.km(item.length_m)} ${item.round_trip ? "loop" : "one way"}`,
+      [item.multi_day ? multiDayText(item) : item.length_m != null && `${fmt.km(item.length_m)} ${item.round_trip ? "loop" : "one way"}`,
         climbText(item, item.elevation_gain_m)].filter(Boolean).join(", "),
       item.highest_m != null && `top ${fmt.m(item.highest_m)}`,
+      // Where it starts, so hikes of one name are told apart (ADR-0055).
+      item.region && `near ${item.region}`,
       `${item.trailhead[0].toFixed(2)}, ${item.trailhead[1].toFixed(2)}`,
     ].filter(Boolean).join(" · ");
     const similar = item.match === "similar" ? ' <span class="similar-tag">similar name</span>' : "";
@@ -1240,7 +1306,8 @@ function nameSearch(input, list, onPick, onLandmark = null) {
     }
     found.filter((item) => item.match !== "similar").forEach((item) => option(item));
     for (const landmark of landmarks) {
-      const where = [LANDMARK_KINDS[landmark.kind] ?? landmark.kind, landmark.town && `near ${landmark.town}`].filter(Boolean).join(", ");
+      const where = [LANDMARK_KINDS[landmark.kind] ?? landmark.kind, landmark.town && `near ${landmark.town}`, landmark.country]
+        .filter(Boolean).join(", ");
       const similar = landmark.match === "similar" ? ' <span class="similar-tag">similar name</span>' : "";
       const head = note(`Hikes near ${escapeHtml(landmark.name)} (${escapeHtml(where)})${similar}`, "landmark");
       if (onLandmark) {
@@ -1371,6 +1438,7 @@ async function choose(id, { from = null, note = null } = {}) {
     pick.restyle();
     pick.drawLoops();
     if (from !== "map") pick.follow();
+    else pick.hint(`Chosen: ${hike.name}, ${lengthText(hike)}.`); // under the map clicked, not only above it
     if (from === "search") $("#liked").scrollIntoView({ block: "start" }); // instant: a smooth scroll can be cut short
     setStatus("");
   } catch (error) {
@@ -1577,7 +1645,7 @@ const pick = {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "secondary";
-      button.textContent = `${hike.name} (${fmt.km(hike.walk_m)})`;
+      button.textContent = `${hike.name} (${hike.multi_day ? multiDayText(hike) : fmt.km(hike.walk_m)})`;
       button.addEventListener("click", () => { this.map.closePopup(); choose(id, { from: "map" }); });
       box.appendChild(button);
     }
@@ -1655,10 +1723,10 @@ const pick = {
     this.restyle();
   },
 
-  // The ids of the hikes a click at a layer point is for, within the tolerance of a tap: where lines run
-  // together along one trail (each passes within SHARED_LINE_PX of the nearest, away from its own ends),
-  // all of them, the shorter first; else the nearest. A start or end dot counts from its rim; at a tie
-  // (two hikes that meet) the one starting nearer wins.
+  // The ids of the hikes a click at a layer point is for, within the tolerance of a tap: where two or more
+  // lines run through it (each within the tolerance, away from its own ends), all of them, the shorter
+  // first, so every hike on a trail others share can be chosen (ADR-0055); else the nearest. A start or
+  // end dot counts from its rim; at a tie (two hikes that meet) the one starting nearer wins.
   near(point) {
     if (compose.on) return [];
     const found = [];
@@ -1672,7 +1740,7 @@ const pick = {
     }
     if (!found.length) return [];
     found.sort((a, b) => a.off - b.off || a.start - b.start);
-    const shared = found.filter((hike) => hike.inside && hike.along <= found[0].off + SHARED_LINE_PX);
+    const shared = found.filter((hike) => hike.inside && hike.along <= PICK_TOLERANCE_PX);
     if (shared.length < 2) return [found[0].id];
     if (!shared.includes(found[0])) shared.push(found[0]);
     return shared.sort((a, b) => a.walk - b.walk).map((hike) => hike.id);
@@ -1692,7 +1760,7 @@ const pick = {
       line.setStyle(PICK_HOVER);
       line.bringToFront();
       this.tip ??= L.tooltip({ direction: "top", offset: [0, -8] });
-      this.tip.setContent(`<strong>${escapeHtml(hike.name)}</strong><br>${fmt.km(hike.walk_m)}`);
+      this.tip.setContent(`<strong>${escapeHtml(hike.name)}</strong><br>${hike.multi_day ? multiDayText(hike) : fmt.km(hike.walk_m)}`);
     }
     if (id != null && at) this.tip.setLatLng(at).addTo(this.map);
   },
@@ -1731,6 +1799,8 @@ const pick = {
 
 // ---------- design your own from segments ----------
 
+const UNCONNECTED = "That is not connected to your route's end over the trails loaded so far. Pan the map along the trails between them, zoomed in so they load, then click it again; or click the segments in between.";
+
 // The marked trails and graded paths in view as segments, junction to junction (from COMPOSE_ZOOM on).
 // Click a junction or a segment to start, then segments to walk on; one away from the
 // route's end is reached the shortest way over the trail segments loaded so far (and
@@ -1748,6 +1818,7 @@ const compose = {
   named: false, // the Hiker typed the name
   segments: new Map(), // every segment loaded so far, by id
   junctions: new Map(),
+  dots: [], // the junctions drawn as dots, every one a click can walk to
   shown: [], // segment ids in the last view
   timer: null,
   abort: null,
@@ -1881,18 +1952,23 @@ const compose = {
       // Dashed over red where the way added walks a segment clicked too, so both show.
       if (added.has(id)) this.line(segment, AUTO_LINE, "Added to reach the segment you clicked");
     }
+    this.dots = [];
     for (const id of ends) {
       const junction = this.junctions.get(id);
       if (!junction || id === this.start || id === end) continue;
       const marker = L.circleMarker(junction.latlng, { radius: 4, color: "#fff", weight: 1, fillColor: "#1e3a8a", fillOpacity: 0.9 })
-        .bindTooltip(this.start == null ? "Start here" : "Junction").addTo(this.layer);
-      marker.on("click", () => this.startAt(id));
+        .bindTooltip(this.start == null ? "Start here" : "Junction: click to walk here").addTo(this.layer);
+      marker.on("click", () => this.toJunction(id));
+      this.dots.push(id);
     }
     const at = (id, fill, text) => {
       const junction = this.junctions.get(id);
-      if (junction) L.circleMarker(junction.latlng, { radius: 8, color: "#fff", weight: 2, fillColor: fill, fillOpacity: 1 }).bindTooltip(text).addTo(this.layer);
+      if (!junction) return;
+      L.circleMarker(junction.latlng, { radius: 8, color: "#fff", weight: 2, fillColor: fill, fillOpacity: 1 })
+        .bindTooltip(text).on("click", () => this.toJunction(id)).addTo(this.layer);
+      this.dots.push(id);
     };
-    if (this.start != null) at(this.start, "#2f7d4f", "<strong>Start</strong>");
+    if (this.start != null) at(this.start, "#2f7d4f", this.route.length ? "<strong>Start</strong>: click to walk back here" : "<strong>Start</strong>");
     if (this.route.length && end != null && end !== this.start) at(end, "#c2410c", "<strong>End so far</strong>");
     this.readout();
     this.offerLinks(end);
@@ -1926,7 +2002,40 @@ const compose = {
     line.bindTooltip(this.label(segment) + (note ? `<br><em>${note}</em>` : ""), { sticky: true });
     line.on("mouseover", () => { line.setStyle(SEGMENT_HOVER); line.bringToFront(); });
     line.on("mouseout", () => line.setStyle(style));
-    line.on("click", (event) => this.add(segment, event.latlng));
+    // A line hovered is drawn on top, so it takes a click on a junction's dot: the dot nearest wins.
+    line.on("click", (event) => {
+      const junction = this.junctionAt(event.latlng);
+      if (junction != null) this.toJunction(junction); else this.add(segment, event.latlng);
+    });
+  },
+
+  // The junction drawn as a dot within JUNCTION_PX of ``latlng``, the nearest; else null.
+  junctionAt(latlng) {
+    const point = pick.map.latLngToLayerPoint(latlng);
+    let nearest = null, best = JUNCTION_PX;
+    for (const id of this.dots) {
+      const px = point.distanceTo(pick.map.latLngToLayerPoint(this.junctions.get(id).latlng));
+      if (px <= best) { nearest = id; best = px; }
+    }
+    return nearest;
+  },
+
+  // A click on a junction: the start, while the hike has none; else the shortest way to it from the route's
+  // end over the trail segments loaded so far (to the start: back there), as one click Undo takes back.
+  toJunction(id) {
+    if (this.start == null) { this.startAt(id); return; }
+    const end = this.end();
+    if (end == null) return;
+    if (id === end) { pick.hint("Your hike ends there so far: click a segment or another junction to go on."); return; }
+    const way = this.shortest(end, { a: id, b: id });
+    if (!way) { pick.hint(UNCONNECTED); return; }
+    let here = end;
+    way.forEach((step, i) => {
+      this.route.push({ id: step.id, step: here === step.a ? step.stepAB : step.stepBA, auto: i < way.length - 1 });
+      here = here === step.a ? step.b : step.a;
+    });
+    this.changed();
+    pick.hint(`Walked ${way.length} segment${way.length === 1 ? "" : "s"} to ${id === this.start ? "the start" : "that junction"}${way.length > 1 ? " (amber, dashed: the way there)" : ""}; Undo takes ${way.length === 1 ? "it" : "them"} back.`);
   },
 
   startAt(junction) {
@@ -1952,7 +2061,7 @@ const compose = {
     if (end !== segment.a && end !== segment.b) {
       way = segment.kind === "link" ? null : this.shortest(end, segment);
       if (!way) {
-        pick.hint("That segment is not connected to your route's end over the trails loaded so far. Pan the map along the trails between them, zoomed in so they load, then click it again; or click the segments in between.");
+        pick.hint(UNCONNECTED);
         return;
       }
     }
@@ -2185,10 +2294,10 @@ async function findPlace() {
   const parsed = parseLatLon(text);
   if (parsed) {
     const warning = swappedWarning(parsed);
-    if (warning) $("#origin-found").textContent = warning; else setOrigin(parsed);
+    if (warning) $("#origin-found").textContent = warning; else setOrigin(parsed, true);
     return;
   }
-  if (state.geocoded.has(text)) { setOrigin(state.geocoded.get(text)); return; }
+  if (state.geocoded.has(text)) { setOrigin(state.geocoded.get(text), true); return; }
   $("#origin-found").textContent = "Searching…";
   try {
     let origin;
@@ -2208,17 +2317,19 @@ async function findPlace() {
       return;
     }
     state.geocoded.set(text, origin);
-    setOrigin(origin);
+    setOrigin(origin, true);
   } catch {
     if (request === placed) $("#origin-found").textContent = "Place search failed; type lat, lon instead.";
   }
 }
 
-function setOrigin(origin) {
+// ``found``: found by the Hiker now, so the address and every "Link to this hike" name it (not one an address names).
+function setOrigin(origin, found = false) {
   state.origin = origin;
   pick.focus({ center: [origin.lat, origin.lon] });
   $("#origin-found").textContent = `Start: ${origin.label} (${origin.lat.toFixed(4)}, ${origin.lon.toFixed(4)})`;
   markStale();
+  if (found) syncAddress();
 }
 
 function useMyLocation() {
@@ -2230,7 +2341,7 @@ function useMyLocation() {
       if (request !== placed) return;
       const { latitude: lat, longitude: lon } = position.coords;
       $("#origin").value = `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
-      setOrigin({ lat, lon, label: "your location" });
+      setOrigin({ lat, lon, label: "your location" }, true);
     },
     () => { if (request === placed) $("#origin-found").textContent = "Location not shared; type a place or lat, lon."; },
   );
@@ -2282,13 +2393,19 @@ function drawn(scores, keys, draw, count, t) {
   return keyed.slice(0, count).map(([, i]) => i).sort((a, b) => a - b);
 }
 
+// The score a row is drawn by: in a day hike's Ranking a multi-day route's is 1 less, so it is drawn only
+// once the day hikes of the pool run out, as the server lists it after them (ADR-0056).
+function drawScore(row) {
+  return row.score - (state.answer?.day_first && row.multi_day ? 1 : 0);
+}
+
 // The rows a page lists of its pool: in Strict order its best, as ranked, else drawn by score with
 // the draw number; in score order either way. Drawn rows Strict order would not list are marked.
 function pageOf(pool) {
   const count = state.info.results;
   const picked = state.strict || pool.length <= count
     ? pool.slice(0, count).map((_, i) => i)
-    : drawn(pool.map((row) => row.score), pool.map(resultKey), state.draw, count, state.info.draw.t);
+    : drawn(pool.map(drawScore), pool.map(resultKey), state.draw, count, state.info.draw.t);
   picked.filter((i) => i >= count).forEach((i) => state.picked.add(pool[i]));
   return picked.map((i) => pool[i]);
 }
@@ -2385,7 +2502,7 @@ async function findSimilar() {
     setStatus(error.message, true);
     // Beside the list it leaves, which is no answer to this search.
     if (!$("#results").hidden) {
-      markStale();
+      markStale(false);
       $("#results-stale").textContent = `This search was not run: ${error.message.replace(/\.$/, "")}. The list below is from before.`;
       $("#results-stale").classList.add("error");
     }
@@ -2434,15 +2551,16 @@ async function rank(query, liked, stale = false, draw = state.draw, place = stat
       weights: body.weights, month: body.month, drive: Boolean(query.max_hours), km: Boolean(query.max_km),
       return_to_start: body.return_to_start, wish: query.wish ?? null, group_km: body.group_km,
     };
-    state.asked = { query, basis: liked, place };
+    // ``address``: what it was asked as, so an address typed or gone back to that asks otherwise marks it.
+    state.asked = { query, basis: liked, place, address: shownAddress() };
     state.answer = body;
     state.draw = draw;
     state.pools = [body.results];
     relist();
     // Instant: a smooth scroll can be cut short, and the list may be screens below the button.
     $("#results").scrollIntoView({ block: "start" });
-    if (stale) markStale();
     setStatus(`Done in ${(body.elapsed_ms / 1000).toFixed(1)} s.`);
+    if (stale) markStale();
     while (state.results.length < rows && !$("#show-more").hidden && request === ranked) {
       const shown = state.results.length;
       await showMore();
@@ -2450,8 +2568,8 @@ async function rank(query, liked, stale = false, draw = state.draw, place = stat
     }
   } catch (error) {
     if (request !== ranked || liked !== rankBasis()) return;
-    if (!query.loops || stale) markStale();
-    setStatus(error.message, true);
+    if (!query.loops || stale) markStale(false);
+    sayFailed($("#status"), error, () => rank(query, liked, stale, draw, place, rows));
     // Beside the list it leaves, which is no answer to this search; a list left under "still running"
     // would read as this search's, so it goes.
     const failed = $("#results-stale");
@@ -2470,15 +2588,19 @@ async function rank(query, liked, stale = false, draw = state.draw, place = stat
 }
 
 const STALE_NOTE = "The query changed since this ranking; press Find again to update it.";
+// The same, under the Find button, where a phone's Hiker is when they change a setting (ADR-0055).
+const FIND_STALE = (button) => `Your settings changed since the list below: press ${button} again to update it.`;
 const SUGGEST_LOOPS = "Suggest loops near these hikes (takes a few seconds)";
 
-// The shown results no longer match the query on the left.
-function markStale() {
+// The shown results no longer match the query on the left; ``say``: under the Find button too (not when
+// it says why a search did not run).
+function markStale(say = true) {
   if ($("#results").hidden) return;
   $("#results").classList.add("stale");
   $("#results-stale").textContent = STALE_NOTE;
   $("#results-stale").classList.remove("error");
   $("#results-stale").hidden = false;
+  if (say) setStatus(FIND_STALE($("#find").textContent));
 }
 
 // The shown Ranking's table, of its first answer and the rows shown.
@@ -2662,9 +2784,10 @@ function showMoreButton(answer) {
 // The next rows of the shown Ranking: its query again, leaving out the areas of the rows shown (ADR-0032).
 // Loops are searched for the first rows only, so no later row's loop outscores the rows above (ADR-0054).
 async function showMore() {
-  const { asked, results } = state;
+  const { asked, results } = state, status = $("#more-status");
   $("#show-more").disabled = true;
-  setStatus("Finding the next hikes…");
+  status.classList.remove("error");
+  status.textContent = "Finding the next hikes…";
   try {
     const after = results.map((result) => ({ lat: result.trailhead[0], lon: result.trailhead[1] }));
     const body = await postRank(asking({ ...asked.query, loops: false, after }), () => asked === state.asked && results === state.results);
@@ -2674,9 +2797,9 @@ async function showMore() {
     listRows(after.length);
     showMoreButton(body);
     showSwipeCue();
-    setStatus(body.results.length ? `Done in ${(body.elapsed_ms / 1000).toFixed(1)} s.` : "No more hikes in other areas.");
+    status.textContent = body.results.length ? `Done in ${(body.elapsed_ms / 1000).toFixed(1)} s.` : "No more hikes in other areas.";
   } catch (error) {
-    if (asked === state.asked && results === state.results) setStatus(error.message, true);
+    if (asked === state.asked && results === state.results) sayFailed(status, error, showMore);
   } finally {
     $("#show-more").disabled = false;
   }
@@ -2696,7 +2819,8 @@ function resultRow(result, number, open) {
     }
     return `<td class="cell" style="background:${scoreColor(score)}" title="${escapeHtml(m.label)}: ${score.toFixed(2)}">${Math.round(score * 100)}</td>`;
   }).join("");
-  const tag = result.route ? '<span class="composed-tag" title="A loop drawn from trail segments, not a catalog hike">composed</span> ' : "";
+  const tag = (result.route ? '<span class="composed-tag" title="A loop drawn from trail segments, not a catalog hike">composed</span> ' : "")
+    + (result.multi_day ? `<span class="multi-day-tag" title="A route of several days${state.answer?.day_first ? ", listed after the day hikes" : ""}">${multiDayText(result)}</span> ` : "");
   const versions = result.versions?.length
     ? ` <span class="versions" title="Click to see each on the map and in this table">${result.versions.length + 1} versions</span>`
     : "";
@@ -2856,6 +2980,7 @@ async function start() {
     $("#km-on").checked = true;
   }
   showGroupDefault();
+  for (const id of ["#hours", "#km", "#hours-on", "#km-on"]) OPENED[id] = { value: $(id).value, checked: $(id).checked };
   LIKED_EMPTY = $("#liked").innerHTML;
   nameSearch($("#search"), $("#suggestions"), (id, note) => choose(id, { from: "search", note }), (landmark, open) => {
     const town = landmark.kind === "town" || landmark.kind === "village";
@@ -2946,10 +3071,24 @@ async function start() {
   });
   // An address opens its hike, composed hike or wish with the search settings it carries; a part the
   // page does not know is left alone, and a link cut short or changed says it could not be opened.
-  const openLinked = () => {
+  // An address typed or gone back or forward to (``changed``, a hashchange) that names no hike is the
+  // home page as it opens, with no hike and no list; one whose settings differ from the list shown marks
+  // the list as from before (ADR-0055).
+  const openLinked = (changed) => {
     const parts = readLink(location.hash);
     const kind = ["hike", "compose", "wish"].find((name) => parts.has(name));
-    if (!kind) return;
+    if (!kind) {
+      if (!changed) return;
+      chosen++; // drops a hike still loading
+      unchoose(); // first: leaving a wish then keeps the address the home page's
+      if (state.wishing) setWishing(false);
+      resetSettings();
+      $("#return-on").checked = true;
+      if (state.strict) setStrict(false);
+      showGroupDefault();
+      syncRoundTrip();
+      return;
+    }
     const oneWay = parts.has("oneway"), modeChanged = returnToStart() === oneWay;
     $("#return-on").checked = !oneWay;
     syncRoundTrip();
@@ -2976,9 +3115,11 @@ async function start() {
       applyWish(/^[\w:.,-]*$/.test(parts.get("wish")) ? parts.get("wish") : "");
       history.replaceState(null, "", wishHash());
     }
+    refreshHikeLinks();
+    if (changed && !$("#results").hidden && state.asked?.address !== shownAddress()) markStale();
   };
-  window.addEventListener("hashchange", openLinked);
-  openLinked();
+  window.addEventListener("hashchange", () => openLinked(true));
+  openLinked(false);
 }
 
 start();

@@ -672,8 +672,13 @@ def create_app(
             raise HTTPException(409, "Your previous search is still running; try again when it ends.")
         if turn == "address":
             raise HTTPException(409, f"{PER_ADDRESS} searches from your network are already waiting; try again when they end.")
-        if turn == "timeout":
-            raise HTTPException(503, "busy; try again in a moment")
+        if turn == "timeout":  # other visitors' searches ahead of it took RANK_WAIT_S (ADR-0055)
+            raise HTTPException(
+                503,
+                f"The server is busy with other visitors' searches: yours waited {RANK_WAIT_S:.0f} s for its turn. "
+                "Try again in a moment.",
+                headers={"Retry-After": "5"},
+            )
         try:
             hours = reach = None
             if body.max_hours is not None:
@@ -734,6 +739,8 @@ def create_app(
             "results": results,
             "other_areas": results.other_areas,
             "loop_search": results.loop_search,
+            # The multi-day routes come after the day hikes: the page draws its rows so too (ADR-0056).
+            "day_first": results.day_first,
             "elapsed_ms": round((time.monotonic() - started) * 1000),
         }
 

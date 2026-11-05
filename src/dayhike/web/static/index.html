@@ -168,10 +168,11 @@
           <button type="button" id="compose-done" class="primary" disabled>Use this hike</button>
         </span>
       </div>
+      <!-- What a click did is said under the map, so the map never moves under the pointer (ADR-0055). -->
+      <div class="map pick-map"></div>
       <p class="hint" id="map-pick-hint" role="status" aria-live="polite"></p>
       <p class="compose-readout" id="compose-readout" aria-live="polite" hidden></p>
       <div class="compose-links" id="compose-links"></div>
-      <div class="map pick-map"></div>
     </section>
 
     <article id="liked" class="card empty">
@@ -191,7 +192,7 @@
       <p class="stale-note" id="results-stale" hidden>The query changed since this ranking; press Find again to update it.</p>
       <p class="hint swipe-cue" id="results-swipe" hidden>Scroll the table sideways for every measure's score →</p>
       <div class="table-wrap"><table id="results-table"></table></div>
-      <p id="results-more" hidden><button type="button" class="secondary" id="show-more">Show 10 more</button> <span class="hint" id="other-areas"></span></p>
+      <p id="results-more" hidden><button type="button" class="secondary" id="show-more">Show 10 more</button> <span class="status" id="more-status" role="status" aria-live="polite"></span> <span class="hint" id="other-areas"></span></p>
       <p id="results-loops" hidden><button type="button" class="secondary" id="suggest-loops">Suggest loops near these hikes (takes a few seconds)</button></p>
       <p class="hint"><span id="results-scores"></span> Only the best of hikes that follow the same route is listed. A dash is “no data”, or a hut, cafe, shelter, viewpoint, summit or parking neither hike has mapped: either way it is left out of that pair’s score.</p>
     </section>

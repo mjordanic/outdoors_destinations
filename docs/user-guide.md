@@ -45,29 +45,48 @@ Pick one of three ways:
    keys, then Enter). It works the same on a phone and a computer.
    Once picked, the page moves to the hike's panel.
 
-   You can also type a **peak, hut, viewpoint, lake, pass, town or village**
-   the hike goes to or starts from. Under the hike names the list then shows
-   "Hikes near Zugspitze (peak, near Ehrwald)" and the closest
+   You can also type a **peak, hut, viewpoint, lake, pass, mountain range,
+   town or village** the hike goes to or starts from, in any language the
+   place has a name in: "Gardasee", "Lake Garda" and "Lago di Garda" all find
+   Lake Garda. Under the hike names the list then shows
+   "Hikes near Zugspitze (peak, near Ehrwald, AT)" and the closest
    few hikes there, each saying how near it comes: "reaches the top", "passes
-   300 m from it", or for a town "starts 1.2 km from it". A lake is measured
-   from its middle, so a hike along the shore of a big lake can read 2 km. A
+   300 m from it", or for a town "starts 1.2 km from it". Where several
+   places share a name, the best known comes first (the one with names in
+   the most languages, then the highest): "Mont Blanc" is the summit above
+   Chamonix before the small hills of that name. A big lake, or a summit no
+   trail reaches, lists the hikes up to 10 km away. A lake is measured from
+   its middle, so a hike along the shore of a big lake can read several km. A
    typo is fine here too. When it lists only some of the hikes there, press
    **Show on map**: the map opens at that place, with every hike there to
    click.
+
+   Each hike in the list says the town it starts near and its country ("near
+   Igls, AT"), so hikes of one name are easy to tell apart. A route of several
+   days says so: "multi-day, 1,073 km" (see "Routes of several days" below).
 2. **Tick "Select hike on map"**, zoom in and click a hike. Hikes appear once
    you zoom in far enough that fewer than about 100 are in view. After you
    type a peak or place in the search box, or find a starting place, the map
    goes there, open or when you open it. Otherwise it opens on your liked
    hike, or else on your starting place, or else where most hikes are. Where
-   two hikes run along the same trail (a day hike and a long tour's stage,
-   say), a click lists both, and you choose one.
+   two or more hikes pass under your click (a day hike and a long tour's
+   stage along one trail, say, or two lines that cross), a click lists them
+   all, the shortest first, and you choose one. Under the map it then says
+   "Chosen: …".
 3. **Press "Design your own from segments"** and draw a walk along the marked
-   trails. You can then use that walk as your liked hike.
+   trails. Click a junction (a dot) or a segment to start, then segments to
+   walk on. A click on another junction walks the shortest way there; a click
+   on the green start dot walks back to the start. What each click did is said
+   under the map, so the map stays still under your pointer. You can then use
+   that walk as your liked hike.
 
 Then press **Find similar**. You get 10 hikes from among the most similar
 (see "Why the list changes from visit to visit" below), and the page moves to
 the list. On a phone the list is wider than the screen: a line above it says to
 scroll it sideways for every measure's score.
+
+If you change a setting after a search, a line under **Find similar** says
+the list is from before your change, so you see it where you are on a phone.
 
 If hikes on the list score below 0.43, what a typical pair of random hikes
 scores, a note above the list says from which row down the matches are weak,
@@ -136,10 +155,12 @@ without it.
 ## Download and share a hike
 
 Open any hike from the results. It has a **Link to this hike**, and two
-buttons.
+buttons. The link and Share give the same address, with your settings as
+they are now.
 
 - **Share** sends the link to your friends. On a phone it opens the share
-  sheet. On a computer, or where the share sheet does not open, it copies the
+  sheet, and a line beside the button says "Opening your phone's share
+  menu…". On a computer, or where the share sheet does not open, it copies the
   link, and a line beside the button says "Link copied". If the link cannot be
   copied, that line shows the link for you to copy.
 - **Download GPX** saves the hike as a file you can open in most hiking and GPS
@@ -155,7 +176,10 @@ keeps them too. Older links without settings still open the hike.
 
 A link that has been cut short or changed by hand says "This link could not be
 opened" beside the search box. A part of a link the page does not know is
-ignored, and the hike still opens.
+ignored, and the hike still opens. If you edit the address to other settings,
+or go Back or Forward to one, a list found with other settings is marked "The
+query changed since this ranking". Back to the home address shows the page as
+it opens, with no hike and no list.
 
 Good to know: the GPX file holds the line of the hike as you see it on the
 map, with a height at every point. With Return to start on, it also holds the
@@ -181,9 +205,15 @@ hike's panel ("↑ 54 m ↓ 59 m, as measured").
 ## When something goes wrong
 
 If the server does not answer within a minute, or cannot be reached, the
-page says so instead of waiting forever. A search that fails says so above
-the list it leaves, which is still the list from before: press **Find
-similar** to try again.
+page says so instead of waiting forever. A search that fails says so under
+the button you pressed (Find similar, or Show 10 more beside it), with a
+**Try again** button, and above the list it leaves, which is still the list
+from before.
+
+The server runs one search at a time for everyone, in turn. When other
+visitors' searches are ahead of yours for 25 seconds, it says "The server is
+busy with other visitors' searches: yours waited 25 s for its turn. Try again
+in a moment." Your search itself is quick: press **Try again**.
 
 Each browser tab runs one search at a time. If you press Find again while your
 earlier search is still running on the server, the page says "Waiting for your
@@ -294,6 +324,17 @@ either. They are there so you know the area has plenty to offer.
 
 This is next to "Show 10 more". It is how many hikes the next pages can
 still show you, all from other areas.
+
+#### Routes of several days
+
+A hike longer than 40 km one way is more than a day's walk: a long-distance
+path or a tour of several stages. It is marked "multi-day" with its length,
+for example "multi-day, 1,073 km", in the search list, in the results and in
+its panel. When you start from a day hike, or describe one, these routes are
+listed after every day-length hike, so they do not take a day hike's place;
+their scores are unchanged. When you start from a multi-day route, or ask for
+a length over 40 km, they are listed by score like any other. Their day-sized
+stages are listed as hikes of their own (see Tips).
 
 #### Why one start can show 4 to 8 hikes
 

@@ -289,7 +289,7 @@ def test_hikes_in_a_map_box(client: TestClient) -> None:
 
     assert [hike["id"] for hike in body["results"]] == [RIDGE_WALK_ID]
     assert body["too_many"] is False
-    assert set(body["results"][0]) == {"id", "name", "walk_m", "line"}
+    assert set(body["results"][0]) == {"id", "name", "walk_m", "multi_day", "line"}
 
 
 def test_hikes_in_a_map_box_holding_too_many_lists_none(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1288,6 +1288,31 @@ def test_a_ranking_names_its_tab_so_another_tab_at_one_address_is_not_refused(da
     finally:
         web.RankingQueue = queue
     assert [tab for _, tab in entered] == ["tab-1", "", ""]  # a name that is no plain name counts as none
+
+
+def test_a_ranking_that_waited_its_turn_too_long_says_others_are_ahead_and_when_to_retry(data: ServingData) -> None:
+    queue = web.RankingQueue
+
+    class Busy(queue):
+        def enter(self, address: str, tab: str, timeout: float) -> str:
+            return "timeout"  # other visitors' Rankings took RANK_WAIT_S
+
+    web.RankingQueue = Busy
+    try:
+        response = TestClient(create_app(data)).post("/api/rank", json={"seed": 1001})
+    finally:
+        web.RankingQueue = queue
+    assert response.status_code == 503 and response.headers["retry-after"] == "5"
+    assert response.json()["detail"] == (
+        "The server is busy with other visitors' searches: yours waited 25 s for its turn. Try again in a moment."
+    )
+
+
+def test_a_ranking_says_whether_its_multi_day_routes_come_after_its_day_hikes(client: TestClient) -> None:
+    body = client.post("/api/rank", json={"seed": 1002}).json()
+
+    assert body["day_first"] is True
+    assert {row["id"]: row["multi_day"] for row in body["results"]} == {1001: False, 1003: False, 1007: False}
 
 
 def test_a_ranking_that_waited_its_longest_still_ends_before_cloud_runs_timeout() -> None:

@@ -13,3 +13,5 @@
 3186007	Ridge Lake	Ridge Lake	Grebensko jezero,Ridge Lake	45.05	15.01	H	LK	HR		01				0		300	Europe/Zagreb	2026-01-01
 3186008	Ridge Saddle	Ridge Saddle		45.08	15.0	T	PASS	HR		01				0		300	Europe/Zagreb	2026-01-01
 3186009	Far Lake	Far Lake		46.5	17.5	H	LK	HR		01				0		300	Europe/Zagreb	2026-01-01
+3186010	Ridge Peak	Ridge Peak	Grebenski vrh,Ridge Peak	45.008	15.001	T	PK	HR		01				0	905	880	Europe/Zagreb	2026-01-01
+3186011	Big Lake	Big Lake	Grosser See,Big Lake	45.04	14.94	H	LK	HR		01				0		250	Europe/Zagreb	2026-01-01
