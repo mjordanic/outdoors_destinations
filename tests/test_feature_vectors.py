@@ -105,6 +105,7 @@ def test_ingest_reads_ele_with_units_and_skips_unparseable_values(
         ("1,500", 1500.0),  # a thousands separator, not a decimal comma
         ("3'937", 3937.0),  # a Swiss thousands separator
         ("1'200 ft", 365.76),
+        ("1,200'", 365.76),  # grouped thousands, then a foot mark
         ("1200 ft", 365.76),
         ("2000 Feet", 609.6),
         ("3937'", 1199.9976),  # feet

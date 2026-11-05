@@ -162,11 +162,17 @@ def test_valhalla_compose_is_tracked_and_tiles_are_ignored() -> None:
 
 
 def test_the_valhalla_that_builds_tiles_is_the_pinned_one_that_serves_them() -> None:
-    import re
+    import yaml
 
     repo = Path(__file__).resolve().parents[1]
-    served = re.search(r"^FROM (\S+)", (repo / "web" / "Dockerfile").read_text(), re.MULTILINE)[1]
-    built = re.search(r"^\s*image: (\S+)", (repo / "data" / "valhalla" / "compose.yaml").read_text(), re.MULTILINE)[1]
+    instructions = [
+        line.split()
+        for line in (repo / "web" / "Dockerfile").read_text().splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    served = next(words[1] for words in instructions if words[0].upper() == "FROM")
+    compose = yaml.safe_load((repo / "data" / "valhalla" / "compose.yaml").read_text())
+    built = compose["services"]["valhalla"]["image"]
 
     assert "@sha256:" in served
     assert built == served
@@ -271,6 +277,13 @@ def test_a_dem_directory_that_does_not_exist_is_refused(tmp_path: Path) -> None:
         build_catalog(FIXTURE, catalog_path, dem_dir=tmp_path / "typo")
 
     assert not catalog_path.exists()
+
+
+def test_a_catalog_opens_from_a_path_with_uri_special_characters(tmp_path: Path) -> None:
+    path = tmp_path / "100% #1?.sqlite"
+    build_catalog(FIXTURE, path)
+
+    assert Catalog.open(path).attribution == "© OpenStreetMap contributors"
 
 
 def test_opening_a_missing_catalog_says_not_found_and_creates_no_file(tmp_path: Path) -> None:

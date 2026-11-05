@@ -195,7 +195,7 @@ class Catalog:
         path = Path(path)
         if not path.is_file():
             raise FileNotFoundError(f"Catalog not found: {path}")
-        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
         try:
             meta = dict(connection.execute("SELECT key, value FROM catalog_meta"))
             report_data = json.loads(meta["ingest_report"])

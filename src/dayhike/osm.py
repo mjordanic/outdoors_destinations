@@ -26,7 +26,7 @@ _MEMBER_TYPE = {
 # Take the first number or skip: a comma or apostrophe before exactly three
 # digits separates thousands, else a comma is a decimal point; feet become metres.
 _ELE_NUMBER = re.compile(
-    r"(?P<grouped>[-+]?\d{1,3}(?:[,'’]\d{3})+(?![\d,'’])(?:\.\d+)?)|(?P<plain>[-+]?\d+(?:[.,]\d+)?)"
+    r"(?P<grouped>[-+]?\d{1,3}(?:[,'’]\d{3})+(?![\d]|[,'’]\d)(?:\.\d+)?)|(?P<plain>[-+]?\d+(?:[.,]\d+)?)"
 )
 _ELE_FEET = re.compile(r"\s*(?:ft\b|feet\b|foot\b|['’′])", re.IGNORECASE)
 FOOT_M = 0.3048
