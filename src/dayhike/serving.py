@@ -214,7 +214,7 @@ MEASURE_INFO: dict[str, tuple[str, str, str, str]] = {
 # lowest, highest, step and default, in the units of the Measure's fact.
 WISH_INPUTS: dict[str, tuple[str | None, float, float, float, float]] = {
     "length": ("m", 1_000, 2_000_000, 500, 10_000),
-    "elevation_gain": ("m", 0, 3_000, 50, 600),
+    "elevation_gain": ("m", 0, 100_000, 50, 600),  # multi-day tours climb tens of km (ADR-0035)
     "difficulty": ("SAC grade", 1, 6, 1, 2),
     "highest": ("m", 0, 5_000, 50, 1_500),
     "lowest": ("m", 0, 4_000, 50, 500),

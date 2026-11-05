@@ -35,7 +35,7 @@ RIDGE_WALK_ID = 1001
 YES_NO = {"kind": "yes/no", "unit": None, "min": None, "max": None, "step": None, "default": True}
 # The "wish" input /api/measures gives the Measures a Hiker can wish for (ADR-0024); every other is null.
 WISHABLE = {
-    "elevation_gain": {"kind": "number", "unit": "m", "min": 0, "max": 3000, "step": 50, "default": 600},
+    "elevation_gain": {"kind": "number", "unit": "m", "min": 0, "max": 100_000, "step": 50, "default": 600},
     "highest": {"kind": "number", "unit": "m", "min": 0, "max": 5000, "step": 50, "default": 1500},
     "hut_along": YES_NO,
     "waterside": {"kind": "number", "unit": "share", "min": 0, "max": 1, "step": 0.05, "default": 0.5},

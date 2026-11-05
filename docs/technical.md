@@ -2052,7 +2052,7 @@ A Hiker with no particular hike in mind presses "No particular hike in mind?
 Describe the one you want" under the search. The weights list then shows only
 the Measures `/api/measures` marks wishable (Advanced ones again only while it is open), each with a value to ask for in its
 unit and range (a yes/no Measure as a tick box) beside its weight. Length and
-dry stretch are typed in km, up to 2,000 km, with a hint under Length that over
+dry stretch are typed in km, up to 2,000 km, and climb up to 100,000 m, with a hint under Length that over
 about 25 km is usually more than a day (ADR-0035). The form
 starts asking nothing: every weight is 0, and setting a value weighs that
 Measure 100; a Measure weighted 0 asks nothing. The liked-hike

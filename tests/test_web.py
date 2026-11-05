@@ -126,6 +126,10 @@ def test_lengths_are_wished_in_km_up_to_multi_day_tours(client: TestClient) -> N
     }  # fmt: skip
     assert measures["elevation_gain"]["wish"]["display"] is None
     assert client.post("/api/rank", json={"wish": {"length": 66_000}}).status_code == 200
+    # Climb goes as far: the longest tours climb over 70 km.
+    assert measures["elevation_gain"]["wish"]["max"] == 100_000
+    assert client.post("/api/rank", json={"wish": {"elevation_gain": 73_000}}).status_code == 200
+    assert client.post("/api/rank", json={"wish": {"elevation_gain": 100_001}}).status_code == 422
 
 
 def test_shares_are_wished_in_percent_as_the_facts_show_them(client: TestClient) -> None:
