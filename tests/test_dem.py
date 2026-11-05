@@ -398,9 +398,10 @@ def test_copernicus_under_trees_reads_the_ground_below_the_canopy(tmp_path: Path
     # The hill and the dip stay; the tree tops go.
     assert np.abs(raw[forest] - ground[forest]).max() == pytest.approx(18.0, abs=0.01)
     assert np.abs(floor[forest] - ground[forest]).max() < 4.0
+    # The climb drops most single tree tops as DEM spikes (a run of up to 60 m), but not all of them.
     assert elevation_gain(lat[forest], lon[forest], raw[forest]) > elevation_gain(
         lat[forest], lon[forest], ground[forest]
-    ) + 100
+    )
     assert elevation_gain(lat[forest], lon[forest], floor[forest]) == pytest.approx(
         elevation_gain(lat[forest], lon[forest], ground[forest]), abs=5.0
     )
@@ -630,8 +631,8 @@ def test_sample_dem_removes_similarity_facts(tmp_path: Path) -> None:
 
 
 def test_catalog_gain_uses_the_similarity_gain_rule() -> None:
-    # Vertices 30 m apart due north: jitter under 10 m and a one-vertex DEM spike add nothing.
-    step = 30 / 111_195
+    # Vertices 70 m apart due north: jitter under 10 m and a one-vertex DEM spike add nothing.
+    step = 70 / 111_195
     elevations = [400.0, 405.0, 398.0, 460.0, 402.0, 404.0, 430.0]
     vertices = [(45 + i * step, 15.0, ele) for i, ele in enumerate(elevations)]
 

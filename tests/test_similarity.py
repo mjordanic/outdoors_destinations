@@ -463,6 +463,13 @@ def test_elevation_gain_drops_dem_spikes_but_keeps_a_steep_summit() -> None:
     assert elevation_gain(*_north_line([400.0, 401.0, 460.0, 345.0, 402.0], step_m=30.0)) == 2.0
     # A summit 100 m above both neighbours 500 m away is a 20 % grade: real.
     assert elevation_gain(*_north_line([1000.0, 1100.0, 1000.0], step_m=500.0)) == 100.0
+    # A run of vertices off the trail goes too while it is at most 60 m long: a path along a steep
+    # shore reads the flat lake for 3 vertices 15 m apart, then the slope again.
+    shore = [850.0, 851.0, 835.0, 835.0, 835.0, 852.0, 850.0]
+    assert elevation_gain(*_north_line(shore, step_m=15.0)) == 0.0  # 16.5 m before the run rule
+    # 4 vertices 25 m apart (75 m) is a real dip in the trail.
+    dip = [850.0, 851.0, 830.0, 830.0, 830.0, 830.0, 852.0, 850.0]
+    assert elevation_gain(*_north_line(dip, step_m=25.0)) == pytest.approx(21.5)
     # The ends are never spikes. Walked down, 60 m down and the last metre up; walked up,
     # 59 m up from the start's 401 m: the mean of the two.
     assert climb_and_descent(*_north_line([460.0, 400.0, 401.0], step_m=30.0)) == (0.5, 59.5)
@@ -470,23 +477,30 @@ def test_elevation_gain_drops_dem_spikes_but_keeps_a_steep_summit() -> None:
 
 def _stepwise_climb_and_descent(along, ele):
     """Climb and descent by the GLOSSARY.md rules, one vertex at a time, one
-    walking direction: a vertex at least 10 m above or below both kept
-    neighbours and at least a 25 % grade on both sides is dropped (and the one
-    before it is looked at again), then a change counts once it moves 10 m from
-    the last counted elevation, and the last kept vertex counts whatever it moved."""
+    walking direction: the shortest run of kept vertices ending at the last one,
+    at most 60 m long (one vertex at any length), whose every vertex is at least
+    10 m above (or every one below) the kept vertices on both sides, with at
+    least a 25 % grade into it and out of it, is dropped (and the vertices before
+    it are looked at again); then a change counts once it moves 10 m from the
+    last counted elevation, and the last kept vertex counts whatever it moved."""
     kept = []
     for here in ((m, e) for m, e in zip(along, ele) if math.isfinite(e)):
-        while len(kept) >= 2:
-            (b_m, b_e), (v_m, v_e) = kept[-2], kept[-1]
-            rise, fall = v_e - b_e, v_e - here[1]
-            if not (
-                rise * fall > 0
-                and min(abs(rise), abs(fall)) >= 10.0
-                and abs(rise) >= 0.25 * (v_m - b_m)
-                and abs(fall) >= 0.25 * (here[0] - v_m)
-            ):
-                break
-            kept.pop()
+        dropped = True
+        while dropped and len(kept) >= 2:
+            dropped = False
+            for start in range(len(kept) - 1, 0, -1):
+                run, before = kept[start:], kept[start - 1]
+                if len(run) > 1 and run[-1][0] - run[0][0] > 60.0:
+                    break
+                heights = [e for _, e in run]
+                above = min(heights) - max(before[1], here[1]) >= 10.0
+                below = min(before[1], here[1]) - max(heights) >= 10.0
+                steep_in = abs(run[0][1] - before[1]) >= 0.25 * (run[0][0] - before[0])
+                steep_out = abs(here[1] - run[-1][1]) >= 0.25 * (here[0] - run[-1][0])
+                if (above or below) and steep_in and steep_out:
+                    del kept[start:]
+                    dropped = True
+                    break
         kept.append(here)
     if not kept:
         return math.nan, math.nan

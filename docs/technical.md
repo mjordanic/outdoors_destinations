@@ -520,7 +520,7 @@ way instead of with its way back.
 | Measure | Fact | Kind | Constant |
 | --- | --- | --- | --- |
 | `length` | Catalog length | ratio | floor 1 km |
-| `elevation_gain` | metres climbed, larger of climb and descent (direction-free); DEM spikes are dropped: walking the vertices in order, a kept vertex 10 m+ above or below both the kept vertex before it and the next vertex, at 25 %+ grade on both sides, is dropped, and the test repeats on the new last kept vertex, so a spike several vertices wide goes too (the ends stay); then a change counts once it moves 10 m and the end counts what it moved; climb and descent are the means of the walk both ways (ADR-0048, lower end) | ratio | floor 100 m |
+| `elevation_gain` | metres climbed, larger of climb and descent (direction-free); DEM spikes are dropped: walking the vertices in order, a kept vertex, or a run of kept vertices up to 60 m long, all 10 m+ above (or all below) both the kept vertex before it and the next vertex, at 25 %+ grade into it and out of it, is dropped, and the test repeats on the new last kept vertex (the ends stay); a path along a steep shore or cliff reads the water or the slope beside it that way; then a change counts once it moves 10 m and the end counts what it moved; climb and descent are the means of the walk both ways (ADR-0048, lower end) | ratio | floor 100 m |
 | `difficulty` | Difficulty as SAC rank 1–6 | tolerance | D = 3 |
 | `highest`, `lowest` | highest and lowest point | tolerance | D = 400 m |
 | `profile` | ProfileShape (64 points) | profile | — |
