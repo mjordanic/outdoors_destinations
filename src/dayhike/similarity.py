@@ -31,7 +31,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
-from sklearn.neighbors import BallTree
 
 from dayhike.catalog import (
     EARTH_RADIUS_M,
@@ -1190,6 +1189,7 @@ class AmenityPoints:
         self.points = np.asarray(points, dtype=float).reshape(-1, 2)
         self.kinds = np.asarray(kinds, dtype=object)
         # An empty tree still answers queries: one dummy point at the South Pole.
+        from sklearn.neighbors import BallTree
         self.tree = BallTree(
             np.radians(self.points if len(self.points) else np.array([[-90.0, 0.0]])),
             metric="haversine",
@@ -1214,6 +1214,7 @@ class AmenityPoints:
         hits = hits[hits < len(self.points)]
         if not hits.size:
             return hits
+        from sklearn.neighbors import BallTree
         near = BallTree(line, metric="haversine").query_radius(np.radians(self.points[hits]), r=reach, count_only=True)
         return hits[near > 0]
 
@@ -1835,6 +1836,7 @@ def twin_groups(routes: Sequence[np.ndarray | None]) -> np.ndarray:
     centre = np.radians([routes[row].mean(axis=0) for row in have])
     # Twins' centres lie within the off-route share of the longer walk.
     reach = np.maximum(TWIN_M, (1 - TWIN_SHARE) * length / TWIN_SHARE) / EARTH_RADIUS_M
+    from sklearn.neighbors import BallTree
     near = BallTree(centre, metric="haversine").query_radius(centre, r=reach)
 
     def twins_after(i: int) -> list[int]:

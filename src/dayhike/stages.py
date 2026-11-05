@@ -14,7 +14,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
-from sklearn.neighbors import BallTree
 
 from dayhike.built import BuildContext, BuiltWalk
 from dayhike.catalog import EARTH_RADIUS_M, named_points
@@ -77,6 +76,7 @@ def day_stages(context: BuildContext) -> list[BuiltWalk]:
     ] + [CutPoint("place", lat, lon, name) for lat, lon, name in snapshot.places]
     if not points:
         return []
+    from sklearn.neighbors import BallTree
     tree = BallTree(np.radians([(point.lat, point.lon) for point in points]), metric="haversine")
     places = named_points(snapshot.places)
     walks: list[BuiltWalk] = []
@@ -217,6 +217,7 @@ def _cuts(lat: np.ndarray, lon: np.ndarray, points: Sequence[CutPoint]) -> list[
     # ends where the next starts.
     if not points:
         return []
+    from sklearn.neighbors import BallTree
     tree = BallTree(np.radians(np.column_stack([lat, lon])), metric="haversine")
     distance, vertex = tree.query(np.radians([(point.lat, point.lon) for point in points]), k=1)
     best: dict[int, tuple[float, float, CutPoint]] = {}

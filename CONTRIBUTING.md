@@ -11,7 +11,7 @@ pipeline and how everything works are in the
   GitHub's default branch is `main`, so change the base branch when you open
   the PR.
 - CI (`.github/workflows/ci.yml`) runs `uv sync --locked` and
-  `uv run pytest -m "not real_data"` on every pull request to `develop` or
+  `uv run pytest -n 4 -m "not real_data"` on every pull request to `develop` or
   `main`. It does not install Playwright, so the page tests in
   `tests/test_page.py` are skipped there.
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/):
@@ -22,7 +22,8 @@ pipeline and how everything works are in the
 ## Tests
 
 ```bash
-uv run pytest                     # the whole fast suite: about 3 to 7 minutes
+uv run pytest -n 4                # the whole fast suite on 4 cores: about 70 to 80 seconds
+uv run pytest                     # the same, on one core: about 2.5 minutes
 uv run pytest tests/test_web.py   # just the file next to your change: seconds
 uv run pytest -k rank             # tests whose name matches
 uv run playwright install chromium   # once, to run tests/test_page.py locally too
