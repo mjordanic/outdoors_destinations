@@ -227,9 +227,12 @@ bus stop (a shuttle) is still open.
 ### Why it's parked
 
 Elevation gain (the `elevation_gain_m` fact, the web page's climb and descent,
-and the Catalog's `feature_vectors.elevation_gain_m`) drops one-vertex DEM
-spikes (10 m or more above or below both neighbours at a 25 % or steeper grade
-each side), then counts a climb or descent only once it moves 10 m. Against
+and the Catalog's `feature_vectors.elevation_gain_m`) drops DEM spikes (a
+vertex, or a run of vertices up to 60 m long, all 10 m or more above or all
+below both sides at a 25 % or steeper grade in and out), then counts a climb or
+descent only once it moves 10 m. The numbers below were measured with one-vertex
+spikes only; the run rule leaves the median DayHike unchanged and moves 9 % by
+more than 5 % (a sample of 1,348). Against
 2,973 OSM `ascent` tags the median error is 12 %, and 5 % of DayHikes are over
 1.5 times the tag (8 % before the spike filter). Checked against published
 gains: Ben Nevis Mountain Path 1,357 m (about 1,350 m), BergeSeen Trail D5
@@ -239,7 +242,11 @@ Routes cut into a cliff side still get far too much: Levada da Ribeira da
 Janela (Madeira, 357 m height range, nearly flat in reality) has 1,557 m. There
 the DEM is wrong by 20–40 m over many vertices in a row, which neither the
 spike filter nor the 10 m dead-band removes; a wider median filter that fixes
-it also cuts real mountain gain by about 10 %.
+it also cuts real mountain gain by about 10 %. A path along a steep lake shore
+is the same: Rhodannenberg – Vorauen on Klöntalersee (83 m height range) reads
+the lake's flattened surface and the slope above it in turn, 408 m one way
+before the run rule and 248 m after it; a 90 m moving average would give 162 m
+but trims real climbs by about 10 % (7 % where the height range is over 500 m).
 
 ### What would have to be true to start
 

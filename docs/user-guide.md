@@ -53,8 +53,9 @@ No particular hike in mind? Press **"No particular hike in mind? Describe the
 one you want"** under the search.
 
 Example: you want a hike of about 10 km with 800 m of climbing and a hut on
-the way. Type 10 for Length, 800 for climbing and tick the hut box. Press
-**Find hikes**.
+the way. Type 10 for Length and 800 for Climbing. Open **Advanced search** and
+click the "yes" box of Hut along: it already shows "yes", and the click turns
+it on (a second click asks for no hut). Press **Find hikes**.
 
 Everything starts at "ask for nothing": the value boxes are empty, with a
 grey example value in each. Typing a value switches that measure on, at weight

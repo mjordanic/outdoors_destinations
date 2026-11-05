@@ -38,6 +38,7 @@ const WAKE_AFTER_MS = 1500; // a first answer slower than this is a server start
 const PICK_ZOOM = 12; // the map shows hikes from this zoom on
 const PICK_LINE = { color: "#6b2fa3", weight: 3, opacity: 0.85 };
 const PICK_HOVER = { color: "#c2410c", weight: 5, opacity: 1 };
+const PICK_TOLERANCE_PX = 10; // a click this far off a hike's line or dot still chooses it
 const START_PANE = "starts"; // the map pane of the hikes' start and end dots, above every line (overlayPane is 400)
 const COMPOSE_ZOOM = 13; // designing a hike shows the trail segments from this zoom on
 const MAX_COMPOSED_M = 100000; // the longest hike the server measures (trailgraph.MAX_WALK_M)
@@ -225,7 +226,7 @@ function factText(measure, facts, month) {
     case "temperature": return `${v.toFixed(1)} °C`;
     case "precipitation": return `${Math.round(v)} mm / month`;
     case "solar_radiation": return `${Math.round(v).toLocaleString("en")} kJ/m²/day`;
-    case "southness": return `${v.toFixed(2)} (${v >= 0.6 ? "south-facing" : v <= 0.4 ? "north-facing" : "mixed"})`;
+    case "southness": return `${v.toFixed(2)} (${v >= 0.6 ? "south-facing" : v <= 0.4 ? "north-facing" : "mixed or flat"})`;
     case "climb_grade": return `${(v * 100).toFixed(1)} %`;
     case "waterside": return `${fmt.pct(v)} of the walk`;
     default: return fmt.yes(v);
@@ -812,8 +813,10 @@ function factsTable(hike, compare, result, month, weights, returnToStart) {
       });
       if (compare) {
         const { score, note } = result?.measures?.[measure.name] ?? {};
+        const unasked = compare.wish && compare.wish[measure.name] == null; // a wish asks nothing of it
         row.lastElementChild.innerHTML = score == null
-          ? (note ? `– ${helpButton(measure.name)}<small class="note">${escapeHtml(note)}</small>` : '<span class="nodata">no data</span>')
+          ? (note ? `– ${helpButton(measure.name)}<small class="note">${escapeHtml(note)}</small>`
+            : `<span class="nodata">${unasked ? "left out" : "no data"}</span>`)
           : `<span class="bar"><i style="width:${Math.round(score * 100)}%"></i></span>${score.toFixed(2)} ${helpButton(measure.name)}${note ? `<small class="note">${escapeHtml(note)}</small>` : ""}`;
         if (weights && !weights[measure.name]) row.lastElementChild.title = "Left out of this score";
       }
@@ -857,11 +860,14 @@ function buildWeights() {
         showWeight(row);
         if (state.wishing) askDefault(row);
       });
-      // Typing a value of a Measure left at 0 asks it in full.
+      // Typing a value of a Measure left at 0 asks it in full. A yes/no box at 0 shows "yes" already,
+      // so its first click asks that "yes"; a second click asks "no".
       for (const event of ["input", "change"]) {
         value?.addEventListener(event, () => {
           value.setCustomValidity(""); // a value typed again is checked again at Find
-          if (Number(slider.value) === 0 && (value.type === "checkbox" || value.value !== "")) setWeight(row, 100);
+          if (Number(slider.value) !== 0 || (value.type !== "checkbox" && value.value === "")) return;
+          setWeight(row, 100);
+          if (value.type === "checkbox") value.checked = true;
         });
       }
       showWeight(row);
@@ -1247,11 +1253,15 @@ async function editComposed(hike) {
 // ---------- select on map ----------
 
 // A map of the hikes in view (from PICK_ZOOM on, and only while the view holds
-// at most the server's limit); clicking a line or an end chooses that hike.
+// at most the server's limit); clicking a line or an end chooses that hike: the one
+// nearest the pointer, so where hikes meet the line clicked wins, not the one drawn last.
 const pick = {
   map: null,
   layer: null,
   lines: new Map(), // hike id -> its polyline
+  shown: [], // { hike, line, dots } of every hike drawn
+  hovered: null, // the hike id under the pointer
+  tip: null, // its tooltip
   loops: null, // the suggested loops and the shown row's versions of the Ranking
   timer: null,
   abort: null,
@@ -1261,7 +1271,7 @@ const pick = {
     card.hidden = false;
     if (!this.map) {
       // Canvas with a tolerance: a tap a few pixels off a thin line still hits it.
-      this.map = L.map(card.querySelector(".pick-map"), { renderer: L.canvas({ tolerance: 10 }) });
+      this.map = L.map(card.querySelector(".pick-map"), { renderer: L.canvas({ tolerance: PICK_TOLERANCE_PX }) });
       L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 19,
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
@@ -1274,6 +1284,12 @@ const pick = {
         this.map.fitBounds([[south, west], [north, east]]);
       }
       this.map.on("moveend", () => this.load());
+      this.map.on("click", (event) => {
+        const id = this.nearest(event.layerPoint);
+        if (id != null) choose(id);
+      });
+      this.map.on("mousemove", (event) => this.hover(this.nearest(event.layerPoint), event.latlng));
+      this.map.on("mouseout", () => this.hover(null));
       this.drawLoops();
     }
     this.map.invalidateSize();
@@ -1306,8 +1322,10 @@ const pick = {
     this.abort?.abort();
     const request = ++boxed;
     if (this.map.getZoom() < PICK_ZOOM) {
+      this.hover(null);
       this.layer.clearLayers();
       this.lines.clear();
+      this.shown = [];
       this.hint("Zoom in on the map to see the hikes there as lines.");
       return;
     }
@@ -1329,24 +1347,60 @@ const pick = {
   },
 
   draw(hikes) {
+    this.hover(null);
     this.layer.clearLayers();
     this.lines.clear();
+    this.shown = [];
     for (const hike of hikes) {
       const latlngs = decodePolyline(hike.line);
-      const line = L.polyline(latlngs, PICK_LINE);
+      // The map, not each line, takes the pointer (``nearest``).
+      const line = L.polyline(latlngs, { ...PICK_LINE, interactive: false });
       // A hike that ends where it starts (a loop) draws its start only: its end dot would cover it.
       const [first, last] = [latlngs[0], latlngs.at(-1)];
       const dots = (L.latLng(first).equals(last) ? [first] : [first, last]).map((at, i) => L.circleMarker(at, {
         radius: 5, color: "#fff", weight: 1.5, fillColor: i === 0 ? "#2f7d4f" : "#1f2a24", fillOpacity: 1, pane: START_PANE,
+        interactive: false,
       }));
-      const group = L.featureGroup([line, ...dots]).addTo(this.layer);
-      group.bindTooltip(`<strong>${escapeHtml(hike.name)}</strong><br>${fmt.km(hike.walk_m)}`, { sticky: true });
-      group.on("mouseover", () => { line.setStyle(PICK_HOVER); line.bringToFront(); });
-      group.on("mouseout", () => line.setStyle(this.style(hike.id)));
-      group.on("click", () => choose(hike.id));
+      L.featureGroup([line, ...dots]).addTo(this.layer);
       this.lines.set(hike.id, line);
+      this.shown.push({ hike, line, dots });
     }
     this.restyle();
+  },
+
+  // The id of the hike drawn nearest a layer point, within the tolerance of a tap (null: none).
+  // A start or end dot counts from its rim; at a tie (two hikes that meet) the one starting nearer wins.
+  nearest(point) {
+    if (compose.on) return null;
+    let best = null;
+    for (const { hike, line, dots } of this.shown) {
+      const distance = (dot) => point.distanceTo(this.map.latLngToLayerPoint(dot.getLatLng())) - dot.getRadius();
+      const along = line.closestLayerPoint(point)?.distance ?? Infinity;
+      const key = [Math.min(along, ...dots.map(distance)), distance(dots[0])];
+      if (key[0] <= PICK_TOLERANCE_PX && (!best || key[0] < best.key[0] || (key[0] === best.key[0] && key[1] < best.key[1]))) {
+        best = { id: hike.id, key };
+      }
+    }
+    return best?.id ?? null;
+  },
+
+  // The hike under the pointer stands out, named in a tooltip beside the pointer.
+  hover(id, at) {
+    if (id !== this.hovered) {
+      this.lines.get(this.hovered)?.setStyle(this.style(this.hovered));
+      this.hovered = id;
+      this.map?.getContainer().classList.toggle("leaflet-interactive", id != null);
+      if (id == null) {
+        this.tip?.remove();
+        return;
+      }
+      const { hike, line } = this.shown.find((shown) => shown.hike.id === id);
+      line.setStyle(PICK_HOVER);
+      line.bringToFront();
+      this.tip ??= L.tooltip({ direction: "top", offset: [0, -8] });
+      this.tip.setContent(`<strong>${escapeHtml(hike.name)}</strong><br>${fmt.km(hike.walk_m)}`);
+    }
+    if (id != null && at) this.tip.setLatLng(at).addTo(this.map);
   },
 
   // The chosen hike stands out.
@@ -1371,7 +1425,8 @@ const pick = {
       versions.forEach((version, k) => {
         const label = versions.length > 1 ? `, var ${k + 1}` : "";
         const kind = version.route ? ", composed" : "";
-        L.polyline(decodePolyline(version.line), k ? VERSION_LINE : version.route ? LOOP_LINE : RESULT_LINE)
+        // Its click shows the result, and stays off the map: no hike under it is chosen as well.
+        L.polyline(decodePolyline(version.line), { ...(k ? VERSION_LINE : version.route ? LOOP_LINE : RESULT_LINE), bubblingMouseEvents: false })
           .bindTooltip(`<strong>Similar hike #${i + 1}${kind}${label}</strong><br>${escapeHtml(version.name)}<br>${fmt.km(version.length_m)}`, { sticky: true })
           .on("click", () => showResult(i, k))
           .addTo(this.loops);
@@ -1411,8 +1466,10 @@ const compose = {
     if (!this.layer) this.layer = L.layerGroup().addTo(pick.map);
     clearTimeout(pick.timer);
     pick.abort?.abort();
+    pick.hover(null);
     pick.layer.clearLayers();
     pick.lines.clear();
+    pick.shown = [];
     this.layer.clearLayers();
     if (on && state.liked?.route?.segments && this.start == null) {
       // Go on from the composed hike shown below (unless its link cuts a Segment of this data).
@@ -2226,12 +2283,13 @@ async function showMore() {
 
 // One row of the results table: the hike's figures and every Measure's score.
 function resultRow(result, number, open) {
-  const { weights, drive, km, return_to_start: back } = state.query;
+  const { weights, drive, km, return_to_start: back, wish } = state.query;
   const row = document.createElement("tr");
   row.tabIndex = 0;
   const cells = comparedMeasures(back).map((m) => {
     const { score, note } = result.measures[m.name];
-    if (score == null) return `<td class="cell none" title="${escapeHtml(note ?? "no data")}">–</td>`;
+    const missing = wish && wish[m.name] == null ? "not in your wish" : "no data";
+    if (score == null) return `<td class="cell none" title="${escapeHtml(note ?? missing)}">–</td>`;
     if (!weights[m.name]) {
       return `<td class="cell left-out" title="${escapeHtml(m.label)}: ${score.toFixed(2)}, left out of this ranking">${Math.round(score * 100)}</td>`;
     }

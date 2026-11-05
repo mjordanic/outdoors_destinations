@@ -1692,6 +1692,7 @@ class TrailGraph:
             FACT_COLUMNS,
             LANDCOVER_SHARE_COLUMNS,
             PEAKS_AROUND_M,
+            SOLAR_ASPECT_FLAT,
             TRAILHEAD_M,
             WATERSIDE_STEP_M,
             AmenityPoints,
@@ -1736,10 +1737,13 @@ class TrailGraph:
             facts["temperature_c"] = float(months[5:8, 0].mean())
             facts["precipitation_mm"] = float(months[:, 1].mean())
             facts["solar_radiation"] = float(months[5:8, 2].mean())
-        southness = walk.southness[solar_aspect_points(len(lat))]
+        chosen = solar_aspect_points(len(lat))
+        southness = walk.southness[chosen]
         southness = southness[~np.isnan(southness)]
         if southness.size:
             facts["southness"] = float(southness.mean())
+        elif np.isfinite(walk.ele[chosen]).any():  # flat: faces no way (``solar_aspect_southness``)
+            facts["southness"] = SOLAR_ASPECT_FLAT
         if len(lat) >= 2:
             beside = self._beside_water(_even_points(lat, lon, WATERSIDE_STEP_M))
             beside = beside[~np.isnan(beside)]

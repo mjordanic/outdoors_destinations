@@ -38,6 +38,7 @@ from dayhike.similarity import (
     similarity_dir_for,
     solar_aspect_points,
     solar_aspect_southness,
+    SOLAR_ASPECT_FLAT,
     steepness,
     surface_class,
     surface_class_from_tag,
@@ -325,6 +326,44 @@ def test_two_dry_hikes_score_low_on_waterside_and_the_dead_band_is_one_value(tmp
     assert dry[2] < dry[0]
 
 
+def test_two_close_climbs_beat_two_flat_walks_counted_the_same_under_the_floor(tmp_path: Path) -> None:
+    # ADR-0050. 40 of 100 hikes climb 100 m or less (one value under the floor: 16 % of random pairs);
+    # the others spread from 150 to 1,500 m, 166 m and 167 m among them.
+    climbs = [*np.linspace(5, 95, 40), 166, 167, 600, 599, *np.linspace(150, 1_500, 56)]
+    store = _calibrated(tmp_path, 100, elevation_gain_m=climbs)
+
+    flat, _ = score_rows(store, [0], np.array([39]), {"elevation_gain": 100})
+    close, _ = score_rows(store, [40], np.array([41, 43]), {"elevation_gain": 100})
+    far, _ = score_rows(store, [40], np.array([99]), {"elevation_gain": 100})
+
+    assert flat[0] == pytest.approx(0.84, abs=0.02)  # 16 % of random pairs are as alike: both flat
+    assert close[0] > 0.97 and close[0] > flat[0]  # 166 m and 167 m: the flat pairs share a commoner value
+    assert far[0] < close[1] < close[0]  # off the floor, closeness: 166 m against 1,500, 599 and 167 m
+
+
+def test_a_pair_spanning_the_floor_gets_no_rarity_credit_so_a_farther_rare_pair_can_rank_above(tmp_path: Path) -> None:
+    # ADR-0050's near-floor exception. A Seed at 101 m: 80 m is floored to 100 m (raw 0.990), but its stretch
+    # takes in every hike under the floor, as common as that block, so it gets no credit. 110 m (raw 0.918)
+    # spans a rare stretch and gets the credit of the random pairs at raw 1.
+    climbs = [*np.linspace(5, 95, 39), 80, 101, 110, *np.linspace(150, 1_500, 58)]
+    store = _calibrated(tmp_path, 100, elevation_gain_m=climbs)
+
+    scores, _ = score_rows(store, [40], np.array([39, 41]), {"elevation_gain": 100})
+
+    assert scores[1] > scores[0]  # 110 m ranks above 80 m against 101 m
+
+
+def test_a_near_pair_on_a_tolerance_measure_stays_below_its_dead_band(tmp_path: Path) -> None:
+    # Lake or sea keeps ADR-0026: a gap past the dead band is below every pair counted the same (the Kattegat pair).
+    shares = [0.0] * 82 + [0.1] * 10 + [0.3, 0.3, 0.5, 0.5, 0.7, 0.7, 0.9, 0.9]
+    store = _calibrated(tmp_path, 100, waterside_share=shares)
+
+    dry, _ = score_rows(store, [0], np.array([1]), {"waterside": 100})
+    apart, _ = score_rows(store, [94], np.array([96]), {"waterside": 100})  # 0.5 and 0.7
+
+    assert apart[0] < dry[0]
+
+
 def test_a_hike_without_a_grade_ranks_below_one_with_the_wished_grade_when_difficulty_weighs(tmp_path: Path) -> None:
     # Hike 0 has no grade and the wished length; hike 1 has the wished T4 and is 2 km longer.
     grades = [np.nan, 4, *[1, 2, 3, 4, 5, 6] * 16, 2, 3]
@@ -462,6 +501,13 @@ def test_elevation_gain_drops_dem_spikes_but_keeps_a_steep_summit() -> None:
     assert elevation_gain(*_north_line([400.0, 401.0, 460.0, 345.0, 402.0], step_m=30.0)) == 2.0
     # A summit 100 m above both neighbours 500 m away is a 20 % grade: real.
     assert elevation_gain(*_north_line([1000.0, 1100.0, 1000.0], step_m=500.0)) == 100.0
+    # A run of vertices off the trail goes too while it is at most 60 m long: a path along a steep
+    # shore reads the flat lake for 3 vertices 15 m apart, then the slope again.
+    shore = [850.0, 851.0, 835.0, 835.0, 835.0, 852.0, 850.0]
+    assert elevation_gain(*_north_line(shore, step_m=15.0)) == 0.0  # 16.5 m before the run rule
+    # 4 vertices 25 m apart (75 m) is a real dip in the trail.
+    dip = [850.0, 851.0, 830.0, 830.0, 830.0, 830.0, 852.0, 850.0]
+    assert elevation_gain(*_north_line(dip, step_m=25.0)) == pytest.approx(21.5)
     # The ends are never spikes. Walked down, 60 m down and the last metre up; walked up,
     # 59 m up from the start's 401 m: the mean of the two.
     assert climb_and_descent(*_north_line([460.0, 400.0, 401.0], step_m=30.0)) == (0.5, 59.5)
@@ -469,23 +515,30 @@ def test_elevation_gain_drops_dem_spikes_but_keeps_a_steep_summit() -> None:
 
 def _stepwise_climb_and_descent(along, ele):
     """Climb and descent by the GLOSSARY.md rules, one vertex at a time, one
-    walking direction: a vertex at least 10 m above or below both kept
-    neighbours and at least a 25 % grade on both sides is dropped (and the one
-    before it is looked at again), then a change counts once it moves 10 m from
-    the last counted elevation, and the last kept vertex counts whatever it moved."""
+    walking direction: the shortest run of kept vertices ending at the last one,
+    at most 60 m long (one vertex at any length), whose every vertex is at least
+    10 m above (or every one below) the kept vertices on both sides, with at
+    least a 25 % grade into it and out of it, is dropped (and the vertices before
+    it are looked at again); then a change counts once it moves 10 m from the
+    last counted elevation, and the last kept vertex counts whatever it moved."""
     kept = []
     for here in ((m, e) for m, e in zip(along, ele) if math.isfinite(e)):
-        while len(kept) >= 2:
-            (b_m, b_e), (v_m, v_e) = kept[-2], kept[-1]
-            rise, fall = v_e - b_e, v_e - here[1]
-            if not (
-                rise * fall > 0
-                and min(abs(rise), abs(fall)) >= 10.0
-                and abs(rise) >= 0.25 * (v_m - b_m)
-                and abs(fall) >= 0.25 * (here[0] - v_m)
-            ):
-                break
-            kept.pop()
+        dropped = True
+        while dropped and len(kept) >= 2:
+            dropped = False
+            for start in range(len(kept) - 1, 0, -1):
+                run, before = kept[start:], kept[start - 1]
+                if len(run) > 1 and run[-1][0] - run[0][0] > 60.0:
+                    break
+                heights = [e for _, e in run]
+                above = min(heights) - max(before[1], here[1]) >= 10.0
+                below = min(before[1], here[1]) - max(heights) >= 10.0
+                steep_in = abs(run[0][1] - before[1]) >= 0.25 * (run[0][0] - before[0])
+                steep_out = abs(here[1] - run[-1][1]) >= 0.25 * (here[0] - run[-1][0])
+                if (above or below) and steep_in and steep_out:
+                    del kept[start:]
+                    dropped = True
+                    break
         kept.append(here)
     if not kept:
         return math.nan, math.nan
@@ -814,12 +867,29 @@ def test_southness_scores_south_1_north_0_east_and_west_half(
 
 
 @pytest.mark.parametrize("grade", [0.0, 0.03])  # flat, and under 2 degrees
-def test_southness_leaves_out_flat_points_and_is_missing_with_none_sloped(
+def test_a_flat_walk_faces_no_way_and_counts_as_east_or_west_not_as_missing(
     tmp_path: Path, grade
 ) -> None:
     _write_dem_tile(tmp_path, 1000.0, grade_north=grade)
 
-    assert math.isnan(_southness(tmp_path, EAST_LAT, EAST_LON))
+    assert _southness(tmp_path, EAST_LAT, EAST_LON) == SOLAR_ASPECT_FLAT == 0.5
+
+
+def test_southness_is_the_mean_of_the_sloped_points_only(tmp_path: Path) -> None:
+    # West of 15.0025 the tile slopes up northward (faces south); east of it, flat.
+    _write_dem_tile(tmp_path, 1000.0, grade_north=0.2)
+    import rasterio
+
+    path = next(tmp_path.glob("*.tif"))
+    with rasterio.open(path, "r+") as dataset:
+        data = dataset.read(1)
+        flat_from = int((15.0025 - dataset.bounds.left) / dataset.res[0])
+        data[:, flat_from:] = 1000.0
+        dataset.write(data, 1)
+    lat = np.full(21, 45.0)
+    lon = np.array([_metres_east(25 * i) for i in range(21)])  # 500 m east: about 0.0064°
+
+    assert _southness(tmp_path, lat, lon) == pytest.approx(1.0, abs=0.01)
 
 
 def test_southness_is_missing_without_a_covering_tile_or_with_nodata(tmp_path: Path) -> None:

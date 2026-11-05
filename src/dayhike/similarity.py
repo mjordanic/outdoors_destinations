@@ -57,6 +57,7 @@ PROFILE_RANGE_FLOOR_M = 50.0
 GAIN_HYSTERESIS_M = 10.0  # a climb or descent counts once it reaches this; DEM noise does not
 SPIKE_RISE_M = 10.0  # a vertex at least this far above (or below) both neighbours ...
 SPIKE_GRADE = 0.25  # ... and this steep on both sides is a DEM spike, not the trail
+SPIKE_RUN_M = 60.0  # a spike may be a run of vertices this long: two DEM cells (a path along a cliff or shore)
 STEEPNESS_STEP_M = 50.0  # elevation resampled this often along the walk
 STEEPEST_KM_WINDOW_M = 1_000.0
 CORRIDOR_M = 100.0  # amenity along the DayHike (GLOSSARY.md Corridor)
@@ -69,6 +70,7 @@ WATER_SOURCE_KINDS = ("drinking_water", "spring", "water_tap", "water_point")
 SOLAR_ASPECT_POINTS = 32  # about this many vertices sampled per DayHike
 SOLAR_ASPECT_OFFSET_ARCSEC = 2  # east and north offsets: two FABDEM cells
 SOLAR_ASPECT_MIN_SLOPE_DEG = 5.0  # flatter points face no way
+SOLAR_ASPECT_FLAT = 0.5  # a DayHike with heights but no sloped point faces no way: as east or west
 WATERSIDE_M = 200.0  # open water this close to the line counts (GLOSSARY.md WaterSide)
 WATERSIDE_STEP_M = 200.0  # a WaterSide probe this often along the walk
 WATERSIDE_MIN_SHARE = 0.1  # of the WorldCover cells around a probe that are water
@@ -211,6 +213,8 @@ MEASURES = (
     Measure("steepest_km", "ratio", ("steepest_km_m",), 50),
 )
 MEASURE_NAMES = tuple(measure.name for measure in MEASURES)
+# Ratio Measures: a floor counts every value under it as one; a near pair above it meets that block by rarity.
+_FLOORED = frozenset(measure.name for measure in MEASURES if measure.kind == "ratio")
 # On by default: the page's basic set, the Measures a Hiker sees without
 # opening Advanced search (ADR-0031); the others are off until the Hiker
 # weights them.
@@ -236,10 +240,10 @@ CALIBRATION_KEYS = (
 _FACTS_VERSION = hashlib.sha256(
     json.dumps(
         [
-            FACT_COLUMNS, PROFILE_POINTS, PROFILE_RANGE_FLOOR_M, GAIN_HYSTERESIS_M, SPIKE_RISE_M, SPIKE_GRADE,
+            FACT_COLUMNS, PROFILE_POINTS, PROFILE_RANGE_FLOOR_M, GAIN_HYSTERESIS_M, SPIKE_RISE_M, SPIKE_GRADE, SPIKE_RUN_M,
             STEEPNESS_STEP_M, STEEPEST_KM_WINDOW_M, CORRIDOR_M, PEAK_SUMMITED_M, PEAKS_AROUND_M,
             TRAILHEAD_M, SEARCH_STEP_M, WATER_SOURCE_KINDS, SOLAR_ASPECT_POINTS,
-            SOLAR_ASPECT_OFFSET_ARCSEC, SOLAR_ASPECT_MIN_SLOPE_DEG, WATERSIDE_M,
+            SOLAR_ASPECT_OFFSET_ARCSEC, SOLAR_ASPECT_MIN_SLOPE_DEG, SOLAR_ASPECT_FLAT, WATERSIDE_M,
             WATERSIDE_STEP_M, WATERSIDE_MIN_SHARE, WATERSIDE_OVERVIEW, WORLDCOVER_WATER,
             TWIN_STEP_M, TWIN_M, TWIN_SHARE, sorted(_SURFACE_TAG_CLASS.items()), sorted(_ROAD_HIGHWAYS),
             sorted(_TRACKTYPE_CLASS.items()), GAP_JOIN_M, WAY_BACK_KINDS, WAY_BACK_COLUMNS,
@@ -254,6 +258,7 @@ _CALIBRATION_VERSION = hashlib.sha256(
             "rarity-rank-strict",  # the share strictly less alike, rarer agreements closer (``calibrate``)
             "dead-band-one-value",  # a dead band is one value for rarity (``measure_rarity``)
             "mix-rounded",  # equal float32 shares sum to a raw 1 (``measure_scores``)
+            "near-pairs-meet-the-floor-by-rarity",  # a ratio's raw-1 block by rarity below raw 1 (ADR-0050)
         ]
     ).encode()
 ).hexdigest()[:16]  # fmt: skip
@@ -429,7 +434,7 @@ def rank_dayhikes(
     candidate's similarity to one Seed is the weighted mean of its calibrated
     Measure scores over the Measures both DayHikes have; with several Seeds the
     best Seed counts. Ties break on the same weighted mean of raw scores, then
-    on DayHike id. ``score`` is that similarity: about 0.41 for a typical
+    on DayHike id. ``score`` is that similarity: about 0.43 for a typical
     random pair under the default weights, 1.0 when no random pair is as alike
     on any weighted Measure. Of a group of
     Twins only the best is kept, and none of a Seed's Twins. Seeds are
@@ -669,9 +674,15 @@ def calibrate(
 
     A random pair is less alike when it scores lower, or when both score 1
     and its shared values are more common (a larger ``measure_rarity``, given
-    as ``rarity``). Every other tie is as alike, so 0 is a pair no random
-    pair is less alike than. NaN stays NaN; a key without random-pair scores
-    gives NaN.
+    as ``rarity``). On a ``ratio`` Measure a random pair at raw 1 is also less
+    alike than a pair below raw 1 whose values span a rarer stretch than its
+    shared value: two climbs of 166 and 167 m beat two that are both under the
+    100 m floor (ADR-0050). A pair whose values span the floor block has a
+    stretch as common as that block and gets no such credit, so a farther pair
+    above the floor on a rarer stretch can outrank it: against 101 m, 110 m
+    ranks above 80 m. Every other tie is as alike, so 0 is a pair no
+    random pair is less alike than. NaN stays NaN; a key without random-pair
+    scores gives NaN.
     """
     index = CALIBRATION_KEYS.index(key)
     below, ties = _below_and_ties(store.quantiles[index], scores)
@@ -679,7 +690,10 @@ def calibrate(
         return below
     rarer, as_rare = _below_and_ties(store.rarity[index], rarity)
     commoner = np.nan_to_num(1.0 - rarer - as_rare)
-    return np.where(scores == 1.0, below + ties * commoner, below)
+    if key.split("@")[0] not in _FLOORED:
+        return np.where(scores == 1.0, below + ties * commoner, below)
+    at_one = _below_and_ties(store.quantiles[index], np.array(1.0))[1]
+    return np.where(scores == 1.0, below + ties * commoner, below + at_one * commoner)
 
 
 def random_pair_shares(
@@ -1381,9 +1395,12 @@ def climb_and_descent(lat: np.ndarray, lon: np.ndarray, ele: np.ndarray) -> tupl
 def _one_way_climb_and_descent(lat: np.ndarray, lon: np.ndarray, ele: np.ndarray) -> tuple[float, float]:
     """Metres climbed and descended walking the vertices in their order.
 
-    First a DEM spike is dropped: a vertex at least ``SPIKE_RISE_M`` above
-    or below both its neighbours with a grade of at least ``SPIKE_GRADE`` on
-    both sides (the ends stay). Then a change counts only once it moves
+    First a DEM spike is dropped: a vertex, or a run of vertices at most
+    ``SPIKE_RUN_M`` long, every one at least ``SPIKE_RISE_M`` above (or every
+    one below) the vertices on both sides of it, with a grade of at least
+    ``SPIKE_GRADE`` into it and out of it (the ends stay). A path along a
+    steep shore or cliff reads cells of the water or the slope beside it that
+    way. Then a change counts only once it moves
     ``GAIN_HYSTERESIS_M`` from the last counted elevation, so DEM jitter
     between vertices does not add up on long flat or cross-slope walks; the
     last vertex counts whatever it moved, so climb less descent is the end's
@@ -1397,20 +1414,26 @@ def _one_way_climb_and_descent(lat: np.ndarray, lon: np.ndarray, ele: np.ndarray
     # The kept vertices, as a stack: ``kept_at`` / ``kept`` (metres along,
     # elevation). A plain loop over floats: this runs on every walk.
     kept_at, kept = [at[0]], [height[0]]
-    rise_m, grade = SPIKE_RISE_M, SPIKE_GRADE
+    rise_m, grade, run_m = SPIKE_RISE_M, SPIKE_GRADE, SPIKE_RUN_M
     for here_at, here in zip(at[1:], height[1:]):
-        while len(kept) >= 2:
-            vertex = kept[-1]
-            rise, fall = vertex - kept[-2], vertex - here
-            if not (
-                rise * fall > 0
-                and min(abs(rise), abs(fall)) >= rise_m
-                and abs(rise) >= grade * (kept_at[-1] - kept_at[-2])
-                and abs(fall) >= grade * (here_at - kept_at[-1])
-            ):
+        # Drop the shortest spike ending at the last kept vertex, then look again.
+        while len(kept) >= 2 and abs(here - kept[-1]) >= grade * (here_at - kept_at[-1]):
+            start = len(kept) - 1
+            top = bottom = kept[start]
+            while True:
+                top, bottom = max(top, kept[start]), min(bottom, kept[start])
+                before = kept[start - 1]
+                if (bottom - max(before, here) >= rise_m or min(before, here) - top >= rise_m) and abs(
+                    kept[start] - before
+                ) >= grade * (kept_at[start] - kept_at[start - 1]):
+                    break
+                start -= 1
+                if start < 1 or kept_at[-1] - kept_at[start] > run_m:
+                    start = 0
+                    break
+            if not start:
                 break
-            kept_at.pop()
-            kept.pop()
+            del kept_at[start:], kept[start:]
         kept_at.append(here_at)
         kept.append(here)
     climb = descent = 0.0
@@ -1587,20 +1610,28 @@ def solar_aspect_southness(
     At each point the DEM is read at the point and ``SOLAR_ASPECT_OFFSET_ARCSEC``
     east and north of it; the downslope direction gives (1 - its north
     component) / 2. Points flatter than ``SOLAR_ASPECT_MIN_SLOPE_DEG`` or
-    without a height are left out; a DayHike with none left is NaN.
+    without a height are left out. A DayHike with heights but no sloped point
+    is flat: it faces no way, ``SOLAR_ASPECT_FLAT`` (as east or west). One
+    with no height at all is NaN.
     """
-    southness = slope_southness(dem_dir, points[:, 0], points[:, 1])
+    southness, measured = _slope_southness(dem_dir, points[:, 0], points[:, 1])
     sloped = ~np.isnan(southness)
     count = np.bincount(owners[sloped], minlength=n)
     total = np.bincount(owners[sloped], weights=southness[sloped], minlength=n)
+    flat = np.bincount(owners[measured], minlength=n) > 0
     with np.errstate(invalid="ignore"):
-        return np.where(count > 0, total / count, np.nan)
+        return np.where(count > 0, total / count, np.where(flat, SOLAR_ASPECT_FLAT, np.nan))
 
 
 def slope_southness(dem_dir: Path | str, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
     """Southness of the slope at each point (see ``solar_aspect_southness``),
     NaN where it is flatter than ``SOLAR_ASPECT_MIN_SLOPE_DEG`` or has no height.
     """
+    return _slope_southness(dem_dir, lat, lon)[0]
+
+
+def _slope_southness(dem_dir: Path | str, lat: np.ndarray, lon: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """``slope_southness``, and whether each point has the three heights it reads."""
     offset = SOLAR_ASPECT_OFFSET_ARCSEC / 3600
     lat, lon = np.asarray(lat, dtype=float), np.asarray(lon, dtype=float)
     here, east, north = dem_heights(
@@ -1617,7 +1648,7 @@ def slope_southness(dem_dir: Path | str, lat: np.ndarray, lon: np.ndarray) -> np
         sloped = np.degrees(np.arctan(grade)) >= SOLAR_ASPECT_MIN_SLOPE_DEG
         # Downslope points against the gradient; its north component is
         # -rise_north / grade, so a slope rising northward faces south.
-        return np.where(sloped, (1 + rise_north / grade) / 2, np.nan)
+        return np.where(sloped, (1 + rise_north / grade) / 2, np.nan), ~np.isnan(grade)
 
 
 def waterside_share(

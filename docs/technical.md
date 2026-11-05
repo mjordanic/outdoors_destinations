@@ -520,7 +520,7 @@ way instead of with its way back.
 | Measure | Fact | Kind | Constant |
 | --- | --- | --- | --- |
 | `length` | Catalog length | ratio | floor 1 km |
-| `elevation_gain` | metres climbed, larger of climb and descent (direction-free); DEM spikes are dropped: walking the vertices in order, a kept vertex 10 m+ above or below both the kept vertex before it and the next vertex, at 25 %+ grade on both sides, is dropped, and the test repeats on the new last kept vertex, so a spike several vertices wide goes too (the ends stay); then a change counts once it moves 10 m and the end counts what it moved; climb and descent are the means of the walk both ways (ADR-0048, lower end) | ratio | floor 100 m |
+| `elevation_gain` | metres climbed, larger of climb and descent (direction-free); DEM spikes are dropped: walking the vertices in order, a kept vertex, or a run of kept vertices up to 60 m long, all 10 m+ above (or all below) both the kept vertex before it and the next vertex, at 25 %+ grade into it and out of it, is dropped, and the test repeats on the new last kept vertex (the ends stay); a path along a steep shore or cliff reads the water or the slope beside it that way; then a change counts once it moves 10 m and the end counts what it moved; climb and descent are the means of the walk both ways (ADR-0048, lower end) | ratio | floor 100 m |
 | `difficulty` | Difficulty as SAC rank 1–6 | tolerance | D = 3 |
 | `highest`, `lowest` | highest and lowest point | tolerance | D = 400 m |
 | `profile` | ProfileShape (64 points) | profile | — |
@@ -531,7 +531,7 @@ way instead of with its way back.
 | `temperature` | ClimateNormal temperature (regime or QueryMonth) | tolerance | D = 10 °C |
 | `precipitation` | ClimateNormal precipitation (regime or QueryMonth) | ratio | floor 10 mm |
 | `solar_radiation` | ClimateNormal solar radiation (regime or QueryMonth) | tolerance | D = 5,000 kJ m⁻² day⁻¹ |
-| `southness` | SolarAspect from FABDEM (1 south, 0 north) | tolerance | D = 1 |
+| `southness` | SolarAspect from FABDEM (1 south, 0 north, 0.5 east, west or flat) | tolerance | D = 1 |
 | `water_count` | WaterSources in the Corridor, capped at 3 | tolerance | D = 3 |
 | `dry_stretch` | DryStretch | ratio | floor 1 km |
 | `waterside` | WaterSide: share of the walk within 200 m of sea, lake or wide river (WorldCover) | tolerance | D = 0.5, dead band 0.15 (ADR-0021) |
@@ -566,12 +566,15 @@ once from the whole Catalog) strictly less alike on that Measure, so every
 Measure pulls with the weight it is given. A random pair is less alike when it
 scores lower, or when it scores the same raw 1 on a commoner value: among equal
 pairs the rarer shared value is the closer match (the rarity rank, ADR-0026).
+On a ratio Measure a near pair meets the pairs counted the same under the floor
+by rarity too: two climbs of 166 and 167 m beat two that are both under 100 m
+(ADR-0050).
 Ties never count half. On the seven OSM flags (Peak summited, Viewpoint, Hut,
 restaurant or cafe along, Shelter, restaurant or cafe at the Trailhead,
 parking) two DayHikes that both lack the feature are not compared, and the
 Measure drops out of that pair's mean. The printed score is the similarity
 itself, the weighted mean of the calibrated Measure scores: a typical random
-pair scores about 0.41 under the default weights, 0.72 beats 99 random pairs in
+pair scores about 0.43 under the default weights, 0.75 beats 99 random pairs in
 100, and 1.0 needs a pair no random pair is as alike as on every weighted
 Measure, so the best matches stay apart instead of all reading 1.000. Ties in
 order break on the uncalibrated weighted mean, then on DayHike id.
@@ -609,10 +612,11 @@ Reading a score, as the web demo explains it beside every score (ADR-0025):
 The page's words live in `SCORE_HELP` and `MEASURE_INFO` in
 `dayhike.serving` and reach the page through `/api/measures`, so a change to
 the scoring rule changes them in one place. Their example numbers (a typical
-pair 0.41, 0.72 beating 99 in 100, a hut 0.95, WaterSide 0.16, the Kattegat
-pair's 0.10 and 0.74) are fixed text measured on the 135,588-hike Catalog of
-ADR-0031: a rebuild does not recompute them, and the tests check the strings,
-not the numbers.
+pair 0.43, 0.75 beating 99 in 100, a hut 0.95, WaterSide 0.16, the Kattegat
+pair's 0.13 and 0.75, near climbs 1.00 against both under the floor 0.88) are
+fixed text measured on the Catalog of ADR-0050 (the rebuild-4 export): a
+rebuild does not recompute them, and the tests check the strings, not the
+numbers.
 
 Omit `--month` to compare climate as the default regime (June–August mean
 temperature, the mean of all twelve monthly precipitations, June–August solar
@@ -664,6 +668,8 @@ NetworkHikes and 33,646 DayStages). The README rounds the live one.
 - SolarAspect samples about 32 vertices, takes the slope from the cells
   2″ east and 2″ north, skips points flatter than 5°, scores each point
   (1 + northward rise / grade) / 2 (1 faces south, 0 north) and averages them.
+  A DayHike with heights but no point that steep is flat and scores 0.5 (faces
+  no way, as east or west); one with no heights at all has no data.
   With Copernicus it reads the raw surface model.
 - WaterSide puts a probe every 200 m, reads WorldCover at 40 m (4 × its 10 m
   cells) in a square of ±200 m around it (so up to 283 m at the corners, cut at

@@ -126,6 +126,17 @@ def test_lengths_are_wished_in_km_up_to_multi_day_tours(client: TestClient) -> N
     assert client.post("/api/rank", json={"wish": {"length": 66_000}}).status_code == 200
 
 
+def test_shares_are_wished_in_percent_as_the_facts_show_them(client: TestClient) -> None:
+    # The API takes the share, the Measure's fact; the page shows % like the facts table.
+    measures = {m["name"]: m for m in client.get("/api/measures").json()["measures"]}
+
+    for name in ("waterside", "climb_grade"):
+        assert measures[name]["wish"]["unit"] == "share"
+        assert measures[name]["wish"]["display"] == {"unit": "%", "per": 0.01}
+    assert measures["solar_radiation"]["wish"]["unit"] == "kJ/m²/day"
+    assert "kJ/m²/day" in measures["solar_radiation"]["description"]
+
+
 ELEVATION_MEASURES = ("elevation_gain", "highest", "lowest", "profile", "southness", "climb_grade", "steepest_km")
 CLIMATE_MEASURES = ("temperature", "precipitation", "solar_radiation")
 LANDCOVER_MEASURES = ("landcover", "waterside")
@@ -149,6 +160,7 @@ def test_an_export_sampled_from_copernicus_names_it_and_not_fabdem(tmp_path: Pat
     from test_dem import _write_constant_tif, _write_grassland
 
     from dayhike import sample_dem
+    from dayhike.trailgraph import sample_trailgraph
 
     path = tmp_path / "catalog.sqlite"
     build_catalog(FIXTURE, path)
@@ -157,7 +169,10 @@ def test_an_export_sampled_from_copernicus_names_it_and_not_fabdem(tmp_path: Pat
     _write_constant_tif(
         dem / "Copernicus_DSM_COG_10_N45_00_E015_00_DEM.tif", west=14.99, south=44.99, east=16.01, north=46.01, z=900.0
     )
-    sample_dem(path, dem, landcover_dir=_write_grassland(tmp_path))
+    landcover = _write_grassland(tmp_path)
+    sample_dem(path, dem, landcover_dir=landcover)
+    # A flat tile still gives SolarAspect (a flat walk faces no way), so the TrailGraph is sampled too.
+    sample_trailgraph(path, dem_dir=dem, landcover_dir=landcover, climate_dir=tmp_path / "no-climate")
     build_similarity(path, dem)
     smoothed = []
     drawn = serving.drawn_profile
@@ -185,6 +200,35 @@ def test_an_export_sampled_from_copernicus_names_it_and_not_fabdem(tmp_path: Pat
     assert 'href="https://doi.org/10.5270/ESA-c5d3d65"' in credits
 
 
+@pytest.mark.parametrize(
+    ("name", "zone", "example"),
+    [
+        ("elevation_gain", "Any climb of 100 m or less counts as the same", "like 166 m and 167 m"),
+        ("peaks_around", "No peak and 1 peak count as the same", "like 12 and 13 peaks"),
+        ("climb_grade", "Any grade of 3 % or less counts as the same", "like 12 % and 12.1 %"),
+        ("steepest_km", "Any change of 50 m or less counts as the same", "like 180 m and 182 m"),
+        ("waterside", "Any share under 15 % counts as dry", "like 50 % and 55 %"),
+    ],
+)
+def test_a_measure_whose_same_zone_many_hikes_share_says_it_tells_little(
+    client: TestClient, name: str, zone: str, example: str
+) -> None:
+    # ADR-0050: the "?" of the Measure says where it counts values the same, and what a close match is.
+    descriptions = {m["name"]: m["description"] for m in client.get("/api/measures").json()["measures"]}
+
+    assert zone in descriptions[name]
+    assert "it says little" in descriptions[name]
+    assert f"two hikes that match closely on a less common" in descriptions[name] and example in descriptions[name]
+
+
+@pytest.mark.parametrize("name", ["length", "precipitation", "dry_stretch", "water_count"])
+def test_a_measure_whose_same_zone_few_hikes_share_says_nothing_more(client: TestClient, name: str) -> None:
+    # Almost no hike is under these floors, and Water sources' "3 or more" is not a weak match.
+    descriptions = {m["name"]: m["description"] for m in client.get("/api/measures").json()["measures"]}
+
+    assert "it says little" not in descriptions[name]
+
+
 def test_every_osm_flag_says_two_hikes_without_it_are_not_compared(client: TestClient) -> None:
     descriptions = {m["name"]: m["description"] for m in client.get("/api/measures").json()["measures"]}
 
@@ -203,11 +247,11 @@ def test_the_score_explanation_says_what_a_score_means_and_how_it_is_made(client
     # The rarity rank (ADR-0026): the share of random pairs less alike, a rare match counting for more.
     assert "Share of random hike pairs less alike" in help_["measure"]
     assert "0.9 means only 1 pair in 10" in help_["measure"]
-    assert "about 0.41" in help_["overall"] and "0.72 beats 99" in help_["overall"]  # under the basic set (ADR-0031)
+    assert "about 0.43" in help_["overall"] and "0.75 beats 99" in help_["overall"]  # under the basic set (ADR-0031)
     assert "0.16 on Lake or sea" in text and "84 %" in text  # two dry hikes: identical, but it tells little
     assert "not compared" in text and "0.95" in text  # a shared absence; both passing a hut
     assert "What does 0.1 mean" in " ".join(section["title"] for section in help_["sections"])
-    assert "Kattegat" in text and "0.10" in text
+    assert "Kattegat" in text and "0.13" in text
     assert "count half" not in text and "score 1.0" not in text  # the rules ADR-0026 replaced
     for source in ("OpenStreetMap", "FABDEM", "WorldCover", "CHELSA"):
         assert source in text
