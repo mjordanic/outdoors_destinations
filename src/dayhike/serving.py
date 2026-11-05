@@ -1444,6 +1444,7 @@ class ServingData:
         DayHikes ranked that start in no row's area (ADR-0046).
         """
         group_m = GROUP_M if group_m is None else group_m
+        weights = _measure_weights(weights, return_to_start)  # Round trip is left out with the way back
         store = self.store.mode(return_to_start)
         seed_row, seed_walk = self._seed(seed, return_to_start)
         kept = self._far_and_near(self.trailheads, near, group_m, ())
@@ -1707,7 +1708,7 @@ class ServingData:
         store = self.store.mode(return_to_start)
         a_row, _ = self._seed(a, return_to_start)
         b = self.row_of(b_id)
-        chosen = _measure_weights(weights)
+        chosen = _measure_weights(weights, return_to_start)
         _check_climate(store, month)
         rows = np.array([b])
         similarity, _ = score_rows(store, [a_row], rows, chosen, month=month)

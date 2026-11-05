@@ -444,9 +444,9 @@ def rank_dayhikes(
     many items (every candidate is still scored). QueryMonth selects that
     month's climate in the monthly Measures. ``return_to_start`` measures
     Seeds and candidates alike with their way back to the start (ADR-0019),
-    else one way.
+    else one way; with it Round trip is left out, every hike being one.
     """
-    chosen = _measure_weights(weights)
+    chosen = _measure_weights(weights, return_to_start)
     _check_month(month)
     seed_ids = sorted({resolve_seed(catalog, name) for name in seeds})
     store = catalog.similarity.mode(return_to_start)
@@ -770,7 +770,9 @@ def _calibration_key(measure: Measure, month: int | None, seed: int | OutsideSee
     return measure.name if month is None or not measure.monthly else f"{measure.name}@{month:02d}"
 
 
-def _measure_weights(weights: Mapping[str, float] | None) -> dict[str, float]:
+def _measure_weights(weights: Mapping[str, float] | None, return_to_start: bool = False) -> dict[str, float]:
+    """The weights above 0 (None is ``DEFAULT_WEIGHTS``). With ``return_to_start``
+    every hike is a round trip, so Round trip is left out (ADR-0022)."""
     if weights is None:
         weights = DEFAULT_WEIGHTS
     unknown = sorted(set(weights) - set(MEASURE_NAMES))
@@ -780,6 +782,11 @@ def _measure_weights(weights: Mapping[str, float] | None) -> dict[str, float]:
         if not 0 <= weight <= 100:
             raise ValueError(f"Measure weight must be 0-100, got {name}={weight}")
     chosen = {name: float(weight) for name, weight in weights.items() if weight > 0}
+    if return_to_start and chosen.pop("round_trip", None) and not chosen:
+        raise ValueError(
+            "Round trip is left out with Return to start (every hike is then a round trip); "
+            "give another Measure a weight above 0"
+        )
     if not chosen:
         raise ValueError("at least one Measure needs a weight above 0")
     return chosen

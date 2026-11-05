@@ -147,7 +147,8 @@ def test_score_is_the_similarity(tmp_path: Path) -> None:
 
         store = catalog.similarity.mode(return_to_start)
         rows = np.searchsorted(store.ids, [item.dayhike.id for item in ranking.items])
-        similarity, _ = score_rows(store, [0], rows, weights)
+        weighted = {name: weight for name, weight in weights.items() if name != "round_trip" or not return_to_start}
+        similarity, _ = score_rows(store, [0], rows, weighted)
         assert [item.score for item in ranking.items] == pytest.approx(similarity.tolist())
 
 
@@ -282,6 +283,26 @@ def test_cli_builds_similarity_and_prints_id_name_and_score(tmp_path: Path) -> N
         assert [line.split("\t")[2] for line in printed.stdout.strip().splitlines()] == [
             str(item.score) for item in expected.items
         ]
+
+
+def test_round_trip_is_left_out_with_the_way_back_in_the_cli_too(tmp_path: Path) -> None:
+    path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, path)
+    build_similarity(path, tmp_path / "dem")
+    catalog = Catalog.open(path)
+
+    with_round_trip = _cli("rank", "--catalog", str(path), "--weight", "length=100", "--weight", "round_trip=100", "Ridge Walk")
+    only_round_trip = _cli("rank", "--catalog", str(path), "--weight", "round_trip=100", "Ridge Walk")
+
+    # Every hike with its way back is a round trip: the weight would pull every score down alike.
+    expected = rank_dayhikes(catalog, ["Ridge Walk"], {"length": 100})
+    assert [line.split("\t")[2] for line in with_round_trip.stdout.strip().splitlines()] == [
+        str(item.score) for item in expected.items
+    ]
+    assert only_round_trip.returncode == 2
+    assert "Round trip is left out with Return to start" in only_round_trip.stderr
+    one_way = rank_dayhikes(catalog, ["Ridge Walk"], {"round_trip": 100}, return_to_start=False)
+    assert one_way.items  # one way, Round trip still counts
 
 
 def test_cli_rejects_a_bad_weight(tmp_path: Path) -> None:
