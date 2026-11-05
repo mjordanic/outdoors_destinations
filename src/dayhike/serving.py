@@ -193,8 +193,8 @@ MEASURE_INFO: dict[str, tuple[str, str, str, str]] = {
     "peaks_around": ("scenery", "Peaks around", "Peaks within 2 km of the line; scored by the fewer over the more (floor 1), against random hike pairs.", "OpenStreetMap peaks."),
     "temperature": ("basic", "Typical temperature", "Mean temperature (June-August, or the chosen month); scored by the gap against random hike pairs, lowest from 10 °C apart.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
     "precipitation": ("weather", "Precipitation", "Mean monthly precipitation (or the chosen month's); scored by the smaller over the larger (floor 10 mm), against random hike pairs.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
-    "solar_radiation": ("weather", "Solar radiation", "Solar radiation (June-August, or the chosen month), kJ m⁻² day⁻¹; scored by the gap against random hike pairs, lowest from 5,000 apart.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
-    "southness": ("weather", "Sun-facing slopes", "Which way the slopes face: 1 south, 0 north (from FABDEM); scored by the gap against random hike pairs.", "FABDEM slopes along the line."),
+    "solar_radiation": ("weather", "Solar radiation", "Solar radiation (June-August, or the chosen month), kJ/m²/day; scored by the gap against random hike pairs, lowest from 5,000 apart.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
+    "southness": ("weather", "Sun-facing slopes", "Which way the slopes face: 1 south, 0 north, 0.5 east or west; a flat walk faces no way and counts 0.5 (from FABDEM); scored by the gap against random hike pairs.", "FABDEM slopes along the line."),
     "water_count": ("water", "Water sources", "WaterSources within 100 m of the line, counted up to 3; scored by the gap against random hike pairs.", "OpenStreetMap drinking water, springs, taps and water points."),
     "dry_stretch": ("water", "Dry stretch", "Longest walk between WaterSources; scored by the shorter over the longer (floor 1 km), against random hike pairs.", "OpenStreetMap drinking water, springs, taps and water points."),
     "waterside": ("basic", "Lake or sea", "Share of the walk within 200 m of sea, lake or wide river (WorldCover); scored by the gap against random hike pairs, a gap under 0.15 counting as none, lowest from 0.5 apart.", "ESA WorldCover 2021 permanent water (sea, lakes, wide rivers)."),
@@ -221,7 +221,7 @@ WISH_INPUTS: dict[str, tuple[str | None, float, float, float, float]] = {
     "peaks_around": ("peaks", 0, 50, 1, 5),
     "temperature": ("°C", -20, 30, 1, 18),
     "precipitation": ("mm", 0, 300, 5, 80),
-    "solar_radiation": ("kJ m⁻² day⁻¹", 0, 25_000, 500, 16_000),
+    "solar_radiation": ("kJ/m²/day", 0, 25_000, 500, 16_000),
     "southness": (None, 0, 1, 0.05, 0.5),
     "water_count": ("sources", 0, 3, 1, 1),
     "dry_stretch": ("m", 0, 2_000_000, 500, 5_000),
@@ -231,8 +231,10 @@ WISH_INPUTS: dict[str, tuple[str | None, float, float, float, float]] = {
     "steepest_km": ("m", 0, 800, 10, 150),
 }
 # The unit the page shows a Wish value in, where it is not the fact's, and how many fact units make
-# one: lengths up to multi-day tours are typed in km (ADR-0035).
-WISH_DISPLAY: dict[str, tuple[str, float]] = {"length": ("km", 1_000), "dry_stretch": ("km", 1_000)}
+# one: lengths up to multi-day tours are typed in km (ADR-0035), shares in % as the facts show them.
+WISH_DISPLAY: dict[str, tuple[str, float]] = {
+    "length": ("km", 1_000), "dry_stretch": ("km", 1_000), "waterside": ("%", 0.01), "climb_grade": ("%", 0.01),
+}
 
 
 # A DayHike with no data for a Measure a Wish asks a value of scores 0 there (ADR-0048).
@@ -279,7 +281,7 @@ def _percent(share: float) -> int:
 # scoring rule changes the words in one place.
 SCORE_HELP = {
     "overall": "Average of the measure scores below, under your weights. Each one is the share of random hike "
-    "pairs less alike than these two. A typical pair scores about 0.41; with the default weights, 0.72 beats "
+    "pairs less alike than these two. A typical pair scores about 0.42; with the default weights, 0.74 beats "
     "99 random pairs in 100.",
     "measure": "Share of random hike pairs less alike than these two on this measure: 0.9 means only 1 pair "
     "in 10 is as alike; 0 means nothing in common.",
@@ -332,7 +334,7 @@ SCORE_HELP = {
             "their ratios matter, and a measure with no data on either hike, or not compared, drops out; "
             "when you describe the hike you want, a hike with no data for a measure you asked for scores 0 "
             "on it instead. A "
-            "typical random pair of hikes scores about 0.41. With the default weights, 0.72 beats 99 random "
+            "typical random pair of hikes scores about 0.42. With the default weights, 0.74 beats 99 random "
             "pairs in 100, and the best match for a hike usually scores about 0.82.",
         },
         {

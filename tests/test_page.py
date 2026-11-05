@@ -119,6 +119,11 @@ class Api:
         # The real Ranking from a Seed has the shape a wish Ranking answers with.
         seeded = {key: value for key, value in asked.items() if key != "wish"}
         body = route.fetch(post_data=json.dumps({**seeded, "seed": RIDGE_WALK_ID})).json()
+        # A Wish scores only the Measures it asks a value of: the others have no score and no note.
+        for hike in (hike for row in body["results"] for hike in (row, *row["versions"])):
+            for name, scored in hike.get("measures", {}).items():
+                if name not in asked["wish"]:
+                    scored.update(score=None, raw=None, note=None)
         route.fulfill(json={**body, "seed": None, "wish": asked["wish"]})
 
 
@@ -286,7 +291,7 @@ def test_a_wish_shows_the_basic_measures_and_asks_advanced_ones_only_while_open(
 
     assert page.locator(".weight:visible").evaluate_all(SHOWN) == ["elevation_gain", "highest", "waterside"]
     open_advanced(page)
-    page.get_by_label("Hut along you want").uncheck()
+    page.get_by_label("Hut along you want").click()
     page.get_by_label("Climbing you want, in m").fill("900")
     open_advanced(page)
 
@@ -333,8 +338,8 @@ def test_finding_hikes_for_a_wish_asks_the_ranking_for_it_and_lists_the_results(
     page.get_by_label("Climbing you want, in m").fill("900")
     page.get_by_label("Climbing weight, 0 to 100").fill("80")
     open_advanced(page)
-    page.get_by_label("Hut along you want").uncheck()
     page.get_by_label("Hut along weight, 0 to 100").fill("40")
+    page.get_by_label("Hut along you want").uncheck()
     page.get_by_label("Highest point weight, 0 to 100").fill("0")
     page.get_by_label("Lake or sea weight, 0 to 100").fill("0")
     page.get_by_label("Only hikes near a starting place").check()
@@ -374,14 +379,67 @@ def test_a_hike_found_for_a_wish_is_shown_against_what_the_hiker_wants(browser, 
     assert waterside.locator("td").nth(2).inner_text() == "left out"
 
 
+def test_clicking_the_hut_box_as_the_guide_says_asks_for_a_hut(browser, server) -> None:
+    # docs/user-guide.md: "click the "yes" box of Hut along ... the click turns it on".
+    api = Api(WISHABLE)
+    page = open_page(browser, server, api)
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    page.get_by_label("Climbing you want, in m").fill("800")
+    open_advanced(page)
+    hut = page.get_by_label("Hut along you want")
+    assert hut.is_checked() and page.get_by_label("Hut along weight, 0 to 100").input_value() == "0"
+
+    hut.click()
+    with page.expect_response(f"{server}/api/rank"):
+        page.get_by_role("button", name="Find hikes").click()
+
+    assert api.ranked[-1]["wish"] == {"elevation_gain": 800, "hut_along": True}
+    assert api.ranked[-1]["weights"]["hut_along"] == 100
+
+
+def test_a_measure_the_wish_does_not_ask_is_left_out_not_no_data(browser, server) -> None:
+    page = open_page(browser, server, Api(WISHABLE))
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    open_advanced(page)
+    page.get_by_label("Hut along you want").click()
+    page.get_by_role("button", name="Find hikes").click()
+    row = page.locator("#results-table tbody tr").first
+    row.wait_for()
+
+    titles = row.locator("td.cell.none").evaluate_all("cells => cells.map(c => c.title)")
+    assert titles and set(titles) == {"not in your wish"}
+    row.click()
+    facts = page.locator("#selected table.facts")
+    facts.wait_for()
+    length = facts.locator("tr", has=page.locator("td", has_text="Length"))
+    assert length.locator("td").nth(3).inner_text() == "left out"
+    assert "no data" not in facts.locator("td.score").all_inner_texts()
+
+
+def test_a_share_is_wished_in_percent_and_asked_as_a_share(browser, server) -> None:
+    percent = {**WISHABLE["waterside"], "display": {"unit": "%", "per": 0.01}}
+    api = Api({**WISHABLE, "waterside": percent})
+    page = open_page(browser, server, api)
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    waterside = page.get_by_label("Lake or sea you want, in %")
+    assert waterside.input_value() == "50"
+    assert (waterside.get_attribute("min"), waterside.get_attribute("max"), waterside.get_attribute("step")) == ("0", "100", "5")
+
+    waterside.fill("30")
+    with page.expect_response(f"{server}/api/rank"):
+        page.get_by_role("button", name="Find hikes").click()
+
+    assert api.ranked[-1]["wish"] == {"waterside": 0.3}
+
+
 def test_a_wish_survives_a_reload_and_opens_from_its_link(browser, server) -> None:
     page = open_page(browser, server, Api(WISHABLE))
     page.get_by_role("button", name="No particular hike in mind?").click()
     page.get_by_label("Climbing you want, in m").fill("900")
     page.get_by_label("Climbing weight, 0 to 100").fill("80")
     open_advanced(page)
-    page.get_by_label("Hut along you want").uncheck()
     page.get_by_label("Hut along weight, 0 to 100").fill("40")
+    page.get_by_label("Hut along you want").uncheck()
     page.get_by_label("Highest point weight, 0 to 100").fill("0")
     page.get_by_label("Return to start").uncheck()
 
@@ -516,8 +574,13 @@ def test_a_wish_asks_only_what_the_hiker_sets_and_leaves_the_liked_hike_weights_
     assert page.locator(".weight:visible:not(.excluded)").count() == 0  # all off, struck through
     page.get_by_label("Highest point you want, in m").fill("2000")
     open_advanced(page)
-    page.get_by_label("Hut along you want").uncheck()
+    hut = page.get_by_label("Hut along you want")
+    hut.click()  # the box shows "yes" while off: the first click asks that "yes"
+    assert hut.is_checked()
     assert page.get_by_label("Highest point weight, 0 to 100").input_value() == "100"
+    assert page.get_by_label("Hut along weight, 0 to 100").input_value() == "100"
+    hut.click()  # a second click asks "no"
+    assert not hut.is_checked()
     assert page.get_by_label("Hut along weight, 0 to 100").input_value() == "100"
     assert page.locator(".weight:visible:not(.excluded)").evaluate_all(SHOWN) == ["highest", "hut_along"]
 
@@ -1265,6 +1328,41 @@ def test_the_start_dots_of_the_hikes_on_the_map_are_drawn_above_every_line(brows
 
     assert len(starts) == 2
     assert all(dot["above"] for dot in starts)
+
+
+# Two stages of one trail meeting at START: stage 1 comes from the west, stage 2 goes on east.
+WEST, EAST = (45.0600, 6.5200), (45.0600, 6.5300)
+def click_map(page, at: tuple[float, float], east_px: int) -> list[int]:
+    """Clicks the hike map ``east_px`` pixels east of ``at``: the ids the page chose (``choose`` is spied on)."""
+    page.evaluate("() => { window.chosen = []; window.choose = (id) => { window.chosen.push(id); }; }")
+    point = page.evaluate("([lat, lon]) => pick.map.latLngToContainerPoint([lat, lon])", list(at))
+    box = page.locator("#map-pick .pick-map").bounding_box()
+    page.mouse.click(box["x"] + point["x"] + east_px, box["y"] + point["y"])
+    return page.evaluate("window.chosen")
+
+
+
+@pytest.mark.parametrize("drawn_first", ["stage 1", "stage 2"])
+def test_a_click_on_a_line_where_two_hikes_meet_chooses_the_line_clicked(browser, server, drawn_first) -> None:
+    one, two = drawn_hike("Stage 1", WEST, START), drawn_hike("Stage 2", START, EAST)
+    page = map_dots(browser, server, [one, two] if drawn_first == "stage 1" else [two, one])
+
+    assert click_map(page, START, -8) == [one["id"]]  # 8 px west of where they meet: on stage 1
+    assert click_map(page, START, 8) == [two["id"]]
+    assert click_map(page, START, 0) == [two["id"]]  # on the shared dot: the hike that starts there
+    assert click_map(page, (45.0620, 6.5250), 0) == []  # off every line: nothing
+
+
+def test_the_hike_under_the_pointer_is_the_one_a_click_would_choose(browser, server) -> None:
+    one, two = drawn_hike("Stage 1", WEST, START), drawn_hike("Stage 2", START, EAST)
+    page = map_dots(browser, server, [one, two])
+
+    at = page.evaluate("([lat, lon]) => pick.map.latLngToContainerPoint([lat, lon]).add([-8, 0])", START)
+    box = page.locator("#map-pick .pick-map").bounding_box()
+    page.mouse.move(box["x"] + at["x"], box["y"] + at["y"])
+
+    page.locator(".leaflet-tooltip", has_text="Stage 1").wait_for()
+    assert page.evaluate("pick.hovered") == one["id"]
 
 
 def test_a_hike_that_ends_where_it_starts_draws_its_start_dot_and_no_end_dot_over_it(browser, server) -> None:

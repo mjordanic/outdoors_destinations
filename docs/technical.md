@@ -531,7 +531,7 @@ way instead of with its way back.
 | `temperature` | ClimateNormal temperature (regime or QueryMonth) | tolerance | D = 10 °C |
 | `precipitation` | ClimateNormal precipitation (regime or QueryMonth) | ratio | floor 10 mm |
 | `solar_radiation` | ClimateNormal solar radiation (regime or QueryMonth) | tolerance | D = 5,000 kJ m⁻² day⁻¹ |
-| `southness` | SolarAspect from FABDEM (1 south, 0 north) | tolerance | D = 1 |
+| `southness` | SolarAspect from FABDEM (1 south, 0 north, 0.5 east, west or flat) | tolerance | D = 1 |
 | `water_count` | WaterSources in the Corridor, capped at 3 | tolerance | D = 3 |
 | `dry_stretch` | DryStretch | ratio | floor 1 km |
 | `waterside` | WaterSide: share of the walk within 200 m of sea, lake or wide river (WorldCover) | tolerance | D = 0.5, dead band 0.15 (ADR-0021) |
@@ -571,7 +571,7 @@ restaurant or cafe along, Shelter, restaurant or cafe at the Trailhead,
 parking) two DayHikes that both lack the feature are not compared, and the
 Measure drops out of that pair's mean. The printed score is the similarity
 itself, the weighted mean of the calibrated Measure scores: a typical random
-pair scores about 0.41 under the default weights, 0.72 beats 99 random pairs in
+pair scores about 0.42 under the default weights, 0.74 beats 99 random pairs in
 100, and 1.0 needs a pair no random pair is as alike as on every weighted
 Measure, so the best matches stay apart instead of all reading 1.000. Ties in
 order break on the uncalibrated weighted mean, then on DayHike id.

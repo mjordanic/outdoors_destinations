@@ -38,6 +38,7 @@ from dayhike.similarity import (
     similarity_dir_for,
     solar_aspect_points,
     solar_aspect_southness,
+    SOLAR_ASPECT_FLAT,
     steepness,
     surface_class,
     surface_class_from_tag,
@@ -814,12 +815,29 @@ def test_southness_scores_south_1_north_0_east_and_west_half(
 
 
 @pytest.mark.parametrize("grade", [0.0, 0.03])  # flat, and under 2 degrees
-def test_southness_leaves_out_flat_points_and_is_missing_with_none_sloped(
+def test_a_flat_walk_faces_no_way_and_counts_as_east_or_west_not_as_missing(
     tmp_path: Path, grade
 ) -> None:
     _write_dem_tile(tmp_path, 1000.0, grade_north=grade)
 
-    assert math.isnan(_southness(tmp_path, EAST_LAT, EAST_LON))
+    assert _southness(tmp_path, EAST_LAT, EAST_LON) == SOLAR_ASPECT_FLAT == 0.5
+
+
+def test_southness_is_the_mean_of_the_sloped_points_only(tmp_path: Path) -> None:
+    # West of 15.0025 the tile slopes up northward (faces south); east of it, flat.
+    _write_dem_tile(tmp_path, 1000.0, grade_north=0.2)
+    import rasterio
+
+    path = next(tmp_path.glob("*.tif"))
+    with rasterio.open(path, "r+") as dataset:
+        data = dataset.read(1)
+        flat_from = int((15.0025 - dataset.bounds.left) / dataset.res[0])
+        data[:, flat_from:] = 1000.0
+        dataset.write(data, 1)
+    lat = np.full(21, 45.0)
+    lon = np.array([_metres_east(25 * i) for i in range(21)])  # 500 m east: about 0.0064°
+
+    assert _southness(tmp_path, lat, lon) == pytest.approx(1.0, abs=0.01)
 
 
 def test_southness_is_missing_without_a_covering_tile_or_with_nodata(tmp_path: Path) -> None:
