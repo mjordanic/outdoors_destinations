@@ -276,22 +276,6 @@ def read_grid_cells(dataset, rows: np.ndarray, cols: np.ndarray) -> np.ndarray:
         window = Window(left, top, min(block_width, dataset.width - left), min(block_height, dataset.height - top))
         out[at] = dataset.read(1, window=window)[rows[at] - top, cols[at] - left]
     return out
-    rows, cols = (np.asarray(v, dtype=np.int64) for v in rowcol(dataset.transform, lon, lat))
-    inside = np.flatnonzero((rows >= 0) & (rows < dataset.height) & (cols >= 0) & (cols < dataset.width))
-    if not len(inside):
-        return out
-    block_height, block_width = dataset.block_shapes[0]
-    blocks = rows[inside] // block_height * (dataset.width // block_width + 1) + cols[inside] // block_width
-    order = np.argsort(blocks, kind="stable")
-    inside, blocks = inside[order], blocks[order]
-    starts = np.flatnonzero(np.r_[True, blocks[1:] != blocks[:-1]])
-    for start, end in zip(starts.tolist(), [*starts[1:].tolist(), len(blocks)]):
-        at = inside[start:end]
-        top = int(rows[at[0]]) // block_height * block_height
-        left = int(cols[at[0]]) // block_width * block_width
-        window = Window(left, top, min(block_width, dataset.width - left), min(block_height, dataset.height - top))
-        out[at] = dataset.read(1, window=window)[rows[at] - top, cols[at] - left]
-    return out
 
 
 def sample_elevations(

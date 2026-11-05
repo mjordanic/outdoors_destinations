@@ -2000,10 +2000,11 @@ export, ADR-0029, ADR-0042); the note above the results names the limits and
 the place, "within a 2 h drive of Munich, DE", as they stay set when another
 hike opens in the same tab, and the limit inputs are not restored by the
 browser on a reload. The DriveTime is estimated on highways-only tiles as in
-**Highway tiles** above; the distance needs no routing engine. Measures with no data for a hike (climate and land
-cover do not cover all of Europe yet) show "no data" and drop out of that
-pair's score (a missing Difficulty grade scores 0 instead, ADR-0043, and so
-does missing data for a Measure a Wish asks a value of, ADR-0052, no data against a Wish). Climb and
+**Highway tiles** above; the distance needs no routing engine. Measures with no data for a hike show "no data".
+Most often it is the missing Difficulty grade, which scores 0 on Difficulty
+against a graded hike (ADR-0043); any other missing fact drops out of that
+pair's score (missing data for a Measure a Wish asks a value of scores 0
+instead, ADR-0052, no data against a Wish). Climb and
 descent say "with the way back" or "one way" in the hike's panel and the
 results table (a loop's panel says neither); the search list gives every hike one way. Every API request the
 page makes ends after 60 s with "The server did not answer within 60 s", and
