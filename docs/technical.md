@@ -168,7 +168,8 @@ What each step **does not** do:
 Ingest **replaces** the Catalog (it does not append). `sample-dem`,
 `sample-landcover`, and `sample-climate` do **not** replace the Catalog: they
 only overwrite sampled columns on hikes whose geometry sits on a downloaded
-tile. `build-similarity` reads both SQLite files, FABDEM, the WorldCover
+tile (`sample-climate` clears every hike's climate first, so a hike off the
+downloaded rasters has none). `build-similarity` reads both SQLite files, FABDEM, the WorldCover
 tiles (for `waterside`) and the sampled TrailGraph (for each DayHike's way back) and replaces `data/catalog.similarity/`; ingest and every sample step that changes the
 Catalog or the TrailGraph delete that directory, so rerun `build-similarity` after them (Ranking
 refuses missing facts and facts built for other DayHikes, other Catalog
@@ -555,7 +556,7 @@ exception: a DayHike with no Difficulty grade scores 0 on Difficulty against a
 Seed that has one, so it ranks below a hike with the grade asked for (ADR-0043);
 against a Wish, a DayHike with no data for any Measure the Wish asks a value of
 scores 0 on it the same way, so it ranks below the hikes that have that data
-(ADR-0048, no data against a Wish).
+(ADR-0052, no data against a Wish).
 
 ### What the score means
 
@@ -774,7 +775,7 @@ Measured on the Europe Catalog of late October 2026 (161,614 DayHikes; see
 | --- | --- |
 | `build-similarity` | 28 min wall, facts 1,701 s including WaterSide and Twins (about 1 min of that); run beside a second build, not on an idle machine; per-phase split and peak memory not yet re-measured. Measuring every DayHike with its way back too (ADR-0019) took Slovenia from 11 s to 37 s; Europe not yet re-measured |
 | `build-similarity --calibrate-only` | Calibration 0.6 s |
-| `data/catalog.similarity/` | 85 MB: facts 45 MB, ProfileShapes 41 MB, Twins 1.3 MB, ids 1.3 MB, quantiles 0.26 MB |
+| `data/catalog.similarity/` | 274 MB on the rebuild of November 2026 (258,305 DayHikes), one way and with the way back: facts 2 × 72 MB, ProfileShapes 2 × 66 MB, ways back 4.1 MB, Twins 2.1 MB, ids 2.1 MB, quantiles, rarity and values 1.7 MB (85 MB on the 161,614-DayHike Catalog, before the way back and the rarity rank) |
 | `Catalog.open` (once per process) | 4 s, 0.77 GB |
 | One Seed, 4–6 weighted Measures, `limit=50` | 0.09–0.12 s |
 | One Seed, all 27 Measures, `limit=50` | not yet re-measured (27 Measures) |
@@ -784,7 +785,7 @@ Measured on the Europe Catalog of late October 2026 (161,614 DayHikes; see
 
 So a ranking server fits in 2 GB and is comfortable in 4 GB. Most of its memory
 is the Python DayHike objects `Catalog.open` builds; scoring itself needs the
-85 MB of memory-mapped arrays plus a few hundred MB per query. Building the
+about 280 MB of memory-mapped arrays plus a few hundred MB per query. Building the
 facts needs 1.7 GB (not yet re-measured) and is best run where the
 GeometryStore (21 GB) lives, with only `data/catalog.similarity/` and the
 Catalog copied to the server.
@@ -946,7 +947,8 @@ up to 10 hours.
    lie in a 17 km ring around the outermost contour, where isochrones skip
    roads the matrix reaches, such as the far side of a ferry) go to the matrix
    for an exact time. A time past the limit comes back as unreachable.
-4. A Trailhead with no highway within 100 km (6 of 161,614: they are named on
+4. A Trailhead with no highway within 100 km (8 of 258,305 in the November 2026
+   rebuild, 6 of 161,614 before: they are named on
    stderr as `no highway in reach<TAB>id<TAB>name`) is left out. An Origin with
    no highway within 100 km is refused.
 
@@ -1006,7 +1008,9 @@ The same 4 h query from Munich took 32 s with the matrix alone, one batch of
 - **110 Trailheads have no highway within 35 km** (100 places: mostly the
   Caucasus, then the Azores, Bulgarian mountains, Helgoland, Lapland and
   Iceland). 104 of them snap within 100 km and are
-  estimated like the rest, with a long approach; 6 never snap and are left out.
+  estimated like the rest, with a long approach; 6 never snap and are left out
+  (8 of 258,305 DayHikes in the November 2026 rebuild, which
+  `test_drive_time_real.py` checks).
   `--highways` names every DayHike it leaves out on stderr
   (`no highway in reach<TAB>id<TAB>name`).
 - **The first full-Europe tile set was an unfinished build.** The 19 GB
@@ -1996,10 +2000,11 @@ export, ADR-0029, ADR-0042); the note above the results names the limits and
 the place, "within a 2 h drive of Munich, DE", as they stay set when another
 hike opens in the same tab, and the limit inputs are not restored by the
 browser on a reload. The DriveTime is estimated on highways-only tiles as in
-**Highway tiles** above; the distance needs no routing engine. Measures with no data for a hike (climate and land
-cover do not cover all of Europe yet) show "no data" and drop out of that
-pair's score (a missing Difficulty grade scores 0 instead, ADR-0043, and so
-does missing data for a Measure a Wish asks a value of, ADR-0048, no data against a Wish). Climb and
+**Highway tiles** above; the distance needs no routing engine. Measures with no data for a hike show "no data".
+Most often it is the missing Difficulty grade, which scores 0 on Difficulty
+against a graded hike (ADR-0043); any other missing fact drops out of that
+pair's score (missing data for a Measure a Wish asks a value of scores 0
+instead, ADR-0052, no data against a Wish). Climb and
 descent say "with the way back" or "one way" in the hike's panel and the
 results table (a loop's panel says neither); the search list gives every hike one way. Every API request the
 page makes ends after 60 s with "The server did not answer within 60 s", and

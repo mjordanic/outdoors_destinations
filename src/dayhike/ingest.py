@@ -794,7 +794,7 @@ def _keep_dayhikes(
     """The relation DayHikes, by id, and per drop reason how many relations
     it left out. ``walks``, when given, gets each kept DayHike's main walk
     (see ``_store_walk``)."""
-    report_counts = {"unnamed": 0, "length": 0, "container": 0, "node_network": 0}
+    report_counts = {"length": 0, "container": 0, "node_network": 0}
     seen: set[int] = set()
     hiking = []
     for relation in snapshot.relations:

@@ -11,6 +11,7 @@ from dayhike.catalog import (
     NAME_ORIGIN_OSM_NAME,
     NAME_ORIGIN_OSM_REF,
     NAME_ORIGIN_SYNTHETIC,
+    ensure_column,
     geometry_store_path_for,
 )
 
@@ -293,3 +294,14 @@ def test_opening_a_missing_catalog_says_not_found_and_creates_no_file(tmp_path: 
         Catalog.open(path)
 
     assert not path.exists()
+
+
+def test_ensure_column_adds_a_missing_column_once() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE feature_vectors (dayhike_id INTEGER)")
+    ensure_column(connection, "feature_vectors", "snow_fraction", "REAL")
+    ensure_column(connection, "feature_vectors", "snow_fraction", "REAL")
+    ensure_column(connection, "feature_vectors", "dayhike_id", "INTEGER")
+
+    columns = [(row[1], row[2]) for row in connection.execute("PRAGMA table_info(feature_vectors)")]
+    assert columns == [("dayhike_id", "INTEGER"), ("snow_fraction", "REAL")]

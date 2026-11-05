@@ -6,8 +6,12 @@ Valhalla's **`/sources_to_targets`** matrix: one Origin as the source,
 Trailheads as targets, costing `auto`. Unreachable targets come back without a
 time and are dropped.
 
-Isochrones (`/isochrone`) may shade a later map. They are not how Ranking is
-filtered.
+On highways-only tiles (`--highways`, and the web demo) the DriveTime is an
+estimate (ADR-0051): `/locate` snaps the Origin and each Trailhead onto the
+highways, one `/isochrone` from the Origin puts every snapped point in a time
+band, and only the points near the limit go to `/sources_to_targets` for an
+exact time ([technical docs](technical.md#highway-tiles-all-of-europe-small-server),
+**Highway tiles**).
 
 Tiles and extracts belong under gitignored `data/valhalla/` (rebuild locally;
 do not commit them). Ranking without `--origin` never talks to Valhalla.
@@ -20,7 +24,7 @@ do not commit them). Ranking without `--origin` never talks to Valhalla.
 | Is Valhalla a Python library in this repo? | **No.** `ValhallaMatrixClient` is an HTTP client (`urllib`) that POSTs JSON. |
 | How do you get the engine? | Docker image `ghcr.io/gis-ops/docker-valhalla/valhalla` (Valhalla 3.5.1), pinned to the digest `web/Dockerfile` serves. |
 | Where does it run? | Container, port **8002** on localhost. Compose file: `data/valhalla/compose.yaml`. |
-| When does `dayhike` use it? | Only `rank` with `--origin` and `--max-hours`, `nearby`, or `filter_by_drive_time` with `ValhallaMatrixClient`. |
+| When does `dayhike` use it? | Only `rank` with `--origin` and `--max-hours`, `nearby`, `filter_by_drive_time` with `ValhallaMatrixClient`, `export-serving --valhalla-url` (snaps every Trailhead once) and `serve --valhalla-url` (the web demo's drive-time filter; without it the filter is off). |
 | Do tests start it? | **No.** Tests stub the matrix client or stand up a tiny fake HTTP server. |
 
 If nothing is listening on `127.0.0.1:8002`, ranking with `--origin` fails with
@@ -153,8 +157,10 @@ uv run dayhike rank --catalog data/catalog.sqlite \
   "Ridge Walk"
 ```
 
-`--valhalla-url` overrides the base URL. The path posted is always
-`/sources_to_targets`. Trailheads are sent in batches of 50.
+`--valhalla-url` overrides the base URL. Without `--highways` the path posted
+is always `/sources_to_targets`; Trailheads are sent in batches of 2,500
+(`MATRIX_BATCH_SIZE`, Valhalla's default matrix limit). With `--highways` the
+client also posts `/locate` (1,000 places a batch) and `/isochrone`.
 
 To stop: `Ctrl+C` in the compose terminal, or
 `docker compose -f data/valhalla/compose.yaml down`. Tiles stay in
@@ -170,6 +176,11 @@ To stop: `Ctrl+C` in the compose terminal, or
 3. Reads `time` in **seconds** (or missing → `None`).
 4. `filter_by_drive_time` converts seconds to hours, keeps `hours <= max`,
    drops `None` / non-finite / negative.
+
+`src/dayhike/highways.py` (`HighwayDriveTimeClient`, for `--highways` and the
+web demo) snaps places with `/locate` (`HighwaySnaps`, cached in a snaps file),
+bands them with one `/isochrone` from the Origin, and asks the matrix above only
+for the points whose band straddles the limit.
 
 The Catalog SQLite file is not a routing database. Valhalla's tiles are a
 separate graph built from a PBF. You can rank similarity with no tiles at all.

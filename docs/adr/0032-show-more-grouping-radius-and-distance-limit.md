@@ -1,5 +1,5 @@
 ---
-status: accepted (amends ADR-0020 and ADR-0028; each page drawn from a pool of 30 rows since ADR-0047)
+status: accepted (amends ADR-0020 and ADR-0028; each page drawn from a pool of 30 rows since ADR-0047; what a Ranking does not list said since ADR-0046)
 ---
 
 # Ten rows at a time, a GroupingRadius that follows the search, and a DistanceLimit

@@ -1,3 +1,7 @@
+---
+status: accepted (a built DayHike's GeometryStore rows amended by ADR-0038)
+---
+
 # DayHikeGeometry lives beside the Catalog, not in it
 
 Feature construction needs DayHikeGeometry and unaggregated amenity points. Those do not belong in Catalog: Ranking still loads Catalog, and Catalog stays derived facts. Ingest always writes a GeometryStore at `{catalog}.geometry.sqlite` (for `data/catalog.sqlite` that is `data/catalog.geometry.sqlite`). The ingest work file remains temporary resume state and is still deleted after a successful Catalog write.

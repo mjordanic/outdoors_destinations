@@ -1,5 +1,5 @@
 ---
-status: accepted (the trail search for the way back bounded at 50 km since ADR-0035)
+status: accepted (the trail search for the way back bounded at 50 km since ADR-0035; what the page says amended by ADR-0022)
 ---
 
 # Return to start: every hike measured with its way back

@@ -45,7 +45,7 @@ from dayhike.catalog import (
     similarity_dir_for,
     trailgraph_path_for,
 )
-from dayhike.dem import DEFAULT_DEM_DIR, dem_source_of, fabdem_tile_id
+from dayhike.dem import DEFAULT_DEM_DIR, dem_source_of, fabdem_tile_id, read_grid_cells
 from dayhike.landcover import DEFAULT_LANDCOVER_DIR, _landcover_fractions, worldcover_tile_id
 from dayhike.parallel import parallel_iter, parallel_map
 from dayhike.trailgraph import WAY_BACK_KINDS, ComposedWalk, TrailGraph, WayBack, round_trip, way_back
@@ -1264,7 +1264,8 @@ def walk_facts(
     restaurant or cafe, Shelter or Viewpoint in the ``CORRIDOR_M`` Corridor,
     a Peak within ``PEAK_SUMMITED_M``, the Peaks within ``PEAKS_AROUND_M``,
     and the WaterSources in the Corridor with the DryStretch between them.
-    None of the facts depend on the walking direction.
+    Only TarmacApproach depends on the walking direction: it counts from the
+    start of a line (on a loop the shorter of the two ways counts).
     """
     round_trip = _haversine_m(lat[0], lon[0], lat[-1], lon[-1]) <= GAP_JOIN_M
     facts: dict[str, float] = {
@@ -1857,30 +1858,11 @@ def dem_heights(dem_dir: Path | str, lat: np.ndarray, lon: np.ndarray) -> np.nda
             rows, cols = rasterio.transform.rowcol(dataset.transform, lon[at], lat[at])
             rows = np.clip(np.asarray(rows), 0, dataset.height - 1)
             cols = np.clip(np.asarray(cols), 0, dataset.width - 1)
-            values = _read_cells(dataset, rows, cols).astype(float)
+            values = read_grid_cells(dataset, rows, cols).astype(float)
             if dataset.nodata is not None:
                 values[values == dataset.nodata] = np.nan
         heights[at] = values
     return heights
-
-
-def _read_cells(dataset, rows: np.ndarray, cols: np.ndarray) -> np.ndarray:
-    """Band 1 at each (row, col) of an open raster, reading only the
-    internal blocks that hold them rather than the whole tile."""
-    from rasterio.windows import Window
-
-    block_rows, block_cols = dataset.block_shapes[0]
-    across = -(-dataset.width // block_cols)
-    blocks = (rows // block_rows) * across + cols // block_cols
-    order = np.argsort(blocks, kind="stable")
-    unique, starts = np.unique(blocks[order], return_index=True)
-    values = np.empty(len(rows), dtype=dataset.dtypes[0])
-    for block, first, last in zip(unique.tolist(), starts, [*starts[1:], len(order)]):
-        top, left = block // across * block_rows, block % across * block_cols
-        window = Window(left, top, min(block_cols, dataset.width - left), min(block_rows, dataset.height - top))
-        at = order[first:last]
-        values[at] = dataset.read(1, window=window)[rows[at] - top, cols[at] - left]
-    return values
 
 
 def _step_m(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:

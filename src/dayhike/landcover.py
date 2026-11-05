@@ -11,8 +11,14 @@ from pathlib import Path
 
 import numpy as np
 
-from dayhike.catalog import EARTH_RADIUS_M, LANDCOVER_FEATURE_NAMES, geometry_store_path_for, remove_similarity
-from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS
+from dayhike.catalog import (
+    EARTH_RADIUS_M,
+    LANDCOVER_FEATURE_NAMES,
+    ensure_column,
+    geometry_store_path_for,
+    remove_similarity,
+)
+from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS, format_corner
 from dayhike.download import download as _download
 from dayhike.parallel import parallel_iter, workers
 
@@ -50,7 +56,7 @@ def worldcover_tile_id(lat: float, lon: float) -> str:
     """Return the WorldCover 3° tile id whose southwest corner contains this point."""
     lat_sw = int(math.floor(lat / 3) * 3)
     lon_sw = int(math.floor(lon / 3) * 3)
-    return _format_corner(lat_sw, lon_sw)
+    return format_corner(lat_sw, lon_sw)
 
 
 def worldcover_tiles_covering(bounds: Bounds) -> list[str]:
@@ -60,7 +66,7 @@ def worldcover_tiles_covering(bounds: Bounds) -> list[str]:
     lon_start = int(math.floor(bounds.west / 3) * 3)
     lon_end = int(math.floor(bounds.east / 3) * 3)
     return [
-        _format_corner(lat, lon)
+        format_corner(lat, lon)
         for lat in range(lat_start, lat_end + 1, 3)
         for lon in range(lon_start, lon_end + 1, 3)
     ]
@@ -279,7 +285,7 @@ def sample_landcover(
     write = sqlite3.connect(store_path)
     try:
         write.execute("PRAGMA journal_mode=WAL")
-        _ensure_column(write, "vertices", "landcover", "INTEGER")
+        ensure_column(write, "vertices", "landcover", "INTEGER")
         tiles = _Tiles(rasters)
         stack.callback(tiles.close)
         read = sqlite3.connect(store_path)
@@ -353,7 +359,7 @@ def _refresh_catalog_fractions(
     catalog = sqlite3.connect(catalog_path)
     try:
         for name in LANDCOVER_FEATURE_NAMES:
-            _ensure_column(catalog, "feature_vectors", name, "REAL")
+            ensure_column(catalog, "feature_vectors", name, "REAL")
         by_hike: dict[int, list[int]] = {dayhike_id: [] for dayhike_id in hike_ids}
         ids = list(hike_ids)
         for start in range(0, len(ids), _HIKE_IN_CHUNK):
@@ -395,17 +401,3 @@ def _landcover_fractions(
         codes.count(_BARE) / n,
         codes.count(_SNOW) / n,
     )
-
-
-def _ensure_column(
-    connection: sqlite3.Connection, table: str, column: str, decl: str
-) -> None:
-    existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
-    if column not in existing:
-        connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
-
-
-def _format_corner(lat_sw: int, lon_sw: int) -> str:
-    ns = "N" if lat_sw >= 0 else "S"
-    ew = "E" if lon_sw >= 0 else "W"
-    return f"{ns}{abs(lat_sw):02d}{ew}{abs(lon_sw):03d}"

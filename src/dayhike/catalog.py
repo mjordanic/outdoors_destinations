@@ -397,6 +397,13 @@ def remove_similarity(
         progress(f"removed stale similarity facts {directory}; run `dayhike build-similarity`")
 
 
+def ensure_column(connection: sqlite3.Connection, table: str, column: str, decl: str) -> None:
+    """Add ``column`` to ``table`` unless it is already there."""
+    existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+    if column not in existing:
+        connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
 def dayhike_label(
     relation_id: int, tags: Mapping[str, str], place: str | None = None
 ) -> tuple[str, str]:
@@ -527,7 +534,9 @@ def build_catalog(
     Unnamed `highway=path` ways are not DayHikes; relations under 1 km,
     containers and node-network legs are counted in the ingest report and are
     not DayHikes either (ADR-0033). A missing OSM `name` is
-    kept with a Seed label (`name`, else `ref`, else `relation:{id}`). Attribution is stored
+    kept with a Seed label (ADR-0017, ``dayhike_label``): `name`; else `ref`
+    with the `from` and `to` tags or the nearest place; else `from – to`; else
+    "Hike near" the nearest place; else `relation:{id}`. Attribution is stored
     with the Catalog. DriveTime is not computed at ingest. Replaces the
     SQLite file if it exists, only after the new file is complete; overlapping
     snapshots keep one row per OSM id. The GeometryStore and the TrailGraph

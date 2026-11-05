@@ -52,7 +52,7 @@ _METRES_PER_DEGREE = EARTH_RADIUS_M * math.pi / 180
 
 def fabdem_tile_id(lat: float, lon: float) -> str:
     """Return the FABDEM 1° tile id whose southwest corner contains this point."""
-    return _format_corner(math.floor(lat), math.floor(lon))
+    return format_corner(math.floor(lat), math.floor(lon))
 
 
 def fabdem_archive_id(tile_id: str) -> str:
@@ -61,15 +61,9 @@ def fabdem_archive_id(tile_id: str) -> str:
     lat0 = int(math.floor(lat_sw / 10) * 10)
     lon0 = int(math.floor(lon_sw / 10) * 10)
     return (
-        f"{_format_corner(lat0, lon0)}-{_format_corner(lat0 + 10, lon0 + 10)}"
+        f"{format_corner(lat0, lon0)}-{format_corner(lat0 + 10, lon0 + 10)}"
         f"_FABDEM_{FABDEM_VERSION}"
     )
-
-
-def fabdem_tile_url(tile_id: str) -> str:
-    """HTTPS URL of one 1° FABDEM GeoTIFF (Hugging Face mirror of Bristol V1-2)."""
-    filename = f"{tile_id}_FABDEM_{FABDEM_VERSION}.tif"
-    return f"{FABDEM_DATASET}/{fabdem_archive_id(tile_id)}/{filename}"
 
 
 @dataclass(frozen=True)
@@ -164,7 +158,7 @@ def tiles_covering(bounds: Bounds) -> list[str]:
     lon_start = math.floor(bounds.west)
     lon_end = math.floor(bounds.east)
     tiles = [
-        _format_corner(lat, lon)
+        format_corner(lat, lon)
         for lat in range(lat_start, lat_end + 1)
         for lon in range(lon_start, lon_end + 1)
     ]
@@ -250,22 +244,33 @@ def read_cells(dataset, lon: np.ndarray, lat: np.ndarray) -> np.ndarray:
     one). Each block of the raster holding a point is read once.
     """
     from rasterio.transform import rowcol
-    from rasterio.windows import Window
 
     out = np.full(len(lon), dataset.nodata or 0, dtype=dataset.dtypes[0])
     if not len(lon):
         return out
     rows, cols = (np.asarray(v, dtype=np.int64) for v in rowcol(dataset.transform, lon, lat))
     inside = np.flatnonzero((rows >= 0) & (rows < dataset.height) & (cols >= 0) & (cols < dataset.width))
-    if not len(inside):
+    if len(inside):
+        out[inside] = read_grid_cells(dataset, rows[inside], cols[inside])
+    return out
+
+
+def read_grid_cells(dataset, rows: np.ndarray, cols: np.ndarray) -> np.ndarray:
+    """Band 1 at each (row, col) of an open raster, all on its grid, in its dtype.
+    Each block of the raster holding a cell is read once."""
+    from rasterio.windows import Window
+
+    rows, cols = np.asarray(rows, dtype=np.int64), np.asarray(cols, dtype=np.int64)
+    out = np.empty(len(rows), dtype=dataset.dtypes[0])
+    if not len(rows):
         return out
     block_height, block_width = dataset.block_shapes[0]
-    blocks = rows[inside] // block_height * (dataset.width // block_width + 1) + cols[inside] // block_width
+    blocks = rows // block_height * (dataset.width // block_width + 1) + cols // block_width
     order = np.argsort(blocks, kind="stable")
-    inside, blocks = inside[order], blocks[order]
+    blocks = blocks[order]
     starts = np.flatnonzero(np.r_[True, blocks[1:] != blocks[:-1]])
     for start, end in zip(starts.tolist(), [*starts[1:].tolist(), len(blocks)]):
-        at = inside[start:end]
+        at = order[start:end]
         top = int(rows[at[0]]) // block_height * block_height
         left = int(cols[at[0]]) // block_width * block_width
         window = Window(left, top, min(block_width, dataset.width - left), min(block_height, dataset.height - top))
@@ -601,7 +606,8 @@ def _elevation_stats(vertices: Sequence[tuple[float, float, float]]) -> tuple[fl
     return float(known.min()), float(known.max()), elevation_gain(lat, lon, ele)
 
 
-def _format_corner(lat_sw: int, lon_sw: int) -> str:
+def format_corner(lat_sw: int, lon_sw: int) -> str:
+    """A 1° tile id from its southwest corner, as "N45E015" or "S09W072"."""
     ns = "N" if lat_sw >= 0 else "S"
     ew = "E" if lon_sw >= 0 else "W"
     return f"{ns}{abs(lat_sw):02d}{ew}{abs(lon_sw):03d}"

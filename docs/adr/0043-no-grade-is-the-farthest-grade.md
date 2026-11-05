@@ -1,5 +1,5 @@
 ---
-status: accepted (amends ADR-0013)
+status: accepted (amends ADR-0013; extended to every wished Measure by ADR-0052)
 ---
 
 # A hike with no grade scores 0 on Difficulty against a graded Seed

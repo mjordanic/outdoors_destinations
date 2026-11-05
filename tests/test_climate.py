@@ -13,7 +13,7 @@ from dayhike import (
     rank_dayhikes,
     sample_climate,
 )
-from dayhike.climate import CHELSA_ATTRIBUTION, chelsa_url, fetch_chelsa
+from dayhike.climate import CHELSA_ATTRIBUTION, chelsa_url, fetch_chelsa, regime
 from dayhike.dem import Bounds
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
@@ -1062,3 +1062,10 @@ def test_sample_climate_removes_similarity_facts(tmp_path: Path) -> None:
     )
     with pytest.raises(StaleSimilarity, match="build-similarity"):
         rank_dayhikes(Catalog.open(catalog_path), ["Ridge Walk"])
+
+
+def test_regime_is_june_to_august_temperature_and_radiation_and_all_year_rain() -> None:
+    # The Catalog's regime and a composed hike's (``TrailGraph``) both come from it.
+    months = [(float(m), 10.0 * m, 100.0 * m) for m in range(1, 13)]
+    assert regime(months) == pytest.approx((7.0, 65.0, 700.0))
+    assert regime(np.array(months)) == pytest.approx((7.0, 65.0, 700.0))

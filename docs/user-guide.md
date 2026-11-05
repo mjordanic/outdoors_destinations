@@ -175,8 +175,8 @@ found. You do not need it to use the site.
 #### Every row is an area
 
 Hikes that start close together are grouped into one row, so you don't see ten
-near-copies of the same walk. The row shows the best one. Click the row to see
-up to three other versions of it (var 1, 2, 3). Each is more than half a
+near-copies of the same walk. The row shows the best one (var 1). Click the row
+to see up to two other versions of it (var 2, 3). Each is more than half a
 different route.
 
 The same walk is not listed twice. If a hike is already on an earlier page,
@@ -194,11 +194,12 @@ Each hike has a score, and each thing compared has its own score. Press the
 - A higher score means more alike.
 - A low score on one thing does not mean the hikes are different overall.
   It can mean they share something common, like not passing a lake.
-- "No data" means we don't know that fact for the hike (climate and land
-  cover do not cover all of Europe yet). That thing is simply left out of the
-  score. When you describe the hike you want, a hike with no data for
-  something you asked for scores 0 on it instead, so it is listed below the
-  hikes that have that data.
+- "No data" means we don't know that fact for the hike. Most often it is the
+  difficulty grade, which most trails don't have on OpenStreetMap; a hike with
+  no grade scores 0 on difficulty against a hike that has one. Any other fact
+  we don't know is simply left out of the score. When you describe the hike
+  you want, a hike with no data for something you asked for scores 0 on it
+  instead, so it is listed below the hikes that have that data.
 
 #### Why the list changes from visit to visit
 
