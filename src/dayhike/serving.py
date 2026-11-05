@@ -1010,8 +1010,9 @@ class ServingData:
                 rows.append(self.row_of(int(needle)))
             except KeyError:
                 pass
-        rows += self._rows_with_words(words, needle, set(rows))
-        similar = {row for row in rows if _relevance(self._folded[row], needle, words) == 3}
+        by_name = self._rows_with_words(words, needle, set(rows))
+        rows += by_name
+        similar = {row for row in by_name if _relevance(self._folded[row], needle, words) == 3}
         if len(rows) < limit:
             for spelled in self._spellings.respelled(words):
                 found = self._rows_with_words(spelled, " ".join(spelled), set(rows))
@@ -1898,11 +1899,20 @@ class _Spellings:
         word as typed or as one of its ``FUZZY_SPELLINGS`` nearest words,
         at most ``FUZZY_QUERIES`` of them, never the query as typed."""
         options = [[(0, word)] + self.near(word)[:FUZZY_SPELLINGS] for word in words]
-        queries = sorted(
-            (sum(typos for typos, _ in chosen), [spelled for _, spelled in chosen])
-            for chosen in itertools.product(*options)
-        )
-        return [spelled for typos, spelled in queries if typos][:FUZZY_QUERIES]
+        start = (0,) * len(options)
+        heap, seen, queries = [(0, start)], {start}, []
+        while heap and len(queries) < FUZZY_QUERIES:
+            typos, chosen = heapq.heappop(heap)
+            if typos:
+                queries.append([options[i][pick][1] for i, pick in enumerate(chosen)])
+            for i, pick in enumerate(chosen):
+                if pick + 1 < len(options[i]):
+                    after = chosen[:i] + (pick + 1,) + chosen[i + 1 :]
+                    if after not in seen:
+                        seen.add(after)
+                        cost = typos - options[i][pick][0] + options[i][pick + 1][0]
+                        heapq.heappush(heap, (cost, after))
+        return queries
 
 
 def _letter_mask(word: str) -> int:

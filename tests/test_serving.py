@@ -1,6 +1,7 @@
 import dataclasses
 import json
 import sqlite3
+import time
 from pathlib import Path
 
 import numpy as np
@@ -189,7 +190,7 @@ def test_search_finds_prefix_then_contains_ignoring_case_and_accents(data: Servi
     assert [hit["name"] for hit in data.search("ridge")] == ["Ridge Walk"]
     assert [hit["name"] for hit in data.search("WALK")] == ["Ridge Walk"]
     assert [hit["name"] for hit in data.search("Válley")] == ["Valley Path"]
-    assert [hit["id"] for hit in data.search("1002")] == [1002]
+    assert [(hit["id"], hit["match"]) for hit in data.search("1002")] == [(1002, "words")]
     assert data.search("x") == []
     assert data.search("no such hike") == []
     hit = data.search("ridge")[0]
@@ -277,8 +278,27 @@ def test_a_word_may_be_one_typo_off_and_a_long_word_two() -> None:
     assert spellings.near("triglavskka") == [(1, "triglavska")]
     assert spellings.near("krdaricca") == [(2, "kredarica")]
     assert spellings.near("triglav") == [] and spellings.near("tri") == []  # as typed; too short
-    assert spellings.respelled(["triglov", "jezra"]) == [["triglav", "jezra"], ["triglov", "jezera"], ["triglav", "jezera"]]
+    assert spellings.respelled(["triglov", "jezra"]) == [["triglov", "jezera"], ["triglav", "jezra"], ["triglav", "jezera"]]
     assert _Spellings(["stage 1002", "stage 1003"]).near("1004") == []  # a number is another hike
+
+
+def test_respellings_of_equal_typos_try_the_commonest_word_first() -> None:
+    spellings = _Spellings(["volley a", "volley b", "valley"])
+
+    assert spellings.respelled(["vplley"]) == [["volley"], ["valley"]]
+
+
+def test_a_long_query_of_many_words_with_typos_is_respelled_quickly() -> None:
+    words = [f"{a}{b}{c}x" for a in "bcd" for b in "aeiou" for c in "lmnr"]
+    spellings = _Spellings([" ".join(words[i : i + 3]) for i in range(len(words))])
+    query = [word[:-1] + "y" for word in words[:25]]
+
+    started = time.monotonic()
+    queries = spellings.respelled(query)
+
+    assert time.monotonic() - started < 2
+    assert len(queries) == serving.FUZZY_QUERIES
+    assert all(len(spelled) == len(query) and spelled != query for spelled in queries)
 
 
 def test_rank_matches_rank_dayhikes_and_reports_every_measure(

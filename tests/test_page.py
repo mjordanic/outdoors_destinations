@@ -1838,6 +1838,30 @@ def test_a_value_typed_in_the_wish_form_switches_its_weight_on_and_a_weight_asks
     assert api.ranked[-1]["weights"] == {"elevation_gain": 100, "highest": 50}
 
 
+def test_a_wish_weight_brought_back_after_a_reset_asks_the_shown_default(browser, server) -> None:
+    api = Api(WISHABLE)
+    page = open_page(browser, server, api)
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    page.get_by_label("Climbing weight, 0 to 100").fill("50")
+    page.get_by_role("button", name="Back to a hike you liked").click()
+    page.get_by_role("button", name="Reset weights").click()
+
+    page.get_by_role("button", name="No particular hike in mind?").click()
+
+    assert page.get_by_label("Climbing you want, in m").input_value() == "600"
+    page.get_by_role("button", name="Find hikes").click()
+    page.locator("#results").wait_for()
+    assert api.ranked[-1]["wish"] == {"elevation_gain": 600}
+    assert api.ranked[-1]["weights"] == {"elevation_gain": 50}
+
+
+def test_a_wish_address_with_a_weight_and_no_value_asks_the_shown_default(browser, server) -> None:
+    page = open_page(browser, server, Api(WISHABLE), hash="#wish=elevation_gain::100")
+
+    assert page.get_by_label("Climbing weight, 0 to 100").input_value() == "100"
+    assert page.get_by_label("Climbing you want, in m").input_value() == "600"
+
+
 def test_share_says_beside_the_button_that_the_link_was_copied(browser, server) -> None:
     page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", init=COPIED + SHARED)
     page.get_by_text("Chosen: Ridge Walk").wait_for()

@@ -853,11 +853,7 @@ function buildWeights() {
         row.insertAdjacentHTML("beforeend", '<p class="hint weight-note">Left out with Return to start: every hike is then a round trip.</p>');
       }
       const slider = row.querySelector("input:not(.wish)"), value = row.querySelector("input.wish");
-      slider.addEventListener("input", () => {
-        showWeight(row);
-        // A weight given to a Measure with no value yet asks its default value.
-        if (value?.value === "" && Number(slider.value) > 0) value.value = value.placeholder;
-      });
+      slider.addEventListener("input", () => setWeight(row, slider.value));
       // Typing a value of a Measure left at 0 asks it in full.
       for (const event of ["input", "change"]) {
         value?.addEventListener(event, () => {
@@ -881,8 +877,11 @@ function showWeight(row) {
   row.classList.toggle("excluded", text === "off");
 }
 
+// A weight given to a Measure with no value yet asks its default value.
 function setWeight(row, weight) {
   row.querySelector("input:not(.wish)").value = weight;
+  const value = row.querySelector("input.wish");
+  if (value?.value === "" && Number(weight) > 0) value.value = value.placeholder;
   showWeight(row);
 }
 
@@ -992,12 +991,13 @@ function applyWish(text) {
   for (const row of document.querySelectorAll(".weight:not(.unwishable)")) {
     const value = row.querySelector("input.wish");
     const [, wanted, weight] = asked.get(row.dataset.measure) ?? [];
+    if (wanted != null) {
+      const measure = state.measures.find((m) => m.name === row.dataset.measure);
+      if (value.type === "checkbox") value.checked = wanted === "1";
+      else value.value = wanted === "" || !Number.isFinite(Number(wanted)) ? wanted : String(toShown(measure, Number(wanted)));
+      if (row.closest("#advanced")) $("#advanced").open = true;
+    }
     setWeight(row, Number(weight) > 0 ? Math.max(Number(weight), 10) : 0);
-    if (wanted == null) continue;
-    const measure = state.measures.find((m) => m.name === row.dataset.measure);
-    if (value.type === "checkbox") value.checked = wanted === "1";
-    else value.value = wanted === "" || !Number.isFinite(Number(wanted)) ? wanted : String(toShown(measure, Number(wanted)));
-    if (row.closest("#advanced")) $("#advanced").open = true;
   }
   syncRoundTrip();
 }
