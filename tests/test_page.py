@@ -422,7 +422,7 @@ def test_a_share_is_wished_in_percent_and_asked_as_a_share(browser, server) -> N
     page = open_page(browser, server, api)
     page.get_by_role("button", name="No particular hike in mind?").click()
     waterside = page.get_by_label("Lake or sea you want, in %")
-    assert waterside.input_value() == "50"
+    assert waterside.get_attribute("placeholder") == "50"  # the default, in %
     assert (waterside.get_attribute("min"), waterside.get_attribute("max"), waterside.get_attribute("step")) == ("0", "100", "5")
 
     waterside.fill("30")
