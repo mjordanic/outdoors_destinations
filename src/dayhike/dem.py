@@ -309,7 +309,7 @@ def sample_elevations(
         if not path.is_file():
             continue
         with rasterio.open(path) as dataset:
-            coords = _tile_coords(dataset, source, [points[index] for index in indices])
+            coords = _tile_coords(dataset, [points[index] for index in indices])
             for index, value in zip(indices, _read_heights(dataset, coords), strict=True):
                 out[index] = value
             if shares is not None:
@@ -322,20 +322,18 @@ def sample_elevations(
     return out
 
 
-def _tile_coords(dataset, source: DemSource, points: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
-    """(lon, lat) of (lat, lon) ``points`` on one open tile of ``source``.
+def _tile_coords(dataset, points: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
+    """(lon, lat) of (lat, lon) ``points`` on one open DEM tile.
 
-    A GLO-30 grid stops half a cell short of its tile's east and south edges,
-    and outside it a read gives 0, not nodata: a point there reads the edge cell.
+    A GLO-30 or FABDEM grid stops half a cell short of its tile's east and south
+    edges; outside it a GLO-30 read gives 0 and a FABDEM read nodata. A point
+    there reads the edge cell, as ``dem_heights`` does.
     """
-    coords = [(lon, lat) for lat, lon in points]
-    if source is not COPERNICUS:
-        return coords
     box = dataset.bounds
     half_x, half_y = dataset.res[0] / 2, dataset.res[1] / 2
     return [
         (min(max(lon, box.left + half_x), box.right - half_x), min(max(lat, box.bottom + half_y), box.top - half_y))
-        for lon, lat in coords
+        for lat, lon in points
     ]
 
 
@@ -372,7 +370,7 @@ class PointHeights:
             if point not in self._read:
                 dataset = self._dataset(fabdem_tile_id(*point))
                 self._read[point] = (
-                    None if dataset is None else _read_heights(dataset, _tile_coords(dataset, self.source, [point]))[0]
+                    None if dataset is None else _read_heights(dataset, _tile_coords(dataset, [point]))[0]
                 )
         return [self._read[point] for point in points]
 

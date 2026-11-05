@@ -305,7 +305,7 @@ def test_a_point_the_tiles_grid_misses_reads_its_edge_cell_not_sea_level(tmp_pat
     assert samples == [pytest.approx(1500.0), pytest.approx(1600.0), pytest.approx(1700.0)]
 
 
-def test_a_fabdem_point_outside_the_tiles_grid_stays_uncovered(tmp_path: Path) -> None:
+def test_a_fabdem_point_in_the_tiles_south_or_east_margin_reads_its_edge_cell(tmp_path: Path) -> None:
     import rasterio
     from rasterio.transform import from_origin
 
@@ -322,11 +322,16 @@ def test_a_fabdem_point_outside_the_tiles_grid_stays_uncovered(tmp_path: Path) -
         transform=from_origin(15 - cell / 2, 46 + cell / 2, cell, cell),
         nodata=-9999.0,
     ) as dataset:
-        dataset.write(np.full((3600, 3600), 1500.0, dtype="float32"), 1)
+        # Real FABDEM tiles carry GLO-30's half-cell offset, so their grid too
+        # stops half a cell short of the tile's east and south edges.
+        heights = np.full((3600, 3600), 1500.0, dtype="float32")
+        heights[:, -1] = 1600.0
+        heights[-1, :] = 1700.0
+        dataset.write(heights, 1)
+    points = [(45.5, 15.5), (45.5, 15.99995), (45.00003, 15.5)]
 
-    samples = sample_elevations(tmp_path, [(45.5, 15.5), (45.5, 15.99995), (45.00003, 15.5)])
-
-    assert samples == [pytest.approx(1500.0), None, None]
+    assert sample_elevations(tmp_path, points) == [pytest.approx(1500.0), pytest.approx(1600.0), pytest.approx(1700.0)]
+    assert point_heights(tmp_path)(points) == [pytest.approx(1500.0), pytest.approx(1600.0), pytest.approx(1700.0)]
 
 
 CELL = 1 / 3600  # a GLO-30 cell, in degrees
