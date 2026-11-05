@@ -224,6 +224,13 @@ def test_search_and_detail(client: TestClient) -> None:
     assert client.get("/api/hikes/999").status_code == 404
 
 
+def test_a_hike_s_way_back_for_its_gpx_says_how_it_gets_back(client: TestClient) -> None:
+    back = client.get(f"/api/hikes/{RIDGE_WALK_ID}/way-back").json()
+
+    assert back == {**client.get(f"/api/hikes/{RIDGE_WALK_ID}").json()["way_back"], "line": None, "ele": None}
+    assert client.get("/api/hikes/999/way-back").status_code == 404
+
+
 def test_hikes_in_a_map_box(client: TestClient) -> None:
     box = {"south": 45.05, "west": 14.99, "north": 45.06, "east": 15.01}
 

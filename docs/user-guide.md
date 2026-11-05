@@ -34,7 +34,11 @@ the server wakes up.
 
 Pick one of three ways:
 
-1. **Type its name** in the search box.
+1. **Type its name** in the search box. A small typo is fine: "Triglov"
+   finds Triglav. When no name has every word as you typed it, the list says
+   so and marks each name that is only like it "similar name". So does a name
+   that holds your word only inside a longer word ("Rappenloch" in
+   "Krappenlochklamm"): check that it is the hike you meant.
 2. **Tick "Select hike on map"**, zoom in and click a hike. Hikes appear once
    you zoom in far enough that fewer than about 100 are in view.
 3. **Press "Design your own from segments"** and draw a walk along the marked
@@ -52,8 +56,10 @@ Example: you want a hike of about 10 km with 800 m of climbing and a hut on
 the way. Type 10 for Length, 800 for climbing and tick the hut box. Press
 **Find hikes**.
 
-Everything starts at "ask for nothing". A measure only counts once you give it
-a value. **Back to a hike you liked** takes you back to the normal search.
+Everything starts at "ask for nothing": the value boxes are empty, with a
+grey example value in each. Typing a value switches that measure on, at weight
+100. Sliding a measure's weight up without typing a value asks for the example
+value shown. **Back to a hike you liked** takes you back to the normal search.
 
 ### Say what matters to you
 
@@ -90,22 +96,32 @@ the hut slider to 100. Turn Length down to 30.
 - **More options.** Under the limits, this sets how close hikes must start to
   be grouped as one area (see "Reading the results" below).
 
+The filters a list was found with show as labels just above it: "Within 50 km
+of Bled", "Weather in Jan", "One way, without the way back", "Grouped within
+3 km". Press the × on a label to drop that filter; the list is found again
+without it.
+
 ## Download and share a hike
 
 Open any hike from the results. It has a **Link to this hike**, and two
 buttons.
 
 - **Share** sends the link to your friends. On a phone it opens the share
-  sheet. Where there is none, or it does not open, it copies the link, and the
-  button says "Link copied".
+  sheet. On a computer, or where the share sheet does not open, it copies the
+  link, and a line beside the button says "Link copied". If the link cannot be
+  copied, that line shows the link for you to copy.
 - **Download GPX** saves the hike as a file you can open in most hiking and GPS
   apps.
 
 The link opens the same hike. A walk you drew opens the same walk, too.
 
 Good to know: the GPX file holds the line of the hike as you see it on the
-map, without heights, and not the walk back to the start. The route data comes
-from OpenStreetMap, and the file says so.
+map, with a height at every point. With Return to start on, it also holds the
+walk back to the start as a second track, named "…: way back to the start",
+so the file matches the length the page shows. With it off, the file is the
+hike one way. The route data comes from OpenStreetMap and the heights from an
+elevation map, and the file credits both. The first download of a walk back
+along the trails can take a few seconds while the server reads the trails.
 
 ## One way or with the way back
 

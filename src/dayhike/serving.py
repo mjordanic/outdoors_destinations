@@ -134,6 +134,7 @@ Seed = int | Route | Mapping[str, float]  # a DayHike id, a ComposedHike, or a W
 SERVING_FORMAT = 5
 SERVING_ROOT = "/data"  # where the container finds the export (web/Dockerfile)
 LINE_TOLERANCE_M = 10.0
+LINE_END_M = 2.0  # a served line's end lies this close to the TrailGraph vertex it was (1e-5 degree kept)
 ELEVATION_POINTS = 128
 DRAWN_SMOOTH_M = 90.0  # a Copernicus GLO-30 ElevationProfile is drawn smoothed over this (ADR-0030) ...
 DRAWN_STEP_M = 10.0  # ... resampled this often first
@@ -159,6 +160,9 @@ UNNAMING_KINDS = ("restaurant_cafe", "parking")  # amenity points that name no h
 TRAILHEAD_NEAREST = 3  # parking and restaurant/cafe points kept per Trailhead
 VALHALLA_CACHE_BYTES = 256 * 1024 * 1024  # mjolnir.max_cache_size; the build default is 1 GB
 SEARCH_SCAN_CAP = 5_000  # occurrences of the scanned word a search looks at, so short queries stay fast
+FUZZY_MIN_LETTERS = 4  # a shorter query word is found only as typed
+FUZZY_SPELLINGS = 3  # the nearest words a word with a typo is tried as
+FUZZY_QUERIES = 6  # the respelled queries a search tries, fewest typos first
 GEONAMES_URL = "https://download.geonames.org/export/dump/allCountries.zip"
 GEONAMES_ATTRIBUTION = "GeoNames (geonames.org), CC BY 4.0"
 PLACE_MARGIN_DEG = 2.0  # places this far outside the Trailheads' box are kept: a start a drive away
@@ -741,6 +745,19 @@ def simplify_line(
     return np.degrees(kept[:, 1] / EARTH_RADIUS_M), np.degrees(kept[:, 0] / EARTH_RADIUS_M / scale)
 
 
+def walk_line(lat: np.ndarray, lon: np.ndarray, ele: np.ndarray) -> dict:
+    """A walk for a GPX file: ``line`` simplified as a hike's line is, and
+    ``ele`` the metres at each vertex kept (None where unknown)."""
+    lat0 = float(np.mean(lat))
+    scale = math.cos(math.radians(lat0))
+    xyz = np.column_stack([np.radians(lon) * scale * EARTH_RADIUS_M, np.radians(lat) * EARTH_RADIUS_M, ele])
+    kept = shapely.get_coordinates(shapely.simplify(shapely.linestrings(xyz), LINE_TOLERANCE_M), include_z=True)
+    return {
+        "line": encode_polyline(np.degrees(kept[:, 1] / EARTH_RADIUS_M), np.degrees(kept[:, 0] / EARTH_RADIUS_M / scale)),
+        "ele": [None if math.isnan(z) else round(z) for z in kept[:, 2].tolist()],
+    }
+
+
 def encode_polyline(lat: np.ndarray, lon: np.ndarray) -> str:
     """Google encoded polyline, precision 5 (what Leaflet plugins and OSRM use)."""
     values = np.round(np.column_stack([lat, lon]) * 1e5).astype(np.int64)
@@ -954,6 +971,7 @@ class ServingData:
         # One string of every folded name between newlines: str.find walks it in C.
         self._haystack = "\n" + "\n".join(self._folded) + "\n"
         self._starts = np.cumsum([1] + [len(name) + 1 for name in self._folded[:-1]])
+        self._spellings = _Spellings(self._folded)
         places = self.directory / "places.sqlite"
         self.places = f"file:{places}?mode=ro&immutable=1" if places.is_file() else None
 
@@ -967,7 +985,8 @@ class ServingData:
         return row
 
     def search(self, query: str, limit: int = 20) -> list[dict]:
-        """DayHikes whose name holds every word of the query, in any order.
+        """DayHikes whose name holds every word of the query, in any order;
+        while they are fewer than ``limit``, then names that differ by a typo.
 
         Matching ignores case and accents and folds German ue/oe/ae to u/o/a.
         The best come first: the exact name, then names starting with the
@@ -975,6 +994,13 @@ class ServingData:
         shorter names first within each. A number also finds that DayHike id.
         Only the first SEARCH_SCAN_CAP occurrences, in id order, of the
         longest word (two letters or more) are considered.
+
+        After them come the names that hold every word with up to
+        ``_Spellings.typos`` of its letters wrong (a word of the names
+        spelled so), fewest typos first: Triglov finds Triglav. These, and
+        names that hold a word only inside a longer one (Rappenloch in
+        Krappenlochklamm), are marked ``"match": "similar"``; the others
+        ``"match": "words"``.
         """
         needle = _fold(query.strip())
         words = needle.split()
@@ -984,16 +1010,33 @@ class ServingData:
                 rows.append(self.row_of(int(needle)))
             except KeyError:
                 pass
+        by_name = self._rows_with_words(words, needle, set(rows))
+        rows += by_name
+        similar = {row for row in by_name if _relevance(self._folded[row], needle, words) == 3}
+        if len(rows) < limit:
+            for spelled in self._spellings.respelled(words):
+                found = self._rows_with_words(spelled, " ".join(spelled), set(rows))
+                rows += found
+                similar.update(found)
+                if len(rows) >= limit:
+                    break
+        return [
+            {**summary, "match": "similar" if row in similar else "words"}
+            for row, summary in zip(rows[:limit], self._summaries(rows[:limit]), strict=True)
+        ]
+
+    def _rows_with_words(self, words: list[str], needle: str, skip: set[int]) -> list[int]:
+        """Rows not in ``skip`` whose name holds every word, best first (see ``search``)."""
         scan = max(words, key=len, default="")
-        if len(scan) >= 2:
-            found = [
-                row
-                for row in self._rows_containing(scan)
-                if row not in rows and all(word in self._folded[row] for word in words)
-            ]
-            found.sort(key=lambda row: (_relevance(self._folded[row], needle, words), len(self._folded[row]), row))
-            rows += found
-        return self._summaries(rows[:limit])
+        if len(scan) < 2:
+            return []
+        found = [
+            row
+            for row in self._rows_containing(scan)
+            if row not in skip and all(word in self._folded[row] for word in words)
+        ]
+        found.sort(key=lambda row: (_relevance(self._folded[row], needle, words), len(self._folded[row]), row))
+        return found
 
     def find_place(self, query: str, limit: int = 5) -> list[dict]:
         """Places with a name starting with the query, folded like ``search``.
@@ -1114,6 +1157,27 @@ class ServingData:
             else {"kind": kind, "parts": json.loads(parts), "route": route},
         }
 
+    def way_back_walk(self, dayhike_id: int) -> dict:
+        """A DayHike's way back to its start as walked (ADR-0019), for its GPX:
+        ``kind`` and ``m`` as ``detail`` gives them, and for a trail way back
+        its ``line`` and ``ele`` (see ``walk_line``), found again on the
+        TrailGraph between the line's ends; None for both when it is not
+        (a step or a retrace the page draws from the hike's own line)."""
+        row = self.row_of(dayhike_id)
+        metres, kind = self.store.with_way_back.way_back[[0, 3], row]
+        back = {**_way_back(metres, kind), "line": None, "ele": None}
+        if back["kind"] != "trail" or self.trailgraph is None:
+            return back
+        with self._db() as db:
+            (line,) = db.execute("SELECT line FROM hikes WHERE id = ?", (dayhike_id,)).fetchone()
+        points = decode_polyline(line)
+        ends = [self.trailgraph.vertex_near(lat, lon, LINE_END_M) for lat, lon in (points[0], points[-1])]
+        if None in ends:
+            return back
+        (lat, lon), (end_lat, end_lon) = ends
+        trail = self.trailgraph.trail_back(np.array([lat, end_lat]), np.array([lon, end_lon]), float(metres) + 1.0)
+        return back if trail is None else {**back, **walk_line(trail.lat, trail.lon, trail.ele)}
+
     def segments_in_box(
         self, south: float, west: float, north: float, east: float, limit: int
     ) -> tuple[dict, bool]:
@@ -1196,7 +1260,13 @@ class ServingData:
             "facts": {column: _value(value) for column, value in facts.items()},
             "profile_shape": None if shape is None else [_value(v) for v in shape],
             "routes": routes,
-            "way_back": None if back is None else {"m": back.metres, "kind": back.kind},
+            "way_back": None
+            if back is None
+            else {
+                "m": back.metres,
+                "kind": back.kind,
+                **(walk_line(back.walk.lat, back.walk.lon, back.walk.ele) if back.walk is not None else {"line": None, "ele": None}),
+            },
             "built": None,
         }
 
@@ -1768,6 +1838,110 @@ def _fold(text: str) -> str:
     decomposed = unicodedata.normalize("NFKD", plain)
     bare = "".join(c for c in decomposed if not unicodedata.combining(c)).casefold()
     return bare.replace("ue", "u").replace("oe", "o").replace("ae", "a")
+
+
+class _Spellings:
+    """The words of every hike name, to find a query word typed with a typo.
+
+    A word of ``FUZZY_MIN_LETTERS`` letters or more may be one or two letters
+    off (``typos``): a letter missing, added, changed, or two swapped. The
+    words are kept by length as arrays of their letters, with a mask of the
+    letters each holds, so a query compares only words of a near length
+    whose letters differ little, all at once.
+    """
+
+    def __init__(self, names: list[str]) -> None:
+        counts: dict[str, int] = {}
+        for name in names:
+            for word in set(re.findall(r"\w+", name)):
+                if len(word) >= FUZZY_MIN_LETTERS - 1:
+                    counts[word] = counts.get(word, 0) + 1
+        by_length: dict[int, list[str]] = {}
+        for word in sorted(counts, key=lambda word: (-counts[word], word)):  # the commonest first
+            by_length.setdefault(len(word), []).append(word)
+        self._words = {
+            length: (
+                spelled,
+                np.array([[ord(c) for c in word] for word in spelled], dtype=np.uint32),
+                np.array([_letter_mask(word) for word in spelled], dtype=np.uint32),
+            )
+            for length, spelled in by_length.items()
+        }
+
+    @staticmethod
+    def typos(word: str) -> int:
+        """How many typos a word may have: none under FUZZY_MIN_LETTERS letters
+        or with a digit (1003 is another stage than 1002), two from 8."""
+        if len(word) < FUZZY_MIN_LETTERS or any(c.isdigit() for c in word):
+            return 0
+        return 1 if len(word) < 8 else 2
+
+    def near(self, word: str) -> list[tuple[int, str]]:
+        """(typos, word) of the names' words at most ``typos(word)`` off it,
+        but not ``word`` itself: fewest typos first, then the commonest."""
+        allowed = self.typos(word)
+        if not allowed:
+            return []
+        letters, mask = np.array([ord(c) for c in word], dtype=np.uint32), np.uint32(_letter_mask(word))
+        found: list[tuple[int, int, str]] = []
+        for length in range(len(word) - allowed, len(word) + allowed + 1):
+            if length not in self._words:
+                continue
+            spelled, table, masks = self._words[length]
+            # A typo changes at most two letters of the mask: a cheap test first.
+            keep = np.flatnonzero(np.bitwise_count(masks ^ mask) <= 2 * allowed)
+            off = _typos_off(letters, table[keep])
+            found += [(int(off[i]), int(keep[i]), spelled[keep[i]]) for i in np.flatnonzero((off <= allowed) & (off > 0))]
+        return [(typos, spelled) for typos, _, spelled in sorted(found)]
+
+    def respelled(self, words: list[str]) -> list[list[str]]:
+        """The query's words with typos put right, fewest typos first: each
+        word as typed or as one of its ``FUZZY_SPELLINGS`` nearest words,
+        at most ``FUZZY_QUERIES`` of them, never the query as typed."""
+        options = [[(0, word)] + self.near(word)[:FUZZY_SPELLINGS] for word in words]
+        start = (0,) * len(options)
+        heap, seen, queries = [(0, start)], {start}, []
+        while heap and len(queries) < FUZZY_QUERIES:
+            typos, chosen = heapq.heappop(heap)
+            if typos:
+                queries.append([options[i][pick][1] for i, pick in enumerate(chosen)])
+            for i, pick in enumerate(chosen):
+                if pick + 1 < len(options[i]):
+                    after = chosen[:i] + (pick + 1,) + chosen[i + 1 :]
+                    if after not in seen:
+                        seen.add(after)
+                        cost = typos - options[i][pick][0] + options[i][pick + 1][0]
+                        heapq.heappush(heap, (cost, after))
+        return queries
+
+
+def _letter_mask(word: str) -> int:
+    """A bit per letter a word holds: a to z, any other letter in one of six bits more."""
+    mask = 0
+    for c in word:
+        mask |= 1 << (ord(c) - 97 if "a" <= c <= "z" else 26 + ord(c) % 6)
+    return mask
+
+
+def _typos_off(word: np.ndarray, table: np.ndarray) -> np.ndarray:
+    """Per row of ``table`` (the letters of words of one length), how many
+    typos it is off ``word``: letters missing, added, changed or two swapped
+    (the optimal string alignment distance), all rows at once."""
+    count, length = table.shape
+    before = None
+    above = np.tile(np.arange(length + 1, dtype=np.int16), (count, 1))
+    for i in range(1, len(word) + 1):
+        row = np.empty_like(above)
+        row[:, 0] = i
+        changed = (table != word[i - 1]).astype(np.int16)
+        for j in range(1, length + 1):
+            best = np.minimum(np.minimum(above[:, j], row[:, j - 1]) + 1, above[:, j - 1] + changed[:, j - 1])
+            if before is not None and j > 1:
+                swapped = (table[:, j - 2] == word[i - 1]) & (table[:, j - 1] == word[i - 2])
+                best = np.where(swapped, np.minimum(best, before[:, j - 2] + 1), best)
+            row[:, j] = best
+        before, above = above, row
+    return above[:, length]
 
 
 def _relevance(name: str, needle: str, words: list[str]) -> int:

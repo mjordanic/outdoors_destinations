@@ -5,7 +5,9 @@ The wish half of the API (wishable Measures in ``/api/measures``, a ``wish`` in
 Needs Chromium for Playwright: ``uv run playwright install chromium``.
 """
 
+import itertools
 import json
+import math
 import re
 import socket
 import threading
@@ -121,10 +123,18 @@ class Api:
 
 
 def open_page(
-    browser, server: str, api: Api, *, width: int = 1280, hash: str = "", init: str = "", draw: int | None = None
+    browser,
+    server: str,
+    api: Api,
+    *,
+    width: int = 1280,
+    hash: str = "",
+    init: str = "",
+    draw: int | None = None,
+    touch: bool = False,
 ):
-    """``draw``: the draw number each Find takes, in place of a random one."""
-    page = browser.new_page(viewport={"width": width, "height": 900})
+    """``draw``: the draw number each Find takes, in place of a random one; ``touch``: a phone's touch screen."""
+    page = browser.new_page(viewport={"width": width, "height": 900}, has_touch=touch, is_mobile=touch)
     if init:
         page.add_init_script(init)
     page.set_default_timeout(5000)
@@ -302,7 +312,8 @@ def test_a_hiker_with_no_hike_in_mind_gets_a_wish_form_of_the_wishable_measures(
     gain = page.get_by_label("Climbing you want, in m")
     assert gain.get_attribute("type") == "number"
     assert (gain.get_attribute("min"), gain.get_attribute("max"), gain.get_attribute("step")) == ("0", "3000", "50")
-    assert gain.input_value() == "600"
+    # Empty until asked, so no value looks asked while its weight is off; the default is a hint.
+    assert gain.input_value() == "" and gain.get_attribute("placeholder") == "600"
     hut = page.get_by_label("Hut along you want")
     assert hut.get_attribute("type") == "checkbox" and hut.is_checked()
     assert page.get_by_label("Climbing weight, 0 to 100").is_visible()
@@ -407,7 +418,7 @@ def test_a_multi_day_length_is_wished_in_km_with_a_hint(browser, server) -> None
     length = page.get_by_label("Length you want, in km")
 
     assert (length.get_attribute("min"), length.get_attribute("max"), length.get_attribute("step")) == ("1", "2000", "0.5")
-    assert length.input_value() == "10"
+    assert length.input_value() == "" and length.get_attribute("placeholder") == "10"
     assert page.get_by_text("Over about 25 km is usually more than a day").is_visible()
 
     length.fill("66")
@@ -525,7 +536,7 @@ def test_resetting_a_wish_asks_nothing_again(browser, server) -> None:
     page.get_by_role("button", name="Reset weights").click()
 
     assert page.get_by_label("Highest point weight, 0 to 100").input_value() == "0"
-    assert page.get_by_label("Highest point you want, in m").input_value() == "1500"
+    assert page.get_by_label("Highest point you want, in m").input_value() == ""
 
 
 def test_a_hike_still_loading_leaves_the_wish_form_open(browser, server) -> None:
@@ -1276,10 +1287,22 @@ def downloaded_gpx(page, card: str):
     return caught.value.suggested_filename, ET.parse(caught.value.path()).getroot()
 
 
+def gpx_tracks(gpx) -> list[tuple[str, list[tuple[float, float]], list[float]]]:
+    """Name, points and heights of each track of a GPX file."""
+    return [
+        (
+            track.findtext(f"{GPX}name"),
+            [(float(p.get("lat")), float(p.get("lon"))) for p in track.iter(f"{GPX}trkpt")],
+            [float(p.findtext(f"{GPX}ele")) for p in track.iter(f"{GPX}trkpt")],
+        )
+        for track in gpx.iter(f"{GPX}trk")
+    ]
+
+
 def test_a_liked_hike_downloads_as_a_gpx_track_that_credits_openstreetmap_and_links_back(browser, server) -> None:
-    with urllib.request.urlopen(f"{server}/api/hikes/{RIDGE_WALK_ID}") as response:
-        line = json.load(response)["line"]
-    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    with urllib.request.urlopen(f"{server}/api/hikes/{RIDGE_WALK_ID}?return_to_start=false") as response:
+        hike = json.load(response)
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}&oneway")
     page.get_by_text("Chosen: Ridge Walk").wait_for()
 
     name, gpx = downloaded_gpx(page, "#liked")
@@ -1288,15 +1311,39 @@ def test_a_liked_hike_downloads_as_a_gpx_track_that_credits_openstreetmap_and_li
     assert gpx.tag == f"{GPX}gpx" and gpx.get("version") == "1.1"
     meta = gpx.find(f"{GPX}metadata")
     assert meta.findtext(f"{GPX}name") == "Ridge Walk"
-    assert meta.findtext(f"{GPX}desc") == "Route data © OpenStreetMap contributors, ODbL 1.0."
+    assert meta.findtext(f"{GPX}desc").startswith("Route data © OpenStreetMap contributors, ODbL 1.0. Heights: FABDEM V1-2")
+    assert "CC BY-NC-SA 4.0" in meta.findtext(f"{GPX}desc")  # the heights come from FABDEM, so its licence goes with them
     assert meta.find(f"{GPX}copyright").get("author") == "OpenStreetMap contributors"
     assert meta.findtext(f"{GPX}copyright/{GPX}license") == "https://opendatacommons.org/licenses/odbl/"
-    assert meta.find(f"{GPX}link").get("href") == f"{server}/#hike={RIDGE_WALK_ID}"
-    assert gpx.findtext(f"{GPX}trk/{GPX}name") == "Ridge Walk"
-    points = [coordinate for p in gpx.iter(f"{GPX}trkpt") for coordinate in (float(p.get("lat")), float(p.get("lon")))]
-    assert points == pytest.approx([coordinate for point in decode_polyline(line) for coordinate in point], abs=1e-9)
-    assert len(points) > 1
-    assert not list(gpx.iter(f"{GPX}ele"))  # no elevation, so no DEM licence in the file
+    assert meta.find(f"{GPX}link").get("href") == f"{server}/#hike={RIDGE_WALK_ID}&oneway"
+    # One way: the hike alone, a height at every point, from its profile end to end.
+    ((track, points, heights),) = gpx_tracks(gpx)
+    assert track == "Ridge Walk"
+    assert points == pytest.approx(decode_polyline(hike["line"]), abs=1e-9) and len(points) > 1
+    assert heights[0] == hike["elevation"]["metres"][0] and heights[-1] == hike["elevation"]["metres"][-1]
+    assert min(heights) >= min(hike["elevation"]["metres"]) and max(heights) <= max(hike["elevation"]["metres"])
+
+
+def test_a_hike_measured_with_its_way_back_downloads_the_way_back_as_a_second_track(browser, server) -> None:
+    with urllib.request.urlopen(f"{server}/api/hikes/{RIDGE_WALK_ID}") as response:
+        hike = json.load(response)
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+
+    _, gpx = downloaded_gpx(page, "#liked")
+
+    (name, there, up), (back_name, back, down) = gpx_tracks(gpx)
+    assert name == "Ridge Walk"
+    assert back_name.startswith("Ridge Walk: way back to the start (")
+    assert back[0] == there[-1] and back[-1] == there[0] and down[0] == up[-1] and down[-1] == up[0]
+    walked = sum(metres_between(a, b) for a, b in itertools.pairwise(there + back[1:]))
+    assert walked == pytest.approx(hike["facts"]["length_m"], rel=0.05)  # the length the page says
+
+
+def metres_between(a: tuple[float, float], b: tuple[float, float]) -> float:
+    lat1, lon1, lat2, lon2 = map(math.radians, (*a, *b))
+    h = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2
+    return 2 * 6_371_000 * math.asin(math.sqrt(h))
 
 
 def test_a_catalog_hike_and_a_hike_found_similar_each_link_to_themselves(browser, server) -> None:
@@ -1317,7 +1364,7 @@ Object.defineProperty(navigator, "clipboard", { value: { writeText: async (text)
 
 
 def test_share_hands_the_hike_address_to_the_phone_share_sheet(browser, server) -> None:
-    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", init=SHARED)
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", init=SHARED, touch=True)
     page.get_by_text("Chosen: Ridge Walk").wait_for()
 
     page.locator("#liked").get_by_role("button", name="Share").click()
@@ -1345,7 +1392,7 @@ def loops_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
 
 def test_a_suggested_loop_shared_opens_the_same_route_for_a_friend(browser, loops_server, monkeypatch) -> None:
     monkeypatch.setattr("dayhike.serving.GROUP_M", 0.0)  # every hike in its own row, the loops too
-    page = open_page(browser, loops_server, Api({}), hash=f"#hike={MEADOW_PATH}", init=SHARED)
+    page = open_page(browser, loops_server, Api({}), hash=f"#hike={MEADOW_PATH}", init=SHARED, touch=True)
     page.get_by_text("Chosen: Meadow Path").wait_for()
     page.get_by_role("button", name="Find similar").click()
     page.locator("#results-table tbody tr").first.wait_for()
@@ -1483,7 +1530,7 @@ SHARE_REFUSED = COPIED.replace(
 
 
 def test_share_copies_the_link_when_the_share_sheet_fails(browser, server) -> None:
-    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", init=SHARE_REFUSED)
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", init=SHARE_REFUSED, touch=True)
     page.get_by_text("Chosen: Ridge Walk").wait_for()
 
     page.locator("#liked").get_by_role("button", name="Share").click()
@@ -1656,7 +1703,7 @@ def test_each_suggested_hike_is_in_the_accessibility_tree_and_picks_itself(brows
     page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
     page.get_by_text("Chosen: Ridge Walk").wait_for()
     page.locator("#pair-search").fill("al")
-    options = page.locator("#pair-suggestions li")
+    options = page.locator("#pair-suggestions li[role=option]")  # not the note above names only like the query
     options.nth(1).wait_for()
 
     # Focusable, as the snapshots of DevTools-based tools need to list an option at all.
@@ -1669,7 +1716,7 @@ def test_each_suggested_hike_is_in_the_accessibility_tree_and_picks_itself(brows
     focusable = [p["value"]["value"] for n in listed for p in n.get("properties", []) if p["name"] == "focusable"]
     assert len(focusable) == len(names) and all(focusable)
 
-    second = options.nth(1).evaluate("li => li.firstChild.textContent")
+    second = options.nth(1).evaluate("li => li.firstChild.textContent.trim()")  # before a similar-name tag
     page.locator("#pair-suggestions").get_by_role("option").nth(1).click()
     page.locator("#selected").get_by_text(second).first.wait_for()
     assert page.locator("#pair-search").input_value() == second
@@ -1714,3 +1761,157 @@ def test_using_an_edited_loop_after_undo_measures_the_route_drawn_and_says_so(br
     page.get_by_text(f"Your hike of {drawn - 1} segment").wait_for()
     assert page.evaluate("state.liked.route.segments.length") == drawn - 1
     assert page.evaluate("state.liked.route.text === compose.text()")
+
+
+# ---------- the wishes of the second visitor test ----------
+
+
+def test_the_filters_of_a_list_show_above_it_and_each_clears_with_its_x(browser, server) -> None:
+    api = Api({})
+    page = open_page(browser, server, api, hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_label("Only hikes near a starting place").check()
+    page.get_by_label("From", exact=True).fill("45.2, 15.1")
+    page.get_by_label("Max drive hours", exact=True).uncheck()
+    page.get_by_label("Max km, straight line", exact=True).check()
+    page.get_by_label("Max km value").fill("50")
+    page.locator("#more-options summary").click()
+    page.locator("#group-km").fill("3")
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+
+    chips = page.locator("#results-filters li")
+    assert chips.all_inner_texts() == ["Within 50 km of 45.2, 15.1\n×", "Grouped within 3 km\n×"]
+
+    asked = len(api.ranked)
+    page.get_by_role("button", name="Clear Within 50 km of 45.2, 15.1").click()
+    page.wait_for_function("() => document.querySelectorAll('#results-filters li').length === 1")
+    assert len(api.ranked) == asked + 1 and "origin" not in api.ranked[-1] and api.ranked[-1]["group_km"] == 3
+    assert not page.get_by_label("Only hikes near a starting place").is_checked()
+
+    page.get_by_role("button", name="Clear Grouped within 3 km").click()
+    page.wait_for_function("() => document.querySelector('#results-filters').hidden")
+    assert "group_km" not in api.ranked[-1] and page.locator("#group-km").input_value() == ""
+
+
+def test_a_one_way_list_says_so_above_it_and_its_x_measures_the_way_back_again(browser, server) -> None:
+    api = Api({})
+    page = open_page(browser, server, api, hash=f"#hike={RIDGE_WALK_ID}&oneway")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+
+    page.get_by_role("button", name="Clear One way, without the way back").click()
+
+    page.wait_for_function("() => document.querySelector('#results-filters').hidden")
+    assert page.locator("#return-on").is_checked() and api.ranked[-1]["return_to_start"] is True
+
+
+def test_a_name_typed_with_a_typo_lists_similar_names_marked_so(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+
+    page.locator("#search").fill("Valey Path")
+
+    page.get_by_text("“Valey Path” as typed. Names like it:").wait_for()
+    option = page.get_by_role("option", name="Valley Path")
+    assert "similar name" in option.inner_text()
+    page.locator("#search").press("ArrowDown")
+    page.locator("#search").press("Enter")
+    page.get_by_text("Chosen: Valley Path").wait_for()
+
+
+def test_a_value_typed_in_the_wish_form_switches_its_weight_on_and_a_weight_asks_the_shown_default(
+    browser, server
+) -> None:
+    api = Api(WISHABLE)
+    page = open_page(browser, server, api)
+    page.get_by_role("button", name="No particular hike in mind?").click()
+
+    page.get_by_label("Climbing you want, in m").fill("900")
+    page.get_by_label("Highest point weight, 0 to 100").fill("50")
+
+    assert page.get_by_label("Climbing weight, 0 to 100").input_value() == "100"
+    assert page.get_by_label("Highest point you want, in m").input_value() == "1500"
+    page.get_by_role("button", name="Find hikes").click()
+    page.locator("#results").wait_for()
+    assert api.ranked[-1]["wish"] == {"elevation_gain": 900, "highest": 1500}
+    assert api.ranked[-1]["weights"] == {"elevation_gain": 100, "highest": 50}
+
+
+def test_a_wish_weight_brought_back_after_a_reset_asks_the_shown_default(browser, server) -> None:
+    api = Api(WISHABLE)
+    page = open_page(browser, server, api)
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    page.get_by_label("Climbing weight, 0 to 100").fill("50")
+    page.get_by_role("button", name="Back to a hike you liked").click()
+    page.get_by_role("button", name="Reset weights").click()
+
+    page.get_by_role("button", name="No particular hike in mind?").click()
+
+    assert page.get_by_label("Climbing you want, in m").input_value() == "600"
+    page.get_by_role("button", name="Find hikes").click()
+    page.locator("#results").wait_for()
+    assert api.ranked[-1]["wish"] == {"elevation_gain": 600}
+    assert api.ranked[-1]["weights"] == {"elevation_gain": 50}
+
+
+def test_going_back_to_a_liked_hike_leaves_the_wish_values_empty(browser, server) -> None:
+    page = open_page(browser, server, Api(WISHABLE))
+    page.get_by_label("Length weight, 0 to 100").fill("70")
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    page.get_by_role("button", name="Back to a hike you liked").click()
+
+    page.get_by_role("button", name="No particular hike in mind?").click()
+
+    assert set(page.locator("input.wish[type=number]").evaluate_all("inputs => inputs.map(i => i.value)")) == {""}
+
+
+def test_a_wish_address_with_a_weight_and_no_value_asks_the_shown_default(browser, server) -> None:
+    page = open_page(browser, server, Api(WISHABLE), hash="#wish=elevation_gain::100")
+
+    assert page.get_by_label("Climbing weight, 0 to 100").input_value() == "100"
+    assert page.get_by_label("Climbing you want, in m").input_value() == "600"
+
+
+def test_share_says_beside_the_button_that_the_link_was_copied(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", init=COPIED + SHARED)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+
+    page.locator("#liked").get_by_role("button", name="Share").click()
+
+    # A computer's share sheet may never answer: there the link is copied, and the page says so.
+    page.locator("#liked .share-note").get_by_text("Link copied").wait_for()
+    assert page.evaluate("window.shared") == [] and page.evaluate("window.copied") == [f"{server}/#hike={RIDGE_WALK_ID}"]
+
+
+def test_share_shows_the_link_to_copy_where_it_cannot_be_copied(browser, server) -> None:
+    refused = 'Object.defineProperty(navigator, "clipboard", { value: { writeText: async () => { throw new Error("no"); } } });'
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", init=refused)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+
+    page.locator("#liked").get_by_role("button", name="Share").click()
+
+    assert page.get_by_label("Link to share").input_value() == f"{server}/#hike={RIDGE_WALK_ID}"
+
+
+TAPPED = """() => [...document.querySelectorAll(
+  'button, select, input:not([type=checkbox]):not([type=range]), summary, label.check, .leaflet-bar a')]
+  .filter((e) => e.offsetParent && !e.matches('button.help'))
+  .map((e) => [e.id || e.className || e.textContent.trim(), e.getBoundingClientRect().height])
+  .filter(([, height]) => height < 44)"""
+
+
+def test_every_control_on_a_phone_takes_a_tap_44_px_across(browser, server) -> None:
+    page = open_page(browser, server, Api({}), width=390, hash=f"#hike={RIDGE_WALK_ID}", touch=True)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_label("Select hike on map").check()
+    page.locator(".pick-map .leaflet-control-zoom-in").wait_for()
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+
+    assert page.evaluate(TAPPED) == []
+    zoom = page.locator(".pick-map .leaflet-control-zoom-in").bounding_box()
+    assert zoom["width"] >= 44 and zoom["height"] >= 44
+    # The "?" beside a score stays small but takes a tap 44 px across.
+    assert page.locator("button.help").first.evaluate("b => getComputedStyle(b, '::after').inset") == "-12px"
+    assert page.evaluate("document.documentElement.scrollWidth") <= 390

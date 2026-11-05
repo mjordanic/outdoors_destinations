@@ -1,6 +1,7 @@
 import dataclasses
 import json
 import sqlite3
+import time
 from pathlib import Path
 
 import numpy as np
@@ -14,6 +15,7 @@ from dayhike.serving import (
     ServingData,
     ServingExportError,
     _fold,
+    _Spellings,
     _relevance,
     decode_polyline,
     draw_noise,
@@ -188,7 +190,7 @@ def test_search_finds_prefix_then_contains_ignoring_case_and_accents(data: Servi
     assert [hit["name"] for hit in data.search("ridge")] == ["Ridge Walk"]
     assert [hit["name"] for hit in data.search("WALK")] == ["Ridge Walk"]
     assert [hit["name"] for hit in data.search("Válley")] == ["Valley Path"]
-    assert [hit["id"] for hit in data.search("1002")] == [1002]
+    assert [(hit["id"], hit["match"]) for hit in data.search("1002")] == [(1002, "words")]
     assert data.search("x") == []
     assert data.search("no such hike") == []
     hit = data.search("ridge")[0]
@@ -236,6 +238,67 @@ def test_search_scans_a_bounded_number_of_occurrences_of_a_word_of_two_letters_o
     assert data.search("r w") == []
     monkeypatch.setattr(serving, "SEARCH_SCAN_CAP", 1)
     assert [hit["name"] for hit in data.search("al")] == ["Ridge Walk"]
+
+
+def test_search_finds_a_name_typed_with_a_typo_and_says_it_is_only_similar(data: ServingData) -> None:
+    for typed in ("Valey", "Vallley", "Valkey Path", "Rdige walk"):
+        assert [(hit["name"], hit["match"]) for hit in data.search(typed)][:1] in (
+            [("Valley Path", "similar")],
+            [("Ridge Walk", "similar")],
+        ), typed
+    assert [(hit["name"], hit["match"]) for hit in data.search("ridge")] == [("Ridge Walk", "words")]
+    assert data.search("Rid") == data.search("rid")  # a short word only as typed: nothing near it
+
+
+def test_a_word_only_inside_a_longer_word_is_a_similar_name(data: ServingData) -> None:
+    # As Rappenloch is only inside Krappenlochklamm: the name has no such word.
+    assert [(hit["name"], hit["match"]) for hit in data.search("idge")] == [("Ridge Walk", "similar")]
+
+
+def test_names_spelled_like_the_query_come_after_every_name_with_its_words(
+    data: ServingData, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(data._spellings, "respelled", lambda words: [["path"]])
+
+    assert [(hit["name"], hit["match"]) for hit in data.search("ridge")] == [
+        ("Ridge Walk", "words"),
+        ("Valley Path", "similar"),
+    ]
+    assert [hit["name"] for hit in data.search("ridge", limit=1)] == ["Ridge Walk"]
+
+
+def test_a_word_may_be_one_typo_off_and_a_long_word_two() -> None:
+    spellings = _Spellings(["triglav", "dolic triglav", "triglavska jezera", "kredarica", "trig"])
+
+    assert spellings.near("triglov") == [(1, "triglav")]  # changed
+    assert spellings.near("tirglav") == [(1, "triglav")]  # two swapped
+    assert spellings.near("trglav") == [(1, "triglav")]  # missing
+    assert spellings.near("trigglav") == [(1, "triglav")]  # added
+    assert spellings.near("trilgov") == []  # two typos in a short word
+    assert spellings.near("triglavskka") == [(1, "triglavska")]
+    assert spellings.near("krdaricca") == [(2, "kredarica")]
+    assert spellings.near("triglav") == [] and spellings.near("tri") == []  # as typed; too short
+    assert spellings.respelled(["triglov", "jezra"]) == [["triglov", "jezera"], ["triglav", "jezra"], ["triglav", "jezera"]]
+    assert _Spellings(["stage 1002", "stage 1003"]).near("1004") == []  # a number is another hike
+
+
+def test_respellings_of_equal_typos_try_the_commonest_word_first() -> None:
+    spellings = _Spellings(["volley a", "volley b", "valley"])
+
+    assert spellings.respelled(["vplley"]) == [["volley"], ["valley"]]
+
+
+def test_a_long_query_of_many_words_with_typos_is_respelled_quickly() -> None:
+    words = [f"{a}{b}{c}x" for a in "bcd" for b in "aeiou" for c in "lmnr"]
+    spellings = _Spellings([" ".join(words[i : i + 3]) for i in range(len(words))])
+    query = [word[:-1] + "y" for word in words[:25]]
+
+    started = time.monotonic()
+    queries = spellings.respelled(query)
+
+    assert time.monotonic() - started < 2
+    assert len(queries) == serving.FUZZY_QUERIES
+    assert all(len(spelled) == len(query) and spelled != query for spelled in queries)
 
 
 def test_rank_matches_rank_dayhikes_and_reports_every_measure(

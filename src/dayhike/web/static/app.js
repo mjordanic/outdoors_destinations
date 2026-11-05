@@ -261,40 +261,97 @@ function hikeAddress(hike) {
   return `${location.origin}${location.pathname}${likedHash(hike)}`;
 }
 
-// ``hike`` as a GPX 1.1 track for hiking and GPS apps: its line as served, without
-// elevation (the DEM's licence stays out of the file), credited to OpenStreetMap.
-function gpxText(hike) {
+// Heights at ``points`` along a hike's line, from its ElevationProfile (heights at equal steps along
+// the walk) by the share of the line walked to each point; null for each without a profile.
+function heightsAlong(points, elevation) {
+  if (!elevation) return points.map(() => null);
+  const along = [0];
+  for (let i = 1; i < points.length; i++) along.push(along[i - 1] + metresBetween(points[i - 1], points[i]));
+  const metres = elevation.metres, last = metres.length - 1, total = along.at(-1) || 1;
+  return along.map((m) => {
+    const x = (m / total) * last, i = Math.min(Math.floor(x), last - 1);
+    return last < 1 ? metres[0] : Math.round(metres[i] + (metres[i + 1] - metres[i]) * (x - i));
+  });
+}
+
+// A GPX track of ``points`` with their ``heights`` (a height of null is left out).
+function gpxTrack(name, points, heights) {
+  const trkpts = points.map(([lat, lon], i) => (heights[i] == null
+    ? `<trkpt lat="${lat}" lon="${lon}"/>`
+    : `<trkpt lat="${lat}" lon="${lon}"><ele>${heights[i]}</ele></trkpt>`));
+  return `<trk><name>${escapeHtml(name)}</name><trkseg>
+${trkpts.join("\n")}
+</trkseg></trk>`;
+}
+
+// The way back of ``hike`` as GPX ``points`` and ``heights``, the hike's own drawn the other way, a
+// straight step, or a trail way back the server finds again (ADR-0019); null when it has none.
+async function wayBackTrack(hike, points, heights) {
+  const back = hike.way_back;
+  if (!back || back.kind === "none") return null;
+  if (back.kind === "retrace") return { points: [...points].reverse(), heights: [...heights].reverse() };
+  if (back.kind === "step") return { points: [points.at(-1), points[0]], heights: [heights.at(-1), heights[0]] };
+  // A designed hike carries its trail way back; a catalog hike's is asked for once.
+  hike.wayBackLine ??= hike.route ? back : await api(`/api/hikes/${hike.id}/way-back`);
+  if (!hike.wayBackLine.line) return null;
+  return { points: decodePolyline(hike.wayBackLine.line), heights: hike.wayBackLine.ele };
+}
+
+// ``hike`` as a GPX 1.1 file for hiking and GPS apps: its line as served with heights from its
+// profile, credited to OpenStreetMap and the elevation map; measured with its way back, the way
+// back as a second track named so.
+async function gpxText(hike) {
   const name = escapeHtml(hike.name), url = escapeHtml(hikeAddress(hike));
-  const points = decodePolyline(hike.line).map(([lat, lon]) => `<trkpt lat="${lat}" lon="${lon}"/>`);
+  const points = decodePolyline(hike.line), heights = heightsAlong(points, hike.elevation);
+  const tracks = [gpxTrack(hike.name, points, heights)];
+  const back = await wayBackTrack(hike, points, heights);
+  if (back) tracks.push(gpxTrack(`${hike.name}: way back to the start (${fmt.km(hike.way_back.m)}, ${WAY_BACK[hike.way_back.kind]})`, back.points, back.heights));
+  const { fabdem, copernicus } = state.info?.attribution ?? {};
+  const dem = hike.elevation && (fabdem ?? copernicus);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="HikesAlike" xmlns="http://www.topografix.com/GPX/1/1">
-<metadata><name>${name}</name><desc>Route data © OpenStreetMap contributors, ODbL 1.0.</desc>
+<metadata><name>${name}</name><desc>Route data © OpenStreetMap contributors, ODbL 1.0.${dem ? ` Heights: ${escapeHtml(dem)}` : ""}</desc>
 <copyright author="OpenStreetMap contributors"><license>https://opendatacommons.org/licenses/odbl/</license></copyright>
 <link href="${url}"><text>${name}</text></link></metadata>
-<trk><name>${name}</name><trkseg>
-${points.join("\n")}
-</trkseg></trk>
+${tracks.join("\n")}
 </gpx>
 `;
 }
 
-// Saves ``hike`` as a GPX file named after it.
-function downloadGpx(hike) {
+// Saves ``hike`` as a GPX file named after it; ``button`` says while the way back is fetched.
+async function downloadGpx(hike, button) {
   const base = hike.name.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
     .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(new Blob([gpxText(hike)], { type: "application/gpx+xml" }));
-  link.download = `${base || "hike"}.gpx`;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  button.disabled = true;
+  button.textContent = "Preparing GPX…";
+  try {
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(new Blob([await gpxText(hike)], { type: "application/gpx+xml" }));
+    link.download = `${base || "hike"}.gpx`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  } catch (error) {
+    setStatus(`The GPX could not be made: ${error.message}`, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Download GPX";
+  }
 }
 
-// Sends ``hike``'s address to a friend: through the phone's share sheet, else copied for pasting.
-async function shareHike(hike, button) {
+// Sends ``hike``'s address to a friend: through a phone's share sheet, else copied for pasting (a
+// computer's share sheet may never answer). ``note`` beside the button says what happened.
+async function shareHike(hike, button, note) {
   const url = hikeAddress(hike);
-  if (navigator.share) {
+  const say = (html) => {
+    note.innerHTML = html;
+    note.hidden = false;
+    clearTimeout(note.timer);
+    note.timer = setTimeout(() => { note.hidden = true; }, 6000);
+  };
+  if (navigator.share && matchMedia("(pointer: coarse)").matches) {
     try {
       await navigator.share({ title: hike.name, url });
+      say("Shared.");
       return;
     } catch (error) {
       if (error.name === "AbortError") return; // the Hiker closed the share sheet
@@ -305,8 +362,12 @@ async function shareHike(hike, button) {
     await navigator.clipboard.writeText(url);
     button.textContent = "Link copied";
     setTimeout(() => { button.textContent = "Share"; }, 2000);
+    say("Link copied: paste it in a message or a note to share this hike.");
   } catch {
-    setStatus(`Copy this link to share the hike: ${url}`);
+    clearTimeout(note.timer); // the link stays until the Hiker copies it
+    note.innerHTML = `Copy this link to share the hike: <input type="text" readonly value="${escapeHtml(url)}" aria-label="Link to share">`;
+    note.hidden = false;
+    note.querySelector("input").select();
   }
 }
 
@@ -677,7 +738,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
         : hike.built ? builtLinks(hike, compare)
         : `<span><a href="https://www.openstreetmap.org/relation/${hike.id}" target="_blank" rel="noopener">OpenStreetMap relation ${hike.id}</a> · <a href="${likedHash(hike)}" title="This address opens this hike">Link to this hike</a></span>`}
     </div>
-    ${hike.line ? '<p class="hike-actions"><button type="button" class="secondary share-hike">Share</button> <button type="button" class="secondary download-gpx">Download GPX</button></p>' : ""}
+    ${hike.line ? '<p class="hike-actions"><button type="button" class="secondary share-hike">Share</button> <button type="button" class="secondary download-gpx">Download GPX</button> <span class="share-note" role="status" hidden></span></p>' : ""}
     ${scoreLine}
     ${hike.route ? `<p class="hint">Drawn from trail segments${hike.routes?.length ? ` along ${escapeHtml(hike.routes.slice(0, 5).join(", "))}${hike.routes.length > 5 ? " and more" : ""}` : ""}; measured as drawn${hike.way_back ? ", with its way back" : ""}.</p>` : ""}
     ${hike.way_back && hike.way_back.kind !== "none" ? `<p class="hint">Length, climb, descent and every measure include the way back to the start (${escapeHtml(wayBackText(hike.way_back))}); the map and profile show the hike itself.</p>` : ""}
@@ -688,8 +749,8 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     <div class="charts"></div>
     <h3>${compare ? `Every measure: this hike against the ${compare.wish ? "one you want" : "liked one"}` : "The facts behind every measure"}</h3>
     <div class="table-wrap"><table class="facts"></table></div>`;
-  card.querySelector(".share-hike")?.addEventListener("click", (event) => shareHike(hike, event.currentTarget));
-  card.querySelector(".download-gpx")?.addEventListener("click", () => downloadGpx(hike));
+  card.querySelector(".share-hike")?.addEventListener("click", (event) => shareHike(hike, event.currentTarget, card.querySelector(".share-note")));
+  card.querySelector(".download-gpx")?.addEventListener("click", (event) => downloadGpx(hike, event.currentTarget));
   card.querySelector(".edit-composed")?.addEventListener("click", () => editComposed(
     hike.built ? { route: { text: hike.built.route }, name: hike.name } : hike,
   ));
@@ -791,13 +852,18 @@ function buildWeights() {
       if (measure.name === "round_trip") {
         row.insertAdjacentHTML("beforeend", '<p class="hint weight-note">Left out with Return to start: every hike is then a round trip.</p>');
       }
-      const slider = row.querySelector("input:not(.wish)");
-      slider.addEventListener("input", () => showWeight(row));
-      // Asking a value of a Measure left at 0 asks it in full.
-      row.querySelector("input.wish")?.addEventListener("input", (event) => {
-        event.target.setCustomValidity(""); // a value typed again is checked again at Find
-        if (Number(slider.value) === 0) setWeight(row, 100);
+      const slider = row.querySelector("input:not(.wish)"), value = row.querySelector("input.wish");
+      slider.addEventListener("input", () => {
+        showWeight(row);
+        if (state.wishing) askDefault(row);
       });
+      // Typing a value of a Measure left at 0 asks it in full.
+      for (const event of ["input", "change"]) {
+        value?.addEventListener(event, () => {
+          value.setCustomValidity(""); // a value typed again is checked again at Find
+          if (Number(slider.value) === 0 && (value.type === "checkbox" || value.value !== "")) setWeight(row, 100);
+        });
+      }
       showWeight(row);
       set.appendChild(row);
     }
@@ -817,6 +883,12 @@ function showWeight(row) {
 function setWeight(row, weight) {
   row.querySelector("input:not(.wish)").value = weight;
   showWeight(row);
+}
+
+// A wish weight given to a Measure with no value yet asks its default value.
+function askDefault(row) {
+  const value = row.querySelector("input.wish");
+  if (value?.value === "" && Number(row.querySelector("input:not(.wish)").value) > 0) value.value = value.placeholder;
 }
 
 // Round trip tells no hike from another while every hike returns to its start: greyed out then.
@@ -869,7 +941,8 @@ function wishInput(measure) {
   }
   const range = ["min", "max", "step"].filter((key) => wish[key] != null).map((key) => ` ${key}="${escapeHtml(toShown(measure, wish[key]))}"`).join("");
   const unit = shownUnit(measure) ? escapeHtml(shownUnit(measure)) : "";
-  return `<span class="wish-value"><input class="wish" type="number"${range} value="${escapeHtml(toShown(measure, wish.default))}" inputmode="decimal"
+  // Empty until the Hiker asks it, so no value looks asked while its weight is off; the default shows as a hint.
+  return `<span class="wish-value"><input class="wish" type="number"${range} value="" placeholder="${escapeHtml(toShown(measure, wish.default))}" inputmode="decimal"
     aria-label="${label} you want${unit ? `, in ${unit}` : ""}">${unit ? `<span class="unit">${unit}</span>` : ""}</span>`;
 }
 
@@ -924,12 +997,14 @@ function applyWish(text) {
   for (const row of document.querySelectorAll(".weight:not(.unwishable)")) {
     const value = row.querySelector("input.wish");
     const [, wanted, weight] = asked.get(row.dataset.measure) ?? [];
+    if (wanted != null) {
+      const measure = state.measures.find((m) => m.name === row.dataset.measure);
+      if (value.type === "checkbox") value.checked = wanted === "1";
+      else value.value = wanted === "" || !Number.isFinite(Number(wanted)) ? wanted : String(toShown(measure, Number(wanted)));
+      if (row.closest("#advanced")) $("#advanced").open = true;
+    }
     setWeight(row, Number(weight) > 0 ? Math.max(Number(weight), 10) : 0);
-    if (wanted == null) continue;
-    const measure = state.measures.find((m) => m.name === row.dataset.measure);
-    if (value.type === "checkbox") value.checked = wanted === "1";
-    else value.value = wanted === "" || !Number.isFinite(Number(wanted)) ? wanted : String(toShown(measure, Number(wanted)));
-    if (row.closest("#advanced")) $("#advanced").open = true;
+    askDefault(row);
   }
   syncRoundTrip();
 }
@@ -940,7 +1015,10 @@ function swapWeights(on) {
   const rows = [...document.querySelectorAll(".weight")];
   state.kept[on ? "seed" : "wish"] = rows.map((row) => row.querySelector("input:not(.wish)").value);
   const back = state.kept[on ? "wish" : "seed"] ?? rows.map(() => "0");
-  rows.forEach((row, i) => setWeight(row, back[i]));
+  rows.forEach((row, i) => {
+    setWeight(row, back[i]);
+    if (on) askDefault(row);
+  });
   syncRoundTrip();
 }
 
@@ -988,6 +1066,9 @@ function nameSearch(input, list, onPick) {
     list.innerHTML = "";
     if (nothingFor) {
       list.innerHTML = `<li class="nothing">No hike name has every word of “${escapeHtml(nothingFor)}”.<span class="meta">Only hike names are searched, not places; try a word of a trail's name, or select a hike on the map.</span></li>`;
+    } else if (found.length && found[0].match === "similar") {
+      // Only names like the query: say so before the Hiker picks one for the hike they meant.
+      list.innerHTML = `<li class="nothing" role="presentation">No hike name has every word of “${escapeHtml(input.value.trim())}” as typed. Names like it:</li>`;
     }
     found.forEach((item, i) => {
       const li = document.createElement("li");
@@ -1002,7 +1083,8 @@ function nameSearch(input, list, onPick) {
         item.highest_m != null && `top ${fmt.m(item.highest_m)}`,
         `${item.trailhead[0].toFixed(2)}, ${item.trailhead[1].toFixed(2)}`,
       ].filter(Boolean).join(" · ");
-      li.innerHTML = `${escapeHtml(item.name)}<span class="meta">${escapeHtml(meta)}</span>`;
+      const similar = item.match === "similar" ? ' <span class="similar-tag">similar name</span>' : "";
+      li.innerHTML = `${escapeHtml(item.name)}${similar}<span class="meta">${escapeHtml(meta)}</span>`;
       li.addEventListener("mousedown", (event) => { event.preventDefault(); pick(item.id); });
       list.appendChild(li);
     });
@@ -1012,7 +1094,7 @@ function nameSearch(input, list, onPick) {
   const move = (step) => {
     if (!items.length) return;
     active = (active + step + items.length) % items.length;
-    list.querySelectorAll("li").forEach((li, i) => li.setAttribute("aria-selected", String(i === active)));
+    list.querySelectorAll('li[role="option"]').forEach((li, i) => li.setAttribute("aria-selected", String(i === active)));
     input.setAttribute("aria-activedescendant", `${list.id}-${active}`);
     document.getElementById(`${list.id}-${active}`).scrollIntoView({ block: "nearest" });
   };
@@ -2007,6 +2089,7 @@ function renderResults() {
   $("#results-note").textContent = shown.length
     ? `${state.query.wish ? "Closest to the hike you want" : `Like “${state.liked.name}”`}, out of ${considered}${body.loops ? " and loops composed near the best of them" : ""}, ${mode}.${picked}${ties} Click a row to see it.${composed}${searched}${versions}`
     : `No hike matched, out of ${considered}. Try a longer drive, a longer distance or other weights.`;
+  showFilters();
   $("#results-draw").hidden = !shown.length;
   $("#results-loops").hidden = !state.info.compose || body.loops; // SuggestedLoops on request (ADR-0028)
   const table = $("#results-table");
@@ -2018,6 +2101,54 @@ function renderResults() {
   table.appendChild(document.createElement("tbody"));
   listRows(0);
   showMoreButton(body);
+}
+
+// The filters the shown list was found with, as chips above it: the × of each drops it and finds again.
+function showFilters() {
+  const body = state.answer, { query, place } = state.asked;
+  const chips = [];
+  if (body.max_hours) chips.push([`Within a ${body.max_hours} h drive of ${place}`, () => dropLimit("#hours-on")]);
+  if (body.max_km) chips.push([`Within ${body.max_km} km of ${place}`, () => dropLimit("#km-on")]);
+  if (body.month) {
+    chips.push([`Weather in ${MONTHS[body.month - 1]}`, () => {
+      $("#month").value = "";
+      $("#month").dispatchEvent(new Event("change"));
+      findSimilar();
+    }]);
+  }
+  if (!body.return_to_start) {
+    chips.push(["One way, without the way back", () => {
+      $("#return-on").checked = true;
+      $("#return-on").dispatchEvent(new Event("change")); // measures the hike again and finds again
+    }]);
+  }
+  if (query.group_km != null) {
+    chips.push([`Grouped within ${query.group_km} km`, () => {
+      $("#group-km").value = "";
+      showGroupDefault();
+      findSimilar();
+    }]);
+  }
+  const list = $("#results-filters");
+  list.innerHTML = "";
+  for (const [text, drop] of chips) {
+    const chip = document.createElement("li");
+    chip.innerHTML = `<span>${escapeHtml(text)}</span><button type="button" class="chip-clear" title="Clear this filter and find again" aria-label="Clear ${escapeHtml(text)}">×</button>`;
+    chip.querySelector("button").addEventListener("click", drop);
+    list.appendChild(chip);
+  }
+  list.hidden = !chips.length;
+}
+
+// Unticks a limit from the starting place, and the starting place with its last limit; then finds again.
+function dropLimit(box) {
+  $(box).checked = false;
+  if (!$("#hours-on").checked && !$("#km-on").checked) {
+    $("#drive-on").checked = false;
+    $("#drive").hidden = true;
+  }
+  showGroupDefault();
+  findSimilar();
 }
 
 // What the loop search did, of the loops in the rows shown, with their versions.

@@ -548,6 +548,14 @@ def create_app(
         except KeyError:
             raise HTTPException(404, f"no DayHike {dayhike_id}") from None
 
+    # The way back the page puts in a hike's GPX: a trail one is found again on the TrailGraph.
+    @app.api_route("/api/hikes/{dayhike_id}/way-back", methods=["GET", "HEAD"])
+    def way_back(dayhike_id: int) -> dict:
+        try:
+            return data.way_back_walk(dayhike_id)
+        except KeyError:
+            raise HTTPException(404, f"no DayHike {dayhike_id}") from None
+
     @app.post("/api/rank")
     def rank(body: RankRequest) -> dict:
         started = time.monotonic()
