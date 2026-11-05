@@ -400,6 +400,9 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         help="Another origin (https://host) whose page may call the API, e.g. a loading shell; repeatable",
     )
+    serve.add_argument(
+        "--site-url", help="The site's public origin (https://host): shared links then get a preview image"
+    )
     coverage = subparsers.add_parser(
         "coverage-map", help="Draw the SVG map of Europe with the covered countries shaded"
     )
@@ -431,6 +434,7 @@ def main(argv: list[str] | None = None) -> int:
             args.forwarded_hops,
             args.goatcounter,
             tuple(args.cors_origin),
+            args.site_url,
         )
     if args.command == "coverage-map":
         from dayhike.coverage import coverage_map
@@ -722,6 +726,7 @@ def _serve(
     forwarded_hops: int,
     goatcounter: str | None,
     cors_origins: tuple[str, ...],
+    site_url: str | None = None,
 ) -> int:
     try:
         import uvicorn
@@ -751,6 +756,7 @@ def _serve(
             forwarded_hops=forwarded_hops,
             goatcounter=goatcounter,
             cors_origins=cors_origins,
+            site_url=site_url,
         )
     except ValueError as exc:
         print(exc, file=sys.stderr)

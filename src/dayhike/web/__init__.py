@@ -120,6 +120,7 @@ COPERNICUS_CREDITS = {
     "are included.",
 }
 PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")  # a GoatCounter code
+SITE_URL = re.compile(r"https://[A-Za-z0-9.-]+(:[0-9]+)?")  # the public origin a shared link names
 
 DriveClientFactory = Callable[[float], MatrixClient]
 MEASURE_KINDS = {measure.name: measure.kind for measure in MEASURES}
@@ -277,13 +278,19 @@ def wish_input(measure: Measure) -> dict | None:
 
 
 def site_pages(
-    goatcounter: str | None, place_search: bool = False, *, copernicus: bool = False
+    goatcounter: str | None,
+    place_search: bool = False,
+    *,
+    copernicus: bool = False,
+    site_url: str | None = None,
 ) -> dict[str, str]:
     """Each page's HTML with the GoatCounter tag where a code is set.
 
     With ``place_search`` (the export has GeoNames places) the place-search credit names GeoNames, not Nominatim,
     and the privacy page keeps its ``places`` text, not its ``nominatim`` text.
     With ``copernicus`` (an export sampled from Copernicus GLO-30), the pages credit it instead of FABDEM.
+    With ``site_url`` (the public origin, ``https://host``) each page names its own address (``og:url``) and its
+    share preview image by full address, as link previews need; else the image stays relative.
 
     Text between ``<!--if-goatcounter-->`` and ``<!--/if-goatcounter-->`` (or ``places``,
     ``nominatim``) is kept only when that setting is on.
@@ -292,6 +299,8 @@ def site_pages(
     """
     if goatcounter is not None and not PLAIN_NAME.fullmatch(goatcounter):
         raise ValueError(f"a GoatCounter code is letters, digits, - and _, not {goatcounter!r}")
+    if site_url is not None and not SITE_URL.fullmatch(site_url):
+        raise ValueError(f"the site URL is https://host, without a path, not {site_url!r}")
     analytics = "" if goatcounter is None else (
         f'<script data-goatcounter="https://{goatcounter}.goatcounter.com/count"'
         ' async src="vendor/goatcounter/count.js"></script>'
@@ -315,6 +324,11 @@ def site_pages(
             html = re.sub(r'<span id="place-credit">.*?</span>', credit, html, flags=re.S)
         if copernicus and name in COPERNICUS_CREDITS:
             html = re.sub(r"<!--elevation-->.*?<!--/elevation-->", COPERNICUS_CREDITS[name], html, flags=re.S)
+        if site_url is not None:
+            address = f"{site_url}/" if name == "index" else f"{site_url}/{name}.html"
+            html = html.replace('content="social-preview.png"', f'content="{site_url}/social-preview.png"').replace(
+                '<meta property="og:type"', f'<meta property="og:url" content="{address}">\n  <meta property="og:type"', 1
+            )
         pages[name] = html
     return pages
 
@@ -389,6 +403,7 @@ def create_app(
     api_rate: int = API_RATE,
     goatcounter: str | None = None,
     cors_origins: tuple[str, ...] = (),
+    site_url: str | None = None,
 ) -> FastAPI:
     """The app over one serving export.
 
@@ -397,10 +412,13 @@ def create_app(
     append to ``X-Forwarded-For`` in front of the app (1 on Cloud Run): the
     client is that many entries from the end. 0 uses the socket peer.
     ``goatcounter`` fills in the pages (``site_pages``); a value that
-    is not a plain name is a ValueError. ``cors_origins`` are the other origins
+    is not a plain name is a ValueError, and so is ``site_url``, the public origin
+    (``https://host``) the pages' share previews name. ``cors_origins`` are the other origins
     (``https://host``) whose pages may call the API.
     """
-    pages = site_pages(goatcounter, data.places is not None, copernicus="copernicus" in data.meta["attribution"])
+    pages = site_pages(
+        goatcounter, data.places is not None, copernicus="copernicus" in data.meta["attribution"], site_url=site_url
+    )
     app = FastAPI(title="HikesAlike", docs_url="/api/docs", openapi_url="/api/openapi.json")
     limiters = {"rank": RateLimiter(rank_rate, RATE_WINDOW_S), "api": RateLimiter(api_rate, RATE_WINDOW_S)}
     rankings = RankingQueue()

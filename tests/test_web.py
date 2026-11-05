@@ -1202,3 +1202,20 @@ def test_a_ranking_that_waits_too_long_gives_up_its_place_in_line() -> None:
 def test_a_ranking_that_waited_its_longest_still_ends_before_cloud_runs_timeout() -> None:
     slowest_run_s = 31  # a 4 h drive Ranking on 1 vCPU (docs/deploy.md)
     assert web.RANK_WAIT_S + slowest_run_s < 60  # Cloud Run's --timeout: else the visitor gets its 504, not our 503
+
+
+def test_with_the_site_url_each_page_names_itself_and_its_preview_image_by_full_address(data: ServingData) -> None:
+    client = TestClient(create_app(data, site_url="https://hikes.example"))
+    plain = TestClient(create_app(data)).get("/about.html").text
+
+    home, about = client.get("/").text, client.get("/about.html").text
+
+    # Link previews need a full address: a relative og:image shows no picture.
+    assert '<meta property="og:url" content="https://hikes.example/">' in home
+    assert '<meta property="og:url" content="https://hikes.example/about.html">' in about
+    for page in (home, about):
+        assert '<meta property="og:image" content="https://hikes.example/social-preview.png">' in page
+        assert '<meta name="twitter:image" content="https://hikes.example/social-preview.png">' in page
+    assert "og:url" not in plain and 'content="social-preview.png"' in plain
+    with pytest.raises(ValueError, match="https://host"):
+        create_app(data, site_url="https://hikes.example/path")

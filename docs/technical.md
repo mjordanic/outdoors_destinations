@@ -2096,6 +2096,10 @@ proxies sit in front of the server, so it keys on the visitor's address in
 privacy page names GoatCounter only once it is set. No page sets a cookie or writes browser storage
 (GoatCounter's script writes localStorage only when a visitor opens a page with
 `#toggle-goatcounter` to stop counting their own visits). A code other than letters, digits, `-` and `_` is refused at start.
+`--site-url https://HOST` (`DAYHIKE_SITE_URL`) is the site's public address:
+each page then names itself in `og:url` and its share preview image by full
+address, which link previews need; unset, the image address stays relative. A
+value other than `https://host` is refused at start.
 
 The page opens behind a loading screen, the logo and "Loading…", which says
 "Waking the server" when the first answer is slow (a start from zero), and that
