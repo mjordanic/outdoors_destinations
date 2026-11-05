@@ -31,7 +31,7 @@ from dayhike.similarity import (
     calibrate_similarity,
     rank_dayhikes,
 )
-from dayhike.valhalla import DEFAULT_VALHALLA_URL, MAX_MATRIX_DISTANCE_M, ValhallaMatrixClient
+from dayhike.valhalla import DEFAULT_VALHALLA_URL, MAX_MATRIX_DISTANCE_M, VALHALLA_TIMEOUT_S, ValhallaMatrixClient
 
 # The most highway snaps `serve` keeps beyond the export's (SuggestedLoop starts a Ranking asked of Valhalla):
 # about 20 MB of memory.
@@ -491,7 +491,7 @@ def main(argv: list[str] | None = None) -> int:
             return _nearby(
                 args.catalog, args.origin, args.max_hours, args.valhalla_url, args.highways
             )
-        except ValueError as exc:
+        except (ValueError, FileNotFoundError) as exc:
             nearby.error(str(exc))
     if (args.origin is None) != (args.max_hours is None):
         rank.error("--origin and --max-hours must be given together")
@@ -508,7 +508,7 @@ def main(argv: list[str] | None = None) -> int:
             args.highways,
             return_to_start=not args.one_way,
         )
-    except ValueError as exc:
+    except (ValueError, FileNotFoundError) as exc:
         rank.error(str(exc))
 
 
@@ -726,7 +726,7 @@ def _serve(
     try:
         import uvicorn
 
-        from dayhike.web import VALHALLA_TIMEOUT_S, create_app
+        from dayhike.web import create_app
     except ImportError:
         print("the web demo needs its extra: uv sync --extra web", file=sys.stderr)
         return 1

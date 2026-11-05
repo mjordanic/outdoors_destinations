@@ -35,6 +35,8 @@ data/geonames/
 *.sqlite.work-wal
 *.sqlite.work-shm
 *.sqlite.tmp
+*.sqlite.new
+*.sqlite.new.tmp
 *.similarity/
 
 # env / secrets

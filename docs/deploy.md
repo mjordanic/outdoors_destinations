@@ -20,7 +20,7 @@ snapped once at export time instead of on a visitor's query:
 ```bash
 docker run -d --name valhalla-highways -p 127.0.0.1:8002:8002 \
   -v "$PWD/data/valhalla/highways-eu:/custom_files:ro" \
-  --entrypoint /bin/bash ghcr.io/gis-ops/docker-valhalla/valhalla:latest -c \
+  --entrypoint /bin/bash ghcr.io/gis-ops/docker-valhalla/valhalla:latest@sha256:060da5b92e6024a67f65135c236d918b021d63e73d1808a0d55b7e7cbd17240c -c \
   'jq -s ".[0] * .[1]" /custom_files/valhalla.json /custom_files/mjolnir.drive-time.json > /tmp/valhalla.json && exec valhalla_service /tmp/valhalla.json 2'
 
 uv run dayhike export-serving --catalog data/catalog.sqlite --out data/web-serving \

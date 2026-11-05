@@ -84,7 +84,6 @@ RANK_RATE = 20
 API_RATE = 300
 RATE_WINDOW_S = 60.0
 RANK_WAIT_S = 30.0  # a Ranking waits this long for the one running before it
-VALHALLA_TIMEOUT_S = 50.0  # socket timeout for Valhalla calls, under Cloud Run's 60 s request timeout
 # The API reads a browser keeps API_MAX_AGE_S seconds; after that the ETag revalidates them.
 CACHED_READS = ("/api/info", "/api/measures", "/api/search", "/api/hikes", "/api/segments")
 # The metadata the page's shape depends on: a browser revalidates it every time, so new code never reads old metadata.

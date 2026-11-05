@@ -1395,10 +1395,11 @@ def climb_and_descent(lat: np.ndarray, lon: np.ndarray, ele: np.ndarray) -> tupl
 def _one_way_climb_and_descent(lat: np.ndarray, lon: np.ndarray, ele: np.ndarray) -> tuple[float, float]:
     """Metres climbed and descended walking the vertices in their order.
 
-    First a DEM spike is dropped: a vertex, or a run of vertices at most
+    First DEM spikes are dropped: a vertex, or a run of vertices at most
     ``SPIKE_RUN_M`` long, every one at least ``SPIKE_RISE_M`` above (or every
     one below) the vertices on both sides of it, with a grade of at least
-    ``SPIKE_GRADE`` into it and out of it (the ends stay). A path along a
+    ``SPIKE_GRADE`` into it and out of it (the ends stay). Each drop tests the
+    new last kept vertex again, so several can drop in a row. A path along a
     steep shore or cliff reads cells of the water or the slope beside it that
     way. Then a change counts only once it moves
     ``GAIN_HYSTERESIS_M`` from the last counted elevation, so DEM jitter

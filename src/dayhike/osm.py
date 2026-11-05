@@ -22,8 +22,14 @@ _MEMBER_TYPE = {
     "way": "way",
     "relation": "relation",
 }
-# OSM ele is free text: "300 m", "~1200", "1,5". Take the first number or skip.
-_ELE_NUMBER = re.compile(r"[-+]?\d+(?:[.,]\d+)?")
+# OSM ele is free text: "300 m", "~1200", "1,5", "1,500", "3'937", "1200 ft".
+# Take the first number or skip: a comma or apostrophe before exactly three
+# digits separates thousands, else a comma is a decimal point; feet become metres.
+_ELE_NUMBER = re.compile(
+    r"(?P<grouped>[-+]?\d{1,3}(?:[,'’]\d{3})+(?![\d]|[,'’]\d)(?:\.\d+)?)|(?P<plain>[-+]?\d+(?:[.,]\d+)?)"
+)
+_ELE_FEET = re.compile(r"\s*(?:ft\b|feet\b|foot\b|['’′])", re.IGNORECASE)
+FOOT_M = 0.3048
 
 
 @dataclass(frozen=True)
@@ -240,10 +246,14 @@ def amenity_kind(tags: dict[str, str]) -> str | None:
 def _parse_ele_m(raw: str | None) -> float | None:
     if raw is None:
         return None
-    match = _ELE_NUMBER.search(raw.strip())
+    match = _ELE_NUMBER.search(raw)
     if match is None:
         return None
-    return float(match.group(0).replace(",", "."))
+    if match["grouped"]:
+        value = float(re.sub(r"[,'’]", "", match["grouped"]))
+    else:
+        value = float(match["plain"].replace(",", "."))
+    return value * FOOT_M if _ELE_FEET.match(raw, match.end()) else value
 
 
 def _take_node(snapshot: OsmSnapshot, obj: object) -> None:

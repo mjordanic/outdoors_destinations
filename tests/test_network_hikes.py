@@ -905,3 +905,18 @@ def test_a_network_line_whose_ends_differ_by_over_100_m_starts_at_its_lower_end_
     assert (hike.way_ids, hike.parts) == ((101, 100), (2, 1))
     flat = LowerStart(_down_to_charlie(rise_m=90.0), [*parking, *((lat, lon) for lat, lon, _ in places)])
     assert network_hikes(net.legs, net.ways, net.nodes, parking, places, lower=flat)[0].name == "Alpha – Charlie"
+
+
+def test_a_chain_the_crossings_take_over_the_maximum_is_left_out():
+    # Legs A-P1 (12.47 km) and P3-D (12.5 km) sum to 24.97 km, under 25 km;
+    # stepping P1, P2, P3 across their wide signpost adds 60 m and takes the
+    # hike over 25 km, so it is left out. A-P1-P2-E, 14.5 km, is kept.
+    net = Network({"A": (0, 0), "P1": (12.47, 0), "P2": (12.5, 0), "P3": (12.53, 0), "E": (12.5, 2), "D": (25.03, 0)})
+    net.leg(1, "A", "P1")
+    net.leg(2, "P2", "E")
+    net.leg(3, "P3", "D")
+
+    hikes = network_hikes(net.legs, net.ways, net.nodes, [net.point("A")], [])
+
+    assert [hike.parts for hike in hikes] == [(1, 2)]
+    assert all(hike.length_m <= 25_000.0 for hike in hikes)

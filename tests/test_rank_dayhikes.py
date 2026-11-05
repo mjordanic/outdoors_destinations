@@ -296,3 +296,13 @@ def test_cli_rejects_a_bad_weight(tmp_path: Path) -> None:
     assert "MEASURE=WEIGHT" in malformed.stderr
     assert unknown.returncode == 2
     assert "unknown Measure" in unknown.stderr
+
+
+def test_cli_rank_on_a_missing_catalog_says_not_found(tmp_path: Path) -> None:
+    path = tmp_path / "catalgo.sqlite"
+
+    result = _cli("rank", "--catalog", str(path), "Ridge Walk")
+
+    assert result.returncode == 2
+    assert f"Catalog not found: {path}" in result.stderr
+    assert not path.exists()

@@ -452,24 +452,33 @@ def _pass_done(conn: sqlite3.Connection, pass_name: str, paths: Sequence[Path]) 
     return bool(paths)
 
 
-def _file_state(conn: sqlite3.Connection, pass_name: str, path: Path) -> tuple[int, bool]:
+def _file_state(conn: sqlite3.Connection, pass_name: str, path: Path) -> tuple[int | None, bool]:
+    # The last id read at the file's checkpoint (None: none yet), and whether the file is done.
     row = conn.execute(
         "SELECT last_id, done FROM file_progress WHERE pass = ? AND path = ?",
         (pass_name, str(path)),
     ).fetchone()
     if row is None:
-        return 0, False
+        return None, False
     return int(row[0]), bool(row[1])
 
 
+def _after(osm_id: int, last_id: int | None) -> bool:
+    """Whether ``osm_id`` comes after the checkpoint ``last_id`` (None: no
+    checkpoint) in a sorted OSM file: osmium sorts negative ids (new objects
+    in a JOSM file) first, by absolute value, then positive ones."""
+    return last_id is None or (osm_id > 0, abs(osm_id)) > (last_id > 0, abs(last_id))
+
+
 def _mark_progress(
-    conn: sqlite3.Connection, pass_name: str, path: Path, last_id: int, done: bool = False
+    conn: sqlite3.Connection, pass_name: str, path: Path, last_id: int | None, done: bool = False
 ) -> None:
+    # Only a file with no object of the pass is done with no last id; a done file's is never read.
     conn.execute(
         "INSERT INTO file_progress (pass, path, last_id, done) VALUES (?, ?, ?, ?) "
         "ON CONFLICT(pass, path) DO UPDATE SET last_id = excluded.last_id, "
         "done = excluded.done",
-        (pass_name, str(path), last_id, int(done)),
+        (pass_name, str(path), 0 if last_id is None else last_id, int(done)),
     )
     conn.commit()
 
@@ -494,7 +503,7 @@ def _pass_relations(
             continue
         file_last = last_id
         for obj in _iter_file(path, osmium.osm.RELATION):
-            if not obj.is_relation() or int(obj.id) <= last_id:
+            if not obj.is_relation() or not _after(int(obj.id), last_id):
                 continue
             tags = dict(obj.tags)
             members = [
@@ -551,7 +560,7 @@ def _pass_ways(
             continue
         file_last = last_id
         for obj in _iter_file(path, osmium.osm.WAY):
-            if not obj.is_way() or int(obj.id) <= last_id:
+            if not obj.is_way() or not _after(int(obj.id), last_id):
                 continue
             osm_id = int(obj.id)
             node_ids = [int(node.ref) for node in obj.nodes]
@@ -630,7 +639,7 @@ def _pass_nodes(
             continue
         file_last = last_id
         for obj in _iter_file(path, osmium.osm.NODE):
-            if not obj.is_node() or int(obj.id) <= last_id:
+            if not obj.is_node() or not _after(int(obj.id), last_id):
                 continue
             osm_id = int(obj.id)
             location = obj.location
