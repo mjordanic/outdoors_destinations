@@ -6,7 +6,9 @@
 returns the results in item order, so a stage builds the same thing with any
 worker count; ``parallel_iter`` streams them. The workers are forked, so they
 read what the stage holds (the snapshot, a graph, a closure's variables)
-without it being sent to them; only the items and the results are.
+without it being sent to them; only the items and the results are. A worker
+the system kills (out of memory) fails the stage with BrokenProcessPool
+instead of leaving it waiting.
 """
 
 from __future__ import annotations
@@ -17,6 +19,8 @@ import os
 import sys
 from collections import deque
 from collections.abc import Callable, Iterable, Iterator
+from concurrent.futures import ProcessPoolExecutor
+from contextlib import contextmanager
 from typing import TypeVar
 
 WORKERS_ENV = "DAYHIKE_WORKERS"
@@ -66,8 +70,8 @@ def parallel_map(task: Callable[[T], R], items: Iterable[T]) -> list[R]:
     # not write to (and copy) the pages they share with this process.
     gc.freeze()
     try:
-        with multiprocessing.get_context("fork").Pool(count) as pool:
-            return pool.map(_run, items, chunksize=max(1, len(items) // (count * CHUNKS_PER_WORKER)))
+        with _forked_pool(count) as pool:
+            return list(pool.map(_run, items, chunksize=max(1, len(items) // (count * CHUNKS_PER_WORKER))))
     finally:
         gc.unfreeze()
         _task = None
@@ -88,16 +92,27 @@ def parallel_iter(task: Callable[[T], R], items: Iterable[T]) -> Iterator[R]:
     _task = task
     gc.freeze()
     try:
-        with multiprocessing.get_context("fork").Pool(count) as pool:
+        with _forked_pool(count) as pool:
             pending: deque = deque()
             for item in items:
-                pending.append(pool.apply_async(_run, (item,)))
+                pending.append(pool.submit(_run, item))
                 if len(pending) >= count * IN_FLIGHT_PER_WORKER:
-                    yield pending.popleft().get()
+                    yield pending.popleft().result()
             while pending:
-                yield pending.popleft().get()
+                yield pending.popleft().result()
     finally:
         gc.unfreeze()
+
+
+@contextmanager
+def _forked_pool(count: int) -> Iterator[ProcessPoolExecutor]:
+    # The workers are forked at the first submit. Leaving early (an error, or
+    # the caller stopped reading) drops the items no worker has started.
+    pool = ProcessPoolExecutor(count, mp_context=multiprocessing.get_context("fork"))
+    try:
+        yield pool
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
 
 
 def _check_fork_safe_blas() -> None:

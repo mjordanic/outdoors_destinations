@@ -615,6 +615,9 @@ def _pass_nodes(
     emit_progress(progress, "nodes", "starting")
     if _pass_done(conn, "nodes", paths):
         emit_progress(progress, "nodes", "resumed, already complete")
+        # A run stopped while resolving left no amenity of a way or relation:
+        # resolve again, as replacing rows it does no harm when it had finished.
+        _resolve_pending_amenities(conn)
         return
     needed_nodes = _sorted_ids(conn, "needed_nodes")
     graded_nodes = _sorted_ids(conn, "graded_needed_nodes")
@@ -674,30 +677,25 @@ def _sorted_has(ids: np.ndarray, osm_id: int) -> bool:
 
 
 def _resolve_pending_amenities(conn: sqlite3.Connection) -> None:
-    node_coords = {
-        node_id: (lat, lon)
-        for node_id, lat, lon in conn.execute("SELECT id, lat, lon FROM nodes")
-    }
-    for way_id, kind, node_id, tags_json in conn.execute(
-        "SELECT id, kind, node_id, tags FROM pending_amenity_ways"
-    ):
-        if not kind:
-            continue
-        point = node_coords.get(node_id)
-        if point is None:
-            continue
-        conn.execute(
-            "INSERT OR REPLACE INTO amenities (osm_key, kind, lat, lon, tags) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (f"w{way_id}", kind, point[0], point[1], tags_json),
-        )
+    """The amenities mapped as ways or relations, each at its first node:
+    looked up in the work file, not loaded whole (it holds every geometry node)."""
+
+    def node_coords(node_id: int) -> tuple[float, float] | None:
+        return conn.execute("SELECT lat, lon FROM nodes WHERE id = ?", (node_id,)).fetchone()
+
+    conn.execute(
+        "INSERT OR REPLACE INTO amenities (osm_key, kind, lat, lon, tags) "
+        "SELECT 'w' || way.id, way.kind, node.lat, node.lon, way.tags "
+        "FROM pending_amenity_ways AS way JOIN nodes AS node ON node.id = way.node_id "
+        "WHERE way.kind != '' ORDER BY way.id"
+    )
     for rel_id, kind, members_json, tags_json in conn.execute(
         "SELECT id, kind, members, tags FROM pending_amenity_relations"
     ):
         point = None
         for member_type, member_id in json.loads(members_json):
             if member_type == "node":
-                point = node_coords.get(member_id)
+                point = node_coords(member_id)
             elif member_type == "way":
                 row = conn.execute(
                     "SELECT node_ids FROM ways WHERE id = ?", (member_id,)
@@ -708,11 +706,11 @@ def _resolve_pending_amenities(conn: sqlite3.Connection) -> None:
                         (member_id,),
                     ).fetchone()
                     if pending is not None:
-                        point = node_coords.get(pending[0])
+                        point = node_coords(pending[0])
                 else:
                     node_ids = json.loads(row[0])
                     if node_ids:
-                        point = node_coords.get(node_ids[0])
+                        point = node_coords(node_ids[0])
             if point is not None:
                 break
         if point is None:

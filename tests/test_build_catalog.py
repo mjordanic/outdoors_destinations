@@ -3,6 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from dayhike import Catalog, build_catalog
 from dayhike.catalog import (
     MIN_LENGTH_M,
@@ -236,3 +238,25 @@ def test_cli_ingest_list_prints_dayhike_names(tmp_path: Path) -> None:
     assert "Valley Path" in result.stdout
     assert "relation:1003" in result.stdout
     assert "PS-1" in result.stdout
+
+
+def test_the_ingest_command_takes_a_directory_of_osm_files(tmp_path: Path) -> None:
+    from dayhike.cli import main
+
+    osm = tmp_path / "osm"
+    osm.mkdir()
+    (osm / "catalog.osm").write_bytes(FIXTURE.read_bytes())
+    catalog_path = tmp_path / "catalog.sqlite"
+
+    assert main(["ingest", str(osm), "--catalog", str(catalog_path)]) == 0
+
+    assert {hike.id for hike in Catalog.open(catalog_path).dayhikes} == KEPT_IDS
+
+
+def test_a_dem_directory_that_does_not_exist_is_refused(tmp_path: Path) -> None:
+    catalog_path = tmp_path / "catalog.sqlite"
+
+    with pytest.raises(FileNotFoundError, match="typo"):
+        build_catalog(FIXTURE, catalog_path, dem_dir=tmp_path / "typo")
+
+    assert not catalog_path.exists()

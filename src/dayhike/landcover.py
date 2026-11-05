@@ -2,21 +2,18 @@ from __future__ import annotations
 
 import math
 import os
-import shutil
 import sqlite3
-import time
 from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from contextlib import ExitStack
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
 import numpy as np
 
 from dayhike.catalog import EARTH_RADIUS_M, LANDCOVER_FEATURE_NAMES, geometry_store_path_for, remove_similarity
 from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS
+from dayhike.download import download as _download
 from dayhike.parallel import parallel_iter, workers
 
 Progress = Callable[[str], None]
@@ -412,27 +409,3 @@ def _format_corner(lat_sw: int, lon_sw: int) -> str:
     ns = "N" if lat_sw >= 0 else "S"
     ew = "E" if lon_sw >= 0 else "W"
     return f"{ns}{abs(lat_sw):02d}{ew}{abs(lon_sw):03d}"
-
-
-def _download(url: str, filename: str) -> None:
-    dest = Path(filename)
-    tmp = dest.with_name(dest.name + ".part")
-    request = Request(url, headers={"User-Agent": "dayhike"})
-    last_error: Exception | None = None
-    for attempt in range(5):
-        try:
-            with urlopen(request, timeout=120) as source, tmp.open("wb") as out:
-                shutil.copyfileobj(source, out)
-            tmp.replace(dest)
-            return
-        except HTTPError as exc:
-            tmp.unlink(missing_ok=True)
-            if exc.code == 404:
-                raise FileNotFoundError(url) from exc
-            last_error = exc
-        except (URLError, TimeoutError, OSError) as exc:
-            tmp.unlink(missing_ok=True)
-            last_error = exc
-        time.sleep(min(2**attempt, 16))
-    assert last_error is not None
-    raise last_error

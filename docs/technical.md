@@ -115,6 +115,7 @@ uv run dayhike fetch-extracts --dest data/osm
 
 # 2. Elevation tiles. Ingest starts a line whose ends differ by more than 100 m
 #    at its lower end (ADR-0048, lower end); without --dem, height orients no line.
+#    A --dem directory that does not exist stops ingest before it starts.
 uv run dayhike fetch-dem          # default bbox: Alps + Dinarides, 152 tiles, about 3.2 GB;
                                   # --bounds S,W,N,E for less (Walkthrough A)
 
@@ -1639,6 +1640,9 @@ uv run dayhike ingest data/osm/croatia-latest.osm.pbf \
 
 To add a country later, put its PBF next to the others and ingest the **whole
 directory** (or list every file you want) again.
+A directory is read as every `.osm` / `.pbf` in it except the extracts ingest
+writes there itself (`*.catalog.osm.pbf`, and `*.writing.osm.pbf` while one
+is written), so the next run on the same directory resumes.
 
 ### Re-ingest after an ingest change
 
