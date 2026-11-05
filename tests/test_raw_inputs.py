@@ -1,7 +1,7 @@
 """The raw downloads under the data directory are complete and are the recorded ones.
 
 Slow, opt-in (DAYHIKE_REAL_DATA=1); reads DAYHIKE_DATA_DIR (default data/).
-The snapshot check also needs DAYHIKE_REFERENCE_DIR/raw-manifest.tsv. README
+The snapshot check also needs DAYHIKE_REFERENCE_DIR/raw-manifest.tsv. docs/technical.md
 "Clean rebuild" says how these fit the rebuild.
 """
 

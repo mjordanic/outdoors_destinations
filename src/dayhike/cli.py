@@ -266,7 +266,7 @@ def main(argv: list[str] | None = None) -> int:
     rank.add_argument(
         "--highways",
         action="store_true",
-        help="Valhalla serves highways-only tiles: estimate DriveTime (see README)",
+        help="Valhalla serves highways-only tiles: estimate DriveTime (see docs/technical.md, 'Highway tiles')",
     )
     rank.add_argument(
         "--month",
@@ -342,7 +342,7 @@ def main(argv: list[str] | None = None) -> int:
     nearby.add_argument(
         "--highways",
         action="store_true",
-        help="Valhalla serves highways-only tiles: estimate DriveTime (see README)",
+        help="Valhalla serves highways-only tiles: estimate DriveTime (see docs/technical.md, 'Highway tiles')",
     )
     export = subparsers.add_parser(
         "export-serving", help="Write the small read-only dataset the web demo serves"

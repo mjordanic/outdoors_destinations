@@ -2,7 +2,7 @@
 
 Slow, opt-in (DAYHIKE_REAL_DATA=1); compares DAYHIKE_DATA_DIR (default data/)
 with DAYHIKE_REFERENCE_DIR, frozen copies of the old outputs plus
-raw-manifest.tsv and golden/ (README "Clean rebuild"). Skipped without a
+raw-manifest.tsv and golden/ (docs/technical.md "Clean rebuild"). Skipped without a
 reference.
 
 The pipeline is deterministic (same snapshot, same uv.lock, a fixed

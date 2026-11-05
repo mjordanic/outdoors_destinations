@@ -1,13 +1,17 @@
 # Future work
 
-Deliberately deferred. Nothing here is being built in the Catalog-and-ranker
-milestone. This file exists so the research behind these decisions is not redone.
+Deliberately deferred ideas, and the measurements behind them, so the research
+is not redone. It was written during the Catalog-and-ranker milestone; some
+items have since been built, and say so.
 
 ---
 
 ## 1. Website UI
 
-### Why it's parked
+**Built since:** the web demo (ADR-0014, `src/dayhike/web/`) is live; see
+[Web demo](technical.md#web-demo). What follows is the original reasoning.
+
+### Why it was parked
 
 Phase 1 is a local Catalog and CLI Ranking. A webpage would freeze the HTTP
 shape before ingest, AmenityFacts, and k-NN are honest.
@@ -92,7 +96,8 @@ can ingest GTFS, but coverage will be patchy.
 
 LandCover and ClimateNormal are FeatureVector material (ADR-0010). A weekend
 forecast is not: it would make "like Seed X" depend on the day of the query.
-SolarAspect is still the notebook prototype. Seasonal snow has no honest
+SolarAspect has since been built as a Measure (`southness`, from FABDEM; see
+the Measures table in [technical.md](technical.md#measures)). Seasonal snow has no honest
 per-DayHike layer. LandCover snow is permanent ice on the land-cover map, not
 January snowpack.
 
@@ -100,8 +105,6 @@ January snowpack.
 
 - A forecast shown on a detail view, or applied after Ranking the way DriveTime
   is. Never a FeatureVector column.
-- SolarAspect promoted from `notebooks/04_rank_feature_lab.ipynb` the same way
-  elevation left the notebook.
 - A snow layer that describes the season the Hiker asked about.
 
 ---

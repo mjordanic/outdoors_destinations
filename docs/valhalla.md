@@ -40,7 +40,7 @@ keeps motorway–residential, other `service` ways (parking aisles, alleys),
 `trunk`, `primary` (and `_link` ramps) plus ferries. Output is
 `*-highways.osm.pbf`. Use it for long-distance European travel, not for
 DriveTime to Trailheads on its own; with `--highways` it gives an estimate for all
-of Europe (README, **Highway tiles**). Turn restrictions
+of Europe ([technical docs](technical.md#highway-tiles-all-of-europe-small-server), **Highway tiles**). Turn restrictions
 are omitted so osmium does not pull small member ways into the extract.
 
 **`mjolnir.drive-time.json`** is merged into `valhalla.json` when the
@@ -51,8 +51,9 @@ ways do not become edges.
 To restore a fuller graph: skip both prepare scripts, copy an unfiltered
 Geofabrik PBF into `data/valhalla/`, set those three flags to `true`, delete
 `valhalla_tiles/`, `valhalla_tiles.tar`, and `file_hashes.txt`, then compose
-up. README section **How to restore a fuller graph** is the canonical
-checklist.
+up. The technical docs section
+[How to restore a fuller graph](technical.md#how-to-restore-a-fuller-graph) is
+the canonical checklist.
 
 Changing flags alone does not rebuild existing tiles.
 

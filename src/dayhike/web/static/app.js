@@ -2210,7 +2210,7 @@ async function start() {
   narrow.addEventListener("change", () => { $("#weights-panel").open = !narrow.matches; });
   const loading = $("#loading-text");
   const waking = setTimeout(() => {
-    loading.textContent = "Waking the server… It sleeps while no one is using it, so the first visit after a quiet spell takes about 15 seconds.";
+    loading.textContent = "Waking the server… It sleeps while no one is using it, so the first visit after a quiet spell can take up to about 20 seconds.";
   }, WAKE_AFTER_MS);
   try {
     const [info, measures] = await Promise.all([api("/api/info"), api("/api/measures")]);

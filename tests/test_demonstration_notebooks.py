@@ -10,7 +10,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 NOTEBOOKS = REPO / "notebooks"
-README = REPO / "README.md"
+TECHNICAL_DOCS = REPO / "docs" / "technical.md"
 FIXTURE = REPO / "tests" / "fixtures" / "catalog.osm"
 
 
@@ -175,15 +175,15 @@ def test_notebook_shows_ingest_stages_and_resume() -> None:
     assert "route=hiking" in markdown
 
 
-def test_readme_points_at_demonstration_notebooks() -> None:
-    text = README.read_text()
+def test_technical_docs_point_at_demonstration_notebooks() -> None:
+    text = TECHNICAL_DOCS.read_text()
     for name in WALKTHROUGH:
         assert f"notebooks/{name}" in text
     assert "Notebook walkthrough" in text
 
 
-def test_readme_documents_landcover_and_climate() -> None:
-    text = README.read_text()
+def test_technical_docs_document_landcover_and_climate() -> None:
+    text = TECHNICAL_DOCS.read_text()
     for command in (
         "fetch-landcover",
         "sample-landcover",

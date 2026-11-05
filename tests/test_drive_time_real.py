@@ -2,7 +2,7 @@
 
 Slow, opt-in (DAYHIKE_REAL_DATA=1); needs the highway tiles under
 DAYHIKE_DATA_DIR/valhalla/highways-eu served at DAYHIKE_VALHALLA_URL (default
-http://127.0.0.1:8002; README "Highway tiles"), and compares with
+http://127.0.0.1:8002; docs/technical.md "Highway tiles"), and compares with
 DAYHIKE_REFERENCE_DIR/golden/ captured from the reference server.
 """
 

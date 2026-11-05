@@ -4,7 +4,7 @@ Run after an ingest, the three sample commands and build-similarity:
 
     DAYHIKE_REAL_DATA=1 uv run pytest tests/test_real_data.py
 
-Skipped without DAYHIKE_REAL_DATA=1. DAYHIKE_DATA_DIR replaces data/ (README
+Skipped without DAYHIKE_REAL_DATA=1. DAYHIKE_DATA_DIR replaces data/ (docs/technical.md
 "Clean rebuild"). The baseline checks compare with data/baseline/ and are
 skipped without it. That is the 2026-10-21 Catalog
 (catalog.sqlite and catalog.similarity_facts.pkl, 155,844 DayHikes), copied
