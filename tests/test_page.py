@@ -1703,7 +1703,7 @@ def test_each_suggested_hike_is_in_the_accessibility_tree_and_picks_itself(brows
     page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
     page.get_by_text("Chosen: Ridge Walk").wait_for()
     page.locator("#pair-search").fill("al")
-    options = page.locator("#pair-suggestions li")
+    options = page.locator("#pair-suggestions li[role=option]")  # not the note above names only like the query
     options.nth(1).wait_for()
 
     # Focusable, as the snapshots of DevTools-based tools need to list an option at all.
@@ -1716,7 +1716,7 @@ def test_each_suggested_hike_is_in_the_accessibility_tree_and_picks_itself(brows
     focusable = [p["value"]["value"] for n in listed for p in n.get("properties", []) if p["name"] == "focusable"]
     assert len(focusable) == len(names) and all(focusable)
 
-    second = options.nth(1).evaluate("li => li.firstChild.textContent")
+    second = options.nth(1).evaluate("li => li.firstChild.textContent.trim()")  # before a similar-name tag
     page.locator("#pair-suggestions").get_by_role("option").nth(1).click()
     page.locator("#selected").get_by_text(second).first.wait_for()
     assert page.locator("#pair-search").input_value() == second
