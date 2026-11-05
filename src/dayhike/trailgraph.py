@@ -1318,7 +1318,7 @@ class TrailGraph:
                     walked = self._cross(db, rows, "gap" if way == "g" else "link", here, end, where)
                 else:
                     walked = self._follow(db, rows, ways, keys, int(way), here, end, where)
-                total += len(walked)
+                total += sum(abs(last - first) for _, first, last in walked)
                 if total > MAX_WALK_STEPS:
                     raise RouteError(
                         f"{where}: a composed hike may walk at most {MAX_WALK_STEPS:,} vertex steps; draw a shorter one"
