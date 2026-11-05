@@ -677,7 +677,10 @@ def calibrate(
     as ``rarity``). On a ``ratio`` Measure a random pair at raw 1 is also less
     alike than a pair below raw 1 whose values span a rarer stretch than its
     shared value: two climbs of 166 and 167 m beat two that are both under the
-    100 m floor (ADR-0050). Every other tie is as alike, so 0 is a pair no
+    100 m floor (ADR-0050). A pair whose values span the floor block has a
+    stretch as common as that block and gets no such credit, so a farther pair
+    above the floor on a rarer stretch can outrank it: against 101 m, 110 m
+    ranks above 80 m. Every other tie is as alike, so 0 is a pair no
     random pair is less alike than. NaN stays NaN; a key without random-pair
     scores gives NaN.
     """

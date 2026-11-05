@@ -338,7 +338,19 @@ def test_two_close_climbs_beat_two_flat_walks_counted_the_same_under_the_floor(t
 
     assert flat[0] == pytest.approx(0.84, abs=0.02)  # 16 % of random pairs are as alike: both flat
     assert close[0] > 0.97 and close[0] > flat[0]  # 166 m and 167 m: the flat pairs share a commoner value
-    assert far[0] < close[1] < close[0]  # still closeness first: 166 m against 1,500, 599 and 167 m
+    assert far[0] < close[1] < close[0]  # off the floor, closeness: 166 m against 1,500, 599 and 167 m
+
+
+def test_a_pair_spanning_the_floor_gets_no_rarity_credit_so_a_farther_rare_pair_can_rank_above(tmp_path: Path) -> None:
+    # ADR-0050's near-floor exception. A Seed at 101 m: 80 m is floored to 100 m (raw 0.990), but its stretch
+    # takes in every hike under the floor, as common as that block, so it gets no credit. 110 m (raw 0.918)
+    # spans a rare stretch and gets the credit of the random pairs at raw 1.
+    climbs = [*np.linspace(5, 95, 39), 80, 101, 110, *np.linspace(150, 1_500, 58)]
+    store = _calibrated(tmp_path, 100, elevation_gain_m=climbs)
+
+    scores, _ = score_rows(store, [40], np.array([39, 41]), {"elevation_gain": 100})
+
+    assert scores[1] > scores[0]  # 110 m ranks above 80 m against 101 m
 
 
 def test_a_near_pair_on_a_tolerance_measure_stays_below_its_dead_band(tmp_path: Path) -> None:
