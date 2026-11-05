@@ -39,8 +39,20 @@ Pick one of three ways:
    so and marks each name that is only like it "similar name". So does a name
    that holds your word only inside a longer word ("Rappenloch" in
    "Krappenlochklamm"): check that it is the hike you meant.
+
+   You can also type a **peak, hut, viewpoint, lake, pass, town or village**
+   the hike goes to or starts from. Under the hike names the list then shows
+   "Hikes near Zugspitze (peak, near Ehrwald)" and the closest
+   few hikes there, each saying how near it comes: "reaches the top", "passes
+   300 m from it", or for a town "starts 1.2 km from it". A lake is measured
+   from its middle, so a hike along the shore of a big lake can read 2 km. A
+   typo is fine here too. When it lists only some of the hikes there, press
+   **Show on map**: the map opens at that place, with every hike there to
+   click.
 2. **Tick "Select hike on map"**, zoom in and click a hike. Hikes appear once
-   you zoom in far enough that fewer than about 100 are in view.
+   you zoom in far enough that fewer than about 100 are in view. After you
+   type a peak or place in the search box, or find a starting place, the map
+   goes there, open or when you open it.
 3. **Press "Design your own from segments"** and draw a walk along the marked
    trails. You can then use that walk as your liked hike.
 

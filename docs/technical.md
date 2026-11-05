@@ -2138,7 +2138,11 @@ writes `places.sqlite`, the towns of 1,000 people or more within 2° of the
 Trailheads' box and the smaller villages within 5 km of a Trailhead for "Find
 place" (ADR-0042); `dayhike export-places --out
 data/web-serving` adds it beside an existing export, which needs no other
-change (ADR-0029). Rerun it
+change (ADR-0029). Every export also writes `landmarks.sqlite`, the Landmarks
+the hike search finds hikes by (ADR-0053): the named Peaks, Huts, Shelters and
+Viewpoints on the hikes, the places of `places.sqlite` with the hikes starting
+within 5 km, and with `--geonames` the lakes and passes within 2 km of a hike;
+`export-places` rewrites it too. Rerun it
 after any rebuild; `meta.json` is written last, so a half-written export never
 opens.
 
@@ -2180,14 +2184,19 @@ and encoded line; when the box holds more than 100, none are listed and
 `too_many` is true, so the page asks to zoom in),
 `GET /api/measures`, `GET /api/info`
 (with the Trailheads' box, `coverage`, for the page's swapped "lat, lon"
-warning, `place_search`, true when the export has `places.sqlite`, `results`
+warning, `place_search`, true when the export has `places.sqlite`, `landmark_search`, true when it has
+`landmarks.sqlite`, `results`
 and `max_rows`, the rows a page and a whole list hold, `max_km`, `grouping`,
 the rule of the default GroupingRadius, and `draw`, `{"pool", "t"}`: the rows a
 Ranking answers with and the temperature the page draws its `results` rows of
 them with),
 `GET /api/place?q=&limit=` (GeoNames places with a name starting with the
 query, folded like search: the place named exactly that, then one with it as an
-alternate name, then the most populous; 404 without `places.sqlite`), `POST /api/rank` with `{"seed": id, "weights": {measure: 0-100},
+alternate name, then the most populous; 404 without `places.sqlite`),
+`GET /api/landmarks?q=&limit=` (up to 10, default 5, Landmarks with a folded name holding the query from a
+word's start, typos as search: the one named exactly first, then the most hikes; each with `name`, `kind`,
+`town` (the nearest town within 30 km, to tell equal names apart), `lat`, `lon`, `match`, `hike_count` and
+`hikes`, its 5 nearest as search lists them with `off_m`; 404 without `landmarks.sqlite`), `POST /api/rank` with `{"seed": id, "weights": {measure: 0-100},
 "excluded": [measure], "month": 1-12, "origin": {"lat", "lon"}, "max_hours":
 0-4, "max_km": 0-200, "group_km": 0.1-50, "after": [{"lat", "lon"}], "draw":
 0-4294967295}` (ADR-0032:

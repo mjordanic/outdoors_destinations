@@ -21,6 +21,10 @@ const LEGEND = [
   ["Water", WATER], ["Hut", "#c0392b"], ["Restaurant / cafe", "#e67e22"], ["Shelter", "#8e5b3a"],
   ["Viewpoint", "#8e44ad"], ["Peak", "#3b3b3b"], ["Parking", "#6b7280"], ["Trailhead", "#2f7d4f"],
 ];
+// A Landmark's kind as the hike search says it (serving.export_landmarks).
+const LANDMARK_KINDS = { peak: "peak", hut: "hut", shelter: "shelter", viewpoint: "viewpoint", lake: "lake",
+  pass: "pass", town: "town", village: "village" };
+const PEAK_SUMMITED_M = 50; // a hike this near a peak reaches its top (similarity.PEAK_SUMMITED_M)
 const SAC = ["", "T1 hiking", "T2 mountain hiking", "T3 demanding mountain", "T4 alpine hiking",
   "T5 demanding alpine", "T6 difficult alpine"];
 const SAC_RANK = { hiking: 1, mountain_hiking: 2, demanding_mountain_hiking: 3, alpine_hiking: 4,
@@ -74,6 +78,7 @@ const state = {
   expanded: null, // the result row whose versions (var 1, 2, 3) are shown
   selected: null, // the hike shown against the liked one: { key } of a result, or { pair } a DayHike id
   origin: null,
+  mapAt: null, // where the hike map opens next: the last Landmark or start place found while it was closed
   missed: null, // the place text the last lookup found nothing for
   geocoded: new Map(),
 };
@@ -1062,42 +1067,85 @@ function setWishing(on) {
 
 // ---------- search ----------
 
+// How near a Landmark's hike comes to it: a town's hike starts near it, a lake's is measured from its GeoNames point.
+function nearText(landmark, offM) {
+  if (landmark.kind === "town" || landmark.kind === "village") return `starts ${fmt.km(offM)} from it`;
+  if (landmark.kind === "peak" && offM <= PEAK_SUMMITED_M) return "reaches the top";
+  if (landmark.kind === "lake") return `passes ${fmt.km(offM)} from its middle`;
+  return offM <= PEAK_SUMMITED_M ? "passes it" : `passes ${fmt.km(offM)} from it`;
+}
+
 // A hike-name box with a suggestion list; ``onPick(id)`` loads the chosen hike.
 // A hit is listed one way, as walked: its length says so unless it ends at its start.
-function nameSearch(input, list, onPick) {
+// With an export's Landmarks the list also has the hikes near a peak, hut, lake, pass or town named
+// like the query (ADR-0053); ``onLandmark(landmark, open)`` then moves a map there, ``open`` asking to open it.
+function nameSearch(input, list, onPick, onLandmark = null) {
   let timer = null, abort = null, items = [], active = -1;
-  const show = (found, nothingFor = null) => {
-    items = found;
+  const option = (item, extra = null) => {
+    const li = document.createElement("li");
+    li.role = "option";
+    li.id = `${list.id}-${items.length}`;
+    li.tabIndex = -1; // focusable, so the accessibility tree lists each option to click
+    li.setAttribute("aria-selected", "false");
+    const meta = [
+      extra,
+      // A hit is walked one way, so its climb is too: the liked hike's panel adds the way back.
+      [item.length_m != null && `${fmt.km(item.length_m)} ${item.round_trip ? "loop" : "one way"}`,
+        climbText(item, item.elevation_gain_m)].filter(Boolean).join(", "),
+      item.highest_m != null && `top ${fmt.m(item.highest_m)}`,
+      `${item.trailhead[0].toFixed(2)}, ${item.trailhead[1].toFixed(2)}`,
+    ].filter(Boolean).join(" · ");
+    const similar = item.match === "similar" ? ' <span class="similar-tag">similar name</span>' : "";
+    li.innerHTML = `${escapeHtml(item.name)}${similar}<span class="meta">${escapeHtml(meta)}</span>`;
+    li.addEventListener("mousedown", (event) => { event.preventDefault(); pick(item.id); });
+    list.appendChild(li);
+    items.push(item);
+  };
+  const note = (html, className = "nothing") => {
+    const li = document.createElement("li");
+    li.className = className;
+    li.role = "presentation";
+    li.innerHTML = html;
+    list.appendChild(li);
+    return li;
+  };
+  const show = (found, landmarks = [], nothingFor = null) => {
+    items = [];
     active = -1;
     list.innerHTML = "";
+    const query = escapeHtml(input.value.trim());
     if (nothingFor) {
-      list.innerHTML = `<li class="nothing">No hike name has every word of “${escapeHtml(nothingFor)}”.<span class="meta">Only hike names are searched, not places; try a word of a trail's name, or select a hike on the map.</span></li>`;
-    } else if (found.length && found[0].match === "similar") {
-      // Only names like the query: say so before the Hiker picks one for the hike they meant.
-      list.innerHTML = `<li class="nothing" role="presentation">No hike name has every word of “${escapeHtml(input.value.trim())}” as typed. Names like it:</li>`;
+      list.innerHTML = state.info.landmark_search
+        ? `<li class="nothing">No hike name, peak or place has every word of “${escapeHtml(nothingFor)}”.<span class="meta">Try a word of a trail's name, a peak, hut, lake or town, or select a hike on the map.</span></li>`
+        : `<li class="nothing">No hike name has every word of “${escapeHtml(nothingFor)}”.<span class="meta">Only hike names are searched, not places; try a word of a trail's name, or select a hike on the map.</span></li>`;
     }
-    found.forEach((item, i) => {
-      const li = document.createElement("li");
-      li.role = "option";
-      li.id = `${list.id}-${i}`;
-      li.tabIndex = -1; // focusable, so the accessibility tree lists each option to click
-      li.setAttribute("aria-selected", "false");
-      const meta = [
-        // A hit is walked one way, so its climb is too: the liked hike's panel adds the way back.
-        [item.length_m != null && `${fmt.km(item.length_m)} ${item.round_trip ? "loop" : "one way"}`,
-          climbText(item, item.elevation_gain_m)].filter(Boolean).join(", "),
-        item.highest_m != null && `top ${fmt.m(item.highest_m)}`,
-        `${item.trailhead[0].toFixed(2)}, ${item.trailhead[1].toFixed(2)}`,
-      ].filter(Boolean).join(" · ");
-      const similar = item.match === "similar" ? ' <span class="similar-tag">similar name</span>' : "";
-      li.innerHTML = `${escapeHtml(item.name)}${similar}<span class="meta">${escapeHtml(meta)}</span>`;
-      li.addEventListener("mousedown", (event) => { event.preventDefault(); pick(item.id); });
-      list.appendChild(li);
-    });
-    list.hidden = found.length === 0 && !nothingFor;
+    found.filter((item) => item.match !== "similar").forEach((item) => option(item));
+    for (const landmark of landmarks) {
+      const where = [LANDMARK_KINDS[landmark.kind] ?? landmark.kind, landmark.town && `near ${landmark.town}`].filter(Boolean).join(", ");
+      const similar = landmark.match === "similar" ? ' <span class="similar-tag">similar name</span>' : "";
+      const head = note(`Hikes near ${escapeHtml(landmark.name)} (${escapeHtml(where)})${similar}`, "landmark");
+      if (onLandmark) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "link";
+        button.textContent = "Show on map";
+        button.addEventListener("mousedown", (event) => { event.preventDefault(); show([]); onLandmark(landmark, true); });
+        head.appendChild(button);
+      }
+      landmark.hikes.forEach((item) => option(item, nearText(landmark, item.off_m)));
+      const more = landmark.hike_count - landmark.hikes.length;
+      if (more > 0) note(`<span class="meta">and ${more.toLocaleString("en")} more${onLandmark ? ": show them on the map" : ""}</span>`);
+    }
+    const similar = found.filter((item) => item.match === "similar");
+    if (similar.length) {
+      // Only names like the query: say so before the Hiker picks one for the hike they meant.
+      note(items.length ? `Hike names like “${query}”:` : `No hike name has every word of “${query}” as typed. Names like it:`);
+      similar.forEach((item) => option(item));
+    }
+    list.hidden = items.length === 0 && !nothingFor;
     input.setAttribute("aria-expanded", String(!list.hidden));
     input.removeAttribute("aria-activedescendant"); // its option is gone
-
+    if (landmarks.length && onLandmark) onLandmark(landmarks[0], false);
   };
   const move = (step) => {
     if (!items.length) return;
@@ -1124,8 +1172,18 @@ function nameSearch(input, list, onPick) {
       abort?.abort();
       abort = new AbortController();
       try {
-        const body = await api(`/api/search?q=${encodeURIComponent(query)}&limit=20`, { signal: abort.signal });
-        show(body.results, body.results.length ? null : query);
+        const { signal } = abort;
+        // An export's Landmarks come with the names; a failed Landmark search leaves the names alone.
+        const [body, near] = await Promise.all([
+          api(`/api/search?q=${encodeURIComponent(query)}&limit=20`, { signal }),
+          state.info.landmark_search
+            ? api(`/api/landmarks?q=${encodeURIComponent(query)}`, { signal }).catch((error) => {
+              if (error.name === "AbortError") throw error;
+              return { results: [] };
+            })
+            : { results: [] },
+        ]);
+        show(body.results, near.results, body.results.length || near.results.length ? null : query);
       } catch (error) {
         if (error.name !== "AbortError") setStatus(error.message, true);
       }
@@ -1158,6 +1216,7 @@ async function choose(id, { fromLink = false } = {}) {
     const hike = await api(`/api/hikes/${id}?return_to_start=${returnToStart()}`);
     if (request !== chosen) return;
     state.liked = hike;
+    state.mapAt = null; // the map opens at the hike chosen, not at a place searched before
     if (state.wishing) setWishing(false);
     $("#search").value = hike.name;
     $("#liked-name").textContent = `Chosen: ${hike.name}, ${lengthText(hike)}`;
@@ -1301,8 +1360,19 @@ const pick = {
       this.drawLoops();
     }
     this.map.invalidateSize();
+    if (state.mapAt) this.focus(state.mapAt);
     this.load();
     card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  },
+
+  // Show a place the Hiker searched (a Landmark, or the start place) close enough to see
+  // its hikes as lines: a town's hikes start within 5 km, the others pass within 2 km.
+  // With the map closed, it opens there.
+  focus(at) {
+    state.mapAt = at;
+    if (!this.map || $("#map-pick").hidden) return;
+    state.mapAt = null;
+    this.map.setView(at.center, at.zoom ?? PICK_ZOOM);
   },
 
   close() {
@@ -1887,6 +1957,7 @@ async function findPlace() {
 
 function setOrigin(origin) {
   state.origin = origin;
+  pick.focus({ center: [origin.lat, origin.lon] });
   $("#origin-found").textContent = `Start: ${origin.label} (${origin.lat.toFixed(4)}, ${origin.lon.toFixed(4)})`;
   markStale();
 }
@@ -2464,7 +2535,15 @@ async function start() {
   }
   showGroupDefault();
   LIKED_EMPTY = $("#liked").innerHTML;
-  nameSearch($("#search"), $("#suggestions"), choose);
+  nameSearch($("#search"), $("#suggestions"), choose, (landmark, open) => {
+    const town = landmark.kind === "town" || landmark.kind === "village";
+    pick.focus({ center: [landmark.lat, landmark.lon], zoom: town ? PICK_ZOOM : PICK_ZOOM + 1 });
+    if (open && !$("#map-pick-on").checked) {
+      $("#map-pick-on").checked = true;
+      pick.open();
+    }
+  });
+  if (state.info.landmark_search) $("#search").placeholder = "Type a hike name, peak or place, e.g. Triglav";
   $("#search").addEventListener("input", forgetBrokenLink);
   $("#map-pick-on").addEventListener("change", (event) => {
     forgetBrokenLink();

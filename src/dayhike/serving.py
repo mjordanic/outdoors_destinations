@@ -29,6 +29,10 @@ similarity directory live. It writes a directory a server memory-maps:
   names, for the page's place search, when a GeoNames dump (``allCountries``)
   is given. ``export_places`` writes it beside an existing export too: it reads
   only ``trailheads.npy``, and an export without it still opens.
+- ``landmarks.sqlite``: the Landmarks the hike search finds hikes by
+  (``export_landmarks``, ADR-0053), each with its nearest hikes; written by
+  every export and by ``export_places``. An export without it still opens
+  and searches hike names only.
 - ``meta.json``: written last, so a directory without it is incomplete.
 
 ``ServingData`` opens such a directory without ``Catalog.open``: name search,
@@ -42,6 +46,7 @@ lists them among them (``dayhike.loops``, ADR-0020).
 
 from __future__ import annotations
 
+import functools
 import heapq
 import itertools
 import json
@@ -50,6 +55,7 @@ import os
 import re
 import shutil
 import sqlite3
+import threading
 import time
 import unicodedata
 import zipfile
@@ -172,6 +178,11 @@ TOWN_POPULATION = 1_000  # a town (this many people, or a seat as below) is kept
 SEAT_CODES = ("PPLC", "PPLA", "PPLA2", "PPLA3")  # GeoNames capitals and seats of administrative divisions
 VILLAGE_M = 5_000  # a smaller populated place is kept this close to a Trailhead: a village a hike starts from
 NOT_VILLAGE_CODES = ("PPLX", "PPLH", "PPLQ", "PPLW", "PPLCH")  # a section of a place; historical, abandoned, gone
+LANDMARK_KINDS = ("peak", "hut", "shelter", "viewpoint")  # the named points on hikes a Landmark is made of (ADR-0053)
+GEONAMES_LANDMARKS = {"LK": "lake", "LKS": "lake", "RSV": "lake", "PASS": "pass"}  # GeoNames codes the points lack
+LANDMARK_NEAR_M = 2_000.0  # a lake or pass is on the hikes passing this close to its GeoNames point
+LANDMARK_HIKES = 5  # the hikes a Landmark lists, nearest first
+LANDMARK_TOWN_M = 30_000.0  # a Landmark is told apart by the nearest town this close
 _HIKE_CHUNK = 2_000
 _RASTER_FACTS = ("tree_share", "temperature_c", "southness", "waterside_share")  # read from rasters
 _SIMILARITY_FILES = (
@@ -494,6 +505,7 @@ def export_serving(
         export_places(geonames_path, out)
     else:
         (out / "places.sqlite").unlink(missing_ok=True)
+    export_landmarks(out, geonames_path)
     # The elevation map in use: FABDEM, unless the GeometryStore was sampled from Copernicus GLO-30 (ADR-0030).
     elevation = {} if "copernicus" in sources else {"fabdem": FABDEM_ATTRIBUTION}
     meta = {
@@ -952,6 +964,139 @@ def _geonames_lines(path: Path) -> Iterator[str]:
                 yield line.decode("utf-8")
 
 
+def export_landmarks(out_dir: Path | str, geonames_path: Path | str | None = None) -> Path:
+    """Write ``landmarks.sqlite`` into the export ``out_dir``: the Landmarks a
+    hike search finds hikes by (ADR-0053).
+
+    A Landmark is a named point of ``LANDMARK_KINDS`` on the hikes of
+    ``hikes.sqlite`` (a Peak within ``PEAKS_AROUND_M`` of the line, the rest
+    within ``CORRIDOR_M``), with the hikes it is on; a place of
+    ``places.sqlite``, when there is one, with the hikes starting within
+    ``VILLAGE_M`` of it; and, from a GeoNames dump, a lake or pass
+    (``GEONAMES_LANDMARKS``) with the hikes passing within ``LANDMARK_NEAR_M``.
+    Each keeps its ``LANDMARK_HIKES`` nearest hikes and how many it has, a Peak its height, the
+    nearest town (``LANDMARK_TOWN_M``) to tell equal names apart, and an index
+    of every folded name it has from each word on (Sorapiss finds Punta
+    Sorapiss), marked whether it is the whole name: a point's OSM name, a
+    place's names in ``places.sqlite``, a lake's or pass's GeoNames names.
+    Written to a temporary file first, like ``places.sqlite``.
+    """
+    from scipy.spatial import cKDTree
+
+    out = Path(out_dir)
+    found: dict[tuple, dict[int, float]] = {}  # (kind, name, lat, lon) -> hike id -> metres off
+    names: dict[tuple, set[str]] = {}
+    heights: dict[tuple, float] = {}  # a Peak's ele tag
+    with sqlite3.connect(f"file:{out / 'hikes.sqlite'}?mode=ro&immutable=1", uri=True) as db:
+        for dayhike_id, blob in db.execute("SELECT id, points FROM hikes"):
+            for kind, where, lat, lon, _, off_m, name, ele in json.loads(zlib.decompress(blob)):
+                if kind in LANDMARK_KINDS and where == "line" and name:
+                    hikes = found.setdefault((kind, name, lat, lon), {})
+                    hikes[dayhike_id] = min(off_m, hikes.get(dayhike_id, off_m))
+                    if ele is not None and kind == "peak":
+                        heights[(kind, name, lat, lon)] = ele
+        for key in found:
+            names[key] = {key[1]}
+        if geonames_path is not None:
+            _geonames_landmarks(Path(geonames_path), db, found, names)
+    towns, town_names = np.empty((0, 2)), []
+    places = out / "places.sqlite"
+    if places.is_file():
+        trailheads = np.load(out / "trailheads.npy")
+        ids = np.load(out / "similarity" / "ids.npy")
+        near = cKDTree(_unit(trailheads[:, 0], trailheads[:, 1]))
+        chord = 2 * math.sin(VILLAGE_M / (2 * EARTH_RADIUS_M))
+        with sqlite3.connect(f"file:{places}?mode=ro&immutable=1", uri=True) as db:
+            kept = db.execute("SELECT id, name, population, lat, lon FROM places").fetchall()
+            spelled: dict[int, set[str]] = {}
+            for name, place in db.execute("SELECT name, place FROM place_names"):
+                spelled.setdefault(place, set()).add(name)
+        for place, name, population, lat, lon in kept:
+            rows = near.query_ball_point(_unit(lat, lon)[0], chord)
+            if not rows:
+                continue
+            key = ("town" if population >= TOWN_POPULATION else "village", name, lat, lon)
+            found[key] = {
+                int(ids[row]): float(_haversine_m(lat, lon, *trailheads[row])) for row in rows
+            }
+            names[key] = spelled.get(place, set()) | {name}
+        big = [(name, lat, lon) for _, name, population, lat, lon in kept if population >= TOWN_POPULATION]
+        town_names = [name for name, _, _ in big]
+        towns = np.array([(lat, lon) for _, lat, lon in big]).reshape(-1, 2)
+    town_tree = cKDTree(_unit(towns[:, 0], towns[:, 1])) if len(towns) else None
+    town_chord = 2 * math.sin(LANDMARK_TOWN_M / (2 * EARTH_RADIUS_M))
+    path, partial = out / "landmarks.sqlite", out / "landmarks.sqlite.partial"
+    partial.unlink(missing_ok=True)
+    db = sqlite3.connect(partial)
+    try:
+        db.executescript(
+            "CREATE TABLE landmarks (id INTEGER PRIMARY KEY, name TEXT, kind TEXT, town TEXT,"
+            " lat REAL, lon REAL, ele REAL, hikes INTEGER);"
+            "CREATE TABLE landmark_hikes (landmark INTEGER, hike INTEGER, off_m INTEGER, PRIMARY KEY (landmark, off_m, hike))"
+            " WITHOUT ROWID;"
+            "CREATE TABLE landmark_names (name TEXT, landmark INTEGER, whole INTEGER, PRIMARY KEY (name, landmark))"
+            " WITHOUT ROWID;"
+        )
+        for landmark, (key, hikes) in enumerate(sorted(found.items(), key=lambda item: item[0]), start=1):
+            kind, name, lat, lon = key
+            town = None
+            if town_tree is not None and kind not in ("town", "village"):
+                distance, nearest = town_tree.query(_unit(lat, lon)[0], distance_upper_bound=town_chord)
+                town = town_names[nearest] if math.isfinite(distance) else None
+            db.execute(
+                "INSERT INTO landmarks VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (landmark, name, kind, town, lat, lon, heights.get(key), len(hikes)),
+            )
+            nearest_hikes = sorted(hikes.items(), key=lambda item: (item[1], item[0]))[:LANDMARK_HIKES]
+            db.executemany(
+                "INSERT INTO landmark_hikes VALUES (?, ?, ?)",
+                [(landmark, dayhike_id, round(off_m)) for dayhike_id, off_m in nearest_hikes],
+            )
+            keys: dict[str, bool] = {}
+            for spelled_name in names[key]:
+                folded = _fold(spelled_name).strip()
+                for match in re.finditer(r"\w+", folded):
+                    tail = folded[match.start() :]
+                    keys[tail] = keys.get(tail, False) or match.start() == 0
+            db.executemany(
+                "INSERT INTO landmark_names VALUES (?, ?, ?)", [(tail, landmark, whole) for tail, whole in keys.items()]
+            )
+        db.commit()
+    finally:
+        db.close()
+    os.replace(partial, path)
+    return path
+
+
+def _geonames_landmarks(
+    path: Path, hikes: sqlite3.Connection, found: dict[tuple, dict[int, float]], names: dict[tuple, set[str]]
+) -> None:
+    """Add the GeoNames lakes and passes within ``LANDMARK_NEAR_M`` of a hike's line to ``found``:
+    the hikes whose line's box is that near, then those whose line is."""
+    reach = math.degrees(LANDMARK_NEAR_M / EARTH_RADIUS_M)
+    for line in _geonames_lines(path):
+        fields = line.rstrip("\n").split("\t")
+        if fields[6] not in ("H", "T") or fields[7] not in GEONAMES_LANDMARKS:
+            continue
+        lat, lon = float(fields[4]), float(fields[5])
+        across = reach / max(math.cos(math.radians(lat)), 0.01)
+        candidates = hikes.execute(
+            "SELECT h.id, h.line FROM hike_boxes b JOIN hikes h ON h.id = b.id "
+            "WHERE b.north >= ? AND b.south <= ? AND b.east >= ? AND b.west <= ?",
+            (lat - reach, lat + reach, lon - across, lon + across),
+        ).fetchall()
+        near = {}
+        for dayhike_id, encoded in candidates:
+            chain = np.array(decode_polyline(encoded))
+            (off_m,), _ = nearest_on_line(chain[:, 0], chain[:, 1], [lat], [lon])
+            if off_m <= LANDMARK_NEAR_M:
+                near[dayhike_id] = float(off_m)
+        if near:
+            key = (GEONAMES_LANDMARKS[fields[7]], fields[1], lat, lon)
+            found[key] = near
+            names[key] = {fields[1], fields[2], *(name for name in fields[3].split(",") if name)}
+
+
 class Ranking(list):
     """``ServingData.rank``'s rows, best first, and what they leave out: ``other_areas``,
     the hikes ranked that start in no row's area (later pages list them), and
@@ -993,6 +1138,11 @@ class ServingData:
         self._spellings = _Spellings(self._folded)
         places = self.directory / "places.sqlite"
         self.places = f"file:{places}?mode=ro&immutable=1" if places.is_file() else None
+        # An export from before Landmarks (ADR-0053) opens without them: the page searches hike names only.
+        landmarks = self.directory / "landmarks.sqlite"
+        self.landmarks = f"file:{landmarks}?mode=ro&immutable=1" if landmarks.is_file() else None
+        if self.landmarks is not None:  # about 2 s for Europe: read beside the first requests, not in one of them
+            threading.Thread(target=lambda: self._landmark_spellings, daemon=True).start()
 
     def _db(self) -> sqlite3.Connection:
         return sqlite3.connect(self._db_uri, uri=True)
@@ -1076,6 +1226,63 @@ class ServingData:
                 (needle, needle + "\U0010ffff", needle, limit),
             ).fetchall()
         return [dict(zip(("name", "country", "lat", "lon", "population"), row)) for row in rows]
+
+    def find_landmarks(self, query: str, limit: int = 5) -> list[dict]:
+        """Landmarks (peaks, huts, lakes, towns ...) with a name holding the
+        query from a word's start, each with its nearest hikes (ADR-0053).
+
+        Folded like ``search``. The Landmark named exactly the query comes
+        first, then one with it as its last words (Punta Sorapiss for
+        Sorapiss), then names starting with it, then the rest. Within each
+        the highest Peak comes first, then the most hikes: Kleiner Watzmann
+        in the Alps before Märkischer Watzmann, a hill near Berlin. When none is named
+        so, the query is respelled as ``search`` respells it, from the
+        Landmarks' words, and those found are marked ``"match": "similar"``.
+        """
+        needle = _fold(query).strip()
+        if self.landmarks is None or len(needle) < 2:
+            return []
+        with sqlite3.connect(self.landmarks, uri=True) as db:
+            found, match = self._landmarks_named(db, needle, limit), "words"
+            if not found:
+                for spelled in self._landmark_spellings.respelled(needle.split()):
+                    found, match = self._landmarks_named(db, " ".join(spelled), limit), "similar"
+                    if found:
+                        break
+            hikes: dict[int, list[tuple[int, int]]] = {}
+            for landmark, dayhike_id, off_m in _in_chunks(
+                db, "SELECT landmark, hike, off_m FROM landmark_hikes WHERE landmark IN ({}) ORDER BY landmark, off_m, hike",
+                [row[0] for row in found],
+            ):
+                hikes.setdefault(landmark, []).append((dayhike_id, off_m))
+        results = []
+        for landmark, name, kind, town, lat, lon, count in found:
+            nearest = hikes.get(landmark, [])
+            summaries = self._summaries([self.row_of(dayhike_id) for dayhike_id, _ in nearest])
+            results.append(
+                {
+                    "name": name, "kind": kind, "town": town, "lat": lat, "lon": lon, "match": match,
+                    "hike_count": count,
+                    "hikes": [{**summary, "off_m": off_m} for summary, (_, off_m) in zip(summaries, nearest, strict=True)],
+                }
+            )  # fmt: skip
+        return results
+
+    @staticmethod
+    def _landmarks_named(db: sqlite3.Connection, needle: str, limit: int) -> list[tuple]:
+        return db.execute(
+            "SELECT l.id, l.name, l.kind, l.town, l.lat, l.lon, l.hikes FROM landmark_names n "
+            "JOIN landmarks l ON l.id = n.landmark WHERE n.name >= ? AND n.name < ? "
+            "GROUP BY l.id ORDER BY MIN(CASE WHEN n.name = ? THEN 1 - n.whole ELSE 3 - n.whole END), "
+            "l.ele IS NULL, l.ele DESC, l.hikes DESC, l.id LIMIT ?",
+            (needle, needle + "\U0010ffff", needle, limit),
+        ).fetchall()
+
+    @functools.cached_property
+    def _landmark_spellings(self) -> _Spellings:
+        """The words of the Landmarks' names, read at the first query that needs them."""
+        with sqlite3.connect(self.landmarks, uri=True) as db:
+            return _Spellings([name for (name,) in db.execute("SELECT name FROM landmark_names WHERE whole")])
 
     def _rows_containing(self, word: str) -> list[int]:
         """Rows whose name holds ``word``, in id order, from its first SEARCH_SCAN_CAP occurrences."""

@@ -675,7 +675,8 @@ def test_place_file_can_be_added_beside_an_existing_export(catalog_path: Path, t
 
     assert (out / "meta.json").read_bytes() == meta
     assert [place["name"] for place in ServingData(out).find_place("ogulin")] == ["Ogulin"]
-    assert capsys.readouterr().out.strip() == str(out / "places.sqlite")
+    assert [landmark["kind"] for landmark in ServingData(out).find_landmarks("ridge lake")] == ["lake"]
+    assert capsys.readouterr().out.split() == [str(out / "places.sqlite"), str(out / "landmarks.sqlite")]
 
 
 def test_place_file_reads_the_geonames_zip(catalog_path: Path, tmp_path: Path) -> None:
@@ -708,6 +709,97 @@ def test_geonames_is_downloaded_only_when_missing(tmp_path: Path) -> None:
     assert fetch_geonames(target, urlretrieve) == target
     assert fetch_geonames(target, urlretrieve) == target
     assert asked == [GEONAMES_URL] == ["https://download.geonames.org/export/dump/allCountries.zip"]
+
+
+def test_landmarks_are_the_named_points_on_hikes_with_the_hikes_nearest_first(data: ServingData) -> None:
+    [peak] = data.find_landmarks("Ridge Peak")
+
+    assert {key: peak[key] for key in ("name", "kind", "town", "lat", "lon", "match", "hike_count")} == {
+        "name": "Ridge Peak", "kind": "peak", "town": None, "lat": 45.00764, "lon": 15.0, "match": "words", "hike_count": 1,
+    }  # fmt: skip
+    assert [(hike["id"], hike["off_m"]) for hike in peak["hikes"]] == [(RIDGE_WALK_ID, 0)]
+    assert {key for key in peak["hikes"][0]} == {*data._summaries([0])[0], "off_m"}
+    # From any word's start: a word inside the name, or the start of one.
+    assert [landmark["name"] for landmark in data.find_landmarks("peak")] == ["Ridge Peak"]
+    assert [landmark["kind"] for landmark in data.find_landmarks("RIDGE VI")] == ["viewpoint"]
+    # A cafe names no Landmark, an unnamed hut neither, and a letter alone finds nothing.
+    assert data.find_landmarks("ridge cafe") == [] and data.find_landmarks("r") == []
+    assert data.find_landmarks("idg") == []  # not from a word's start, and too short for a typo
+
+
+def test_a_landmark_typed_with_a_typo_is_found_and_said_to_be_similar(data: ServingData) -> None:
+    [peak] = data.find_landmarks("Rigde Peak")
+
+    assert (peak["name"], peak["match"]) == ("Ridge Peak", "similar")
+
+
+def test_a_landmark_named_exactly_comes_before_one_named_from_it(placed: ServingData) -> None:
+    # Ridge Peak, Ridge View, Ridge Lake and Ridge Saddle all start with "ridge"; the lake's last word is "lake".
+    assert placed.find_landmarks("ridge lake")[0]["name"] == "Ridge Lake"
+    assert len(placed.find_landmarks("ridge")) == 4
+    assert [landmark["name"] for landmark in placed.find_landmarks("ridge", limit=2)] == [
+        landmark["name"] for landmark in placed.find_landmarks("ridge")[:2]
+    ]
+
+
+def test_among_equal_names_the_highest_peak_comes_first_then_the_most_hikes() -> None:
+    db = sqlite3.connect(":memory:")
+    db.executescript(
+        "CREATE TABLE landmarks (id INTEGER PRIMARY KEY, name TEXT, kind TEXT, town TEXT, lat REAL, lon REAL, ele REAL, hikes INTEGER);"
+        "CREATE TABLE landmark_names (name TEXT, landmark INTEGER, whole INTEGER);"
+        "INSERT INTO landmarks VALUES (1, 'Mont Blanc', 'peak', 'Hesdin', 50, 2, 120, 6), (2, 'Mont Blanc', 'peak', 'Chamonix', 45.8, 6.9, 4806, 2),"
+        " (3, 'Mont Blanc', 'village', NULL, 46, 6, NULL, 9), (4, 'Le Mont Blanc', 'peak', NULL, 45, 6, 4810, 40);"
+        "INSERT INTO landmark_names VALUES ('mont blanc', 1, 1), ('mont blanc', 2, 1), ('mont blanc', 3, 1),"
+        " ('le mont blanc', 4, 1), ('mont blanc', 4, 0);"
+    )
+
+    assert [row[0] for row in ServingData._landmarks_named(db, "mont blanc", 5)] == [2, 1, 3, 4]
+
+
+def test_geonames_lakes_and_passes_near_a_hike_are_landmarks_under_every_name(placed: ServingData) -> None:
+    [lake] = placed.find_landmarks("Grebensko jezero")
+    [saddle] = placed.find_landmarks("ridge saddle")
+
+    assert (lake["name"], lake["kind"]) == ("Ridge Lake", "lake")
+    assert [hike["id"] for hike in lake["hikes"]] == [RIDGE_WALK_ID]
+    assert 750 < lake["hikes"][0]["off_m"] < 820  # 0.01° of longitude east of the line at 45°
+    assert (saddle["kind"], saddle["hikes"][0]["off_m"]) == ("pass", 0)
+    # A lake no hike passes within LANDMARK_NEAR_M of is not kept; nor is a mountain (Kapelica) the points lack.
+    assert placed.find_landmarks("far lake") == [] and placed.find_landmarks("kapelica") == []
+
+
+def test_a_place_is_a_landmark_with_the_hikes_starting_near_it(placed: ServingData) -> None:
+    [village] = placed.find_landmarks("vrh")
+
+    assert (village["name"], village["kind"], village["town"]) == ("Vrh", "village", None)
+    start = placed.search("Valley Path")[0]
+    assert village["hikes"][0]["id"] == start["id"]
+    assert 1_000 < village["hikes"][0]["off_m"] < 2_000  # Vrh (45.21, 15.11) from the start at (45.2, 15.1)
+    # A town no hike starts within VILLAGE_M of is no Landmark (Vrhnika is in Slovenia, far from every hike).
+    assert [landmark["name"] for landmark in placed.find_landmarks("vrhnika")] == []
+
+
+def test_a_landmark_lists_its_nearest_hikes_and_counts_them_all(
+    catalog_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(serving, "LANDMARK_HIKES", 1)
+    monkeypatch.setattr(serving, "VILLAGE_M", 50_000.0)  # every hike starts "near" Ogulin
+    out = export_serving(catalog_path, tmp_path / "out", geonames_path=CITIES)
+    [ogulin] = ServingData(out).find_landmarks("ogulin")
+
+    assert ogulin["kind"] == "town" and len(ogulin["hikes"]) == 1 < ogulin["hike_count"]
+
+
+def test_landmarks_can_be_added_beside_an_existing_export_and_an_older_one_has_none(
+    catalog_path: Path, tmp_path: Path
+) -> None:
+    out = export_serving(catalog_path, tmp_path / "out")
+    (out / "landmarks.sqlite").unlink()
+    older = ServingData(out)
+
+    assert older.landmarks is None and older.find_landmarks("ridge peak") == []
+    serving.export_landmarks(out)
+    assert [landmark["name"] for landmark in ServingData(out).find_landmarks("ridge peak")] == ["Ridge Peak"]
 
 
 def test_the_rows_after_leave_out_the_twin_of_a_hike_already_listed(

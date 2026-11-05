@@ -368,7 +368,7 @@ def main(argv: list[str] | None = None) -> int:
         help="GeoNames allCountries.zip for the page's place search; downloaded there when missing",
     )
     places = subparsers.add_parser(
-        "export-places", help="Add GeoNames place search beside an existing serving export"
+        "export-places", help="Add GeoNames place search and the hike search's Landmarks beside an existing serving export"
     )
     places.add_argument(
         "--geonames",
@@ -421,9 +421,11 @@ def main(argv: list[str] | None = None) -> int:
             args.catalog, args.out, args.valhalla_tiles, args.snaps, args.valhalla_url, args.geonames
         )
     if args.command == "export-places":
-        from dayhike.serving import export_places, fetch_geonames
+        from dayhike.serving import export_landmarks, export_places, fetch_geonames
 
-        print(export_places(fetch_geonames(args.geonames), args.out))
+        geonames = fetch_geonames(args.geonames)
+        print(export_places(geonames, args.out))
+        print(export_landmarks(args.out, geonames))
         return 0
     if args.command == "serve":
         return _serve(
