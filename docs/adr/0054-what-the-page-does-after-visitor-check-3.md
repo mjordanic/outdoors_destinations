@@ -65,8 +65,8 @@ and says it cannot be drawn there.
 opens on the liked hike (its line, at least at the zoom where hikes show), else the starting place, else
 `core` in `/api/info`, the box of the middle 80 % of Trailheads. A hike picked by name while the map is open
 moves it there. Where lines run together along one trail (each within 3 px of the nearest, away from its
-ends), a click lists them, the shorter first, instead of picking one. Hikes that only meet at a point still
-pick the one clicked.
+ends), a click lists them and the hike nearest the click, the shorter first, instead of picking one. Hikes
+that only meet at a point still pick the one clicked.
 
 **Smaller fixes.** Find and a hike picked by name jump to the list or the hike's card at once (a smooth
 scroll could be cut short and leave the list 3,800 px below on a phone). The score "?" box shows "More
