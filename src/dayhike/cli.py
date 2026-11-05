@@ -33,6 +33,10 @@ from dayhike.similarity import (
 )
 from dayhike.valhalla import DEFAULT_VALHALLA_URL, MAX_MATRIX_DISTANCE_M, ValhallaMatrixClient
 
+# The most highway snaps `serve` keeps beyond the export's (SuggestedLoop starts a Ranking asked of Valhalla):
+# about 20 MB of memory.
+SERVE_SNAPS_KEPT = 50_000
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="dayhike")
@@ -734,8 +738,8 @@ def _serve(
         if not (data / "snaps.npz").is_file():
             print(f"{data}: no snaps.npz; export with --valhalla-url first", file=sys.stderr)
             return 1
-        snaps = HighwaySnaps(valhalla_url, data / "snaps.npz")
-        snaps.path = None  # the export is read-only: keep new snaps in memory
+        snaps = HighwaySnaps(valhalla_url, data / "snaps.npz", keep=SERVE_SNAPS_KEPT)
+        snaps.path = None  # the export is read-only: keep new snaps in memory, the most recent SERVE_SNAPS_KEPT
 
         def drive_client(max_hours: float) -> HighwayDriveTimeClient:
             return HighwayDriveTimeClient(max_hours, snaps)

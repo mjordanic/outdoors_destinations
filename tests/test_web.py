@@ -403,6 +403,62 @@ def test_pair_refuses_bad_queries(client: TestClient, body: dict, status: int) -
     assert client.post("/api/pair", json=body).status_code == status
 
 
+def test_search_for_a_digit_that_is_not_ascii_finds_nothing(client: TestClient) -> None:
+    response = client.get("/api/search", params={"q": "\u1369"})  # ETHIOPIC DIGIT ONE: isdigit, but no int
+
+    assert response.status_code == 200 and response.json()["results"] == []
+
+
+def test_a_body_over_the_cap_or_of_unstated_length_is_refused_unread(client: TestClient) -> None:
+    big = '{"seed": 1001, "excluded": ["' + "x" * web.MAX_BODY_BYTES + '"]}'
+    over = client.post("/api/rank", content=big, headers={"content-type": "application/json"})
+    chunked = client.post(
+        "/api/rank", content=iter([b'{"seed": 1001}']), headers={"content-type": "application/json"}
+    )
+
+    assert over.status_code == 413
+    assert chunked.status_code == 411
+    assert client.post("/api/rank", json={"seed": RIDGE_WALK_ID}).status_code == 200
+
+
+def test_weights_and_excluded_hold_at_most_one_entry_per_measure(client: TestClient) -> None:
+    every = {name: 50 for name in MEASURE_NAMES}
+    more = {**every, "extra": 50}
+
+    assert client.post("/api/rank", json={"seed": RIDGE_WALK_ID, "weights": every}).status_code == 200
+    assert client.post("/api/rank", json={"seed": RIDGE_WALK_ID, "weights": more}).status_code == 422
+    excluded = [*MEASURE_NAMES, "length"]
+    assert client.post("/api/rank", json={"seed": RIDGE_WALK_ID, "excluded": excluded}).status_code == 422
+
+
+def test_unknown_weight_names_are_refused_before_ranking_and_quoted_short(client: TestClient, monkeypatch) -> None:
+    def no_ranking(*args, **kwargs):
+        raise AssertionError("ranked")
+
+    monkeypatch.setattr(ServingData, "rank", no_ranking)
+    monkeypatch.setattr(ServingData, "pair", no_ranking)
+    weights = {f"{'n' * 1_000}{i}": 50 for i in range(5)}
+
+    for path, seed in (("/api/rank", {"seed": RIDGE_WALK_ID}), ("/api/pair", {"a": RIDGE_WALK_ID, "b": 1003})):
+        response = client.post(path, json={**seed, "weights": weights})
+        assert response.status_code == 422
+        assert "unknown Measure" in response.text and "and 2 more" in response.text
+        assert len(response.text) < 1_000
+    excluded = client.post("/api/rank", json={"seed": RIDGE_WALK_ID, "excluded": ["x" * 1_000]})
+    assert excluded.status_code == 400 and len(excluded.text) < 200
+
+
+@pytest.mark.parametrize(
+    "wish",
+    [{"length": 1e308}, {"length": 500}, {"elevation_gain": -1}, {"southness": 1.5}, {"temperature": -21}],
+)
+def test_rank_refuses_a_wish_value_outside_its_range(client: TestClient, wish: dict) -> None:
+    response = client.post("/api/rank", json={"wish": wish})
+
+    assert response.status_code == 422
+    assert " to " in response.json()["detail"][0]["msg"]
+
+
 def test_info_gives_the_trailhead_box_for_the_swapped_coordinates_warning(client: TestClient) -> None:
     south, west, north, east = client.get("/api/info").json()["coverage"]
 
@@ -415,7 +471,7 @@ def test_info_gives_the_trailhead_box_for_the_swapped_coordinates_warning(client
     [
         ({"seed": RIDGE_WALK_ID, "weights": {"length": 101}}, 400),
         ({"seed": RIDGE_WALK_ID, "weights": {"length": 0}}, 400),
-        ({"seed": RIDGE_WALK_ID, "weights": {"nonsense": 50}}, 400),
+        ({"seed": RIDGE_WALK_ID, "weights": {"nonsense": 50}}, 422),
         ({"seed": RIDGE_WALK_ID, "excluded": ["nonsense"]}, 400),
         ({"seed": RIDGE_WALK_ID, "month": 13}, 422),
         ({"seed": 999}, 404),

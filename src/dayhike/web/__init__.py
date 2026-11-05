@@ -75,8 +75,10 @@ MAX_KM = 200.0  # the longest straight-line distance limit: 4 h at GROUP_KMH, so
 MAX_GROUP_KM = 50.0  # the widest grouping radius a Hiker may ask
 MAP_HIKES = 100  # a map view shows its hikes only when it holds at most this many
 MAP_SEGMENTS = 1_500  # and its TrailGraph Segments only when it holds at most this many
+MAP_SEGMENT_DEGREES = 2.0  # and only in a box at most this many degrees each way (the page asks from zoom 13)
 ROUTE_STEPS = 2_000  # the most steps (OSM ways walked) a ComposedHike may have
 NAME_LENGTH = 120  # the longest name a Hiker may give a ComposedHike
+MAX_BODY_BYTES = 256 * 1024  # the largest request body; a Route of ROUTE_STEPS steps is about 100 KB
 # Requests per client per RATE_WINDOW_S: Ranking, and everything else under /api.
 RANK_RATE = 20
 API_RATE = 300
@@ -126,11 +128,26 @@ class Place(BaseModel):
     lon: float = Field(ge=-180, le=180)
 
 
+def _shown(names: list[str]) -> str:
+    """Names a refusal quotes: the first few, each cut short."""
+    shown = ", ".join(name[:40] for name in names[:3])
+    return shown + (f" and {len(names) - 3} more" if len(names) > 3 else "")
+
+
 class Weighted(BaseModel):
-    weights: dict[str, float] | None = None
-    excluded: list[str] = []
+    weights: dict[str, float] | None = Field(default=None, max_length=len(MEASURES))
+    excluded: list[str] = Field(default=[], max_length=len(MEASURES))
     month: int | None = Field(default=None, ge=1, le=12)
     return_to_start: bool = True  # every hike with its way back, or every hike one way
+
+    @field_validator("weights")
+    @classmethod
+    def _weights(cls, weights: dict[str, float] | None) -> dict[str, float] | None:
+        """Unknown Measure names are refused here, before a Ranking waits for the one before it."""
+        unknown = sorted(set(weights or ()) - set(MEASURE_KINDS))
+        if unknown:
+            raise ValueError(f"unknown Measure(s): {_shown(unknown)}")
+        return weights
 
     def given_weights(self) -> dict[str, float]:
         """The weights asked for; None is the default weights."""
@@ -145,7 +162,7 @@ class Weighted(BaseModel):
         dropped = []
         for name in self.excluded:
             if name not in MEASURE_INFO:
-                raise HTTPException(400, f"unknown Measure: {name}")
+                raise HTTPException(400, f"unknown Measure: {_shown([name])}")
             if weights.get(name, 0) > 0:
                 dropped.append(MEASURE_INFO[name][1])
             weights[name] = 0.0
@@ -217,6 +234,10 @@ class RankRequest(Weighted):
                 raise ValueError(f"{name} takes {'true or false' if MEASURE_KINDS[name] == 'agree' else 'a number'}")
             if not math.isfinite(value):
                 raise ValueError(f"{name} takes a finite number")
+            if MEASURE_KINDS[name] != "agree":
+                _, low, high, _, _ = WISH_INPUTS[name]
+                if not low <= value <= high:
+                    raise ValueError(f"{name} takes {low:g} to {high:g}")
         return wish
 
     @model_validator(mode="after")
@@ -377,6 +398,12 @@ def create_app(
     @app.middleware("http")
     async def limit_and_harden(request: Request, call_next):
         path = request.url.path
+        # A body is read whole before it is checked: refuse a large one, or one of unstated length, unread.
+        length = request.headers.get("content-length")
+        if length is None and "transfer-encoding" in request.headers:
+            return JSONResponse({"detail": "Give the request body's Content-Length."}, status_code=411)
+        if length is not None and (not length.isdigit() or int(length) > MAX_BODY_BYTES):
+            return JSONResponse({"detail": f"The request body is over {MAX_BODY_BYTES // 1024} KB."}, status_code=413)
         if path.startswith("/api/") and path != "/api/health":
             limiter = limiters["rank" if path == "/api/rank" else "api"]
             if not limiter.allow(client_key(request)):
@@ -501,6 +528,8 @@ def create_app(
         trailgraph()
         if south > north or west > east:
             raise HTTPException(400, "the box needs south <= north and west <= east")
+        if max(north - south, east - west) > MAP_SEGMENT_DEGREES:
+            return {"junctions": [], "segments": [], "too_many": True}
         found, too_many = data.segments_in_box(south, west, north, east, MAP_SEGMENTS)
         return {**found, "too_many": too_many}
 
