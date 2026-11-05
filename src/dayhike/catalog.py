@@ -533,7 +533,8 @@ def build_catalog(
     ``sources`` build DayHikes that are not one relation (ADR-0038); by
     default ingest's own ``BUILT_HIKE_SOURCES``. The DEM tiles in ``dem_dir``
     give the heights of line ends that orient lines (``LowerStart``); without
-    tiles there, height orients none.
+    tiles there, height orients none. A ``dem_dir`` that is not a directory
+    is refused, so a mistyped path does not build a Catalog without heights.
     """
     from dayhike.dem import point_heights
     from dayhike.ingest import BUILT_HIKE_SOURCES, _connect_work, emit_progress, remove_work, run_ingest, write_geometry_store
@@ -541,6 +542,8 @@ def build_catalog(
 
     check_snap_tolerance(snap_tolerance_m)
     catalog_path = Path(catalog_path)
+    if dem_dir is not None and not Path(dem_dir).is_dir():
+        raise FileNotFoundError(f"No DEM directory {dem_dir}")
     heights = None if dem_dir is None else point_heights(dem_dir)
     if dem_dir is not None and heights is None:
         emit_progress(progress, "assemble", f"no DEM tiles in {dem_dir}: height orients no line")
@@ -573,20 +576,28 @@ def build_catalog(
 
 
 def _osm_paths(osm_path: Path | str | Sequence[Path | str]) -> list[Path]:
+    """The snapshot files to ingest: each path given, a directory as the OSM
+    files in it."""
     if isinstance(osm_path, (str, Path)):
-        path = Path(osm_path)
-        if path.is_dir():
-            files = sorted(
-                candidate
-                for candidate in path.iterdir()
-                if candidate.suffix in {".osm", ".xml", ".pbf"}
-                or candidate.name.endswith(".osm.pbf")
-            )
-            if not files:
-                raise FileNotFoundError(f"No OSM files in {path}")
-            return files
+        osm_path = [osm_path]
+    return [file for path in osm_path for file in _osm_files(Path(path))]
+
+
+def _osm_files(path: Path) -> list[Path]:
+    if not path.is_dir():
         return [path]
-    return [Path(path) for path in osm_path]
+    # Ingest writes its osmium extract (``*.catalog.osm.pbf``, while being
+    # written ``*.writing.osm.pbf``) beside the source: not a source itself, and
+    # listing it would change the fingerprint and stop the next run resuming.
+    files = sorted(
+        candidate
+        for candidate in path.iterdir()
+        if candidate.suffix in {".osm", ".xml", ".pbf"}
+        and not candidate.name.endswith((".catalog.osm.pbf", ".writing.osm.pbf"))
+    )
+    if not files:
+        raise FileNotFoundError(f"No OSM files in {path}")
+    return files
 
 
 def _drop_reason(relation: OsmRelation, length_m: float, round_trip: bool = False) -> str | None:

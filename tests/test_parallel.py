@@ -1,7 +1,9 @@
 import itertools
 import os
+import signal
 import subprocess
 import sys
+from concurrent.futures.process import BrokenProcessPool
 
 import pytest
 
@@ -108,3 +110,35 @@ def test_workers_are_refused_when_numpy_loaded_before_dayhike_could_set_up_its_b
 
     assert done.returncode != 0
     assert "VECLIB_MAXIMUM_THREADS=1" in done.stderr
+
+
+def _killed_on_three(n):
+    if n == 3:
+        os.kill(os.getpid(), signal.SIGKILL)  # as the system kills a worker out of memory
+    return n
+
+
+@pytest.fixture
+def fails_if_hung():
+    def hung(signum, frame):
+        raise AssertionError("still waiting for a killed worker")
+
+    previous = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(60)
+    yield
+    signal.alarm(0)
+    signal.signal(signal.SIGALRM, previous)
+
+
+def test_a_worker_killed_by_the_system_fails_parallel_map(monkeypatch, fails_if_hung):
+    monkeypatch.setenv(WORKERS_ENV, "2")
+
+    with pytest.raises(BrokenProcessPool):
+        parallel_map(_killed_on_three, range(20))
+
+
+def test_a_worker_killed_by_the_system_fails_parallel_iter(monkeypatch, fails_if_hung):
+    monkeypatch.setenv(WORKERS_ENV, "2")
+
+    with pytest.raises(BrokenProcessPool):
+        list(parallel_iter(_killed_on_three, range(20)))

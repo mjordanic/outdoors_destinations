@@ -1,19 +1,16 @@
 from __future__ import annotations
 
 import re
-import shutil
 import sqlite3
 import tempfile
-import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
 import numpy as np
 
 from dayhike.catalog import CLIMATE_FEATURE_NAMES, geometry_store_path_for, remove_similarity
 from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS
+from dayhike.download import download as _download
 
 Progress = Callable[[str], None]
 Retrieve = Callable[[str, str], None]
@@ -391,27 +388,3 @@ def _clip_and_convert(source: Path, out: Path, variable: str, bounds: Bounds) ->
     with rasterio.open(tmp, "w", **profile) as target:
         target.write(data, 1)
     tmp.replace(out)
-
-
-def _download(url: str, filename: str) -> None:
-    dest = Path(filename)
-    tmp = dest.with_name(dest.name + ".part")
-    request = Request(url, headers={"User-Agent": "dayhike"})
-    last_error: Exception | None = None
-    for attempt in range(5):
-        try:
-            with urlopen(request, timeout=120) as source, tmp.open("wb") as out:
-                shutil.copyfileobj(source, out)
-            tmp.replace(dest)
-            return
-        except HTTPError as exc:
-            tmp.unlink(missing_ok=True)
-            if exc.code == 404:
-                raise FileNotFoundError(url) from exc
-            last_error = exc
-        except (URLError, TimeoutError, OSError) as exc:
-            tmp.unlink(missing_ok=True)
-            last_error = exc
-        time.sleep(min(2**attempt, 16))
-    assert last_error is not None
-    raise last_error
