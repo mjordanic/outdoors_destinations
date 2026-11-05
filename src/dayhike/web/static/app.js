@@ -42,6 +42,7 @@ const START_PANE = "starts"; // the map pane of the hikes' start and end dots, a
 const COMPOSE_ZOOM = 13; // designing a hike shows the trail segments from this zoom on
 const MAX_COMPOSED_M = 100000; // the longest hike the server measures (trailgraph.MAX_WALK_M)
 const SHORTEST_HIKE_M = 1000; // the shortest catalog hike
+const ROUND_TRIP_M = 50; // a hike ending this near its start is a round trip, its way back a short step (catalog.GAP_JOIN_M)
 const NAME_LENGTH = 120; // the longest name of a composed hike (web.NAME_LENGTH)
 const SEGMENT_LINE = { color: "#2563eb", weight: 3, opacity: 0.75 };
 const SEGMENT_GAP = { ...SEGMENT_LINE, dashArray: "4 6" };
@@ -793,7 +794,8 @@ function buildWeights() {
       const slider = row.querySelector("input:not(.wish)");
       slider.addEventListener("input", () => showWeight(row));
       // Asking a value of a Measure left at 0 asks it in full.
-      row.querySelector("input.wish")?.addEventListener("input", () => {
+      row.querySelector("input.wish")?.addEventListener("input", (event) => {
+        event.target.setCustomValidity(""); // a value typed again is checked again at Find
         if (Number(slider.value) === 0) setWeight(row, 100);
       });
       showWeight(row);
@@ -878,6 +880,7 @@ function readWish(weights) {
     if (!(weights[measure.name] > 0)) continue;
     const input = document.querySelector(`.weight[data-measure="${measure.name}"] input.wish`);
     if (yesNo(measure)) { wish[measure.name] = input.checked; continue; }
+    input.setCustomValidity(""); // valid unless it is out of range again
     const value = toFact(measure, Number(input.value)), { min, max } = measure.wish, unit = shownUnit(measure);
     if (input.value === "" || !Number.isFinite(value) || value < (min ?? -Infinity) || value > (max ?? Infinity)) {
       const range = `${toShown(measure, min)} to ${toShown(measure, max)}${unit ? ` ${unit}` : ""}`;
@@ -990,6 +993,8 @@ function nameSearch(input, list, onPick) {
       const li = document.createElement("li");
       li.role = "option";
       li.id = `${list.id}-${i}`;
+      li.tabIndex = -1; // focusable, so the accessibility tree lists each option to click
+      li.setAttribute("aria-selected", "false");
       const meta = [
         // A hit is walked one way, so its climb is too: the liked hike's panel adds the way back.
         [item.length_m != null && `${fmt.km(item.length_m)} ${item.round_trip ? "loop" : "one way"}`,
@@ -1047,7 +1052,7 @@ function nameSearch(input, list, onPick) {
 
 let LIKED_EMPTY = ""; // the liked-hike card's words while no hike is chosen, as the page opens
 
-let chosen = 0, shown = 0, ranked = 0, paired = 0, boxed = 0; // the latest of each request; an older response that lands later is dropped
+let chosen = 0, shown = 0, ranked = 0, paired = 0, boxed = 0, placed = 0; // the latest of each request; an older response that lands later is dropped
 
 // ``fromLink``: the hike an address names; when it cannot be opened, the page shows no hike.
 async function choose(id, { fromLink = false } = {}) {
@@ -1128,6 +1133,8 @@ async function chooseComposed(route, name, from = null) {
     history.replaceState(null, "", routeHash(hike) + modeHash());
     renderDetail($("#liked"), hike, { role: "Your hike" });
     if (compose.on) compose.readout(); // measured now: the same figures as the card
+    // Said beside the button pressed: a change that keeps the length and name still shows it was used.
+    if (from === "compose") pick.hint(`Your hike of ${hike.route.segments.length} segment${hike.route.segments.length === 1 ? "" : "s"}, as drawn here, is measured and shown below.`);
     $("#results").hidden = true;
     $("#selected").hidden = true;
     pick.restyle();
@@ -1608,13 +1615,16 @@ const compose = {
       seen.add(id);
       here = forward ? segment.b : segment.a;
     }
-    const loop = this.route.length && here === this.start;
+    // Ending a few metres from the start is ending there, as the hike below measures it (a round trip).
+    const [from, to] = [this.start, here].map((id) => this.junctions.get(id)?.latlng);
+    const apart = here === this.start ? 0 : from && to ? metresBetween(from, to) : Infinity;
+    const loop = this.route.length && apart <= ROUND_TRIP_M;
     const parts = [
       `${this.route.length} segment${this.route.length === 1 ? "" : "s"}`,
       `${fmt.km(metres)}${loop ? "" : " one way"}`,
       climb ?? `about ↑ ${fmt.m(up)} ↓ ${fmt.m(down)}`,
     ];
-    if (loop) parts.push("back at the start");
+    if (loop) parts.push(apart ? `ends ${fmt.m(apart)} from the start` : "back at the start");
     else if (this.route.length && returnToStart()) parts.push("the way back to the start is added when you use it");
     if (reused) parts.push("walks a segment twice");
     const added = this.route.filter((step) => step.auto).length;
@@ -1691,8 +1701,8 @@ function swappedWarning(origin) {
 }
 
 async function findPlace() {
-  const text = $("#origin").value.trim();
-  if (!text) return;
+  const text = $("#origin").value.trim(), request = ++placed;
+  if (!text) { $("#origin-found").textContent = "Type a town name or lat, lon first."; return; }
   // The box no longer names the start found before: a failed lookup must not leave it in place.
   state.origin = null;
   state.missed = null;
@@ -1715,6 +1725,7 @@ async function findPlace() {
       const [place] = await response.json();
       if (place) origin = { lat: Number(place.lat), lon: Number(place.lon), label: place.display_name };
     }
+    if (request !== placed) return; // the box changed, or another lookup started, meanwhile
     if (!origin) {
       state.missed = text;
       $("#origin-found").textContent = "Place not found; try a town name or lat, lon.";
@@ -1723,25 +1734,28 @@ async function findPlace() {
     state.geocoded.set(text, origin);
     setOrigin(origin);
   } catch {
-    $("#origin-found").textContent = "Place search failed; type lat, lon instead.";
+    if (request === placed) $("#origin-found").textContent = "Place search failed; type lat, lon instead.";
   }
 }
 
 function setOrigin(origin) {
   state.origin = origin;
   $("#origin-found").textContent = `Start: ${origin.label} (${origin.lat.toFixed(4)}, ${origin.lon.toFixed(4)})`;
+  markStale();
 }
 
 function useMyLocation() {
   if (!navigator.geolocation) { $("#origin-found").textContent = "This browser cannot share a location."; return; }
+  const request = ++placed;
   $("#origin-found").textContent = "Asking the browser…";
   navigator.geolocation.getCurrentPosition(
     (position) => {
+      if (request !== placed) return;
       const { latitude: lat, longitude: lon } = position.coords;
       $("#origin").value = `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
       setOrigin({ lat, lon, label: "your location" });
     },
-    () => { $("#origin-found").textContent = "Location not shared; type a place or lat, lon."; },
+    () => { if (request === placed) $("#origin-found").textContent = "Location not shared; type a place or lat, lon."; },
   );
 }
 
@@ -1893,6 +1907,12 @@ async function findSimilar() {
     }
   } catch (error) {
     setStatus(error.message, true);
+    // Beside the list it leaves, which is no answer to this search.
+    if (!$("#results").hidden) {
+      markStale();
+      $("#results-stale").textContent = `This search was not run: ${error.message.replace(/\.$/, "")}. The list below is from before.`;
+      $("#results-stale").classList.add("error");
+    }
     return;
   }
   // A GoatCounter event when the server set analytics up; without them there is no goatcounter.
@@ -2281,7 +2301,7 @@ async function start() {
     wishToHash();
   });
   $("#drive-on").addEventListener("change", (event) => { $("#drive").hidden = !event.target.checked; markStale(); });
-  $("#origin").addEventListener("input", () => { state.origin = null; state.missed = null; $("#origin-found").textContent = ""; markStale(); });
+  $("#origin").addEventListener("input", () => { placed++; state.origin = null; state.missed = null; $("#origin-found").textContent = ""; markStale(); });
   for (const limit of ["#drive-on", "#hours-on", "#hours", "#km-on", "#km"]) {
     $(limit).addEventListener("input", markStale);
     $(limit).addEventListener("input", showGroupDefault);

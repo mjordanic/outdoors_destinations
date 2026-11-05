@@ -263,8 +263,9 @@ they are the 20 best.
   rebuild, a tiny score change can swap their order, so a different set of
   starts gets searched, and a different loop can show up (or one can
   disappear).
-- The search has a time limit of 5 seconds. If it hits that limit, it lists
-  what it found so far.
+- The search has a time limit of 5 seconds. The search for loops stops after
+  3.5 of them, so the rest is left to measure the loops it found; if it hits
+  that limit, it lists the best of what it found so far.
 
 So the loops are a good list of ideas, not every loop there is. A note above
 the list says this too, and tells you how many starts it searched from, how

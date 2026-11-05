@@ -946,7 +946,7 @@ def test_a_distance_limit_alone_or_with_the_drive_time_is_asked(browser, server)
     page.get_by_label("Max km, straight line", exact=True).uncheck()
     page.get_by_label("Max drive hours", exact=True).uncheck()
     page.get_by_role("button", name="Find similar").click()
-    page.get_by_text("Tick Max drive hours, Max km or both.").wait_for()
+    page.locator("#status").get_by_text("Tick Max drive hours, Max km or both.").wait_for()
 
 
 def test_round_and_small_max_km_values_are_valid_in_the_box(browser, server) -> None:
@@ -1552,3 +1552,165 @@ def test_a_loop_edited_on_the_map_shows_the_climb_its_card_shows(browser, loops_
     measured = page.evaluate("upDown(state.liked.climb_m, state.liked.descent_m)")
     readout.get_by_text(measured).wait_for()
     assert "as measured" in readout.inner_text() and "about" not in readout.inner_text()
+
+
+# ---------- what the second visitor test of rebuild 4 found ----------
+
+
+def test_the_grouping_radius_takes_its_own_defaults_and_tenths_as_valid(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+    page.get_by_text("More options", exact=True).click()
+    box = page.get_by_label("Group hikes starting within (km)")
+
+    for km in ("0.1", "0.5", "1", "1.5", "2.5", "5", "10", "20", "50"):
+        box.fill(km)
+        assert box.evaluate("box => box.validity.valid"), km
+
+
+def test_a_wish_value_corrected_after_find_said_it_is_out_of_range_is_valid_again(browser, server) -> None:
+    api = Api(WISHABLE)
+    page = open_page(browser, server, api)
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    gain = page.get_by_label("Climbing you want, in m")
+
+    gain.fill("9000")
+    page.get_by_role("button", name="Find hikes").click()
+    page.get_by_text("Climbing: you want a value from 0 to 3000 m.").wait_for()
+    assert not gain.evaluate("box => box.validity.valid")
+
+    gain.fill("900")
+    assert gain.evaluate("box => box.validity.valid")
+    page.get_by_role("button", name="Find hikes").click()
+    page.get_by_text("Done in").wait_for()
+    assert api.ranked[-1]["wish"]["elevation_gain"] == 900
+    assert gain.evaluate("box => box.validity.valid")
+
+
+def test_a_place_found_after_the_hiker_typed_another_is_not_the_start(browser, server) -> None:
+    api = Api({})
+    page = open_page(browser, server, api, hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_label("Only hikes near a starting place").check()
+    held = []
+    page.route(f"{server}/api/place?*", lambda route: held.append(route))  # answered only once the Hiker typed another place
+    page.get_by_label("From", exact=True).fill("agram")
+    page.get_by_role("button", name="Find place").click()
+    page.wait_for_function("() => document.querySelector('#origin-found').textContent === 'Searching…'")
+    assert len(held) == 1
+
+    page.get_by_label("From", exact=True).fill("Nevache")
+    held[0].continue_()
+    page.wait_for_timeout(300)
+
+    assert page.locator("#origin-found").inner_text() == ""
+    page.get_by_role("button", name="Find similar").click()
+    page.get_by_text("Set a starting place.").wait_for()
+    assert api.ranked == []
+
+
+def test_find_place_with_an_empty_box_says_what_to_type(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+    page.get_by_label("Only hikes near a starting place").check()
+
+    page.get_by_role("button", name="Find place").click()
+
+    page.get_by_text("Type a town name or lat, lon first.").wait_for()
+
+
+def test_a_starting_place_set_after_a_find_says_the_list_is_from_before(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.context.grant_permissions(["geolocation"])
+    page.context.set_geolocation({"latitude": 45.2, "longitude": 15.2})
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_label("Only hikes near a starting place").check()
+    page.get_by_label("From", exact=True).fill("45.1, 15.1")
+    _find(page)
+    assert not page.locator("#results-stale").is_visible()
+
+    page.get_by_role("button", name="Use my location").click()  # sets the box with no input event
+
+    page.get_by_text("Start: your location (45.2000, 15.2000)").wait_for()
+    assert page.locator("#results-stale").is_visible()
+
+
+def test_a_find_the_page_refuses_says_so_beside_the_list_it_leaves(browser, server) -> None:
+    api = Api({})
+    page = open_page(browser, server, api, hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+    asked = len(api.ranked)
+    for row in page.locator(".weight:visible input[type=range]").all():
+        row.fill("0")
+
+    page.get_by_role("button", name="Find similar").click()
+
+    stale = page.locator("#results-stale")
+    stale.get_by_text("This search was not run: Give at least one measure a weight above 0.").wait_for()
+    assert "The list below is from before." in stale.inner_text()
+    assert "error" in stale.get_attribute("class")
+    assert "stale" in page.locator("#results").get_attribute("class")
+    assert len(api.ranked) == asked
+
+
+def test_each_suggested_hike_is_in_the_accessibility_tree_and_picks_itself(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.locator("#pair-search").fill("al")
+    options = page.locator("#pair-suggestions li")
+    options.nth(1).wait_for()
+
+    # Focusable, as the snapshots of DevTools-based tools need to list an option at all.
+    names = options.evaluate_all("lis => lis.map(li => li.firstChild.textContent)")
+    tree = page.context.new_cdp_session(page).send("Accessibility.getFullAXTree")["nodes"]
+    listed = [
+        n for n in tree
+        if n.get("role", {}).get("value") == "option" and any(n.get("name", {}).get("value", "").startswith(name) for name in names)
+    ]
+    focusable = [p["value"]["value"] for n in listed for p in n.get("properties", []) if p["name"] == "focusable"]
+    assert len(focusable) == len(names) and all(focusable)
+
+    second = options.nth(1).evaluate("li => li.firstChild.textContent")
+    page.locator("#pair-suggestions").get_by_role("option").nth(1).click()
+    page.locator("#selected").get_by_text(second).first.wait_for()
+    assert page.locator("#pair-search").input_value() == second
+
+
+def test_the_designer_says_a_route_ending_a_few_metres_from_its_start_is_back_there(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+    ending = """(metres) => {
+      compose.junctions = new Map([[1, { latlng: [46, 14] }], [2, { latlng: [46.01, 14] }], [3, { latlng: [46 + metres / 111195, 14] }]]);
+      compose.segments = new Map([
+        [10, { id: 10, a: 1, b: 2, length: 1200, climbAB: 50, climbBA: 0 }],
+        [11, { id: 11, a: 2, b: 3, length: 1150, climbAB: 0, climbBA: 50 }],
+      ]);
+      compose.start = 1;
+      compose.route = [{ id: 10, step: "a" }, { id: 11, step: "b" }];
+      compose.readout();
+      return document.querySelector("#compose-readout").textContent;
+    }"""
+
+    near = page.evaluate(ending, 30)
+    assert "one way" not in near and "ends 30 m from the start" in near
+    assert "the way back to the start is added" not in near
+    far = page.evaluate(ending, 80)
+    assert "2.4 km one way" in far and "ends" not in far
+
+
+def test_using_an_edited_loop_after_undo_measures_the_route_drawn_and_says_so(browser, loops_server, monkeypatch) -> None:
+    monkeypatch.setattr("dayhike.serving.GROUP_M", 0.0)
+    page = open_page(browser, loops_server, Api({}), hash=f"#hike={MEADOW_PATH}")
+    page.get_by_text("Chosen: Meadow Path").wait_for()
+    _find(page)
+    page.get_by_role("button", name="Suggest loops near these hikes (takes a few seconds)").click()
+    page.locator("#results-table tbody tr", has=page.locator(".composed-tag")).first.click()
+    page.locator("#selected").get_by_role("button", name="Edit on the map").click()
+    page.wait_for_function("() => compose.on && state.liked?.route")
+    drawn = page.evaluate("compose.route.length")
+    assert drawn > 1
+
+    page.get_by_role("button", name="Undo").click()
+    page.get_by_role("button", name="Use this hike").click()
+
+    page.get_by_text(f"Your hike of {drawn - 1} segment").wait_for()
+    assert page.evaluate("state.liked.route.segments.length") == drawn - 1
+    assert page.evaluate("state.liked.route.text === compose.text()")
