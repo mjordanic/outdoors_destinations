@@ -1084,12 +1084,19 @@ def test_the_segments_are_sampled_in_the_workers(tmp_path: Path, monkeypatch: py
 
 # Way 500 passes node 2 twice: 1 - 2 - 3 - 4 - 2 - 5, a lollipop with its loop at 2 (km east, north of 46.05, 14.05).
 LOLLIPOP_NODES = {1: (0, 0), 2: (1, 0), 3: (1.5, 0.5), 4: (1.5, -0.5), 5: (2, 0)}
+
+
+def _place(east: float, north: float) -> tuple[float, float]:
+    """(lat, lon) of a node km east and north of 46.05, 14.05, as the fixture writes it."""
+    return round(46.05 + north / 111.2, 7), round(14.05 + east / 77.2, 7)
+
+
 LOLLIPOP = "\n".join(
     [
         '<?xml version="1.0" encoding="UTF-8"?>\n<osm version="0.6" generator="dayhike-fixture">',
         *(
-            f'  <node id="{node}" lat="{46.05 + north / 111.2:.7f}" lon="{14.05 + east / 77.2:.7f}" version="1"/>'
-            for node, (east, north) in LOLLIPOP_NODES.items()
+            f'  <node id="{node}" lat="{_place(*at)[0]:.7f}" lon="{_place(*at)[1]:.7f}" version="1"/>'
+            for node, at in LOLLIPOP_NODES.items()
         ),
         '  <way id="500" version="1">',
         *(f'    <nd ref="{node}"/>' for node in (1, 2, 3, 4, 2, 5)),
@@ -1118,16 +1125,16 @@ def test_a_walk_along_a_way_that_passes_a_node_twice_opens_again(tmp_path: Path)
 
 def test_a_built_walk_that_comes_back_to_a_node_of_its_way_opens_whole(tmp_path: Path) -> None:
     from dayhike.built import route_of
-    from dayhike.osm import parse_osm
+    from dayhike.osm import OsmWay
 
     (tmp_path / "lollipop.osm").write_text(LOLLIPOP)
     build_catalog(tmp_path / "lollipop.osm", tmp_path / "catalog.sqlite")
     graph = TrailGraph(trailgraph_path_for(tmp_path / "catalog.sqlite"))
-    snapshot = parse_osm(tmp_path / "lollipop.osm")
+    ways = {500: OsmWay((1, 2, 3, 4, 2, 5), {"highway": "path"})}
     nodes = (1, 2, 3, 4, 2)  # up the stem and round the loop, back to 2
-    vertices = [(node, snapshot.nodes[node]) for node in nodes]
+    vertices = [(node, _place(*LOLLIPOP_NODES[node])) for node in nodes]
 
-    route, _ = route_of(vertices, [500] * (len(nodes) - 1), snapshot.ways)
+    route, _ = route_of(vertices, [500] * (len(nodes) - 1), ways)
     walk = graph.walk(Route.parse(route))
 
     # One merged step "500.2" would stop at the first arrival at 2, a third of the walk.
@@ -1142,14 +1149,14 @@ TWICE_NODES = {5: (1, 0), 7: (2, 0), 8: (1.5, 1), 1: (0, 0.5), 6: (1.5, -0.5), 9
 
 def test_a_built_walk_with_a_shorter_way_round_on_its_way_opens_whole(tmp_path: Path) -> None:
     from dayhike.built import route_of
-    from dayhike.osm import parse_osm
+    from dayhike.osm import OsmWay
 
     osm = "\n".join(
         [
             '<?xml version="1.0" encoding="UTF-8"?>\n<osm version="0.6" generator="dayhike-fixture">',
             *(
-                f'  <node id="{node}" lat="{46.05 + north / 111.2:.7f}" lon="{14.05 + east / 77.2:.7f}" version="1"/>'
-                for node, (east, north) in TWICE_NODES.items()
+                f'  <node id="{node}" lat="{_place(*at)[0]:.7f}" lon="{_place(*at)[1]:.7f}" version="1"/>'
+                for node, at in TWICE_NODES.items()
             ),
             '  <way id="500" version="1">',
             *(f'    <nd ref="{node}"/>' for node in (5, 7, 8, 1, 5, 6, 7, 9)),
@@ -1162,11 +1169,11 @@ def test_a_built_walk_with_a_shorter_way_round_on_its_way_opens_whole(tmp_path: 
     (tmp_path / "twice.osm").write_text(osm)
     build_catalog(tmp_path / "twice.osm", tmp_path / "catalog.sqlite")
     graph = TrailGraph(trailgraph_path_for(tmp_path / "catalog.sqlite"))
-    snapshot = parse_osm(tmp_path / "twice.osm")
+    ways = {500: OsmWay((5, 7, 8, 1, 5, 6, 7, 9), {"highway": "path"})}
     nodes = (1, 5, 6, 7, 9)
-    vertices = [(node, snapshot.nodes[node]) for node in nodes]
+    vertices = [(node, _place(*TWICE_NODES[node])) for node in nodes]
 
-    route, _ = route_of(vertices, [500] * (len(nodes) - 1), snapshot.ways)
+    route, _ = route_of(vertices, [500] * (len(nodes) - 1), ways)
     walk = graph.walk(Route.parse(route))
 
     # One merged step "500.9" would reopen as 1 - 5 - 7 - 9, dropping 5 - 6 - 7.
