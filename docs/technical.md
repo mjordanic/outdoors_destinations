@@ -1969,11 +1969,17 @@ liked hike's figures and ranks again, and an address ends in `&oneway` when
 it is off. Clicking a result shows it the same way, next to the
 liked hike. Every shown hike has "Link to this hike" (`#hike=<id>` for a
 catalog or built hike, its `#compose=` link for a composed one, with `&oneway`
-when set) and two buttons: Share sends that address to the phone's share sheet,
-or copies it where there is none or it fails (the button then says "Link
-copied"), and Download GPX saves the hike as drawn
-(the served, simplified line, not its way back) as a GPX 1.1 track, made in the
-browser, with no elevation and credited to OpenStreetMap under the ODbL. An optional starting place with a maximum drive (up to 4 h), a
+when set) and two buttons: Share sends that address to a touch screen's share
+sheet, or copies it on a computer or where the sheet fails (a line beside the
+button then says "Link copied", or shows the link when it cannot be copied),
+and Download GPX saves the hike as drawn (the served, simplified line) as a GPX
+1.1 track, made in the browser, with a height per point from its
+ElevationProfile, credited to OpenStreetMap under the ODbL and to the
+elevation map; with Return to start on, its WayBack follows as a second track
+named "…: way back to the start" (a retrace or step drawn from the line, a
+trail way back from `GET /api/hikes/{id}/way-back`). The filters a list was
+found with (its limits and place, month, one way, grouping radius) show as
+labels above it, each with a × that drops it and finds again. An optional starting place with a maximum drive (up to 4 h), a
 maximum straight-line distance (up to 200 km, from the start to where a hike
 starts, not by road; ADR-0032) or both keeps only hikes within those limits (the
 start is typed as "lat, lon", taken from the
@@ -2146,7 +2152,13 @@ The details, endpoint by endpoint (JSON): `GET /api/search?q=` (every word in an
 two letters or more; case, accents
 and ue/oe/ae spellings ignored; the exact name first, then names starting with
 the query, then names where every word starts a word, shorter first; a number
-finds that id), `GET /api/hikes/{id}` (with `built`, `{"kind", "parts",
+finds that id; while they are fewer than `limit`, then names with a word
+spelled one typo off a query word of 4 to 7 letters, two off a longer one, no
+digits; each hit's `match` is `similar` for these and for a name holding a word
+only inside a longer one, else `words`), `GET /api/hikes/{id}/way-back`
+(`kind` and `m` as the detail's `way_back`, and for a trail way back its
+encoded `line` and `ele`, metres per point, found again on the TrailGraph
+between the served line's ends; else null), `GET /api/hikes/{id}` (with `built`, `{"kind", "parts",
 "route"}` for a built DayHike, else null; ADR-0038), `GET
 /api/hikes?south=&west=&north=&east=` (the hikes whose line's bounding box
 meets that box, for "Select hike on map", each with its id, name, walk length
@@ -2198,7 +2210,8 @@ and ElevationProfile stay the hike's own. With a TrailGraph (`compose` true in
 Junctions in that box, none and `too_many` true above 1,500 or in a box over 2 degrees either way), `POST
 /api/compose` with `{"route": "start:step,...", "name": optional}` (the
 Route as its link holds it, up to 2,000 steps, 100 km and 50,000 vertex steps; see `dayhike.trailgraph.Route`),
-giving the same detail as `GET /api/hikes/{id}` with `id` null, the proposed or
+giving the same detail as `GET /api/hikes/{id}` with `id` null (its `way_back`
+also with `line` and `ele`, as `/way-back` gives them), the proposed or
 given `name`, and `route` with its text and its start Junction, Segment ids
 and their steps in this export (null where an older link now cuts a Segment);
 a step whose way is gone, whose node is off the way, or whose way no longer

@@ -146,6 +146,16 @@ svg text { font-size: 11px; fill: var(--muted); }
 #results-draw { display: flex; gap: 12px; align-items: center; }
 #results-draw[hidden] { display: none; }
 #results-draw .check { margin-top: 0; }
+.filter-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; }
+.filter-chips[hidden] { display: none; }
+.filter-chips li { display: inline-flex; align-items: center; gap: 2px; background: #eef3ee; border: 1px solid #cfe0d3;
+  border-radius: 999px; padding: 0 2px 0 10px; font-size: 0.85rem; }
+.filter-chips .chip-clear { border: none; background: none; padding: 2px 8px; border-radius: 999px; font-size: 1rem; line-height: 1; color: var(--muted); }
+.filter-chips .chip-clear:hover { background: #dbe7de; color: var(--ink); }
+.similar-tag { white-space: nowrap; color: #8a4b08; font-size: 0.75rem; margin-left: 4px; }
+.share-note { font-size: 0.85rem; color: var(--green-dark); }
+.share-note[hidden] { display: none; }
+.share-note input { margin-top: 4px; }
 .composed-tag { background: #dcfce7; color: #15803d; border-radius: 999px; padding: 0 6px; font-size: 0.75rem; font-weight: 600; }
 
 .credits { max-width: 1600px; margin: 0 auto; padding: 8px 16px 32px; font-size: 0.85rem; color: var(--muted); }
@@ -213,3 +223,20 @@ button.help:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 .page .wordmark { display: block; width: 100%; max-width: 560px; height: auto; margin: 4px auto 12px; }
 .site-nav { margin-top: 10px; }
 .page + .credits { max-width: 900px; }
+
+/* Phones and touch screens: every control a finger aims at is at least 44 px each way (WCAG 2.5.5). */
+@media (max-width: 900px), (pointer: coarse) {
+  button:not(.help), select, input[type="text"], input[type="search"], input[type="number"] { min-height: 44px; }
+  .check, .panel-title.check, #advanced > summary, #more-options > summary, summary.panel-title { min-height: 44px; display: flex; align-items: center; }
+  .check input[type="checkbox"] { width: 22px; height: 22px; margin: 0 4px 0 0; flex: none; }
+  .wish-value input[type="checkbox"] { width: 22px; height: 22px; }
+  .weight input[type="range"] { height: 44px; }
+  .suggestions li { min-height: 44px; padding: 10px 8px; }
+  #results-table tbody td { padding-top: 12px; padding-bottom: 12px; }
+  .filter-chips .chip-clear { min-width: 44px; min-height: 44px; }
+  /* The "?" stays small beside its score, but takes a tap 44 px across. */
+  button.help { position: relative; }
+  button.help::after { content: ""; position: absolute; inset: -12px; }
+  .leaflet-touch .leaflet-bar a, .leaflet-bar a { width: 44px; height: 44px; line-height: 44px; font-size: 22px; }
+  .compose-tools button.primary { min-height: 44px; }
+}

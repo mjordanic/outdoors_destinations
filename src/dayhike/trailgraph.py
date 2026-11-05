@@ -1535,6 +1535,26 @@ class TrailGraph:
         pieces.append([start[0], targets[t][2], start[1]])
         return self._stitch(None, rows, [piece for piece in pieces if piece[1] != piece[2]])
 
+    def vertex_near(self, lat: float, lon: float, within_m: float) -> tuple[float, float] | None:
+        """The vertex of a Segment (not a Link) nearest this point, at most
+        ``within_m`` away, as stored; None without one. A served hike line
+        keeps 1e-5 degree, so its ends lie up to a metre off the vertices
+        they were."""
+        margin = within_m / 111_000 / max(math.cos(math.radians(lat)), 0.01)
+        best, at = within_m, None
+        with self._db() as db:
+            for (coords,) in db.execute(
+                "SELECT s.coords FROM segment_boxes b JOIN segments s ON s.id = b.id WHERE s.kind != 'link' "
+                "AND b.south <= ? AND b.north >= ? AND b.west <= ? AND b.east >= ?",
+                (lat + margin, lat - margin, lon + margin, lon - margin),
+            ):
+                points = decode_coords(coords)
+                metres = _haversine(points[:, 0], points[:, 1], np.full(len(points), lat), np.full(len(points), lon))
+                i = int(metres.argmin())
+                if metres[i] <= best:
+                    best, at = float(metres[i]), (float(points[i, 0]), float(points[i, 1]))
+        return at
+
     def _shortest(
         self, sources: list[tuple[int, float]], targets: list[tuple[int, float]], limit_m: float
     ) -> tuple[float, int, int, list[int], list[int]] | None:

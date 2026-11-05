@@ -16,6 +16,7 @@ import threading
 import time
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -31,12 +32,14 @@ from dayhike import (
     sample_landcover,
 )
 from dayhike.catalog import similarity_dir_for, trailgraph_path_for
+from dayhike.serving import decode_polyline
 from dayhike.similarity import FACT_COLUMNS, WAY_BACK_COLUMNS, SimilarityStore, climb_and_descent
 from dayhike.trailgraph import (
     WAY_BACK_KINDS,
     Route,
     RouteError,
     TrailGraph,
+    _haversine,
     decode_coords,
     encode_coords,
     round_trip,
@@ -849,7 +852,7 @@ def test_a_loop_gains_nothing_on_its_way_back(data, sampled: Path) -> None:
     assert WAY_BACK_KINDS[int(_way_back_row(sampled, LAKE_LOOP)["kind"])] == "none"
     np.testing.assert_array_equal(store.with_way_back.facts[:, row], store.facts[:, row])
     loop = Route.parse(LOOP)
-    assert data.compose(loop)["way_back"] == {"m": 0.0, "kind": "none"}
+    assert data.compose(loop)["way_back"] == {"m": 0.0, "kind": "none", "line": None, "ele": None}
     assert data.compose(loop)["facts"] == data.compose(loop, return_to_start=False)["facts"]
 
 
@@ -871,6 +874,50 @@ def test_a_line_takes_a_shorter_way_back_where_one_exists(data) -> None:
 
     assert hike["walk_m"] == pytest.approx(3000, abs=5)
     assert hike["way_back"]["kind"] == "trail" and hike["way_back"]["m"] == pytest.approx(1000, abs=2)
+
+
+def test_a_designed_hike_carries_its_trail_way_back_with_heights_for_its_gpx(data) -> None:
+    hike = data.compose(Route.parse(LONG_WAY))
+    back = hike["way_back"]
+    points = np.array(decode_polyline(back["line"]))
+    walked = np.array(decode_polyline(hike["line"]))
+
+    # From where the hike ends back to where it starts, a height at every point.
+    np.testing.assert_allclose(points[0], walked[-1], atol=1e-5)
+    np.testing.assert_allclose(points[-1], walked[0], atol=1e-5)
+    assert _haversine(points[:-1, 0], points[:-1, 1], points[1:, 0], points[1:, 1]).sum() == pytest.approx(back["m"], rel=0.02)
+    assert len(back["ele"]) == len(points) and all(isinstance(metres, int) for metres in back["ele"])
+
+
+def test_a_catalog_hike_s_trail_way_back_is_found_again_from_its_served_line(data, sampled: Path, monkeypatch) -> None:
+    # Stored as a trail way back as long as the line: the trail back is the line itself, walked back.
+    store = SimilarityStore.open(sampled).with_way_back
+    row = list(store.ids).index(SUMMIT_LINE)
+    stored = np.array(store.way_back)
+    stored[3, row] = WAY_BACK_KINDS.index("trail")
+    monkeypatch.setattr(data, "store", replace(data.store, with_way_back=replace(data.store.with_way_back, way_back=stored)))
+    hike = data.detail(SUMMIT_LINE)
+
+    back = data.way_back_walk(SUMMIT_LINE)
+
+    assert back["kind"] == "trail" and back["m"] == pytest.approx(hike["way_back"]["m"])
+    points, walked = np.array(decode_polyline(back["line"])), np.array(decode_polyline(hike["line"]))
+    np.testing.assert_allclose(points, walked[::-1], atol=1e-5)
+    assert len(back["ele"]) == len(points) and back["ele"][0] > back["ele"][-1]  # down from the summit
+
+
+def test_a_way_back_the_line_draws_itself_carries_no_line(data) -> None:
+    assert data.way_back_walk(SUMMIT_LINE) == {"m": pytest.approx(data.detail(SUMMIT_LINE)["walk_m"], rel=1e-5),
+                                               "kind": "retrace", "line": None, "ele": None}
+    assert data.way_back_walk(LAKE_LOOP) == {"m": 0.0, "kind": "none", "line": None, "ele": None}
+
+
+def test_a_served_line_end_finds_the_trailgraph_vertex_it_was_rounded_from(data) -> None:
+    (lat, lon), *_ = decode_polyline(data.detail(SUMMIT_LINE)["line"])
+    vertex = data.trailgraph.vertex_near(lat, lon, 2.0)
+
+    assert vertex is not None and _haversine(np.array([lat]), np.array([lon]), np.array([vertex[0]]), np.array([vertex[1]]))[0] < 1.0
+    assert data.trailgraph.vertex_near(lat + 0.01, lon, 2.0) is None
 
 
 def test_the_network_is_built_once_when_many_requests_need_it_at_once(catalog_path: Path, monkeypatch) -> None:

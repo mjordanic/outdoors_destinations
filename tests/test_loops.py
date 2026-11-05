@@ -86,7 +86,7 @@ def test_a_ranking_lists_loops_drawn_from_segments_beside_dayhikes(data) -> None
         route = Route.parse(loop["route"]["text"])
         for return_to_start in (True, False):  # it ends where it starts: measured the same either way
             hike = data.compose(route, return_to_start=return_to_start)
-            assert hike["way_back"] in (None, {"m": 0.0, "kind": "none"}) and hike["facts"]["round_trip"] == 1.0
+            assert hike["way_back"] in (None, {"m": 0.0, "kind": "none", "line": None, "ele": None}) and hike["facts"]["round_trip"] == 1.0
         assert len(set(hike["route"]["segments"])) == len(hike["route"]["segments"])
         assert (loop["line"], loop["trailhead"]) == (hike["line"], hike["trailhead"])
         assert (loop["length_m"], loop["climb_m"], loop["descent_m"]) == (
