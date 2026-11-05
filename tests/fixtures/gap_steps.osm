@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="dayhike-fixture">
+  <!-- A NetworkHike whose legs end apart, so its Route has gap steps the
+       TrailGraph has no gap Segment for (ADR-0038). Comments give each
+       node's (east, north) km from S at 44.90, 6.60; every leg is one way.
+
+       Le Pinet (S), parking by it: legs 11 S - A1 (Belvoir), 12 A2 - B1
+         (Serre Lan) and 13 B2 - S close a 6.8 km loop. A1 and A2 are 30 m
+         apart and the Spur (2001, way 201 X1 - A1 - A2 - X2) joins them: the
+         TrailGraph has a trail Segment A1 - A2. B1 and B2 are 40 m apart and
+         no way joins them directly: the Combe paths (2002) lead B1 - C - B2,
+         72 m, with a third way C - Z. -->
+  <node id="1" lat="44.9000000000" lon="6.6000000000" version="1"/><!-- S (0, 0), signpost Le Pinet -->
+  <node id="2" lat="44.9000000000" lon="6.6253923418" version="1"/><!-- A1 (2, 0): leg 11 ends here -->
+  <node id="3" lat="44.9002697961" lon="6.6253924610" version="1"/><!-- A2 (2, 0.03): leg 12 starts here, 30 m north -->
+  <node id="4" lat="44.9179864073" lon="6.6254002890" version="1"/><!-- B1 (2, 2): leg 12 ends here -->
+  <node id="5" lat="44.9179864073" lon="6.6248922832" version="1"/><!-- B2 (1.96, 2): leg 13 starts here, 40 m west -->
+  <node id="6" lat="44.9182562034" lon="6.6251464042" version="1"/><!-- C (1.98, 2.03): where the Combe paths meet -->
+  <node id="7" lat="44.8995503398" lon="6.6292009647" version="1"/><!-- X1 (2.3, -0.05) -->
+  <node id="8" lat="44.9007194563" lon="6.6292015585" version="1"/><!-- X2 (2.3, 0.08) -->
+  <node id="9" lat="44.9197850480" lon="6.6279411925" version="1"/><!-- Y1 (2.2, 2.2) -->
+  <node id="10" lat="44.9197850480" lon="6.6228609757" version="1"/><!-- Y2 (1.8, 2.2) -->
+  <node id="11" lat="44.9206843684" lon="6.6251474669" version="1"/><!-- Z (1.98, 2.3) -->
+  <node id="90" lat="44.9002697961" lon="6.6000000000" version="1"><!-- parking by S (0, 0.03) -->
+    <tag k="amenity" v="parking"/>
+  </node>
+  <way id="101" version="1">
+    <nd ref="1"/>
+    <nd ref="2"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="102" version="1">
+    <nd ref="3"/>
+    <nd ref="4"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="103" version="1">
+    <nd ref="5"/>
+    <nd ref="1"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="201" version="1">
+    <nd ref="7"/>
+    <nd ref="2"/>
+    <nd ref="3"/>
+    <nd ref="8"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="202" version="1">
+    <nd ref="9"/>
+    <nd ref="4"/>
+    <nd ref="6"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="203" version="1">
+    <nd ref="6"/>
+    <nd ref="5"/>
+    <nd ref="10"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="204" version="1">
+    <nd ref="6"/>
+    <nd ref="11"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <relation id="11" version="1">
+    <member type="way" ref="101" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="network" v="lwn"/>
+    <tag k="network:type" v="node_network"/>
+    <tag k="name" v="Le Pinet - Belvoir"/>
+  </relation>
+  <relation id="12" version="1">
+    <member type="way" ref="102" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="network" v="lwn"/>
+    <tag k="network:type" v="node_network"/>
+    <tag k="name" v="Belvoir - Serre Lan"/>
+  </relation>
+  <relation id="13" version="1">
+    <member type="way" ref="103" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="network" v="lwn"/>
+    <tag k="network:type" v="node_network"/>
+    <tag k="name" v="Serre Lan - Le Pinet"/>
+  </relation>
+  <relation id="2001" version="1">
+    <member type="way" ref="201" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="network" v="lwn"/>
+    <tag k="name" v="Spur"/>
+  </relation>
+  <relation id="2002" version="1">
+    <member type="way" ref="202" role=""/>
+    <member type="way" ref="203" role=""/>
+    <member type="way" ref="204" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="network" v="lwn"/>
+    <tag k="name" v="Combe paths"/>
+  </relation>
+</osm>
