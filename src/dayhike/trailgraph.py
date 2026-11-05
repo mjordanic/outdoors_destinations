@@ -41,8 +41,10 @@ import heapq
 import json
 import math
 import re
+import shutil
 import sqlite3
 import threading
+from collections import deque
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -1278,13 +1280,23 @@ _SEGMENT_COLUMNS = (
 )
 
 
+# The arrays of ``TrailGraph._network``, as ``write_network`` saves them.
+NETWORK_ARRAYS = ("nodes", "start_of", "neighbour", "step_m", "segment_of")
+
+
 class TrailGraph:
-    """A TrailGraph file (or its serving copy), opened read-only."""
+    """A TrailGraph file (or its serving copy), opened read-only.
+
+    The network the way back is searched on is read from ``{stem}.network/``
+    beside the file, memory-mapped, when ``write_network`` wrote it there (the
+    serving export does), else built from the Segments on first use.
+    """
 
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
         if not self.path.is_file():
             raise FileNotFoundError(self.path)
+        self.network_dir = self.path.with_name(f"{self.path.stem}.network")
         self._uri = f"file:{self.path}?mode=ro"
         self._graph: tuple | None = None  # what ``trail_back`` searches, read once
         self._graph_lock = threading.Lock()  # one build at a time; the others wait for it
@@ -1410,34 +1422,45 @@ class TrailGraph:
     ) -> list[tuple[int, int, int]]:
         """The steps (segment, vertex, next vertex) along OSM way ``|way|`` from
         ``here`` to ``end``, in its node order when ``way`` is positive; ``ways``
-        keeps each way walked so far and ``keys`` each Segment's vertex keys."""
+        keeps each way walked so far and ``keys`` each Segment's vertex keys.
+
+        A way that passes a node twice leaves it more than one way: the walk is
+        the one of fewest steps (at least one) that reaches ``end``, never passing a
+        node twice, the walk a Route step names (``route_of``, ``_steps``)."""
         if way not in ways:
             ways[way] = self._way(db, rows, keys, way, where)
         leaving, on_way = ways[way]
         for node in (here, end):
             if node not in on_way:
                 raise RouteError(f"{where}: {_describe(node)} is no longer on OSM way {abs(way)}")
-        steps, node = [], here
-        while node != end or not steps:
-            if node not in leaving or len(steps) > len(leaving):
-                raise RouteError(
-                    f"{where}: OSM way {abs(way)} no longer leads from {_describe(here)} to {_describe(end)}"
-                )
-            segment, first, last, node = leaving[node]
-            steps.append((segment, first, last))
-        return steps
+        came: dict[str, tuple[str, tuple[int, int, int]]] = {}  # node: (node before it, step to it)
+        seen, queue = ({here} if here != end else set()), deque([here])
+        while queue and end not in came:
+            node = queue.popleft()
+            for segment, first, last, after in leaving.get(node, ()):
+                if after not in seen:
+                    seen.add(after)
+                    came[after] = (node, (segment, first, last))
+                    queue.append(after)
+        if end not in came:
+            raise RouteError(f"{where}: OSM way {abs(way)} no longer leads from {_describe(here)} to {_describe(end)}")
+        steps, node = [], end
+        while not steps or node != here:
+            node, step = came[node]
+            steps.append(step)
+        return steps[::-1]
 
     def _way(
         self, db: sqlite3.Connection, rows: dict[int, tuple], keys: dict[int, list[str]], way: int, where: str
     ) -> tuple[dict, set]:
-        """The step leaving each node of OSM way ``|way|`` (segment, vertex, next
+        """The steps leaving each node of OSM way ``|way|`` (segment, vertex, next
         vertex, next node), walked in its node order when ``way`` is positive, and its nodes."""
         found = self._load(
             db, rows, "JOIN segment_ways w ON w.segment_id = s.id WHERE w.way_id = ? ORDER BY s.id", (abs(way),)
         )
         if not found:
             raise RouteError(f"{where}: OSM way {abs(way)} is no longer on the marked network")
-        leaving: dict[str, tuple[int, int, int, str]] = {}
+        leaving: dict[str, list[tuple[int, int, int, str]]] = {}
         on_way: set[str] = set()
         for row in found:
             if row[0] not in keys:
@@ -1449,9 +1472,9 @@ class TrailGraph:
                     for k in range(at, at + count):
                         on_way.update((vertex[k], vertex[k + 1]))
                         if (signed > 0) == (way > 0):
-                            leaving.setdefault(vertex[k], (row[0], k, k + 1, vertex[k + 1]))
+                            leaving.setdefault(vertex[k], []).append((row[0], k, k + 1, vertex[k + 1]))
                         else:
-                            leaving.setdefault(vertex[k + 1], (row[0], k + 1, k, vertex[k]))
+                            leaving.setdefault(vertex[k + 1], []).append((row[0], k + 1, k, vertex[k]))
                 at += count
         return leaving, on_way
 
@@ -1638,9 +1661,20 @@ class TrailGraph:
         and that Segment's id."""
         if self._graph is None:
             with self._graph_lock:  # a request arriving during a build waits for it, not a build of its own
-                if self._graph is None:
+                if self._graph is None and self.network_dir.is_dir():
+                    self._graph = tuple(np.load(self.network_dir / f"{name}.npy", mmap_mode="r") for name in NETWORK_ARRAYS)
+                elif self._graph is None:
                     self._graph = self._build_network()
         return self._graph
+
+    def write_network(self) -> None:
+        """Save the network into ``network_dir``, for a server to memory-map rather than
+        read about half the file to build it on its first way back."""
+        arrays = self._build_network()
+        shutil.rmtree(self.network_dir, ignore_errors=True)
+        self.network_dir.mkdir()
+        for name, array in zip(NETWORK_ARRAYS, arrays):
+            np.save(self.network_dir / f"{name}.npy", array)
 
     def _build_network(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         chunks = []

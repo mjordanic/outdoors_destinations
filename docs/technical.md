@@ -2129,7 +2129,9 @@ metres each climbs either way, the Junctions, amenity points and sampled
 values, with the OSM node and way ids a shared link names (export format 4), and
 each hike's `kind`, `parts` and `route`, so the page links what a built DayHike is built from
 (export format 5; `dayhike serve` refuses an
-older export, so rerun `export-serving` once). With `--valhalla-tiles` it also links the
+older export, so rerun `export-serving` once), and beside it `trailgraph.network/`, the trail network a way back
+is searched on as `.npy` arrays the server memory-maps (about 75 MB for Europe; without it the first way back
+builds the network from the Segments, reading about half of `trailgraph.sqlite`, 10-20 s). With `--valhalla-tiles` it also links the
 tile extract and writes a `valhalla.json` that serves it inside the container;
 with `--valhalla-url` it snaps every Trailhead once (`snaps.npz`). With
 `--geonames` (GeoNames `allCountries.zip`, downloaded there when missing) it

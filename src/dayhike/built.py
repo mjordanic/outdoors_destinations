@@ -93,14 +93,18 @@ def route_of(
 ) -> tuple[str, dict[int, float]]:
     """The Route text of the walk along ``vertices`` (``start:step,...``, a step
     ``{way}.{node}`` along one of ``way_ids``, negative against its node order,
-    or ``g.{node}`` over a joined gap) and the metres it walks on each way."""
+    or ``g.{node}`` over a joined gap) and the metres it walks on each way.
+
+    Consecutive steps on one way merge into one, unless the walk comes back to
+    a node that step already passed: a step is walked to the first arrival at
+    its node (``TrailGraph.walk``), so it starts a new step there."""
     on_ways: dict[int, list[tuple[int, int]]] = {}
     for way_id in dict.fromkeys(way_ids):
         for position, node_id in enumerate(ways[way_id].node_ids):
             on_ways.setdefault(node_id, []).append((way_id, position))
     steps: list[str] = []
     walked: dict[int, float] = {}
-    last = None
+    last, passed = None, set()  # the step before, and the nodes its run passed
     for (here, at), (there, to) in zip(vertices, vertices[1:]):
         way = _way_between(on_ways.get(here, []), on_ways.get(there, []))
         if way is None:
@@ -108,10 +112,12 @@ def route_of(
         else:
             walked[abs(way)] = walked.get(abs(way), 0.0) + _haversine_m(*at, *to)
             step = str(way)
-        if step == last and step != "g":
+        if step == last and step != "g" and there not in passed:
             steps[-1] = f"{step}.{there}"
+            passed.add(there)
         else:
             steps.append(f"{step}.{there}")
+            passed = {here, there}
         last = step
     return f"{vertices[0][0]}:{','.join(steps)}", walked
 
