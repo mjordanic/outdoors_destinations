@@ -1136,6 +1136,44 @@ def test_a_built_walk_that_comes_back_to_a_node_of_its_way_opens_whole(tmp_path:
     assert graph.facts(walk)[0]["length_m"] == pytest.approx(length, rel=1e-3)
 
 
+# Way 500 passes nodes 5 and 7 twice: 5 - 7 - 8 - 1 - 5 - 6 - 7 - 9, so from 5 it leads to 7 both directly and by 6.
+TWICE_NODES = {5: (1, 0), 7: (2, 0), 8: (1.5, 1), 1: (0, 0.5), 6: (1.5, -0.5), 9: (3, 0)}
+
+
+def test_a_built_walk_with_a_shorter_way_round_on_its_way_opens_whole(tmp_path: Path) -> None:
+    from dayhike.built import route_of
+    from dayhike.osm import parse_osm
+
+    osm = "\n".join(
+        [
+            '<?xml version="1.0" encoding="UTF-8"?>\n<osm version="0.6" generator="dayhike-fixture">',
+            *(
+                f'  <node id="{node}" lat="{46.05 + north / 111.2:.7f}" lon="{14.05 + east / 77.2:.7f}" version="1"/>'
+                for node, (east, north) in TWICE_NODES.items()
+            ),
+            '  <way id="500" version="1">',
+            *(f'    <nd ref="{node}"/>' for node in (5, 7, 8, 1, 5, 6, 7, 9)),
+            '    <tag k="highway" v="path"/>\n  </way>',
+            '  <relation id="5000" version="1">\n    <member type="way" ref="500" role=""/>',
+            '    <tag k="type" v="route"/>\n    <tag k="route" v="hiking"/>\n    <tag k="name" v="Twice"/>',
+            "  </relation>\n</osm>\n",
+        ]
+    )
+    (tmp_path / "twice.osm").write_text(osm)
+    build_catalog(tmp_path / "twice.osm", tmp_path / "catalog.sqlite")
+    graph = TrailGraph(trailgraph_path_for(tmp_path / "catalog.sqlite"))
+    snapshot = parse_osm(tmp_path / "twice.osm")
+    nodes = (1, 5, 6, 7, 9)
+    vertices = [(node, snapshot.nodes[node]) for node in nodes]
+
+    route, _ = route_of(vertices, [500] * (len(nodes) - 1), snapshot.ways)
+    walk = graph.walk(Route.parse(route))
+
+    # One merged step "500.9" would reopen as 1 - 5 - 7 - 9, dropping 5 - 6 - 7.
+    length = sum(_haversine(*a[1], *b[1]) for a, b in zip(vertices, vertices[1:]))
+    assert graph.facts(walk)[0]["length_m"] == pytest.approx(length, rel=1e-3)
+
+
 def test_the_export_saves_the_way_back_network_for_a_server_to_memory_map(data, sampled: Path) -> None:
     built = TrailGraph(trailgraph_path_for(sampled))._network()  # the Catalog's: built from its Segments
 
