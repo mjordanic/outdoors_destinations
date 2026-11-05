@@ -57,6 +57,14 @@ listed every loop the 60 s run found. The one miss was Freiburg's first cold cal
 second round took 7.4 s and listed all 11. The time went to cold reads, not to the search. A larger
 budget barely moves the typical Ranking, because the search mostly ends before 5 s.
 
+**The search gets 3.5 s of the 5 s** (`LOOP_SEARCH_S`, added after the visitor test of rebuild 4). The
+search used to run to the 5 s deadline that measuring its loops shares, so a search that ran out of
+time left none to measure them and listed none. A Seed with a long walk did that on the Europe export:
+the Via Alpina stage to the Herzogstand (31 km with its way back) searches loops of 23 to 39 km, and
+reading the Segments around each start took most of the 5 s. Its search found 30 loops and listed 0.
+With 3.5 s for the search, measuring 30 to 40 loops takes about 1.2 s warm, and the same Ranking lists
+2 to 3 loops.
+
 The cgroup peak, page cache included, was at most 1.05 GB of 2 GiB. The app's own (anon) memory was
 at most 0.49 GB. No run was OOM-killed.
 

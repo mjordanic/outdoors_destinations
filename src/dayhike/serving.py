@@ -139,6 +139,7 @@ DRAWN_SMOOTH_M = 90.0  # a Copernicus GLO-30 ElevationProfile is drawn smoothed 
 DRAWN_STEP_M = 10.0  # ... resampled this often first
 LOOP_MEASURED = 40  # the SuggestedLoops guessed best that a Ranking measures exactly
 LOOP_BUDGET_S = 5.0  # the most a Ranking spends on SuggestedLoops (measured on 1 CPU: ADR-0036)
+LOOP_SEARCH_S = 3.5  # of which the search for them at most; the rest measures the loops it found
 LOOP_SEED_SHARE = 0.5  # a loop sharing more of its walk with the Seed, or of the Seed's, is no suggestion
 GROUP_M = 10_000.0  # hikes starting closer than this to a better one are its versions, one row
 # The grouping radius a Ranking takes by default follows its search limit (ADR-0032): this share of
@@ -1503,8 +1504,10 @@ class ServingData:
         way back when the Seed is) and scored like a DayHike. A loop is left out
         that shares more than ``LOOP_SEED_SHARE`` of its walk with the Seed's
         line (``seed_line``, (lat, lon) rows; None for a Wish) or of the Seed's with it, or that
-        is a Twin of a DayHike. All of it stops at ``LOOP_BUDGET_S``."""
-        deadline = time.monotonic() + LOOP_BUDGET_S
+        is a Twin of a DayHike. All of it stops at ``LOOP_BUDGET_S``, the search at ``LOOP_SEARCH_S``,
+        so a search that runs out of time still leaves time to measure the loops it found."""
+        began = time.monotonic()
+        deadline = began + LOOP_BUDGET_S
         if not isinstance(seed, OutsideSeed):
             seed = OutsideSeed.of(dict(zip(FACT_COLUMNS, store.facts[:, seed].tolist())), store.profile[seed])
         fact = dict(zip(FACT_COLUMNS, seed.facts.tolist()))
@@ -1517,7 +1520,7 @@ class ServingData:
             target,
             trailheads,
             limit=LOOP_MEASURED,
-            deadline=deadline,
+            deadline=began + min(LOOP_SEARCH_S, LOOP_BUDGET_S),
             reach=reach,
             origin=None if origin is None else (origin.latitude, origin.longitude),
         )

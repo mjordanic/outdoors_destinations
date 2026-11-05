@@ -292,6 +292,31 @@ def test_a_loop_search_cut_by_its_time_limit_says_so(data, monkeypatch) -> None:
     assert search == {"starts": 0, "found": 0, "listed": 0, "stopped": True}
 
 
+@pytest.mark.usefixtures("rows_apart")
+def test_a_loop_search_that_runs_out_of_time_still_measures_the_loops_it_found(data, monkeypatch) -> None:
+    import dataclasses
+    import time
+
+    import dayhike.serving as serving
+
+    def slow(graph, target, trailheads, *, deadline, **kwargs):
+        # As a long Seed's search on a dense TrailGraph does: it finds loops and runs to its deadline.
+        search = serving.find_loops.__wrapped__(graph, target, trailheads, deadline=deadline, **kwargs)
+        time.sleep(max(0.0, deadline - time.monotonic()))
+        return dataclasses.replace(search, stopped=True)
+
+    slow.__wrapped__ = serving.find_loops
+    monkeypatch.setattr(serving, "find_loops", slow)
+    monkeypatch.setattr(serving, "LOOP_BUDGET_S", 1.0)
+    monkeypatch.setattr(serving, "LOOP_SEARCH_S", 0.5)
+
+    results = data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True)
+
+    search = results.loop_search
+    assert search["found"] >= 2 and search["stopped"] is True
+    assert search["listed"] == len(_loops(results)) == 2
+
+
 def test_the_next_rows_leave_out_loops_of_an_area_already_listed(data) -> None:
     (row,) = data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True)
 
