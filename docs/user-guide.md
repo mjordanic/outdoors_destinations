@@ -93,13 +93,13 @@ the hut slider to 100. Turn Length down to 30.
   treat it as a rough guide. The limits stay set when you open another hike
   in the same tab, and the note above the results always names them, for
   example "within a 2 h drive of Munich, DE". A fresh page starts with none.
+- **More options.** Under the limits, this sets how close hikes must start to
+  be grouped as one area (see "Reading the results" below).
 
 The filters a list was found with show as labels just above it: "Within 50 km
 of Bled", "Weather in Jan", "One way, without the way back", "Grouped within
 3 km". Press the × on a label to drop that filter; the list is found again
 without it.
-- **More options.** Under the limits, this sets how close hikes must start to
-  be grouped as one area (see "Reading the results" below).
 
 ## Download and share a hike
 
