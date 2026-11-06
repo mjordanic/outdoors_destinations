@@ -1182,6 +1182,27 @@ def test_a_loop_above_the_rows_drawn_says_why_it_is_not_listed(browser, server, 
     assert f"14 found, none listed: the best scores 0.600, above #1's 0.500{why}" in note
 
 
+def test_a_loop_tied_with_the_last_row_past_the_page_ranks_just_below_it(browser, server, monkeypatch) -> None:
+    monkeypatch.setattr(web, "RESULTS", 1)  # three areas: in Strict order page 1 lists the first
+
+    def tied(route) -> None:
+        body = route.fetch().json()
+        rows = body["results"]
+        for row in rows:
+            row["score"] = 0.5
+        rows[1]["versions"] = [dict(rows[1], versions=[], id=None, name="Loop from the hut", route={"text": "loop"})]
+        body["loop_search"] = {"starts": 31, "found": 14, "listed": 1, "best": 0.5, "stopped": False}
+        route.fulfill(json=body)
+
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}&strict")
+    page.route(f"{server}/api/rank", tied)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+
+    note = page.locator("#results-loops-note").inner_text()
+    assert "14 found, none listed: the best scores 0.500, level with #1's 0.500; it ranks just below #1." in note
+
+
 def test_a_server_that_cannot_compose_offers_no_loops(browser, server) -> None:
     page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
     page.route(f"{server}/api/info", lambda route: route.fulfill(json={**route.fetch().json(), "compose": False}))

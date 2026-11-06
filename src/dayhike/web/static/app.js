@@ -2717,11 +2717,11 @@ function noteLoops() {
   const last = state.results.at(-1);
   const best = search?.best?.toFixed(3), lastScore = last?.score.toFixed(3);
   const versus = Number(best) < Number(lastScore) ? "below" : best === lastScore ? "level with" : "above";
-  const unshown = state.strict ? [] : (state.pools[0] ?? [])
+  const unshown = (state.pools[0] ?? [])
     .filter((row) => !state.results.includes(row)).flatMap((row) => [row, ...row.versions]).filter((row) => row.route);
-  const drawn = unshown.length > 0;
+  const drawn = !state.strict && unshown.length > 0;
   const why = versus === "below" ? "" : unshown.some((row) => row.score.toFixed(3) === best)
-    ? "; it is not drawn on this page: Redraw or tick Strict order"
+    ? state.strict ? `; it ranks just below #${state.results.length}` : "; it is not drawn on this page: Redraw or tick Strict order"
     : `; it walks mostly the same trails as ${others}`;
   const count = listed === rows.length ? `${listed} listed` : `${listed} listed in ${rows.length} row${rows.length === 1 ? "" : "s"}`;
   const where = listed
