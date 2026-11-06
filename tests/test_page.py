@@ -486,7 +486,8 @@ def test_a_measure_behind_a_closed_advanced_search_says_to_open_it(browser, serv
     page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
     page.get_by_text("Chosen: Ridge Walk").wait_for()
     open_advanced(page)
-    page.get_by_label("Lowest point weight, 0 to 100").fill("50")
+    for slider in page.locator('.weight input[type="range"]:not([disabled])').all():
+        slider.fill("50")  # every measure has a weight: only the closed section holds some back
     open_advanced(page)
 
     facts = _compared(page)
@@ -500,10 +501,45 @@ def test_a_measure_behind_a_closed_advanced_search_says_to_open_it(browser, serv
     )
 
 
+def test_a_folded_measure_at_weight_0_says_weight_0_and_the_line_does_not_send_to_advanced_search(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    open_advanced(page)
+    page.get_by_label("Lowest point weight, 0 to 100").fill("0")
+    open_advanced(page)
+
+    facts = _compared(page)
+
+    lowest = facts.locator("tr", has=page.locator("td", has_text="Lowest point"))
+    assert lowest.locator("td.score .uncounted").inner_text() == "not counted (weight 0)"
+    note = page.locator("#selected .uncounted-note").inner_text()
+    assert "Advanced search" not in note
+    assert note.endswith("To count them, set their weight in step 2.")
+
+
+def test_the_line_names_step_2_once_when_it_offers_both_ways_to_count(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    open_advanced(page)
+    page.get_by_label("Lowest point weight, 0 to 100").fill("50")
+    open_advanced(page)
+    page.get_by_label("Climbing weight, 0 to 100").fill("0")
+
+    _compared(page)
+
+    assert page.locator("#selected .uncounted-note").inner_text() == (
+        "Greyed measures have weight 0 or are behind a closed Advanced search and are not part of the score."
+        " To count them, set their weight or open Advanced search, in step 2."
+    )
+
+
 def test_a_pair_checked_says_which_measures_it_does_not_count(browser, server) -> None:
     page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
     page.get_by_text("Chosen: Ridge Walk").wait_for()
     page.get_by_label("Climbing weight, 0 to 100").fill("0")
+    open_advanced(page)
+    page.get_by_label("Lowest point weight, 0 to 100").fill("50")
+    open_advanced(page)
     page.locator("#pair-search").fill("Valley Path")
     page.locator("#pair-suggestions li", has_text="Valley Path").first.dispatch_event("mousedown")
     page.locator("#selected").get_by_text("Compared with the liked hike").wait_for()
@@ -2316,6 +2352,35 @@ def test_clear_on_the_liked_composed_hike_clears_it_and_on_an_edited_one_keeps_t
     assert page.get_by_role("button", name="Find similar").is_disabled()
     assert page.locator("#liked-name").inner_text() == "No hike chosen yet."
     assert page.evaluate("location.hash") == ""
+
+
+def test_the_cleared_hint_goes_when_another_hike_is_opened_from_the_address(browser, loops_server, monkeypatch) -> None:
+    monkeypatch.setattr("dayhike.serving.GROUP_M", 0.0)
+    page = open_page(browser, loops_server, Api({}), hash=f"#hike={MEADOW_PATH}")
+    _edit_a_loop(page)
+    page.get_by_role("button", name="Use this hike").click()
+    page.wait_for_function("() => state.liked?.route")
+    page.get_by_role("button", name="Clear").click()
+    page.locator("#map-pick-hint").get_by_text("Cleared: your hike is gone too").wait_for()
+
+    page.evaluate(f"location.hash = '#hike={MEADOW_PATH}'")  # a hike from the address, as a hashchange
+
+    page.get_by_text("Chosen: Meadow Path").wait_for()
+    assert "Cleared" not in page.locator("#map-pick-hint").inner_text()
+
+
+def test_the_cleared_hint_goes_when_the_address_names_no_hike(browser, loops_server, monkeypatch) -> None:
+    monkeypatch.setattr("dayhike.serving.GROUP_M", 0.0)
+    page = open_page(browser, loops_server, Api({}), hash=f"#hike={MEADOW_PATH}")
+    _edit_a_loop(page)
+    page.get_by_role("button", name="Use this hike").click()
+    page.wait_for_function("() => state.liked?.route")
+    page.get_by_role("button", name="Clear").click()
+    page.locator("#map-pick-hint").get_by_text("Cleared: your hike is gone too").wait_for()
+
+    page.evaluate("location.hash = '#x'")  # an address that names no hike
+
+    page.wait_for_function("() => !document.querySelector('#map-pick-hint').textContent.includes('Cleared')")
 
 
 # ---------- the wishes of the second visitor test ----------

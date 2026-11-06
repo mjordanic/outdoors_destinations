@@ -945,8 +945,8 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
 // Why a Measure a query weighs 0 is not counted, as the detail table says it: weighted 0, behind a
 // closed Advanced search, or, while the Hiker describes a hike, one no value can be asked of.
 const UNCOUNTED = {
-  weight: { cell: "not counted (weight 0)", why: "have weight 0", how: "set their weight in step 2" },
-  advanced: { cell: "not counted (Advanced search closed)", why: "are behind a closed Advanced search", how: "open Advanced search in step 2" },
+  weight: { cell: "not counted (weight 0)", why: "have weight 0", how: "set their weight" },
+  advanced: { cell: "not counted (Advanced search closed)", why: "are behind a closed Advanced search", how: "open Advanced search" },
   wish: { cell: "not counted (cannot be asked)", why: "cannot be asked of a hike you describe" },
 };
 
@@ -954,7 +954,9 @@ const UNCOUNTED = {
 function uncountedReasons() {
   const reasons = {};
   for (const row of document.querySelectorAll(".weight")) {
-    reasons[row.dataset.measure] = state.wishing && row.classList.contains("unwishable") ? "wish" : folded(row) ? "advanced" : "weight";
+    // Opening Advanced search counts a row only if it has a weight above 0: weight 0 wins over folded.
+    const held = folded(row) && Number(row.querySelector("input:not(.wish)").value) > 0;
+    reasons[row.dataset.measure] = state.wishing && row.classList.contains("unwishable") ? "wish" : held ? "advanced" : "weight";
   }
   return reasons;
 }
@@ -971,7 +973,7 @@ function uncountedLine(query) {
   const reasons = [...new Set(Object.values(uncountedOf(true, query)))];
   if (!reasons.length) return "";
   const hows = reasons.map((r) => r.how).filter(Boolean);
-  return `Greyed measures ${reasons.map((r) => r.why).join(" or ")} and are not part of the score.${hows.length ? ` To count them, ${hows.join(" or ")}.` : ""}`;
+  return `Greyed measures ${reasons.map((r) => r.why).join(" or ")} and are not part of the score.${hows.length ? ` To count them, ${hows.join(" or ")}${hows.length > 1 ? "," : ""} in step 2.` : ""}`;
 }
 
 // A built hike's head (ADR-0038): the OSM relations it is built from, a link to it,
@@ -1512,6 +1514,7 @@ async function choose(id, { from = null, note = null } = {}) {
     pick.drawLoops();
     if (from !== "map") pick.follow();
     else pick.hint(`Chosen: ${hike.name}, ${lengthText(hike)}.`); // under the map clicked, not only above it
+    dropClearedHint();
     if (from === "search") $("#liked").scrollIntoView({ block: "start" }); // instant: a smooth scroll can be cut short
     setStatus("");
   } catch (error) {
@@ -1543,6 +1546,13 @@ function brokenLink(error, malformed = false) {
     <p>The trails may have changed since it was shared. Search for a hike by name, or select one on the map.</p>`;
   $("#liked-name").textContent = "This link could not be opened; no hike chosen yet.";
   $("#liked-name").classList.add("error-text");
+}
+
+const CLEARED_HINT = "Cleared: your hike is gone too. Click a junction or a segment to draw a new one, or search for a hike by name.";
+
+// The design bar's "Cleared" hint is about the hike that was cleared: a new one, or none, replaces it.
+function dropClearedHint() {
+  if (compose.on && $("#map-pick-hint").textContent === CLEARED_HINT) compose.hintNext();
 }
 
 // No hike chosen: the page as it opens, with no list.
@@ -1605,6 +1615,7 @@ async function chooseComposed(route, name, from = null) {
     $("#selected").hidden = true;
     pick.restyle();
     pick.drawLoops();
+    dropClearedHint();
     setStatus("");
   } catch (error) {
     if (request !== chosen) return;
@@ -2239,7 +2250,7 @@ const compose = {
       chosen++; // drops a hike still loading
       unchoose();
       history.replaceState(null, "", location.pathname + location.search);
-      pick.hint("Cleared: your hike is gone too. Click a junction or a segment to draw a new one, or search for a hike by name.");
+      pick.hint(CLEARED_HINT);
     }
   },
 
@@ -3190,6 +3201,7 @@ async function start() {
       if (!changed) return;
       chosen++; // drops a hike still loading
       unchoose(); // first: leaving a wish then keeps the address the home page's
+      dropClearedHint();
       if (state.wishing) setWishing(false);
       resetSettings();
       $("#return-on").checked = true;
