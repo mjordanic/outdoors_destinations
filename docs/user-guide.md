@@ -395,7 +395,9 @@ many loops it found and how many are listed.
 
 Example: "Loops: searched from 31 starts near the best hikes, 14 found, 3
 listed in 2 rows: #2, #5 (marked composed)". Not all 14 are listed. The others
-rank lower, or walk mostly the same trails as a listed hike. When none makes the
-list, the note says how the best loop found scores against the last row (below
-it, or level with it to three decimals). When the search finds none, it says
-"no loop found, so none is listed".
+rank lower, are not drawn on this page (Redraw or tick Strict order shows
+them), or walk mostly the same trails as a listed hike. When none makes the
+list, the note says how the best loop found scores against the last row (below,
+level with it to three decimals, or above), and why one that scores as well is
+not listed. When the search finds none, it says "no loop found, so none is
+listed".

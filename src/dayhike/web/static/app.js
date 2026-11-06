@@ -2717,11 +2717,15 @@ function noteLoops() {
   const last = state.results.at(-1);
   const best = search?.best?.toFixed(3), lastScore = last?.score.toFixed(3);
   const versus = Number(best) < Number(lastScore) ? "below" : best === lastScore ? "level with" : "above";
+  const drawn = !state.strict && state.pools.some((pool) => pool.length > state.info.results);
+  const why = versus === "below" ? "" : drawn
+    ? "; it is not drawn on this page: Redraw or tick Strict order"
+    : `; it walks mostly the same trails as ${others}`;
   const count = listed === rows.length ? `${listed} listed` : `${listed} listed in ${rows.length} row${rows.length === 1 ? "" : "s"}`;
   const where = listed
-    ? `, ${count}: ${rows.join(", ")} (marked composed)${search?.found > listed ? `; the others rank lower, or walk mostly the same trails as ${others}` : ""}`
+    ? `, ${count}: ${rows.join(", ")} (marked composed)${search?.found > listed ? `; the others rank lower, ${drawn ? "are not drawn on this page (Redraw or tick Strict order), " : ""}or walk mostly the same trails as ${others}` : ""}`
     : search?.found
-      ? `, none listed${best != null && last ? `: the best scores ${best}, ${versus} #${state.results.length}'s ${lastScore}` : ""}`
+      ? `, none listed${best != null && last ? `: the best scores ${best}, ${versus} #${state.results.length}'s ${lastScore}${why}` : ""}`
       : "";
   $("#results-loops-note").textContent = search && state.results.length
     ? ` Loops: searched from ${search.starts} start${search.starts === 1 ? "" : "s"} near the best hikes, ${search.found ? `${search.found} found${where}` : "no loop found, so none is listed"}.${search.stopped ? " The search stopped at its time limit, so it may have missed some loops." : ""}`

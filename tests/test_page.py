@@ -981,6 +981,7 @@ def test_the_loop_note_counts_the_loops_in_the_rows_shown(browser, server, monke
 
     page.get_by_label("Strict order").uncheck()  # page 1 again, drawn, later pages dropped
     assert fewer in note.inner_text()
+    assert "rank lower, are not drawn on this page (Redraw or tick Strict order), or walk" in note.inner_text()
     page.get_by_role("button", name="Redraw").click()
     assert fewer in note.inner_text()
 
@@ -1115,7 +1116,16 @@ def test_a_row_whose_version_is_a_loop_is_marked_composed(browser, server) -> No
     ("search", "says"),
     [
         ({"found": 14, "best": -0.01}, ", 14 found, none listed: the best scores {best}, below #{n}'s {last}."),
-        ({"found": 14, "best": -0.0001}, ", 14 found, none listed: the best scores {last}, level with #{n}'s {last}."),
+        (
+            {"found": 14, "best": -0.0001},
+            ", 14 found, none listed: the best scores {last}, level with #{n}'s {last}; it walks mostly the same trails"
+            " as a listed hike or the hike you like.",
+        ),
+        (
+            {"found": 14, "best": 0.01},
+            ", 14 found, none listed: the best scores {best}, above #{n}'s {last}; it walks mostly the same trails"
+            " as a listed hike or the hike you like.",
+        ),
         ({"found": 0, "best": None}, ", no loop found, so none is listed."),
     ],
 )
@@ -1139,6 +1149,26 @@ def test_the_loop_note_says_plainly_when_no_loop_is_listed(browser, server, sear
 
     note = page.locator("#results-loops-note").inner_text()
     assert f"Loops: searched from 31 starts near the best hikes{says.format(**shown)}" in note
+
+
+def test_a_loop_above_the_rows_drawn_is_said_not_drawn(browser, server, monkeypatch) -> None:
+    monkeypatch.setattr(web, "RESULTS", 1)  # three areas: page 1 draws one row of a three-row pool
+
+    def above(route) -> None:
+        body = route.fetch().json()
+        best = body["results"][0]["score"] + 0.01
+        body["loop_search"] = {"starts": 31, "found": 14, "listed": 0, "best": best, "stopped": False}
+        route.fulfill(json=body)
+
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.route(f"{server}/api/rank", above)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+
+    note = page.locator("#results-loops-note").inner_text()
+    assert "14 found, none listed: the best scores" in note
+    assert "above #1's" in note
+    assert "; it is not drawn on this page: Redraw or tick Strict order." in note
 
 
 def test_a_server_that_cannot_compose_offers_no_loops(browser, server) -> None:
