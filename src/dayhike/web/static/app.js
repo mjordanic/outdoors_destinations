@@ -1228,7 +1228,7 @@ function setWishing(on) {
   $("#wish-card").hidden = !on;
   $("#results").hidden = $("#selected").hidden = true;
   $("#find").textContent = on ? "Find hikes" : "Find similar";
-  $("#find").disabled = !on && !state.liked;
+  syncFind();
   $("#return-bar").hidden = !on && !state.liked;
   if (on) {
     $("#weights-panel").open = true;
@@ -1238,11 +1238,7 @@ function setWishing(on) {
   }
   history.replaceState(null, "", on ? wishHash() : state.liked ? likedHash(state.liked) : location.pathname + location.search);
   const liked = state.liked;
-  if (!on && liked && (liked.way_back != null) !== returnToStart()) {
-    $("#find").disabled = true;
-    if (liked.route) chooseComposed(liked.route.text, liked.name_origin === "hiker" ? liked.name : null);
-    else choose(liked.id);
-  }
+  if (!on && liked && (liked.way_back != null) !== returnToStart()) remeasure(liked);
 }
 
 // ---------- search ----------
@@ -1426,13 +1422,37 @@ let LIKED_EMPTY = ""; // the liked-hike card's words while no hike is chosen, as
 
 let chosen = 0, shown = 0, ranked = 0, paired = 0, boxed = 0, placed = 0; // the latest of each request; an older response that lands later is dropped
 let selecting = 0; // the latest request to fill the hike card, a result or a compared hike: only it fills it
+let loading = 0, held = 0; // the hike request in flight (0: none), and the one Find waits for
+let ranking = false; // a Ranking runs: Find waits for it
+
+// Find is greyed out while there is nothing to rank or the page is busy; each time, the line beside it
+// says why: no hike chosen in its own words, a hike loading or a search running in the status line.
+function syncFind() {
+  const none = !state.wishing && !state.liked, busy = loading !== 0 && loading === chosen;
+  $("#find").disabled = none || ranking || (busy && held === chosen);
+  $("#find-why").textContent = none && !busy && !ranking
+    ? `Choose a hike first: search for one by name or select one on the map${$("#wish-on").hidden ? "" : ", or describe the one you want"}.`
+    : "";
+}
+
+// The liked hike measured again for the Return to start ticked now, Find greyed out until it is; when
+// it cannot be, Find stays usable and measures it again when pressed.
+async function remeasure(liked) {
+  const measured = liked.route
+    ? chooseComposed(liked.route.text, liked.name_origin === "hiker" ? liked.name : null)
+    : choose(liked.id);
+  held = chosen;
+  syncFind();
+  await measured;
+}
 
 // ``from``: "link" (the hike an address names; when it cannot be opened, the page shows no hike),
 // "map" (clicked on the map, which stays where it is), "search" (the hike's card is then scrolled to)
 // or null; ``note``: why Enter picked it, said beside its name.
 async function choose(id, { from = null, note = null } = {}) {
-  const request = ++chosen;
+  const request = loading = ++chosen;
   setStatus("Loading the hike…");
+  syncFind();
   try {
     const hike = await api(`/api/hikes/${id}?return_to_start=${returnToStart()}`);
     if (request !== chosen) return;
@@ -1442,7 +1462,6 @@ async function choose(id, { from = null, note = null } = {}) {
     $("#search").value = hike.name;
     $("#liked-name").textContent = `Chosen: ${hike.name}, ${lengthText(hike)}${note ? ` (${note})` : ""}`;
     $("#liked-name").classList.remove("error-text");
-    $("#find").disabled = false;
     $("#pair-search").disabled = false;
     $("#return-bar").hidden = false;
     history.replaceState(null, "", `#hike=${id}${modeHash()}`);
@@ -1457,9 +1476,17 @@ async function choose(id, { from = null, note = null } = {}) {
     setStatus("");
   } catch (error) {
     if (request !== chosen) return;
-    if (from === "link" && namesNothing(error)) brokenLink(error); else setStatus(error.message, true);
+    if (from === "link" && namesNothing(error)) brokenLink(error); else setStatus(notMeasured(error, request), true);
+  } finally {
+    if (request === chosen) loading = 0;
+    syncFind();
   }
 }
+
+// Why a hike was not loaded; for the liked hike measured again, that Find tries again.
+const notMeasured = (error, request) => request === held
+  ? `Your hike could not be measured again for Return to start: ${(error.reason ?? error.message).replace(/\.$/, "")}. Press Find similar to try again.`
+  : error.message;
 
 // The server read the request and found no such hike; not a dropped connection or a busy server.
 const namesNothing = (error) => [400, 404, 422].includes(error.status);
@@ -1488,7 +1515,8 @@ function unchoose() {
   $("#liked-name").textContent = "No hike chosen yet.";
   $("#liked-name").classList.remove("error-text");
   $("#search").value = "";
-  $("#find").disabled = $("#pair-search").disabled = true;
+  $("#pair-search").disabled = true;
+  syncFind();
   $("#return-bar").hidden = true;
   $("#results").hidden = $("#selected").hidden = true;
   pick.restyle();
@@ -1508,8 +1536,9 @@ function forgetBrokenLink() {
 
 // ``from``: "link" (an address), "compose" (the composer's Use this hike) or null.
 async function chooseComposed(route, name, from = null) {
-  const request = ++chosen;
+  const request = loading = ++chosen;
   setStatus("Measuring your hike…");
+  syncFind();
   try {
     const hike = await api("/api/compose", {
       method: "POST",
@@ -1525,7 +1554,6 @@ async function chooseComposed(route, name, from = null) {
     $("#compose-name").value = hike.name;
     compose.named = hike.name_origin === "hiker";
     compose.source = hike; // the drawing is the liked hike now: Clear clears it
-    $("#find").disabled = false;
     $("#pair-search").disabled = false;
     $("#return-bar").hidden = false;
     history.replaceState(null, "", routeHash(hike) + modeHash());
@@ -1542,9 +1570,12 @@ async function chooseComposed(route, name, from = null) {
     if (request !== chosen) return;
     if (from === "link" && namesNothing(error)) brokenLink(error, error.status === 422);
     else {
-      setStatus(error.message, true);
+      setStatus(notMeasured(error, request), true);
       if (from === "compose") pick.hint(`Not measured: ${error.message}`); // beside the button pressed
     }
+  } finally {
+    if (request === chosen) loading = 0;
+    syncFind();
   }
 }
 
@@ -2468,6 +2499,11 @@ function rankBasis() {
 }
 
 async function findSimilar() {
+  const was = state.liked;
+  if (!state.wishing && was && (was.way_back != null) !== returnToStart()) { // its measuring again failed
+    await remeasure(was);
+    if (state.liked === was) return; // still not measured: the status line says so
+  }
   const liked = rankBasis();
   if (!liked) return;
   let query, place = null;
@@ -2554,7 +2590,9 @@ async function postRank(request, current = () => true) {
 // with "Show 10 more" asked for the rows past the first page (Suggest loops keeps the rows shown).
 async function rank(query, liked, stale = false, draw = state.draw, place = state.asked?.place, rows = 0) {
   const request = ++ranked;
-  $("#find").disabled = $("#suggest-loops").disabled = true;
+  ranking = true;
+  $("#suggest-loops").disabled = true;
+  syncFind();
   if (query.loops) $("#suggest-loops").textContent = "Suggesting loops…";
   setStatus(query.loops ? "Suggesting loops near these hikes…"
     : query.max_hours ? "Finding hikes within the drive, then ranking…" : "Ranking every hike…");
@@ -2596,7 +2634,8 @@ async function rank(query, liked, stale = false, draw = state.draw, place = stat
       $("#results").classList.toggle("failed", error.status === 409);
     }
   } finally {
-    if (request === ranked) $("#find").disabled = $("#suggest-loops").disabled = false;
+    if (request === ranked) ranking = $("#suggest-loops").disabled = false;
+    syncFind();
     $("#suggest-loops").textContent = SUGGEST_LOOPS;
   }
 }
@@ -2995,6 +3034,7 @@ async function start() {
   scoreHelp.listen();
   buildWeights();
   $("#wish-on").hidden = !state.measures.some(wishable);
+  syncFind();
   $("#wish-on").addEventListener("click", () => {
     chosen++; // drops a hike still loading
     setWishing(true);

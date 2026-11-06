@@ -141,7 +141,8 @@
       <input type="checkbox" id="return-on" checked autocomplete="off">
       Return to start: compare every hike with its way back (untick to compare them one way)
     </label>
-    <button type="button" id="find" class="primary" disabled>Find similar</button>
+    <button type="button" id="find" class="primary" disabled aria-describedby="find-why status">Find similar</button>
+    <p id="find-why" class="hint find-why">Choose a hike first: search for one by name or select one on the map.</p>
     <p id="status" class="status" role="status" aria-live="polite"></p>
 
     <section class="panel" id="pair-panel">

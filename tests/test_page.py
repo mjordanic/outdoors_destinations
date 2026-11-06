@@ -712,6 +712,112 @@ def test_a_liked_hike_is_measured_again_for_return_to_start_changed_while_wishin
     assert page.url.endswith("&oneway")
 
 
+def _why(page) -> str:
+    """What the line beside Find says, which the button names as its description."""
+    assert set(page.locator("#find").get_attribute("aria-describedby").split()) == {"find-why", "status"}
+    why = page.locator("#find-why")
+    return why.inner_text() if why.is_visible() else ""
+
+
+def test_find_greyed_out_with_no_hike_chosen_says_beside_it_to_choose_one(browser, server) -> None:
+    page = open_page(browser, server, Api(WISHABLE))
+
+    assert page.locator("#find").is_disabled()
+    assert _why(page) == (
+        "Choose a hike first: search for one by name or select one on the map, or describe the one you want."
+    )
+
+    page.evaluate(f"location.hash = '#hike={RIDGE_WALK_ID}'")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    assert page.locator("#find").is_enabled()
+    assert _why(page) == ""
+
+    page.evaluate("location.hash = '#hike=999999999'")  # a broken link: no hike again
+    page.get_by_text("This link could not be opened; no hike chosen yet.").wait_for()
+    assert page.locator("#find").is_disabled()
+    assert _why(page).startswith("Choose a hike first")
+
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    assert page.locator("#find").is_enabled() and _why(page) == ""
+    page.get_by_role("button", name="Back to a hike you liked").click()
+    assert page.locator("#find").is_disabled() and _why(page).startswith("Choose a hike first")
+
+
+def test_with_no_wish_form_the_line_beside_find_offers_no_description(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+
+    assert _why(page) == "Choose a hike first: search for one by name or select one on the map."
+
+
+def test_while_a_hike_loads_the_status_line_says_so_and_not_to_choose_one(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+    held = []
+    page.route(f"{server}/api/hikes/*", lambda route: held.append(route))
+    page.evaluate(f"location.hash = '#hike={RIDGE_WALK_ID}'")
+    page.wait_for_function("() => document.querySelector('#status').textContent === 'Loading the hike…'")
+
+    assert page.locator("#find").is_disabled()
+    assert _why(page) == ""
+
+    held[0].continue_()
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    assert page.locator("#find").is_enabled()
+
+
+def test_find_greyed_out_while_it_ranks_is_explained_by_the_status_line(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    held = []
+    page.route(f"{server}/api/rank", lambda route: held.append(route))
+    page.get_by_role("button", name="Find similar").click()
+    page.wait_for_function("() => document.querySelector('#status').textContent === 'Ranking every hike…'")
+
+    assert page.locator("#find").is_disabled()
+    assert _why(page) == ""
+
+    held[0].continue_()
+    page.locator("#results-table tbody tr").first.wait_for()
+    assert page.locator("#find").is_enabled()
+
+
+def test_a_ranking_that_ends_after_the_hike_is_gone_leaves_find_greyed_out_and_explained(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    held = []
+    page.route(f"{server}/api/rank", lambda route: held.append(route))
+    page.get_by_role("button", name="Find similar").click()
+    page.wait_for_function("() => document.querySelector('#status').textContent === 'Ranking every hike…'")
+    page.evaluate("location.hash = '#'")  # the home page: no hike
+    page.get_by_text("No hike chosen yet.").wait_for()
+
+    with page.expect_response(f"{server}/api/rank"):
+        held[0].continue_()
+
+    assert page.locator("#find").is_disabled()
+    assert _why(page).startswith("Choose a hike first")
+
+
+def test_a_liked_hike_that_fails_to_be_measured_again_leaves_find_usable_to_try_again(browser, server) -> None:
+    api = Api(WISHABLE)
+    page = open_page(browser, server, api, hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    page.get_by_label("Return to start").uncheck()
+    page.route(f"{server}/api/hikes/*", lambda route: route.fulfill(status=503, json={"detail": "The server is busy."}))
+    page.get_by_role("button", name="Back to a hike you liked").click()
+
+    page.get_by_text("Your hike could not be measured again for Return to start: The server is busy. "
+                     "Press Find similar to try again.").wait_for()
+    assert page.locator("#find").is_enabled()
+    assert _why(page) == ""
+
+    page.unroute(f"{server}/api/hikes/*")
+    page.get_by_role("button", name="Find similar").click()  # measures it again, then finds
+    page.locator("#results-table tbody tr").first.wait_for()
+    assert api.ranked[-1]["return_to_start"] is False
+    assert page.url.endswith("&oneway")
+
+
 def test_a_feature_neither_hike_has_mapped_shows_a_dash_and_says_it_is_not_compared(browser, server) -> None:
     # The Valley Path (1002) and the hikes without a Hut: neither has one mapped (ADR-0026).
     page = open_page(browser, server, Api({}), hash="#hike=1002")
