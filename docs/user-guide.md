@@ -355,8 +355,10 @@ no such hut, you see 4.
 Under the list, a button says **"Suggest loops near these hikes (takes a few
 seconds)"**. It looks for loops drawn on the marked trail network, near the
 start you gave (if any) and near the best results. They are marked
-"composed" and drawn dashed green on the map. A loop is named after a hiking
-place near its start, or else the trails it walks.
+"composed" and drawn dashed green on the map. A loop listed as a version of a
+catalog hike is marked on that hike's row, as "composed var 2", until you click
+the row to see it. A loop is named after a hiking place near its start, or else
+the trails it walks.
 
 Press **Edit on the map** to take a loop into the route designer and change
 it. The designer opens zoomed in on the loop. Your liked hike and the list stay
@@ -392,6 +394,10 @@ the list says this too, and tells you how many starts it searched from, how
 many loops it found and how many are listed.
 
 Example: "Loops: searched from 31 starts near the best hikes, 14 found, 3
-listed: #2, #5 (marked composed)". Not all 14 are listed. The others rank lower,
-or walk mostly the same trails as a listed hike. When none makes the list, the
-note says how the best loop found scores against the last row.
+listed in 2 rows: #2, #5 (marked composed)". Not all 14 are listed. The others
+rank lower, are not drawn on this page (Redraw or tick Strict order shows
+them), or walk mostly the same trails as a listed hike. When none makes the
+list, the note says how the best loop found scores against the last row (below,
+level with it to three decimals, or above), and why one that scores as well is
+not listed. When the search finds none, it says "no loop found, so none is
+listed".

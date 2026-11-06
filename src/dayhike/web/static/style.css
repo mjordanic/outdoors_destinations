@@ -176,7 +176,7 @@ svg text { font-size: 11px; fill: var(--muted); }
   border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 4px 14px rgba(31, 42, 36, 0.15); }
 .share-note[hidden] { display: none; }
 .share-note input { margin-top: 4px; }
-.composed-tag { background: #dcfce7; color: #15803d; border-radius: 999px; padding: 0 6px; font-size: 0.75rem; font-weight: 600; }
+.composed-tag, .composed-var { background: #dcfce7; color: #15803d; border-radius: 999px; padding: 0 6px; font-size: 0.75rem; font-weight: 600; }
 .multi-day-tag { background: #fef3c7; color: #92400e; border-radius: 999px; padding: 0 6px; font-size: 0.75rem; font-weight: 600; white-space: nowrap; }
 .status .retry { margin-left: 6px; padding: 2px 10px; }
 
