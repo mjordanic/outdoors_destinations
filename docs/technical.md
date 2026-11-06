@@ -2146,7 +2146,9 @@ data/web-serving` adds it beside an existing export, which needs no other
 change (ADR-0029). Every export also writes `landmarks.sqlite`, the Landmarks
 the hike search finds hikes by (ADR-0053): the named Peaks, Huts, Shelters and
 Viewpoints on the hikes, the places of `places.sqlite` with the hikes starting
-within 5 km, and with `--geonames` the lakes and passes within 2 km of a hike;
+within 5 km, and with `--geonames` the lakes, passes and mountains within 2 km
+of a hike, else 10 km, a GeoNames peak at an OSM Peak of its name adding its
+names to it, and each Landmark with how many names it has (ADR-0055);
 `export-places` rewrites it too. Rerun it
 after any rebuild; `meta.json` is written last, so a half-written export never
 opens.
@@ -2184,8 +2186,8 @@ encoded `line` and `ele`, metres per point, found again on the TrailGraph
 between the served line's ends; else null), `GET /api/hikes/{id}` (with `built`, `{"kind", "parts",
 "route"}` for a built DayHike, else null; ADR-0038), `GET
 /api/hikes?south=&west=&north=&east=` (the hikes whose line's bounding box
-meets that box, for "Select hike on map", each with its id, name, walk length
-and encoded line; when the box holds more than 100, none are listed and
+meets that box, for "Select hike on map", each with its id, name, walk length,
+`multi_day` and encoded line; when the box holds more than 100, none are listed and
 `too_many` is true, so the page asks to zoom in),
 `GET /api/measures`, `GET /api/info`
 (with the Trailheads' box, `coverage`, for the page's swapped "lat, lon"
@@ -2199,8 +2201,9 @@ them with),
 query, folded like search: the place named exactly that, then one with it as an
 alternate name, then the most populous; 404 without `places.sqlite`),
 `GET /api/landmarks?q=&limit=` (up to 10, default 5, Landmarks with a folded name holding the query from a
-word's start, typos as search: the one named exactly first, then the most hikes; each with `name`, `kind`,
-`town` (the nearest town within 30 km, to tell equal names apart), `lat`, `lon`, `match`, `hike_count` and
+word's start, typos as search: the one named exactly first, then the one with the most names, the highest,
+the most hikes; each with `name`, `kind`, `town` (the nearest other town within 30 km, to tell equal names
+apart) and its `country`, `lat`, `lon`, `match`, `hike_count` and
 `hikes`, its 5 nearest as search lists them with `off_m`; 404 without `landmarks.sqlite`), `POST /api/rank` with `{"seed": id, "weights": {measure: 0-100},
 "excluded": [measure], "month": 1-12, "origin": {"lat", "lon"}, "max_hours":
 0-4, "max_km": 0-200, "group_km": 0.1-50, "after": [{"lat", "lon"}], "draw":
@@ -2223,12 +2226,17 @@ ADR-0046: each row has `more_here`, the DayHikes starting in its area that are
 not listed and score within 0.05 of it, and `in_area`, every DayHike ranked
 that starts in its area, so the page adds the areas of the rows it did not draw
 to the hikes in other areas; the answer has `other_areas`, the
-DayHikes ranked that start in no row's area, and `loop_search`, null without
+DayHikes ranked that start in no row's area, `day_first`, whether its multi-day routes come after its day
+hikes (ADR-0056), and `loop_search`, null without
 loops, `{"starts", "found", "listed", "best", "stopped"}`: the loop search's start
 Junctions, the loops it found and measured, those listed in all its rows and their versions (the whole pool; the page counts those in the rows it shows), the best score of a loop found within the limits (null: none), and whether it
 stopped at its 5 s limit), and `POST /api/pair` with `{"a": id, "b": id}` plus the same weights,
 excluded and month, giving the score a Ranking would show for `b` with `a` as
-the Seed and every Measure's score. Detail, compose, rank and pair take
+the Seed and every Measure's score. Every hike the API lists (search, Landmarks, a map box,
+detail, compose and a Ranking's DayHike rows) has `multi_day`, longer than 40 km one way (ADR-0056), and its
+one-way `walk_m`; those of search, Landmarks, a Ranking, a detail and compose also have `region`, the nearest town
+within 30 km of its start and that town's country ("Igls, AT"; null without `places.sqlite`). A Ranking that waits 25 s for its turn answers 503 with
+`Retry-After: 5`. Detail, compose, rank and pair take
 `return_to_start` (default true; `?return_to_start=false` on `GET
 /api/hikes/{id}`): true measures every hike with its way back to its start
 (facts, `climb_m`, `descent_m` and the listed `length_m` included, with

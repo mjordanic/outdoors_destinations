@@ -2437,3 +2437,218 @@ def test_suggest_loops_keeps_the_rows_shown_and_says_where_the_loops_are(browser
     assert [asked.get("loops") for asked in api.ranked[-2:]] == [True, False]  # later rows search no loops
     note = page.locator("#results-loops-note").inner_text()
     assert re.search(r"listed: #\d", note) or "none listed" in note
+
+
+# ---------- the fourth visitor check (ADR-0055, ADR-0056) ----------
+
+
+def test_an_address_edited_to_other_settings_marks_the_list_shown_as_from_before(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+    assert not page.locator("#results-stale").is_visible()
+
+    page.evaluate(f"location.hash = '#hike={RIDGE_WALK_ID}&w=length:50'")  # typed in the address bar
+
+    page.locator("#results-stale").get_by_text("The query changed since this ranking").wait_for()
+    assert page.locator('.weight[data-measure="length"] output').inner_text() == "50"
+    page.go_back()  # the address the list was found with: the weights stay as set, so it stays marked
+    page.wait_for_function("() => location.hash === '#hike=1001'")
+    assert page.locator("#results-stale").is_visible()
+
+
+def test_back_to_the_home_address_shows_the_home_page_with_no_hike_or_list(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+    page.evaluate(f"location.hash = '#hike={RIDGE_WALK_ID}&w=length:50&from=45.8,15.9&km=200'")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+
+    page.go_back()
+
+    page.wait_for_function("() => location.hash === '' && !state.liked")
+    assert page.locator("#liked-name").inner_text() == "No hike chosen yet."
+    assert not page.locator("#results").is_visible()
+    assert page.locator('.weight[data-measure="length"] output').inner_text() == "100"  # as the page opens
+    assert not page.get_by_label("Only hikes near a starting place").is_checked()
+    assert page.get_by_role("button", name="Find similar").is_disabled()
+
+
+def test_link_to_this_hike_carries_the_settings_as_they_are_now_as_share_does(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", init=COPIED)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+
+    page.locator('.weight[data-measure="highest"] input[type=range]').evaluate(
+        "slider => { slider.value = 0; slider.dispatchEvent(new Event('input', { bubbles: true })); }"
+    )
+    open_advanced(page)
+
+    link = page.locator("#liked").get_by_role("link", name="Link to this hike")
+    page.wait_for_function("() => document.querySelector('#liked a.hike-link').getAttribute('href').includes('&adv')")
+    page.locator("#liked").get_by_role("button", name="Share").click()
+    page.wait_for_function("() => window.copied.length")
+    assert link.get_attribute("href") == f"#hike={RIDGE_WALK_ID}&w=highest:0&adv"
+    assert page.evaluate("window.copied") == [f"{server}/{link.get_attribute('href')}"]
+
+
+BUSY = "The server is busy with other visitors' searches: yours waited 25 s for its turn. Try again in a moment."
+
+
+def test_a_busy_server_is_said_beside_the_button_pressed_with_a_try_again(browser, server, monkeypatch) -> None:
+    monkeypatch.setattr(web, "RESULTS", 1)
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}&strict", width=390, touch=True)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    answers = iter([503, 200, 503, 200])  # Find busy, Try again; Show 1 more busy, Try again
+
+    def rank(route) -> None:
+        if next(answers) == 503:
+            route.fulfill(status=503, json={"detail": BUSY})
+        else:
+            route.continue_()
+
+    page.route(f"{server}/api/rank", rank)
+    page.get_by_role("button", name="Find similar").click()
+
+    status = page.locator("#status")
+    status.get_by_text(BUSY).wait_for()
+    status.get_by_role("button", name="Try again").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+
+    page.get_by_role("button", name="Show 1 more").click()  # busy once more: said beside Show 1 more
+    more = page.locator("#more-status")
+    more.get_by_text(BUSY).wait_for()
+    gap = page.evaluate("""() => document.querySelector('#more-status').getBoundingClientRect().top
+      - document.querySelector('#show-more').getBoundingClientRect().top""")
+    assert abs(gap) < 100
+    more.get_by_role("button", name="Try again").click()
+    page.wait_for_function("() => state.results.length === 2")
+    assert more.inner_text().startswith("Done in")
+
+
+def test_a_setting_changed_after_a_search_is_said_under_the_find_button(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", width=390, touch=True)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+
+    page.locator("#weights-panel > summary").click()  # folded away on a phone
+    page.locator("#month").select_option("1")
+
+    page.locator("#status").get_by_text("Your settings changed since the list below: press Find similar again").wait_for()
+
+
+def test_a_hike_chosen_on_the_map_is_said_under_the_map(browser, server) -> None:
+    ridge = {**drawn_hike("Ridge Walk", WEST, EAST), "id": RIDGE_WALK_ID}
+    page = map_dots(browser, server, [ridge])
+    point = page.evaluate("([lat, lon]) => pick.map.latLngToContainerPoint([lat, lon])", list(START))
+    box = page.locator("#map-pick .pick-map").bounding_box()
+
+    page.mouse.click(box["x"] + point["x"], box["y"] + point["y"])
+
+    page.locator("#map-pick-hint").get_by_text("Chosen: Ridge Walk,").wait_for()
+    assert page.locator("#map-pick-hint").bounding_box()["y"] > box["y"]  # under the map
+
+
+def test_share_on_a_phone_says_its_share_menu_is_opening(browser, server) -> None:
+    waits = "navigator.share = () => new Promise(() => {});"  # a share sheet still open
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", init=waits, touch=True, width=390)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+
+    page.locator("#liked").get_by_role("button", name="Share").click()
+
+    page.locator("#liked .share-note").get_by_text("Opening your phone's share menu…").wait_for()
+
+
+def test_a_click_where_lines_pass_near_each_other_offers_every_one(browser, server) -> None:
+    # A day hike along a trail and another 5 px north of it, as two copies of one path simplified apart are.
+    day = drawn_hike("Day hike", WEST, EAST)
+    page = map_dots(browser, server, [day])
+    north = page.evaluate("([lat, lon]) => pick.map.containerPointToLatLng(pick.map.latLngToContainerPoint([lat, lon]).add([0, -5]))", list(WEST))
+    beside = {**drawn_hike("Zirbenweg", (north["lat"], WEST[1]), (north["lat"], EAST[1])), "walk_m": 7_200}
+    page.unroute(f"{server}/api/hikes?*")
+    page.route(f"{server}/api/hikes?*", lambda route: route.fulfill(json={"results": [day, beside], "too_many": False}))
+    page.evaluate("pick.load()")
+    page.wait_for_function("() => pick.shown.length === 2")
+
+    assert click_map(page, START, 0) == []  # on the day hike: both offered, not the nearest alone
+    assert page.locator(".pick-offer").get_by_role("button").all_inner_texts() == ["Day hike (1.0 km)", "Zirbenweg (7.2 km)"]
+
+
+def test_the_designer_walks_to_a_junction_clicked_and_its_messages_leave_the_map_in_place(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+    page.locator("#map-pick-on").check()
+    page.evaluate("""() => {
+      compose.on = true;
+      compose.junctions = new Map([[1, { id: 1, latlng: [46, 14] }], [2, { id: 2, latlng: [46.01, 14] }], [3, { id: 3, latlng: [46.02, 14] }]]);
+      compose.segments = new Map([
+        [10, { id: 10, kind: "trail", a: 1, b: 2, length: 1100, climbAB: 50, climbBA: 0, routes: [], stepAB: "a", stepBA: "b",
+          latlngs: [[46, 14], [46.01, 14]] }],
+        [11, { id: 11, kind: "trail", a: 2, b: 3, length: 1100, climbAB: 0, climbBA: 50, routes: [], stepAB: "c", stepBA: "d",
+          latlngs: [[46.01, 14], [46.02, 14]] }],
+      ]);
+      compose.layer = L.layerGroup().addTo(pick.map);
+      compose.shown = [10, 11];
+      pick.map.setView([46.01, 14], 14, { animate: false });
+    }""")
+    top = "() => document.querySelector('#map-pick .pick-map').getBoundingClientRect().top"
+    before = page.evaluate(top)
+
+    page.evaluate("compose.toJunction(1)")  # the start
+    page.evaluate("compose.toJunction(3)")  # two segments on: both walked, as one click
+    assert page.evaluate("compose.route.map(s => [s.id, s.auto])") == [[10, True], [11, False]]
+    assert "Walked 2 segments to that junction" in page.locator("#map-pick-hint").inner_text()
+    assert page.evaluate(top) == before  # the hint and readout grew under the map, not over it
+    # A click on a line this near a junction's dot is for the junction: back to the start here.
+    assert page.evaluate("compose.junctionAt(pick.map.layerPointToLatLng(pick.map.latLngToLayerPoint([46, 14]).add([3, 0])))") == 1
+    page.evaluate("compose.undo()")
+    assert page.evaluate("compose.route.length") == 0
+
+
+def test_the_pair_table_shows_its_score_column_on_a_phone(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", width=390, touch=True)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.locator("#pair-search").fill("Valley Path")
+    page.locator("#pair-suggestions li", has_text="Valley Path").first.dispatch_event("mousedown")
+    page.locator("#selected").get_by_text("Compared with the liked hike").wait_for()
+
+    assert page.evaluate("() => { const w = document.querySelector('#selected .table-wrap'); return w.scrollWidth - w.clientWidth; }") <= 1
+
+
+def test_suggestions_say_where_a_hike_starts_and_mark_a_multi_day_route(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+
+    def multi_day(route) -> None:
+        body = route.fetch().json()
+        for hike in body["results"]:
+            if hike["id"] == RIDGE_WALK_ID:
+                hike.update(multi_day=True, walk_m=1_073_000)
+        route.fulfill(json=body)
+
+    page.route(f"{server}/api/search?*", multi_day)
+    page.locator("#search").fill("walk")
+    meta = page.locator("#suggestions li", has_text="Ridge Walk").first.locator(".meta")
+    meta.wait_for()
+    assert meta.inner_text().startswith("multi-day, 1,073 km")
+
+    page.locator("#search").fill("valley path")
+    page.locator("#suggestions li", has_text="Valley Path").first.locator(".meta").get_by_text("near Ogulin, HR").wait_for()
+    page.locator("#search").fill("vrh")
+    page.locator("#suggestions li.landmark", has_text="Hikes near Vrh (village, near Ogulin, HR)").wait_for()
+
+
+def test_a_multi_day_route_is_marked_in_the_list_and_panel_and_drawn_only_after_the_day_hikes(browser, server) -> None:
+    def multi_day(route) -> None:
+        body = route.fetch().json()
+        body["day_first"] = True
+        body["results"][-1].update(multi_day=True, walk_m=1_073_000)
+        route.fulfill(json=body)
+
+    page = open_page(browser, server, Api({}), hash="#hike=1002")
+    page.get_by_text("Chosen: Valley Path").wait_for()
+    page.route(f"{server}/api/rank", multi_day)
+    _find(page)
+
+    assert page.locator("#results-table tbody tr").last.locator(".multi-day-tag").inner_text() == "multi-day, 1,073 km"
+    assert page.evaluate("drawScore({ score: 0.9, multi_day: true })") == pytest.approx(-0.1)
+    assert page.evaluate("drawScore({ score: 0.9, multi_day: false })") == 0.9
+    page.route(f"{server}/api/hikes/1001*", lambda route: route.fulfill(json={**route.fetch().json(), "multi_day": True, "walk_m": 1_073_000}))
+    page.evaluate(f"location.hash = '#hike={RIDGE_WALK_ID}'")
+    page.locator("#liked .badges li").first.get_by_text("multi-day, 1,073 km").wait_for()

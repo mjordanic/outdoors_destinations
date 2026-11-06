@@ -764,14 +764,57 @@ def test_geonames_lakes_and_passes_near_a_hike_are_landmarks_under_every_name(pl
     assert [hike["id"] for hike in lake["hikes"]] == [RIDGE_WALK_ID]
     assert 750 < lake["hikes"][0]["off_m"] < 820  # 0.01° of longitude east of the line at 45°
     assert (saddle["kind"], saddle["hikes"][0]["off_m"]) == ("pass", 0)
-    # A lake no hike passes within LANDMARK_NEAR_M of is not kept; nor is a mountain (Kapelica) the points lack.
-    assert placed.find_landmarks("far lake") == [] and placed.find_landmarks("kapelica") == []
+    # A lake no hike passes within LANDMARK_FAR_M of is not kept.
+    assert placed.find_landmarks("far lake") == []
+
+
+def test_geonames_mountains_the_points_lack_are_landmarks(placed: ServingData) -> None:
+    # Kapelica is a GeoNames mountain no OSM Peak names: its height is the elevation model's there.
+    [mountain] = placed.find_landmarks("kapelica")
+
+    assert (mountain["kind"], [hike["id"] for hike in mountain["hikes"]]) == ("peak", [RIDGE_WALK_ID])
+
+
+def test_a_landmark_no_hike_passes_near_is_on_the_hikes_farther_off(placed: ServingData) -> None:
+    # Big Lake's GeoNames point is about 4.7 km west of Ridge Walk, the nearest hike: a big lake's middle.
+    [lake] = placed.find_landmarks("grosser see")
+
+    assert (lake["name"], lake["kind"], [hike["id"] for hike in lake["hikes"]]) == ("Big Lake", "lake", [RIDGE_WALK_ID])
+    assert serving.LANDMARK_NEAR_M < lake["hikes"][0]["off_m"] < serving.LANDMARK_FAR_M
+
+
+def test_a_geonames_peak_at_an_osm_peak_of_its_name_adds_its_names_to_it(placed: ServingData) -> None:
+    # GeoNames has Ridge Peak 120 m from the OSM Peak, also as Grebenski vrh: one Landmark under both names.
+    assert [(landmark["name"], landmark["lat"]) for landmark in placed.find_landmarks("grebenski vrh")] == [
+        ("Ridge Peak", 45.00764)
+    ]
+    assert len(placed.find_landmarks("ridge peak")) == 1
+
+
+def test_among_equal_names_the_one_with_most_names_comes_first(placed: ServingData) -> None:
+    db = sqlite3.connect(":memory:")
+    db.executescript(
+        "CREATE TABLE landmarks (id INTEGER PRIMARY KEY, name TEXT, kind TEXT, town TEXT, lat REAL, lon REAL, ele REAL,"
+        " hikes INTEGER, names INTEGER);"
+        "CREATE TABLE landmark_names (name TEXT, landmark INTEGER, whole INTEGER);"
+        # A tarn named Bodensee high in the Alps with many hikes, and Lake Constance, known in 99 languages.
+        "INSERT INTO landmarks VALUES (1, 'Bodensee', 'lake', 'Haus', 47.4, 13.8, NULL, 8, 1),"
+        " (2, 'Bodensee', 'lake', 'Lindau', 47.6, 9.5, NULL, 3, 99), (3, 'Mont Blanc', 'peak', 'Aumale', 50, 2, 174, 3, 1),"
+        " (4, 'Mont Blanc', 'peak', 'Chamonix', 45.8, 6.9, 4806, 2, 70), (5, 'Radolfzell', 'town', NULL, 47.7, 9, NULL, 92, 3);"
+        "INSERT INTO landmark_names VALUES ('bodensee', 1, 1), ('bodensee', 2, 1), ('mont blanc', 3, 1), ('mont blanc', 4, 1),"
+        " ('radolfzell am bodensee', 5, 1), ('bodensee', 5, 0);"
+    )
+
+    assert [row[0] for row in ServingData._landmarks_named(db, "bodensee", 5, "l.names")] == [2, 1, 5]
+    assert [row[0] for row in ServingData._landmarks_named(db, "mont blanc", 5, "l.names")] == [4, 3]
+    assert placed._landmark_names == "l.names"  # an export of now has the column
 
 
 def test_a_place_is_a_landmark_with_the_hikes_starting_near_it(placed: ServingData) -> None:
-    [village] = placed.find_landmarks("vrh")
+    village = placed.find_landmarks("vrh")[0]  # then Ridge Peak, also Grebenski vrh
 
-    assert (village["name"], village["kind"], village["town"]) == ("Vrh", "village", None)
+    # Told apart by the town nearest it and that town's country.
+    assert (village["name"], village["kind"], village["town"], village["country"]) == ("Vrh", "village", "Ogulin", "HR")
     start = placed.search("Valley Path")[0]
     assert village["hikes"][0]["id"] == start["id"]
     assert 1_000 < village["hikes"][0]["off_m"] < 2_000  # Vrh (45.21, 15.11) from the start at (45.2, 15.1)
@@ -800,6 +843,68 @@ def test_landmarks_can_be_added_beside_an_existing_export_and_an_older_one_has_n
     assert older.landmarks is None and older.find_landmarks("ridge peak") == []
     serving.export_landmarks(out)
     assert [landmark["name"] for landmark in ServingData(out).find_landmarks("ridge peak")] == ["Ridge Peak"]
+
+
+def test_a_landmark_file_from_before_names_were_counted_still_opens(catalog_path: Path, tmp_path: Path) -> None:
+    out = export_serving(catalog_path, tmp_path / "out", geonames_path=CITIES)
+    with sqlite3.connect(out / "landmarks.sqlite") as db:
+        db.execute("ALTER TABLE landmarks DROP COLUMN names")
+    older = ServingData(out)
+
+    assert older._landmark_names == "NULL"
+    assert [landmark["name"] for landmark in older.find_landmarks("grebenski vrh")] == ["Ridge Peak"]
+
+
+def test_a_hike_says_the_town_and_country_it_starts_near(placed: ServingData, data: ServingData) -> None:
+    # Valley Path starts 12 km from Ogulin; Ridge Walk 35 km from it, past LANDMARK_TOWN_M, near no town.
+    [valley] = [hike for hike in placed.search("Valley Path") if hike["id"] == 1002]
+    [ridge] = placed.search("Ridge Walk")
+
+    assert (valley["region"], ridge["region"]) == ("Ogulin, HR", None)
+    assert placed.detail(1002)["region"] == "Ogulin, HR"
+    assert data.search("Valley Path")[0]["region"] is None  # an export without places names none
+
+
+def test_a_hike_longer_than_a_multi_day_length_one_way_is_said_to_be_multi_day(
+    data: ServingData, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(serving, "MULTI_DAY_M", 7_000.0)  # Ridge Walk (10 km one way) is multi-day here
+
+    [ridge] = data.search("Ridge Walk")
+    assert (ridge["multi_day"], round(ridge["walk_m"])) == (True, 10_000)
+    assert data.detail(RIDGE_WALK_ID)["multi_day"] is True and data.detail(1002)["multi_day"] is False
+    assert {hike["id"]: hike["multi_day"] for hike in data.in_box(44, 14, 46, 16, 10)[0]}[RIDGE_WALK_ID] is True
+
+
+def test_a_day_hikes_ranking_lists_the_multi_day_routes_after_every_day_hike(
+    data: ServingData, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A 9 km wish, one way: Ridge Walk (10 km) is the closest, the others are 5 km.
+    wish, weights = {"length": 9_000.0}, {"length": 100.0}
+    plain = data.rank(wish, weights, limit=10, return_to_start=False)
+    monkeypatch.setattr(serving, "MULTI_DAY_M", 9_500.0)  # Ridge Walk is multi-day here, the wish is not
+    ranking = data.rank(wish, weights, limit=10, return_to_start=False)
+
+    assert plain[0]["id"] == RIDGE_WALK_ID and plain.day_first is True
+    assert ranking.day_first is True and ranking[-1]["id"] == RIDGE_WALK_ID and ranking[-1]["multi_day"] is True
+    assert [row["id"] for row in ranking] == [row["id"] for row in plain[1:]] + [RIDGE_WALK_ID]
+    assert ranking[-1]["score"] == plain[0]["score"]  # the score is kept; only its place moves
+    # From a multi-day Seed, or a Wish of a multi-day length, they rank by score alone.
+    assert data.rank({"length": 9_600.0}, weights, limit=10, return_to_start=False)[0]["id"] == RIDGE_WALK_ID
+    assert data.rank(RIDGE_WALK_ID, weights, limit=10).day_first is False
+
+
+def test_a_wish_asks_for_multi_day_routes_by_its_length_one_way(
+    data: ServingData, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(serving, "MULTI_DAY_M", 9_500.0)  # Ridge Walk (10 km one way) is multi-day here
+    wish, weights = {"length": 15_000.0}, {"length": 100.0}
+
+    # With Return to start 15 km is the whole walk, about 7.5 km out and back: a day hike.
+    assert data.rank(wish, weights, limit=10, return_to_start=True).day_first is True
+    # Without it 15 km is one way, over the multi-day length.
+    assert data.rank(wish, weights, limit=10, return_to_start=False).day_first is False
+    assert data.rank({"length": 19_600.0}, weights, limit=10, return_to_start=True).day_first is False
 
 
 def test_the_rows_after_leave_out_the_twin_of_a_hike_already_listed(
