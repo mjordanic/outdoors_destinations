@@ -22,7 +22,7 @@ hikes that fit.
 - It is free: no ads, no account, no cookies, and no tips or donations asked
   for. The code is open source
   ([MIT](../LICENSE)) and the data it uses is credited
-  ([credits](https://dayhike-445079235401.europe-west1.run.app/credits.html),
+  ([credits](https://hikesalike.com/credits.html),
   [DATA-LICENSES.md](../DATA-LICENSES.md)).
 
 The first visit after a quiet spell can take up to about 20 seconds, while
@@ -250,7 +250,7 @@ below the box's edge, the box says "More below ↓ scroll".
 - Narrow with a drive limit if a result list is huge and far away.
 - The address in your browser holds your hike or your drawn walk, so you can
   bookmark it.
-- Hiking is risky. Read the [terms and safety](https://dayhike-445079235401.europe-west1.run.app/terms.html)
+- Hiking is risky. Read the [terms and safety](https://hikesalike.com/terms.html)
   page before you go. Trails change, and the map is OpenStreetMap, which anyone
   can edit.
 

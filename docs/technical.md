@@ -13,7 +13,7 @@ query and no database server to start. You ingest an OSM snapshot once,
 optionally sample a DEM, LandCover, and climate onto the geometries, build the
 similarity facts once, then rank from those files. A small read-only web demo
 serves a trimmed export of them ([Web demo](#web-demo)). It runs live at
-<https://dayhike-445079235401.europe-west1.run.app> on Google Cloud Run, which
+<https://hikesalike.com> on Google Cloud Run, which
 stops the server when idle, so the first visit after a quiet spell can take up
 to about 20 seconds ([docs/deploy.md](deploy.md)).
 
