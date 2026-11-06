@@ -99,6 +99,8 @@ gcloud run deploy dayhike --image "$IMAGE" --region europe-west1 \
   --set-env-vars DAYHIKE_FORWARDED_HOPS=1,DAYHIKE_SITE_URL=https://SERVICE.run.app
 ```
 
+For the live site, `DAYHIKE_SITE_URL` is `https://hikesalike.com`.
+
 Artifact Registry storage is not covered by the Cloud Run spend cap (section 5),
 and each push adds 1 to 2.4 GB, hence the cleanup policy. `docker buildx` pushes
 three versions per tag: an image index (the tagged one), the `linux/amd64`
@@ -122,7 +124,7 @@ What the flags do:
 | `--concurrency 8` | Searches and hike pages run side by side; Rankings queue one at a time per instance (in the app). |
 | `--timeout 60` | No request may run longer; a 4 h drive query from the densest origin takes 23-31 s on 1 vCPU. |
 | `DAYHIKE_FORWARDED_HOPS=1` | The rate limit keys on the last `X-Forwarded-For` entry, the one Google's front end adds. Earlier entries are client-supplied and ignored, so the limit cannot be dodged by sending a fake header. If that last entry turns out to be a Google proxy address rather than the visitor, the limit becomes one shared budget per instance: stricter, never looser. |
-| `DAYHIKE_SITE_URL=https://HOST` (optional) | The site's public address (the Cloud Run URL, or the custom domain once there is one). Each page then names itself in `og:url` and its preview image by full address, so a shared link shows the preview; unset, the image address stays relative and most link previews show none. |
+| `DAYHIKE_SITE_URL=https://HOST` (optional) | The site's public address (the live site's is `https://hikesalike.com`; before a custom domain, the Cloud Run URL). Each page then names itself in `og:url` and its preview image by full address, so a shared link shows the preview; unset, the image address stays relative and most link previews show none. |
 | `DAYHIKE_GOATCOUNTER=CODE` (optional) | Cookieless visit counts at `https://CODE.goatcounter.com`: every page loads the self-hosted `vendor/goatcounter/count.js`, and "Find" is counted as an event. Unset, no page loads analytics. Not set yet: no GoatCounter account. |
 | `DAYHIKE_CORS_ORIGINS="https://HOST ..."` (optional) | The origins whose pages may call the API (CORS): the loading shell of section 8. Unset, no other origin may. Not set yet: no shell. |
 
@@ -320,8 +322,9 @@ goes back to an earlier revision.
 
 ## 8. A loading shell on a static host (not done yet)
 
-**Not set up.** No domain, static host or shell exists yet; the host is chosen
-once there is a domain. Nothing below has been run.
+**Not set up.** The live site is served at `https://hikesalike.com`, but no
+static host or shell exists yet; the host is chosen later. Nothing below has
+been run.
 
 With `--min-instances 0` the first visit after a quiet spell waits for the
 container to start, and while Cloud Run serves the page too, the browser shows
@@ -342,7 +345,7 @@ Cloud Run. What is built for it:
   `no-cors` mode: any answer says the site is paused or busy, no answer that
   the server is down.
 
-The steps, once there is a domain and a host account:
+The steps, once there is a host account:
 
 1. Deploy Cloud Run as in section 3, with
    `DAYHIKE_CORS_ORIGINS="https://SHELL_HOST"` added to `--set-env-vars`
