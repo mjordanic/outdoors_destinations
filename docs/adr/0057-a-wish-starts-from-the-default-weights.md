@@ -9,13 +9,13 @@ Measures off and struck through, every value box empty. The liked-hike form open
 100 (ADR-0031). The captain found the two forms incoherent. Now the Wish form opens with the same default
 weights as the liked-hike form: the basic set on at 100, the advanced Measures at 0, and only what shows
 counts, as before. Each Measure that is on asks the default value its value box already showed as a grey
-hint (`WISH_INPUTS`: 10 km, 600 m of climbing, 1,500 m highest point, 18 °C, 0 % by a lake or the sea);
-every wishable Measure has one, so no box starts on and empty. "Reset weights" brings the same defaults
-back.
+hint (`WISH_INPUTS`: 10 km, 600 m of climbing, 1,500 m highest point, 18 °C), so no box starts on and
+empty. "Reset weights" brings the same defaults back.
 
-Lake or sea's default value was 50 %. On by default, that would have pushed every untouched Wish towards
-lakeside hikes, so it is now 0 %: dry, as most hikes are, and any share under 15 % scores as dry (ADR-0021),
-so the default favours no lake. A Hiker who wants water types a share.
+Lake or sea is the exception: it starts off in the Wish form (weight 0, struck through) and stays at 100 in
+the liked-hike form. It has no neutral wanted value. A Wish scores the gap between the share it asks and
+the hike's share, so 0 % ranks lakeside hikes down and 50 % ranks them up. The Hiker who cares turns Lake
+or sea on and sets the share they want.
 
 A wish address that names Measures opens exactly as before: each Measure it names with its value and
 weight, every other wishable Measure at 0. Only an address naming none (`#wish=`, which could not be

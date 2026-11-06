@@ -1168,13 +1168,20 @@ function typedFact(row, typed) {
   return typed === "" || !Number.isFinite(value) ? typed : String(toFact(measure, value));
 }
 
+// The weight a wish starts a Measure at: the liked-hike form's default, but Lake or sea off, as no
+// share it could ask is neutral (0 % ranks lakes down, 50 % up); the Hiker turns it on (ADR-0057).
+function wishDefaultWeight(row) {
+  return row.dataset.measure === "waterside" ? 0
+    : state.measures.find((m) => m.name === row.dataset.measure).default_weight;
+}
+
 // Fills the form from a wish address: every wishable Measure it does not name weighs 0. An address
 // naming none (a wish just opened, or reset) starts from the default weights, as the liked-hike form does.
 function applyWish(text) {
   const asked = new Map(text.split(",").filter(Boolean).map((part) => [part.split(":")[0], part.split(":")]));
   for (const row of document.querySelectorAll(".weight:not(.unwishable)")) {
     if (!asked.size) {
-      setWeight(row, state.measures.find((m) => m.name === row.dataset.measure).default_weight);
+      setWeight(row, wishDefaultWeight(row));
       askDefault(row);
       continue;
     }
@@ -1198,7 +1205,7 @@ function swapWeights(on) {
   const rows = [...document.querySelectorAll(".weight")];
   state.kept[on ? "seed" : "wish"] = rows.map((row) => row.querySelector("input:not(.wish)").value);
   const back = state.kept[on ? "wish" : "seed"]
-    ?? rows.map((row) => state.measures.find((m) => m.name === row.dataset.measure).default_weight);
+    ?? rows.map(wishDefaultWeight);
   rows.forEach((row, i) => {
     setWeight(row, back[i]);
     if (on) askDefault(row);

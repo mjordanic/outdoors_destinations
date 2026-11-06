@@ -100,13 +100,15 @@ No particular hike in mind? Press **"No particular hike in mind? Describe the
 one you want"** under the search.
 
 It starts like the normal search: the main features (Length, Climbing,
-Highest point, Typical temperature and Lake or sea) are on at weight 100, each
-asking for a typical value already in its box, and the Advanced ones are off.
-Change the values you care about, and slide the ones you don't care about to 0.
+Highest point and Typical temperature) are on at weight 100, each asking for a
+typical value already in its box, and the Advanced ones are off. Change the
+values you care about, and slide the ones you don't care about to 0. Lake or
+sea starts off, since no share suits every hike: turn it on and set the share
+you want.
 
 Example: you want a hike of about 10 km with 800 m of climbing and a hut on
 the way. Length already asks for 10; type 800 for Climbing. Slide Highest
-point, Typical temperature and Lake or sea to 0 if they don't matter to you.
+point and Typical temperature to 0 if they don't matter to you.
 Open **Advanced search** and click the "yes" box of Hut along: it already
 shows "yes", and the click turns it on (a second click asks for no hut). Press
 **Find hikes**.
