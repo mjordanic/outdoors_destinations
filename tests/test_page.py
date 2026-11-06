@@ -970,13 +970,14 @@ def test_the_loop_note_counts_the_loops_in_the_rows_shown(browser, server, monke
     page.get_by_text("Chosen: Ridge Walk").wait_for()
     _find(page)
     note = page.locator("#results-loops-note")
-    fewer = "Loops: searched from 20 starts near the best hikes, 4 found, 2 listed: #1 (marked composed); the others rank lower"
+    # Two loops in one row: the count before the row numbers is the count of rows.
+    fewer = "Loops: searched from 20 starts near the best hikes, 4 found, 2 listed in 1 row: #1 (marked composed); the others rank lower"
     assert fewer in note.inner_text()
 
     with page.expect_response(f"{server}/api/rank"):
         page.get_by_role("button", name="Show 1 more").click()
     page.locator("#results-table tbody tr:not(.version)").nth(1).wait_for()
-    assert "4 found, 4 listed: #1, #2 (marked composed)." in note.inner_text()
+    assert "4 found, 4 listed in 2 rows: #1, #2 (marked composed)." in note.inner_text()
 
     page.get_by_label("Strict order").uncheck()  # page 1 again, drawn, later pages dropped
     assert fewer in note.inner_text()
@@ -1088,6 +1089,56 @@ def test_the_grouping_radius_waits_under_more_options_and_follows_the_limits(bro
     page.wait_for_function("() => document.querySelector('#results-note').textContent.includes('within 20 km')")
     assert api.ranked[-1]["group_km"] == 20
     assert page.locator("#results-table tbody tr").count() == 2  # 1002 and 1003, 14 km apart, share a row
+
+
+def test_a_row_whose_version_is_a_loop_is_marked_composed(browser, server) -> None:
+    def loop_version(route) -> None:
+        body = route.fetch().json()
+        first = body["results"][0]
+        first["versions"] = [dict(first, versions=[], id=None, name="Loop from the hut", route={"text": "loop"})]
+        body["loop_search"] = {"starts": 5, "found": 3, "listed": 1, "best": first["score"], "stopped": False}
+        route.fulfill(json=body)
+
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}&strict")
+    page.route(f"{server}/api/rank", loop_version)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+
+    row = page.locator("#results-table tbody tr").first
+    assert row.locator(".composed-tag").count() == 0  # the row itself is a catalog hike
+    assert row.locator(".composed-var").inner_text() == "composed var 2"
+    assert "1 listed: #1 (marked composed)" in page.locator("#results-loops-note").inner_text()
+    assert "Rows marked composed are loops" in page.locator("#results-note").inner_text()
+
+
+@pytest.mark.parametrize(
+    ("search", "says"),
+    [
+        ({"found": 14, "best": -0.01}, ", 14 found, none listed: the best scores {best}, below #{n}'s {last}."),
+        ({"found": 14, "best": -0.0001}, ", 14 found, none listed: the best scores {last}, level with #{n}'s {last}."),
+        ({"found": 0, "best": None}, ", no loop found, so none is listed."),
+    ],
+)
+def test_the_loop_note_says_plainly_when_no_loop_is_listed(browser, server, search, says) -> None:
+    shown = {}
+
+    def none_listed(route) -> None:
+        body = route.fetch().json()
+        last = body["results"][-1]["score"]
+        last = round(last, 3) + 0.0002  # so a loop 0.0001 below it rounds to the same three decimals
+        body["results"][-1]["score"] = last
+        best = None if search["best"] is None else last + search["best"]
+        body["loop_search"] = {"starts": 31, "found": search["found"], "listed": 0, "best": best, "stopped": False}
+        shown.update(n=len(body["results"]), last=f"{last:.3f}", best=None if best is None else f"{best:.3f}")
+        route.fulfill(json=body)
+
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}&strict")
+    page.route(f"{server}/api/rank", none_listed)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+
+    note = page.locator("#results-loops-note").inner_text()
+    assert f"Loops: searched from 31 starts near the best hikes{says.format(**shown)}" in note
 
 
 def test_a_server_that_cannot_compose_offers_no_loops(browser, server) -> None:

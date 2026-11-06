@@ -2617,7 +2617,7 @@ function renderResults() {
     ? `${state.info.dayhikes.toLocaleString("en")} hikes`
     : `${body.reachable.toLocaleString("en")} hikes within ${limits} of ${state.asked.place}`;
   const mode = body.return_to_start ? "each with its way back to the start" : "each one way";
-  const composed = shown.some((result) => result.route)
+  const composed = shown.some((result) => [result, ...result.versions].some((row) => row.route))
     ? " Rows marked composed are loops drawn from trail segments, not catalog hikes; with Select hike on map ticked, that map shows them dashed green."
     : "";
   const searched = body.loops
@@ -2707,19 +2707,24 @@ function dropLimit(box) {
 }
 
 // What the loop search did, of the loops in the rows shown, with their versions: which rows they are,
-// or, with none listed, how the best loop found scores against the rows shown.
+// counted as rows, or, with none listed, how the best loop found scores against the rows shown.
 function noteLoops() {
   const search = state.answer.loop_search;
-  const at = state.results.flatMap((result, i) => [result, ...result.versions].filter((row) => row.route).map(() => `#${i + 1}`));
+  const loops = state.results.map((result) => [result, ...result.versions].filter((row) => row.route).length);
+  const listed = loops.reduce((sum, n) => sum + n, 0);
+  const rows = loops.flatMap((n, i) => (n ? [`#${i + 1}`] : []));
   const others = state.query.wish ? "a listed hike" : "a listed hike or the hike you like";
   const last = state.results.at(-1);
-  const where = at.length
-    ? `, ${at.length} listed: ${[...new Set(at)].join(", ")} (marked composed)${search?.found > at.length ? `; the others rank lower, or walk mostly the same trails as ${others}` : ""}`
+  const best = search?.best?.toFixed(3), lastScore = last?.score.toFixed(3);
+  const versus = Number(best) < Number(lastScore) ? "below" : best === lastScore ? "level with" : "above";
+  const count = listed === rows.length ? `${listed} listed` : `${listed} listed in ${rows.length} row${rows.length === 1 ? "" : "s"}`;
+  const where = listed
+    ? `, ${count}: ${rows.join(", ")} (marked composed)${search?.found > listed ? `; the others rank lower, or walk mostly the same trails as ${others}` : ""}`
     : search?.found
-      ? `, none listed${search.best != null && last ? `: the best scores ${search.best.toFixed(3)}, below #${state.results.length}'s ${last.score.toFixed(3)}` : ""}`
+      ? `, none listed${best != null && last ? `: the best scores ${best}, ${versus} #${state.results.length}'s ${lastScore}` : ""}`
       : "";
   $("#results-loops-note").textContent = search && state.results.length
-    ? ` Loops: searched from ${search.starts} start${search.starts === 1 ? "" : "s"} near the best hikes, ${search.found} found${where}.${search.stopped ? " The search stopped at its time limit, so it may have missed some loops." : ""}`
+    ? ` Loops: searched from ${search.starts} start${search.starts === 1 ? "" : "s"} near the best hikes, ${search.found ? `${search.found} found${where}` : "no loop found, so none is listed"}.${search.stopped ? " The search stopped at its time limit, so it may have missed some loops." : ""}`
     : "";
 }
 
@@ -2819,7 +2824,10 @@ function resultRow(result, number, open) {
     }
     return `<td class="cell" style="background:${scoreColor(score)}" title="${escapeHtml(m.label)}: ${score.toFixed(2)}">${Math.round(score * 100)}</td>`;
   }).join("");
-  const tag = (result.route ? '<span class="composed-tag" title="A loop drawn from trail segments, not a catalog hike">composed</span> ' : "")
+  // A row's composed version is marked on the row too, as its versions are listed only once it is clicked.
+  const composedVar = result.route ? -1 : (result.versions ?? []).findIndex((version) => version.route);
+  const tag = (result.route ? '<span class="composed-tag" title="A loop drawn from trail segments, not a catalog hike">composed</span> '
+    : composedVar >= 0 ? `<span class="composed-var" title="Its var ${composedVar + 2} is a loop drawn from trail segments, not a catalog hike: click the row to see it">composed var ${composedVar + 2}</span> ` : "")
     + (result.multi_day ? `<span class="multi-day-tag" title="A route of several days${state.answer?.day_first ? ", listed after the day hikes" : ""}">${multiDayText(result)}</span> ` : "");
   const versions = result.versions?.length
     ? ` <span class="versions" title="Click to see each on the map and in this table">${result.versions.length + 1} versions</span>`
