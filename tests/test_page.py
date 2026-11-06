@@ -1151,24 +1151,35 @@ def test_the_loop_note_says_plainly_when_no_loop_is_listed(browser, server, sear
     assert f"Loops: searched from 31 starts near the best hikes{says.format(**shown)}" in note
 
 
-def test_a_loop_above_the_rows_drawn_is_said_not_drawn(browser, server, monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("in_pool", "why"),
+    [
+        (True, "; it is not drawn on this page: Redraw or tick Strict order."),
+        (False, "; it walks mostly the same trails as a listed hike or the hike you like."),
+    ],
+)
+def test_a_loop_above_the_rows_drawn_says_why_it_is_not_listed(browser, server, monkeypatch, in_pool, why) -> None:
     monkeypatch.setattr(web, "RESULTS", 1)  # three areas: page 1 draws one row of a three-row pool
 
     def above(route) -> None:
         body = route.fetch().json()
-        best = body["results"][0]["score"] + 0.01
-        body["loop_search"] = {"starts": 31, "found": 14, "listed": 0, "best": best, "stopped": False}
+        rows = body["results"]
+        for row in rows:
+            row["score"] = 0.5
+        shown = drawn([r["score"] for r in rows], [str(r["id"]) for r in rows], 11, 1)
+        if in_pool:  # a loop under a row the draw leaves out
+            other = rows[next(i for i in range(len(rows)) if i not in shown)]
+            other["versions"] = [dict(other, versions=[], id=None, name="Loop from the hut", score=0.6, route={"text": "loop"})]
+        body["loop_search"] = {"starts": 31, "found": 14, "listed": int(in_pool), "best": 0.6, "stopped": False}
         route.fulfill(json=body)
 
-    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", draw=11)
     page.route(f"{server}/api/rank", above)
     page.get_by_text("Chosen: Ridge Walk").wait_for()
     _find(page)
 
     note = page.locator("#results-loops-note").inner_text()
-    assert "14 found, none listed: the best scores" in note
-    assert "above #1's" in note
-    assert "; it is not drawn on this page: Redraw or tick Strict order." in note
+    assert f"14 found, none listed: the best scores 0.600, above #1's 0.500{why}" in note
 
 
 def test_a_server_that_cannot_compose_offers_no_loops(browser, server) -> None:
