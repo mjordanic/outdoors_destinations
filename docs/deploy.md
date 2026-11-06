@@ -345,7 +345,7 @@ Cloud Run. What is built for it:
   `no-cors` mode: any answer says the site is paused or busy, no answer that
   the server is down.
 
-The steps, once there is a domain and a host account:
+The steps, once there is a host account:
 
 1. Deploy Cloud Run as in section 3, with
    `DAYHIKE_CORS_ORIGINS="https://SHELL_HOST"` added to `--set-env-vars`
