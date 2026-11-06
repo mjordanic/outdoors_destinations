@@ -25,4 +25,4 @@ jobs:
           enable-cache: true
       - run: uv sync --locked
       # real_data tests stay opt-in (DAYHIKE_REAL_DATA=1) and need local data.
-      - run: uv run --locked pytest -m "not real_data"
+      - run: uv run --locked pytest -n 4 -m "not real_data"

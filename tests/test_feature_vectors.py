@@ -94,3 +94,25 @@ def test_ingest_reads_ele_with_units_and_skips_unparseable_values(
     assert vector.elevation_min_m == pytest.approx(200.0)
     assert vector.elevation_max_m == pytest.approx(500.0)
     assert vector.elevation_gain_m == pytest.approx(300.0)
+
+
+@pytest.mark.parametrize(
+    ("raw", "metres"),
+    [
+        ("200 m", 200.0),
+        ("~500m", 500.0),
+        ("1,5", 1.5),
+        ("1,500", 1500.0),  # a thousands separator, not a decimal comma
+        ("3'937", 3937.0),  # a Swiss thousands separator
+        ("1'200 ft", 365.76),
+        ("1,200'", 365.76),  # grouped thousands, then a foot mark
+        ("1200 ft", 365.76),
+        ("2000 Feet", 609.6),
+        ("3937'", 1199.9976),  # feet
+        ("unknown", None),
+    ],
+)
+def test_osm_ele_text_is_read_in_metres(raw: str, metres: float | None) -> None:
+    from dayhike.osm import _parse_ele_m
+
+    assert _parse_ele_m(raw) == (None if metres is None else pytest.approx(metres))

@@ -3,9 +3,20 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>About · GoFindMeAHike</title>
-  <meta name="description" content="What GoFindMeAHike is, who runs it, and where its code is.">
+  <title>About · HikesAlike</title>
+  <meta name="description" content="What HikesAlike is, who runs it, and where its code is.">
   <link rel="icon" href="mark.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <meta property="og:site_name" content="HikesAlike">
+  <meta property="og:title" content="About · HikesAlike">
+  <meta property="og:description" content="What HikesAlike is, who runs it, and where its code is.">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="social-preview.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="HikesAlike: Hikes like the ones you love.">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="social-preview.png">
   <link rel="stylesheet" href="style.css">
   <!--analytics-->
 </head>
@@ -13,18 +24,21 @@
 <header class="top">
   <a class="home" href="/" tabindex="-1" aria-hidden="true"><img class="mark" src="mark.svg" alt="" width="44" height="44"></a>
   <div class="brand">
-    <h1><a class="home" href="/">GoFindMeAHike</a></h1>
-    <p class="tagline">Pick a hike you liked; find the ones most like it, across Europe.</p>
+    <h1><a class="home" href="/">HikesAlike</a></h1>
+    <p class="tagline">Hikes like the ones you love.</p>
   </div>
 </header>
 
 <main class="page card">
+  <img class="wordmark" src="wordmark.svg" alt="HikesAlike: Hikes like the ones you love." width="1258" height="274">
+  <p class="lede">Pick a hike you loved, or set what you want, and we'll find the closest matches among <!--dayhikes-->the<!--/dayhikes--> hikes across Europe.</p>
   <h2>About</h2>
-  <p>GoFindMeAHike is free and non-commercial. Pick a day hike you liked, and it finds the ones most like it; or describe the hike you want. There are no ads, no accounts and nothing to pay for. Tips cover the hosting, nothing more (<a href="support.html">Support</a>).</p>
-  <p>It is built on the <a href="https://github.com/mjordanic/outdoors_destinations">DayHike catalog</a>: OpenStreetMap hiking routes of 1–20 km one way, compared on 27 measures (with Return to start, a hike that does not end at its start is measured with its way back, up to about 40 km). Each measure is calibrated against random pairs of hikes, so weights mean the same on every measure.</p>
+  <p>HikesAlike is free and non-commercial. Pick a hike you liked, and it finds the ones most like it; or describe the hike you want. There are no ads, no accounts and nothing to pay for.</p>
+  <p>It is built on the <a href="https://github.com/mjordanic/outdoors_destinations">Hike catalog</a>: OpenStreetMap hiking routes of at least 1 km one way, with no upper limit, plus day stages of long tours and hikes joined from signpost networks, compared on 27 measures (with Return to start, a hike that does not end at its start is measured with its way back). You choose what matters most to you, such as length or climbing, and the results follow.</p>
   <h3>Why use it</h3>
   <ul>
     <li>Start from a hike you liked, and it finds the ones most like it. No hike in mind? Describe the one you want.</li>
+    <li>Day hikes and multi-day tours: routes of any length, long tours also cut into day stages of 8–25 km, and hikes joined from signpost networks. Over about 25 km is usually more than a day.</li>
     <li>It weighs the weather too: the typical temperature in the month you pick, and under Advanced search rain and sunshine, alongside length, climbing and landscape.</li>
     <li>A few plain measures to start with, and more, grouped by topic, under Advanced search. You choose how much each one matters.</li>
     <li>Free, with no ads, no account and no cookies. The code is open source (MIT), and the open data it uses is credited on <a href="credits.html">Data and credits</a>.</li>
@@ -38,7 +52,7 @@
 
 <footer class="credits">
   <nav class="site-nav" aria-label="Site">
-    <a href="/">Find hikes</a> · <a href="about.html">About</a> · <a href="support.html">Support</a> · <a href="credits.html">Data and credits</a> · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms and safety</a>
+    <a href="/">Find hikes</a> · <a href="about.html">About</a> · <a href="credits.html">Data and credits</a> · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms and safety</a>
   </nav>
 </footer>
 </body>

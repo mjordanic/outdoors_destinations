@@ -1,3 +1,7 @@
+---
+status: accepted (amends ADR-0004)
+---
+
 # DriveTime on highways-only tiles is an estimate, found with an isochrone
 
 Detailed car tiles for Europe do not build in a 7.6 GB Docker VM: the build of the whole roads PBF never finished, and a 1.1 GB regional chunk was killed for lack of memory. Highways-only tiles (motorway, trunk, primary) build in 11 minutes and serve from a 754 MB extract, but most Trailheads are not on them.

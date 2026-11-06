@@ -1,0 +1,7 @@
+# Per-repo no-mistakes overrides.
+
+# Fixed test command for the gate's Test step, instead of an agent choosing
+# tests. Same as CI, plus `-n 4` (pytest-xdist). real_data tests are opt-in
+# (DAYHIKE_REAL_DATA=1) and stay out of reviews.
+commands:
+  test: uv run pytest -n 4 -m "not real_data"

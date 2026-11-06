@@ -12,7 +12,11 @@ import math
 import re
 import shutil
 import sqlite3
+import threading
+import time
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -28,13 +32,16 @@ from dayhike import (
     sample_landcover,
 )
 from dayhike.catalog import similarity_dir_for, trailgraph_path_for
+from dayhike.serving import decode_polyline
 from dayhike.similarity import FACT_COLUMNS, WAY_BACK_COLUMNS, SimilarityStore, climb_and_descent
 from dayhike.trailgraph import (
     WAY_BACK_KINDS,
     Route,
     RouteError,
     TrailGraph,
+    _haversine,
     decode_coords,
+    encode_coords,
     round_trip,
     sample_trailgraph,
     way_back,
@@ -184,7 +191,10 @@ def test_a_walk_follows_segments_end_to_end_and_may_reuse_one(catalog_path: Path
         # Way 104 runs from A to D: walked against its node order it does not leave A.
         ("1:-104.11", "step 1 of this hike: OSM way 104 no longer leads from OSM node 1 to OSM node 11"),
         ("1:104.11,104.11", "step 2 of this hike: OSM way 104 no longer leads from OSM node 11 to OSM node 11"),
-        ("1:g.4", "step 1 of this hike: the gap from OSM node 1 to OSM node 4 is no longer"),
+        # A gap step whose ends no gap joins and whose trail between them is far longer.
+        ("1:g.4", "step 1 of this hike: this hike jumps a gap from OSM node 1 to OSM node 4 that the trail network does not join"),
+        # Q2 is a vertex inside the Summit Line's Segment D - P, not a Junction.
+        ("1:g.12", "step 1 of this hike: this hike jumps a gap from OSM node 1 to OSM node 12 that the trail network does not join"),
         ("c460000000_140000000:l.1", "the connect-here link from the trail crossing at 46.0000000, 14.0000000"),
     ],
 )
@@ -193,7 +203,59 @@ def test_a_walk_refuses_what_is_not_one_walk(catalog_path: Path, route: str, mes
         TrailGraph(trailgraph_path_for(catalog_path)).walk(Route.parse(route))
 
 
-@pytest.mark.parametrize("text", ["", "1:x.2", "1:104", "1:104.11,", "a:104.11"])
+@pytest.fixture(scope="module")
+def gap_steps_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    path = tmp_path_factory.mktemp("gap_steps") / "catalog.sqlite"
+    build_catalog(FIXTURE.with_name("gap_steps.osm"), path)
+    return path
+
+
+def test_a_gap_step_walks_the_trail_segment_between_its_ends(gap_steps_path: Path) -> None:
+    # A1 (2) and A2 (3) are 30 m apart with no gap Segment: the Spur joins them.
+    walk = TrailGraph(trailgraph_path_for(gap_steps_path)).walk(Route.parse("2:g.3"))
+
+    assert walk.segments == [_segment(_segments(gap_steps_path), 2, 3)["id"]]
+    assert walk.steps == ["201.3"]
+
+
+def test_a_gap_step_no_segment_joins_walks_the_shortest_trail_between_its_ends(gap_steps_path: Path) -> None:
+    # B1 (4) and B2 (5) are 40 m apart; the Combe paths join them through C (6) in 72 m.
+    segments = _segments(gap_steps_path)
+
+    walk = TrailGraph(trailgraph_path_for(gap_steps_path)).walk(Route.parse("4:g.5"))
+
+    assert walk.segments == [_segment(segments, 4, 6)["id"], _segment(segments, 6, 5)["id"]]
+    assert TrailGraph(trailgraph_path_for(gap_steps_path)).facts(walk)[0]["length_m"] == pytest.approx(72, abs=0.5)
+
+
+@pytest.mark.parametrize("name", ["gap_steps.osm", "node_network.osm", "long_tour.osm"])
+def test_every_built_hike_walks_its_route_on_the_trailgraph(name: str, tmp_path: Path) -> None:
+    catalog = build_catalog(FIXTURE.with_name(name), tmp_path / "catalog.sqlite")
+    graph = TrailGraph(trailgraph_path_for(tmp_path / "catalog.sqlite"))
+    built = [hike for hike in catalog.dayhikes if hike.route is not None]
+
+    assert built
+    for hike in built:
+        walk = graph.walk(Route.parse(hike.route))
+        # A gap step walks the trail rather than jumping straight: a little longer, never shorter.
+        assert hike.length_m - 0.01 <= graph.facts(walk)[0]["length_m"] <= hike.length_m * 1.02
+    if name == "gap_steps.osm":
+        assert [hike.route for hike in built] == ["1:101.2,g.3,102.4,g.5,103.1"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "1:x.2",
+        "1:104",
+        "1:104.11,",
+        "a:104.11",
+        "1:9223372036854775808.11",  # a way id past SQLite's 64-bit integer
+        "1:\u0661\u0660\u0664.11",  # Arabic-Indic digits: int() reads them, OSM ids are ASCII
+        "\u0661:104.11",
+    ],
+)
 def test_a_route_that_is_not_one_is_refused_as_text(text: str) -> None:
     with pytest.raises(RouteError, match="not a composed hike"):
         Route.parse(text)
@@ -408,6 +470,46 @@ def test_sampling_again_changes_nothing_but_drops_the_similarity_facts(sampled: 
     assert not similarity_dir_for(catalog).exists()  # the ways back read the samples
 
 
+def test_sampling_reads_the_segments_tile_by_tile_whatever_their_ids(
+    sampled: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import dayhike.similarity
+    import dayhike.trailgraph
+
+    # Every other Segment moved a degree north: in id order each chunk would span two DEM tiles.
+    catalog = tmp_path / "catalog.sqlite"
+    shutil.copyfile(trailgraph_path_for(sampled), trailgraph_path_for(catalog))
+    db = sqlite3.connect(trailgraph_path_for(catalog))
+    for (segment_id,) in db.execute("SELECT id FROM segments WHERE id % 2 = 0").fetchall():
+        (coords,) = db.execute("SELECT coords FROM segments WHERE id = ?", (segment_id,)).fetchone()
+        lat, lon = decode_coords(coords).T
+        db.execute("UPDATE segments SET coords = ? WHERE id = ?", (encode_coords(lat + 1, lon), segment_id))
+        db.execute("UPDATE segment_boxes SET south = south + 1, north = north + 1 WHERE id = ?", (segment_id,))
+    db.commit()
+    db.close()
+    whole = tmp_path / "whole.sqlite"
+    shutil.copyfile(trailgraph_path_for(catalog), trailgraph_path_for(whole))
+    root = tmp_path / "rasters"
+    root.mkdir()
+    dem, landcover, climate = _write_rasters(root)
+    sample_trailgraph(whole, dem_dir=dem, landcover_dir=landcover, climate_dir=climate)
+
+    tiles_per_chunk: list[set[tuple[int, int]]] = []
+    real = dayhike.similarity.slope_southness
+
+    def spy(dem_dir, lat, lon):
+        tiles_per_chunk.append(set(zip(np.floor(lat).astype(int).tolist(), np.floor(lon).astype(int).tolist())))
+        return real(dem_dir, lat, lon)
+
+    monkeypatch.setattr(dayhike.similarity, "slope_southness", spy)
+    monkeypatch.setattr(dayhike.trailgraph, "_SEGMENT_CHUNK", 2)
+    sample_trailgraph(catalog, dem_dir=dem, landcover_dir=landcover, climate_dir=climate)
+
+    assert len(tiles_per_chunk) == math.ceil(len(_segments(catalog)) / 2) > 2
+    assert sorted(len(tiles) for tiles in tiles_per_chunk)[-2] == 1  # at most the chunk where the tiles meet spans two
+    assert _segments(catalog) == _segments(whole)
+
+
 def test_copernicus_tiles_are_sampled_like_fabdem_tiles_away_from_trees(sampled: Path, tmp_path: Path) -> None:
     from dayhike.dem import CANOPY_RADIUS_M
     from dayhike.landcover import tree_share
@@ -455,7 +557,8 @@ def _digest(path: Path, query: str) -> str:
 
 def test_fabdem_heights_and_drawn_profiles_stay_byte_identical(sampled: Path, data) -> None:
     # Digests taken before Copernicus got its canopy floor and smoothed profile (ADR-0030):
-    # FABDEM, on tree cover too, gives the same bytes from the same inputs.
+    # FABDEM, on tree cover too, gives the same bytes from the same inputs. The gain and the
+    # climb and descent drawn were taken again when they became the mean of both ways (ADR-0048).
     store = geometry_store_path_for(sampled)
     assert _rows(store, "SELECT count(*) FROM vertices WHERE landcover = 10")[0][0] > 0
     assert {
@@ -467,9 +570,9 @@ def test_fabdem_heights_and_drawn_profiles_stay_byte_identical(sampled: Path, da
         "drawn": _digest(data.directory / "hikes.sqlite", "SELECT id, elevation, climb_m, descent_m FROM hikes ORDER BY id"),
     } == {
         "vertices": "13c1f97740c5700bdabf68ed559c0fab883f54d3a2a64877efd038a6acc203d6",
-        "catalog": "c0ddfd2ec479bd82ff0e7684a41f930e71fd3f6601022697f981f5a56c1f4d01",
+        "catalog": "46944fe72520606560aca02020de649be686d05a27af0bbed7ea8d5d5094a558",
         "segments": "5b7fa9c9287a9a5af0f8c7988a00d4bbe901b1350d6153be53eb9873ffd8548b",
-        "drawn": "2c8077dc35f2b2d4fede7e3f9f975e49ce207d0a66b9b2ca7f4de1936f8e05f2",
+        "drawn": "bb6b43ee3c041eb70d24cd100ca9b0718d811c8d6563a70dcee5b7e98ee6869a",
     }
 
 
@@ -536,6 +639,24 @@ def test_the_export_keeps_the_trailgraph_with_display_lines(data, sampled: Path)
     assert {j[0] for j in found["junctions"]} >= {A, D, P, F, Z2, -1}
     assert [j[4] for j in found["junctions"] if j[0] == D] == ["11"]
     assert data.segments_in_box(46.04, 14.0, 46.07, 14.1, 3) == ({"junctions": [], "segments": []}, True)
+    assert [s[0] for s in found["segments"]] == sorted(s[0] for s in found["segments"])
+
+
+def test_a_box_over_the_limit_reads_the_box_index_alone(data, monkeypatch) -> None:
+    statements: list[str] = []
+    connect = sqlite3.connect
+
+    def traced(*args, **kwargs):
+        db = connect(*args, **kwargs)
+        db.set_trace_callback(statements.append)
+        return db
+
+    monkeypatch.setattr(sqlite3, "connect", traced)
+
+    assert data.segments_in_box(46.04, 14.0, 46.07, 14.1, 3) == ({"junctions": [], "segments": []}, True)
+    # No Segment row is read and nothing sorted: a box over all Europe answers from the R*Tree at once.
+    assert "SELECT id FROM segment_boxes WHERE north >= 46.04 AND south <= 46.07 AND east >= 14.0 AND west <= 14.1 LIMIT 4" in statements
+    assert not [s for s in statements if re.search(r"\bsegments\b|ORDER BY", s)]
 
 
 def test_a_composed_hike_has_the_detail_shape_of_a_dayhike(data, summit: Route) -> None:
@@ -602,6 +723,8 @@ def test_api_segments_compose_rank_and_pair(client, summit: Route) -> None:
     assert response.headers["cache-control"] == "public, max-age=3600" and response.headers["etag"]
     box = response.json()
     assert box["too_many"] is False and box["segments"] and box["junctions"]
+    wide = client.get("/api/segments", params={"south": 44.0, "west": 13.0, "north": 47.0, "east": 14.1}).json()
+    assert wide == {"junctions": [], "segments": [], "too_many": True}  # a box over 2 degrees reads nothing
     hike = client.post("/api/compose", json=composed).json()
     assert hike["route"]["text"] == str(summit) and hike["facts"]["round_trip"] == 1.0  # with its way back
     assert client.post("/api/compose", json={**composed, "return_to_start": False}).json()["facts"]["round_trip"] == 0.0
@@ -729,7 +852,7 @@ def test_a_loop_gains_nothing_on_its_way_back(data, sampled: Path) -> None:
     assert WAY_BACK_KINDS[int(_way_back_row(sampled, LAKE_LOOP)["kind"])] == "none"
     np.testing.assert_array_equal(store.with_way_back.facts[:, row], store.facts[:, row])
     loop = Route.parse(LOOP)
-    assert data.compose(loop)["way_back"] == {"m": 0.0, "kind": "none"}
+    assert data.compose(loop)["way_back"] == {"m": 0.0, "kind": "none", "line": None, "ele": None}
     assert data.compose(loop)["facts"] == data.compose(loop, return_to_start=False)["facts"]
 
 
@@ -751,6 +874,75 @@ def test_a_line_takes_a_shorter_way_back_where_one_exists(data) -> None:
 
     assert hike["walk_m"] == pytest.approx(3000, abs=5)
     assert hike["way_back"]["kind"] == "trail" and hike["way_back"]["m"] == pytest.approx(1000, abs=2)
+
+
+def test_a_designed_hike_carries_its_trail_way_back_with_heights_for_its_gpx(data) -> None:
+    hike = data.compose(Route.parse(LONG_WAY))
+    back = hike["way_back"]
+    points = np.array(decode_polyline(back["line"]))
+    walked = np.array(decode_polyline(hike["line"]))
+
+    # From where the hike ends back to where it starts, a height at every point.
+    np.testing.assert_allclose(points[0], walked[-1], atol=1e-5)
+    np.testing.assert_allclose(points[-1], walked[0], atol=1e-5)
+    assert _haversine(points[:-1, 0], points[:-1, 1], points[1:, 0], points[1:, 1]).sum() == pytest.approx(back["m"], rel=0.02)
+    assert len(back["ele"]) == len(points) and all(isinstance(metres, int) for metres in back["ele"])
+
+
+def test_a_catalog_hike_s_trail_way_back_is_found_again_from_its_served_line(data, sampled: Path, monkeypatch) -> None:
+    # Stored as a trail way back as long as the line: the trail back is the line itself, walked back.
+    store = SimilarityStore.open(sampled).with_way_back
+    row = list(store.ids).index(SUMMIT_LINE)
+    stored = np.array(store.way_back)
+    stored[3, row] = WAY_BACK_KINDS.index("trail")
+    monkeypatch.setattr(data, "store", replace(data.store, with_way_back=replace(data.store.with_way_back, way_back=stored)))
+    hike = data.detail(SUMMIT_LINE)
+
+    back = data.way_back_walk(SUMMIT_LINE)
+
+    assert back["kind"] == "trail" and back["m"] == pytest.approx(hike["way_back"]["m"])
+    points, walked = np.array(decode_polyline(back["line"])), np.array(decode_polyline(hike["line"]))
+    np.testing.assert_allclose(points, walked[::-1], atol=1e-5)
+    assert len(back["ele"]) == len(points) and back["ele"][0] > back["ele"][-1]  # down from the summit
+
+
+def test_a_way_back_the_line_draws_itself_carries_no_line(data) -> None:
+    assert data.way_back_walk(SUMMIT_LINE) == {"m": pytest.approx(data.detail(SUMMIT_LINE)["walk_m"], rel=1e-5),
+                                               "kind": "retrace", "line": None, "ele": None}
+    assert data.way_back_walk(LAKE_LOOP) == {"m": 0.0, "kind": "none", "line": None, "ele": None}
+
+
+def test_a_served_line_end_finds_the_trailgraph_vertex_it_was_rounded_from(data) -> None:
+    (lat, lon), *_ = decode_polyline(data.detail(SUMMIT_LINE)["line"])
+    vertex = data.trailgraph.vertex_near(lat, lon, 2.0)
+
+    assert vertex is not None and _haversine(np.array([lat]), np.array([lon]), np.array([vertex[0]]), np.array([vertex[1]]))[0] < 1.0
+    assert data.trailgraph.vertex_near(lat + 0.01, lon, 2.0) is None
+
+
+def test_the_network_is_built_once_when_many_requests_need_it_at_once(catalog_path: Path, monkeypatch) -> None:
+    # Over all of Europe one build takes seconds and ~0.4 GB: a request arriving during it waits for it.
+    graph = TrailGraph(trailgraph_path_for(catalog_path))
+    opened = []
+    db = TrailGraph._db
+
+    def slow_db(self):
+        opened.append(1)
+        time.sleep(0.2)  # every thread reaches the build while the first is still in it
+        return db(self)
+
+    monkeypatch.setattr(TrailGraph, "_db", slow_db)
+    start = threading.Barrier(8)
+
+    def build():
+        start.wait()
+        return graph._network()
+
+    with ThreadPoolExecutor(8) as pool:
+        built = list(pool.map(lambda _: build(), range(8)))
+
+    assert len(opened) == 1
+    assert all(network is built[0] for network in built)
 
 
 def test_a_line_doubles_and_climbs_its_descent_back(data, sampled: Path, monkeypatch) -> None:
@@ -834,3 +1026,168 @@ def test_cli_samples_the_trailgraph_and_composes(
     assert len(lines) == 3 and all(str(SUMMIT_LINE) not in line.split("\t")[0] for line in lines[1:])
     assert main(["compose", "--data", str(data.directory), "--limit", "2", "--one-way", str(summit)]) == 0
     assert capsys.readouterr().out.startswith("Summit Line\t2728 m\t")
+
+
+def _sampled_trailgraph(root: Path, workers: int, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    from dayhike.parallel import WORKERS_ENV
+
+    monkeypatch.setenv(WORKERS_ENV, str(workers))
+    root.mkdir()
+    dem, landcover, climate = _write_rasters(root)
+    path = root / "catalog.sqlite"
+    build_catalog(FIXTURE, path)
+    assert sample_trailgraph(path, dem_dir=dem, landcover_dir=landcover, climate_dir=climate) > 0
+    db = sqlite3.connect(trailgraph_path_for(path))
+    try:
+        return list(db.iterdump())
+    finally:
+        db.close()
+
+
+def test_sampling_writes_the_same_trailgraph_with_any_worker_count(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import dayhike.trailgraph as trailgraph_module
+
+    monkeypatch.setattr(trailgraph_module, "_SEGMENT_CHUNK", 3)  # many chunks, so every worker samples some
+    serial = _sampled_trailgraph(tmp_path / "serial", 1, monkeypatch)
+
+    assert _sampled_trailgraph(tmp_path / "workers", 3, monkeypatch) == serial
+
+
+def test_the_segments_are_sampled_in_the_workers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+
+    import dayhike.dem
+    import dayhike.trailgraph as trailgraph_module
+    from dayhike.parallel import WORKERS_ENV
+
+    read = tmp_path / "read"
+    real = dayhike.dem.sample_elevations
+
+    def recorded(*args):
+        with read.open("a") as out:
+            out.write(f"{os.getpid()}\n")
+        return real(*args)
+
+    monkeypatch.setattr(dayhike.dem, "sample_elevations", recorded)
+    monkeypatch.setattr(trailgraph_module, "_SEGMENT_CHUNK", 3)
+    monkeypatch.setenv(WORKERS_ENV, "2")
+    dem, landcover, climate = _write_rasters(tmp_path)
+    path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, path)
+
+    assert sample_trailgraph(path, dem_dir=dem, landcover_dir=landcover, climate_dir=climate) > 0
+
+    pids = read.read_text().split()
+    assert len(pids) > 1
+    assert str(os.getpid()) not in pids
+
+
+# Way 500 passes node 2 twice: 1 - 2 - 3 - 4 - 2 - 5, a lollipop with its loop at 2 (km east, north of 46.05, 14.05).
+LOLLIPOP_NODES = {1: (0, 0), 2: (1, 0), 3: (1.5, 0.5), 4: (1.5, -0.5), 5: (2, 0)}
+
+
+def _place(east: float, north: float) -> tuple[float, float]:
+    """(lat, lon) of a node km east and north of 46.05, 14.05, as the fixture writes it."""
+    return round(46.05 + north / 111.2, 7), round(14.05 + east / 77.2, 7)
+
+
+LOLLIPOP = "\n".join(
+    [
+        '<?xml version="1.0" encoding="UTF-8"?>\n<osm version="0.6" generator="dayhike-fixture">',
+        *(
+            f'  <node id="{node}" lat="{_place(*at)[0]:.7f}" lon="{_place(*at)[1]:.7f}" version="1"/>'
+            for node, at in LOLLIPOP_NODES.items()
+        ),
+        '  <way id="500" version="1">',
+        *(f'    <nd ref="{node}"/>' for node in (1, 2, 3, 4, 2, 5)),
+        '    <tag k="highway" v="path"/>\n  </way>',
+        '  <relation id="5000" version="1">\n    <member type="way" ref="500" role=""/>',
+        '    <tag k="type" v="route"/>\n    <tag k="route" v="hiking"/>\n    <tag k="name" v="Lollipop"/>',
+        "  </relation>\n</osm>\n",
+    ]
+)
+
+
+def test_a_walk_along_a_way_that_passes_a_node_twice_opens_again(tmp_path: Path) -> None:
+    (tmp_path / "lollipop.osm").write_text(LOLLIPOP)
+    build_catalog(tmp_path / "lollipop.osm", tmp_path / "catalog.sqlite")
+    graph = TrailGraph(trailgraph_path_for(tmp_path / "catalog.sqlite"))
+    ends = {(s["a"], s["b"]): s["id"] for s in _segments(tmp_path / "catalog.sqlite")}
+    stem, out, back, tail = ends[1, 2], ends[2, 4], ends[4, 2], ends[2, 5]  # the loop is two Segments, 2 - 3 - 4 and 4 - 2
+
+    for walked in ([stem, out, back, tail], [stem, tail], [stem, out, back, out, back, tail], [stem, back, out, tail]):
+        walk = graph.walk_segments(1, walked)
+        again = graph.walk(Route.parse(str(walk.route)))
+
+        assert again.segments == walked
+        assert graph.facts(again)[0]["length_m"] == pytest.approx(graph.facts(walk)[0]["length_m"])
+
+
+def test_a_built_walk_that_comes_back_to_a_node_of_its_way_opens_whole(tmp_path: Path) -> None:
+    from dayhike.built import route_of
+    from dayhike.osm import OsmWay
+
+    (tmp_path / "lollipop.osm").write_text(LOLLIPOP)
+    build_catalog(tmp_path / "lollipop.osm", tmp_path / "catalog.sqlite")
+    graph = TrailGraph(trailgraph_path_for(tmp_path / "catalog.sqlite"))
+    ways = {500: OsmWay((1, 2, 3, 4, 2, 5), {"highway": "path"})}
+    nodes = (1, 2, 3, 4, 2)  # up the stem and round the loop, back to 2
+    vertices = [(node, _place(*LOLLIPOP_NODES[node])) for node in nodes]
+
+    route, _ = route_of(vertices, [500] * (len(nodes) - 1), ways)
+    walk = graph.walk(Route.parse(route))
+
+    # One merged step "500.2" would stop at the first arrival at 2, a third of the walk.
+    assert route == "1:500.4,500.2"
+    length = sum(_haversine(*a[1], *b[1]) for a, b in zip(vertices, vertices[1:]))
+    assert graph.facts(walk)[0]["length_m"] == pytest.approx(length, rel=1e-3)
+
+
+# Way 500 passes nodes 5 and 7 twice: 5 - 7 - 8 - 1 - 5 - 6 - 7 - 9, so from 5 it leads to 7 both directly and by 6.
+TWICE_NODES = {5: (1, 0), 7: (2, 0), 8: (1.5, 1), 1: (0, 0.5), 6: (1.5, -0.5), 9: (3, 0)}
+
+
+def test_a_built_walk_with_a_shorter_way_round_on_its_way_opens_whole(tmp_path: Path) -> None:
+    from dayhike.built import route_of
+    from dayhike.osm import OsmWay
+
+    osm = "\n".join(
+        [
+            '<?xml version="1.0" encoding="UTF-8"?>\n<osm version="0.6" generator="dayhike-fixture">',
+            *(
+                f'  <node id="{node}" lat="{_place(*at)[0]:.7f}" lon="{_place(*at)[1]:.7f}" version="1"/>'
+                for node, at in TWICE_NODES.items()
+            ),
+            '  <way id="500" version="1">',
+            *(f'    <nd ref="{node}"/>' for node in (5, 7, 8, 1, 5, 6, 7, 9)),
+            '    <tag k="highway" v="path"/>\n  </way>',
+            '  <relation id="5000" version="1">\n    <member type="way" ref="500" role=""/>',
+            '    <tag k="type" v="route"/>\n    <tag k="route" v="hiking"/>\n    <tag k="name" v="Twice"/>',
+            "  </relation>\n</osm>\n",
+        ]
+    )
+    (tmp_path / "twice.osm").write_text(osm)
+    build_catalog(tmp_path / "twice.osm", tmp_path / "catalog.sqlite")
+    graph = TrailGraph(trailgraph_path_for(tmp_path / "catalog.sqlite"))
+    ways = {500: OsmWay((5, 7, 8, 1, 5, 6, 7, 9), {"highway": "path"})}
+    nodes = (1, 5, 6, 7, 9)
+    vertices = [(node, _place(*TWICE_NODES[node])) for node in nodes]
+
+    route, _ = route_of(vertices, [500] * (len(nodes) - 1), ways)
+    walk = graph.walk(Route.parse(route))
+
+    # One merged step "500.9" would reopen as 1 - 5 - 7 - 9, dropping 5 - 6 - 7.
+    length = sum(_haversine(*a[1], *b[1]) for a, b in zip(vertices, vertices[1:]))
+    assert graph.facts(walk)[0]["length_m"] == pytest.approx(length, rel=1e-3)
+
+
+def test_the_export_saves_the_way_back_network_for_a_server_to_memory_map(data, sampled: Path) -> None:
+    built = TrailGraph(trailgraph_path_for(sampled))._network()  # the Catalog's: built from its Segments
+
+    saved = data.trailgraph._network()
+
+    assert data.trailgraph.network_dir == data.directory / "trailgraph.network"
+    assert all(isinstance(array, np.memmap) for array in saved)
+    for array, expected in zip(saved, built, strict=True):
+        assert array.dtype == expected.dtype
+        np.testing.assert_array_equal(array, expected)

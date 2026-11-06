@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import io
 import json
 import os
@@ -10,7 +11,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 NOTEBOOKS = REPO / "notebooks"
-README = REPO / "README.md"
+TECHNICAL_DOCS = REPO / "docs" / "technical.md"
 FIXTURE = REPO / "tests" / "fixtures" / "catalog.osm"
 
 
@@ -47,6 +48,7 @@ def _notebook_text(path: Path) -> tuple[str, str, str]:
     return stdout.getvalue(), "\n".join(markdown), "\n".join(sources)
 
 
+@functools.cache
 def _run_notebooks() -> tuple[str, str, str]:
     outputs: list[str] = []
     markdown: list[str] = []
@@ -94,8 +96,8 @@ def test_notebook_shows_ingest_keep_drop_counts_and_kept_names() -> None:
 
     assert "kept=4" in output
     assert "dropped_unnamed=0" in output
-    assert "dropped_length=2" in output
-    assert "dropped_network=1" in output
+    assert "dropped_length=1" in output
+    assert "dropped_container=1" in output
     assert "Ridge Walk" in output
     assert "Valley Path" in output
 
@@ -157,7 +159,8 @@ def test_notebook_states_catalog_limitations() -> None:
     folded = markdown.casefold()
 
     assert "route=hiking" in markdown
-    assert "length band" in folded
+    assert "1 km" in folded
+    assert "no upper length cap" in folded
     assert "unnamed" in folded
     assert "scraped reviews" in folded
     assert "webpage ratings" in folded or "webpage rating" in folded
@@ -174,15 +177,15 @@ def test_notebook_shows_ingest_stages_and_resume() -> None:
     assert "route=hiking" in markdown
 
 
-def test_readme_points_at_demonstration_notebooks() -> None:
-    text = README.read_text()
+def test_technical_docs_point_at_demonstration_notebooks() -> None:
+    text = TECHNICAL_DOCS.read_text()
     for name in WALKTHROUGH:
         assert f"notebooks/{name}" in text
     assert "Notebook walkthrough" in text
 
 
-def test_readme_documents_landcover_and_climate() -> None:
-    text = README.read_text()
+def test_technical_docs_document_landcover_and_climate() -> None:
+    text = TECHNICAL_DOCS.read_text()
     for command in (
         "fetch-landcover",
         "sample-landcover",
@@ -209,13 +212,13 @@ def test_readme_documents_landcover_and_climate() -> None:
     assert "QueryMonth" in text
 
 
-def test_notebook_sanity_checks_catalog_counts_length_band_and_map() -> None:
+def test_notebook_sanity_checks_catalog_counts_min_length_and_map() -> None:
     output, markdown, source = _run_notebooks()
 
     assert "The Catalog" in markdown
     assert "data/catalog.sqlite" in source
     assert "sanity kept_matches_rows\tok" in output
-    assert "sanity length_band\tok" in output
+    assert "sanity min_length\tok" in output
     assert "sanity trailhead_per_dayhike\tok" in output
     assert "geopandas" in source.casefold()
     assert "contextily" in source.casefold()

@@ -15,6 +15,7 @@ SEARCH_CUTOFF_M = 35_000
 WIDE_SEARCH_CUTOFF_M = 100_000
 MAX_MATRIX_DISTANCE_M = 1_000_000  # max_matrix_distance in mjolnir.drive-time.json
 NO_SUITABLE_EDGES = 171  # Valhalla error_code: a location has no road in reach
+VALHALLA_TIMEOUT_S = 50.0  # socket timeout for Valhalla calls, under Cloud Run's 60 s request timeout
 
 Place = tuple[float, float]  # (latitude, longitude)
 
@@ -26,7 +27,7 @@ def post_json(base_url: str, path: str, payload: dict) -> object:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(request) as response:
+    with urllib.request.urlopen(request, timeout=VALHALLA_TIMEOUT_S) as response:
         return json.load(response)
 
 

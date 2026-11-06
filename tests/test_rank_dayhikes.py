@@ -147,7 +147,8 @@ def test_score_is_the_similarity(tmp_path: Path) -> None:
 
         store = catalog.similarity.mode(return_to_start)
         rows = np.searchsorted(store.ids, [item.dayhike.id for item in ranking.items])
-        similarity, _ = score_rows(store, [0], rows, weights)
+        weighted = {name: weight for name, weight in weights.items() if name != "round_trip" or not return_to_start}
+        similarity, _ = score_rows(store, [0], rows, weighted)
         assert [item.score for item in ranking.items] == pytest.approx(similarity.tolist())
 
 
@@ -284,6 +285,26 @@ def test_cli_builds_similarity_and_prints_id_name_and_score(tmp_path: Path) -> N
         ]
 
 
+def test_round_trip_is_left_out_with_the_way_back_in_the_cli_too(tmp_path: Path) -> None:
+    path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, path)
+    build_similarity(path, tmp_path / "dem")
+    catalog = Catalog.open(path)
+
+    with_round_trip = _cli("rank", "--catalog", str(path), "--weight", "length=100", "--weight", "round_trip=100", "Ridge Walk")
+    only_round_trip = _cli("rank", "--catalog", str(path), "--weight", "round_trip=100", "Ridge Walk")
+
+    # Every hike with its way back is a round trip: the weight would pull every score down alike.
+    expected = rank_dayhikes(catalog, ["Ridge Walk"], {"length": 100})
+    assert [line.split("\t")[2] for line in with_round_trip.stdout.strip().splitlines()] == [
+        str(item.score) for item in expected.items
+    ]
+    assert only_round_trip.returncode == 2
+    assert "Round trip is left out with Return to start" in only_round_trip.stderr
+    one_way = rank_dayhikes(catalog, ["Ridge Walk"], {"round_trip": 100}, return_to_start=False)
+    assert one_way.items  # one way, Round trip still counts
+
+
 def test_cli_rejects_a_bad_weight(tmp_path: Path) -> None:
     path = tmp_path / "catalog.sqlite"
     build_catalog(FIXTURE, path)
@@ -296,3 +317,34 @@ def test_cli_rejects_a_bad_weight(tmp_path: Path) -> None:
     assert "MEASURE=WEIGHT" in malformed.stderr
     assert unknown.returncode == 2
     assert "unknown Measure" in unknown.stderr
+
+
+def test_cli_rank_on_a_missing_catalog_says_not_found(tmp_path: Path) -> None:
+    path = tmp_path / "catalgo.sqlite"
+
+    result = _cli("rank", "--catalog", str(path), "Ridge Walk")
+
+    assert result.returncode == 2
+    assert f"Catalog not found: {path}" in result.stderr
+    assert not path.exists()
+
+
+def test_a_ranking_reads_rarity_only_where_the_calibration_does_and_scores_alike(tmp_path: Path) -> None:
+    from dayhike.similarity import MEASURES, _calibration_key, calibrate, measure_rarity, ranked_scores, weighted_mean
+
+    catalog = _catalog(tmp_path, LENGTHS)
+    weights = dict.fromkeys(MEASURE_NAMES, 100.0)
+    for return_to_start in (True, False):
+        store = catalog.similarity.mode(return_to_start)
+        rows = np.arange(1, len(store.ids))
+        similarity, _ = score_rows(store, [0], rows, weights)
+
+        # Every row's rarity, as before: the scores are the same to the bit.
+        raw = np.column_stack([ranked_scores(store, measure, 0, rows) for measure in MEASURES])
+        calibrated = np.column_stack(
+            [
+                calibrate(store, _calibration_key(measure, None, 0), raw[:, j], measure_rarity(store, measure, 0, rows))
+                for j, measure in enumerate(MEASURES)
+            ]
+        )
+        assert np.array_equal(similarity, weighted_mean(calibrated, np.full(len(MEASURES), 100.0)), equal_nan=True)

@@ -1,3 +1,7 @@
+---
+status: accepted (Copernicus GLO-30 an alternative beside FABDEM since ADR-0030; SolarAspect in production as the `southness` Measure)
+---
+
 # FABDEM is a local snapshot, sampled after ingest
 
 Ingest still reads OSM `ele` only, so a Catalog can be built without rasters.
@@ -9,6 +13,8 @@ scaler. Live elevation APIs and sampling inside ingest are rejected: the first
 needs the network at query time, the second would block Catalog builds on a
 multi-gigabyte raster fetch.
 
-**Considered Options**: Copernicus GLO-30 (trees and buildings remain);
+**Considered Options**: Copernicus GLO-30 (trees and buildings remain; since
+ADR-0030 it is an alternative beside FABDEM, which stays the default);
 session-only notebook sampling (too slow to repeat on a real GeometryStore);
-OSM `ele` only (too sparse). SolarAspect stays notebook-only until promoted.
+OSM `ele` only (too sparse). SolarAspect, notebook-only when this was decided,
+is now the `southness` Measure, sampled from the same DEM.

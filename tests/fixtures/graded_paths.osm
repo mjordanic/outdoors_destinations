@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="dayhike-fixture">
+  <!-- Graded paths in the TrailGraph (ADR-0037). Comments give each node's
+       (east, north) metres from A at 46.05, 14.05.
+
+       Valley Trail (3001): A - B - C, 2 km, parking by A. Its way B - C has
+         a sac_scale and is still a marked trail of the relation.
+       Ridge Trail (3002): C - R, 1.5 km south.
+       Way 210: a graded highway=path (mountain_hiking) in no relation,
+         B - N1 - N2 - C, 3 km: with the Valley Trail it closes a 4 km loop.
+       Left out: way 211 (highway=path, no sac_scale), way 212 (highway=track
+         with a sac_scale) and way 213 (a sac_scale that is no grade). -->
+  <node id="1" lat="46.0500000000" lon="14.0500000000" version="1"><!-- A (0, 0) -->
+    <tag k="ele" v="600"/>
+  </node>
+  <node id="2" lat="46.0500000000" lon="14.0629579576" version="1"><!-- B (1000, 0) -->
+    <tag k="ele" v="620"/>
+  </node>
+  <node id="3" lat="46.0500000000" lon="14.0759159152" version="1"><!-- C (2000, 0) -->
+    <tag k="ele" v="640"/>
+  </node>
+  <node id="4" lat="46.0589932161" lon="14.0629579576" version="1"><!-- N1 (1000, 1000) -->
+    <tag k="ele" v="700"/>
+  </node>
+  <node id="5" lat="46.0589932161" lon="14.0759159152" version="1"><!-- N2 (2000, 1000) -->
+    <tag k="ele" v="720"/>
+  </node>
+  <node id="6" lat="46.0679864322" lon="14.0629579576" version="1"><!-- Q (1000, 2000) -->
+    <tag k="ele" v="800"/>
+  </node>
+  <node id="7" lat="46.0679864322" lon="14.0759159152" version="1"><!-- T (2000, 2000) -->
+    <tag k="ele" v="800"/>
+  </node>
+  <node id="8" lat="46.0589932161" lon="14.0500000000" version="1"><!-- I (0, 1000) -->
+    <tag k="ele" v="700"/>
+  </node>
+  <node id="9" lat="46.0365101758" lon="14.0759159152" version="1"><!-- R (2000, -1500) -->
+    <tag k="ele" v="900"/>
+  </node>
+  <node id="90" lat="46.0502697965" lon="14.0500000000" version="1"><!-- (0, 30) -->
+    <tag k="amenity" v="parking"/>
+  </node>
+  <node id="91" lat="46.0526979648" lon="14.0630875372" version="1"><!-- (1010, 300) -->
+    <tag k="natural" v="spring"/>
+    <tag k="name" v="Mossy Spring"/>
+  </node>
+  <way id="201" version="1">
+    <nd ref="1"/>
+    <nd ref="2"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="202" version="1">
+    <nd ref="2"/>
+    <nd ref="3"/>
+    <tag k="highway" v="path"/>
+    <tag k="sac_scale" v="hiking"/>
+  </way>
+  <way id="210" version="1">
+    <nd ref="2"/>
+    <nd ref="4"/>
+    <nd ref="5"/>
+    <nd ref="3"/>
+    <tag k="highway" v="path"/>
+    <tag k="sac_scale" v="mountain_hiking"/>
+  </way>
+  <way id="211" version="1">
+    <nd ref="4"/>
+    <nd ref="6"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="212" version="1">
+    <nd ref="5"/>
+    <nd ref="7"/>
+    <tag k="highway" v="track"/>
+    <tag k="sac_scale" v="hiking"/>
+  </way>
+  <way id="213" version="1">
+    <nd ref="4"/>
+    <nd ref="8"/>
+    <tag k="highway" v="path"/>
+    <tag k="sac_scale" v="yes"/>
+  </way>
+  <way id="220" version="1">
+    <nd ref="3"/>
+    <nd ref="9"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <relation id="3001" version="1">
+    <member type="way" ref="201" role=""/>
+    <member type="way" ref="202" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Valley Trail"/>
+  </relation>
+  <relation id="3002" version="1">
+    <member type="way" ref="220" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Ridge Trail"/>
+  </relation>
+</osm>

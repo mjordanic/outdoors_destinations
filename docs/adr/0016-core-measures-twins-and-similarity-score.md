@@ -1,5 +1,5 @@
 ---
-status: accepted (amends ADR-0013; default weights amended by ADR-0031)
+status: accepted (amends ADR-0013; default weights amended by ADR-0031; WaterSide's dead band and the compare note by ADR-0021; Wish Rankings by ADR-0024; the rarity rank by ADR-0026)
 ---
 
 # Core Measures by default, WaterSide, Twins, and the similarity as the score

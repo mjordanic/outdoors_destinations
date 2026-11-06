@@ -23,9 +23,11 @@ from dayhike.catalog import EARTH_RADIUS_M
 from dayhike.serving import LINE_TOLERANCE_M, POINT_COLUMNS, ServingData, decode_polyline
 
 pytestmark = rc.real_data
-# Measured on the 2026-09-18 Catalog: hikes.sqlite 154 MB, similarity 88 MB,
-# snaps 4.5 MB, Trailheads 2.6 MB; the highway tile tar 790 MB.
-DATA_BUDGET_BYTES = 300_000_000
+# Measured on the 2026-10-31 rebuild (250,160 hikes): trailgraph.sqlite 4.17 GB,
+# hikes.sqlite 551 MB, similarity 278 MB, places 38 MB, snaps 6.5 MB, Trailheads
+# 4.0 MB, 5.04 GB in all; the highway tile tar 790 MB. The image built from it is
+# 3.11 GB compressed against gate S4's 4 GB; this budget leaves about 20 % growth.
+DATA_BUDGET_BYTES = 6_000_000_000
 TAR_BUDGET_BYTES = 900_000_000
 # Encoded polylines keep 5 decimals: up to ~0.8 m of rounding on top of the tolerance.
 LINE_SLACK_M = 1.5
@@ -108,8 +110,16 @@ def test_export_has_no_raster_and_no_per_vertex_climate(data: ServingData) -> No
 
     assert {path.suffix for path in files} <= EXPORTED_SUFFIXES
     assert tables == {
-        "hikes": ["id", "name", "name_origin", "sac_scale", "walk_m", "line", "elevation", "climb_m", "descent_m", "points"]
-    }
+        "hikes": [
+            "id", "name", "name_origin", "sac_scale", "walk_m", "line", "elevation", "climb_m", "descent_m",
+            "points", "kind", "parts", "route",
+        ],
+        # The R-tree of line boxes the map's view asks (/api/hikes).
+        "hike_boxes": ["id", "south", "north", "west", "east"],
+        "hike_boxes_node": ["nodeno", "data"],
+        "hike_boxes_parent": ["nodeno", "parentnode"],
+        "hike_boxes_rowid": ["rowid", "nodeno"],
+    }  # fmt: skip
     assert all(len(point) == len(POINT_COLUMNS) for point in json.loads(zlib.decompress(points)))
     # Climate leaves the export only as the per-DayHike facts of the similarity copy.
     assert data.store.facts.shape[1] == len(data.store.ids)
@@ -117,10 +127,12 @@ def test_export_has_no_raster_and_no_per_vertex_climate(data: ServingData) -> No
 
 def test_export_attribution_lists_osm_worldcover_chelsa_fabdem_valhalla(data: ServingData) -> None:
     from dayhike.climate import CHELSA_ATTRIBUTION
+    from dayhike.dem import FABDEM_ATTRIBUTION
     from dayhike.landcover import WORLDCOVER_ATTRIBUTION
 
     assert data.meta["attribution"] == {
         "osm": "© OpenStreetMap contributors",
+        "fabdem": FABDEM_ATTRIBUTION,
         "worldcover": WORLDCOVER_ATTRIBUTION,
         "chelsa": CHELSA_ATTRIBUTION,
     }
@@ -136,11 +148,21 @@ def test_rankings_from_the_export_equal_golden_rankings(data: ServingData, monke
         golden.setdefault((row["set"], int(row["seed"])), []).append(row)
     sets = rc.golden_weight_sets()
 
-    for (name, seed), rows in golden.items():
-        got = data.rank(seed, sets[name], limit=rc.GOLDEN_TOP, return_to_start=False)  # captured one way
+    twins = data.store.twins
+    for (name, seed), captured in golden.items():
+        # Golden is captured before Twins are dropped: a Ranking keeps the best of each group
+        # of Twins and none of the Seed's (a route's reverse is its Twin).
+        groups = twins[np.searchsorted(data.store.ids, [int(row["dayhike_id"]) for row in captured])]
+        seen = {twins[np.searchsorted(data.store.ids, seed)]}
+        rows = []
+        for row, group in zip(captured, groups):
+            if group not in seen:
+                seen.add(group)
+                rows.append(row)
+        got = data.rank(seed, sets[name], limit=len(rows), return_to_start=False)  # captured one way
         assert [hike["id"] for hike in got] == [int(row["dayhike_id"]) for row in rows], (name, seed)
         for hike, row in zip(got, rows):
-            assert hike["score"] == pytest.approx(float(row["score"]), abs=1e-6)
+            assert hike["score"] == pytest.approx(float(row["similarity"]), abs=1e-6)
 
 
 def test_export_highways_tar_is_the_built_tiles(data: ServingData) -> None:

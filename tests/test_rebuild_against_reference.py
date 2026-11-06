@@ -2,7 +2,7 @@
 
 Slow, opt-in (DAYHIKE_REAL_DATA=1); compares DAYHIKE_DATA_DIR (default data/)
 with DAYHIKE_REFERENCE_DIR, frozen copies of the old outputs plus
-raw-manifest.tsv and golden/ (README "Clean rebuild"). Skipped without a
+raw-manifest.tsv and golden/ (docs/technical.md "Clean rebuild"). Skipped without a
 reference.
 
 The pipeline is deterministic (same snapshot, same uv.lock, a fixed
@@ -12,6 +12,12 @@ Europe only. Values that read those rasters must be equal for DayHikes whose
 every vertex lies strictly inside the old coverage, may appear where the
 reference had none, and may never disappear. (For climate, a DayHike with a
 vertex exactly on a raster cell edge is left out of the exact comparison.)
+
+A reference built from an older Europe snapshot cannot be equal: OSM edits
+move hikes in and out and change their values. Then the exact comparisons
+are skipped, the hikes that left are listed with the reason OSM gives on the
+new snapshot, and only a hike the rules would still keep fails. Golden
+outputs are recaptured from the rebuild (ADR-0016 precedent).
 """
 
 from __future__ import annotations
@@ -19,15 +25,24 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections import Counter
 
 import numpy as np
 import pytest
 import rebuild_checks as rc
+from test_real_data import _main_walk_reasons
 
 from dayhike import SimilarityStore, geometry_store_path_for, similarity_dir_for
 from dayhike.similarity import CALIBRATION_KEYS, FACT_COLUMNS, LANDCOVER_SHARE_COLUMNS
 
 pytestmark = [*rc.real_data, rc.needs_reference]
+SAME_SNAPSHOT = (
+    rc.REFERENCE_DIR is not None
+    and (rc.REFERENCE_DIR / "raw-manifest.tsv").is_file()
+    and (rc.DATA_DIR / "osm" / "europe-latest.osm.pbf").is_file()
+    and rc.same_snapshot_as(rc.REFERENCE_DIR)
+)
+same_snapshot = pytest.mark.skipif(not SAME_SNAPSHOT, reason="reference built from another Europe snapshot")
 # Old raster coverage (south, west, north, east): 24 WorldCover tiles and the
 # fetch-climate default clip of the reference.
 OLD_LANDCOVER = (39.0, 3.0, 51.0, 21.0)
@@ -84,10 +99,29 @@ def _assert_equal(diff: rc.TableDiff) -> None:
     assert diff.equal, diff.report()
 
 
+@same_snapshot
 def test_dayhike_ids_names_lengths_and_difficulty_equal_reference(catalogs) -> None:
     _assert_equal(rc.compare_tables(*catalogs, "dayhikes", ["id"], ["name", "name_origin", "length_m", "difficulty"]))
 
 
+@pytest.mark.skipif(SAME_SNAPSHOT, reason="same snapshot: the exact comparison applies")
+def test_on_a_fresh_snapshot_only_osm_edits_take_hikes_out_of_the_catalog(
+    catalogs, capsys: pytest.CaptureFixture[str]
+) -> None:
+    diff = rc.compare_tables(*catalogs, "dayhikes", ["id"], [])
+    left = {key[0] for key in diff.left}
+    by_reason, unexplained = rc.departures(_main_walk_reasons(left) if left else {})
+    kinds = dict(catalogs[1].execute("SELECT id, kind FROM dayhikes"))
+    joined = Counter(kinds[key[0]] for key in diff.joined)
+    with capsys.disabled():
+        print(f"\nleft the Catalog: {len(left)}; joined: {len(diff.joined)} {dict(sorted(joined.items()))}")
+        for reason, ids in by_reason.items():
+            print(f"left, {reason}: {len(ids)}: {ids[:50]}")
+
+    assert unexplained[:20] == []
+
+
+@same_snapshot
 def test_ingest_report_equals_reference(catalogs) -> None:
     old, new = (
         json.loads(c.execute("SELECT value FROM catalog_meta WHERE key = 'ingest_report'").fetchone()[0])
@@ -97,11 +131,13 @@ def test_ingest_report_equals_reference(catalogs) -> None:
     assert new == old
 
 
+@same_snapshot
 def test_trailheads_and_amenity_facts_equal_reference(catalogs) -> None:
     _assert_equal(rc.compare_tables(*catalogs, "trailheads", ["dayhike_id"], ["latitude", "longitude"]))
     _assert_equal(rc.compare_tables(*catalogs, "amenity_facts", ["dayhike_id", "kind"], ["count", "nearest_m"]))
 
 
+@same_snapshot
 def test_elevation_columns_equal_reference(catalogs) -> None:
     columns = ["length_m", "difficulty_ordinal", "elevation_min_m", "elevation_max_m", "elevation_gain_m"]
     _assert_equal(rc.compare_tables(*catalogs, "feature_vectors", ["dayhike_id"], columns, abs_tol=1e-9))
@@ -111,6 +147,7 @@ def _changes_inside(diff: rc.TableDiff, inside: set[int]) -> list:
     return [(key, old, new) for key, old, new in diff.changed if key[0] in inside]
 
 
+@same_snapshot
 def test_landcover_and_climate_equal_reference_where_reference_had_them(catalogs, inside_old) -> None:
     old, new = catalogs
     for names, coverage in ((LANDCOVER, "landcover"), (CLIMATE, "climate")):
@@ -144,6 +181,7 @@ def _walk_hashes(geometry: sqlite3.Connection) -> dict[int, tuple[str, str]]:
     return hashes
 
 
+@same_snapshot
 def test_geometry_equals_reference(geometries, inside_old) -> None:
     old, new = geometries
     _assert_equal(
@@ -175,6 +213,7 @@ def _differing(old: np.ndarray, new: np.ndarray, ids: np.ndarray) -> list[int]:
     return ids[~same].tolist()
 
 
+@same_snapshot
 def test_similarity_facts_equal_reference(inside_old) -> None:
     old, new = _stores()
     assert np.array_equal(old.ids, new.ids)
@@ -200,12 +239,14 @@ def test_similarity_facts_equal_reference(inside_old) -> None:
     assert ids[~same].tolist()[:20] == []
 
 
+@same_snapshot
 def test_calibration_equals_reference_for_measures_not_touched_by_coverage() -> None:
     old, new = _stores()
     keys = [
         index for index, key in enumerate(CALIBRATION_KEYS) if key.split("@")[0] not in rc.COVERAGE_MEASURES
     ]
-    assert len(keys) == 22
+    # 22 Measures and the 7 presence Measures' every-pair calibrations.
+    assert len(keys) == 29
     differing = [
         CALIBRATION_KEYS[index]
         for index in keys
@@ -215,6 +256,7 @@ def test_calibration_equals_reference_for_measures_not_touched_by_coverage() -> 
     assert differing == []
 
 
+@same_snapshot
 def test_golden_rankings_reproduce() -> None:
     golden: dict[tuple[str, int], list[dict]] = {}
     for row in rc.read_tsv(rc.REFERENCE_DIR / "golden" / "rankings.tsv"):
@@ -235,7 +277,7 @@ def test_raw_inputs_are_unchanged() -> None:
     expected = {
         rel: entry
         for rel, entry in rc.read_manifest(rc.REFERENCE_DIR / "raw-manifest.tsv").items()
-        if rel == "osm/europe-latest.osm.pbf" or rel.startswith(("dem/", "landcover/"))
+        if (rel == "osm/europe-latest.osm.pbf" and SAME_SNAPSHOT) or rel.startswith(("dem/", "landcover/"))
     }
     actual = rc.raw_manifest(
         rc.DATA_DIR, [rel for rel in expected if (rc.DATA_DIR / rel).exists()], hashed=["osm/europe-latest.osm.pbf"]

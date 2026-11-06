@@ -1,4 +1,4 @@
-"""Comparison helpers for the clean-rebuild checks (README "Clean rebuild").
+"""Comparison helpers for the clean-rebuild checks (docs/technical.md "Clean rebuild").
 
 The slow ``real_data`` tests apply these to a rebuilt data directory and to the
 reference (``DAYHIKE_REFERENCE_DIR``); tests/test_rebuild_checks.py runs them
@@ -27,19 +27,24 @@ REFERENCE_DIR = (
 )
 VALHALLA_URL = os.environ.get("DAYHIKE_VALHALLA_URL", "http://127.0.0.1:8002")
 SERVING_DIR = Path(os.environ.get("DAYHIKE_SERVING_DIR", DATA_DIR / "web-serving"))
-EUROPE_BOUNDS = (32.6, -31.3, 71.2, 46.4)  # south, west, north, east (README Europe walkthrough)
-# FABDEM tiles that carry vertices but are 404 on the mirror (checked 2026-10-25).
-KNOWN_DEM_GAPS = frozenset({"N41E043", "N41E044", "N41E046"})
+EUROPE_BOUNDS = (32.6, -31.3, 71.2, 46.4)  # south, west, north, east (docs/technical.md Europe walkthrough)
+# FABDEM tiles that carry vertices but are 404 on the mirror (checked 2026-10-25): Georgian
+# mountains; and open sea under the ferry gaps of the E2, E8 and E9 long-distance paths,
+# kept since ADR-0033 (checked 2026-11-02).
+KNOWN_DEM_GAPS = frozenset({"N41E043", "N41E044", "N41E046", "N49W004", "N49W005", "N52E002", "N52E003"})
 # Geofabrik "europe" children that group other children.
 COMPOSITE_REGIONS = frozenset({"alps", "dach", "britain-and-ireland", "great-britain"})
 CHUNK = 2_000
-# The Geofabrik Europe snapshot of 2026-09-18 that the recorded numbers below come from.
-RECORDED_SNAPSHOT_BYTES = 34_999_693_913
-RECORDED_SNAPSHOT_SHA256 = "77aaa00727e343a9d44f118f04cd5165c4240c03c11c408f92e12a71ff4beba0"
+# The Geofabrik Europe snapshot that the recorded numbers below come from:
+# europe-261031.osm.pbf, osmosis_replication_timestamp 2026-10-31T21:23:06Z.
+RECORDED_SNAPSHOT_BYTES = 35_354_652_634
+RECORDED_SNAPSHOT_SHA256 = "6e2bfbfd7756ece175d5d879f5eb0b1f11536f6131260b0b234cb6840a89cd82"
+# The ingest report of the shared rebuild on that snapshot: ADR-0033/0034 rules, NetworkHikes
+# (55,558) and DayStages (33,646) built; ``kept`` counts them, the named_* counts only relations.
 RECORDED_INGEST_REPORT = {
-    "kept": 135_588, "dropped_unnamed": 0, "dropped_length": 77_561, "dropped_network": 6_234,
-    "named_osm_name": 98_845, "named_osm_ref": 21_692, "named_synthetic": 90,
-    "dropped_node_network": 26_026, "named_from_to": 11_058, "named_place": 3_903,
+    "kept": 250_160, "dropped_unnamed": 0, "dropped_length": 104_311, "dropped_container": 3_740,
+    "named_osm_name": 122_133, "named_osm_ref": 22_886, "named_synthetic": 107,
+    "dropped_node_network": 43_351, "named_from_to": 11_572, "named_place": 4_258,
 }  # fmt: skip
 # Tables and columns of a Catalog and its GeometryStore after ingest, the three
 # sample steps and build-similarity (tests/test_pipeline_rebuild.py checks it).
@@ -47,7 +52,7 @@ CATALOG_SCHEMA = {
     "amenity_facts": ["dayhike_id", "kind", "count", "nearest_m"],
     "catalog_meta": ["key", "value"],
     "climate_months": ["dayhike_id", "month", "temperature_c", "precipitation_mm", "solar_radiation"],
-    "dayhikes": ["id", "name", "name_origin", "length_m", "difficulty"],
+    "dayhikes": ["id", "name", "name_origin", "length_m", "difficulty", "kind", "parts", "route"],
     "feature_vectors": [
         "dayhike_id", "length_m", "elevation_min_m", "elevation_max_m", "elevation_gain_m",
         "difficulty_ordinal", "tree_fraction", "shrub_fraction", "grass_fraction",
@@ -89,6 +94,13 @@ def same_snapshot() -> bool:
     """Whether DATA_DIR holds the recorded Europe snapshot (by size; tests/test_raw_inputs.py hashes it)."""
     pbf = DATA_DIR / "osm" / "europe-latest.osm.pbf"
     return pbf.is_file() and pbf.stat().st_size == RECORDED_SNAPSHOT_BYTES
+
+
+def same_snapshot_as(reference: Path, data: Path = DATA_DIR) -> bool:
+    """Whether ``data`` holds the Europe snapshot ``reference`` was built from (by size, per its raw-manifest.tsv)."""
+    pbf = "osm/europe-latest.osm.pbf"
+    size, _, _ = read_manifest(reference / "raw-manifest.tsv")[pbf]
+    return (data / pbf).stat().st_size == size
 
 
 def connect_ro(path: Path, *, immutable: bool = False) -> sqlite3.Connection:
@@ -187,6 +199,24 @@ def _same(old: Sequence, new: Sequence, abs_tol: float) -> bool:
         elif a != b:
             return False
     return True
+
+
+# What tests/test_real_data.py ``_main_walk_reasons`` says of a relation the rules
+# would still keep: a departure no OSM edit explains.
+KEPT_BY_THE_RULES = "kept by the main-walk rules"
+
+
+def departures(reasons: Mapping[int, str]) -> tuple[dict[str, list[int]], list[int]]:
+    """DayHike ids that left the Catalog, grouped by reason, and those the rules still keep.
+
+    On a fresh snapshot hikes leave through OSM edits (a relation deleted,
+    retagged or cut below 1 km); only a departure the rules would keep is a
+    rebuild error.
+    """
+    by_reason: dict[str, list[int]] = {}
+    for dayhike_id, reason in sorted(reasons.items()):
+        by_reason.setdefault(reason, []).append(dayhike_id)
+    return dict(sorted(by_reason.items())), by_reason.get(KEPT_BY_THE_RULES, [])
 
 
 def raw_manifest(root: Path, relpaths: Iterable[str], *, hashed: Iterable[str] = ()) -> dict:
@@ -345,13 +375,18 @@ def top_matches(store, seed_id: int, weights: Mapping[str, float], limit: int = 
     ]
 
 
-def similarity_between(store, seed_id: int, other_id: int, weights: Mapping[str, float]) -> tuple[float, float, int]:
-    """(similarity, raw, rank among all candidates) of ``other_id`` for Seed ``seed_id``."""
+def similarity_between(
+    store, seed_id: int, other_id: int, weights: Mapping[str, float], among: np.ndarray | None = None
+) -> tuple[float, float, int]:
+    """(similarity, raw, rank among all candidates) of ``other_id`` for Seed ``seed_id``.
+
+    ``among``: a mask over the store's rows that limits the candidates ranked.
+    """
     from dayhike.similarity import score_rows
 
     seed_row, other_row = np.searchsorted(store.ids, [seed_id, other_id])
     rows = np.arange(len(store.ids))
-    rows = rows[rows != seed_row]
+    rows = rows[(rows != seed_row) & (True if among is None else among)]
     similarity, raw = score_rows(store, [seed_row], rows, weights)
     at = int(np.searchsorted(rows, other_row))
     better = (similarity > similarity[at]) | ((similarity == similarity[at]) & (raw > raw[at]))

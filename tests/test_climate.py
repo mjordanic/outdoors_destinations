@@ -13,7 +13,7 @@ from dayhike import (
     rank_dayhikes,
     sample_climate,
 )
-from dayhike.climate import CHELSA_ATTRIBUTION, chelsa_url, fetch_chelsa
+from dayhike.climate import CHELSA_ATTRIBUTION, chelsa_url, fetch_chelsa, regime
 from dayhike.dem import Bounds
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
@@ -975,6 +975,27 @@ def test_hike_mean_counts_only_vertices_every_raster_covers(tmp_path: Path) -> N
     assert hikes[1002].feature_vector.temperature_c is None
 
 
+def test_sample_climate_reads_each_raster_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from rasterio.io import DatasetReader
+
+    catalog_path = _catalog(tmp_path)
+    rasters = tmp_path / "rasters"
+    rasters.mkdir()
+    _write_climate_tifs(rasters, west=14.99, south=44.99, east=15.05, north=45.12)
+    reads: list[str] = []
+    real_read = DatasetReader.read
+
+    def counted(self, *args, **kwargs):
+        reads.append(Path(self.name).name)
+        return real_read(self, *args, **kwargs)
+
+    monkeypatch.setattr(DatasetReader, "read", counted)
+
+    assert sample_climate(catalog_path, rasters) > 0
+    assert sorted(reads) == sorted(path.name for path in rasters.glob("chelsa_*.tif"))
+    assert len(reads) == 36
+
+
 def test_resampling_clears_climate_of_hikes_no_longer_covered(tmp_path: Path) -> None:
     catalog_path = _catalog(tmp_path)
     wide = tmp_path / "wide"
@@ -1041,3 +1062,10 @@ def test_sample_climate_removes_similarity_facts(tmp_path: Path) -> None:
     )
     with pytest.raises(StaleSimilarity, match="build-similarity"):
         rank_dayhikes(Catalog.open(catalog_path), ["Ridge Walk"])
+
+
+def test_regime_is_june_to_august_temperature_and_radiation_and_all_year_rain() -> None:
+    # The Catalog's regime and a composed hike's (``TrailGraph``) both come from it.
+    months = [(float(m), 10.0 * m, 100.0 * m) for m in range(1, 13)]
+    assert regime(months) == pytest.approx((7.0, 65.0, 700.0))
+    assert regime(np.array(months)) == pytest.approx((7.0, 65.0, 700.0))

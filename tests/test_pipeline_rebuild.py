@@ -2,7 +2,7 @@
 
 Ingest tests/fixtures/catalog.osm, sample synthetic DEM, LandCover and climate
 rasters, then build-similarity, in two separate directories. The slow
-real-data checks (README "Clean rebuild") rely on this determinism: on the
+real-data checks (docs/technical.md "Clean rebuild") rely on this determinism: on the
 same snapshot and the same uv.lock a rebuilt Catalog must equal the old one.
 """
 

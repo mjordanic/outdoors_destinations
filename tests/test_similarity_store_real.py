@@ -35,11 +35,13 @@ CLIMATE_COLUMNS = tuple(
 )
 # Largest NaN share per fact column after a Europe-coverage rebuild; columns not
 # named: 0. The 2026-09-18 Catalog had: difficulty 0.660, southness 0.097, the
-# elevation columns 0.00033 (53 DayHikes off the DEM), surface 0.00016.
+# elevation columns 0.00033 (53 DayHikes off the DEM), surface 0.00016. The
+# 2026-10-31 rebuild: southness 0.135, as NetworkHikes are mostly in flat node-network
+# country (39 % of them flat, median relief 6 m; relations 6 %). A flat DayHike now
+# faces no way (SOLAR_ASPECT_FLAT), so southness is missing only off the DEM.
 NAN_BUDGETS = {
     "difficulty_rank": 0.67,
-    "southness": 0.10,
-    **{name: 0.001 for name in ("elevation_gain_m", "highest_m", "lowest_m", "climb_grade", "steepest_km_m")},
+    **{name: 0.001 for name in ("elevation_gain_m", "highest_m", "lowest_m", "southness", "climb_grade", "steepest_km_m")},
     **{name: 0.001 for name in ("paved_share", "gravel_share", "natural_share", "rock_share", "tarmac_approach_m")},
     **{name: 0.01 for name in (*LANDCOVER_SHARE_COLUMNS, "waterside_share", *CLIMATE_COLUMNS)},
 }

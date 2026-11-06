@@ -21,9 +21,12 @@ from dayhike.dem import (
     _elevation_stats,
     fabdem_archive_id,
     fabdem_tile_id,
-    fabdem_tile_url,
     fetch_dem,
     fetch_fabdem,
+    format_corner,
+    point_heights,
+    read_cells,
+    read_grid_cells,
     sample_elevations,
     sample_dem,
     tiles_covering,
@@ -39,6 +42,13 @@ def test_fabdem_tile_id_uses_southwest_corner() -> None:
     assert fabdem_tile_id(9.1, 5.2) == "N09E005"
 
 
+
+def test_format_corner_names_a_tile_by_its_southwest_corner_in_every_hemisphere() -> None:
+    # The FABDEM and WorldCover tile ids share this one spelling.
+    assert format_corner(45, 15) == "N45E015"
+    assert format_corner(-9, -72) == "S09W072"
+    assert format_corner(0, -1) == "N00W001"
+
 def test_fabdem_archive_groups_ten_degree_blocks() -> None:
     assert fabdem_archive_id("N45E015") == "N40E010-N50E020_FABDEM_V1-2"
     assert fabdem_archive_id("N46E009") == "N40E000-N50E010_FABDEM_V1-2"
@@ -46,7 +56,7 @@ def test_fabdem_archive_groups_ten_degree_blocks() -> None:
 
 
 def test_fabdem_tile_url_points_at_huggingface_one_degree_geotiff() -> None:
-    url = fabdem_tile_url("N45E015")
+    url = FABDEM.tile_url("N45E015")
     assert url.startswith("https://huggingface.co/datasets/pavelzaitsau/fabdem-v12/resolve/main/tiles/")
     assert url.endswith("N40E010-N50E020_FABDEM_V1-2/N45E015_FABDEM_V1-2.tif")
 
@@ -59,7 +69,6 @@ def test_copernicus_tile_url_points_at_the_aws_open_data_cog() -> None:
     assert COPERNICUS.tile_url("S09W072").endswith(
         "Copernicus_DSM_COG_10_S09_00_W072_00_DEM/Copernicus_DSM_COG_10_S09_00_W072_00_DEM.tif"
     )
-    assert FABDEM.tile_url("N45E015") == fabdem_tile_url("N45E015")
 
 
 def test_tiles_covering_default_prd_bounds_include_croatia_and_switzerland() -> None:
@@ -91,7 +100,7 @@ def test_fetch_fabdem_downloads_missing_tiles_and_skips_existing(tmp_path: Path)
     assert existing in paths
     fetched = [path for path in paths if path != existing]
     assert fetched == [dest / "N45E016_FABDEM_V1-2.tif"]
-    assert recorded == [fabdem_tile_url("N45E016")]
+    assert recorded == [FABDEM.tile_url("N45E016")]
     assert fetched[0].read_bytes() == b"tif-bytes"
 
 
@@ -113,7 +122,7 @@ def test_fetch_fabdem_raises_on_a_non_404_download_error(tmp_path: Path) -> None
     from urllib.error import URLError
 
     def broken_for_one(url: str, filename: str) -> None:
-        if url == fabdem_tile_url("N45E016"):
+        if url == FABDEM.tile_url("N45E016"):
             raise URLError("connection reset")
         Path(filename).write_bytes(b"tif-bytes")
 
@@ -201,6 +210,43 @@ def _write_constant_tif(
         dataset.write(data, 1)
 
 
+@pytest.mark.parametrize(
+    ("dtype", "nodata"), [("float32", -9999.0), ("float32", float("nan")), ("uint8", 0.0), ("int16", None)]
+)
+def test_read_cells_gives_what_rasterio_samples_point_by_point(tmp_path: Path, dtype: str, nodata) -> None:
+    import rasterio
+    from rasterio.transform import from_bounds
+
+    # Not a whole number of 16-cell blocks, with nodata cells, read at random points and at
+    # the grid's edges, inside and outside it.
+    rng = np.random.default_rng(7)
+    height, width = 70, 45
+    data = (rng.random((height, width)) * 200).astype(dtype)
+    if nodata is not None:
+        data[rng.random((height, width)) < 0.1] = nodata
+    path = tmp_path / "grid.tif"
+    with rasterio.open(
+        path, "w", driver="GTiff", height=height, width=width, count=1, dtype=dtype, crs="EPSG:4326",
+        transform=from_bounds(14.0, 46.0, 14.3, 46.5, width, height), nodata=nodata,
+        tiled=True, blockxsize=16, blockysize=16,
+    ) as dataset:  # fmt: skip
+        dataset.write(data, 1)
+    lon = np.concatenate([rng.uniform(13.9, 14.4, 2_000), [14.0, 14.3, 14.0, 14.3, 13.99, 14.31]])
+    lat = np.concatenate([rng.uniform(45.9, 46.6, 2_000), [46.0, 46.5, 46.5, 46.0, 46.2, 46.2]])
+
+    with rasterio.open(path) as dataset:
+        expected = np.array([value[0] for value in dataset.sample(zip(lon.tolist(), lat.tolist()))])
+        got = read_cells(dataset, lon, lat)
+
+    assert got.dtype == expected.dtype == np.dtype(dtype)
+    assert np.array_equal(got, expected, equal_nan=dtype == "float32")
+    assert len(set(got.tolist())) > 100
+    # A tile can hold no point on its grid: a point on its south edge falls one row past the last.
+    with rasterio.open(path) as dataset:
+        off = read_cells(dataset, np.array([13.95, 14.35]), np.array([46.2, 46.2]))
+    assert np.array_equal(off, np.full(2, dataset.nodata or 0, dtype=dtype), equal_nan=True)
+
+
 def test_sample_elevations_reads_covering_raster_and_skips_uncovered(
     tmp_path: Path,
 ) -> None:
@@ -214,6 +260,20 @@ def test_sample_elevations_reads_covering_raster_and_skips_uncovered(
 
     assert samples[0] == pytest.approx(1234.5, abs=0.01)
     assert samples[1] is None
+
+
+def test_point_heights_read_what_sample_elevations_reads_tile_by_tile(tmp_path: Path) -> None:
+    _write_constant_tif(tmp_path / "N45E015_FABDEM_V1-2.tif", west=14.99, south=44.99, east=16.01, north=46.01, z=1234.5)
+    _write_constant_tif(tmp_path / "N46E015_FABDEM_V1-2.tif", west=14.99, south=45.99, east=16.01, north=47.01, z=2000.0)
+    points = [(45.2, 15.1), (47.0, 11.0), (46.5, 15.5), (45.2, 15.1)]
+
+    heights = point_heights(tmp_path)
+
+    assert heights is not None
+    assert heights(points) == sample_elevations(tmp_path, points) == [1234.5, None, 2000.0, 1234.5]
+    (tmp_path / "empty").mkdir()
+    assert point_heights(tmp_path / "empty") is None
+    assert point_heights(tmp_path / "missing") is None
 
 
 def test_sample_elevations_reads_copernicus_tiles(tmp_path: Path) -> None:
@@ -252,7 +312,7 @@ def test_a_point_the_tiles_grid_misses_reads_its_edge_cell_not_sea_level(tmp_pat
     assert samples == [pytest.approx(1500.0), pytest.approx(1600.0), pytest.approx(1700.0)]
 
 
-def test_a_fabdem_point_outside_the_tiles_grid_stays_uncovered(tmp_path: Path) -> None:
+def test_a_fabdem_point_in_the_tiles_south_or_east_margin_reads_its_edge_cell(tmp_path: Path) -> None:
     import rasterio
     from rasterio.transform import from_origin
 
@@ -269,11 +329,16 @@ def test_a_fabdem_point_outside_the_tiles_grid_stays_uncovered(tmp_path: Path) -
         transform=from_origin(15 - cell / 2, 46 + cell / 2, cell, cell),
         nodata=-9999.0,
     ) as dataset:
-        dataset.write(np.full((3600, 3600), 1500.0, dtype="float32"), 1)
+        # Real FABDEM tiles carry GLO-30's half-cell offset, so their grid too
+        # stops half a cell short of the tile's east and south edges.
+        heights = np.full((3600, 3600), 1500.0, dtype="float32")
+        heights[:, -1] = 1600.0
+        heights[-1, :] = 1700.0
+        dataset.write(heights, 1)
+    points = [(45.5, 15.5), (45.5, 15.99995), (45.00003, 15.5)]
 
-    samples = sample_elevations(tmp_path, [(45.5, 15.5), (45.5, 15.99995), (45.00003, 15.5)])
-
-    assert samples == [pytest.approx(1500.0), None, None]
+    assert sample_elevations(tmp_path, points) == [pytest.approx(1500.0), pytest.approx(1600.0), pytest.approx(1700.0)]
+    assert point_heights(tmp_path)(points) == [pytest.approx(1500.0), pytest.approx(1600.0), pytest.approx(1700.0)]
 
 
 CELL = 1 / 3600  # a GLO-30 cell, in degrees
@@ -340,9 +405,10 @@ def test_copernicus_under_trees_reads_the_ground_below_the_canopy(tmp_path: Path
     # The hill and the dip stay; the tree tops go.
     assert np.abs(raw[forest] - ground[forest]).max() == pytest.approx(18.0, abs=0.01)
     assert np.abs(floor[forest] - ground[forest]).max() < 4.0
+    # The climb drops most single tree tops as DEM spikes (a run of up to 60 m), but not all of them.
     assert elevation_gain(lat[forest], lon[forest], raw[forest]) > elevation_gain(
         lat[forest], lon[forest], ground[forest]
-    ) + 100
+    )
     assert elevation_gain(lat[forest], lon[forest], floor[forest]) == pytest.approx(
         elevation_gain(lat[forest], lon[forest], ground[forest]), abs=5.0
     )
@@ -572,10 +638,38 @@ def test_sample_dem_removes_similarity_facts(tmp_path: Path) -> None:
 
 
 def test_catalog_gain_uses_the_similarity_gain_rule() -> None:
-    # Vertices 30 m apart due north: jitter under 10 m and a one-vertex DEM spike add nothing.
-    step = 30 / 111_195
+    # Vertices 70 m apart due north: jitter under 10 m and a one-vertex DEM spike add nothing.
+    step = 70 / 111_195
     elevations = [400.0, 405.0, 398.0, 460.0, 402.0, 404.0, 430.0]
     vertices = [(45 + i * step, 15.0, ele) for i, ele in enumerate(elevations)]
 
     assert _elevation_stats(vertices) == (398.0, 460.0, pytest.approx(30.0))
-    assert _elevation_stats([(45.0, 15.0, math.nan), *vertices[:2]]) == (400.0, 405.0, 0.0)
+    # Two vertices 5 m apart in height: the walk's end counts what it moved (ADR-0048).
+    assert _elevation_stats([(45.0, 15.0, math.nan), *vertices[:2]]) == (400.0, 405.0, 5.0)
+
+
+def test_read_grid_cells_reads_each_cell_across_ragged_edge_blocks(tmp_path: Path) -> None:
+    import rasterio
+    from rasterio.transform import from_bounds
+
+    # 3 x 3 blocks of 16 cells, the last row and column cut short, read in any order and
+    # with repeats; ``similarity.dem_heights`` clips its points onto the grid and reads them here.
+    height, width = 40, 37
+    data = np.arange(height * width, dtype="int16").reshape(height, width)
+    path = tmp_path / "grid.tif"
+    with rasterio.open(
+        path, "w", driver="GTiff", height=height, width=width, count=1, dtype="int16", crs="EPSG:4326",
+        transform=from_bounds(14.0, 46.0, 14.3, 46.5, width, height), tiled=True, blockxsize=16, blockysize=16,
+    ) as dataset:  # fmt: skip
+        dataset.write(data, 1)
+    rng = np.random.default_rng(5)
+    rows = np.concatenate([rng.integers(0, height, 300), [0, height - 1, height - 1, 0]])
+    cols = np.concatenate([rng.integers(0, width, 300), [0, width - 1, 0, width - 1]])
+
+    with rasterio.open(path) as dataset:
+        got = read_grid_cells(dataset, rows, cols)
+        empty = read_grid_cells(dataset, np.empty(0, dtype=int), np.empty(0, dtype=int))
+
+    assert got.dtype == np.dtype("int16")
+    assert np.array_equal(got, data[rows, cols])
+    assert empty.shape == (0,) and empty.dtype == np.dtype("int16")

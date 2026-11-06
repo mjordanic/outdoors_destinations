@@ -1,5 +1,5 @@
 ---
-status: accepted (supersedes ADR-0003 and ADR-0011; default weights, the shown score and the altitude tolerance amended by ADR-0016)
+status: accepted (supersedes ADR-0003 and ADR-0011; default weights, the shown score and the altitude tolerance amended by ADR-0016; a missing Difficulty grade by ADR-0043; ties no longer count half since ADR-0026, the rarity rank; no data against a Wish scores 0 since ADR-0052)
 ---
 
 # Similarity is a Hiker-weighted mean of calibrated Measures

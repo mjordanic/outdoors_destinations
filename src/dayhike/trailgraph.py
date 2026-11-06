@@ -1,9 +1,11 @@
-"""The TrailGraph: the marked hiking network as Junctions and Segments (ADR-0018).
+"""The TrailGraph: the marked hiking network and graded paths as Junctions and Segments (ADR-0018, ADR-0037).
 
 ``write_trailgraph`` runs in ``build_catalog`` on the ingest work file, just
 before it is deleted, and writes ``{catalog}.trailgraph.sqlite`` beside the
 Catalog (``trailgraph_path_for``). Its input is every member way of every
-``route=hiking`` relation ingest read, kept as a DayHike or not:
+``route=hiking`` or ``route=foot`` relation ingest read, kept as a DayHike or not,
+and every graded path (``highway=path`` with a ``sac_scale``) no such relation
+lists, with no relation id (ADR-0037):
 
 - Ways are split at every node two of them share (or one repeats). Two ways
   of the same layer that cross with no node there get one at the crossing.
@@ -39,7 +41,10 @@ import heapq
 import json
 import math
 import re
+import shutil
 import sqlite3
+import threading
+from collections import deque
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -55,15 +60,19 @@ from dayhike.catalog import (
     remove_similarity,
     trailgraph_path_for,
 )
+from dayhike.parallel import parallel_iter
 
 Progress = Callable[[str], None]
 
 SNAP_DETOUR_FACTOR = 3  # a tip joins only a node more than this x the tolerance away along the network
 LINK_DETOUR_M = 100.0  # ways passing this much farther apart along the network get a Link
 MAX_WALK_M = 100_000.0  # the longest ComposedHike
+WAY_BACK_SEARCH_M = 50_000.0  # the longest trail back searched; past it a walk is retraced (ADR-0035)
+GAP_CROSS_M = 3 * GAP_JOIN_M  # the longest trail a gap step walks where no gap Segment joins its ends (ADR-0049)
 MAX_WALK_STEPS = 50_000  # the most vertex steps a ComposedHike walks: 500 Segments of Slovenia's mean 72 vertices, and room
 TRAILHEAD_KINDS = ("parking", "restaurant_cafe")
 _SEGMENT_CHUNK = 5_000
+_IDS_PER_QUERY = 900  # below SQLite's oldest limit of 999 bound parameters
 _NEVER = -(2**31)  # level of a bridge or tunnel: never joined
 COORD_SCALE = 10_000_000  # OSM stores coordinates as 1e-7 degree integers
 
@@ -78,7 +87,7 @@ def _emit(progress: Progress | None, message: str) -> None:
 
 @dataclass
 class _Network:
-    """Every hiking member way as node indices, with what Segments keep of it."""
+    """Every hiking member way and graded path as node indices, with what Segments keep of it."""
 
     node_id: np.ndarray  # OSM node id per node index; crossings get negative ids
     lat: np.ndarray
@@ -142,13 +151,18 @@ def _load_network(conn: sqlite3.Connection) -> _Network:
     from dayhike.similarity import surface_class
 
     node_chunks = []
-    cursor = conn.execute("SELECT id, lat, lon, ifnull(ele, 'nan') FROM nodes ORDER BY id")
+    cursor = conn.execute(
+        "SELECT id, lat, lon, ifnull(ele, 'nan') FROM nodes "
+        "UNION ALL SELECT id, lat, lon, ifnull(ele, 'nan') FROM graded_nodes ORDER BY id"
+    )
     while rows := cursor.fetchmany(1_000_000):
         node_chunks.append(np.array(rows, dtype=float))
     nodes = np.concatenate(node_chunks) if node_chunks else np.empty((0, 4))
     node_id = nodes[:, 0].astype(np.int64)  # OSM ids are far below 2**53
     way_ids, refs, lengths, level, sac, surface = [], [], [], [], [], []
-    for way_id, node_ids_json, tags_json in conn.execute("SELECT id, node_ids, tags FROM ways ORDER BY id"):
+    for way_id, node_ids_json, tags_json in conn.execute(
+        "SELECT id, node_ids, tags FROM ways UNION ALL SELECT id, node_ids, tags FROM graded_ways ORDER BY id"
+    ):
         node_ids = json.loads(node_ids_json)
         tags = json.loads(tags_json)
         way_ids.append(way_id)
@@ -874,8 +888,9 @@ def sample_trailgraph(
     facts read these samples on each way back, so they are deleted, as
     after every sample step. Returns the number of vertices.
     """
+    from dayhike import dem
     from dayhike.climate import _climate_rasters
-    from dayhike.dem import COPERNICUS, dem_source_of, require_worldcover, sample_elevations
+    from dayhike.dem import COPERNICUS, dem_source_of, require_worldcover
     from dayhike.landcover import _raster_paths, sample_landcover_classes
     from dayhike.similarity import slope_southness
 
@@ -893,47 +908,58 @@ def sample_trailgraph(
     db = sqlite3.connect(path)
     sampled = 0
     cells: set[int] = set()
-    try:
-        ids = [row[0] for row in db.execute("SELECT id FROM segments ORDER BY id")]
-        for start in range(0, len(ids), _SEGMENT_CHUNK):
-            chunk = db.execute(
+
+    def read(ids: list[int]) -> list[tuple]:
+        return [
+            row
+            for start in range(0, len(ids), _IDS_PER_QUERY)
+            for row in db.execute(
                 "SELECT id, coords, ele, landcover, climate_cell, southness FROM segments "
-                "WHERE id BETWEEN ? AND ? ORDER BY id",
-                (ids[start], ids[min(start + _SEGMENT_CHUNK, len(ids)) - 1]),
-            ).fetchall()
-            coords = [decode_coords(row[1]) for row in chunk]
-            sizes = [len(c) for c in coords]
-            lat, lon = np.concatenate(coords).T
-            ele = np.concatenate([np.frombuffer(row[2], dtype="<f4") for row in chunk]).astype(float)
-            landcover = np.concatenate([_blob(row[3], "u1", len(c), 0) for row, c in zip(chunk, coords)])
-            climate = np.concatenate([_blob(row[4], "<i4", len(c), -1) for row, c in zip(chunk, coords)])
-            southness = np.concatenate([_blob(row[5], "<f4", len(c), np.nan) for row, c in zip(chunk, coords)])
-            points = list(zip(lat.tolist(), lon.tolist()))
-            if has_dem:
-                heights = sample_elevations(dem_dir, points, landcover_dir)
-                ele = np.array([e if h is None else h for e, h in zip(ele.tolist(), heights)], dtype=float)
-                southness = slope_southness(dem_dir, lat, lon)
-            if has_landcover:
-                classes = sample_landcover_classes(landcover_dir, points)
-                landcover = np.array([c or 0 for c in classes], dtype=np.uint8)
-            if grid is not None:
-                climate = _climate_cells(rasters, grid, lat, lon)
-                cells.update(climate[climate >= 0].tolist())
-            bounds = np.cumsum([0, *sizes])
-            db.executemany(
-                "UPDATE segments SET ele = ?, landcover = ?, climate_cell = ?, southness = ? WHERE id = ?",
-                [
-                    (
-                        ele[s:e].astype("<f4").tobytes(),
-                        landcover[s:e].astype("u1").tobytes(),
-                        climate[s:e].astype("<i4").tobytes(),
-                        southness[s:e].astype("<f4").tobytes(),
-                        row[0],
-                    )
-                    for row, s, e in zip(chunk, bounds[:-1], bounds[1:])
-                ],
+                f"WHERE id IN ({','.join('?' * len(ids[start : start + _IDS_PER_QUERY]))}) ORDER BY id",
+                ids[start : start + _IDS_PER_QUERY],
             )
-            sampled += len(lat)
+        ]
+
+    def sample(chunk: list[tuple]) -> tuple[list[tuple], list[int], int]:
+        # One chunk's Segment updates, its climate cells and vertex count, sampled in a worker.
+        coords = [decode_coords(row[1]) for row in chunk]
+        sizes = [len(c) for c in coords]
+        lat, lon = np.concatenate(coords).T
+        ele = np.concatenate([np.frombuffer(row[2], dtype="<f4") for row in chunk]).astype(float)
+        landcover = np.concatenate([_blob(row[3], "u1", len(c), 0) for row, c in zip(chunk, coords)])
+        climate = np.concatenate([_blob(row[4], "<i4", len(c), -1) for row, c in zip(chunk, coords)])
+        southness = np.concatenate([_blob(row[5], "<f4", len(c), np.nan) for row, c in zip(chunk, coords)])
+        points = list(zip(lat.tolist(), lon.tolist()))
+        if has_dem:
+            heights = dem.sample_elevations(dem_dir, points, landcover_dir)
+            ele = np.array([e if h is None else h for e, h in zip(ele.tolist(), heights)], dtype=float)
+            southness = slope_southness(dem_dir, lat, lon)
+        if has_landcover:
+            classes = sample_landcover_classes(landcover_dir, points)
+            landcover = np.array([c or 0 for c in classes], dtype=np.uint8)
+        if grid is not None:
+            climate = _climate_cells(rasters, lat, lon)
+        bounds = np.cumsum([0, *sizes])
+        updates = [
+            (
+                ele[s:e].astype("<f4").tobytes(),
+                landcover[s:e].astype("u1").tobytes(),
+                climate[s:e].astype("<i4").tobytes(),
+                southness[s:e].astype("<f4").tobytes(),
+                row[0],
+            )
+            for row, s, e in zip(chunk, bounds[:-1], bounds[1:])
+        ]
+        return updates, climate[climate >= 0].tolist(), len(lat)
+
+    try:
+        chunks = (read(ids) for ids in segment_chunks(db, _SEGMENT_CHUNK))
+        for updates, chunk_cells, vertices in parallel_iter(sample, chunks):
+            db.executemany(
+                "UPDATE segments SET ele = ?, landcover = ?, climate_cell = ?, southness = ? WHERE id = ?", updates
+            )
+            cells.update(chunk_cells)
+            sampled += vertices
             _emit(progress, f"sampled {sampled} vertices")
         if grid is not None:
             _write_climate_cells(db, rasters, grid, sorted(cells))
@@ -944,6 +970,23 @@ def sample_trailgraph(
         db.close()
     remove_similarity(catalog_path, progress)  # a way back reads these samples (ADR-0019)
     return sampled
+
+
+def segment_chunks(db: sqlite3.Connection, size: int) -> list[list[int]]:
+    """The TrailGraph's Segment ids in chunks of ``size``, tile by tile.
+
+    Ids follow OSM way order, which scatters a run of them over the whole
+    network; sorted by the 1-degree tile holding the centre of each
+    Segment's box (then by id), a chunk reads the few DEM, WorldCover and
+    climate tiles around it. Each chunk lists its ids in ascending order.
+    """
+    rows = db.execute("SELECT id, south, north, west, east FROM segment_boxes").fetchall()
+    if not rows:
+        return []
+    box = np.array(rows, dtype=float)
+    ids = box[:, 0].astype(np.int64)
+    order = np.lexsort((ids, np.floor((box[:, 3] + box[:, 4]) / 2), np.floor((box[:, 1] + box[:, 2]) / 2)))
+    return [sorted(ids[order[start : start + size]].tolist()) for start in range(0, len(order), size)]
 
 
 def _blob(value: bytes | None, dtype: str, size: int, missing: float) -> np.ndarray:
@@ -965,19 +1008,14 @@ def _climate_grid(rasters: Sequence[tuple[str, int, Path]]) -> tuple:
     return grids.pop()
 
 
-def _climate_cells(rasters, grid: tuple, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
+def _climate_cells(rasters, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
     """The climate grid cell of each point (row x width + col), -1 where a raster has no value."""
-    from rasterio import Affine
+    from dayhike.climate import _raster_cells
 
-    from dayhike.climate import _raster_values
-
-    transform, height, width = Affine(*grid[0]), grid[1], grid[2]
-    covered = np.ones(len(lat), dtype=bool)
-    for _, _, raster in rasters:
-        covered &= ~np.isnan(_raster_values(raster, lat, lon))
-    cols, rows = ~transform @ (lon, lat)
-    cell = np.floor(rows).astype(np.int64) * width + np.floor(cols).astype(np.int64)
-    return np.where(covered, cell, -1)
+    grids: dict[tuple, tuple[np.ndarray, np.ndarray]] = {}
+    covered = np.logical_and.reduce([~np.isnan(_raster_cells(raster, lat, lon, grids)[0]) for _, _, raster in rasters])
+    ((cells, point_cell),) = grids.values()  # the rasters share one grid (``_climate_grid``)
+    return np.where(covered[point_cell], cells[point_cell], -1)
 
 
 def _write_climate_cells(db: sqlite3.Connection, rasters, grid: tuple, cells: list[int]) -> None:
@@ -1069,7 +1107,8 @@ _WATER_STEP_M = 5.0  # well under a WorldCover overview cell (40 m by about 28 m
 
 
 _JUNCTION_KEY = r"\d+|c-?\d+_-?\d+"
-_STEP = re.compile(rf"(?:-?\d+|g|l)\.(?:{_JUNCTION_KEY})")
+# A way id fits SQLite's 64-bit integer; ASCII digits only.
+_STEP = re.compile(rf"(?:-?[0-9]{{1,18}}|g|l)\.(?:{_JUNCTION_KEY})", re.ASCII)
 
 
 @dataclass(frozen=True)
@@ -1081,8 +1120,8 @@ class Route:
     ``c{lat}_{lon}`` in 1e-7 degrees for a crossing ingest added. Each step
     walks one OSM way from the node reached so far, ``{way}.{node}``: the way
     id (negative against the way's node order) and the key of the node where
-    the walk leaves that way; ``g.{node}`` crosses a gap Segment and
-    ``l.{node}`` a Link. Steps name no Junction or Segment, so a rebuild that
+    the walk leaves that way; ``g.{node}`` crosses a gap (see ``TrailGraph._cross``)
+    and ``l.{node}`` a Link. Steps name no Junction or Segment, so a rebuild that
     adds or drops Junctions along the way still finds the same walk. As text
     (``str``, ``parse``) it is ``start:step,step,...``.
     """
@@ -1094,7 +1133,7 @@ class Route:
     def parse(cls, text: str) -> Route:
         start, _, steps = text.partition(":")
         route = cls(start, tuple(steps.split(",")) if steps else ())
-        if not re.fullmatch(_JUNCTION_KEY, start) or not all(_STEP.fullmatch(step) for step in route.steps):
+        if not re.fullmatch(_JUNCTION_KEY, start, re.ASCII) or not all(_STEP.fullmatch(step) for step in route.steps):
             raise RouteError(f"not a composed hike: {text[:80]!r}")
         return route
 
@@ -1150,7 +1189,9 @@ def way_back(lat: np.ndarray, lon: np.ndarray, graph: TrailGraph | None) -> WayB
     Ends at most ``GAP_JOIN_M`` apart take the straight step. Otherwise the
     shortest walk over the TrailGraph's trails and gaps (never a Link), when
     both ends are TrailGraph vertices and it is shorter than retracing the
-    walk; else the walk retraced. Without a TrailGraph there is no trail.
+    walk and than ``WAY_BACK_SEARCH_M``; else the walk retraced. Without a
+    TrailGraph there is no trail. The bound keeps the search's work that of a
+    day hike's for a walk of any length (ADR-0035).
     """
     if len(lat) < 2:
         return WayBack("none", 0.0)
@@ -1160,7 +1201,8 @@ def way_back(lat: np.ndarray, lon: np.ndarray, graph: TrailGraph | None) -> WayB
     if gap <= GAP_JOIN_M:
         return WayBack("step", gap)
     retrace = float(_haversine(lat[:-1], lon[:-1], lat[1:], lon[1:]).sum())
-    trail = None if graph is None else graph.trail_back(lat, lon, retrace - 1.0)
+    limit = min(retrace - 1.0, WAY_BACK_SEARCH_M)
+    trail = None if graph is None or gap >= limit else graph.trail_back(lat, lon, limit)
     if trail is None:
         return WayBack("retrace", retrace)
     return WayBack("trail", float(_haversine(trail.lat[:-1], trail.lon[:-1], trail.lat[1:], trail.lon[1:]).sum()), trail)
@@ -1238,15 +1280,26 @@ _SEGMENT_COLUMNS = (
 )
 
 
+# The arrays of ``TrailGraph._network``, as ``write_network`` saves them.
+NETWORK_ARRAYS = ("nodes", "start_of", "neighbour", "step_m", "segment_of")
+
+
 class TrailGraph:
-    """A TrailGraph file (or its serving copy), opened read-only."""
+    """A TrailGraph file (or its serving copy), opened read-only.
+
+    The network the way back is searched on is read from ``{stem}.network/``
+    beside the file, memory-mapped, when ``write_network`` wrote it there (the
+    serving export does), else built from the Segments on first use.
+    """
 
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
         if not self.path.is_file():
             raise FileNotFoundError(self.path)
+        self.network_dir = self.path.with_name(f"{self.path.stem}.network")
         self._uri = f"file:{self.path}?mode=ro"
         self._graph: tuple | None = None  # what ``trail_back`` searches, read once
+        self._graph_lock = threading.Lock()  # one build at a time; the others wait for it
 
     def _db(self) -> sqlite3.Connection:
         return sqlite3.connect(self._uri, uri=True)
@@ -1278,7 +1331,7 @@ class TrailGraph:
                     walked = self._cross(db, rows, "gap" if way == "g" else "link", here, end, where)
                 else:
                     walked = self._follow(db, rows, ways, keys, int(way), here, end, where)
-                total += len(walked)
+                total += sum(abs(last - first) for _, first, last in walked)
                 if total > MAX_WALK_STEPS:
                     raise RouteError(
                         f"{where}: a composed hike may walk at most {MAX_WALK_STEPS:,} vertex steps; draw a shorter one"
@@ -1320,18 +1373,41 @@ class TrailGraph:
     def _cross(
         self, db: sqlite3.Connection, rows: dict[int, tuple], kind: str, here: str, end: str, where: str
     ) -> list[tuple[int, int, int]]:
+        """The steps over a Link or a gap from Junction ``here`` to ``end``. A
+        Link step walks only its Link. A gap step walks the gap Segment, else
+        the shortest other Segment (never a Link) between the two, else the
+        shortest walk over trails and gaps, either at most ``GAP_CROSS_M``: a built
+        hike jumps from one of its ways to the next, and the TrailGraph may
+        join those ways only along another way (ADR-0049)."""
         ids = dict(db.execute("SELECT key, id FROM junctions WHERE key IN (?, ?)", (here, end)))
-        found = []
         if here in ids and end in ids:
+            pair = (ids[here], ids[end], ids[end], ids[here])
             found = self._load(
-                db, rows, "WHERE kind = ? AND ((a = ? AND b = ?) OR (a = ? AND b = ?)) ORDER BY id LIMIT 1",
-                (kind, ids[here], ids[end], ids[end], ids[here]),
+                db, rows,
+                "WHERE kind = 'link' AND ((a = ? AND b = ?) OR (a = ? AND b = ?)) ORDER BY id LIMIT 1"
+                if kind == "link" else
+                "WHERE kind != 'link' AND ((a = ? AND b = ?) OR (a = ? AND b = ?)) "
+                "AND (kind = 'gap' OR length_m <= ?) ORDER BY kind != 'gap', length_m, id LIMIT 1",
+                pair if kind == "link" else (*pair, GAP_CROSS_M),
             )  # fmt: skip
-        if not found:
-            what = "the gap" if kind == "gap" else "the connect-here link"
-            raise RouteError(f"{where}: {what} from {_describe(here)} to {_describe(end)} is no longer on the marked network")
-        segment, a = found[0][0], found[0][2]
-        return [(segment, 0, 1) if a == ids[here] else (segment, 1, 0)]
+            if found:
+                last = len(found[0][7]) // 8 - 1
+                return [(found[0][0], 0, last) if found[0][2] == ids[here] else (found[0][0], last, 0)]
+            if kind == "gap":
+                nodes = self._network()[0]
+                at = np.minimum(np.searchsorted(nodes, [ids[here], ids[end]]), len(nodes) - 1)
+                path = None
+                if (nodes[at] == [ids[here], ids[end]]).all():  # both on trails or gaps, not only Links
+                    path = self._shortest([(int(at[0]), 0.0)], [(int(at[1]), 0.0)], GAP_CROSS_M)
+                if path is not None:
+                    return [tuple(piece) for piece in self._along(db, rows, path[3], path[4])]
+        if kind == "link":
+            raise RouteError(
+                f"{where}: the connect-here link from {_describe(here)} to {_describe(end)} is no longer on the marked network"
+            )
+        raise RouteError(
+            f"{where}: this hike jumps a gap from {_describe(here)} to {_describe(end)} that the trail network does not join"
+        )
 
     def _follow(
         self,
@@ -1346,34 +1422,45 @@ class TrailGraph:
     ) -> list[tuple[int, int, int]]:
         """The steps (segment, vertex, next vertex) along OSM way ``|way|`` from
         ``here`` to ``end``, in its node order when ``way`` is positive; ``ways``
-        keeps each way walked so far and ``keys`` each Segment's vertex keys."""
+        keeps each way walked so far and ``keys`` each Segment's vertex keys.
+
+        A way that passes a node twice leaves it more than one way: the walk is
+        the one of fewest steps (at least one) that reaches ``end``, never passing a
+        node twice, the walk a Route step names (``route_of``, ``_steps``)."""
         if way not in ways:
             ways[way] = self._way(db, rows, keys, way, where)
         leaving, on_way = ways[way]
         for node in (here, end):
             if node not in on_way:
                 raise RouteError(f"{where}: {_describe(node)} is no longer on OSM way {abs(way)}")
-        steps, node = [], here
-        while node != end or not steps:
-            if node not in leaving or len(steps) > len(leaving):
-                raise RouteError(
-                    f"{where}: OSM way {abs(way)} no longer leads from {_describe(here)} to {_describe(end)}"
-                )
-            segment, first, last, node = leaving[node]
-            steps.append((segment, first, last))
-        return steps
+        came: dict[str, tuple[str, tuple[int, int, int]]] = {}  # node: (node before it, step to it)
+        seen, queue = ({here} if here != end else set()), deque([here])
+        while queue and end not in came:
+            node = queue.popleft()
+            for segment, first, last, after in leaving.get(node, ()):
+                if after not in seen:
+                    seen.add(after)
+                    came[after] = (node, (segment, first, last))
+                    queue.append(after)
+        if end not in came:
+            raise RouteError(f"{where}: OSM way {abs(way)} no longer leads from {_describe(here)} to {_describe(end)}")
+        steps, node = [], end
+        while not steps or node != here:
+            node, step = came[node]
+            steps.append(step)
+        return steps[::-1]
 
     def _way(
         self, db: sqlite3.Connection, rows: dict[int, tuple], keys: dict[int, list[str]], way: int, where: str
     ) -> tuple[dict, set]:
-        """The step leaving each node of OSM way ``|way|`` (segment, vertex, next
+        """The steps leaving each node of OSM way ``|way|`` (segment, vertex, next
         vertex, next node), walked in its node order when ``way`` is positive, and its nodes."""
         found = self._load(
             db, rows, "JOIN segment_ways w ON w.segment_id = s.id WHERE w.way_id = ? ORDER BY s.id", (abs(way),)
         )
         if not found:
             raise RouteError(f"{where}: OSM way {abs(way)} is no longer on the marked network")
-        leaving: dict[str, tuple[int, int, int, str]] = {}
+        leaving: dict[str, list[tuple[int, int, int, str]]] = {}
         on_way: set[str] = set()
         for row in found:
             if row[0] not in keys:
@@ -1385,9 +1472,9 @@ class TrailGraph:
                     for k in range(at, at + count):
                         on_way.update((vertex[k], vertex[k + 1]))
                         if (signed > 0) == (way > 0):
-                            leaving.setdefault(vertex[k], (row[0], k, k + 1, vertex[k + 1]))
+                            leaving.setdefault(vertex[k], []).append((row[0], k, k + 1, vertex[k + 1]))
                         else:
-                            leaving.setdefault(vertex[k + 1], (row[0], k + 1, k, vertex[k]))
+                            leaving.setdefault(vertex[k + 1], []).append((row[0], k + 1, k, vertex[k]))
                 at += count
         return leaving, on_way
 
@@ -1451,7 +1538,7 @@ class TrailGraph:
             start = self._locate(db, rows, lat[0], lon[0])
             if end is None or start is None:
                 return None
-            nodes, start_of, neighbour, weight, segment_of = self._network()
+            nodes = self._network()[0]
 
             def ends(segment: int, vertex: int, along: np.ndarray) -> list[tuple[int, float, int]]:
                 """(node, metres to it, its vertex) for both ends of the Segment."""
@@ -1459,51 +1546,93 @@ class TrailGraph:
                 return [(int(a), along[vertex], 0), (int(b), along[-1] - along[vertex], len(along) - 1)]
 
             sources, targets = ends(*end), ends(*start)
-            best, via = limit_m, None
-            if end[0] == start[0] and abs(end[2][end[1]] - start[2][start[1]]) < best:
-                best, via = abs(end[2][end[1]] - start[2][start[1]]), ()
-            # Dijkstra from both ends of the end's Segment, each with its metres to it.
-            reach: dict[int, list[tuple[int, float]]] = {}
-            for t, (node, to_target, _) in enumerate(targets):
-                reach.setdefault(node, []).append((t, to_target))
-            settled: dict[int, tuple[int, int, int]] = {}  # node: (Junction before it, source, entry to it)
-            heap = [(to_source, node, -1, s, -1) for s, (node, to_source, _) in enumerate(sources)]
-            heapq.heapify(heap)
-            while heap:
-                metres, node, before, s, k = heapq.heappop(heap)
-                if metres >= best:
-                    break
-                if node in settled:
-                    continue
-                settled[node] = (before, s, k)
-                for t, to_target in reach.get(node, ()):
-                    if metres + to_target < best:
-                        best, via = metres + to_target, (node, t)
-                first, after = int(start_of[node]), int(start_of[node + 1])
-                for k, other, step_m in zip(
-                    range(first, after), neighbour[first:after].tolist(), weight[first:after].tolist()
-                ):
-                    if other not in settled:
-                        heapq.heappush(heap, (metres + step_m, other, node, s, k))
-            if via is None:
-                return None
-            if not via:
-                return self._stitch(None, rows, [[end[0], end[1], start[1]]])
-            reached, t = via
-            chain = [reached]
-            while settled[chain[-1]][0] != -1:
-                chain.append(settled[chain[-1]][0])
-            s = settled[reached][1]
-            chain.reverse()
-            middle = [int(segment_of[settled[y][2]]) for y in chain[1:]]
-            if middle:
-                self._load(db, rows, f"WHERE id IN ({','.join('?' * len(middle))})", tuple(middle))
-        pieces = [[end[0], end[1], sources[s][2]]]
-        for x, segment in zip(chain, middle):
-            last = len(rows[segment][7]) // 8 - 1
-            pieces.append([segment, 0, last] if np.searchsorted(nodes, rows[segment][2]) == x else [segment, last, 0])
+            best = limit_m
+            same = end[0] == start[0] and abs(end[2][end[1]] - start[2][start[1]]) < best
+            if same:
+                best = abs(end[2][end[1]] - start[2][start[1]])
+            found = self._shortest([(n, m) for n, m, _ in sources], [(n, m) for n, m, _ in targets], best)
+            if found is None:
+                return self._stitch(None, rows, [[end[0], end[1], start[1]]]) if same else None
+            _, s, t, chain, middle = found
+            pieces = [[end[0], end[1], sources[s][2]], *self._along(db, rows, chain, middle)]
         pieces.append([start[0], targets[t][2], start[1]])
         return self._stitch(None, rows, [piece for piece in pieces if piece[1] != piece[2]])
+
+    def vertex_near(self, lat: float, lon: float, within_m: float) -> tuple[float, float] | None:
+        """The vertex of a Segment (not a Link) nearest this point, at most
+        ``within_m`` away, as stored; None without one. A served hike line
+        keeps 1e-5 degree, so its ends lie up to a metre off the vertices
+        they were."""
+        margin = within_m / 111_000 / max(math.cos(math.radians(lat)), 0.01)
+        best, at = within_m, None
+        with self._db() as db:
+            for (coords,) in db.execute(
+                "SELECT s.coords FROM segment_boxes b JOIN segments s ON s.id = b.id WHERE s.kind != 'link' "
+                "AND b.south <= ? AND b.north >= ? AND b.west <= ? AND b.east >= ?",
+                (lat + margin, lat - margin, lon + margin, lon - margin),
+            ):
+                points = decode_coords(coords)
+                metres = _haversine(points[:, 0], points[:, 1], np.full(len(points), lat), np.full(len(points), lon))
+                i = int(metres.argmin())
+                if metres[i] <= best:
+                    best, at = float(metres[i]), (float(points[i, 0]), float(points[i, 1]))
+        return at
+
+    def _shortest(
+        self, sources: list[tuple[int, float]], targets: list[tuple[int, float]], limit_m: float
+    ) -> tuple[float, int, int, list[int], list[int]] | None:
+        """The shortest walk over the network (``_network``) from one of the
+        ``sources`` to one of the ``targets``, each a Junction index and the
+        metres to it or on from it, when shorter than ``limit_m``: its metres,
+        the source and target it joins, the Junction indices it passes and the
+        Segment from each to the next; else None. The search stops at the best
+        way found, so its work grows with the ground within that distance."""
+        _, start_of, neighbour, weight, segment_of = self._network()
+        best, via = limit_m, None
+        reach: dict[int, list[tuple[int, float]]] = {}
+        for t, (node, to_target) in enumerate(targets):
+            reach.setdefault(node, []).append((t, to_target))
+        settled: dict[int, tuple[int, int, int]] = {}  # node: (Junction before it, source, entry to it)
+        heap = [(to_source, node, -1, s, -1) for s, (node, to_source) in enumerate(sources)]
+        heapq.heapify(heap)
+        while heap:
+            metres, node, before, s, k = heapq.heappop(heap)
+            if metres >= best:
+                break
+            if node in settled:
+                continue
+            settled[node] = (before, s, k)
+            for t, to_target in reach.get(node, ()):
+                if metres + to_target < best:
+                    best, via = metres + to_target, (node, t)
+            first, after = int(start_of[node]), int(start_of[node + 1])
+            for k, other, step_m in zip(
+                range(first, after), neighbour[first:after].tolist(), weight[first:after].tolist()
+            ):
+                if other not in settled:
+                    heapq.heappush(heap, (metres + step_m, other, node, s, k))
+        if via is None:
+            return None
+        reached, t = via
+        chain = [reached]
+        while settled[chain[-1]][0] != -1:
+            chain.append(settled[chain[-1]][0])
+        chain.reverse()
+        return best, settled[reached][1], t, chain, [int(segment_of[settled[y][2]]) for y in chain[1:]]
+
+    def _along(
+        self, db: sqlite3.Connection, rows: dict[int, tuple], chain: list[int], segments: list[int]
+    ) -> list[list[int]]:
+        """The pieces walking each Segment whole, from Junction index ``chain[i]`` to the next."""
+        if not segments:
+            return []
+        self._load(db, rows, f"WHERE id IN ({','.join('?' * len(segments))})", tuple(segments))
+        nodes = self._network()[0]
+        pieces = []
+        for x, segment in zip(chain, segments):
+            last = len(rows[segment][7]) // 8 - 1
+            pieces.append([segment, 0, last] if np.searchsorted(nodes, rows[segment][2]) == x else [segment, last, 0])
+        return pieces
 
     def _locate(
         self, db: sqlite3.Connection, rows: dict[int, tuple], lat: float, lon: float
@@ -1531,26 +1660,46 @@ class TrailGraph:
         the first entry per Junction, then per entry the neighbour, metres
         and that Segment's id."""
         if self._graph is None:
-            with self._db() as db:
-                found = db.execute("SELECT id, a, b, length_m FROM segments WHERE kind != 'link'").fetchall()
-            ids = np.array([row[0] for row in found], dtype=np.int64)
-            ends = np.array([row[1:3] for row in found], dtype=np.int64).reshape(-1, 2)
-            metres = np.array([row[3] for row in found], dtype=float)
-            nodes = np.unique(ends)
-            low, high = np.sort(np.searchsorted(nodes, ends), axis=1).T
-            shortest = np.argsort(metres, kind="stable")
-            shortest = shortest[low[shortest] != high[shortest]]
-            _, first = np.unique(low[shortest] * len(nodes) + high[shortest], return_index=True)
-            keep = shortest[first]
-            weight = np.maximum(metres[keep], 1e-3)
-            here = np.concatenate([low[keep], high[keep]])
-            order = np.argsort(here, kind="stable")
-            start_of = np.concatenate([[0], np.cumsum(np.bincount(here, minlength=len(nodes)))]).astype(np.int64)
-            neighbour = np.concatenate([high[keep], low[keep]])[order].astype(np.int32)
-            step_m = np.concatenate([weight, weight])[order].astype(np.float32)
-            segment_of = np.concatenate([ids[keep], ids[keep]])[order]
-            self._graph = (nodes, start_of, neighbour, step_m, segment_of)
+            with self._graph_lock:  # a request arriving during a build waits for it, not a build of its own
+                if self._graph is None and self.network_dir.is_dir():
+                    self._graph = tuple(np.load(self.network_dir / f"{name}.npy", mmap_mode="r") for name in NETWORK_ARRAYS)
+                elif self._graph is None:
+                    self._graph = self._build_network()
         return self._graph
+
+    def write_network(self) -> None:
+        """Save the network into ``network_dir``, for a server to memory-map rather than
+        read about half the file to build it on its first way back."""
+        arrays = self._build_network()
+        shutil.rmtree(self.network_dir, ignore_errors=True)
+        self.network_dir.mkdir()
+        for name, array in zip(NETWORK_ARRAYS, arrays):
+            np.save(self.network_dir / f"{name}.npy", array)
+
+    def _build_network(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        chunks = []
+        with self._db() as db:
+            cursor = db.execute("SELECT id, a, b, length_m FROM segments WHERE kind != 'link'")
+            while rows := cursor.fetchmany(100_000):  # arrays chunk by chunk, not a million tuples at once
+                chunks.append(np.array(rows, dtype=float))
+        found = np.concatenate(chunks) if chunks else np.empty((0, 4))
+        ids = found[:, 0].astype(np.int64)  # ids and OSM node ids are far below 2**53
+        ends = found[:, 1:3].astype(np.int64)
+        metres = found[:, 3].copy()
+        nodes = np.unique(ends)
+        low, high = np.sort(np.searchsorted(nodes, ends), axis=1).T
+        shortest = np.argsort(metres, kind="stable")
+        shortest = shortest[low[shortest] != high[shortest]]
+        _, first = np.unique(low[shortest] * len(nodes) + high[shortest], return_index=True)
+        keep = shortest[first]
+        weight = np.maximum(metres[keep], 1e-3)
+        here = np.concatenate([low[keep], high[keep]])
+        order = np.argsort(here, kind="stable")
+        start_of = np.concatenate([[0], np.cumsum(np.bincount(here, minlength=len(nodes)))]).astype(np.int64)
+        neighbour = np.concatenate([high[keep], low[keep]])[order].astype(np.int32)
+        step_m = np.concatenate([weight, weight])[order].astype(np.float32)
+        segment_of = np.concatenate([ids[keep], ids[keep]])[order]
+        return (nodes, start_of, neighbour, step_m, segment_of)
 
     def amenities_near(self, lat: np.ndarray, lon: np.ndarray, radius_m: float) -> list[tuple]:
         """(id, kind, lat, lon, name, ele tag) of the amenity points in the walk's
@@ -1577,6 +1726,7 @@ class TrailGraph:
             FACT_COLUMNS,
             LANDCOVER_SHARE_COLUMNS,
             PEAKS_AROUND_M,
+            SOLAR_ASPECT_FLAT,
             TRAILHEAD_M,
             WATERSIDE_STEP_M,
             AmenityPoints,
@@ -1614,17 +1764,20 @@ class TrailGraph:
             facts.update(zip(LANDCOVER_SHARE_COLUMNS, shares))
         cells = walk.climate_cell[walk.climate_cell >= 0]
         if cells.size:
+            from dayhike.climate import regime
+
             months = self._climate(cells).mean(axis=0)  # 12 x 3
             for month in range(12):
                 for index, name in enumerate(CLIMATE_NAMES):
                     facts[f"{name}_{month + 1:02d}"] = float(months[month, index])
-            facts["temperature_c"] = float(months[5:8, 0].mean())
-            facts["precipitation_mm"] = float(months[:, 1].mean())
-            facts["solar_radiation"] = float(months[5:8, 2].mean())
-        southness = walk.southness[solar_aspect_points(len(lat))]
+            facts.update(zip(CLIMATE_NAMES, map(float, regime(months))))
+        chosen = solar_aspect_points(len(lat))
+        southness = walk.southness[chosen]
         southness = southness[~np.isnan(southness)]
         if southness.size:
             facts["southness"] = float(southness.mean())
+        elif np.isfinite(walk.ele[chosen]).any():  # flat: faces no way (``solar_aspect_southness``)
+            facts["southness"] = SOLAR_ASPECT_FLAT
         if len(lat) >= 2:
             beside = self._beside_water(_even_points(lat, lon, WATERSIDE_STEP_M))
             beside = beside[~np.isnan(beside)]

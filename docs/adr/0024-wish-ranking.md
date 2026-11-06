@@ -1,5 +1,5 @@
 ---
-status: accepted (amends ADR-0016, ADR-0020)
+status: accepted (amends ADR-0016, ADR-0020; no data against a Wish scores 0 since ADR-0052)
 ---
 
 # A Ranking from a Wish

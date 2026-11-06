@@ -1,16 +1,18 @@
+import threading
+import time
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from dayhike import build_catalog, build_similarity, serving, web
-from dayhike.serving import ServingData, export_places, export_serving
+from dayhike.serving import ServingData, export_landmarks, export_places, export_serving
 from dayhike.similarity import CORE_MEASURES, FACILITIES_FLAG_COLUMNS, MEASURE_NAMES
 from dayhike.web import RESULTS, create_app
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
 RIDGE_WALK_ID = 1001
-SITE_PAGES = ("/", "/index.html", "/about.html", "/support.html", "/credits.html", "/privacy.html", "/terms.html")
+SITE_PAGES = ("/", "/index.html", "/about.html", "/credits.html", "/privacy.html", "/terms.html")
 
 
 @pytest.fixture(scope="module")
@@ -111,6 +113,36 @@ def test_measures_say_how_a_wish_value_is_typed_in(client: TestClient) -> None:
     assert client.post("/api/rank", json={"wish": defaults, "return_to_start": False}).status_code == 200
 
 
+def test_lengths_are_wished_in_km_up_to_multi_day_tours(client: TestClient) -> None:
+    # The API takes metres, the Measure's fact; the page shows km (ADR-0035).
+    measures = {m["name"]: m for m in client.get("/api/measures").json()["measures"]}
+    km = {"unit": "km", "per": 1000}
+
+    assert measures["length"]["wish"] == {
+        "kind": "number", "unit": "m", "min": 1000, "max": 2_000_000, "step": 500, "default": 10_000, "display": km,
+    }  # fmt: skip
+    assert measures["dry_stretch"]["wish"] == {
+        "kind": "number", "unit": "m", "min": 0, "max": 2_000_000, "step": 500, "default": 5_000, "display": km,
+    }  # fmt: skip
+    assert measures["elevation_gain"]["wish"]["display"] is None
+    assert client.post("/api/rank", json={"wish": {"length": 66_000}}).status_code == 200
+    # Climb goes as far: the longest tours climb over 70 km.
+    assert measures["elevation_gain"]["wish"]["max"] == 100_000
+    assert client.post("/api/rank", json={"wish": {"elevation_gain": 73_000}}).status_code == 200
+    assert client.post("/api/rank", json={"wish": {"elevation_gain": 100_001}}).status_code == 422
+
+
+def test_shares_are_wished_in_percent_as_the_facts_show_them(client: TestClient) -> None:
+    # The API takes the share, the Measure's fact; the page shows % like the facts table.
+    measures = {m["name"]: m for m in client.get("/api/measures").json()["measures"]}
+
+    for name in ("waterside", "climb_grade"):
+        assert measures[name]["wish"]["unit"] == "share"
+        assert measures[name]["wish"]["display"] == {"unit": "%", "per": 0.01}
+    assert measures["solar_radiation"]["wish"]["unit"] == "kJ/m²/day"
+    assert "kJ/m²/day" in measures["solar_radiation"]["description"]
+
+
 ELEVATION_MEASURES = ("elevation_gain", "highest", "lowest", "profile", "southness", "climb_grade", "steepest_km")
 CLIMATE_MEASURES = ("temperature", "precipitation", "solar_radiation")
 LANDCOVER_MEASURES = ("landcover", "waterside")
@@ -134,6 +166,7 @@ def test_an_export_sampled_from_copernicus_names_it_and_not_fabdem(tmp_path: Pat
     from test_dem import _write_constant_tif, _write_grassland
 
     from dayhike import sample_dem
+    from dayhike.trailgraph import sample_trailgraph
 
     path = tmp_path / "catalog.sqlite"
     build_catalog(FIXTURE, path)
@@ -142,7 +175,10 @@ def test_an_export_sampled_from_copernicus_names_it_and_not_fabdem(tmp_path: Pat
     _write_constant_tif(
         dem / "Copernicus_DSM_COG_10_N45_00_E015_00_DEM.tif", west=14.99, south=44.99, east=16.01, north=46.01, z=900.0
     )
-    sample_dem(path, dem, landcover_dir=_write_grassland(tmp_path))
+    landcover = _write_grassland(tmp_path)
+    sample_dem(path, dem, landcover_dir=landcover)
+    # A flat tile still gives SolarAspect (a flat walk faces no way), so the TrailGraph is sampled too.
+    sample_trailgraph(path, dem_dir=dem, landcover_dir=landcover, climate_dir=tmp_path / "no-climate")
     build_similarity(path, dem)
     smoothed = []
     drawn = serving.drawn_profile
@@ -170,6 +206,35 @@ def test_an_export_sampled_from_copernicus_names_it_and_not_fabdem(tmp_path: Pat
     assert 'href="https://doi.org/10.5270/ESA-c5d3d65"' in credits
 
 
+@pytest.mark.parametrize(
+    ("name", "zone", "example"),
+    [
+        ("elevation_gain", "Any climb of 100 m or less counts as the same", "like 166 m and 167 m"),
+        ("peaks_around", "No peak and 1 peak count as the same", "like 12 and 13 peaks"),
+        ("climb_grade", "Any grade of 3 % or less counts as the same", "like 12 % and 12.1 %"),
+        ("steepest_km", "Any change of 50 m or less counts as the same", "like 180 m and 182 m"),
+        ("waterside", "Any share under 15 % counts as dry", "like 50 % and 55 %"),
+    ],
+)
+def test_a_measure_whose_same_zone_many_hikes_share_says_it_tells_little(
+    client: TestClient, name: str, zone: str, example: str
+) -> None:
+    # ADR-0050: the "?" of the Measure says where it counts values the same, and what a close match is.
+    descriptions = {m["name"]: m["description"] for m in client.get("/api/measures").json()["measures"]}
+
+    assert zone in descriptions[name]
+    assert "it says little" in descriptions[name]
+    assert f"two hikes that match closely on a less common" in descriptions[name] and example in descriptions[name]
+
+
+@pytest.mark.parametrize("name", ["length", "precipitation", "dry_stretch", "water_count"])
+def test_a_measure_whose_same_zone_few_hikes_share_says_nothing_more(client: TestClient, name: str) -> None:
+    # Almost no hike is under these floors, and Water sources' "3 or more" is not a weak match.
+    descriptions = {m["name"]: m["description"] for m in client.get("/api/measures").json()["measures"]}
+
+    assert "it says little" not in descriptions[name]
+
+
 def test_every_osm_flag_says_two_hikes_without_it_are_not_compared(client: TestClient) -> None:
     descriptions = {m["name"]: m["description"] for m in client.get("/api/measures").json()["measures"]}
 
@@ -188,11 +253,12 @@ def test_the_score_explanation_says_what_a_score_means_and_how_it_is_made(client
     # The rarity rank (ADR-0026): the share of random pairs less alike, a rare match counting for more.
     assert "Share of random hike pairs less alike" in help_["measure"]
     assert "0.9 means only 1 pair in 10" in help_["measure"]
-    assert "about 0.41" in help_["overall"] and "0.72 beats 99" in help_["overall"]  # under the basic set (ADR-0031)
-    assert "0.16 on Lake or sea" in text and "84 %" in text  # two dry hikes: identical, but it tells little
+    assert "about 0.43" in help_["overall"] and "0.75 beats 99" in help_["overall"]  # under the basic set (ADR-0031)
+    # Two dry hikes: identical, but it tells little; as the rebuild 4 Calibration scores them (0.208).
+    assert "0.21 on Lake or sea" in text and "79 %" in text and "never near water 0.21" in text
     assert "not compared" in text and "0.95" in text  # a shared absence; both passing a hut
     assert "What does 0.1 mean" in " ".join(section["title"] for section in help_["sections"])
-    assert "Kattegat" in text and "0.10" in text
+    assert "Kattegat" in text and "0.13" in text
     assert "count half" not in text and "score 1.0" not in text  # the rules ADR-0026 replaced
     for source in ("OpenStreetMap", "FABDEM", "WorldCover", "CHELSA"):
         assert source in text
@@ -209,6 +275,13 @@ def test_search_and_detail(client: TestClient) -> None:
     assert client.get("/api/hikes/999").status_code == 404
 
 
+def test_a_hike_s_way_back_for_its_gpx_says_how_it_gets_back(client: TestClient) -> None:
+    back = client.get(f"/api/hikes/{RIDGE_WALK_ID}/way-back").json()
+
+    assert back == {**client.get(f"/api/hikes/{RIDGE_WALK_ID}").json()["way_back"], "line": None, "ele": None}
+    assert client.get("/api/hikes/999/way-back").status_code == 404
+
+
 def test_hikes_in_a_map_box(client: TestClient) -> None:
     box = {"south": 45.05, "west": 14.99, "north": 45.06, "east": 15.01}
 
@@ -216,7 +289,7 @@ def test_hikes_in_a_map_box(client: TestClient) -> None:
 
     assert [hike["id"] for hike in body["results"]] == [RIDGE_WALK_ID]
     assert body["too_many"] is False
-    assert set(body["results"][0]) == {"id", "name", "walk_m", "line"}
+    assert set(body["results"][0]) == {"id", "name", "walk_m", "multi_day", "line"}
 
 
 def test_hikes_in_a_map_box_holding_too_many_lists_none(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -388,6 +461,62 @@ def test_pair_refuses_bad_queries(client: TestClient, body: dict, status: int) -
     assert client.post("/api/pair", json=body).status_code == status
 
 
+def test_search_for_a_digit_that_is_not_ascii_finds_nothing(client: TestClient) -> None:
+    response = client.get("/api/search", params={"q": "\u1369"})  # ETHIOPIC DIGIT ONE: isdigit, but no int
+
+    assert response.status_code == 200 and response.json()["results"] == []
+
+
+def test_a_body_over_the_cap_or_of_unstated_length_is_refused_unread(client: TestClient) -> None:
+    big = '{"seed": 1001, "excluded": ["' + "x" * web.MAX_BODY_BYTES + '"]}'
+    over = client.post("/api/rank", content=big, headers={"content-type": "application/json"})
+    chunked = client.post(
+        "/api/rank", content=iter([b'{"seed": 1001}']), headers={"content-type": "application/json"}
+    )
+
+    assert over.status_code == 413
+    assert chunked.status_code == 411
+    assert client.post("/api/rank", json={"seed": RIDGE_WALK_ID}).status_code == 200
+
+
+def test_weights_and_excluded_hold_at_most_one_entry_per_measure(client: TestClient) -> None:
+    every = {name: 50 for name in MEASURE_NAMES}
+    more = {**every, "extra": 50}
+
+    assert client.post("/api/rank", json={"seed": RIDGE_WALK_ID, "weights": every}).status_code == 200
+    assert client.post("/api/rank", json={"seed": RIDGE_WALK_ID, "weights": more}).status_code == 422
+    excluded = [*MEASURE_NAMES, "length"]
+    assert client.post("/api/rank", json={"seed": RIDGE_WALK_ID, "excluded": excluded}).status_code == 422
+
+
+def test_unknown_weight_names_are_refused_before_ranking_and_quoted_short(client: TestClient, monkeypatch) -> None:
+    def no_ranking(*args, **kwargs):
+        raise AssertionError("ranked")
+
+    monkeypatch.setattr(ServingData, "rank", no_ranking)
+    monkeypatch.setattr(ServingData, "pair", no_ranking)
+    weights = {f"{'n' * 1_000}{i}": 50 for i in range(5)}
+
+    for path, seed in (("/api/rank", {"seed": RIDGE_WALK_ID}), ("/api/pair", {"a": RIDGE_WALK_ID, "b": 1003})):
+        response = client.post(path, json={**seed, "weights": weights})
+        assert response.status_code == 422
+        assert "unknown Measure" in response.text and "and 2 more" in response.text
+        assert len(response.text) < 1_000
+    excluded = client.post("/api/rank", json={"seed": RIDGE_WALK_ID, "excluded": ["x" * 1_000]})
+    assert excluded.status_code == 400 and len(excluded.text) < 200
+
+
+@pytest.mark.parametrize(
+    "wish",
+    [{"length": 1e308}, {"length": 500}, {"elevation_gain": -1}, {"southness": 1.5}, {"temperature": -21}],
+)
+def test_rank_refuses_a_wish_value_outside_its_range(client: TestClient, wish: dict) -> None:
+    response = client.post("/api/rank", json={"wish": wish})
+
+    assert response.status_code == 422
+    assert " to " in response.json()["detail"][0]["msg"]
+
+
 def test_info_gives_the_trailhead_box_for_the_swapped_coordinates_warning(client: TestClient) -> None:
     south, west, north, east = client.get("/api/info").json()["coverage"]
 
@@ -400,7 +529,7 @@ def test_info_gives_the_trailhead_box_for_the_swapped_coordinates_warning(client
     [
         ({"seed": RIDGE_WALK_ID, "weights": {"length": 101}}, 400),
         ({"seed": RIDGE_WALK_ID, "weights": {"length": 0}}, 400),
-        ({"seed": RIDGE_WALK_ID, "weights": {"nonsense": 50}}, 400),
+        ({"seed": RIDGE_WALK_ID, "weights": {"nonsense": 50}}, 422),
         ({"seed": RIDGE_WALK_ID, "excluded": ["nonsense"]}, 400),
         ({"seed": RIDGE_WALK_ID, "month": 13}, 422),
         ({"seed": 999}, 404),
@@ -425,6 +554,139 @@ def test_drive_filter_keeps_only_reachable_hikes_with_their_hours(
     assert body["reachable"] == 3  # the Seed's Trailhead counts; 1003 is unreachable
     assert sorted(r["id"] for r in body["results"]) == [1002, 1007]
     assert all(r["drive_hours"] == 1.0 for r in body["results"])
+
+
+def test_a_distance_limit_keeps_hikes_within_it_in_a_straight_line_without_a_drive_service(
+    data: ServingData,
+) -> None:
+    client = TestClient(create_app(data))  # no drive-time service: the distance needs none
+    # From 1002's Trailhead (45.2,15.1): 1003 is 13.6 km off, 1007 about 55 km, the Seed 26 km.
+    body = client.post(
+        "/api/rank", json={"seed": RIDGE_WALK_ID, "origin": {"lat": 45.2, "lon": 15.1}, "max_km": 20, "group_km": 0.1}
+    ).json()
+
+    assert body["max_km"] == 20 and body["max_hours"] is None
+    assert body["reachable"] == 2
+    assert [(r["id"], r["distance_km"], r["drive_hours"]) for r in body["results"]] == [
+        (1002, 0.0, None), (1003, 13.6, None)]  # fmt: skip
+
+
+def test_a_distance_limit_and_a_drive_limit_together_keep_hikes_within_both(
+    client: TestClient, matrix: Matrix
+) -> None:
+    # 1003 is within 20 km but unreachable by car; 1007 is reachable but 55 km off.
+    body = client.post(
+        "/api/rank",
+        json={"seed": RIDGE_WALK_ID, "origin": {"lat": 45.2, "lon": 15.1}, "max_hours": 2, "max_km": 20},
+    ).json()
+
+    assert [(r["id"], r["drive_hours"], r["distance_km"]) for r in body["results"]] == [(1002, 1.0, 0.0)]
+    assert body["reachable"] == 1
+
+
+def test_rank_says_how_near_hikes_are_grouped_by_default_and_as_asked(client: TestClient) -> None:
+    def rank(**query) -> dict:
+        return client.post("/api/rank", json={"seed": RIDGE_WALK_ID, **query}).json()
+
+    place = {"lat": 45.2, "lon": 15.1}
+    assert rank()["group_km"] == 10
+    assert rank(origin=place, max_km=50)["group_km"] == 2.5
+    assert rank(origin=place, max_hours=2)["group_km"] == 5
+    assert rank(origin=place, max_hours=2, max_km=50)["group_km"] == 2.5
+    assert rank(origin=place, max_km=5)["group_km"] == 0.5
+    asked = rank(group_km=20)
+    assert asked["group_km"] == 20
+    assert [(r["id"], [v["id"] for v in r["versions"]]) for r in asked["results"]] == [(1002, [1003]), (1007, [])]
+    assert len(rank(group_km=0.1)["results"]) == 3
+
+
+def test_a_row_counts_the_good_matches_starting_in_its_area_that_are_not_listed(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Like 1002, 1003 and 1007 score 0.5 and the Ridge Walk 0; within 50 km of 1003 start 1007 (41 km)
+    # and the Ridge Walk (37 km). With no versions, both are left out of 1003's row.
+    monkeypatch.setattr(serving, "VERSIONS", 1)
+
+    body = client.post("/api/rank", json={"seed": 1002, "group_km": 50}).json()
+
+    assert [(r["id"], r["versions"], r["more_here"]) for r in body["results"]] == [(1003, [], 1)]  # the Ridge Walk scores 0.5 lower
+    assert body["other_areas"] == 0
+
+
+def test_rank_counts_the_hikes_starting_in_other_areas_than_the_rows_shown(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(web, "POOL", 1)
+
+    body = client.post("/api/rank", json={"seed": 1002, "group_km": 0.1}).json()
+
+    assert [(r["id"], r["more_here"]) for r in body["results"]] == [(1003, 0)]
+    assert body["other_areas"] == 2  # 1007 and the Ridge Walk, of the 3 hikes ranked
+
+
+def test_info_gives_the_rule_of_the_default_grouping_and_the_limits(client: TestClient) -> None:
+    info = client.get("/api/info").json()
+
+    assert info["grouping"] == {"km": 10, "share": 0.05, "min_km": 0.5, "kmh": 50}
+    assert (info["max_km"], info["max_rows"], info["results"]) == (web.MAX_KM, web.MAX_ROWS, RESULTS)
+    # The page draws RESULTS rows of the POOL a Ranking answers with, as the server draws loop starts.
+    assert info["draw"] == {"pool": web.POOL, "t": serving.DRAW_T} == {"pool": 30, "t": 0.005}
+
+
+def test_rank_answers_with_a_pool_of_rows_for_the_page_to_draw_from(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    query = {"seed": RIDGE_WALK_ID, "group_km": 0.1}
+    monkeypatch.setattr(web, "RESULTS", 1)
+    assert len(client.post("/api/rank", json=query).json()["results"]) == 3  # every area, up to POOL
+
+    monkeypatch.setattr(web, "POOL", 2)
+    body = client.post("/api/rank", json={**query, "draw": 4_000_000_000}).json()
+
+    assert [(r["id"], r["in_area"]) for r in body["results"]] == [(1002, 1), (1003, 1)]
+    assert body["other_areas"] == 1 and body["draw"] == 4_000_000_000
+    assert client.post("/api/rank", json=query).json()["draw"] is None  # Strict order
+
+
+@pytest.mark.parametrize("draw", [-1, 2**32, 1.5])
+def test_rank_refuses_a_draw_number_that_is_not_32_bits(client: TestClient, draw) -> None:
+    assert client.post("/api/rank", json={"seed": RIDGE_WALK_ID, "draw": draw}).status_code == 422
+
+
+def test_the_next_rows_follow_the_rows_already_shown(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(web, "POOL", 1)
+    query = {"seed": RIDGE_WALK_ID, "group_km": 20}
+
+    first = client.post("/api/rank", json=query).json()["results"]
+    after = [{"lat": row["trailhead"][0], "lon": row["trailhead"][1]} for row in first]
+    following = client.post("/api/rank", json={**query, "after": after}).json()
+
+    assert [r["id"] for r in first] == [1002]
+    assert [r["id"] for r in following["results"]] == [1007]
+    assert following["after"] == 1
+    assert client.post("/api/rank", json={**query, "after": after * web.MAX_ROWS}).status_code == 422
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"origin": {"lat": 45, "lon": 15}, "max_km": 0},
+        {"origin": {"lat": 45, "lon": 15}, "max_km": 201},
+        {"group_km": 0},  # a row per area needs an area: 0.1 km at least, so the next rows leave out those shown
+        {"group_km": 51},
+        {"after": [{"lat": 91, "lon": 15}]},
+    ],
+)
+def test_rank_refuses_limits_out_of_range(client: TestClient, body: dict) -> None:
+    assert client.post("/api/rank", json={"seed": RIDGE_WALK_ID, **body}).status_code == 422
+
+
+@pytest.mark.parametrize("body", [{"max_km": 20}, {"max_hours": 1}, {"origin": {"lat": 45, "lon": 15}}])
+def test_rank_refuses_a_starting_place_without_a_limit_or_a_limit_without_one(client: TestClient, body: dict) -> None:
+    response = client.post("/api/rank", json={"seed": RIDGE_WALK_ID, **body})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "give origin with max_hours, max_km or both, or none of them"
 
 
 def test_a_stalled_drive_service_gives_503_and_frees_the_ranking(
@@ -570,11 +832,82 @@ def test_every_site_page_has_the_home_link_and_the_footer_navigation(client: Tes
         page = client.get(path)
         assert page.status_code == 200, path
         assert page.headers["content-type"].startswith("text/html"), path
-        assert '<a class="home" href="/">GoFindMeAHike</a>' in page.text, path
+        assert '<a class="home" href="/">HikesAlike</a>' in page.text, path
         for link in (
-            'href="about.html"', 'href="support.html"', 'href="credits.html"', 'href="privacy.html"', 'href="terms.html"'
+            'href="about.html"', 'href="credits.html"', 'href="privacy.html"', 'href="terms.html"'
         ):
             assert link in page.text, (path, link)
+
+
+def test_every_site_page_carries_the_hikesalike_name_icons_and_social_preview(client: TestClient) -> None:
+    for path in SITE_PAGES:
+        text = client.get(path).text
+        title = text[text.index("<title>") + 7 : text.index("</title>")]
+        assert title == "HikesAlike" or title.endswith(" · HikesAlike"), (path, title)
+        assert "GoFindMeAHike" not in text, path
+        for tag in (
+            '<link rel="icon" href="mark.svg" type="image/svg+xml">',
+            '<link rel="apple-touch-icon" href="apple-touch-icon.png">',
+            '<meta property="og:site_name" content="HikesAlike">',
+            '<meta property="og:image" content="social-preview.png">',
+            '<meta property="og:image:width" content="1200">',
+            '<meta property="og:image:height" content="630">',
+            '<meta name="twitter:card" content="summary_large_image">',
+            '<meta name="twitter:image" content="social-preview.png">',
+        ):
+            assert tag in text, (path, tag)
+        assert f'<meta property="og:title" content="{title}">' in text, path
+
+
+def png_size(png: bytes) -> tuple[int, int]:
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    return int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")
+
+
+def test_the_touch_icon_and_the_social_preview_are_pngs_of_their_sizes(client: TestClient) -> None:
+    for path, size in (("/apple-touch-icon.png", (180, 180)), ("/social-preview.png", (1200, 630))):
+        response = client.get(path)
+        assert response.status_code == 200, path
+        assert response.headers["content-type"] == "image/png", path
+        assert png_size(response.content) == size, path
+
+
+def test_the_mark_is_the_square_hikesalike_tile(client: TestClient) -> None:
+    mark = client.get("/mark.svg").text
+
+    assert 'aria-label="HikesAlike mark"' in mark
+    assert "<title>HikesAlike mark</title>" in mark
+    _, _, width, height = mark.split('viewBox="')[1].split('"')[0].split()
+    assert width == height
+
+
+def test_the_about_page_and_the_header_count_the_hikes_of_this_export(data: ServingData) -> None:
+    client = TestClient(create_app(data))
+    count = f"{data.meta['dayhikes']:,}"
+
+    assert f"the closest matches among {count} hikes across Europe" in client.get("/about.html").text
+    assert f'<span id="count">{count}</span>' in client.get("/").text
+    assert "160,000" not in client.get("/about.html").text + client.get("/").text
+    assert b"160" not in client.get("/wordmark.svg").content.split(b"<path")[0]  # the art no longer says a count
+
+
+def test_info_gives_where_most_hikes_are_and_what_a_typical_pair_scores(client: TestClient) -> None:
+    info = client.get("/api/info").json()
+    south, west, north, east = info["core"]
+    box = info["coverage"]
+
+    assert box[0] <= south <= north <= box[2] and box[1] <= west <= east <= box[3]
+    assert info["typical_pair"] == serving.TYPICAL_PAIR == 0.43
+
+
+def test_the_about_page_shows_the_wordmark_and_the_tagline(client: TestClient) -> None:
+    about = client.get("/about.html").text
+
+    assert '<img class="wordmark" src="wordmark.svg"' in about
+    assert 'alt="HikesAlike: Hikes like the ones you love."' in about
+    assert client.get("/wordmark.svg").status_code == 200
+    assert '<p class="tagline">Hikes like the ones you love.</p>' in about
+    assert ">Hike catalog</a>" in about and "DayHike catalog" not in about
 
 
 def test_the_about_page_says_who_runs_the_site_and_where_its_code_is(client: TestClient) -> None:
@@ -591,7 +924,10 @@ def test_the_about_page_says_plainly_why_a_hiker_would_use_the_site(client: Test
     about = client.get("/about.html").text
     why = about[about.index("<h3>Why use it</h3>") : about.index("<h3>Who runs it</h3>")]
 
-    for point in ("a hike you liked", "weather", "Advanced search", "how much each one matters", "no account", "MIT"):
+    for point in (
+        "a hike you liked", "weather", "Advanced search", "how much each one matters", "no account", "MIT",
+        "multi-day tours",
+    ):  # fmt: skip
         assert point in why, point
     assert 'href="credits.html"' in why
     assert "Europe" in why and "thin" in why  # coverage, stated as it is
@@ -614,7 +950,7 @@ def test_no_served_static_file_names_the_owner(data: ServingData) -> None:
         if path.is_file() and path.suffix in (".html", ".js", ".css", ".svg")
     ]
     assert paths
-    served = TestClient(create_app(data, goatcounter="gofindmeahike", kofi="gofindmeahike"))
+    served = TestClient(create_app(data, goatcounter="gofindmeahike"))
     for path in paths:
         response = served.get(path)
         assert response.status_code == 200, path
@@ -624,18 +960,19 @@ def test_no_served_static_file_names_the_owner(data: ServingData) -> None:
             assert personal not in text, (path, personal)
 
 
-def test_the_support_page_links_no_tip_jar_until_a_ko_fi_handle_is_set(data: ServingData) -> None:
-    unset = TestClient(create_app(data)).get("/support.html").text
-    assert "ko-fi.com" not in unset
-    assert "not set up yet" in unset
-    assert "only cover hosting" in unset
-    assert "The link opens Ko-fi" not in unset
+def test_the_site_has_no_support_page_and_no_page_asks_for_tips_or_donations(data: ServingData) -> None:
+    client = TestClient(create_app(data, goatcounter="gofindmeahike"))
+    assert client.get("/support.html").status_code == 404
+    for path in SITE_PAGES:
+        page = client.get(path).text.lower()
+        for word in ("ko-fi", "kofi", "donat", "support.html", "leave a tip", "tips cover"):
+            assert word not in page, (path, word)
+    assert 'href="support.html"' not in client.get("/").text
 
-    support = TestClient(create_app(data, kofi="gofindmeahike")).get("/support.html").text
-    assert '<a href="https://ko-fi.com/gofindmeahike">' in support
-    assert support.count("ko-fi.com") == 1  # a plain link: no widget script
-    assert "not set up yet" not in support
-    assert "The link opens Ko-fi, which takes the tip" in support
+
+def test_a_ko_fi_handle_is_no_longer_a_setting(data: ServingData) -> None:
+    with pytest.raises(TypeError):
+        create_app(data, kofi="gofindmeahike")  # type: ignore[call-arg]
 
 
 def test_the_credits_page_credits_every_source_with_the_fabdem_dataset(client: TestClient) -> None:
@@ -677,16 +1014,15 @@ def test_the_privacy_page_says_who_runs_the_site_what_is_kept_who_gets_it_and_wh
     assert "no cookies" in privacy and "no consent banner" in privacy
 
 
-def test_the_privacy_page_names_goatcounter_and_ko_fi_only_once_they_are_set(data: ServingData) -> None:
+def test_the_privacy_page_names_goatcounter_only_once_it_is_set(data: ServingData) -> None:
     unset = TestClient(create_app(data)).get("/privacy.html").text
     assert "GoatCounter" not in unset
     assert "Ko-fi" not in unset
 
-    privacy = TestClient(create_app(data, goatcounter="gofindmeahike", kofi="gofindmeahike")).get("/privacy.html").text
+    privacy = TestClient(create_app(data, goatcounter="gofindmeahike")).get("/privacy.html").text
     assert "GoatCounter" in privacy
     assert "#toggle-goatcounter" in privacy  # the one thing its script may store, and only when asked
-    assert "Ko-fi" in privacy
-    assert "after you click" in privacy
+    assert "Ko-fi" not in privacy
 
 
 def test_the_terms_page_warns_hikers_and_restricts_no_reuse_beyond_the_data_licences(client: TestClient) -> None:
@@ -701,7 +1037,7 @@ def test_the_terms_page_warns_hikers_and_restricts_no_reuse_beyond_the_data_lice
 
 
 def test_no_response_sets_a_cookie(data: ServingData) -> None:
-    client = TestClient(create_app(data, goatcounter="gofindmeahike", kofi="gofindmeahike"))
+    client = TestClient(create_app(data, goatcounter="gofindmeahike"))
     for path in (*SITE_PAGES, "/app.js", "/api/info", "/api/measures"):
         assert "set-cookie" not in client.get(path).headers, path
 
@@ -725,8 +1061,8 @@ def test_every_page_counts_with_the_self_hosted_goatcounter_script_once_a_code_i
     assert client.get("/vendor/goatcounter/LICENSE").status_code == 200
 
 
-@pytest.mark.parametrize("setting", [{"goatcounter": 'x" onload="alert(1)'}, {"goatcounter": ""}, {"kofi": "a/b"}])
-def test_a_goatcounter_code_or_ko_fi_handle_that_is_not_a_plain_name_is_refused(
+@pytest.mark.parametrize("setting", [{"goatcounter": 'x" onload="alert(1)'}, {"goatcounter": ""}, {"goatcounter": "a/b"}])
+def test_a_goatcounter_code_that_is_not_a_plain_name_is_refused(
     data: ServingData, setting: dict
 ) -> None:
     with pytest.raises(ValueError):
@@ -767,7 +1103,7 @@ def test_place_search_answers_from_the_export_and_is_credited(tmp_path: Path, ma
     path = tmp_path / "catalog.sqlite"
     build_catalog(FIXTURE, path)
     build_similarity(path, tmp_path / "dem")
-    cities = Path(__file__).parent / "fixtures" / "cities1000.txt"
+    cities = Path(__file__).parent / "fixtures" / "geonames.txt"
     placed = TestClient(create_app(ServingData(export_serving(path, tmp_path / "web", geonames_path=cities)), lambda h: matrix))
 
     info = placed.get("/api/info").json()
@@ -795,8 +1131,39 @@ def test_adding_places_to_an_export_changes_the_etag(tmp_path: Path) -> None:
         return TestClient(create_app(ServingData(out))).get("/api/info").headers["etag"]
 
     before = etag()
-    export_places(Path(__file__).parent / "fixtures" / "cities1000.txt", out)
+    export_places(Path(__file__).parent / "fixtures" / "geonames.txt", out)
     assert etag() != before
+
+
+def test_landmark_search_answers_the_hikes_near_a_named_point(client: TestClient) -> None:
+    assert client.get("/api/info").json()["landmark_search"] is True
+    [peak] = client.get("/api/landmarks", params={"q": "ridge peak"}).json()["results"]
+
+    assert (peak["name"], peak["kind"], peak["hike_count"]) == ("Ridge Peak", "peak", 1)
+    assert [(hike["id"], hike["name"], hike["off_m"]) for hike in peak["hikes"]] == [(1001, "Ridge Walk", 0)]
+    assert len(client.get("/api/landmarks", params={"q": "ridge", "limit": 1}).json()["results"]) == 1
+    assert client.get("/api/landmarks", params={"q": "ridge", "limit": 11}).status_code == 422
+    assert client.get("/api/landmarks", params={"q": "x" * 101}).status_code == 422
+    assert "public" in client.get("/api/landmarks", params={"q": "ridge"}).headers["cache-control"]
+
+
+def test_an_export_from_before_landmarks_searches_hike_names_only(tmp_path: Path) -> None:
+    path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, path)
+    build_similarity(path, tmp_path / "dem")
+    out = export_serving(path, tmp_path / "web")
+    (out / "landmarks.sqlite").unlink()
+
+    def app() -> TestClient:
+        return TestClient(create_app(ServingData(out)))
+
+    older = app()
+    assert older.get("/api/info").json()["landmark_search"] is False
+    assert older.get("/api/landmarks", params={"q": "ridge"}).status_code == 404
+    assert older.get("/api/search", params={"q": "ridge"}).json()["results"][0]["name"] == "Ridge Walk"
+    before = older.get("/api/info").headers["etag"]
+    export_landmarks(out)
+    assert app().get("/api/info").headers["etag"] != before
 
 
 def test_an_export_without_places_says_so(client: TestClient) -> None:
@@ -807,7 +1174,8 @@ def test_an_export_without_places_says_so(client: TestClient) -> None:
     assert client.get("/api/place", params={"q": "zag"}).status_code == 404
     privacy = client.get("/privacy.html").text
     assert "sends the name and your IP address to the OpenStreetMap Foundation's" in privacy
-    assert "looked up with Nominatim" in privacy and "the place search" not in privacy
+    assert "looked up with Nominatim" not in privacy and "the place search" not in privacy
+    assert "The coordinates sent with the search are not in the request logs." in privacy
 
 
 SHELL = "https://gofindmeahike.example"  # a loading shell on a static host, calling the API from its own origin
@@ -847,3 +1215,123 @@ def test_the_rate_limiter_forgets_an_idle_client_within_a_window() -> None:
     now[0] = 121.0
     assert limiter.allow("9.9.9.9")
     assert len(limiter) == 1
+
+
+def test_a_client_with_a_ranking_running_waits_its_turn_behind_the_others() -> None:
+    queue = web.RankingQueue()
+    order: list[str] = []
+
+    def rank(key: str) -> None:
+        assert queue.enter(key, "", 5.0) == "run"
+        order.append(key)
+        queue.leave()
+
+    assert queue.enter("busy", "", 5.0) == "run"
+    assert queue.enter("busy", "", 5.0) == "own"  # one queued or running per client: its next is refused at once
+    other = threading.Thread(target=rank, args=("other",))
+    other.start()
+    while ("other", "") not in queue._queue:
+        time.sleep(0.001)
+    queue.leave()
+    again = threading.Thread(target=rank, args=("busy",))  # its next Ranking, sent the moment the first ended
+    again.start()
+    other.join(5)
+    again.join(5)
+
+    assert order == ["other", "busy"]
+
+
+def test_a_ranking_that_waits_too_long_gives_up_its_place_in_line() -> None:
+    queue = web.RankingQueue()
+    assert queue.enter("running", "", 5.0) == "run"
+
+    assert queue.enter("late", "", 0.01) == "timeout"
+    queue.leave()
+    assert queue.enter("late", "", 0.01) == "run"
+
+
+def test_tabs_behind_one_address_each_take_their_own_turn_up_to_a_few() -> None:
+    # Visitors behind one address (a home, an office, a test machine) do not wait on each other's
+    # searches, but one address cannot fill the line (ADR-0054).
+    queue = web.RankingQueue(per_address=3)
+    assert queue.enter("1.2.3.4", "tab-a", 5.0) == "run"
+    waiting = [threading.Thread(target=queue.enter, args=("1.2.3.4", tab, 5.0)) for tab in ("tab-b", "tab-c")]
+    for thread in waiting:
+        thread.start()
+    while len(queue._queue) < 2:
+        time.sleep(0.001)
+
+    assert queue.enter("1.2.3.4", "tab-a", 5.0) == "own"  # its own previous search still runs
+    assert queue.enter("1.2.3.4", "tab-d", 5.0) == "address"  # three from this address already
+    assert queue.enter("5.6.7.8", "tab-a", 0.01) == "timeout"  # another address queues as before
+    for _ in range(3):
+        queue.leave()
+        time.sleep(0.01)
+    for thread in waiting:
+        thread.join(5)
+
+
+def test_a_ranking_names_its_tab_so_another_tab_at_one_address_is_not_refused(data: ServingData) -> None:
+    entered: list[tuple] = []
+    queue = web.RankingQueue
+
+    class Spy(queue):
+        def enter(self, address: str, tab: str, timeout: float) -> str:
+            entered.append((address, tab))
+            return super().enter(address, tab, timeout)
+
+    web.RankingQueue = Spy
+    try:
+        client = TestClient(create_app(data))
+        for tab in ("tab-1", "bad tab!", ""):
+            assert client.post("/api/rank", json={"seed": 1001}, headers={web.TAB_HEADER: tab}).status_code == 200
+    finally:
+        web.RankingQueue = queue
+    assert [tab for _, tab in entered] == ["tab-1", "", ""]  # a name that is no plain name counts as none
+
+
+def test_a_ranking_that_waited_its_turn_too_long_says_others_are_ahead_and_when_to_retry(data: ServingData) -> None:
+    queue = web.RankingQueue
+
+    class Busy(queue):
+        def enter(self, address: str, tab: str, timeout: float) -> str:
+            return "timeout"  # other visitors' Rankings took RANK_WAIT_S
+
+    web.RankingQueue = Busy
+    try:
+        response = TestClient(create_app(data)).post("/api/rank", json={"seed": 1001})
+    finally:
+        web.RankingQueue = queue
+    assert response.status_code == 503 and response.headers["retry-after"] == "5"
+    assert response.json()["detail"] == (
+        "The server is busy with other visitors' searches: yours waited 25 s for its turn. Try again in a moment."
+    )
+
+
+def test_a_ranking_says_whether_its_multi_day_routes_come_after_its_day_hikes(client: TestClient) -> None:
+    body = client.post("/api/rank", json={"seed": 1002}).json()
+
+    assert body["day_first"] is True
+    assert {row["id"]: row["multi_day"] for row in body["results"]} == {1001: False, 1003: False, 1007: False}
+
+
+def test_a_ranking_that_waited_its_longest_still_ends_before_cloud_runs_timeout() -> None:
+    slowest_run_s = 31  # a 4 h drive Ranking on 1 vCPU (docs/deploy.md)
+    assert web.RANK_WAIT_S + slowest_run_s < 60  # Cloud Run's --timeout: else the visitor gets its 504, not our 503
+
+
+def test_with_the_site_url_each_page_names_itself_and_its_preview_image_by_full_address(data: ServingData) -> None:
+    client = TestClient(create_app(data, site_url="https://hikes.example"))
+    plain = TestClient(create_app(data)).get("/about.html").text
+
+    home, about = client.get("/").text, client.get("/about.html").text
+
+    # Link previews need a full address: a relative og:image shows no picture.
+    assert '<meta property="og:url" content="https://hikes.example/">' in home
+    assert '<meta property="og:url" content="https://hikes.example/about.html">' in about
+    for page in (home, about):
+        assert '<meta property="og:image" content="https://hikes.example/social-preview.png">' in page
+        assert '<meta name="twitter:image" content="https://hikes.example/social-preview.png">' in page
+    assert "og:url" not in plain and 'content="social-preview.png"' in plain
+    with pytest.raises(ValueError, match="https://host"):
+        create_app(data, site_url="https://hikes.example/path")

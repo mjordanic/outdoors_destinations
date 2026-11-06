@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="dayhike-fixture">
+  <!-- DayStages (ADR-0040). Tour des Refuges: a 40 km tour north along 16.0 E from 46.0 N,
+       a node every km (1 km of latitude = 0.0089932161° at R = 6371000 m), on three ways
+       of 13, 14 and 13 km. Its huts, 100 m east of the line, stand at km 13 and km 27, and
+       the village Saint-Départ 200 m east of its start. Via Fixture R3 is a stage relation
+       on the tour's last 13 km. -->
+  <node id="1" lat="46.0000000000" lon="16.0000000000" version="1"/>
+  <node id="2" lat="46.0089932161" lon="16.0000000000" version="1"/>
+  <node id="3" lat="46.0179864321" lon="16.0000000000" version="1"/>
+  <node id="4" lat="46.0269796482" lon="16.0000000000" version="1"/>
+  <node id="5" lat="46.0359728642" lon="16.0000000000" version="1"/>
+  <node id="6" lat="46.0449660803" lon="16.0000000000" version="1"/>
+  <node id="7" lat="46.0539592964" lon="16.0000000000" version="1"/>
+  <node id="8" lat="46.0629525124" lon="16.0000000000" version="1"/>
+  <node id="9" lat="46.0719457285" lon="16.0000000000" version="1"/>
+  <node id="10" lat="46.0809389445" lon="16.0000000000" version="1"/>
+  <node id="11" lat="46.0899321606" lon="16.0000000000" version="1"/>
+  <node id="12" lat="46.0989253767" lon="16.0000000000" version="1"/>
+  <node id="13" lat="46.1079185927" lon="16.0000000000" version="1"/>
+  <node id="14" lat="46.1169118088" lon="16.0000000000" version="1"/>
+  <node id="15" lat="46.1259050248" lon="16.0000000000" version="1"/>
+  <node id="16" lat="46.1348982409" lon="16.0000000000" version="1"/>
+  <node id="17" lat="46.1438914569" lon="16.0000000000" version="1"/>
+  <node id="18" lat="46.1528846730" lon="16.0000000000" version="1"/>
+  <node id="19" lat="46.1618778891" lon="16.0000000000" version="1"/>
+  <node id="20" lat="46.1708711051" lon="16.0000000000" version="1"/>
+  <node id="21" lat="46.1798643212" lon="16.0000000000" version="1"/>
+  <node id="22" lat="46.1888575372" lon="16.0000000000" version="1"/>
+  <node id="23" lat="46.1978507533" lon="16.0000000000" version="1"/>
+  <node id="24" lat="46.2068439694" lon="16.0000000000" version="1"/>
+  <node id="25" lat="46.2158371854" lon="16.0000000000" version="1"/>
+  <node id="26" lat="46.2248304015" lon="16.0000000000" version="1"/>
+  <node id="27" lat="46.2338236175" lon="16.0000000000" version="1"/>
+  <node id="28" lat="46.2428168336" lon="16.0000000000" version="1"/>
+  <node id="29" lat="46.2518100497" lon="16.0000000000" version="1"/>
+  <node id="30" lat="46.2608032657" lon="16.0000000000" version="1"/>
+  <node id="31" lat="46.2697964818" lon="16.0000000000" version="1"/>
+  <node id="32" lat="46.2787896978" lon="16.0000000000" version="1"/>
+  <node id="33" lat="46.2877829139" lon="16.0000000000" version="1"/>
+  <node id="34" lat="46.2967761300" lon="16.0000000000" version="1"/>
+  <node id="35" lat="46.3057693460" lon="16.0000000000" version="1"/>
+  <node id="36" lat="46.3147625621" lon="16.0000000000" version="1"/>
+  <node id="37" lat="46.3237557781" lon="16.0000000000" version="1"/>
+  <node id="38" lat="46.3327489942" lon="16.0000000000" version="1"/>
+  <node id="39" lat="46.3417422102" lon="16.0000000000" version="1"/>
+  <node id="40" lat="46.3507354263" lon="16.0000000000" version="1"/>
+  <node id="41" lat="46.3597286424" lon="16.0000000000" version="1"/>
+  <node id="101" lat="46.1169118088" lon="16.0012969703" version="1">
+    <tag k="tourism" v="alpine_hut"/>
+    <tag k="name" v="Refuge du Lac"/>
+  </node>
+  <node id="102" lat="46.2428168336" lon="16.0012969703" version="1">
+    <tag k="tourism" v="alpine_hut"/>
+    <tag k="name" v="Refuge du Col"/>
+  </node>
+  <node id="103" lat="46.0000000000" lon="16.0025939407" version="1">
+    <tag k="place" v="village"/>
+    <tag k="name" v="Saint-Départ"/>
+  </node>
+  <way id="201" version="1">
+    <nd ref="1"/>
+    <nd ref="2"/>
+    <nd ref="3"/>
+    <nd ref="4"/>
+    <nd ref="5"/>
+    <nd ref="6"/>
+    <nd ref="7"/>
+    <nd ref="8"/>
+    <nd ref="9"/>
+    <nd ref="10"/>
+    <nd ref="11"/>
+    <nd ref="12"/>
+    <nd ref="13"/>
+    <nd ref="14"/>
+    <tag k="highway" v="path"/>
+    <tag k="sac_scale" v="mountain_hiking"/>
+  </way>
+  <way id="202" version="1">
+    <nd ref="14"/>
+    <nd ref="15"/>
+    <nd ref="16"/>
+    <nd ref="17"/>
+    <nd ref="18"/>
+    <nd ref="19"/>
+    <nd ref="20"/>
+    <nd ref="21"/>
+    <nd ref="22"/>
+    <nd ref="23"/>
+    <nd ref="24"/>
+    <nd ref="25"/>
+    <nd ref="26"/>
+    <nd ref="27"/>
+    <nd ref="28"/>
+    <tag k="highway" v="path"/>
+    <tag k="sac_scale" v="mountain_hiking"/>
+  </way>
+  <way id="203" version="1">
+    <nd ref="28"/>
+    <nd ref="29"/>
+    <nd ref="30"/>
+    <nd ref="31"/>
+    <nd ref="32"/>
+    <nd ref="33"/>
+    <nd ref="34"/>
+    <nd ref="35"/>
+    <nd ref="36"/>
+    <nd ref="37"/>
+    <nd ref="38"/>
+    <nd ref="39"/>
+    <nd ref="40"/>
+    <nd ref="41"/>
+    <tag k="highway" v="path"/>
+    <tag k="sac_scale" v="mountain_hiking"/>
+  </way>
+  <relation id="3001" version="1">
+    <member type="way" ref="201" role=""/>
+    <member type="way" ref="202" role=""/>
+    <member type="way" ref="203" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Tour des Refuges"/>
+    <tag k="network" v="rwn"/>
+  </relation>
+  <relation id="3002" version="1">
+    <member type="way" ref="203" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Via Fixture R3"/>
+    <tag k="network" v="iwn"/>
+  </relation>
+</osm>

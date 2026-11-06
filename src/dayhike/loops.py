@@ -1,7 +1,8 @@
 """SuggestedLoops: RoundTrips drawn on the TrailGraph that a Ranking proposes itself (ADR-0020).
 
 ``find_loops`` runs at query time, from the start Junctions near the
-Trailheads of the best Catalog results. From each start a beam search grows
+Hiker's Origin, when there is one, and near the Trailheads of the best
+Catalog results (ADR-0036). From each start a beam search grows
 walks Segment by Segment and keeps the ``LOOP_BEAM`` whose elevation so far
 is closest to the Seed's ElevationProfile, stretched to the Seed's length,
 highest and lowest point and taken either way round. A walk never visits a
@@ -17,7 +18,7 @@ from __future__ import annotations
 import math
 import sqlite3
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -28,13 +29,16 @@ from dayhike.catalog import EARTH_RADIUS_M
 from dayhike.similarity import PROFILE_RANGE_FLOOR_M, TWIN_SHARE
 from dayhike.trailgraph import TrailGraph, decode_coords, _haversine
 
-LOOP_SEEDS = 30  # the best Catalog results whose Trailheads start the search
+LOOP_SEEDS = 30  # the best Catalog results whose Trailheads are passed to the loop search, of which only the first LOOP_TRAILHEADS give starts (ADR-0045)
 LOOP_START_M = 2_000.0  # start Junctions within this of such a Trailhead ...
 LOOP_STARTS_PER_TRAILHEAD = 3  # ... the nearest this many
+LOOP_TRAILHEADS = 20  # of those Trailheads only the best this many, round by round, to bound the reads on one vCPU (ADR-0045)
+LOOP_ORIGIN_M = 5_000.0  # start Junctions within this of the Origin, searched first (ADR-0036) ...
+LOOP_ORIGIN_STARTS = 20  # ... the nearest this many
 LOOP_STARTS = 40  # and at most this many in all
 LOOP_BAND = (0.75, 1.25)  # a loop's length against the Seed's
 LOOP_MIN_M = 1_000.0  # the Catalog's shortest DayHike
-LOOP_MAX_M = 40_000.0  # no loop is searched longer: the longest DayHike there and back
+LOOP_MAX_M = 40_000.0  # no loop is searched longer, to bound the search on one vCPU: a multi-day Seed gets none (ADR-0035)
 LOOP_BEAM = 64  # partial loops kept per start
 LOOP_SEGMENTS = 400  # the most Segments one loop walks
 LOOP_KEPT = 200  # completed loops kept per start, best first
@@ -66,6 +70,16 @@ class FoundLoop:
     drive_hours: float | None
 
 
+@dataclass(frozen=True)
+class LoopSearch:
+    """What one search did: its loops, best first, how many start Junctions it
+    searched from, and whether it stopped at its deadline."""
+
+    loops: list[FoundLoop]
+    starts: int
+    stopped: bool
+
+
 @dataclass
 class _Read:
     """The Segments read so far in one search, by local index."""
@@ -87,8 +101,10 @@ def find_loops(
     limit: int,
     deadline: float,
     reach: Callable[[list[tuple[float, float]]], list[float | None]] | None = None,
-) -> list[FoundLoop]:
-    """The ``limit`` loops most like ``target`` by their guess, from Junctions
+    origin: tuple[float, float] | None = None,
+) -> LoopSearch:
+    """The search for the ``limit`` loops most like ``target`` by their guess, from Junctions
+    near ``origin`` (lat, lon; within ``LOOP_ORIGIN_M``, searched first) and
     near ``trailheads`` (best first), best first; of loops that share a Twin's
     share of their Segments' length only the best.
 
@@ -100,15 +116,16 @@ def find_loops(
     low, high = target.length_m * LOOP_BAND[0], min(target.length_m * LOOP_BAND[1], LOOP_MAX_M)
     low = max(low, LOOP_MIN_M)
     if not math.isfinite(target.length_m) or low >= high:
-        return []
+        return LoopSearch([], 0, False)
     with sqlite3.connect(f"file:{graph.path}?mode=ro", uri=True) as db:
-        starts = _starts(db, trailheads)
+        starts = _starts(db, origin, trailheads)
         hours: list[float | None] = [None] * len(starts)
         if reach is not None and starts:
             hours = reach([(lat, lon) for _, lat, lon in starts])
         read = _Read({}, [], [], [], [], [], [])
         found: list[FoundLoop] = []
         budget = LOOP_EXPANSIONS
+        searched = 0
         for (junction, lat, lon), drive in zip(starts, hours):
             if (reach is not None and drive is None) or budget <= 0 or time.monotonic() >= deadline:
                 continue
@@ -116,8 +133,10 @@ def find_loops(
             if local is None:
                 continue
             loops, used = _beam(read, local, junction, target, low, high, budget, deadline)
+            searched += 1
             budget -= used
             found += [FoundLoop(junction, path, guess, drive) for path, guess in loops]
+    stopped = time.monotonic() >= deadline
     found.sort(key=lambda loop: -loop.guess)
     # Of loops that share at least a Twin's share of each one's length, keep the best guess.
     metres = {segment: read.length[read.index[segment]] for loop in found for segment in loop.segments}
@@ -132,38 +151,62 @@ def find_loops(
             for _, other, other_total in kept
         ):
             kept.append((loop, walked, total))
-    return [loop for loop, _, _ in kept]
+    return LoopSearch([loop for loop, _, _ in kept], searched, stopped)
 
 
-def _starts(db: sqlite3.Connection, trailheads: Sequence[tuple[float, float]]) -> list[tuple[int, float, float]]:
-    """(Junction id, lat, lon) of the start Junctions: per Trailhead in order,
-    the ``LOOP_STARTS_PER_TRAILHEAD`` nearest within ``LOOP_START_M`` where
-    two trail Segments meet, at most ``LOOP_STARTS`` in all."""
+def _starts(
+    db: sqlite3.Connection, origin: tuple[float, float] | None, trailheads: Sequence[tuple[float, float]]
+) -> list[tuple[int, float, float]]:
+    """(Junction id, lat, lon) of the start Junctions where two trail Segments
+    meet, at most ``LOOP_STARTS`` in all: the ``LOOP_ORIGIN_STARTS`` nearest
+    ``origin`` within ``LOOP_ORIGIN_M`` first, then round by round each of the
+    first ``LOOP_TRAILHEADS`` Trailheads' next nearest within ``LOOP_START_M``,
+    in the Trailheads' order, for ``LOOP_STARTS_PER_TRAILHEAD`` rounds. So each
+    of them gets a start before any gets a second, and a near-tie in the
+    Ranking cannot push a Trailhead's every start past the cap."""
     starts: dict[int, tuple[float, float]] = {}
-    for lat, lon in trailheads:
-        if len(starts) >= LOOP_STARTS:
-            break
-        grow_lat = math.degrees(LOOP_START_M / EARTH_RADIUS_M)
-        grow_lon = grow_lat / max(math.cos(math.radians(lat)), 1e-6)
-        near = db.execute(
-            "SELECT DISTINCT j.id, j.latitude, j.longitude FROM segment_boxes b JOIN segments s ON s.id = b.id "
-            "JOIN junctions j ON j.id IN (s.a, s.b) WHERE s.kind != 'link' AND j.degree >= 2 "
-            "AND b.north >= ? AND b.south <= ? AND b.east >= ? AND b.west <= ?",
-            (lat - grow_lat, lat + grow_lat, lon - grow_lon, lon + grow_lon),
-        ).fetchall()
-        if not near:
-            continue
-        points = np.array([row[1:] for row in near], dtype=float)
-        metres = _haversine(np.full(len(near), lat), np.full(len(near), lon), points[:, 0], points[:, 1])
-        taken = 0
-        for at in np.argsort(metres, kind="stable").tolist():
-            if metres[at] > LOOP_START_M or taken >= LOOP_STARTS_PER_TRAILHEAD or len(starts) >= LOOP_STARTS:
-                break
-            junction = int(near[at][0])
+
+    def take(nearest: Iterator[tuple[int, float, float]]) -> None:
+        for junction, lat, lon in nearest:
             if junction not in starts:
-                starts[junction] = (float(near[at][1]), float(near[at][2]))
-                taken += 1
+                starts[junction] = (lat, lon)
+                return
+
+    if origin is not None:
+        nearest = _nearest(db, origin, LOOP_ORIGIN_M)
+        for _ in range(min(LOOP_ORIGIN_STARTS, LOOP_STARTS)):
+            take(nearest)
+    queues = [_nearest(db, trailhead, LOOP_START_M) for trailhead in trailheads[:LOOP_TRAILHEADS]]
+    for _ in range(LOOP_STARTS_PER_TRAILHEAD):
+        for nearest in queues:
+            if len(starts) >= LOOP_STARTS:
+                break
+            take(nearest)
     return [(junction, lat, lon) for junction, (lat, lon) in starts.items()]
+
+
+def _nearest(
+    db: sqlite3.Connection, point: tuple[float, float], radius_m: float
+) -> Iterator[tuple[int, float, float]]:
+    """(Junction id, lat, lon) of the Junctions where two trail Segments meet
+    within ``radius_m`` of the point, nearest first; read at the first ask."""
+    lat, lon = point
+    grow_lat = math.degrees(radius_m / EARTH_RADIUS_M)
+    grow_lon = grow_lat / max(math.cos(math.radians(lat)), 1e-6)
+    near = db.execute(
+        "SELECT DISTINCT j.id, j.latitude, j.longitude FROM segment_boxes b JOIN segments s ON s.id = b.id "
+        "JOIN junctions j ON j.id IN (s.a, s.b) WHERE s.kind != 'link' AND j.degree >= 2 "
+        "AND b.north >= ? AND b.south <= ? AND b.east >= ? AND b.west <= ?",
+        (lat - grow_lat, lat + grow_lat, lon - grow_lon, lon + grow_lon),
+    ).fetchall()
+    if not near:
+        return
+    points = np.array([row[1:] for row in near], dtype=float)
+    metres = _haversine(np.full(len(near), lat), np.full(len(near), lon), points[:, 0], points[:, 1])
+    for at in np.argsort(metres, kind="stable").tolist():
+        if metres[at] > radius_m:
+            return
+        yield int(near[at][0]), float(near[at][1]), float(near[at][2])
 
 
 def _local(db: sqlite3.Connection, read: _Read, lat: float, lon: float, radius_m: float) -> np.ndarray | None:

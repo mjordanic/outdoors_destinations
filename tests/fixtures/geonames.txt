@@ -1,0 +1,17 @@
+3194351	Ogulin	Ogulin	Ogulin,Огулин	45.26611	15.22861	P	PPL	HR		01				8216		300	Europe/Zagreb	2026-01-01
+3186886	Zagreb	Zagreb	Agram,Zagabria,Zagreb,Загреб	45.81444	15.97798	P	PPL	HR		01				698966		300	Europe/Zagreb	2026-01-01
+3186952	Zaprešić	Zapresic	Zapresic,Zaprešić	45.85639	15.80778	P	PPL	HR		01				19644		300	Europe/Zagreb	2026-01-01
+3186000	Vrh	Vrh		45.21	15.11	P	PPL	HR		01				400		300	Europe/Zagreb	2026-01-01
+3186001	Vrhnika	Vrhnika	Oberlaibach,Vrh,Vrhnika	45.96583	14.29361	P	PPL	SI		01				8462		300	Europe/Zagreb	2026-01-01
+2762372	Völkermarkt	Volkermarkt	Velikovec,Völkermarkt	46.66222	14.63444	P	PPL	AT		01				11139		300	Europe/Zagreb	2026-01-01
+2267057	Lisbon	Lisbon	Lisboa,Lisbon,Lissabon	38.71667	-9.13333	P	PPL	PT		01				517802		300	Europe/Zagreb	2026-01-01
+3186002	Velikovecki Breg	Velikovecki Breg		45.5	15.5	P	PPL	HR		01				20000		300	Europe/Zagreb	2026-01-01
+3186003	Planina	Planina	Alpe,Planina	45.31	15.21	P	PPL	HR		01				0		300	Europe/Zagreb	2026-01-01
+3186004	Daleka	Daleka		46.5	17.5	P	PPL	HR		01				120		300	Europe/Zagreb	2026-01-01
+3186005	Kapelica	Kapelica		45.001	15.001	T	MT	HR		01				0		300	Europe/Zagreb	2026-01-01
+3186006	Gornji Kraj	Gornji Kraj		45.002	15.002	P	PPLX	HR		01				0		300	Europe/Zagreb	2026-01-01
+3186007	Ridge Lake	Ridge Lake	Grebensko jezero,Ridge Lake	45.05	15.01	H	LK	HR		01				0		300	Europe/Zagreb	2026-01-01
+3186008	Ridge Saddle	Ridge Saddle		45.08	15.0	T	PASS	HR		01				0		300	Europe/Zagreb	2026-01-01
+3186009	Far Lake	Far Lake		46.5	17.5	H	LK	HR		01				0		300	Europe/Zagreb	2026-01-01
+3186010	Ridge Peak	Ridge Peak	Grebenski vrh,Ridge Peak	45.008	15.001	T	PK	HR		01				0	905	880	Europe/Zagreb	2026-01-01
+3186011	Big Lake	Big Lake	Grosser See,Big Lake	45.04	14.94	H	LK	HR		01				0		250	Europe/Zagreb	2026-01-01

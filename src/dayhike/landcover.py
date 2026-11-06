@@ -1,21 +1,26 @@
 from __future__ import annotations
 
 import math
-import shutil
+import os
 import sqlite3
-import time
 from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from contextlib import ExitStack
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
 import numpy as np
 
-from dayhike.catalog import EARTH_RADIUS_M, LANDCOVER_FEATURE_NAMES, geometry_store_path_for, remove_similarity
-from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS
+from dayhike.catalog import (
+    EARTH_RADIUS_M,
+    LANDCOVER_FEATURE_NAMES,
+    ensure_column,
+    geometry_store_path_for,
+    remove_similarity,
+)
+from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS, format_corner
+from dayhike.download import download as _download
+from dayhike.parallel import parallel_iter, workers
 
 Progress = Callable[[str], None]
 Retrieve = Callable[[str, str], None]
@@ -51,7 +56,7 @@ def worldcover_tile_id(lat: float, lon: float) -> str:
     """Return the WorldCover 3° tile id whose southwest corner contains this point."""
     lat_sw = int(math.floor(lat / 3) * 3)
     lon_sw = int(math.floor(lon / 3) * 3)
-    return _format_corner(lat_sw, lon_sw)
+    return format_corner(lat_sw, lon_sw)
 
 
 def worldcover_tiles_covering(bounds: Bounds) -> list[str]:
@@ -61,7 +66,7 @@ def worldcover_tiles_covering(bounds: Bounds) -> list[str]:
     lon_start = int(math.floor(bounds.west / 3) * 3)
     lon_end = int(math.floor(bounds.east / 3) * 3)
     return [
-        _format_corner(lat, lon)
+        format_corner(lat, lon)
         for lat in range(lat_start, lat_end + 1, 3)
         for lon in range(lon_start, lon_end + 1, 3)
     ]
@@ -229,23 +234,22 @@ def _sample_open_datasets(
     points: Sequence[tuple[float, float]],
 ) -> list[int | None]:
     """First-tile-wins sampling over the tiles in sorted file order."""
+    from dayhike.dem import read_cells
+
     out: list[int | None] = [None] * len(points)
-    remaining = set(range(len(points)))
+    lat, lon = np.array(points, dtype=float).reshape(-1, 2).T
+    remaining = np.ones(len(points), dtype=bool)
     for tile in range(len(tiles.paths)):
-        if not remaining:
+        if not remaining.any():
             break
         bounds, nodata = tiles.extent(tile)
-        indices = [
-            index
-            for index in remaining
-            if bounds.left <= points[index][1] <= bounds.right
-            and bounds.bottom <= points[index][0] <= bounds.top
-        ]
-        if not indices:
+        indices = np.flatnonzero(
+            remaining & (bounds.left <= lon) & (lon <= bounds.right) & (bounds.bottom <= lat) & (lat <= bounds.top)
+        )
+        if not len(indices):
             continue
-        coords = [(points[index][1], points[index][0]) for index in indices]
-        for index, sample in zip(indices, tiles.dataset(tile).sample(coords), strict=True):
-            value = float(sample[0])
+        values = read_cells(tiles.dataset(tile), lon[indices], lat[indices]).tolist()
+        for index, value in zip(indices.tolist(), values, strict=True):
             if not math.isfinite(value):
                 continue
             if nodata is not None and value == nodata:
@@ -253,7 +257,7 @@ def _sample_open_datasets(
             if value == _WORLDCOVER_NODATA:
                 continue
             out[index] = int(value)
-            remaining.discard(index)
+            remaining[index] = False
     return out
 
 
@@ -266,6 +270,7 @@ def sample_landcover(
     """Write land-cover classes onto covered vertices and Catalog fractions."""
     catalog_path = Path(catalog_path)
     raster_dir = Path(raster_dir)
+    workers()  # a bad DAYHIKE_WORKERS fails here, before the GeometryStore is open
     store_path = geometry_store_path_for(catalog_path)
     if not store_path.is_file():
         raise FileNotFoundError(store_path)
@@ -280,7 +285,7 @@ def sample_landcover(
     write = sqlite3.connect(store_path)
     try:
         write.execute("PRAGMA journal_mode=WAL")
-        _ensure_column(write, "vertices", "landcover", "INTEGER")
+        ensure_column(write, "vertices", "landcover", "INTEGER")
         tiles = _Tiles(rasters)
         stack.callback(tiles.close)
         read = sqlite3.connect(store_path)
@@ -288,25 +293,31 @@ def sample_landcover(
             cursor = read.execute(
                 "SELECT dayhike_id, seq, latitude, longitude FROM vertices"
             )
-            while True:
-                rows = cursor.fetchmany(_VERTEX_CHUNK)
-                if not rows:
-                    break
+            # Each process reads through rasters it opened itself, never another's.
+            opened = {os.getpid(): tiles}
+
+            def chunk_updates(rows: list[tuple]) -> list[tuple[int, int, int]]:
+                # A chunk's (code, dayhike_id, seq) updates, sampled in a worker.
+                if os.getpid() not in opened:
+                    opened[os.getpid()] = _Tiles(rasters)
                 coverable = [
                     (int(dayhike_id), int(seq), float(lat), float(lon))
                     for dayhike_id, seq, lat, lon in rows
                 ]
                 classes = _sample_open_datasets(
-                    tiles,
+                    opened[os.getpid()],
                     [(lat, lon) for _id, _seq, lat, lon in coverable],
                 )
-                updates = [
+                return [
                     (code, dayhike_id, seq)
                     for (dayhike_id, seq, _lat, _lon), code in zip(
                         coverable, classes, strict=True
                     )
                     if code is not None
                 ]
+
+            chunks = iter(lambda: cursor.fetchmany(_VERTEX_CHUNK), [])
+            for updates in parallel_iter(chunk_updates, chunks):
                 if not updates:
                     continue
                 write.executemany(
@@ -348,7 +359,7 @@ def _refresh_catalog_fractions(
     catalog = sqlite3.connect(catalog_path)
     try:
         for name in LANDCOVER_FEATURE_NAMES:
-            _ensure_column(catalog, "feature_vectors", name, "REAL")
+            ensure_column(catalog, "feature_vectors", name, "REAL")
         by_hike: dict[int, list[int]] = {dayhike_id: [] for dayhike_id in hike_ids}
         ids = list(hike_ids)
         for start in range(0, len(ids), _HIKE_IN_CHUNK):
@@ -390,41 +401,3 @@ def _landcover_fractions(
         codes.count(_BARE) / n,
         codes.count(_SNOW) / n,
     )
-
-
-def _ensure_column(
-    connection: sqlite3.Connection, table: str, column: str, decl: str
-) -> None:
-    existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
-    if column not in existing:
-        connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
-
-
-def _format_corner(lat_sw: int, lon_sw: int) -> str:
-    ns = "N" if lat_sw >= 0 else "S"
-    ew = "E" if lon_sw >= 0 else "W"
-    return f"{ns}{abs(lat_sw):02d}{ew}{abs(lon_sw):03d}"
-
-
-def _download(url: str, filename: str) -> None:
-    dest = Path(filename)
-    tmp = dest.with_name(dest.name + ".part")
-    request = Request(url, headers={"User-Agent": "dayhike"})
-    last_error: Exception | None = None
-    for attempt in range(5):
-        try:
-            with urlopen(request, timeout=120) as source, tmp.open("wb") as out:
-                shutil.copyfileobj(source, out)
-            tmp.replace(dest)
-            return
-        except HTTPError as exc:
-            tmp.unlink(missing_ok=True)
-            if exc.code == 404:
-                raise FileNotFoundError(url) from exc
-            last_error = exc
-        except (URLError, TimeoutError, OSError) as exc:
-            tmp.unlink(missing_ok=True)
-            last_error = exc
-        time.sleep(min(2**attempt, 16))
-    assert last_error is not None
-    raise last_error

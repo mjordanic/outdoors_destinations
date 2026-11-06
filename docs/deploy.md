@@ -1,39 +1,41 @@
 # Deploying the web demo to Google Cloud Run
 
-The GoFindMeAHike demo is one container: the FastAPI app (`dayhike serve`) and a
+The HikesAlike demo is one container: the FastAPI app (`dayhike serve`) and a
 highways-only Valhalla for the drive-time filter, with the serving export baked
 into the image. Nothing is written at run time; Cloud Run scales it to zero
-when idle and starts it again on the next visit (a cold start of about 10-12 s).
+when idle and starts it again on the next visit (a cold start of up to about 20 s).
 
-The demo runs on Cloud Run today (the README links it). Every `gcloud`
+The demo runs on Cloud Run today (the README links it; setup and measurements are in
+[technical.md](technical.md)). Every `gcloud`
 command below creates or changes cloud resources and costs money, so run them
 only once the deployment is approved.
 
 ## 1. Build the serving export (on the machine with the data)
 
 The export needs the Catalog, its GeometryStore, its similarity directory
-(`dayhike build-similarity`), and the highways-only Valhalla tiles (README,
+(`dayhike build-similarity`), and the highways-only Valhalla tiles ([technical docs](technical.md#highway-tiles-all-of-europe-small-server),
 **Highway tiles**). Start Valhalla on those tiles first, so every Trailhead is
 snapped once at export time instead of on a visitor's query:
 
 ```bash
 docker run -d --name valhalla-highways -p 127.0.0.1:8002:8002 \
   -v "$PWD/data/valhalla/highways-eu:/custom_files:ro" \
-  --entrypoint /bin/bash ghcr.io/gis-ops/docker-valhalla/valhalla:latest -c \
+  --entrypoint /bin/bash ghcr.io/gis-ops/docker-valhalla/valhalla:latest@sha256:060da5b92e6024a67f65135c236d918b021d63e73d1808a0d55b7e7cbd17240c -c \
   'jq -s ".[0] * .[1]" /custom_files/valhalla.json /custom_files/mjolnir.drive-time.json > /tmp/valhalla.json && exec valhalla_service /tmp/valhalla.json 2'
 
 uv run dayhike export-serving --catalog data/catalog.sqlite --out data/web-serving \
   --valhalla-tiles data/valhalla/highways-eu --snaps data/catalog.snaps.npz \
-  --valhalla-url http://127.0.0.1:8002 --geonames data/geonames/cities1000.zip
+  --valhalla-url http://127.0.0.1:8002 --geonames data/geonames/allCountries.zip
 ```
 
 `--snaps` is optional (it starts from an existing snap cache). `--geonames`
-writes `places.sqlite` for the page's "Find place" (ADR-0029); the file is
+writes `places.sqlite` for the page's "Find place" (ADR-0029, ADR-0042); the file (about 420 MB) is
 downloaded there when missing, so delete it before a refresh to fetch the
 current GeoNames list. An export written without it falls back to public
 Nominatim. To add place search to an export already built, without exporting
 again, run `uv run dayhike export-places --out data/web-serving` (it reads
-only `trailheads.npy` and leaves `meta.json` as it is), then rebuild the image. Rerun the
+only `trailheads.npy` and `hikes.sqlite` and leaves `meta.json` as it is; it also writes
+`landmarks.sqlite`, the peaks, huts, lakes and towns the hike search finds hikes by, ADR-0053), then rebuild the image. Rerun the
 command after any rebuild of the Catalog, the similarity facts or the tiles:
 it rewrites the directory and writes `meta.json` last, so a half-written export
 never opens.
@@ -94,7 +96,7 @@ gcloud run deploy dayhike --image "$IMAGE" --region europe-west1 \
   --allow-unauthenticated \
   --cpu 1 --memory 2Gi --execution-environment gen2 --cpu-boost \
   --min-instances 0 --max-instances 2 --concurrency 8 --timeout 60 \
-  --set-env-vars DAYHIKE_FORWARDED_HOPS=1
+  --set-env-vars DAYHIKE_FORWARDED_HOPS=1,DAYHIKE_SITE_URL=https://SERVICE.run.app
 ```
 
 Artifact Registry storage is not covered by the Cloud Run spend cap (section 5),
@@ -114,15 +116,15 @@ What the flags do:
 
 | Flag | Why |
 | --- | --- |
-| `--memory 2Gi` | Measured peak of app plus Valhalla in the README table, **Web demo**; raise to 4Gi if the logs show out-of-memory restarts. |
+| `--memory 2Gi` | Measured peak of app plus Valhalla in the technical docs table, **Web demo measurements** ([technical.md](technical.md#web-demo-measurements)). The trail network for the way back is memory-mapped from the export's `trailgraph.network/` (an export without it builds it once per instance, a request arriving during the build waiting for it), and the image sets `MALLOC_ARENA_MAX=2`; with both, 8 visitors on 1 vCPU peak near 1.1 GB. Raise to 4Gi if the logs show out-of-memory restarts. |
 | `--min-instances 0` | Scale to zero; the captain accepted the cold start. |
 | `--max-instances 2` | The instance cap: at most two containers ever bill at once. |
 | `--concurrency 8` | Searches and hike pages run side by side; Rankings queue one at a time per instance (in the app). |
 | `--timeout 60` | No request may run longer; a 4 h drive query from the densest origin takes 23-31 s on 1 vCPU. |
 | `DAYHIKE_FORWARDED_HOPS=1` | The rate limit keys on the last `X-Forwarded-For` entry, the one Google's front end adds. Earlier entries are client-supplied and ignored, so the limit cannot be dodged by sending a fake header. If that last entry turns out to be a Google proxy address rather than the visitor, the limit becomes one shared budget per instance: stricter, never looser. |
+| `DAYHIKE_SITE_URL=https://HOST` (optional) | The site's public address (the Cloud Run URL, or the custom domain once there is one). Each page then names itself in `og:url` and its preview image by full address, so a shared link shows the preview; unset, the image address stays relative and most link previews show none. |
 | `DAYHIKE_GOATCOUNTER=CODE` (optional) | Cookieless visit counts at `https://CODE.goatcounter.com`: every page loads the self-hosted `vendor/goatcounter/count.js`, and "Find" is counted as an event. Unset, no page loads analytics. Not set yet: no GoatCounter account. |
 | `DAYHIKE_CORS_ORIGINS="https://HOST ..."` (optional) | The origins whose pages may call the API (CORS): the loading shell of section 8. Unset, no other origin may. Not set yet: no shell. |
-| `DAYHIKE_KOFI=HANDLE` (optional) | The Support page links `https://ko-fi.com/HANDLE`. Unset, it says the tip link is not set up yet. Not set yet: no Ko-fi handle. While FABDEM is in use, email Fathom / the University of Bristol about the donation link before setting it, unless the Copernicus swap has landed. |
 
 The service also carries a service-level `scaling.maxInstanceCount` of 20 in
 the Cloud Run v2 API, next to the revision-level `template.scaling.maxInstanceCount`
@@ -141,9 +143,14 @@ curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
 The app limits each client to **20 Rankings and 300 other API calls per
 minute per instance** (`HTTP 429` past that; the counter lives in each
 instance's memory, so with `--max-instances 2` a client whose requests reach
-both instances gets up to 2x that), runs one Ranking at a time per instance (others
-wait up to 30 s, then get `503`; a Valhalla call stalled past 50 s also ends
-in `503` and frees the slot), and caps the drive filter at 4 hours. With
+both instances gets up to 2x that), runs one Ranking at a time per instance, in
+the order they came (others wait up to 25 s, then get `503`; with the slowest
+4 h drive Ranking of about 31 s that still ends inside the 60 s request timeout,
+so a visitor gets the app's `503` rather than Cloud Run's `504`; a Valhalla call
+stalled past 50 s also ends in `503` and frees the slot), lets a client (a browser
+tab at an address) have one Ranking queued or running at a time, and an address
+at most 4 (the next gets `409` until one ends, so one client cannot hold the
+Ranking for everyone, and people behind one address do not block each other), refuses a request body over 256 KB unread (`413`), and caps the drive filter at 4 hours. With
 `--max-instances 2` the most the service can ever bill is two instances busy
 around the clock: about 5.3 million vCPU-seconds and 10.5 million GiB-seconds a
 month, roughly **$150 per month at list price** after the free tier (verify the
@@ -293,7 +300,7 @@ If an alert fires and the traffic is abuse, close the public access at once:
   `europe-west1`), says the request logs are kept by Google Cloud Logging in
   Google's default storage location (not pinned to the EU), the 30-day log
   retention, the map tile and place-search
-  providers, and GoatCounter and Ko-fi once they are set. Change it with any of
+  providers, and GoatCounter once it is set. Change it with any of
   these: a new host or a CDN in front (the `host-recipient` item), a shorter
   log retention, or a different tile or place-search provider.
 - **FABDEM is non-commercial (CC BY-NC-SA 4.0):** the demo must stay
@@ -348,9 +355,10 @@ The steps, once there is a domain and a host account:
    sed -i '' 's|<meta name="api-base" content="">|<meta name="api-base" content="https://SERVICE.run.app">|' "$SHELL_DIR/index.html"
    ```
 
-   The server fills in the GoatCounter tag and the Ko-fi link (`<!--analytics-->`,
-   `<!--ko-fi-->`); a shell copy keeps the placeholders, so fill them the same way
-   if those settings are on.
+   The server fills in the GoatCounter tag (`<!--analytics-->`) and, with
+   `DAYHIKE_SITE_URL`, the pages' `og:url` and full preview image address; a
+   shell copy keeps the placeholder and the relative image, so fill them the
+   same way if those settings are on.
 3. Publish `$SHELL_DIR` on the static host after every `gcloud run deploy`, so
    the shell and the API stay the same version (on Cloudflare Pages:
    `wrangler pages deploy "$SHELL_DIR" --project-name gofindmeahike`).

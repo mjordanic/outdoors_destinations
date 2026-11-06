@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import os
 import socket
 import sys
+import time
 from pathlib import Path
 
 from dayhike.catalog import (
@@ -17,6 +19,7 @@ from dayhike.catalog import (
 )
 from dayhike.dem import DEM_SOURCES, Bounds, DEFAULT_DEM_BOUNDS, DEFAULT_DEM_DIR, fetch_dem, sample_dem
 from dayhike.landcover import DEFAULT_LANDCOVER_DIR, fetch_worldcover, sample_landcover
+from dayhike.parallel import WORKERS_ENV
 from dayhike.climate import DEFAULT_CLIMATE_DIR, fetch_chelsa, sample_climate
 from dayhike.extracts import fetch_geofabrik_extracts
 from dayhike.highways import HighwayDriveTimeClient, HighwaySnaps
@@ -28,7 +31,11 @@ from dayhike.similarity import (
     calibrate_similarity,
     rank_dayhikes,
 )
-from dayhike.valhalla import DEFAULT_VALHALLA_URL, MAX_MATRIX_DISTANCE_M, ValhallaMatrixClient
+from dayhike.valhalla import DEFAULT_VALHALLA_URL, MAX_MATRIX_DISTANCE_M, VALHALLA_TIMEOUT_S, ValhallaMatrixClient
+
+# The most highway snaps `serve` keeps beyond the export's (SuggestedLoop starts a Ranking asked of Valhalla):
+# about 20 MB of memory.
+SERVE_SNAPS_KEPT = 50_000
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -68,6 +75,14 @@ def main(argv: list[str] | None = None) -> int:
         help="TrailGraph: join a dead-end tip to another way this close, at most 50 "
         f"(default: {SNAP_TOLERANCE_M})",
     )
+    ingest.add_argument(
+        "--dem",
+        type=Path,
+        default=None,
+        help="Directory of FABDEM (or Copernicus GLO-30) GeoTIFFs: a line whose ends differ by more than "
+        "100 m starts at its lower end (ADR-0048). Without it, height orients no line",
+    )
+    _add_workers(ingest)
     fetch = subparsers.add_parser(
         "fetch-extracts",
         help="Download Geofabrik PBFs into data/osm (does not ingest)",
@@ -155,6 +170,7 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_LANDCOVER_DIR,
         help="WorldCover GeoTIFFs; Copernicus GLO-30 needs them for the ground under trees (default: data/landcover)",
     )
+    _add_workers(sample)
     sample_lc = subparsers.add_parser(
         "sample-landcover",
         help="Sample local LandCover rasters onto GeometryStore vertices and Catalog fractions",
@@ -171,6 +187,7 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_LANDCOVER_DIR,
         help="Directory of LandCover GeoTIFFs (default: data/landcover)",
     )
+    _add_workers(sample_lc)
     sample_cl = subparsers.add_parser(
         "sample-climate",
         help="Sample local climate rasters into Catalog hike-level monthly means",
@@ -204,6 +221,7 @@ def main(argv: list[str] | None = None) -> int:
     sample_tg.add_argument(
         "--climate", type=Path, default=DEFAULT_CLIMATE_DIR, help="CHELSA GeoTIFFs (default: data/climate)"
     )
+    _add_workers(sample_tg)
     similarity = subparsers.add_parser(
         "build-similarity",
         help="Build the similarity facts and Calibration next to a Catalog",
@@ -231,6 +249,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Keep the stored facts and only recompute the Calibration",
     )
+    _add_workers(similarity)
     rank = subparsers.add_parser("rank", help="Rank DayHikes by similarity to Seeds")
     rank.add_argument("--catalog", required=True, type=Path)
     rank.add_argument(
@@ -251,7 +270,7 @@ def main(argv: list[str] | None = None) -> int:
     rank.add_argument(
         "--highways",
         action="store_true",
-        help="Valhalla serves highways-only tiles: estimate DriveTime (see README)",
+        help="Valhalla serves highways-only tiles: estimate DriveTime (see docs/technical.md, 'Highway tiles')",
     )
     rank.add_argument(
         "--month",
@@ -327,7 +346,7 @@ def main(argv: list[str] | None = None) -> int:
     nearby.add_argument(
         "--highways",
         action="store_true",
-        help="Valhalla serves highways-only tiles: estimate DriveTime (see README)",
+        help="Valhalla serves highways-only tiles: estimate DriveTime (see docs/technical.md, 'Highway tiles')",
     )
     export = subparsers.add_parser(
         "export-serving", help="Write the small read-only dataset the web demo serves"
@@ -346,16 +365,16 @@ def main(argv: list[str] | None = None) -> int:
     export.add_argument(
         "--geonames",
         type=Path,
-        help="GeoNames cities1000.zip for the page's place search; downloaded there when missing",
+        help="GeoNames allCountries.zip for the page's place search; downloaded there when missing",
     )
     places = subparsers.add_parser(
-        "export-places", help="Add GeoNames place search beside an existing serving export"
+        "export-places", help="Add GeoNames place search and the hike search's Landmarks beside an existing serving export"
     )
     places.add_argument(
         "--geonames",
         type=Path,
-        default=Path("data/geonames/cities1000.zip"),
-        help="GeoNames cities1000.zip; downloaded there when missing",
+        default=Path("data/geonames/allCountries.zip"),
+        help="GeoNames allCountries.zip; downloaded there when missing",
     )
     places.add_argument("--out", type=Path, default=Path("data/web-serving"))
     serve = subparsers.add_parser("serve", help="Serve the web demo from a serving export")
@@ -375,12 +394,14 @@ def main(argv: list[str] | None = None) -> int:
     serve.add_argument(
         "--goatcounter", help="GoatCounter code: count visits at https://CODE.goatcounter.com; omit for no analytics"
     )
-    serve.add_argument("--kofi", help="Ko-fi handle for the Support page's tip link; omit for no link")
     serve.add_argument(
         "--cors-origin",
         action="append",
         default=[],
         help="Another origin (https://host) whose page may call the API, e.g. a loading shell; repeatable",
+    )
+    serve.add_argument(
+        "--site-url", help="The site's public origin (https://host): shared links then get a preview image"
     )
     coverage = subparsers.add_parser(
         "coverage-map", help="Draw the SVG map of Europe with the covered countries shaded"
@@ -393,14 +414,18 @@ def main(argv: list[str] | None = None) -> int:
         "--out", type=Path, default=Path("src/dayhike/web/static/coverage.svg")
     )
     args = parser.parse_args(argv)
+    if getattr(args, "workers", None) is not None:
+        os.environ[WORKERS_ENV] = str(args.workers)  # the stage's code reads it (dayhike.parallel)
     if args.command == "export-serving":
         return _export_serving(
             args.catalog, args.out, args.valhalla_tiles, args.snaps, args.valhalla_url, args.geonames
         )
     if args.command == "export-places":
-        from dayhike.serving import export_places, fetch_geonames
+        from dayhike.serving import export_landmarks, export_places, fetch_geonames
 
-        print(export_places(fetch_geonames(args.geonames), args.out))
+        geonames = fetch_geonames(args.geonames)
+        print(export_places(geonames, args.out))
+        print(export_landmarks(args.out, geonames))
         return 0
     if args.command == "serve":
         return _serve(
@@ -410,8 +435,8 @@ def main(argv: list[str] | None = None) -> int:
             args.valhalla_url,
             args.forwarded_hops,
             args.goatcounter,
-            args.kofi,
             tuple(args.cors_origin),
+            args.site_url,
         )
     if args.command == "coverage-map":
         from dayhike.coverage import coverage_map
@@ -426,6 +451,7 @@ def main(argv: list[str] | None = None) -> int:
             fresh=args.fresh,
             list_dayhikes=args.list_dayhikes,
             snap_tolerance_m=args.snap_tolerance,
+            dem_dir=args.dem,
         )
     if args.command == "sample-trailgraph":
         try:
@@ -471,7 +497,7 @@ def main(argv: list[str] | None = None) -> int:
             return _nearby(
                 args.catalog, args.origin, args.max_hours, args.valhalla_url, args.highways
             )
-        except ValueError as exc:
+        except (ValueError, FileNotFoundError) as exc:
             nearby.error(str(exc))
     if (args.origin is None) != (args.max_hours is None):
         rank.error("--origin and --max-hours must be given together")
@@ -488,7 +514,7 @@ def main(argv: list[str] | None = None) -> int:
             args.highways,
             return_to_start=not args.one_way,
         )
-    except ValueError as exc:
+    except (ValueError, FileNotFoundError) as exc:
         rank.error(str(exc))
 
 
@@ -499,13 +525,15 @@ def _ingest(
     fresh: bool = False,
     list_dayhikes: bool = False,
     snap_tolerance_m: float = SNAP_TOLERANCE_M,
+    dem_dir: Path | None = None,
 ) -> int:
     catalog = build_catalog(
         osm_paths,
         catalog_path,
-        progress=lambda message: print(message, file=sys.stderr, flush=True),
+        progress=_progress,
         fresh=fresh,
         snap_tolerance_m=snap_tolerance_m,
+        dem_dir=dem_dir,
     )
     print(catalog.path)
     print(catalog.ingest_report)
@@ -526,7 +554,7 @@ def _fetch_dem(dest: Path, bounds: Bounds, source: str) -> int:
         dest,
         bounds,
         source=DEM_SOURCES[source],
-        progress=lambda message: print(message, file=sys.stderr, flush=True),
+        progress=_progress,
     )
     for path in paths:
         print(path)
@@ -537,7 +565,7 @@ def _fetch_landcover(dest: Path, bounds: Bounds) -> int:
     paths = fetch_worldcover(
         dest,
         bounds,
-        progress=lambda message: print(message, file=sys.stderr, flush=True),
+        progress=_progress,
     )
     for path in paths:
         print(path)
@@ -548,7 +576,7 @@ def _fetch_climate(dest: Path, bounds: Bounds) -> int:
     paths = fetch_chelsa(
         dest,
         bounds,
-        progress=lambda message: print(message, file=sys.stderr, flush=True),
+        progress=_progress,
     )
     for path in paths:
         print(path)
@@ -560,7 +588,7 @@ def _sample_dem(catalog_path: Path, raster_dir: Path, landcover_dir: Path) -> in
         catalog_path,
         raster_dir,
         landcover_dir=landcover_dir,
-        progress=lambda message: print(message, file=sys.stderr, flush=True),
+        progress=_progress,
     )
     print(sampled)
     return 0
@@ -570,7 +598,7 @@ def _sample_landcover(catalog_path: Path, raster_dir: Path) -> int:
     sampled = sample_landcover(
         catalog_path,
         raster_dir,
-        progress=lambda message: print(message, file=sys.stderr, flush=True),
+        progress=_progress,
     )
     if sampled == 0:
         print(f"no vertices sampled: no usable landcover rasters cover them in {raster_dir}", file=sys.stderr)
@@ -582,7 +610,7 @@ def _sample_climate(catalog_path: Path, raster_dir: Path) -> int:
     sampled = sample_climate(
         catalog_path,
         raster_dir,
-        progress=lambda message: print(message, file=sys.stderr, flush=True),
+        progress=_progress,
     )
     if sampled == 0:
         print(f"no vertices sampled: no usable climate rasters cover them in {raster_dir}", file=sys.stderr)
@@ -599,7 +627,7 @@ def _sample_trailgraph(catalog_path: Path, dem_dir: Path, landcover_dir: Path, c
             dem_dir=dem_dir,
             landcover_dir=landcover_dir,
             climate_dir=climate_dir,
-            progress=lambda message: print(message, file=sys.stderr, flush=True),
+            progress=_progress,
         )
     )
     return 0
@@ -649,16 +677,13 @@ def _compose(
 def _build_similarity(
     catalog_path: Path, dem_dir: Path, landcover_dir: Path, *, calibrate_only: bool
 ) -> int:
-    def progress(message: str) -> None:
-        print(message, file=sys.stderr, flush=True)
-
     try:
         if calibrate_only:
-            print(calibrate_similarity(catalog_path, progress=progress))
+            print(calibrate_similarity(catalog_path, progress=_progress))
         else:
             print(
                 build_similarity(
-                    catalog_path, dem_dir, landcover_dir=landcover_dir, progress=progress
+                    catalog_path, dem_dir, landcover_dir=landcover_dir, progress=_progress
                 )
             )
     except StaleSimilarity as exc:
@@ -677,9 +702,6 @@ def _export_serving(
 ) -> int:
     from dayhike.serving import ServingExportError, export_serving, fetch_geonames
 
-    def progress(message: str) -> None:
-        print(message, file=sys.stderr, flush=True)
-
     try:
         print(
             export_serving(
@@ -689,7 +711,7 @@ def _export_serving(
                 snaps_path=snaps,
                 valhalla_url=valhalla_url,
                 geonames_path=geonames and fetch_geonames(geonames),
-                progress=progress,
+                progress=_progress,
             )
         )
     except (StaleSimilarity, ServingExportError) as exc:
@@ -705,13 +727,13 @@ def _serve(
     valhalla_url: str | None,
     forwarded_hops: int,
     goatcounter: str | None,
-    kofi: str | None,
     cors_origins: tuple[str, ...],
+    site_url: str | None = None,
 ) -> int:
     try:
         import uvicorn
 
-        from dayhike.web import VALHALLA_TIMEOUT_S, create_app
+        from dayhike.web import create_app
     except ImportError:
         print("the web demo needs its extra: uv sync --extra web", file=sys.stderr)
         return 1
@@ -723,8 +745,8 @@ def _serve(
         if not (data / "snaps.npz").is_file():
             print(f"{data}: no snaps.npz; export with --valhalla-url first", file=sys.stderr)
             return 1
-        snaps = HighwaySnaps(valhalla_url, data / "snaps.npz")
-        snaps.path = None  # the export is read-only: keep new snaps in memory
+        snaps = HighwaySnaps(valhalla_url, data / "snaps.npz", keep=SERVE_SNAPS_KEPT)
+        snaps.path = None  # the export is read-only: keep new snaps in memory, the most recent SERVE_SNAPS_KEPT
 
         def drive_client(max_hours: float) -> HighwayDriveTimeClient:
             return HighwayDriveTimeClient(max_hours, snaps)
@@ -735,8 +757,8 @@ def _serve(
             drive_client,
             forwarded_hops=forwarded_hops,
             goatcounter=goatcounter,
-            kofi=kofi,
             cors_origins=cors_origins,
+            site_url=site_url,
         )
     except ValueError as exc:
         print(exc, file=sys.stderr)
@@ -746,6 +768,31 @@ def _serve(
     socket.setdefaulttimeout(VALHALLA_TIMEOUT_S)
     uvicorn.run(app, host=host, port=port, log_level="info", proxy_headers=False)
     return 0
+
+
+def _progress(message: str) -> None:
+    # Each line says when it was written (UTC), so a long rebuild's log times every step.
+    print(f"{time.strftime('%H:%M:%SZ', time.gmtime())} {message}", file=sys.stderr, flush=True)
+
+
+def _add_workers(command: argparse.ArgumentParser) -> None:
+    command.add_argument(
+        "--workers",
+        type=_parse_workers,
+        default=None,
+        metavar="N",
+        help=f"Worker processes to use, the same result with any number (default: ${WORKERS_ENV}, else 1)",
+    )
+
+
+def _parse_workers(value: str) -> int:
+    try:
+        count = int(value)
+    except ValueError:
+        count = 0
+    if count < 1:
+        raise argparse.ArgumentTypeError(f"expected a whole number of at least 1, got {value!r}")
+    return count
 
 
 def _parse_snap_tolerance(value: str) -> float:

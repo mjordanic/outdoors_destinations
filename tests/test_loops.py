@@ -10,6 +10,7 @@ within 10 km of the others, so a Ranking lists one row; the tests that look
 at the loops themselves list every hike in its own row.
 """
 
+import numpy as np
 import pytest
 from test_trailgraph import BRIDGE_PATH, FIXTURE, LAKE_LOOP, MEADOW_PATH, _write_rasters
 
@@ -22,9 +23,13 @@ MIDDLE_PATH = 2008
 
 @pytest.fixture(scope="module")
 def data(tmp_path_factory: pytest.TempPathFactory):
+    return loops_export(tmp_path_factory.mktemp("loops"))
+
+
+def loops_export(root):
+    """The serving export of the network with the Middle Path, written under ``root``."""
     from dayhike.serving import ServingData, export_serving
 
-    root = tmp_path_factory.mktemp("loops")
     text = FIXTURE.read_text()
     text = text.replace("  <way ", '  <node id="61" lat="46.0562952512" lon="14.0564789788" version="1"/>\n  <way ', 1)
     text = text.replace(
@@ -81,7 +86,7 @@ def test_a_ranking_lists_loops_drawn_from_segments_beside_dayhikes(data) -> None
         route = Route.parse(loop["route"]["text"])
         for return_to_start in (True, False):  # it ends where it starts: measured the same either way
             hike = data.compose(route, return_to_start=return_to_start)
-            assert hike["way_back"] in (None, {"m": 0.0, "kind": "none"}) and hike["facts"]["round_trip"] == 1.0
+            assert hike["way_back"] in (None, {"m": 0.0, "kind": "none", "line": None, "ele": None}) and hike["facts"]["round_trip"] == 1.0
         assert len(set(hike["route"]["segments"])) == len(hike["route"]["segments"])
         assert (loop["line"], loop["trailhead"]) == (hike["line"], hike["trailhead"])
         assert (loop["length_m"], loop["climb_m"], loop["descent_m"]) == (
@@ -163,9 +168,9 @@ def test_hikes_starting_near_each_other_share_a_row_of_versions(data) -> None:
     assert [v["id"] for v in row["versions"]] == [2004, None]
     assert _segments(data, row["versions"][1]) != _segments(data, row)
     assert row["score"] > apart[2008]["score"] > apart[LAKE_LOOP]["score"] > row["versions"][0]["score"]
-    for version in row["versions"]:  # each as it is listed in a row of its own, but for versions
+    for version in row["versions"]:  # each as it is listed in a row of its own, but for a row's versions and counts
         key = version["id"] if version["id"] is not None else version["route"]["text"]
-        assert version == {k: v for k, v in apart[key].items() if k != "versions"}
+        assert version == {k: v for k, v in apart[key].items() if k not in ("versions", "more_here", "in_area")}
 
 
 def _rows_apart(data) -> list[dict]:
@@ -204,6 +209,120 @@ def test_a_loop_starts_within_the_drive_and_shows_its_hours(data) -> None:
     loops = _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, reach=everywhere, loops=True))
     assert len(loops) == 2 and {r["drive_hours"] for r in loops} == {1.5}
     assert _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, reach=nowhere, loops=True)) == []
+
+
+@pytest.mark.usefixtures("rows_apart")
+def test_a_loop_starts_within_the_distance_limit(data) -> None:
+    from dayhike.catalog import Origin
+
+    loops = _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True))
+    start = Origin(*loops[0]["trailhead"])
+
+    assert len(_loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, near=(start, 5_000.0), loops=True))) == 2
+    far = Origin(start.latitude + 0.1, start.longitude)  # 11 km north
+    assert _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, near=(far, 5_000.0), loops=True)) == []
+
+
+def _fixture_point(east_m: float, north_m: float) -> tuple[float, float]:
+    """(lat, lon) of a point given in the fixture's metres from A (0, 0)."""
+    return 46.05 + north_m * 0.0044966080 / 500, 14.05 + east_m * 0.0064789788 / 500
+
+
+@pytest.mark.usefixtures("rows_apart")
+def test_loops_also_start_near_the_origin_when_no_good_dayhike_does(data) -> None:
+    from dayhike.catalog import Origin, straight_line_distances_m
+
+    # No DayHike allowed, as when none is in reach: no Trailhead to start a loop from.
+    none, wish = np.array([], dtype=np.int64), {"length": 3_000}
+    origin = Origin(*_fixture_point(1_500, 4_000))  # 3 km north of the Lake Loop's corner C
+
+    assert data.rank(wish, {"length": 100}, allowed_rows=none, loops=True) == []
+    loops = _loops(data.rank(wish, {"length": 100}, allowed_rows=none, loops=True, origin=origin))
+    assert loops and all(r["route"] for r in loops)
+    assert (straight_line_distances_m(origin, [r["trailhead"] for r in loops]) <= 5_000).all()
+    far = Origin(*_fixture_point(1_500, 10_000))  # 9 km from every Junction
+    assert data.rank(wish, {"length": 100}, allowed_rows=none, loops=True, origin=far) == []
+
+
+@pytest.mark.usefixtures("rows_apart")
+def test_a_ranking_says_what_its_loop_search_did(data) -> None:
+    results = data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True)
+
+    search = results.loop_search
+    assert search["listed"] == len(_loops(results)) == 2
+    assert search["found"] >= 2 and search["starts"] > 0 and search["stopped"] is False
+    # The best loop found, for the page to say how it scores when none is listed (ADR-0054).
+    assert search["best"] == max(r["score"] for r in _loops(results))
+    assert data.rank(MEADOW_PATH, DEFAULT_WEIGHTS).loop_search is None  # no search, nothing to say
+
+
+@pytest.mark.usefixtures("rows_apart")
+def test_a_drawn_search_takes_its_loop_starts_by_score_from_the_best_dayhikes(data, monkeypatch) -> None:
+    import dayhike.serving as serving
+    from dayhike.serving import drawn
+
+    asked: list[list[tuple[float, float]]] = []
+
+    def spy(graph, target, trailheads, **kwargs):
+        asked.append([tuple(place) for place in trailheads])
+        return serving.find_loops.__wrapped__(graph, target, trailheads, **kwargs)
+
+    spy.__wrapped__ = serving.find_loops
+    monkeypatch.setattr(serving, "find_loops", spy)
+    monkeypatch.setattr(serving, "LOOP_TRAILHEADS", 2)  # of the fixture's few DayHikes, draw 2 ...
+    monkeypatch.setattr(serving, "DRAW_T", 10.0)  # ... nearly evenly, so draws differ
+    ranked = [r for r in data.rank(MEADOW_PATH, DEFAULT_WEIGHTS) if r["id"] is not None]
+    starts = [tuple(data.trailheads[data.row_of(r["id"])].tolist()) for r in ranked]
+
+    data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True)  # Strict order: the best, as before
+    for draw in range(12):
+        data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True, draw=draw)
+        data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True, draw=draw)
+
+    assert asked[0] == starts[: serving.LOOP_SEEDS]
+    scores, keys = [r["score"] for r in ranked], [str(r["id"]) for r in ranked]
+    expected = [[starts[i] for i in drawn(scores, keys, draw, 2, 10.0)] for draw in range(12)]
+    assert asked[1::2] == asked[2::2] == expected  # the same draw number, the same starts, in rank order
+    assert len({tuple(found) for found in expected}) > 1
+
+
+def test_a_loop_search_cut_by_its_time_limit_says_so(data, monkeypatch) -> None:
+    monkeypatch.setattr("dayhike.serving.LOOP_BUDGET_S", 0.0)
+
+    search = data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True).loop_search
+
+    assert search == {"starts": 0, "found": 0, "listed": 0, "best": None, "stopped": True}
+
+
+@pytest.mark.usefixtures("rows_apart")
+def test_a_loop_search_that_runs_out_of_time_still_measures_the_loops_it_found(data, monkeypatch) -> None:
+    import dataclasses
+    import time
+
+    import dayhike.serving as serving
+
+    def slow(graph, target, trailheads, *, deadline, **kwargs):
+        # As a long Seed's search on a dense TrailGraph does: it finds loops and runs to its deadline.
+        search = serving.find_loops.__wrapped__(graph, target, trailheads, deadline=deadline, **kwargs)
+        time.sleep(max(0.0, deadline - time.monotonic()))
+        return dataclasses.replace(search, stopped=True)
+
+    slow.__wrapped__ = serving.find_loops
+    monkeypatch.setattr(serving, "find_loops", slow)
+    monkeypatch.setattr(serving, "LOOP_BUDGET_S", 1.0)
+    monkeypatch.setattr(serving, "LOOP_SEARCH_S", 0.5)
+
+    results = data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True)
+
+    search = results.loop_search
+    assert search["found"] >= 2 and search["stopped"] is True
+    assert search["listed"] == len(_loops(results)) == 2
+
+
+def test_the_next_rows_leave_out_loops_of_an_area_already_listed(data) -> None:
+    (row,) = data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True)
+
+    assert data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True, after=[tuple(row["trailhead"])]) == []
 
 
 @pytest.mark.parametrize(
@@ -248,6 +367,31 @@ def test_api_ranks_loops_with_their_link_versions_and_drive_hours(data) -> None:
     assert (hike["line"], hike["name"]) == (plain["line"], plain["name"])
     for version in plain["versions"][:1]:  # drawn on the map as the hike's own page draws it
         assert client.get(f"/api/hikes/{version['id']}").json()["line"] == version["line"]
+
+
+def test_api_ranks_loops_near_the_origin_of_a_drive_limit(data) -> None:
+    from fastapi.testclient import TestClient
+
+    from dayhike.catalog import Origin, straight_line_distances_m
+    from dayhike.web import create_app
+
+    lat, lon = _fixture_point(600, 100)  # beside the Lake Loop's Junction at (500, 0); every Trailhead 600 m+ off
+
+    class Near:
+        """An hour's drive to places within 300 m, three hours (out of reach) farther."""
+
+        def sources_to_targets(self, origin, trailheads):
+            metres = straight_line_distances_m(Origin(lat, lon), [(t.latitude, t.longitude) for t in trailheads])
+            return [3600.0 if m <= 300 else 3 * 3600.0 for m in metres]
+
+    client = TestClient(create_app(data, lambda max_hours: Near()))
+    body = {"wish": {"length": 3_000}, "loops": True, "origin": {"lat": lat, "lon": lon}, "max_hours": 2}
+    answer = client.post("/api/rank", json=body).json()
+
+    # No DayHike starts within the drive; loops start near the Origin, an hour away.
+    listed = [r for row in answer["results"] for r in (row, *row["versions"])]
+    assert answer["reachable"] == 0 and listed
+    assert {r["id"] for r in listed} == {None} and {r["drive_hours"] for r in listed} == {1.0}
 
 
 def test_api_ranks_without_loops_unless_asked(data) -> None:
@@ -300,7 +444,7 @@ def test_a_found_loop_names_whole_segments_from_its_start(data) -> None:
     loop = _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True))[0]
     target = LoopTarget(3_100.0, float("nan"), float("nan"), float("nan"), None)
 
-    found = find_loops(data.trailgraph, target, [tuple(loop["trailhead"])], limit=10, deadline=float("inf"))
+    found = find_loops(data.trailgraph, target, [tuple(loop["trailhead"])], limit=10, deadline=float("inf")).loops
 
     assert found and all(f.drive_hours is None for f in found)
     walk = data.trailgraph.walk_segments(found[0].start, found[0].segments)
@@ -317,3 +461,31 @@ def test_a_loop_with_no_hiking_place_near_its_start_is_named_by_its_trails(data,
     names = {loop["name"] for loop in _loops(data.rank(MEADOW_PATH, DEFAULT_WEIGHTS, loops=True))}
 
     assert names and all(name.startswith("Loop on ") for name in names), names
+
+
+def test_loop_starts_take_each_of_the_best_trailheads_nearest_junction_before_any_second() -> None:
+    import sqlite3
+
+    from dayhike.loops import LOOP_STARTS, LOOP_TRAILHEADS, _starts
+
+    # 25 Trailheads 10 km apart, each with three Junctions 100, 200 and 300 m north of it.
+    db = sqlite3.connect(":memory:")
+    db.executescript(
+        "CREATE TABLE junctions (id INTEGER PRIMARY KEY, latitude REAL, longitude REAL, degree INTEGER);"
+        "CREATE TABLE segments (id INTEGER PRIMARY KEY, a INTEGER, b INTEGER, kind TEXT);"
+        "CREATE VIRTUAL TABLE segment_boxes USING rtree(id, south, north, west, east);"
+    )
+    trailheads = [(46.0, 14.0 + 0.13 * place) for place in range(25)]
+    for place, (lat, lon) in enumerate(trailheads):
+        for nth in range(3):
+            junction, north = 100 * place + nth, lat + (nth + 1) * 0.0009
+            db.execute("INSERT INTO junctions VALUES (?, ?, ?, 2)", (junction, north, lon))
+            db.execute("INSERT INTO segments VALUES (?, ?, ?, 'trail')", (junction, junction, junction))
+            db.execute("INSERT INTO segment_boxes VALUES (?, ?, ?, ?, ?)", (junction, north, north, lon, lon))
+
+    starts = [junction for junction, _, _ in _starts(db, None, trailheads)]
+
+    # Round by round over the best LOOP_TRAILHEADS: every one's nearest, then every second nearest, up to LOOP_STARTS.
+    assert starts == [100 * place + nth for nth in range(3) for place in range(LOOP_TRAILHEADS)][:LOOP_STARTS]
+    assert 1500 in starts  # the 16th Trailhead gets a start
+    assert not [junction for junction in starts if junction >= 100 * LOOP_TRAILHEADS]  # the 21st and later none

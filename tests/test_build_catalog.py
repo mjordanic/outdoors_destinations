@@ -3,13 +3,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from dayhike import Catalog, build_catalog
 from dayhike.catalog import (
-    MAX_LENGTH_M,
     MIN_LENGTH_M,
     NAME_ORIGIN_OSM_NAME,
     NAME_ORIGIN_OSM_REF,
     NAME_ORIGIN_SYNTHETIC,
+    ensure_column,
     geometry_store_path_for,
 )
 
@@ -22,7 +24,7 @@ REF_SPINE_ID = 1007
 KEPT_IDS = {RIDGE_WALK_ID, VALLEY_PATH_ID, UNNAMED_ID, REF_SPINE_ID}
 
 
-def test_build_catalog_keeps_named_in_band_dayhikes(tmp_path: Path) -> None:
+def test_build_catalog_keeps_named_and_unnamed_dayhikes_of_at_least_1_km(tmp_path: Path) -> None:
     catalog = build_catalog(FIXTURE, tmp_path / "catalog.sqlite")
 
     kept = catalog.dayhikes
@@ -42,15 +44,15 @@ def _by_id(catalog: Catalog, hike_id: int):
     return next(hike for hike in catalog.dayhikes if hike.id == hike_id)
 
 
-def test_kept_dayhikes_have_trailhead_and_length_in_band(tmp_path: Path) -> None:
+def test_kept_dayhikes_have_trailhead_and_at_least_the_minimum_length(tmp_path: Path) -> None:
     catalog = build_catalog(FIXTURE, tmp_path / "catalog.sqlite")
     ridge = _by_id(catalog, RIDGE_WALK_ID)
     valley = _by_id(catalog, VALLEY_PATH_ID)
 
     assert (ridge.trailhead.latitude, ridge.trailhead.longitude) == (45.0, 15.0)
     assert (valley.trailhead.latitude, valley.trailhead.longitude) == (45.2, 15.1)
-    assert MIN_LENGTH_M <= ridge.length_m <= MAX_LENGTH_M
-    assert MIN_LENGTH_M <= valley.length_m <= MAX_LENGTH_M
+    assert ridge.length_m >= MIN_LENGTH_M
+    assert valley.length_m >= MIN_LENGTH_M
 
 
 def test_difficulty_is_max_sac_scale_or_missing_not_t1(tmp_path: Path) -> None:
@@ -69,8 +71,8 @@ def test_ingest_report_counts_kept_versus_dropped_by_reason(tmp_path: Path) -> N
 
     assert report.kept == 4
     assert report.dropped_unnamed == 0
-    assert report.dropped_length == 2
-    assert report.dropped_network == 1
+    assert report.dropped_length == 1
+    assert report.dropped_container == 1
     assert report.named_osm_name == 2
     assert report.named_osm_ref == 1
     assert report.named_synthetic == 1
@@ -160,6 +162,23 @@ def test_valhalla_compose_is_tracked_and_tiles_are_ignored() -> None:
     assert ignore_code("data/valhalla/croatia-latest-roads.osm.pbf") == 0
 
 
+def test_the_valhalla_that_builds_tiles_is_the_pinned_one_that_serves_them() -> None:
+    import yaml
+
+    repo = Path(__file__).resolve().parents[1]
+    instructions = [
+        line.split()
+        for line in (repo / "web" / "Dockerfile").read_text().splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    served = next(words[1] for words in instructions if words[0].upper() == "FROM")
+    compose = yaml.safe_load((repo / "data" / "valhalla" / "compose.yaml").read_text())
+    built = compose["services"]["valhalla"]["image"]
+
+    assert "@sha256:" in served
+    assert built == served
+
+
 def test_ingest_work_file_is_gitignored() -> None:
     repo = Path(__file__).resolve().parents[1]
 
@@ -237,3 +256,58 @@ def test_cli_ingest_list_prints_dayhike_names(tmp_path: Path) -> None:
     assert "Valley Path" in result.stdout
     assert "relation:1003" in result.stdout
     assert "PS-1" in result.stdout
+
+
+def test_the_ingest_command_takes_a_directory_of_osm_files(tmp_path: Path) -> None:
+    from dayhike.cli import main
+
+    osm = tmp_path / "osm"
+    osm.mkdir()
+    (osm / "catalog.osm").write_bytes(FIXTURE.read_bytes())
+    catalog_path = tmp_path / "catalog.sqlite"
+
+    assert main(["ingest", str(osm), "--catalog", str(catalog_path)]) == 0
+
+    assert {hike.id for hike in Catalog.open(catalog_path).dayhikes} == KEPT_IDS
+
+
+def test_a_dem_directory_that_does_not_exist_is_refused(tmp_path: Path) -> None:
+    catalog_path = tmp_path / "catalog.sqlite"
+
+    with pytest.raises(FileNotFoundError, match="typo"):
+        build_catalog(FIXTURE, catalog_path, dem_dir=tmp_path / "typo")
+
+    assert not catalog_path.exists()
+
+
+def test_a_catalog_opens_from_a_path_with_uri_special_characters(tmp_path: Path) -> None:
+    path = tmp_path / "100% #1?.sqlite"
+    build_catalog(FIXTURE, path)
+
+    assert Catalog.open(path).attribution == "© OpenStreetMap contributors"
+
+
+def test_opening_a_missing_catalog_says_not_found_and_creates_no_file(tmp_path: Path) -> None:
+    path = tmp_path / "catalgo.sqlite"
+
+    with pytest.raises(FileNotFoundError, match="Catalog not found"):
+        Catalog.open(path)
+
+    assert not path.exists()
+
+
+def test_ensure_column_adds_a_missing_column_once() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE feature_vectors (dayhike_id INTEGER)")
+    ensure_column(connection, "feature_vectors", "snow_fraction", "REAL")
+    ensure_column(connection, "feature_vectors", "snow_fraction", "REAL")
+    ensure_column(connection, "feature_vectors", "dayhike_id", "INTEGER")
+
+    columns = [(row[1], row[2]) for row in connection.execute("PRAGMA table_info(feature_vectors)")]
+    assert columns == [("dayhike_id", "INTEGER"), ("snow_fraction", "REAL")]
+
+
+def test_tests_run_away_from_the_repositorys_data() -> None:
+    # A default raster folder (data/landcover ...) is relative: built real data must not reach the fixtures.
+    assert not (Path.cwd() / "data").exists()
+    assert Path.cwd() != Path(__file__).resolve().parents[1]

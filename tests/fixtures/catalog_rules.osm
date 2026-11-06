@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="dayhike-fixture">
+  <!-- The Catalog rules of ADR-0033 and ADR-0034, one relation per case.
+       Lengths use meridians: 1° latitude ≈ 111.195 km at R = 6371000 m.
+       0.5 km → Δlat 0.0044966080; 1.5 km → 0.0134898241; 8 km → 0.0719457285;
+       25 km → 0.2248304015; 30 km → 0.2697964818. -->
+
+  <!-- Long Traverse: 30 km, a tour of more than a day. Kept: there is no upper cap. -->
+  <node id="40" lat="46.6000000000" lon="16.4000000000" version="1"/>
+  <node id="41" lat="46.8697964818" lon="16.4000000000" version="1"/>
+  <way id="501" version="1">
+    <nd ref="40"/>
+    <nd ref="41"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <relation id="2005" version="1">
+    <member type="way" ref="501" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Long Traverse"/>
+  </relation>
+
+  <!-- Via Dinarica Red R1: an 8 km iwn stage with its own ways. Kept like any route. -->
+  <node id="50" lat="46.9000000000" lon="16.5000000000" version="1"/>
+  <node id="51" lat="46.9719457285" lon="16.5000000000" version="1"/>
+  <way id="601" version="1">
+    <nd ref="50"/>
+    <nd ref="51"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <relation id="2006" version="1">
+    <member type="way" ref="601" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Via Dinarica Red R1"/>
+    <tag k="network" v="iwn"/>
+  </relation>
+
+  <!-- Via Dinarica Red: a pure container of stages, no way of its own. Dropped. -->
+  <relation id="2007" version="1">
+    <member type="relation" ref="2006" role=""/>
+    <member type="relation" ref="2005" role=""/>
+    <tag k="type" v="superroute"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Via Dinarica Red"/>
+    <tag k="network" v="iwn"/>
+  </relation>
+
+  <!-- Lac Walk: route=foot, a loop of about 4 km. Read like route=hiking (ADR-0034). -->
+  <node id="1" lat="46.0000000000" lon="16.0000000000" version="1"/>
+  <node id="2" lat="46.0089932160" lon="16.0000000000" version="1"/>
+  <node id="3" lat="46.0089932160" lon="16.0130000000" version="1"/>
+  <node id="4" lat="46.0000000000" lon="16.0130000000" version="1"/>
+  <way id="101" version="1">
+    <nd ref="1"/>
+    <nd ref="2"/>
+    <nd ref="3"/>
+    <nd ref="4"/>
+    <nd ref="1"/>
+    <tag k="highway" v="footway"/>
+  </way>
+  <relation id="2001" version="1">
+    <member type="way" ref="101" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="foot"/>
+    <tag k="name" v="Lac Walk"/>
+  </relation>
+
+  <!-- Tour Mixte: nwn, a 25 km way of its own plus a child relation (mixed).
+       Kept and measured on its own ways (ADR-0033). -->
+  <node id="10" lat="46.1000000000" lon="16.1000000000" version="1"/>
+  <node id="11" lat="46.3248304015" lon="16.1000000000" version="1"/>
+  <way id="201" version="1">
+    <nd ref="10"/>
+    <nd ref="11"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <relation id="2002" version="1">
+    <member type="way" ref="201" role=""/>
+    <member type="relation" ref="2003" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Tour Mixte"/>
+    <tag k="network" v="nwn"/>
+  </relation>
+
+  <!-- Short Spur: 0.5 km, under the 1 km minimum. Dropped on length. -->
+  <node id="20" lat="46.4000000000" lon="16.2000000000" version="1"/>
+  <node id="21" lat="46.4044966080" lon="16.2000000000" version="1"/>
+  <way id="301" version="1">
+    <nd ref="20"/>
+    <nd ref="21"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <relation id="2003" version="1">
+    <member type="way" ref="301" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Short Spur"/>
+  </relation>
+
+  <!-- 12 - 13: a 1.5 km node-network leg, route=foot. Dropped as a leg. -->
+  <node id="30" lat="46.5000000000" lon="16.3000000000" version="1"/>
+  <node id="31" lat="46.5134898241" lon="16.3000000000" version="1"/>
+  <way id="401" version="1">
+    <nd ref="30"/>
+    <nd ref="31"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <relation id="2004" version="1">
+    <member type="way" ref="401" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="foot"/>
+    <tag k="network" v="lwn"/>
+    <tag k="network:type" v="node_network"/>
+    <tag k="ref" v="12-13"/>
+  </relation>
+</osm>

@@ -105,6 +105,32 @@ def test_snaps_look_farther_for_remote_places_and_are_kept_on_disk(tmp_path: Pat
     assert len(cutoffs) == calls  # the second HighwaySnaps read the file, not Valhalla
 
 
+def test_snaps_kept_in_memory_are_capped_least_recently_asked_first(tmp_path: Path) -> None:
+    asked: list[float] = []
+
+    def snap(lat, lon, cutoff):
+        asked.append(lat)
+        return (lat, lon)
+
+    server, url = _serve({"/locate": _locate(snap)})
+    path = tmp_path / "snaps.npz"
+    try:
+        HighwaySnaps(url, path).of([(40.0, 15.0)])
+        snaps = HighwaySnaps(url, path, keep=2)
+        snaps.path = None
+        snaps.of([(45.0, 15.0), (46.0, 15.0)])
+        snaps.of([(45.0, 15.0)])  # 46 is now the least recently asked
+        snaps.of([(47.0, 15.0)])  # and is dropped for 47
+        asked.clear()
+        found = snaps.of([(40.0, 15.0), (45.0, 15.0), (47.0, 15.0), (46.0, 15.0)])
+    finally:
+        _stop(server)
+
+    assert asked == [46.0]  # the place from the file is never dropped
+    assert [s[:2] for s in found] == [(40.0, 15.0), (45.0, 15.0), (47.0, 15.0), (46.0, 15.0)]
+    assert len(snaps._learned) == 2
+
+
 def test_client_bands_by_isochrone_and_asks_the_matrix_only_near_the_limit() -> None:
     asked: list[list[dict]] = []
 
@@ -141,6 +167,45 @@ def test_client_bands_by_isochrone_and_asks_the_matrix_only_near_the_limit() -> 
     assert [[t["lat"] for t in targets] for targets in asked] == [[0.5, 0.7]]
     assert client.unreachable == [(0.2, 0.0)]
 
+
+
+def test_client_asks_the_matrix_near_a_narrow_tip_of_a_jagged_contour() -> None:
+    def jagged_isochrone(body):
+        status, payload = _square_isochrone(body)
+        for feature in payload["features"]:
+            ring = feature["geometry"]["coordinates"][0]
+            r = ring[2][0]
+            # A tip 0.008 degrees high and 0.002 wide on the north side, as real contours have.
+            ring[2:3] = [[r, r], [0.001, r], [0.0, r + 0.008], [-0.001, r]]
+            # Thousands of steps along the east side, as a 4 h contour has tens of thousands.
+            ring[1:2] = [[r + 0.0005 * (k % 2), -r + 2 * r * k / 4000] for k in range(4000)]
+        return status, payload
+
+    asked: list[float] = []
+
+    def matrix(body):
+        asked.extend(t["lat"] for t in body["targets"])
+        return 200, {"sources_to_targets": [[{"time": 3_500.0} for _ in body["targets"]]]}
+
+    server, url = _serve(
+        {
+            "/locate": _locate(lambda lat, lon, cutoff: (lat, lon)),
+            "/isochrone": jagged_isochrone,
+            "/sources_to_targets": matrix,
+        }
+    )
+    try:
+        client = HighwayDriveTimeClient(1.0, HighwaySnaps(url))
+        times = client.sources_to_targets(
+            Origin(latitude=0.0, longitude=0.0),
+            # 0.145 degrees beyond the tip: inside the 0.15 degree ring around the contour.
+            [_trailhead(0.6 + 0.008 + 0.145, 0.0)],
+        )
+    finally:
+        _stop(server)
+
+    assert asked == [0.753]
+    assert times == [3_500.0]
 
 def test_client_adds_straight_line_approach_for_origin_and_trailhead() -> None:
     server, url = _serve(

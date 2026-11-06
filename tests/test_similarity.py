@@ -1,5 +1,6 @@
 import json
 import math
+import os
 import sqlite3
 from pathlib import Path
 
@@ -7,6 +8,7 @@ import numpy as np
 import pytest
 
 from dayhike import Catalog, StaleSimilarity, build_catalog, build_similarity
+from dayhike.parallel import WORKERS_ENV
 from dayhike.serving import scored_measures
 from dayhike.similarity import (
     CALIBRATION_KEYS,
@@ -21,6 +23,8 @@ from dayhike.similarity import (
     AmenityPoints,
     SimilarityStore,
     _FACTS_VERSION,
+    _step_m,
+    are_twins,
     calibrate,
     random_pair_shares,
     calibrate_similarity,
@@ -29,10 +33,12 @@ from dayhike.similarity import (
     climb_and_descent,
     elevation_gain,
     measure_scores,
+    nearest_on_line,
     profile_shape,
     similarity_dir_for,
     solar_aspect_points,
     solar_aspect_southness,
+    SOLAR_ASPECT_FLAT,
     steepness,
     surface_class,
     surface_class_from_tag,
@@ -320,6 +326,95 @@ def test_two_dry_hikes_score_low_on_waterside_and_the_dead_band_is_one_value(tmp
     assert dry[2] < dry[0]
 
 
+def test_two_close_climbs_beat_two_flat_walks_counted_the_same_under_the_floor(tmp_path: Path) -> None:
+    # ADR-0050. 40 of 100 hikes climb 100 m or less (one value under the floor: 16 % of random pairs);
+    # the others spread from 150 to 1,500 m, 166 m and 167 m among them.
+    climbs = [*np.linspace(5, 95, 40), 166, 167, 600, 599, *np.linspace(150, 1_500, 56)]
+    store = _calibrated(tmp_path, 100, elevation_gain_m=climbs)
+
+    flat, _ = score_rows(store, [0], np.array([39]), {"elevation_gain": 100})
+    close, _ = score_rows(store, [40], np.array([41, 43]), {"elevation_gain": 100})
+    far, _ = score_rows(store, [40], np.array([99]), {"elevation_gain": 100})
+
+    assert flat[0] == pytest.approx(0.84, abs=0.02)  # 16 % of random pairs are as alike: both flat
+    assert close[0] > 0.97 and close[0] > flat[0]  # 166 m and 167 m: the flat pairs share a commoner value
+    assert far[0] < close[1] < close[0]  # off the floor, closeness: 166 m against 1,500, 599 and 167 m
+
+
+def test_a_pair_spanning_the_floor_gets_no_rarity_credit_so_a_farther_rare_pair_can_rank_above(tmp_path: Path) -> None:
+    # ADR-0050's near-floor exception. A Seed at 101 m: 80 m is floored to 100 m (raw 0.990), but its stretch
+    # takes in every hike under the floor, as common as that block, so it gets no credit. 110 m (raw 0.918)
+    # spans a rare stretch and gets the credit of the random pairs at raw 1.
+    climbs = [*np.linspace(5, 95, 39), 80, 101, 110, *np.linspace(150, 1_500, 58)]
+    store = _calibrated(tmp_path, 100, elevation_gain_m=climbs)
+
+    scores, _ = score_rows(store, [40], np.array([39, 41]), {"elevation_gain": 100})
+
+    assert scores[1] > scores[0]  # 110 m ranks above 80 m against 101 m
+
+
+def test_a_near_pair_on_a_tolerance_measure_stays_below_its_dead_band(tmp_path: Path) -> None:
+    # Lake or sea keeps ADR-0026: a gap past the dead band is below every pair counted the same (the Kattegat pair).
+    shares = [0.0] * 82 + [0.1] * 10 + [0.3, 0.3, 0.5, 0.5, 0.7, 0.7, 0.9, 0.9]
+    store = _calibrated(tmp_path, 100, waterside_share=shares)
+
+    dry, _ = score_rows(store, [0], np.array([1]), {"waterside": 100})
+    apart, _ = score_rows(store, [94], np.array([96]), {"waterside": 100})  # 0.5 and 0.7
+
+    assert apart[0] < dry[0]
+
+
+def test_a_hike_without_a_grade_ranks_below_one_with_the_wished_grade_when_difficulty_weighs(tmp_path: Path) -> None:
+    # Hike 0 has no grade and the wished length; hike 1 has the wished T4 and is 2 km longer.
+    grades = [np.nan, 4, *[1, 2, 3, 4, 5, 6] * 16, 2, 3]
+    lengths = [10_000, 12_000, *np.linspace(5_000, 20_000, 98)]
+    store = _calibrated(tmp_path, 100, difficulty_rank=grades, length_m=lengths)
+    wish = OutsideSeed.wished({"difficulty": 4, "length": 10_000})
+    rows = np.array([0, 1])
+
+    weighted, _ = score_rows(store, [wish], rows, {"difficulty": 100, "length": 100})
+    graded_seed, _ = score_rows(store, [1], np.array([0]), {"difficulty": 100, "length": 100})
+    length_only, _ = score_rows(store, [wish], rows, {"length": 100})
+    measures = scored_measures(store, wish, rows, None)
+
+    assert weighted[1] > weighted[0]
+    # Still listed: no grade scores as far apart as grades go, not as missing.
+    assert weighted[0] == pytest.approx(length_only[0] / 2)
+    assert graded_seed[0] < 1 and measures[0]["difficulty"]["raw"] == 0.0
+    # Difficulty not weighted: the ungraded hike's better length wins as before.
+    assert length_only[0] > length_only[1]
+    # A Seed without a grade compares no grade: Difficulty drops out.
+    no_grade, _ = score_rows(store, [0], np.array([1]), {"difficulty": 100, "length": 100})
+    only_length, _ = score_rows(store, [0], np.array([1]), {"length": 100})
+    assert no_grade == pytest.approx(only_length)
+
+
+def test_a_hike_with_no_data_for_a_wished_measure_ranks_below_hikes_with_that_data(tmp_path: Path) -> None:
+    # Hike 0 has the wished length but no climb data (no elevation there); hike 1 has the wished climb
+    # and is 2 km longer, as the Georgian hikes with no climb ranked first on length alone.
+    gains = [np.nan, 600, *np.linspace(0, 2_000, 98)]
+    lengths = [10_000, 12_000, *np.linspace(5_000, 20_000, 98)]
+    store = _calibrated(tmp_path, 100, elevation_gain_m=gains, length_m=lengths)
+    wish = OutsideSeed.wished({"elevation_gain": 600, "length": 10_000})
+    rows = np.array([0, 1])
+
+    weighted, _ = score_rows(store, [wish], rows, {"elevation_gain": 100, "length": 100})
+    length_only, _ = score_rows(store, [wish], rows, {"length": 100})
+    measures = scored_measures(store, wish, rows, None)
+
+    assert weighted[1] > weighted[0]
+    # Still listed, scored 0 on the climb it has no data for: not dropped from its mean.
+    assert weighted[0] == pytest.approx(length_only[0] / 2)
+    assert measures[0]["elevation_gain"]["raw"] == 0.0
+    assert measures[0]["elevation_gain"]["note"] == "No data for this hike: counts as 0 against the value you asked for"
+    # Climbing not weighted: the hike with no climb data and the better length wins as before.
+    assert length_only[0] > length_only[1]
+    # A Seed hike, not a wish, still leaves the measure out of a pair either side lacks.
+    seeded, _ = score_rows(store, [1], np.array([0]), {"elevation_gain": 100, "length": 100})
+    seeded_length, _ = score_rows(store, [1], np.array([0]), {"length": 100})
+    assert seeded == pytest.approx(seeded_length)
+
+
 def test_weighted_mean_renormalizes_over_the_scored_columns() -> None:
     scores = np.array([[1.0, 0.0], [1.0, np.nan], [np.nan, np.nan]])
     mean = weighted_mean(scores, np.array([100.0, 50.0]))
@@ -402,12 +497,111 @@ def test_elevation_gain_drops_dem_spikes_but_keeps_a_steep_summit() -> None:
     # 60 m up and down within 30 m of trail on a flat walk is the DEM, not the trail.
     spiky = [400.0, 402.0, 462.0, 401.0, 403.0, 340.0, 404.0, 400.0]
     assert elevation_gain(*_north_line(spiky, step_m=30.0)) == 0.0
-    # A spike next to a spike goes too, once the first is dropped.
-    assert elevation_gain(*_north_line([400.0, 401.0, 460.0, 345.0, 402.0], step_m=30.0)) == 0.0
+    # A spike next to a spike goes too, once the first is dropped: left is the 2 m the walk ends higher.
+    assert elevation_gain(*_north_line([400.0, 401.0, 460.0, 345.0, 402.0], step_m=30.0)) == 2.0
     # A summit 100 m above both neighbours 500 m away is a 20 % grade: real.
     assert elevation_gain(*_north_line([1000.0, 1100.0, 1000.0], step_m=500.0)) == 100.0
-    # The ends are never spikes.
-    assert elevation_gain(*_north_line([460.0, 400.0, 401.0], step_m=30.0)) == 60.0
+    # A run of vertices off the trail goes too while it is at most 60 m long: a path along a steep
+    # shore reads the flat lake for 3 vertices 15 m apart, then the slope again.
+    shore = [850.0, 851.0, 835.0, 835.0, 835.0, 852.0, 850.0]
+    assert elevation_gain(*_north_line(shore, step_m=15.0)) == 0.0  # 16.5 m before the run rule
+    # 4 vertices 25 m apart (75 m) is a real dip in the trail.
+    dip = [850.0, 851.0, 830.0, 830.0, 830.0, 830.0, 852.0, 850.0]
+    assert elevation_gain(*_north_line(dip, step_m=25.0)) == pytest.approx(21.5)
+    # The ends are never spikes. Walked down, 60 m down and the last metre up; walked up,
+    # 59 m up from the start's 401 m: the mean of the two.
+    assert climb_and_descent(*_north_line([460.0, 400.0, 401.0], step_m=30.0)) == (0.5, 59.5)
+
+
+def _stepwise_climb_and_descent(along, ele):
+    """Climb and descent by the GLOSSARY.md rules, one vertex at a time, one
+    walking direction: the shortest run of kept vertices ending at the last one,
+    at most 60 m long (one vertex at any length), whose every vertex is at least
+    10 m above (or every one below) the kept vertices on both sides, with at
+    least a 25 % grade into it and out of it, is dropped (and the vertices before
+    it are looked at again); then a change counts once it moves 10 m from the
+    last counted elevation, and the last kept vertex counts whatever it moved."""
+    kept = []
+    for here in ((m, e) for m, e in zip(along, ele) if math.isfinite(e)):
+        dropped = True
+        while dropped and len(kept) >= 2:
+            dropped = False
+            for start in range(len(kept) - 1, 0, -1):
+                run, before = kept[start:], kept[start - 1]
+                if len(run) > 1 and run[-1][0] - run[0][0] > 60.0:
+                    break
+                heights = [e for _, e in run]
+                above = min(heights) - max(before[1], here[1]) >= 10.0
+                below = min(before[1], here[1]) - max(heights) >= 10.0
+                steep_in = abs(run[0][1] - before[1]) >= 0.25 * (run[0][0] - before[0])
+                steep_out = abs(here[1] - run[-1][1]) >= 0.25 * (here[0] - run[-1][0])
+                if (above or below) and steep_in and steep_out:
+                    del kept[start:]
+                    dropped = True
+                    break
+        kept.append(here)
+    if not kept:
+        return math.nan, math.nan
+    climb = descent = 0.0
+    last = kept[0][1]
+    for _, e in kept[1:]:
+        if e - last >= 10.0:
+            climb, last = climb + (e - last), e
+        elif last - e >= 10.0:
+            descent, last = descent + (last - e), e
+    end = kept[-1][1]
+    return climb + max(end - last, 0.0), descent + max(last - end, 0.0)
+
+
+def _both_ways(lat, lon, ele):
+    """The mean of the stepwise climb and descent walked forward and walked back (ADR-0048)."""
+    def stepwise(lat, lon, ele):
+        along = np.concatenate([[0.0], np.cumsum(_step_m(np.asarray(lat, float), np.asarray(lon, float)))])
+        return _stepwise_climb_and_descent(along.tolist(), list(ele))
+
+    (climb, descent), (back_climb, back_descent) = stepwise(lat, lon, ele), stepwise(lat[::-1], lon[::-1], ele[::-1])
+    return (climb + back_descent) / 2, (descent + back_climb) / 2
+
+
+def test_climb_and_descent_match_the_stepwise_rules_on_noisy_spiky_walks() -> None:
+    rng = np.random.default_rng(20261103)
+    for _ in range(300):
+        count = int(rng.integers(1, 400))
+        step = rng.uniform(5.0, 120.0)
+        lat, lon, _ = _north_line([0.0] * count, step_m=step)
+        ele = 500.0 + np.cumsum(rng.normal(0.0, rng.uniform(0.5, 15.0), count))
+        spikes = rng.random(count) < rng.uniform(0.0, 0.3)
+        ele[spikes] += rng.choice([-1.0, 1.0], spikes.sum()) * rng.uniform(5.0, 80.0, spikes.sum())
+        ele[rng.random(count) < rng.uniform(0.0, 0.2)] = math.nan
+        expected = _both_ways(lat, lon, ele)
+        assert climb_and_descent(lat, lon, ele) == pytest.approx(expected, rel=0, abs=0, nan_ok=True)
+
+
+def _noisy_spiky_walks(seed: int, count: int = 300):
+    rng = np.random.default_rng(seed)
+    for _ in range(count):
+        size = int(rng.integers(2, 400))
+        lat, lon, _ = _north_line([0.0] * size, step_m=rng.uniform(5.0, 120.0))
+        lon = lon + np.cumsum(rng.normal(0.0, 1e-4, size))  # not due north: a step's metres depend on its ends
+        ele = 500.0 + np.cumsum(rng.normal(0.0, rng.uniform(0.5, 15.0), size))
+        spikes = rng.random(size) < rng.uniform(0.0, 0.3)
+        ele[spikes] += rng.choice([-1.0, 1.0], spikes.sum()) * rng.uniform(5.0, 80.0, spikes.sum())
+        ele[1:-1][rng.random(size - 2) < rng.uniform(0.0, 0.2)] = math.nan
+        yield lat, lon, ele
+
+
+def test_climb_and_descent_swap_exactly_when_the_walk_is_reversed() -> None:
+    for lat, lon, ele in _noisy_spiky_walks(20261104):
+        climb, descent = climb_and_descent(lat, lon, ele)
+
+        assert climb_and_descent(lat[::-1], lon[::-1], ele[::-1]) == (descent, climb)
+
+
+def test_a_walk_retraced_climbs_exactly_what_it_descends() -> None:
+    for lat, lon, ele in _noisy_spiky_walks(20261105):
+        climb, descent = climb_and_descent(*(np.concatenate([v, v[::-1][1:]]) for v in (lat, lon, ele)))
+
+        assert climb == descent
 
 
 def test_climb_grade_is_the_gain_over_the_climbing_length() -> None:
@@ -617,6 +811,32 @@ def test_dem_heights_read_the_cell_holding_each_point(tmp_path: Path) -> None:
     assert math.isnan(dem_heights(tmp_path, np.array([45.0]), np.array([15.0]))[0])
 
 
+def test_dem_heights_read_each_cell_across_a_tiled_tile_and_its_ragged_edge_blocks(tmp_path: Path) -> None:
+    import rasterio
+    from rasterio.transform import from_origin
+
+    size, cell = 72, 1 / 3600
+    data = np.arange(size * size, dtype="float32").reshape(size, size)
+    data[5, 7] = -9999.0
+    tmp_path.mkdir(exist_ok=True)
+    with rasterio.open(
+        tmp_path / "N45E015_FABDEM_V1-2.tif", "w", driver="GTiff", height=size, width=size, count=1,
+        dtype="float32", crs="EPSG:4326", transform=from_origin(15.0, 46.0, cell, cell), nodata=-9999.0,
+        tiled=True, blockxsize=32, blockysize=32,  # 3 x 3 blocks, the last row and column cut short
+    ) as dataset:
+        dataset.write(data, 1)
+    rng = np.random.default_rng(3)
+    rows, cols = rng.integers(0, size, 500), rng.integers(0, size, 500)
+    rows[:2], cols[:2] = (5, 71), (7, 71)
+    lat = 46.0 - (rows + 0.5) * cell  # the tile's north-west corner, inside N45E015
+    lon = 15.0 + (cols + 0.5) * cell
+    heights = dem_heights(tmp_path, lat, lon)
+    expected = data[rows, cols].astype(float)
+    expected[expected == -9999.0] = np.nan
+    assert np.array_equal(heights, expected, equal_nan=True)
+    assert math.isnan(heights[0]) and heights[1] == size * size - 1
+
+
 def _southness(dem_dir, lat, lon) -> float:
     chosen = solar_aspect_points(len(lat))
     points = np.column_stack([lat[chosen], lon[chosen]])
@@ -647,12 +867,29 @@ def test_southness_scores_south_1_north_0_east_and_west_half(
 
 
 @pytest.mark.parametrize("grade", [0.0, 0.03])  # flat, and under 2 degrees
-def test_southness_leaves_out_flat_points_and_is_missing_with_none_sloped(
+def test_a_flat_walk_faces_no_way_and_counts_as_east_or_west_not_as_missing(
     tmp_path: Path, grade
 ) -> None:
     _write_dem_tile(tmp_path, 1000.0, grade_north=grade)
 
-    assert math.isnan(_southness(tmp_path, EAST_LAT, EAST_LON))
+    assert _southness(tmp_path, EAST_LAT, EAST_LON) == SOLAR_ASPECT_FLAT == 0.5
+
+
+def test_southness_is_the_mean_of_the_sloped_points_only(tmp_path: Path) -> None:
+    # West of 15.0025 the tile slopes up northward (faces south); east of it, flat.
+    _write_dem_tile(tmp_path, 1000.0, grade_north=0.2)
+    import rasterio
+
+    path = next(tmp_path.glob("*.tif"))
+    with rasterio.open(path, "r+") as dataset:
+        data = dataset.read(1)
+        flat_from = int((15.0025 - dataset.bounds.left) / dataset.res[0])
+        data[:, flat_from:] = 1000.0
+        dataset.write(data, 1)
+    lat = np.full(21, 45.0)
+    lon = np.array([_metres_east(25 * i) for i in range(21)])  # 500 m east: about 0.0064°
+
+    assert _southness(tmp_path, lat, lon) == pytest.approx(1.0, abs=0.01)
 
 
 def test_southness_is_missing_without_a_covering_tile_or_with_nodata(tmp_path: Path) -> None:
@@ -737,6 +974,121 @@ def test_twins_are_routes_that_each_lie_80_percent_on_the_other() -> None:
     ]
 
     assert twin_groups(routes).tolist() == [0, 0, 2, 3, 0, 5]
+
+
+def _wander(rng: np.random.Generator, metres: float, lat0: float = 45.0) -> np.ndarray:
+    """A winding walk of about ``metres`` from (lat0, 15), sampled every ``TWIN_STEP_M``."""
+    heading = np.cumsum(rng.normal(0.0, 0.3, int(metres // TWIN_STEP_M)))
+    north = np.concatenate([[0.0], np.cumsum(TWIN_STEP_M * np.cos(heading))])
+    east = np.concatenate([[0.0], np.cumsum(TWIN_STEP_M * np.sin(heading))])
+    return np.column_stack(
+        [[_metres_north(m, lat0) for m in north], [_metres_east(m) for m in east]]
+    ).astype(np.float32)
+
+
+def _defined_twins(a: np.ndarray, b: np.ndarray) -> bool:
+    """GLOSSARY.md Twin, measured on every point and every piece of the other line."""
+
+    def share_on(a: np.ndarray, b: np.ndarray) -> float:
+        distance, _ = nearest_on_line(b[:, 0], b[:, 1], a[:, 0], a[:, 1])
+        return float((distance <= 30.0).mean())
+
+    return share_on(a, b) >= 0.8 and share_on(b, a) >= 0.8
+
+
+def test_twins_answer_as_the_share_on_every_line_piece_near_the_thresholds() -> None:
+    rng = np.random.default_rng(20261103)
+    answers = []
+    for _ in range(300):
+        a = _wander(rng, rng.uniform(500, 6_000), lat0=rng.uniform(36, 70))
+        b = a[int(rng.integers(0, len(a) // 3)) : len(a) - int(rng.integers(0, len(a) // 3))].astype(float)
+        b = b + rng.normal(0.0, rng.uniform(0, 30), b.shape) / EARTH_RADIUS_M * 180 / math.pi
+        b[:, 1] += math.degrees(rng.uniform(0, 45) / EARTH_RADIUS_M)
+        if rng.random() < 0.5:
+            b = b[::-1]
+        b = b.astype(np.float32)
+        expected = _defined_twins(a, b)
+        assert are_twins(a, b) == expected
+        assert are_twins(b, a) == expected
+        answers.append(expected)
+    assert 30 < sum(answers) < 270  # both answers are tested, many close to a threshold
+
+
+def test_routes_far_from_twins_are_told_apart_without_a_points_by_pieces_matrix() -> None:
+    import tracemalloc
+
+    a = _route(0, 150_000)  # 3,001 points
+    b = _route(0, 150_000, east_m=500)
+    tracemalloc.start()
+    try:
+        assert not are_twins(a, b)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 10_000_000  # a 3,001 x 3,000 float64 matrix alone is 72 MB
+
+
+def test_nearest_on_a_long_line_holds_a_bounded_slice_of_points_by_pieces_in_memory() -> None:
+    import tracemalloc
+
+    line = _route(0, 250_000)  # 5,001 vertices
+    rng = np.random.default_rng(7)
+    points = line[rng.integers(0, len(line), 3_000)].astype(float)
+    points[:, 1] += np.degrees(rng.uniform(-200, 200, len(points)) / EARTH_RADIUS_M)
+    whole_distance, whole_position = nearest_on_line(line[:, 0], line[:, 1], points[:1, 0], points[:1, 1])
+    tracemalloc.start()
+    try:
+        distance, position = nearest_on_line(line[:, 0], line[:, 1], points[:, 0], points[:, 1])
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 100_000_000  # one 3,000 x 5,000 float64 matrix is 120 MB
+    assert (distance[0], position[0]) == (whole_distance[0], whole_position[0])
+    assert distance.max() < 201 and np.all(np.diff(position[np.argsort(points[:, 0])]) >= -1e-6)
+
+
+@pytest.mark.parametrize("radius_m", [50.0, 100.0, 2_000.0])
+def test_rows_near_a_line_are_the_points_within_reach_of_a_line_point(radius_m) -> None:
+    from sklearn.neighbors import BallTree
+
+    from dayhike.similarity import SEARCH_STEP_M, _densify
+
+    rng = np.random.default_rng(int(radius_m))
+    reach = (math.hypot(radius_m, SEARCH_STEP_M / 2) + 1.0) / EARTH_RADIUS_M
+    for _ in range(40):
+        walk = _wander(rng, rng.uniform(100, 20_000), lat0=rng.uniform(36, 70)).astype(float)
+        line = np.radians(_densify(walk[:, 0], walk[:, 1], SEARCH_STEP_M))
+        # Points scattered around the walk, many of them near the reach.
+        near = line[rng.integers(0, len(line), 3_000)]
+        offset = rng.uniform(0.5, 1.5, (len(near), 1)) * reach * rng.normal(size=(len(near), 2))
+        offset[:, 1] /= np.cos(near[:, :1].ravel())
+        points = np.degrees(near + offset)
+        found = AmenityPoints(points, ["hut"] * len(points)).rows_near(line, radius_m)
+        within = BallTree(line, metric="haversine").query_radius(np.radians(points), r=reach, count_only=True) > 0
+        assert found.tolist() == np.flatnonzero(within).tolist()
+        assert 0 < within.sum() < len(points)
+
+def test_twins_are_compared_in_the_workers_and_grouped_alike(monkeypatch, tmp_path: Path) -> None:
+    import dayhike.similarity as similarity_module
+
+    # Ten copies of three routes, shuffled: thirty rows in three groups.
+    shapes = [_route(0, 3_000), _route(0, 3_000, east_m=300), _route(0, 6_000, east_m=600)]
+    routes = [shapes[(7 * row) % 3] for row in range(30)]
+    compared = tmp_path / "compared"
+    are_twins = similarity_module.are_twins
+
+    def recorded(a, b):
+        with compared.open("a") as out:
+            out.write(f"{os.getpid()}\n")
+        return are_twins(a, b)
+
+    monkeypatch.setattr(similarity_module, "are_twins", recorded)
+    monkeypatch.setenv(WORKERS_ENV, "3")
+
+    groups = twin_groups(routes).tolist()
+
+    assert groups == [[0, 1, 2][(7 * row) % 3] for row in range(30)]
+    assert str(os.getpid()) not in compared.read_text().split()
 
 
 def _fixture_catalog(tmp_path: Path) -> Path:
@@ -893,3 +1245,14 @@ def test_quantiles_are_monotone_and_in_unit_interval(tmp_path: Path) -> None:
     assert not np.isnan(scored).any()
     assert (np.diff(scored, axis=1) >= 0).all()
     assert ((scored >= 0) & (scored <= 1)).all()
+
+
+def test_a_walk_that_comes_back_past_a_water_source_passes_it_again() -> None:
+    # 10 km out and back the same way, a spring 1 km out: the DryStretch is 1 km to 19 km (GLOSSARY.md).
+    out = np.array([_metres_north(250 * i) for i in range(41)])
+    lat = np.concatenate([out, out[::-1][1:]])
+
+    facts = _walk(("spring", 1_000, 10), lat=lat, lon=np.full(len(lat), 15.0))
+
+    assert facts["water_count"] == 1  # one WaterSource, passed twice
+    assert facts["dry_stretch_m"] == pytest.approx(18_000.0, abs=5.0)

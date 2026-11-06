@@ -14,21 +14,22 @@ import rebuild_checks as rc
 
 pytestmark = rc.real_data
 INDEX = rc.DATA_DIR / "osm" / "geofabrik-index-v1.json"
-# Trailheads per country in the Catalog of the 2026-09-18 snapshot, as counted
-# on 2026-10-25 with the index of that day. guernsey-jersey and isle-of-man have none.
+# Trailheads per country in the Catalog of the 2026-10-31 snapshot (the shared
+# rebuild: relations, NetworkHikes and DayStages), counted on 2026-11-03 with the
+# index of 2026-11-01. guernsey-jersey has none.
 RECORDED_HIKES = {
-    "albania": 63, "andorra": 9, "austria": 9_669, "azores": 108, "belarus": 25,
-    "belgium": 3_153, "bosnia-herzegovina": 90, "bulgaria": 399, "croatia": 816,
-    "cyprus": 168, "czech-republic": 3_388, "denmark": 1_155, "estonia": 215,
-    "faroe-islands": 1, "finland": 599, "france": 24_414, "georgia": 167,
-    "germany": 35_644, "greece": 1_219, "hungary": 2_054, "iceland": 126,
-    "ireland-and-northern-ireland": 353, "italy": 28_389, "kosovo": 21, "latvia": 190,
-    "liechtenstein": 160, "lithuania": 162, "luxembourg": 365, "macedonia": 21,
-    "malta": 35, "moldova": 1, "monaco": 2, "montenegro": 152, "netherlands": 12_525,
-    "norway": 2_484, "poland": 2_254, "portugal": 1_127, "romania": 1_272,
-    "serbia": 431, "slovakia": 1_952, "slovenia": 1_506, "spain": 5_326,
-    "sweden": 2_419, "switzerland": 16_523, "turkey": 92, "ukraine": 424,
-    "united-kingdom": 1_676,
+    "albania": 91, "andorra": 35, "austria": 12_635, "azores": 123, "belarus": 45,
+    "belgium": 11_349, "bosnia-herzegovina": 177, "bulgaria": 627, "croatia": 1_242,
+    "cyprus": 221, "czech-republic": 6_770, "denmark": 1_960, "estonia": 537,
+    "faroe-islands": 1, "finland": 1_062, "france": 35_126, "georgia": 283,
+    "germany": 51_077, "greece": 1_552, "hungary": 3_288, "iceland": 167,
+    "ireland-and-northern-ireland": 982, "isle-of-man": 14, "italy": 32_202, "kosovo": 36,
+    "latvia": 457, "liechtenstein": 167, "lithuania": 328, "luxembourg": 550, "macedonia": 60,
+    "malta": 42, "moldova": 2, "monaco": 2, "montenegro": 261, "netherlands": 32_886,
+    "norway": 3_306, "poland": 5_907, "portugal": 1_746, "romania": 1_827,
+    "serbia": 828, "slovakia": 2_755, "slovenia": 2_119, "spain": 9_380,
+    "sweden": 4_183, "switzerland": 17_292, "turkey": 220, "ukraine": 632,
+    "united-kingdom": 6_811,
 }  # fmt: skip
 COVERED_SHARE = 0.99  # of each value, in every country with at least COVERED_MIN_HIKES
 COVERED_MIN_HIKES = 50

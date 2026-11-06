@@ -1,13 +1,17 @@
 # Future work
 
-Deliberately deferred. Nothing here is being built in the Catalog-and-ranker
-milestone. This file exists so the research behind these decisions is not redone.
+Deliberately deferred ideas, and the measurements behind them, so the research
+is not redone. It was written during the Catalog-and-ranker milestone; some
+items have since been built, and say so.
 
 ---
 
 ## 1. Website UI
 
-### Why it's parked
+**Built since:** the web demo (ADR-0014, `src/dayhike/web/`) is live; see
+[Web demo](technical.md#web-demo). What follows is the original reasoning.
+
+### Why it was parked
 
 Phase 1 is a local Catalog and CLI Ranking. A webpage would freeze the HTTP
 shape before ingest, AmenityFacts, and k-NN are honest.
@@ -43,7 +47,8 @@ a rewrite.
 
 ### Why it's parked
 
-A DayHike is one named relation in a length band. Hut-to-hut is a sequence of
+A DayHike is one relation of at least 1 km; since ADR-0033 that includes
+multi-day tours and long sections, with no upper cap. Hut-to-hut is a sequence of
 DayHikes (or stages) plus overnight Hut choice. OSM superroutes are not that
 product; they are often 200 km traces.
 
@@ -91,7 +96,8 @@ can ingest GTFS, but coverage will be patchy.
 
 LandCover and ClimateNormal are FeatureVector material (ADR-0010). A weekend
 forecast is not: it would make "like Seed X" depend on the day of the query.
-SolarAspect is still the notebook prototype. Seasonal snow has no honest
+SolarAspect has since been built as a Measure (`southness`, from FABDEM; see
+the Measures table in [technical.md](technical.md#measures)). Seasonal snow has no honest
 per-DayHike layer. LandCover snow is permanent ice on the land-cover map, not
 January snowpack.
 
@@ -99,8 +105,6 @@ January snowpack.
 
 - A forecast shown on a detail view, or applied after Ranking the way DriveTime
   is. Never a FeatureVector column.
-- SolarAspect promoted from `notebooks/04_rank_feature_lab.ipynb` the same way
-  elevation left the notebook.
 - A snow layer that describes the season the Hiker asked about.
 
 ---
@@ -208,12 +212,12 @@ lengths, so a 5 km line and a 5 km RoundTrip look equally long. The
 - A rule for the length a Hiker walks: twice a line, the loop plus twice the
   stem for a lollipop, or a line left as is when it ends near a bus stop or
   parking.
-- Whether the Catalog length band (1–20 km) and the `length` Measure read that walked length
+- Whether the Catalog's 1 km minimum and the `length` Measure read that walked length
   or keep the one-way length.
 
 ADR-0019 takes up the comparison: with ReturnToStart (on by default) every hike
 is measured with its WayBack, the shortest walk back to its Trailhead. The
-Catalog keeps the one-way length and the 1–20 km band; a line left as is near a
+Catalog keeps the one-way length and the 1 km minimum (no upper cap, ADR-0033); a line left as is near a
 bus stop (a shuttle) is still open.
 
 ---
@@ -223,9 +227,14 @@ bus stop (a shuttle) is still open.
 ### Why it's parked
 
 Elevation gain (the `elevation_gain_m` fact, the web page's climb and descent,
-and the Catalog's `feature_vectors.elevation_gain_m`) drops one-vertex DEM
-spikes (10 m or more above or below both neighbours at a 25 % or steeper grade
-each side), then counts a climb or descent only once it moves 10 m. Against
+and the Catalog's `feature_vectors.elevation_gain_m`) drops DEM spikes (a
+vertex, or a run of vertices up to 60 m long, all 10 m or more above or all
+below both sides at a 25 % or steeper grade in and out), then counts a climb or
+descent only once it moves 10 m. Each drop tests the new last kept vertex
+again, so it can drop several in a row, and a real short dip or hump between
+steep sides (500 m, 400 m, 500 m, 100 m apart) is dropped too. The numbers below were measured with one-vertex
+spikes only; the run rule leaves the median DayHike unchanged and moves 9 % by
+more than 5 % (a sample of 1,348). Against
 2,973 OSM `ascent` tags the median error is 12 %, and 5 % of DayHikes are over
 1.5 times the tag (8 % before the spike filter). Checked against published
 gains: Ben Nevis Mountain Path 1,357 m (about 1,350 m), BergeSeen Trail D5
@@ -235,7 +244,11 @@ Routes cut into a cliff side still get far too much: Levada da Ribeira da
 Janela (Madeira, 357 m height range, nearly flat in reality) has 1,557 m. There
 the DEM is wrong by 20–40 m over many vertices in a row, which neither the
 spike filter nor the 10 m dead-band removes; a wider median filter that fixes
-it also cuts real mountain gain by about 10 %.
+it also cuts real mountain gain by about 10 %. A path along a steep lake shore
+is the same: Rhodannenberg – Vorauen on Klöntalersee (83 m height range) reads
+the lake's flattened surface and the slope above it in turn, 408 m one way
+before the run rule and 248 m after it; a 90 m moving average would give 162 m
+but trims real climbs by about 10 % (7 % where the height range is over 500 m).
 
 ### What would have to be true to start
 

@@ -1,6 +1,7 @@
 import dataclasses
 import json
 import sqlite3
+import time
 from pathlib import Path
 
 import numpy as np
@@ -11,11 +12,15 @@ from dayhike import serving
 from dayhike.catalog import Origin
 from dayhike.serving import (
     ELEVATION_POINTS,
+    FLOOR_TEXT,
     ServingData,
     ServingExportError,
     _fold,
+    _Spellings,
     _relevance,
     decode_polyline,
+    draw_noise,
+    drawn,
     drawn_profile,
     encode_polyline,
     export_serving,
@@ -51,7 +56,7 @@ def data(export: Path) -> ServingData:
 def test_export_writes_a_complete_directory(export: Path) -> None:
     meta = json.loads((export / "meta.json").read_text())
 
-    assert meta["format"] == 4
+    assert meta["format"] == 5
     assert meta["compose"] is True
     assert meta["dayhikes"] == 4
     assert meta["attribution"]["osm"] == "© OpenStreetMap contributors"
@@ -186,7 +191,7 @@ def test_search_finds_prefix_then_contains_ignoring_case_and_accents(data: Servi
     assert [hit["name"] for hit in data.search("ridge")] == ["Ridge Walk"]
     assert [hit["name"] for hit in data.search("WALK")] == ["Ridge Walk"]
     assert [hit["name"] for hit in data.search("Válley")] == ["Valley Path"]
-    assert [hit["id"] for hit in data.search("1002")] == [1002]
+    assert [(hit["id"], hit["match"]) for hit in data.search("1002")] == [(1002, "words")]
     assert data.search("x") == []
     assert data.search("no such hike") == []
     hit = data.search("ridge")[0]
@@ -234,6 +239,67 @@ def test_search_scans_a_bounded_number_of_occurrences_of_a_word_of_two_letters_o
     assert data.search("r w") == []
     monkeypatch.setattr(serving, "SEARCH_SCAN_CAP", 1)
     assert [hit["name"] for hit in data.search("al")] == ["Ridge Walk"]
+
+
+def test_search_finds_a_name_typed_with_a_typo_and_says_it_is_only_similar(data: ServingData) -> None:
+    for typed in ("Valey", "Vallley", "Valkey Path", "Rdige walk"):
+        assert [(hit["name"], hit["match"]) for hit in data.search(typed)][:1] in (
+            [("Valley Path", "similar")],
+            [("Ridge Walk", "similar")],
+        ), typed
+    assert [(hit["name"], hit["match"]) for hit in data.search("ridge")] == [("Ridge Walk", "words")]
+    assert data.search("Rid") == data.search("rid")  # a short word only as typed: nothing near it
+
+
+def test_a_word_only_inside_a_longer_word_is_a_similar_name(data: ServingData) -> None:
+    # As Rappenloch is only inside Krappenlochklamm: the name has no such word.
+    assert [(hit["name"], hit["match"]) for hit in data.search("idge")] == [("Ridge Walk", "similar")]
+
+
+def test_names_spelled_like_the_query_come_after_every_name_with_its_words(
+    data: ServingData, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(data._spellings, "respelled", lambda words: [["path"]])
+
+    assert [(hit["name"], hit["match"]) for hit in data.search("ridge")] == [
+        ("Ridge Walk", "words"),
+        ("Valley Path", "similar"),
+    ]
+    assert [hit["name"] for hit in data.search("ridge", limit=1)] == ["Ridge Walk"]
+
+
+def test_a_word_may_be_one_typo_off_and_a_long_word_two() -> None:
+    spellings = _Spellings(["triglav", "dolic triglav", "triglavska jezera", "kredarica", "trig"])
+
+    assert spellings.near("triglov") == [(1, "triglav")]  # changed
+    assert spellings.near("tirglav") == [(1, "triglav")]  # two swapped
+    assert spellings.near("trglav") == [(1, "triglav")]  # missing
+    assert spellings.near("trigglav") == [(1, "triglav")]  # added
+    assert spellings.near("trilgov") == []  # two typos in a short word
+    assert spellings.near("triglavskka") == [(1, "triglavska")]
+    assert spellings.near("krdaricca") == [(2, "kredarica")]
+    assert spellings.near("triglav") == [] and spellings.near("tri") == []  # as typed; too short
+    assert spellings.respelled(["triglov", "jezra"]) == [["triglov", "jezera"], ["triglav", "jezra"], ["triglav", "jezera"]]
+    assert _Spellings(["stage 1002", "stage 1003"]).near("1004") == []  # a number is another hike
+
+
+def test_respellings_of_equal_typos_try_the_commonest_word_first() -> None:
+    spellings = _Spellings(["volley a", "volley b", "valley"])
+
+    assert spellings.respelled(["vplley"]) == [["volley"], ["valley"]]
+
+
+def test_a_long_query_of_many_words_with_typos_is_respelled_quickly() -> None:
+    words = [f"{a}{b}{c}x" for a in "bcd" for b in "aeiou" for c in "lmnr"]
+    spellings = _Spellings([" ".join(words[i : i + 3]) for i in range(len(words))])
+    query = [word[:-1] + "y" for word in words[:25]]
+
+    started = time.monotonic()
+    queries = spellings.respelled(query)
+
+    assert time.monotonic() - started < 2
+    assert len(queries) == serving.FUZZY_QUERIES
+    assert all(len(spelled) == len(query) and spelled != query for spelled in queries)
 
 
 def test_rank_matches_rank_dayhikes_and_reports_every_measure(
@@ -287,8 +353,14 @@ def test_score_note_says_the_score_in_words(score, tied, note) -> None:
         (0.58, "both 3 or more", "Counted as the same (both 3 or more); 42% of random hike pairs are this alike"),
         (
             0.16,
-            "within the dead band",
-            "Counted as the same (within the dead band); 84% of random hike pairs are this alike, so it counts little",
+            "less than 15 % of the walk apart",
+            "Counted as the same (less than 15 % of the walk apart); 84% of random hike pairs are this alike, "
+            "so it counts little",
+        ),
+        (
+            0.88,
+            "both 100 m or less",
+            "Counted as the same (both 100 m or less); 12% of random hike pairs are this alike",
         ),
     ],
 )
@@ -318,6 +390,7 @@ def test_compare_notes_tell_identical_values_and_values_counted_the_same(data: S
     facts[column["waterside_share"], :2] = (0.41, 0.53)
     facts[column["water_count"], :2] = (3, 5)  # both "3 or more"
     facts[column["length_m"], :2] = (4000, 9000)
+    facts[column["elevation_gain_m"], :2] = (11, 65)  # both under Climbing's 100 m floor
     facts[column["shelter_along"], :2] = 0  # neither has one mapped
     profile = np.repeat(data.store.profile[:1], len(facts[0]), 0)
     # Random-pair scores for every Measure, as a Catalog with land cover has them.
@@ -326,7 +399,8 @@ def test_compare_notes_tell_identical_values_and_values_counted_the_same(data: S
 
     (notes,) = scored_measures(store, 0, np.array([1]), None)
 
-    assert notes["waterside"]["note"].startswith("Counted as the same (within the dead band); ")
+    assert notes["waterside"]["note"].startswith("Counted as the same (less than 15 % of the walk apart); ")
+    assert notes["elevation_gain"]["note"].startswith("Counted as the same (both 100 m or less); ")
     assert notes["water_count"]["note"].startswith("Counted as the same (both 3 or more); ")
     assert notes["highest"]["note"].startswith("Identical; ")
     assert notes["round_trip"]["note"].startswith("Identical; ")
@@ -351,6 +425,116 @@ def test_rank_fills_its_rows_from_further_down_when_the_best_hikes_share_an_area
 
     assert [(r["id"], [v["id"] for v in r["versions"]]) for r in results] == [(1002, [1003]), (1007, [])]
     assert [len(data.rank(RIDGE_WALK_ID, {"length": 100}, limit=limit)) for limit in (1, 3)] == [1, 2]
+
+
+def _rows(results: list[dict]) -> list[tuple[int, list[int]]]:
+    return [(r["id"], [v["id"] for v in r["versions"]]) for r in results]
+
+
+def test_the_next_rows_continue_the_rows_listed_exactly(data: ServingData, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 1002 and 1003 start 14 km apart, 1007 farther: two areas within 20 km.
+    monkeypatch.setattr(serving, "GROUP_M", 20_000.0)
+    monkeypatch.setattr(serving, "LOOP_SEEDS", 0)
+    first = data.rank(RIDGE_WALK_ID, {"length": 100}, limit=1)
+
+    after = [tuple(row["trailhead"]) for row in first]
+    following = data.rank(RIDGE_WALK_ID, {"length": 100}, limit=1, after=after)
+
+    assert _rows(first) == [(1002, [1003])]
+    assert _rows(following) == [(1007, [])]
+    assert _rows(first + following) == _rows(data.rank(RIDGE_WALK_ID, {"length": 100}, limit=2))
+    shown = after + [tuple(row["trailhead"]) for row in following]
+    assert data.rank(RIDGE_WALK_ID, {"length": 100}, limit=1, after=shown) == []
+
+
+def test_the_rows_after_leave_out_every_hike_of_an_area_already_listed(
+    data: ServingData, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 1003, a version of 1002's row on the first page, never leads a row on the next.
+    monkeypatch.setattr(serving, "LOOP_SEEDS", 0)
+
+    following = data.rank(RIDGE_WALK_ID, {"length": 100}, after=[(45.2, 15.1)], group_m=20_000.0)
+
+    assert _rows(following) == [(1007, [])]
+
+
+def test_the_grouping_radius_is_asked_per_ranking(data: ServingData, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(serving, "LOOP_SEEDS", 0)
+
+    assert _rows(data.rank(RIDGE_WALK_ID, {"length": 100}, group_m=20_000.0)) == [(1002, [1003]), (1007, [])]
+    assert _rows(data.rank(RIDGE_WALK_ID, {"length": 100}, group_m=0.0)) == [(1002, []), (1003, []), (1007, [])]
+    # Without one, today's 10 km: 1002 and 1003, 14 km apart, are rows of their own.
+    assert _rows(data.rank(RIDGE_WALK_ID, {"length": 100})) == [(1002, []), (1003, []), (1007, [])]
+
+
+def test_a_row_counts_every_dayhike_ranked_that_starts_in_its_area(data: ServingData) -> None:
+    # Within 20 km 1002 leads 1003 (a version) and 1007 its own area; within 100 m each its own.
+    listed = data.rank(RIDGE_WALK_ID, {"length": 100}, group_m=20_000.0)
+    alone = data.rank(RIDGE_WALK_ID, {"length": 100}, group_m=100.0)
+
+    assert [(r["id"], r["in_area"]) for r in listed] == [(1002, 2), (1007, 1)]
+    assert [(r["id"], r["in_area"]) for r in alone] == [(1002, 1), (1003, 1), (1007, 1)]
+
+
+def test_a_draw_is_the_same_for_the_same_draw_number_and_lists_its_rows_in_their_order() -> None:
+    scores, keys = [0.9, 0.8, 0.8, 0.7, 0.6], ["11", "12", "13", "14", "15"]
+
+    first = drawn(scores, keys, 7, 3)
+
+    assert first == drawn(scores, keys, 7, 3) == sorted(first) and len(set(first)) == 3
+    assert drawn(scores, keys, 7, 9) == [0, 1, 2, 3, 4]  # a pool no larger than the page is the page
+    assert drawn(scores, keys, 7, 0) == []
+    equal = [0.5] * 6
+    assert len({tuple(drawn(equal, [str(k) for k in range(6)], draw, 2)) for draw in range(20)}) > 5
+
+
+def test_a_draw_takes_a_row_with_probability_rising_as_exp_of_its_score_over_t() -> None:
+    # Scores T ln 3 apart: the first is drawn 3 times as often as the second.
+    scores = [0.6, 0.6 - serving.DRAW_T * np.log(3)]
+
+    first = sum(drawn(scores, ["a", "b"], draw, 1) == [0] for draw in range(4_000))
+
+    assert first / 4_000 == pytest.approx(0.75, abs=0.025)
+    assert all(drawn([0.9, 0.5], ["a", "b"], draw, 1) == [0] for draw in range(1_000))  # 80 T apart: never
+
+
+def test_draw_noise_is_gumbel_noise_from_the_draw_number_and_the_row_key() -> None:
+    noise = [draw_noise(draw, "19787033") for draw in range(20_000)]
+
+    assert draw_noise(5, "19787033") == noise[5] and draw_noise(5, "19787034") != noise[5]
+    assert np.mean(noise) == pytest.approx(np.euler_gamma, abs=0.03)  # a Gumbel(0, 1)'s mean
+    assert np.var(noise) == pytest.approx(np.pi**2 / 6, abs=0.08)
+
+
+@pytest.mark.parametrize(
+    ("max_hours", "max_km", "metres"),
+    [
+        (None, None, 10_000.0),  # no limit: today's 10 km
+        (None, 50.0, 2_500.0),  # 5 % of the distance
+        (2.0, None, 5_000.0),  # 2 h at 50 km/h is 100 km
+        (4.0, None, 10_000.0),  # the longest drive groups as no limit does
+        (2.0, 50.0, 2_500.0),  # both: the smaller
+        (2.0, 300.0, 5_000.0),
+        (0.1, None, 500.0),  # at least 500 m
+        (None, 5.0, 500.0),
+    ],
+)
+def test_the_default_grouping_radius_follows_the_search_limit(
+    max_hours: float | None, max_km: float | None, metres: float
+) -> None:
+    assert serving.group_radius_m(max_hours, max_km) == pytest.approx(metres)
+
+
+def test_a_distance_limit_keeps_hikes_starting_within_it_in_a_straight_line(data: ServingData) -> None:
+    # From 45.2,15.1 (1002's Trailhead): 1003 at 45.3,15.2 is 13.6 km off, 1007 at 45.6,15.5 about 55 km.
+    near = (Origin(45.2, 15.1), 20_000.0)
+
+    assert [r["id"] for r in data.rank(RIDGE_WALK_ID, {"length": 100}, near=near, group_m=0.0)] == [1002, 1003]
+    assert data.rank(RIDGE_WALK_ID, {"length": 100}, near=(Origin(45.2, 15.1), 1.0)) == [
+        {**r, "in_area": 1}  # 0 m groups no hike in its area, not even its own
+        for r in data.rank(RIDGE_WALK_ID, {"length": 100}, near=near, group_m=0.0)
+        if r["id"] == 1002
+    ]
 
 
 def test_reachable_asks_only_trailheads_within_straight_line_reach(data: ServingData) -> None:
@@ -430,7 +614,7 @@ def test_a_rerun_without_tiles_or_snaps_drops_the_old_ones(catalog_path: Path, t
     assert (tiles / "valhalla_tiles.tar").read_bytes() == b"tiles"
 
 
-CITIES = Path(__file__).parent / "fixtures" / "cities1000.txt"
+CITIES = Path(__file__).parent / "fixtures" / "geonames.txt"
 
 
 @pytest.fixture(scope="module")
@@ -462,6 +646,18 @@ def test_place_search_matches_a_folded_prefix_of_any_name_most_populous_first(pl
     assert placed.find_place("greb") == [] and placed.find_place(" ") == []
 
 
+def test_place_search_finds_a_village_a_hike_starts_from_under_its_own_names(placed: ServingData) -> None:
+    assert placed.find_place("planina") == [
+        {"name": "Planina", "country": "HR", "lat": 45.31, "lon": 15.21, "population": 0}
+    ]
+    # A village keeps its name and ASCII name only: its alternate names would cost the most room.
+    assert placed.find_place("alpe") == []
+    # Far from every Trailhead (though inside the towns' margin), a hamlet is not kept;
+    # nor is a feature that is no place (a mountain) or a section of one.
+    assert placed.find_place("daleka") == []
+    assert placed.find_place("kapelica") == [] and placed.find_place("gornji") == []
+
+
 def test_place_search_puts_its_name_then_another_exact_name_before_a_more_populous_prefix(
     placed: ServingData,
 ) -> None:
@@ -479,15 +675,16 @@ def test_place_file_can_be_added_beside_an_existing_export(catalog_path: Path, t
 
     assert (out / "meta.json").read_bytes() == meta
     assert [place["name"] for place in ServingData(out).find_place("ogulin")] == ["Ogulin"]
-    assert capsys.readouterr().out.strip() == str(out / "places.sqlite")
+    assert [landmark["kind"] for landmark in ServingData(out).find_landmarks("ridge lake")] == ["lake"]
+    assert capsys.readouterr().out.split() == [str(out / "places.sqlite"), str(out / "landmarks.sqlite")]
 
 
 def test_place_file_reads_the_geonames_zip(catalog_path: Path, tmp_path: Path) -> None:
     import zipfile
 
-    with zipfile.ZipFile(tmp_path / "cities1000.zip", "w") as archive:
-        archive.write(CITIES, "cities1000.txt")
-    out = export_serving(catalog_path, tmp_path / "out", geonames_path=tmp_path / "cities1000.zip")
+    with zipfile.ZipFile(tmp_path / "allCountries.zip", "w") as archive:
+        archive.write(CITIES, "geonames.txt")
+    out = export_serving(catalog_path, tmp_path / "out", geonames_path=tmp_path / "allCountries.zip")
 
     assert [place["name"] for place in ServingData(out).find_place("ogulin")] == ["Ogulin"]
 
@@ -508,7 +705,233 @@ def test_geonames_is_downloaded_only_when_missing(tmp_path: Path) -> None:
         asked.append(url)
         Path(path).write_bytes(b"zip")
 
-    target = tmp_path / "geonames" / "cities1000.zip"
+    target = tmp_path / "geonames" / "allCountries.zip"
     assert fetch_geonames(target, urlretrieve) == target
     assert fetch_geonames(target, urlretrieve) == target
-    assert asked == [GEONAMES_URL] == ["https://download.geonames.org/export/dump/cities1000.zip"]
+    assert asked == [GEONAMES_URL] == ["https://download.geonames.org/export/dump/allCountries.zip"]
+
+
+def test_landmarks_are_the_named_points_on_hikes_with_the_hikes_nearest_first(data: ServingData) -> None:
+    [peak] = data.find_landmarks("Ridge Peak")
+
+    assert {key: peak[key] for key in ("name", "kind", "town", "lat", "lon", "match", "hike_count")} == {
+        "name": "Ridge Peak", "kind": "peak", "town": None, "lat": 45.00764, "lon": 15.0, "match": "words", "hike_count": 1,
+    }  # fmt: skip
+    assert [(hike["id"], hike["off_m"]) for hike in peak["hikes"]] == [(RIDGE_WALK_ID, 0)]
+    assert {key for key in peak["hikes"][0]} == {*data._summaries([0])[0], "off_m"}
+    # From any word's start: a word inside the name, or the start of one.
+    assert [landmark["name"] for landmark in data.find_landmarks("peak")] == ["Ridge Peak"]
+    assert [landmark["kind"] for landmark in data.find_landmarks("RIDGE VI")] == ["viewpoint"]
+    # A cafe names no Landmark, an unnamed hut neither, and a letter alone finds nothing.
+    assert data.find_landmarks("ridge cafe") == [] and data.find_landmarks("r") == []
+    assert data.find_landmarks("idg") == []  # not from a word's start, and too short for a typo
+
+
+def test_a_landmark_typed_with_a_typo_is_found_and_said_to_be_similar(data: ServingData) -> None:
+    [peak] = data.find_landmarks("Rigde Peak")
+
+    assert (peak["name"], peak["match"]) == ("Ridge Peak", "similar")
+
+
+def test_a_landmark_named_exactly_comes_before_one_named_from_it(placed: ServingData) -> None:
+    # Ridge Peak, Ridge View, Ridge Lake and Ridge Saddle all start with "ridge"; the lake's last word is "lake".
+    assert placed.find_landmarks("ridge lake")[0]["name"] == "Ridge Lake"
+    assert len(placed.find_landmarks("ridge")) == 4
+    assert [landmark["name"] for landmark in placed.find_landmarks("ridge", limit=2)] == [
+        landmark["name"] for landmark in placed.find_landmarks("ridge")[:2]
+    ]
+
+
+def test_among_equal_names_the_highest_peak_comes_first_then_the_most_hikes() -> None:
+    db = sqlite3.connect(":memory:")
+    db.executescript(
+        "CREATE TABLE landmarks (id INTEGER PRIMARY KEY, name TEXT, kind TEXT, town TEXT, lat REAL, lon REAL, ele REAL, hikes INTEGER);"
+        "CREATE TABLE landmark_names (name TEXT, landmark INTEGER, whole INTEGER);"
+        "INSERT INTO landmarks VALUES (1, 'Mont Blanc', 'peak', 'Hesdin', 50, 2, 120, 6), (2, 'Mont Blanc', 'peak', 'Chamonix', 45.8, 6.9, 4806, 2),"
+        " (3, 'Mont Blanc', 'village', NULL, 46, 6, NULL, 9), (4, 'Le Mont Blanc', 'peak', NULL, 45, 6, 4810, 40);"
+        "INSERT INTO landmark_names VALUES ('mont blanc', 1, 1), ('mont blanc', 2, 1), ('mont blanc', 3, 1),"
+        " ('le mont blanc', 4, 1), ('mont blanc', 4, 0);"
+    )
+
+    assert [row[0] for row in ServingData._landmarks_named(db, "mont blanc", 5)] == [2, 1, 3, 4]
+
+
+def test_geonames_lakes_and_passes_near_a_hike_are_landmarks_under_every_name(placed: ServingData) -> None:
+    [lake] = placed.find_landmarks("Grebensko jezero")
+    [saddle] = placed.find_landmarks("ridge saddle")
+
+    assert (lake["name"], lake["kind"]) == ("Ridge Lake", "lake")
+    assert [hike["id"] for hike in lake["hikes"]] == [RIDGE_WALK_ID]
+    assert 750 < lake["hikes"][0]["off_m"] < 820  # 0.01° of longitude east of the line at 45°
+    assert (saddle["kind"], saddle["hikes"][0]["off_m"]) == ("pass", 0)
+    # A lake no hike passes within LANDMARK_FAR_M of is not kept.
+    assert placed.find_landmarks("far lake") == []
+
+
+def test_geonames_mountains_the_points_lack_are_landmarks(placed: ServingData) -> None:
+    # Kapelica is a GeoNames mountain no OSM Peak names: its height is the elevation model's there.
+    [mountain] = placed.find_landmarks("kapelica")
+
+    assert (mountain["kind"], [hike["id"] for hike in mountain["hikes"]]) == ("peak", [RIDGE_WALK_ID])
+
+
+def test_a_landmark_no_hike_passes_near_is_on_the_hikes_farther_off(placed: ServingData) -> None:
+    # Big Lake's GeoNames point is about 4.7 km west of Ridge Walk, the nearest hike: a big lake's middle.
+    [lake] = placed.find_landmarks("grosser see")
+
+    assert (lake["name"], lake["kind"], [hike["id"] for hike in lake["hikes"]]) == ("Big Lake", "lake", [RIDGE_WALK_ID])
+    assert serving.LANDMARK_NEAR_M < lake["hikes"][0]["off_m"] < serving.LANDMARK_FAR_M
+
+
+def test_a_geonames_peak_at_an_osm_peak_of_its_name_adds_its_names_to_it(placed: ServingData) -> None:
+    # GeoNames has Ridge Peak 120 m from the OSM Peak, also as Grebenski vrh: one Landmark under both names.
+    assert [(landmark["name"], landmark["lat"]) for landmark in placed.find_landmarks("grebenski vrh")] == [
+        ("Ridge Peak", 45.00764)
+    ]
+    assert len(placed.find_landmarks("ridge peak")) == 1
+
+
+def test_among_equal_names_the_one_with_most_names_comes_first(placed: ServingData) -> None:
+    db = sqlite3.connect(":memory:")
+    db.executescript(
+        "CREATE TABLE landmarks (id INTEGER PRIMARY KEY, name TEXT, kind TEXT, town TEXT, lat REAL, lon REAL, ele REAL,"
+        " hikes INTEGER, names INTEGER);"
+        "CREATE TABLE landmark_names (name TEXT, landmark INTEGER, whole INTEGER);"
+        # A tarn named Bodensee high in the Alps with many hikes, and Lake Constance, known in 99 languages.
+        "INSERT INTO landmarks VALUES (1, 'Bodensee', 'lake', 'Haus', 47.4, 13.8, NULL, 8, 1),"
+        " (2, 'Bodensee', 'lake', 'Lindau', 47.6, 9.5, NULL, 3, 99), (3, 'Mont Blanc', 'peak', 'Aumale', 50, 2, 174, 3, 1),"
+        " (4, 'Mont Blanc', 'peak', 'Chamonix', 45.8, 6.9, 4806, 2, 70), (5, 'Radolfzell', 'town', NULL, 47.7, 9, NULL, 92, 3);"
+        "INSERT INTO landmark_names VALUES ('bodensee', 1, 1), ('bodensee', 2, 1), ('mont blanc', 3, 1), ('mont blanc', 4, 1),"
+        " ('radolfzell am bodensee', 5, 1), ('bodensee', 5, 0);"
+    )
+
+    assert [row[0] for row in ServingData._landmarks_named(db, "bodensee", 5, "l.names")] == [2, 1, 5]
+    assert [row[0] for row in ServingData._landmarks_named(db, "mont blanc", 5, "l.names")] == [4, 3]
+    assert placed._landmark_names == "l.names"  # an export of now has the column
+
+
+def test_a_place_is_a_landmark_with_the_hikes_starting_near_it(placed: ServingData) -> None:
+    village = placed.find_landmarks("vrh")[0]  # then Ridge Peak, also Grebenski vrh
+
+    # Told apart by the town nearest it and that town's country.
+    assert (village["name"], village["kind"], village["town"], village["country"]) == ("Vrh", "village", "Ogulin", "HR")
+    start = placed.search("Valley Path")[0]
+    assert village["hikes"][0]["id"] == start["id"]
+    assert 1_000 < village["hikes"][0]["off_m"] < 2_000  # Vrh (45.21, 15.11) from the start at (45.2, 15.1)
+    # A town no hike starts within VILLAGE_M of is no Landmark (Vrhnika is in Slovenia, far from every hike).
+    assert [landmark["name"] for landmark in placed.find_landmarks("vrhnika")] == []
+
+
+def test_a_landmark_lists_its_nearest_hikes_and_counts_them_all(
+    catalog_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(serving, "LANDMARK_HIKES", 1)
+    monkeypatch.setattr(serving, "VILLAGE_M", 50_000.0)  # every hike starts "near" Ogulin
+    out = export_serving(catalog_path, tmp_path / "out", geonames_path=CITIES)
+    [ogulin] = ServingData(out).find_landmarks("ogulin")
+
+    assert ogulin["kind"] == "town" and len(ogulin["hikes"]) == 1 < ogulin["hike_count"]
+
+
+def test_landmarks_can_be_added_beside_an_existing_export_and_an_older_one_has_none(
+    catalog_path: Path, tmp_path: Path
+) -> None:
+    out = export_serving(catalog_path, tmp_path / "out")
+    (out / "landmarks.sqlite").unlink()
+    older = ServingData(out)
+
+    assert older.landmarks is None and older.find_landmarks("ridge peak") == []
+    serving.export_landmarks(out)
+    assert [landmark["name"] for landmark in ServingData(out).find_landmarks("ridge peak")] == ["Ridge Peak"]
+
+
+def test_a_landmark_file_from_before_names_were_counted_still_opens(catalog_path: Path, tmp_path: Path) -> None:
+    out = export_serving(catalog_path, tmp_path / "out", geonames_path=CITIES)
+    with sqlite3.connect(out / "landmarks.sqlite") as db:
+        db.execute("ALTER TABLE landmarks DROP COLUMN names")
+    older = ServingData(out)
+
+    assert older._landmark_names == "NULL"
+    assert [landmark["name"] for landmark in older.find_landmarks("grebenski vrh")] == ["Ridge Peak"]
+
+
+def test_a_hike_says_the_town_and_country_it_starts_near(placed: ServingData, data: ServingData) -> None:
+    # Valley Path starts 12 km from Ogulin; Ridge Walk 35 km from it, past LANDMARK_TOWN_M, near no town.
+    [valley] = [hike for hike in placed.search("Valley Path") if hike["id"] == 1002]
+    [ridge] = placed.search("Ridge Walk")
+
+    assert (valley["region"], ridge["region"]) == ("Ogulin, HR", None)
+    assert placed.detail(1002)["region"] == "Ogulin, HR"
+    assert data.search("Valley Path")[0]["region"] is None  # an export without places names none
+
+
+def test_a_hike_longer_than_a_multi_day_length_one_way_is_said_to_be_multi_day(
+    data: ServingData, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(serving, "MULTI_DAY_M", 7_000.0)  # Ridge Walk (10 km one way) is multi-day here
+
+    [ridge] = data.search("Ridge Walk")
+    assert (ridge["multi_day"], round(ridge["walk_m"])) == (True, 10_000)
+    assert data.detail(RIDGE_WALK_ID)["multi_day"] is True and data.detail(1002)["multi_day"] is False
+    assert {hike["id"]: hike["multi_day"] for hike in data.in_box(44, 14, 46, 16, 10)[0]}[RIDGE_WALK_ID] is True
+
+
+def test_a_day_hikes_ranking_lists_the_multi_day_routes_after_every_day_hike(
+    data: ServingData, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A 9 km wish, one way: Ridge Walk (10 km) is the closest, the others are 5 km.
+    wish, weights = {"length": 9_000.0}, {"length": 100.0}
+    plain = data.rank(wish, weights, limit=10, return_to_start=False)
+    monkeypatch.setattr(serving, "MULTI_DAY_M", 9_500.0)  # Ridge Walk is multi-day here, the wish is not
+    ranking = data.rank(wish, weights, limit=10, return_to_start=False)
+
+    assert plain[0]["id"] == RIDGE_WALK_ID and plain.day_first is True
+    assert ranking.day_first is True and ranking[-1]["id"] == RIDGE_WALK_ID and ranking[-1]["multi_day"] is True
+    assert [row["id"] for row in ranking] == [row["id"] for row in plain[1:]] + [RIDGE_WALK_ID]
+    assert ranking[-1]["score"] == plain[0]["score"]  # the score is kept; only its place moves
+    # From a multi-day Seed, or a Wish of a multi-day length, they rank by score alone.
+    assert data.rank({"length": 9_600.0}, weights, limit=10, return_to_start=False)[0]["id"] == RIDGE_WALK_ID
+    assert data.rank(RIDGE_WALK_ID, weights, limit=10).day_first is False
+
+
+def test_a_wish_asks_for_multi_day_routes_by_its_length_one_way(
+    data: ServingData, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(serving, "MULTI_DAY_M", 9_500.0)  # Ridge Walk (10 km one way) is multi-day here
+    wish, weights = {"length": 15_000.0}, {"length": 100.0}
+
+    # With Return to start 15 km is the whole walk, about 7.5 km out and back: a day hike.
+    assert data.rank(wish, weights, limit=10, return_to_start=True).day_first is True
+    # Without it 15 km is one way, over the multi-day length.
+    assert data.rank(wish, weights, limit=10, return_to_start=False).day_first is False
+    assert data.rank({"length": 19_600.0}, weights, limit=10, return_to_start=True).day_first is False
+
+
+def test_the_rows_after_leave_out_the_twin_of_a_hike_already_listed(
+    data: ServingData, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 1002 and 1003 are Twins starting 14 km apart, just over the 13 km grouping radius: rows of their own.
+    monkeypatch.setattr(serving, "GROUP_M", 13_000.0)
+    monkeypatch.setattr(serving, "LOOP_SEEDS", 0)
+    rows = data.store.ids.searchsorted([1002, 1003])
+    twins = np.array(data.store.twins)
+    twins[rows[1]] = twins[rows[0]]
+    store = dataclasses.replace(
+        data.store, twins=twins, with_way_back=dataclasses.replace(data.store.with_way_back, twins=twins)
+    )
+    monkeypatch.setattr(data, "store", store)
+    first = data.rank(RIDGE_WALK_ID, {"length": 100}, limit=1)
+
+    following = data.rank(RIDGE_WALK_ID, {"length": 100}, limit=1, after=[tuple(row["trailhead"]) for row in first])
+
+    assert _rows(first) == [(1002, [])]
+    assert _rows(following) == [(1007, [])]
+
+
+def test_every_ratio_measure_says_its_floor_in_words() -> None:
+    from dayhike.similarity import MEASURES
+
+    ratio = {measure.name: measure.constant for measure in MEASURES if measure.kind == "ratio"}
+    assert set(FLOOR_TEXT) == set(ratio)
+    assert FLOOR_TEXT["elevation_gain"] == "both 100 m or less"
+    assert FLOOR_TEXT["climb_grade"] == "both 3 % or less"

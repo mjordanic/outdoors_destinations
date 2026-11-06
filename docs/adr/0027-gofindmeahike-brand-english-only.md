@@ -1,3 +1,7 @@
+---
+status: accepted (the name superseded by ADR-0041)
+---
+
 # GoFindMeAHike is the site's name; English only for now
 
 The public page is called GoFindMeAHike (domain gofindmeahike.eu, not bought yet). The name is the brand of the site, not a domain term: a DayHike stays a DayHike in the code, the Catalog and GLOSSARY.md, and the `dayhike` package, CLI and Cloud Run service keep their names. The page is in English only for now, so it has no translation layer, locale switch or translated strings.

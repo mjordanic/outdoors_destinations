@@ -3,8 +3,11 @@
 ``create_app`` serves ``ServingData`` (``dayhike.serving``): name search, place
 search when the export has GeoNames places (ADR-0029), the hikes in a map view,
 hike detail, the Measure list, the score of any two hikes, and Ranking with an
-optional highways-only DriveTime pre-filter. Every client gets a request budget per minute, and one Ranking
-runs at a time per instance, so a small container holds its memory. When the export has a TrailGraph,
+optional highways-only DriveTime pre-filter and a straight-line distance limit, ten rows at a time (ADR-0032). Every client gets a request budget per minute, and one Ranking
+runs at a time per instance, so a small container holds its memory, first come first served and at most one
+per browser tab queued or running (a few per address, so people behind one address do not wait on each other
+and no address holds it for everyone); the trail network the way back is
+searched on is memory-mapped from the export (built once, a request arriving during that build waiting for it, in an export without it). When the export has a TrailGraph,
 it also serves the Segments in a map view and the detail of a ComposedHike, which can then be the
 Seed of a Ranking or of a pair, and a Ranking lists SuggestedLoops beside the DayHikes (ADR-0020).
 A Ranking may start from a Wish instead of a Seed, and the Measure list says how each Measure takes
@@ -15,10 +18,9 @@ A browser keeps the API reads an hour and then revalidates them by an ETag of th
 and the drive-time settings; the page, the API info and the Measure list always revalidate, so a
 redeploy shows at once. Responses are
 gzipped for a browser that takes it.
-The site's pages (the demo, About, Support, Credits, Privacy, Terms) are served with two optional
-settings filled in: a GoatCounter code adds the cookieless analytics tag, and a Ko-fi handle the tip
-link; the privacy page names each only once it is set. Unset, a page loads no analytics and links no
-tip jar.
+The site's pages (the demo, About, Credits, Privacy, Terms) are served with an optional setting
+filled in: a GoatCounter code adds the cookieless analytics tag, and the privacy page names GoatCounter
+only once it is set. Unset, a page loads no analytics.
 The page may load from another origin, a loading shell on a static host (docs/deploy.md): the origins
 given may then call the API (CORS). Their preflights are answered before the request budget, so
 they use none of it. With none given, no other origin may.
@@ -37,6 +39,7 @@ from collections import deque
 from collections.abc import Callable
 from pathlib import Path
 
+import numpy as np
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -46,26 +49,55 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from dayhike.catalog import MatrixClient, Origin
-from dayhike.serving import GEONAMES_ATTRIBUTION, MEASURE_GROUPS, MEASURE_INFO, SCORE_HELP, WISH_INPUTS, ServingData, name_dem
+from dayhike.catalog import MatrixClient, Origin, straight_line_distances_m
+from dayhike.serving import (
+    DRAW_T,
+    GEONAMES_ATTRIBUTION,
+    GROUP_KMH,
+    GROUP_M,
+    GROUP_MIN_M,
+    GROUP_SHARE,
+    MEASURE_GROUPS,
+    MEASURE_INFO,
+    SCORE_HELP,
+    TYPICAL_PAIR,
+    WISH_DISPLAY,
+    WISH_INPUTS,
+    ServingData,
+    group_radius_m,
+    name_dem,
+)
 from dayhike.similarity import DEFAULT_WEIGHTS, MEASURES, WISHABLE, Measure
 from dayhike.trailgraph import Route, RouteError
 
 STATIC_DIR = Path(__file__).parent / "static"
-RESULTS = 10
+RESULTS = 10  # rows a Ranking lists; "Show 10 more" asks the next ones (ADR-0032)
+POOL = 30  # rows a Ranking answers with: the page draws RESULTS of them, or shows the first in Strict order (ADR-0047)
+MAX_ROWS = 100  # the most rows a Ranking may list in all, the rows shown before included
 MAX_DRIVE_HOURS = 4.0
+MAX_KM = 200.0  # the longest straight-line distance limit: 4 h at GROUP_KMH, so it groups as no limit does
+MAX_GROUP_KM = 50.0  # the widest grouping radius a Hiker may ask
 MAP_HIKES = 100  # a map view shows its hikes only when it holds at most this many
 MAP_SEGMENTS = 1_500  # and its TrailGraph Segments only when it holds at most this many
+MAP_SEGMENT_DEGREES = 2.0  # and only in a box at most this many degrees each way (the page asks from zoom 13)
 ROUTE_STEPS = 2_000  # the most steps (OSM ways walked) a ComposedHike may have
 NAME_LENGTH = 120  # the longest name a Hiker may give a ComposedHike
+MAX_BODY_BYTES = 256 * 1024  # the largest request body; a Route of ROUTE_STEPS steps is about 100 KB
 # Requests per client per RATE_WINDOW_S: Ranking, and everything else under /api.
 RANK_RATE = 20
 API_RATE = 300
 RATE_WINDOW_S = 60.0
-RANK_WAIT_S = 30.0  # a Ranking waits this long for the one running before it
-VALHALLA_TIMEOUT_S = 50.0  # socket timeout for Valhalla calls, under Cloud Run's 60 s request timeout
+# A Ranking waits this long for its turn: with the slowest run (a 4 h drive, about 31 s on 1 vCPU, docs/deploy.md)
+# it still ends before Cloud Run's 60 s request timeout, so a visitor gets the app's 503, not Cloud Run's 504.
+RANK_WAIT_S = 25.0
+# The page names its tab in this header: one Ranking queued or running per tab, at most PER_ADDRESS per address.
+TAB_HEADER = "X-HikesAlike-Tab"
+TAB_NAME = re.compile(r"[A-Za-z0-9-]{1,64}")
+PER_ADDRESS = 4
+# The page opens its map of hikes on the box of the middle CORE_SHARE of Trailheads, where most hikes are.
+CORE_SHARE = 0.8
 # The API reads a browser keeps API_MAX_AGE_S seconds; after that the ETag revalidates them.
-CACHED_READS = ("/api/info", "/api/measures", "/api/search", "/api/hikes", "/api/segments")
+CACHED_READS = ("/api/info", "/api/measures", "/api/search", "/api/landmarks", "/api/hikes", "/api/segments")
 # The metadata the page's shape depends on: a browser revalidates it every time, so new code never reads old metadata.
 REVALIDATED_READS = ("/api/info", "/api/measures")
 API_MAX_AGE_S = 3600
@@ -78,7 +110,7 @@ BUILD = hashlib.sha256(
     )
 ).hexdigest()
 
-PAGES = ("index", "about", "support", "credits", "privacy", "terms")  # the site's pages, served with its settings filled in
+PAGES = ("index", "about", "credits", "privacy", "terms")  # the site's pages, served with its settings filled in
 # The elevation credits of an export sampled from Copernicus GLO-30 (ADR-0030), in place of
 # FABDEM's between <!--elevation--> and <!--/elevation--> on each page that names it.
 COPERNICUS_CREDITS = {
@@ -96,7 +128,8 @@ COPERNICUS_CREDITS = {
     "gain, profile shape, steepness, slope aspect) are computed from it; it maps the surface, so tree tops and roofs "
     "are included.",
 }
-PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")  # a GoatCounter code or Ko-fi handle
+PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")  # a GoatCounter code
+SITE_URL = re.compile(r"https://[A-Za-z0-9.-]+(:[0-9]+)?")  # the public origin a shared link names
 
 DriveClientFactory = Callable[[float], MatrixClient]
 MEASURE_KINDS = {measure.name: measure.kind for measure in MEASURES}
@@ -107,11 +140,26 @@ class Place(BaseModel):
     lon: float = Field(ge=-180, le=180)
 
 
+def _shown(names: list[str]) -> str:
+    """Names a refusal quotes: the first few, each cut short."""
+    shown = ", ".join(name[:40] for name in names[:3])
+    return shown + (f" and {len(names) - 3} more" if len(names) > 3 else "")
+
+
 class Weighted(BaseModel):
-    weights: dict[str, float] | None = None
-    excluded: list[str] = []
+    weights: dict[str, float] | None = Field(default=None, max_length=len(MEASURES))
+    excluded: list[str] = Field(default=[], max_length=len(MEASURES))
     month: int | None = Field(default=None, ge=1, le=12)
     return_to_start: bool = True  # every hike with its way back, or every hike one way
+
+    @field_validator("weights")
+    @classmethod
+    def _weights(cls, weights: dict[str, float] | None) -> dict[str, float] | None:
+        """Unknown Measure names are refused here, before a Ranking waits for the one before it."""
+        unknown = sorted(set(weights or ()) - set(MEASURE_KINDS))
+        if unknown:
+            raise ValueError(f"unknown Measure(s): {_shown(unknown)}")
+        return weights
 
     def given_weights(self) -> dict[str, float]:
         """The weights asked for; None is the default weights."""
@@ -126,7 +174,7 @@ class Weighted(BaseModel):
         dropped = []
         for name in self.excluded:
             if name not in MEASURE_INFO:
-                raise HTTPException(400, f"unknown Measure: {name}")
+                raise HTTPException(400, f"unknown Measure: {_shown([name])}")
             if weights.get(name, 0) > 0:
                 dropped.append(MEASURE_INFO[name][1])
             weights[name] = 0.0
@@ -175,7 +223,14 @@ class RankRequest(Weighted):
     wish: dict[str, bool | float] | None = None  # Measure name to value, yes/no as true/false
     origin: Place | None = None
     max_hours: float | None = Field(default=None, gt=0, le=MAX_DRIVE_HOURS)
+    max_km: float | None = Field(default=None, gt=0, le=MAX_KM)  # straight line from origin to a hike's start
     loops: bool = False  # SuggestedLoops too, only on request (ADR-0028)
+    # Hikes starting this near a better one are its versions; None follows the limits (ADR-0032).
+    # At least 0.1 km, so the rows after those shown leave the rows shown out.
+    group_km: float | None = Field(default=None, ge=0.1, le=MAX_GROUP_KM)
+    after: list[Place] = Field(default=[], max_length=MAX_ROWS - RESULTS)  # the starts of the rows already shown
+    # The page's draw number: loop starts are drawn by score with it; none takes the best (Strict order, ADR-0047).
+    draw: int | None = Field(default=None, ge=0, lt=2**32)
 
     @field_validator("wish")
     @classmethod
@@ -191,6 +246,10 @@ class RankRequest(Weighted):
                 raise ValueError(f"{name} takes {'true or false' if MEASURE_KINDS[name] == 'agree' else 'a number'}")
             if not math.isfinite(value):
                 raise ValueError(f"{name} takes a finite number")
+            if MEASURE_KINDS[name] != "agree":
+                _, low, high, _, _ = WISH_INPUTS[name]
+                if not low <= value <= high:
+                    raise ValueError(f"{name} takes {low:g} to {high:g}")
         return wish
 
     @model_validator(mode="after")
@@ -222,26 +281,38 @@ def wish_input(measure: Measure) -> dict | None:
     if measure.kind == "agree":
         return {"kind": "yes/no", "unit": None, "min": None, "max": None, "step": None, "default": True}
     unit, low, high, step, default = WISH_INPUTS[measure.name]
-    return {"kind": "number", "unit": unit, "min": low, "max": high, "step": step, "default": default}
+    shown = WISH_DISPLAY.get(measure.name)
+    display = None if shown is None else {"unit": shown[0], "per": shown[1]}
+    return {"kind": "number", "unit": unit, "min": low, "max": high, "step": step, "default": default, "display": display}
 
 
 def site_pages(
-    goatcounter: str | None, kofi: str | None, place_search: bool = False, *, copernicus: bool = False
+    goatcounter: str | None,
+    place_search: bool = False,
+    *,
+    copernicus: bool = False,
+    site_url: str | None = None,
+    dayhikes: int | None = None,
 ) -> dict[str, str]:
-    """Each page's HTML with the GoatCounter tag where a code is set, and the Ko-fi link where a handle is.
+    """Each page's HTML with the GoatCounter tag where a code is set.
+
+    ``dayhikes``, the export's count, fills in ``<!--dayhikes-->`` (the page's own count where none is given).
 
     With ``place_search`` (the export has GeoNames places) the place-search credit names GeoNames, not Nominatim,
     and the privacy page keeps its ``places`` text, not its ``nominatim`` text.
     With ``copernicus`` (an export sampled from Copernicus GLO-30), the pages credit it instead of FABDEM.
+    With ``site_url`` (the public origin, ``https://host``) each page names its own address (``og:url``) and its
+    share preview image by full address, as link previews need; else the image stays relative.
 
-    Text between ``<!--if-goatcounter-->`` and ``<!--/if-goatcounter-->`` (or ``kofi``, ``places``,
+    Text between ``<!--if-goatcounter-->`` and ``<!--/if-goatcounter-->`` (or ``places``,
     ``nominatim``) is kept only when that setting is on.
 
     The tag loads the self-hosted ``count.js``, which counts at ``https://<code>.goatcounter.com/count``.
     """
-    for setting, value in (("GoatCounter code", goatcounter), ("Ko-fi handle", kofi)):
-        if value is not None and not PLAIN_NAME.fullmatch(value):
-            raise ValueError(f"a {setting} is letters, digits, - and _, not {value!r}")
+    if goatcounter is not None and not PLAIN_NAME.fullmatch(goatcounter):
+        raise ValueError(f"a GoatCounter code is letters, digits, - and _, not {goatcounter!r}")
+    if site_url is not None and not SITE_URL.fullmatch(site_url):
+        raise ValueError(f"the site URL is https://host, without a path, not {site_url!r}")
     analytics = "" if goatcounter is None else (
         f'<script data-goatcounter="https://{goatcounter}.goatcounter.com/count"'
         ' async src="vendor/goatcounter/count.js"></script>'
@@ -249,29 +320,29 @@ def site_pages(
     pages = {}
     for name in PAGES:
         html = (STATIC_DIR / f"{name}.html").read_text(encoding="utf-8").replace("<!--analytics-->", analytics)
+        if dayhikes is not None:
+            html = re.sub(r"<!--dayhikes-->.*?<!--/dayhikes-->", f"{dayhikes:,}", html, flags=re.S)
         settings = {
             "goatcounter": goatcounter is not None,
-            "kofi": kofi is not None,
             "places": place_search,
             "nominatim": not place_search,
         }
         for setting, on in settings.items():  # text true only once it is set
             block = rf"<!--if-{setting}-->(.*?)<!--/if-{setting}-->"
             html = re.sub(block, (lambda m: m[1]) if on else "", html, flags=re.S)
-        if kofi is not None:
-            tip = (
-                f'<p class="tip"><a href="https://ko-fi.com/{kofi}">Leave a tip on Ko-fi</a></p>\n'
-                '  <p class="hint">The link opens Ko-fi, which takes the tip; this site handles no payments.</p>'
-            )
-            html = re.sub(r"<!--ko-fi-->.*?<!--/ko-fi-->", tip, html, flags=re.S)
         if place_search:
             credit = (
-                '<span id="place-credit">Place search: towns from <a href="https://www.geonames.org/">GeoNames</a>'
+                '<span id="place-credit">Place search: towns and villages from <a href="https://www.geonames.org/">GeoNames</a>'
                 ' (geonames.org), <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</span>'
             )
             html = re.sub(r'<span id="place-credit">.*?</span>', credit, html, flags=re.S)
         if copernicus and name in COPERNICUS_CREDITS:
             html = re.sub(r"<!--elevation-->.*?<!--/elevation-->", COPERNICUS_CREDITS[name], html, flags=re.S)
+        if site_url is not None:
+            address = f"{site_url}/" if name == "index" else f"{site_url}/{name}.html"
+            html = html.replace('content="social-preview.png"', f'content="{site_url}/social-preview.png"').replace(
+                '<meta property="og:type"', f'<meta property="og:url" content="{address}">\n  <meta property="og:type"', 1
+            )
         pages[name] = html
     return pages
 
@@ -304,6 +375,47 @@ class RateLimiter:
             return True
 
 
+class RankingQueue:
+    """One Ranking runs at a time, in the order they came; a client (a browser tab at an address) has at
+    most one queued or running, and an address at most ``per_address``.
+
+    So a client within its rate limit cannot keep the Ranking busy for everyone: it waits its turn
+    behind every other client queued before its next Ranking. People behind one address (a home, an
+    office, a phone network) each have their own turn, up to ``per_address`` at once.
+    """
+
+    def __init__(self, per_address: int = PER_ADDRESS) -> None:
+        self.per_address = per_address
+        self._turn = threading.Condition()
+        self._queue: deque[tuple[str, str]] = deque()  # the (address, tab) clients waiting, first in line first
+        self._running: tuple[str, str] | None = None  # the client whose Ranking runs
+
+    def enter(self, address: str, tab: str, timeout: float) -> str:
+        """Wait for this client's turn: "run" once it runs, "timeout" after ``timeout`` seconds; at once
+        "own" when the client already has a Ranking queued or running, "address" when its address has
+        ``per_address``."""
+        key = (address, tab)
+        with self._turn:
+            if key in self._queue or key == self._running:
+                return "own"
+            held = [client for client in (*self._queue, self._running) if client is not None and client[0] == address]
+            if len(held) >= self.per_address:
+                return "address"
+            self._queue.append(key)
+            if self._turn.wait_for(lambda: self._running is None and self._queue[0] == key, timeout):
+                self._running = self._queue.popleft()
+                return "run"
+            self._queue.remove(key)
+            self._turn.notify_all()  # it may have been first in line
+            return "timeout"
+
+    def leave(self) -> None:
+        """The running Ranking ended: the next in line runs."""
+        with self._turn:
+            self._running = None
+            self._turn.notify_all()
+
+
 def create_app(
     data: ServingData,
     drive_client: DriveClientFactory | None = None,
@@ -312,8 +424,8 @@ def create_app(
     rank_rate: int = RANK_RATE,
     api_rate: int = API_RATE,
     goatcounter: str | None = None,
-    kofi: str | None = None,
     cors_origins: tuple[str, ...] = (),
+    site_url: str | None = None,
 ) -> FastAPI:
     """The app over one serving export.
 
@@ -321,16 +433,27 @@ def create_app(
     turns the drive-time filter off. ``forwarded_hops`` is how many proxies
     append to ``X-Forwarded-For`` in front of the app (1 on Cloud Run): the
     client is that many entries from the end. 0 uses the socket peer.
-    ``goatcounter`` and ``kofi`` fill in the pages (``site_pages``); a value that
-    is not a plain name is a ValueError. ``cors_origins`` are the other origins
+    ``goatcounter`` fills in the pages (``site_pages``); a value that
+    is not a plain name is a ValueError, and so is ``site_url``, the public origin
+    (``https://host``) the pages' share previews name. ``cors_origins`` are the other origins
     (``https://host``) whose pages may call the API.
     """
-    pages = site_pages(goatcounter, kofi, data.places is not None, copernicus="copernicus" in data.meta["attribution"])
-    app = FastAPI(title="GoFindMeAHike", docs_url="/api/docs", openapi_url="/api/openapi.json")
+    pages = site_pages(
+        goatcounter,
+        data.places is not None,
+        copernicus="copernicus" in data.meta["attribution"],
+        site_url=site_url,
+        dayhikes=data.meta["dayhikes"],
+    )
+    app = FastAPI(title="HikesAlike", docs_url="/api/docs", openapi_url="/api/openapi.json")
     limiters = {"rank": RateLimiter(rank_rate, RATE_WINDOW_S), "api": RateLimiter(api_rate, RATE_WINDOW_S)}
-    one_ranking = threading.Semaphore(1)
-    # The API reads change only with the export (its meta.json holds facts_version, places.sqlite may come later), the code and the settings.
-    settings = f"{BUILD} {drive_client is not None} {MAX_DRIVE_HOURS} {RESULTS} {data.places is not None}".encode()
+    rankings = RankingQueue()
+    # The API reads change only with the export (its meta.json holds facts_version; places.sqlite and landmarks.sqlite
+    # may come later), the code and the settings.
+    settings = (
+        f"{BUILD} {drive_client is not None} {MAX_DRIVE_HOURS} {RESULTS} {POOL} {data.places is not None} "
+        f"{data.landmarks is not None}"
+    ).encode()
     etag = f'W/"{hashlib.sha256((data.directory / "meta.json").read_bytes() + settings).hexdigest()[:16]}"'
     attribution = data.meta["attribution"]
     measures = [
@@ -358,6 +481,12 @@ def create_app(
     @app.middleware("http")
     async def limit_and_harden(request: Request, call_next):
         path = request.url.path
+        # A body is read whole before it is checked: refuse a large one, or one of unstated length, unread.
+        length = request.headers.get("content-length")
+        if length is None and "transfer-encoding" in request.headers:
+            return JSONResponse({"detail": "Give the request body's Content-Length."}, status_code=411)
+        if length is not None and (not length.isdigit() or int(length) > MAX_BODY_BYTES):
+            return JSONResponse({"detail": f"The request body is over {MAX_BODY_BYTES // 1024} KB."}, status_code=413)
         if path.startswith("/api/") and path != "/api/health":
             limiter = limiters["rank" if path == "/api/rank" else "api"]
             if not limiter.allow(client_key(request)):
@@ -386,7 +515,7 @@ def create_app(
     if cors_origins:  # outermost: a preflight is answered before the limiter, and a 429 is readable
         app.add_middleware(
             CORSMiddleware, allow_origins=list(cors_origins), allow_methods=["GET", "HEAD", "POST"],
-            allow_headers=["Content-Type"], max_age=3600,
+            allow_headers=["Content-Type", TAB_HEADER], max_age=3600,
         )
 
     # A refusal leaves out the input it refuses: a NaN or Infinity in the body cannot be written back as JSON.
@@ -403,18 +532,32 @@ def create_app(
     # The Trailheads' box (south, west, north, east): the page warns when a typed
     # "lat, lon" is outside it but its swap is inside.
     coverage = [*map(float, data.trailheads.min(axis=0)), *map(float, data.trailheads.max(axis=0))]
+    # Where most hikes are: the page's map of hikes opens on it when it has no hike or place to show.
+    edge = (1 - CORE_SHARE) / 2 * 100
+    low, high = np.percentile(data.trailheads, [edge, 100 - edge], axis=0) if len(data.trailheads) else ([0, 0], [0, 0])
+    core = [*map(float, low), *map(float, high)]
 
     @app.api_route("/api/info", methods=["GET", "HEAD"])
     def info() -> dict:
         return {
             "dayhikes": data.meta["dayhikes"],
             "coverage": coverage,
+            "core": core,
+            # A list whose best row scores below this holds nothing much alike: the page says so.
+            "typical_pair": TYPICAL_PAIR,
             "attribution": data.meta["attribution"] | ({"geonames": GEONAMES_ATTRIBUTION} if data.places else {}),
             "place_search": data.places is not None,
+            "landmark_search": data.landmarks is not None,
             "drive_time": drive_client is not None,
             "compose": data.trailgraph is not None,
             "max_drive_hours": MAX_DRIVE_HOURS,
+            "max_km": MAX_KM,
             "results": RESULTS,
+            "max_rows": MAX_ROWS,
+            # The page draws its rows from a pool of this many with probability rising as exp(score / t) (ADR-0047).
+            "draw": {"pool": POOL, "t": DRAW_T},
+            # The default grouping radius (ADR-0032): share of the limit, a drive hour as kmh km, at least min_km, km with none.
+            "grouping": {"km": GROUP_M / 1000, "share": GROUP_SHARE, "min_km": GROUP_MIN_M / 1000, "kmh": GROUP_KMH},
         }
 
     score_help = {
@@ -429,6 +572,13 @@ def create_app(
     @app.api_route("/api/search", methods=["GET", "HEAD"])
     def search(q: str = Query(max_length=100), limit: int = Query(20, ge=1, le=50)) -> dict:
         return {"results": data.search(q, limit)}
+
+    # The hike search's Landmarks: peaks, huts, lakes, passes and towns, each with its nearest hikes (ADR-0053).
+    @app.api_route("/api/landmarks", methods=["GET", "HEAD"])
+    def landmarks(q: str = Query(max_length=100), limit: int = Query(5, ge=1, le=10)) -> dict:
+        if data.landmarks is None:
+            raise HTTPException(404, "no landmark search in this export")
+        return {"results": data.find_landmarks(q, limit)}
 
     # The page's "Find place": a start for the drive filter, without asking Nominatim.
     @app.api_route("/api/place", methods=["GET", "HEAD"])
@@ -476,6 +626,8 @@ def create_app(
         trailgraph()
         if south > north or west > east:
             raise HTTPException(400, "the box needs south <= north and west <= east")
+        if max(north - south, east - west) > MAP_SEGMENT_DEGREES:
+            return {"junctions": [], "segments": [], "too_many": True}
         found, too_many = data.segments_in_box(south, west, north, east, MAP_SEGMENTS)
         return {**found, "too_many": too_many}
 
@@ -494,21 +646,43 @@ def create_app(
         except KeyError:
             raise HTTPException(404, f"no DayHike {dayhike_id}") from None
 
+    # The way back the page puts in a hike's GPX: a trail one is found again on the TrailGraph.
+    @app.api_route("/api/hikes/{dayhike_id}/way-back", methods=["GET", "HEAD"])
+    def way_back(dayhike_id: int) -> dict:
+        try:
+            return data.way_back_walk(dayhike_id)
+        except KeyError:
+            raise HTTPException(404, f"no DayHike {dayhike_id}") from None
+
     @app.post("/api/rank")
-    def rank(body: RankRequest) -> dict:
+    def rank(body: RankRequest, request: Request) -> dict:
         started = time.monotonic()
         weights = body.measure_weights()
-        if (body.origin is None) != (body.max_hours is None):
-            raise HTTPException(400, "give both origin and max_hours, or neither")
-        if body.origin is not None and drive_client is None:
+        if (body.origin is None) != (body.max_hours is None and body.max_km is None):
+            raise HTTPException(400, "give origin with max_hours, max_km or both, or none of them")
+        if body.max_hours is not None and drive_client is None:
             raise HTTPException(400, "the drive-time filter is not available on this server")
+        origin = None if body.origin is None else Origin(body.origin.lat, body.origin.lon)
+        near = None if body.max_km is None else (origin, body.max_km * 1000)
+        group_m = group_radius_m(body.max_hours, body.max_km) if body.group_km is None else body.group_km * 1000
         seed = seed_of(body.seed, body.composed) if body.wish is None else body.wish
-        if not one_ranking.acquire(timeout=RANK_WAIT_S):
-            raise HTTPException(503, "busy; try again in a moment")
+        tab = request.headers.get(TAB_HEADER, "")
+        turn = rankings.enter(client_key(request), tab if TAB_NAME.fullmatch(tab) else "", RANK_WAIT_S)
+        if turn == "own":
+            raise HTTPException(409, "Your previous search is still running; try again when it ends.")
+        if turn == "address":
+            raise HTTPException(409, f"{PER_ADDRESS} searches from your network are already waiting; try again when they end.")
+        if turn == "timeout":  # other visitors' searches ahead of it took RANK_WAIT_S (ADR-0055)
+            raise HTTPException(
+                503,
+                f"The server is busy with other visitors' searches: yours waited {RANK_WAIT_S:.0f} s for its turn. "
+                "Try again in a moment.",
+                headers={"Retry-After": "5"},
+            )
         try:
             hours = reach = None
-            if body.origin is not None:
-                origin, max_hours = Origin(body.origin.lat, body.origin.lon), body.max_hours
+            if body.max_hours is not None:
+                max_hours = body.max_hours
                 client = drive_client(max_hours)
                 hours = data.reachable(origin, max_hours, client)
 
@@ -520,20 +694,34 @@ def create_app(
                 weights,
                 month=body.month,
                 allowed_rows=None if hours is None else sorted(hours),
-                limit=RESULTS,
+                limit=POOL,
                 return_to_start=body.return_to_start,
                 reach=reach,
                 loops=body.loops,
+                near=near,
+                group_m=group_m,
+                after=[(place.lat, place.lon) for place in body.after],
+                origin=origin,
+                draw=body.draw,
             )
         except (urllib.error.URLError, ConnectionError, TimeoutError):
             raise HTTPException(503, "the drive-time service is not answering; try again") from None
         except ValueError as error:  # a RouteError too
             raise HTTPException(400, str(error)) from None
         finally:
-            one_ranking.release()
-        for result in (hike for row in results for hike in (row, *row["versions"])):
+            rankings.leave()
+        listed = [hike for row in results for hike in (row, *row["versions"])]
+        for result in listed:
             if result["id"] is not None:  # a SuggestedLoop has the hours to its own start
                 result["drive_hours"] = None if hours is None else hours[data.row_of(result["id"])]
+        starts = [result["trailhead"] for result in listed]
+        metres = straight_line_distances_m(origin, starts) if origin is not None and starts else [None] * len(starts)
+        for result, distance_m in zip(listed, metres):
+            result["distance_km"] = None if distance_m is None else round(float(distance_m) / 1000, 1)
+        reachable = None if hours is None else set(hours)
+        if near is not None:  # the rows within both limits
+            within = (straight_line_distances_m(origin, data.trailheads) <= near[1]).nonzero()[0].tolist()
+            reachable = set(within) if reachable is None else reachable & set(within)
         return {
             "seed": body.seed,
             "composed": None if body.composed is None else body.composed.model_dump(),
@@ -541,9 +729,18 @@ def create_app(
             "month": body.month,
             "return_to_start": body.return_to_start,
             "loops": body.loops,
+            "max_hours": body.max_hours,
+            "max_km": body.max_km,
+            "group_km": round(group_m / 1000, 3),
+            "after": len(body.after),
+            "draw": body.draw,
             "weights": {name: weight for name, weight in weights.items() if weight > 0},
-            "reachable": None if hours is None else len(hours),
+            "reachable": None if reachable is None else len(reachable),
             "results": results,
+            "other_areas": results.other_areas,
+            "loop_search": results.loop_search,
+            # The multi-day routes come after the day hikes: the page draws its rows so too (ADR-0056).
+            "day_first": results.day_first,
             "elapsed_ms": round((time.monotonic() - started) * 1000),
         }
 

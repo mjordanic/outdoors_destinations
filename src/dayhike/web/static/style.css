@@ -71,6 +71,10 @@ button.secondary:hover { border-color: var(--green); }
 .suggestions li[aria-selected="true"], .suggestions li:hover { background: #e8f1ea; }
 .suggestions .meta { display: block; color: var(--muted); font-size: 0.8rem; }
 .suggestions li.nothing { cursor: default; background: #fff; }
+.suggestions li.landmark { cursor: default; background: #f4f7f4; font-weight: 600; font-size: 0.88rem; display: flex;
+  flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 8px; }
+.suggestions li.landmark button.link { border: none; background: none; padding: 0; color: var(--green-dark);
+  text-decoration: underline; font-size: 0.82rem; font-weight: 400; cursor: pointer; }
 
 .weights-group { border: none; margin: 8px 0 0; padding: 0; }
 .weights-group legend { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); padding: 0; margin-bottom: 2px; }
@@ -82,6 +86,8 @@ button.secondary:hover { border-color: var(--green); }
 .weight .weight-note { grid-column: 1 / -1; margin: 0; display: none; }
 .weight.unused .name { color: var(--muted); }
 .weight.unused .weight-note { display: block; }
+.weight .length-note { grid-column: 1 / -1; margin: 0; display: none; }
+.wishing .weight .length-note { display: block; }
 
 .detail-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; align-items: baseline; }
 .detail-head .role { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); }
@@ -111,7 +117,9 @@ svg text { font-size: 11px; fill: var(--muted); }
 .facts { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
 .facts th, .facts td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #eef0ec; vertical-align: middle; }
 .facts th[scope="rowgroup"] { background: #f3f6f2; text-transform: uppercase; font-size: 0.72rem; letter-spacing: 0.04em; color: var(--muted); }
-.facts td.num { white-space: nowrap; }
+/* A long value wraps, so the Score column stays in view (ADR-0055); a score's bar stays beside its number. */
+.facts td.num { overflow-wrap: anywhere; }
+.facts td.score { white-space: nowrap; overflow: hidden; } /* and a "?" tap area wider than it stays inside */
 .facts td.score .note { display: block; white-space: normal; font-size: 0.72rem; color: var(--muted); }
 .facts .nodata, .nodata { color: var(--muted); font-style: italic; }
 .bar { display: inline-block; width: 70px; height: 9px; background: #eef0ec; border-radius: 4px; vertical-align: middle; margin-right: 6px; overflow: hidden; }
@@ -126,18 +134,51 @@ svg text { font-size: 11px; fill: var(--muted); }
 #results-table th.measure.excluded { color: var(--nodata); }
 #results-table td.name, #results-table th.name { position: sticky; left: 0; background: #fff; max-width: 220px; overflow: hidden; text-overflow: ellipsis; text-align: left; }
 #results-table thead th.name { background: #f3f6f2; }
+#results-table td.name .hike-name { display: block; overflow: hidden; text-overflow: ellipsis; }
+#results-table td.name .badge-line { display: block; white-space: normal; }
 #results-table tbody tr { cursor: pointer; }
 #results-table tbody tr:hover td, #results-table tbody tr.active td { background: #e8f1ea; }
 #results-table td.cell { text-align: center; min-width: 30px; color: #1f2a24; font-variant-numeric: tabular-nums; }
 #results-table td.cell.none { color: var(--muted); background: #fafafa; }
 #results-table td.cell.left-out { color: var(--muted); background: #fafafa; text-decoration: line-through; }
 #results.stale .table-wrap { opacity: 0.55; }
+/* A search that did not run: the list from before goes, so it never reads as this search's. */
+#results.failed > :not(h2):not(#results-stale) { display: none !important; }
+.poor-note { margin: 8px 0 0; padding: 6px 10px; border-left: 3px solid #b45309; background: #fff7ed; color: #7c2d12; font-size: 0.86rem; }
+.poor-note[hidden], .swipe-cue[hidden] { display: none; }
+.swipe-cue { margin: 4px 0; text-align: right; }
+.suggestions li.enter-note { color: var(--muted); font-size: 0.85rem; }
+.pick-offer { display: flex; flex-direction: column; gap: 4px; }
+.pick-offer button { text-align: left; }
+.page .lede { text-align: center; margin: -4px auto 14px; color: var(--ink); }
 .stale-note { font-size: 0.82rem; margin: 6px 0; color: #8a4b08; }
+.stale-note.error { color: #b42318; }
 #results-table td.score { font-weight: 600; }
 #results-table tr.version td { background: #f6faf7; }
 #results-table tr.version td:first-child { color: var(--muted); font-size: 0.75rem; }
 .versions { color: var(--muted); font-size: 0.75rem; }
-.composed-tag { background: #dcfce7; color: #15803d; border-radius: 999px; padding: 0 6px; font-size: 0.75rem; font-weight: 600; }
+#results-table .picked { color: var(--muted); font-size: 0.7rem; margin-left: 3px; }
+#results-draw { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
+#results-draw .hint { flex: 1 1 16em; margin: 0; }
+#results-draw[hidden] { display: none; }
+#results-draw .check { margin-top: 0; }
+.filter-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; }
+.filter-chips[hidden] { display: none; }
+.filter-chips li { display: inline-flex; align-items: center; gap: 2px; background: #eef3ee; border: 1px solid #cfe0d3;
+  border-radius: 999px; padding: 0 2px 0 10px; font-size: 0.85rem; }
+.filter-chips .chip-clear { border: none; background: none; padding: 2px 8px; border-radius: 999px; font-size: 1rem; line-height: 1; color: var(--muted); }
+.filter-chips .chip-clear:hover { background: #dbe7de; color: var(--ink); }
+.similar-tag { white-space: nowrap; color: #8a4b08; font-size: 0.75rem; margin-left: 4px; }
+/* Over the map below, not in the line: the note does not push the map down. */
+.hike-actions { position: relative; }
+.share-note { position: absolute; left: 0; top: 100%; z-index: 1000; max-width: min(100%, 420px); margin-top: 4px;
+  padding: 6px 10px; font-size: 0.85rem; color: var(--green-dark); background: var(--card);
+  border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 4px 14px rgba(31, 42, 36, 0.15); }
+.share-note[hidden] { display: none; }
+.share-note input { margin-top: 4px; }
+.composed-tag, .composed-var { background: #dcfce7; color: #15803d; border-radius: 999px; padding: 0 6px; font-size: 0.75rem; font-weight: 600; }
+.multi-day-tag { background: #fef3c7; color: #92400e; border-radius: 999px; padding: 0 6px; font-size: 0.75rem; font-weight: 600; white-space: nowrap; }
+.status .retry { margin-left: 6px; padding: 2px 10px; }
 
 .credits { max-width: 1600px; margin: 0 auto; padding: 8px 16px 32px; font-size: 0.85rem; color: var(--muted); }
 .credits h2 { color: var(--ink); font-size: 1rem; margin-bottom: 6px; }
@@ -155,11 +196,28 @@ svg text { font-size: 11px; fill: var(--muted); }
   .tagline { font-size: 0.82rem; }
   .map { height: 260px; }
   .pick-map { height: 380px; }
+  /* The Score column fits a phone too. */
+  .facts td:first-child, .facts thead th:first-child { width: auto; }
+  .facts .bar { width: 36px; margin-right: 4px; }
 }
 summary.panel-title { cursor: pointer; }
+/* Every fold shows that it opens: an arrow before its title, and "show" after it while closed. */
+summary.panel-title, #advanced > summary, #more-options > summary { list-style: none; }
+summary.panel-title::-webkit-details-marker, #advanced > summary::-webkit-details-marker,
+#more-options > summary::-webkit-details-marker { display: none; }
+summary.panel-title::before, #advanced > summary::before, #more-options > summary::before {
+  content: "▸"; display: inline-block; width: 1em; color: var(--green-dark); }
+details[open] > summary.panel-title::before, #advanced[open] > summary::before, #more-options[open] > summary::before { content: "▾"; }
+details:not([open]) > summary.panel-title::after, #advanced:not([open]) > summary::after,
+#more-options:not([open]) > summary::after { content: "show"; margin-left: auto; padding-left: 8px; font-size: 0.8rem; font-weight: 400; color: var(--muted); }
+summary.panel-title, #advanced > summary, #more-options > summary { display: flex; align-items: center; }
 #advanced { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 8px; }
 #advanced > summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; }
 #advanced > .hint { margin: 4px 0 0; }
+.row.limit > label.check { flex: 0 0 170px; margin: 0; }
+#more-options { margin-top: 8px; font-size: 0.85rem; color: var(--muted); }
+#more-options > summary { cursor: pointer; }
+#more-options .row > label { flex: 0 0 170px; font-size: 0.85rem; }
 .facts td:first-child, .facts thead th:first-child { width: 190px; }
 .facts thead th { color: var(--muted); font-weight: 600; }
 .mode-switch { margin-top: 8px; width: 100%; text-align: left; }
@@ -192,11 +250,31 @@ button.help:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 .score-help h4 { margin: 10px 0 2px; font-size: 0.84rem; }
 .score-help p { margin: 4px 0; }
 .score-help .help-close { position: absolute; top: 6px; right: 6px; padding: 0 6px; border: none; font-size: 1.1rem; line-height: 1.2; }
+.score-help .help-more { display: none; position: sticky; bottom: -10px; margin: 6px -14px -10px; padding: 22px 0 6px;
+  text-align: center; font-weight: 600; color: var(--green-dark); background: linear-gradient(rgba(255, 255, 255, 0), var(--card) 55%); }
+.score-help.more .help-more { display: block; }
 
 .page { max-width: 900px; margin: 16px auto; }
 .page p, .page li { max-width: 75ch; }
 .page ul { padding-left: 18px; }
 .page li { margin: 6px 0; }
-.tip { font-size: 1.05rem; font-weight: 600; }
+.page .wordmark { display: block; width: 100%; max-width: 560px; height: auto; margin: 4px auto 12px; }
 .site-nav { margin-top: 10px; }
 .page + .credits { max-width: 900px; }
+
+/* Phones and touch screens: every control a finger aims at is at least 44 px each way (WCAG 2.5.5). */
+@media (max-width: 900px), (pointer: coarse) {
+  button:not(.help), select, input[type="text"], input[type="search"], input[type="number"] { min-height: 44px; }
+  .check, .panel-title.check, #advanced > summary, #more-options > summary, summary.panel-title { min-height: 44px; display: flex; align-items: center; }
+  .check input[type="checkbox"] { width: 22px; height: 22px; margin: 0 4px 0 0; flex: none; }
+  .wish-value input[type="checkbox"] { width: 22px; height: 22px; }
+  .weight input[type="range"] { height: 44px; }
+  .suggestions li { min-height: 44px; padding: 10px 8px; }
+  #results-table tbody td { padding-top: 12px; padding-bottom: 12px; }
+  .filter-chips .chip-clear { min-width: 44px; min-height: 44px; }
+  /* The "?" stays small beside its score, but takes a tap 44 px across. */
+  button.help { position: relative; }
+  button.help::after { content: ""; position: absolute; inset: -12px; }
+  .leaflet-touch .leaflet-bar a, .leaflet-bar a { width: 44px; height: 44px; line-height: 44px; font-size: 22px; }
+  .compose-tools button.primary { min-height: 44px; }
+}

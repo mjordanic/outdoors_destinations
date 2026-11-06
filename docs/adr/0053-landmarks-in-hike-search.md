@@ -1,0 +1,23 @@
+---
+status: accepted (the GeoNames Landmarks and their order amended by ADR-0055)
+---
+
+# The hike search also finds hikes by the peaks, huts, lakes and towns they reach
+
+In the third round of visitor checks all six visitors typed a peak or place into the hike search (Zugspitze, Watzmann, Benediktenwand, Mont Blanc, Sorapis, Walchensee, Kesselberg, Cadini di Misurina, Kobarid) and got look-alike hike names or nothing: search matched only hike names, and 4 of the 8 hikes they knew from the web could not be found. The serving export now carries `landmarks.sqlite`, and `GET /api/landmarks?q=` answers the Landmarks named like the query, each with its 5 nearest hikes and how many it has. The page asks it beside `/api/search` and lists, under the hike-name matches and above names only like the query, "Hikes near Zugspitze (peak, near Ehrwald)" and those hikes, each saying "reaches the top", "passes 400 m from it" or "starts 1.2 km from it". The nearest town tells equal names apart. "Show on map" opens "Select hike on map" there. With the map open, a Landmark found and a start found with "Find place" move it there; with the map closed, it opens there.
+
+A Landmark is one of:
+
+- a named OSM Peak, Hut, Shelter or Viewpoint among the points `hikes.sqlite` already keeps per hike (a Peak within 2 km of the line, the rest within 100 m), with the hikes it is on. Restaurants, cafes and car parks are left out: their names are businesses, not places a hike goes to.
+- a place of `places.sqlite` (ADR-0029, ADR-0042) with the hikes starting within 5 km (`VILLAGE_M`), under every name it has there.
+- with the GeoNames dump, a lake (`LK`, `LKS`, `RSV`) or pass (`PASS`) whose GeoNames point is within 2 km of a hike's line, under its GeoNames names. These are what the OSM points lack.
+
+Every folded name is indexed from each word's start, so "Sorapis" finds Lago Sorapis and Punta Sorapiss and "Cadini di Misurina" finds the viewpoint named "Cadini di Misurina Punto Panoramico". The exact name comes first, then a name ending in the query, then names starting with it. Within each, the highest Peak comes first (Kleiner Watzmann in the Alps before Märkischer Watzmann, a hill near Berlin), then the Landmark with the most hikes. When nothing matches, the query is respelled from the Landmarks' words the way hike search respells it ("Zugspize" finds Zugspitze), and the group is marked "similar name". `/api/search` is unchanged.
+
+On the review export of 2026-11-05 (258,305 hikes), `export-places` (places as ADR-0042) takes 30 s and `export_landmarks` takes 5 min on one core, peaking at 1.6 GB. The file is 110 MB. A server opens it in no extra time and reads the words for respelling in a background thread (about 2-3 s, 110 MB more memory). A Landmark query takes 0.2-3 ms for a name, up to 30-55 ms for two letters, and 3 ms for a respelled one. Hike-name search takes 5-22 ms as before, so the page's list waits for the slower of the two, the name search.
+
+`export-serving` always writes the file, with lakes and passes when given `--geonames`. `export-places` rewrites it beside an existing export (it reads `hikes.sqlite`, `trailheads.npy` and `places.sqlite`), so a deployed export gains it without a new export. An export without the file still opens: `/api/info` says `landmark_search: false`, `/api/landmarks` answers 404, and the page searches hike names only and says so, as before.
+
+**Considered Options**: one endpoint answering names and Landmarks (would slow down and change `/api/search`); reading the points out of `hikes.sqlite` when the server starts (7 s and about 450,000 names in memory on every cold start); OSM `place=*` and `natural=water` from the extracts (a second ingest path, when GeoNames and the hike points already hold the names); GeoNames mountains (`MT`, `PK`) as well (they repeat the OSM Peaks, which are on the hikes already); matching a town's hikes by their line rather than their start (a town is where a hike starts, not one it crosses). Rejected.
+
+**Consequences**: a lake is a GeoNames point, so only hikes passing within 2 km of the lake's middle are found. A big lake (Lake Garda) is found by none, and a shore path of a mid-size one reads 1-2 km "from its middle". A Peak, Hut, Shelter or Viewpoint no hike passes is not a Landmark: the summit of Mont Blanc is more than 2 km from every hike, so "Mont Blanc" lists hills of that name in France, while hike names such as "Tour du Mont Blanc" still match it, nor is a town no hike starts within 5 km of. A Landmark lists 5 hikes; the rest are on the map. Names with many matches (Kesselberg, Mont Blanc) list at most 5 Landmarks.

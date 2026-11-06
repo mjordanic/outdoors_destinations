@@ -1,20 +1,19 @@
 from __future__ import annotations
 
 import math
+import os
 import re
-import shutil
 import sqlite3
-import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
 import numpy as np
 
 from dayhike.catalog import EARTH_RADIUS_M, geometry_store_path_for, remove_similarity
+from dayhike.download import download as _download
+from dayhike.parallel import parallel_iter, workers
 
 FABDEM_VERSION = "V1-2"
 FABDEM_DATASET = "https://huggingface.co/datasets/pavelzaitsau/fabdem-v12/resolve/main/tiles"
@@ -53,7 +52,7 @@ _METRES_PER_DEGREE = EARTH_RADIUS_M * math.pi / 180
 
 def fabdem_tile_id(lat: float, lon: float) -> str:
     """Return the FABDEM 1° tile id whose southwest corner contains this point."""
-    return _format_corner(math.floor(lat), math.floor(lon))
+    return format_corner(math.floor(lat), math.floor(lon))
 
 
 def fabdem_archive_id(tile_id: str) -> str:
@@ -62,15 +61,9 @@ def fabdem_archive_id(tile_id: str) -> str:
     lat0 = int(math.floor(lat_sw / 10) * 10)
     lon0 = int(math.floor(lon_sw / 10) * 10)
     return (
-        f"{_format_corner(lat0, lon0)}-{_format_corner(lat0 + 10, lon0 + 10)}"
+        f"{format_corner(lat0, lon0)}-{format_corner(lat0 + 10, lon0 + 10)}"
         f"_FABDEM_{FABDEM_VERSION}"
     )
-
-
-def fabdem_tile_url(tile_id: str) -> str:
-    """HTTPS URL of one 1° FABDEM GeoTIFF (Hugging Face mirror of Bristol V1-2)."""
-    filename = f"{tile_id}_FABDEM_{FABDEM_VERSION}.tif"
-    return f"{FABDEM_DATASET}/{fabdem_archive_id(tile_id)}/{filename}"
 
 
 @dataclass(frozen=True)
@@ -165,7 +158,7 @@ def tiles_covering(bounds: Bounds) -> list[str]:
     lon_start = math.floor(bounds.west)
     lon_end = math.floor(bounds.east)
     tiles = [
-        _format_corner(lat, lon)
+        format_corner(lat, lon)
         for lat in range(lat_start, lat_end + 1)
         for lon in range(lon_start, lon_end + 1)
     ]
@@ -243,6 +236,48 @@ def fetch_dem(
     return paths
 
 
+def read_cells(dataset, lon: np.ndarray, lat: np.ndarray) -> np.ndarray:
+    """The value of the cell under each point of an open raster, in its dtype.
+
+    The same as ``dataset.sample`` point by point: the cell is found with the
+    same floor, and off the grid a point reads the nodata value (0 without
+    one). Each block of the raster holding a point is read once.
+    """
+    from rasterio.transform import rowcol
+
+    out = np.full(len(lon), dataset.nodata or 0, dtype=dataset.dtypes[0])
+    if not len(lon):
+        return out
+    rows, cols = (np.asarray(v, dtype=np.int64) for v in rowcol(dataset.transform, lon, lat))
+    inside = np.flatnonzero((rows >= 0) & (rows < dataset.height) & (cols >= 0) & (cols < dataset.width))
+    if len(inside):
+        out[inside] = read_grid_cells(dataset, rows[inside], cols[inside])
+    return out
+
+
+def read_grid_cells(dataset, rows: np.ndarray, cols: np.ndarray) -> np.ndarray:
+    """Band 1 at each (row, col) of an open raster, all on its grid, in its dtype.
+    Each block of the raster holding a cell is read once."""
+    from rasterio.windows import Window
+
+    rows, cols = np.asarray(rows, dtype=np.int64), np.asarray(cols, dtype=np.int64)
+    out = np.empty(len(rows), dtype=dataset.dtypes[0])
+    if not len(rows):
+        return out
+    block_height, block_width = dataset.block_shapes[0]
+    blocks = rows // block_height * (dataset.width // block_width + 1) + cols // block_width
+    order = np.argsort(blocks, kind="stable")
+    blocks = blocks[order]
+    starts = np.flatnonzero(np.r_[True, blocks[1:] != blocks[:-1]])
+    for start, end in zip(starts.tolist(), [*starts[1:].tolist(), len(blocks)]):
+        at = order[start:end]
+        top = int(rows[at[0]]) // block_height * block_height
+        left = int(cols[at[0]]) // block_width * block_width
+        window = Window(left, top, min(block_width, dataset.width - left), min(block_height, dataset.height - top))
+        out[at] = dataset.read(1, window=window)[rows[at] - top, cols[at] - left]
+    return out
+
+
 def sample_elevations(
     raster_dir: Path | str,
     points: Sequence[tuple[float, float]],
@@ -276,26 +311,8 @@ def sample_elevations(
         if not path.is_file():
             continue
         with rasterio.open(path) as dataset:
-            nodata = dataset.nodata
-            box = dataset.bounds
-            half_x, half_y = dataset.res[0] / 2, dataset.res[1] / 2
-            # A GLO-30 grid stops half a cell short of its tile's east and south
-            # edges, and outside it a read gives 0, not nodata: read the edge cell.
-            coords = [(points[index][1], points[index][0]) for index in indices]
-            if source is COPERNICUS:
-                coords = [
-                    (
-                        min(max(lon, box.left + half_x), box.right - half_x),
-                        min(max(lat, box.bottom + half_y), box.top - half_y),
-                    )
-                    for lon, lat in coords
-                ]
-            for index, sample in zip(indices, dataset.sample(coords), strict=True):
-                value = float(sample[0])
-                if not math.isfinite(value):
-                    continue
-                if nodata is not None and value == nodata:
-                    continue
+            coords = _tile_coords(dataset, [points[index] for index in indices])
+            for index, value in zip(indices, _read_heights(dataset, coords), strict=True):
                 out[index] = value
             if shares is not None:
                 near = [k for k, index in enumerate(indices) if shares[index] > 0 and out[index] is not None]
@@ -305,6 +322,81 @@ def sample_elevations(
                         index = indices[k]
                         out[index] -= shares[index] * (out[index] - floor)
     return out
+
+
+def _tile_coords(dataset, points: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
+    """(lon, lat) of (lat, lon) ``points`` on one open DEM tile.
+
+    A GLO-30 or FABDEM grid stops half a cell short of its tile's east and south
+    edges; outside it a GLO-30 read gives 0 and a FABDEM read nodata. A point
+    there reads the edge cell, as ``dem_heights`` does.
+    """
+    box = dataset.bounds
+    half_x, half_y = dataset.res[0] / 2, dataset.res[1] / 2
+    return [
+        (min(max(lon, box.left + half_x), box.right - half_x), min(max(lat, box.bottom + half_y), box.top - half_y))
+        for lat, lon in points
+    ]
+
+
+def _read_heights(dataset, coords: Sequence[tuple[float, float]]) -> list[float | None]:
+    """The height under each (lon, lat) of ``coords`` on an open tile, None at nodata."""
+    nodata = dataset.nodata
+    return [
+        value if math.isfinite(value) and (nodata is None or value != nodata) else None
+        for value in read_cells(dataset, *np.array(coords, dtype=float).T).tolist()
+    ]
+
+
+POINT_TILES_OPEN = 16  # tiles ``PointHeights`` keeps open per process
+
+
+class PointHeights:
+    """Heights of a few points at a time on the DEM tiles in ``raster_dir``,
+    each the cell ``sample_elevations`` reads (Copernicus GLO-30 without its
+    canopy correction), None off the tiles. Ingest orients lines by the heights
+    of their ends (ADR-0048). It keeps the last ``POINT_TILES_OPEN`` tiles
+    open, in each process apart, and every height it read."""
+
+    def __init__(self, raster_dir: Path | str, source: DemSource) -> None:
+        self.raster_dir = Path(raster_dir)
+        self.source = source
+        self._pid: int | None = None
+        self._open: dict[str, object] = {}
+        self._read: dict[tuple[float, float], float | None] = {}
+
+    def __call__(self, points: Sequence[tuple[float, float]]) -> list[float | None]:
+        if self._pid != os.getpid():  # a forked worker opens its own tiles
+            self._pid, self._open, self._read = os.getpid(), {}, {}
+        for point in points:
+            if point not in self._read:
+                dataset = self._dataset(fabdem_tile_id(*point))
+                self._read[point] = (
+                    None if dataset is None else _read_heights(dataset, _tile_coords(dataset, [point]))[0]
+                )
+        return [self._read[point] for point in points]
+
+    def _dataset(self, tile_id: str):
+        if tile_id in self._open:
+            self._open[tile_id] = self._open.pop(tile_id)  # the newest
+            return self._open[tile_id]
+        import rasterio
+
+        path = self.raster_dir / self.source.tile_file(tile_id)
+        dataset = rasterio.open(path) if path.is_file() else None
+        if len(self._open) >= POINT_TILES_OPEN:
+            oldest = self._open.pop(next(iter(self._open)))
+            if oldest is not None:
+                oldest.close()
+        self._open[tile_id] = dataset
+        return dataset
+
+
+def point_heights(raster_dir: Path | str) -> PointHeights | None:
+    """``PointHeights`` on the tiles in ``raster_dir``; None when it holds none."""
+    raster_dir = Path(raster_dir)
+    source = dem_source_of(raster_dir) if raster_dir.is_dir() else None
+    return None if source is None else PointHeights(raster_dir, source)
 
 
 def require_worldcover(landcover_dir: Path | str | None) -> None:
@@ -378,6 +470,7 @@ def sample_dem(
     """
     catalog_path = Path(catalog_path)
     raster_dir = Path(raster_dir)
+    workers()  # a bad DAYHIKE_WORKERS fails here, before the GeometryStore is open
     store_path = geometry_store_path_for(catalog_path)
     if not store_path.is_file():
         raise FileNotFoundError(store_path)
@@ -405,29 +498,31 @@ def sample_dem(
                 "WHERE latitude >= ? AND latitude < ? AND longitude >= ? AND longitude < ?",
                 (south, north, west, east),
             )
-            while True:
-                rows = cursor.fetchmany(_VERTEX_CHUNK)
-                if not rows:
-                    break
+
+            def chunk_updates(rows: list[tuple]) -> list[tuple[float, int, int]]:
+                # A chunk's (elevation, dayhike_id, seq) updates, sampled in a worker.
                 coverable = [
                     (int(dayhike_id), int(seq), float(lat), float(lon))
                     for dayhike_id, seq, lat, lon in rows
                     if fabdem_tile_id(float(lat), float(lon)) in available
                 ]
                 if not coverable:
-                    continue
+                    return []
                 elevations = sample_elevations(
                     raster_dir,
                     [(lat, lon) for _id, _seq, lat, lon in coverable],
                     landcover_dir,
                 )
-                updates = [
+                return [
                     (elevation, dayhike_id, seq)
                     for (dayhike_id, seq, _lat, _lon), elevation in zip(
                         coverable, elevations, strict=True
                     )
                     if elevation is not None
                 ]
+
+            chunks = iter(lambda: cursor.fetchmany(_VERTEX_CHUNK), [])
+            for updates in parallel_iter(chunk_updates, chunks):
                 if not updates:
                     continue
                 write.executemany(
@@ -511,7 +606,8 @@ def _elevation_stats(vertices: Sequence[tuple[float, float, float]]) -> tuple[fl
     return float(known.min()), float(known.max()), elevation_gain(lat, lon, ele)
 
 
-def _format_corner(lat_sw: int, lon_sw: int) -> str:
+def format_corner(lat_sw: int, lon_sw: int) -> str:
+    """A 1° tile id from its southwest corner, as "N45E015" or "S09W072"."""
     ns = "N" if lat_sw >= 0 else "S"
     ew = "E" if lon_sw >= 0 else "W"
     return f"{ns}{abs(lat_sw):02d}{ew}{abs(lon_sw):03d}"
@@ -534,27 +630,3 @@ def _parse_tile(tile_id: str) -> tuple[int, int]:
     if ew == "W":
         lon = -lon
     return lat, lon
-
-
-def _download(url: str, filename: str) -> None:
-    dest = Path(filename)
-    tmp = dest.with_name(dest.name + ".part")
-    request = Request(url, headers={"User-Agent": "dayhike"})
-    last_error: Exception | None = None
-    for attempt in range(5):
-        try:
-            with urlopen(request, timeout=120) as source, tmp.open("wb") as out:
-                shutil.copyfileobj(source, out)
-            tmp.replace(dest)
-            return
-        except HTTPError as exc:
-            tmp.unlink(missing_ok=True)
-            if exc.code == 404:
-                raise FileNotFoundError(url) from exc
-            last_error = exc
-        except (URLError, TimeoutError, OSError) as exc:
-            tmp.unlink(missing_ok=True)
-            last_error = exc
-        time.sleep(min(2**attempt, 16))
-    assert last_error is not None
-    raise last_error

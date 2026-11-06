@@ -10,9 +10,12 @@ from rebuild_checks import (
     CountryCoverage,
     compare_tables,
     coverage_by_country,
+    departures,
     europe_countries,
     manifest_diff,
     raw_manifest,
+    same_snapshot_as,
+    write_manifest,
 )
 
 
@@ -49,6 +52,22 @@ def test_compare_tables_reports_left_and_joined_ids(tmp_path: Path) -> None:
     assert diff.changed == []
     assert compare_tables(old, old, "t", ["id"], ["name", "length_m"]).equal
 
+
+
+def test_departures_group_ids_by_reason_and_flag_the_ones_the_rules_still_keep() -> None:
+    reasons = {
+        9: "not in the extract", 3: "under 1 km", 5: "not in the extract",
+        7: "kept by the main-walk rules", 4: "node-network leg",
+    }  # fmt: skip
+
+    by_reason, unexplained = departures(reasons)
+
+    assert by_reason == {
+        "kept by the main-walk rules": [7], "node-network leg": [4],
+        "not in the extract": [5, 9], "under 1 km": [3],
+    }  # fmt: skip
+    assert unexplained == [7]
+    assert departures({3: "under 1 km", 5: "container"})[1] == []
 
 def _square(west: float, south: float, size: float) -> dict:
     ring = [[west, south], [west + size, south], [west + size, south + size], [west, south + size], [west, south]]
@@ -108,3 +127,14 @@ def test_raw_manifest_diff_names_a_missing_and_a_changed_file(tmp_path: Path) ->
     assert problems[1].startswith("changed b.tif: size")
     assert problems[2].startswith("changed c.pbf: sha256")
     assert manifest_diff(expected, expected) == []
+
+
+def test_a_reference_is_from_the_same_snapshot_only_when_its_pbf_has_the_same_size(tmp_path: Path) -> None:
+    reference, data = tmp_path / "ref", tmp_path / "data"
+    for root, content in ((reference, b"old snapshot"), (data, b"new snapshot!")):
+        (root / "osm").mkdir(parents=True)
+        (root / "osm" / "europe-latest.osm.pbf").write_bytes(content)
+    write_manifest(reference / "raw-manifest.tsv", raw_manifest(reference, ["osm/europe-latest.osm.pbf"]))
+
+    assert same_snapshot_as(reference, reference)
+    assert not same_snapshot_as(reference, data)

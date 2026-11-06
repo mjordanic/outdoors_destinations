@@ -1,19 +1,35 @@
-# DayHike catalog
+# Hike catalog
 
 A local Catalog of DayHikes built from OpenStreetMap, ranked by similarity to Seed DayHikes the hiker already knows. Drive time is a query-time filter, not a property of a hike.
 
 ## Language
 
 **DayHike**:
-A day-length hiking outing stored in the Catalog. It is an OSM `route=hiking` relation that survived the length band, superroute and node-network rules (a `network:type=node_network` leg that is not a RoundTrip is not a DayHike). Its label is OSM `name`, else `ref` with `from – to` or the nearest place, else `from – to`, else "Hike near" the nearest place, else `relation:{id}` (ADR-0017). Its length is the length of its DayHikeGeometry, each way once: a there-and-back trail counts one way.
+A hiking outing stored in the Catalog, a day or longer. It is an OSM `route=hiking` or `route=foot` relation with trail of its own that survived the 1 km minimum, container and node-network rules: there is no upper length cap, a container (a relation with no way of its own, such as a superroute of stages) is not a DayHike, and neither is a `network:type=node_network` leg that is not a RoundTrip (ADR-0033, ADR-0034). Or it is a built DayHike, a NetworkHike or DayStage (ADR-0038). Its label is OSM `name`, else `ref` with `from – to` or the nearest place, else `from – to`, else "Hike near" the nearest place, else `relation:{id}` (ADR-0017). Its length is the length of its DayHikeGeometry, each way once: a there-and-back trail counts one way.
 _Avoid_: destination, trail, route, path, recommendation
 
+**Built DayHike**:
+A DayHike that ingest builds from OSM data rather than reads as one relation: a NetworkHike or a DayStage. A built-hike source returns its walk; from then on it is a DayHike like any other, on the map, in search and in every Ranking. It has a kind (`network` or `stage`), the OSM relations it is built from, and its Route (ADR-0018); its id is a hash of that Route above 2^40, so it stays the same across a rebuild that leaves the walk unchanged (ADR-0038). Unlike a ComposedHike it is stored in the Catalog.
+_Avoid_: composed DayHike, generated hike, virtual relation, synthetic hike
+
+**DayStage**:
+A built DayHike that is one day of a long tour: a piece of 8–25 km of a relation DayHike over 25 km, cut where a day can end, at a hut, else a place, else parking near the line, as near 16 km as those allow. It is named "{tour}, stage k: {from} – {to}" and the tour stays listed too. Tours that share a stretch cut it at the same points; a DayStage that is a Twin of a relation DayHike, such as a stage relation, is left out (ADR-0040).
+_Avoid_: stage (a stage is a relation), section, leg, day stage relation
+
+**Multi-day route**:
+A DayHike longer than 40 km one way, more than a day's walk: marked "multi-day" with its length, and listed after the day-length hikes of a Ranking unless its Seed or Wish is one too (ADR-0056).
+_Avoid_: tour (any long DayHike), long hike
+
+**NetworkHike**:
+A built DayHike that chains node-network legs (`network:type=node_network` relations, signpost to signpost) into a day's walk of 3–25 km and at least two legs: a loop back to its first signpost, or a line that passes no signpost twice. It starts from a signpost within 500 m of parking or 300 m of a place; near parking it starts at the parking when a trail leads from there to the signpost. Every start (its signposts within 1 km) keeps 4, or one per named destination its lines reach, up to 8: loops first, then lines to a named Peak, Hut, Viewpoint or lake, then the rest, each nearer 10 km first, each more than half off the better ones there; the 5th to 8th each go to a named destination none of the others there reaches; a line to a destination is its shortest one from the start. None is a Twin of a relation DayHike or of a better NetworkHike. Its label is "Loop from {start} via {destination}" or "{start} – {destination}", from its legs' end names, named guideposts, destinations and places (ADR-0039).
+_Avoid_: network DayHike, knooppunt route, chain, leg
+
 **NameOrigin**:
-Whether a DayHike label came from OSM `name`, OSM `ref`, the `from`/`to` tags, the nearest place, or a synthetic `relation:{id}` assigned at ingest. Synthetic labels can be dropped in postprocessing.
+Whether a DayHike label came from OSM `name`, OSM `ref`, the `from`/`to` tags, the nearest place, or a synthetic `relation:{id}` assigned at ingest; for a built DayHike, `network` or `stage`, from the source that built it. Synthetic labels can be dropped in postprocessing.
 _Avoid_: unnamed as a drop reason, title, display name
 
 **Trailhead**:
-The point where a DayHike's main walk starts, so it is the first vertex of DayHikeGeometry. A line starts at the end its `from`/`to` names point to (ADR-0017), else at the end nearer an access point within 5 km, else at the end where member order starts it. A loop starts at the far end of the one dead end it keeps (its stem), else at its vertex nearest an access point within 5 km. An access point is a parking point and nothing else. Drive time and nearby amenities are measured from here.
+The point where a DayHike's main walk starts, so it is the first vertex of DayHikeGeometry. A line starts at the end its `from`/`to` tags point to (ADR-0017); else at its lower end when its ends differ by more than 100 m, unless nothing reaches the lower end while something reaches the upper one (ADR-0048: parking or a place within 300 m, or a road through the end); else, when it lacks a `from` or `to` tag, at the end its dashed name points to; else at the end nearer an access point within 5 km; else at the end where member order starts it. A DayStage or a NetworkHike line starts at its lower end by the same height rule, else as it is built (ADR-0040, ADR-0039). A loop starts at the far end of the one dead end it keeps (its stem), else at its vertex nearest an access point within 5 km. An access point is a parking point and nothing else. Drive time and nearby amenities are measured from here.
 _Avoid_: start, parking (parking is an amenity near a Trailhead)
 
 **Catalog**:
@@ -33,7 +49,7 @@ The sidecar SQLite written at ingest next to a Catalog. It holds DayHikeGeometry
 _Avoid_: experimental database, work file, Catalog, lab
 
 **TrailGraph**:
-The sidecar SQLite written at ingest next to a Catalog (`{catalog}.trailgraph.sqlite`): every member way of every `route=hiking` relation ingest read, including relations dropped as too short, too long, superroutes or node-network legs, split into Segments that meet at Junctions (ADR-0018). Unmarked paths are not in it. A ComposedHike is drawn on it; Ranking of Catalog DayHikes does not read it.
+The sidecar SQLite written at ingest next to a Catalog (`{catalog}.trailgraph.sqlite`): every member way of every `route=hiking` or `route=foot` relation ingest read, including relations dropped as too short or as node-network legs, and every graded path (`highway=path` with a `sac_scale`) although no relation lists it, split into Segments that meet at Junctions (ADR-0018, ADR-0037). Other unmarked paths are not in it. A ComposedHike is drawn on it; Ranking of Catalog DayHikes does not read it.
 _Avoid_: routing graph (that is Valhalla's), network, member-way graph (the per-DayHike graph of ADR-0012)
 
 **Junction**:
@@ -41,7 +57,7 @@ A point of the TrailGraph where Segments meet: an OSM node shared by two or more
 _Avoid_: node (an OSM node is not always a Junction), intersection, vertex
 
 **Segment**:
-A stretch of the TrailGraph between two Junctions with no Junction inside: one or more OSM ways end to end, with their way ids, relation ids, `sac_scale`, surface, and full-resolution vertices. A short gap Segment bridges a joined dead-end tip. A Segment is walked either way.
+A stretch of the TrailGraph between two Junctions with no Junction inside: one or more OSM ways end to end, with their way ids, relation ids (none on a graded path no relation lists), `sac_scale`, surface, and full-resolution vertices. A short gap Segment bridges a joined dead-end tip. A Segment is walked either way.
 _Avoid_: edge, leg, stage (a stage is a relation), section
 
 **Link**:
@@ -49,11 +65,11 @@ A "connect here" offer: two nearby TrailGraph points, within the snap tolerance 
 _Avoid_: shortcut, snap, gap (a gap Segment is joined automatically)
 
 **ComposedHike**:
-A walk the Hiker draws from TrailGraph Segments, from a start Junction, Segment after Segment. It may reuse a Segment, and is measured as drawn, by distance walked: its facts come from the same rules as a DayHike's, applied to the vertices walked. It has a name the Hiker may change (proposed from the trails it walks longest and a named place at its start). It is not stored; it is shared through its URL, which names the OSM ways it walks from OSM node to OSM node, not Junctions or Segments, so the link opens the same walk after a rebuild, and it is not in the Catalog.
+A walk the Hiker draws from TrailGraph Segments, from a start Junction, Segment after Segment. It may reuse a Segment, and is measured as drawn, by distance walked: its facts come from the same rules as a DayHike's, applied to the vertices walked. It has a name the Hiker may change (proposed from the trails it walks longest, each at least 30 % of it (ADR-0037), and a named place at its start). It is not stored; it is shared through its URL, which names the OSM ways it walks from OSM node to OSM node, not Junctions or Segments, so the link opens the same walk after a rebuild, and it is not in the Catalog.
 _Avoid_: custom route, user route, composed DayHike
 
 **SuggestedLoop**:
-A ComposedHike that a Ranking proposes itself: a loop drawn on the TrailGraph from a Junction near the Trailhead of one of the best Catalog DayHikes, that ends where it starts, visits no Junction twice and crosses no Link. It is found at query time, when the Hiker asks for loops (ADR-0028), by following the Seed's ElevationProfile and length, scored like a DayHike and listed among them, and left out when more than half of it lies on the Seed (or of the Seed on it) or when it is a Twin of a DayHike. It shares rows with DayHikes as the Ranking groups them (ADR-0020). It is named after a hiking place near where it starts, else by the trails it walks (ADR-0022), and shared, opened and edited like any ComposedHike.
+A ComposedHike that a Ranking proposes itself: a loop drawn on the TrailGraph from a Junction near the Origin or near the Trailhead of one of the best Catalog DayHikes (ADR-0036), that ends where it starts, visits no Junction twice and crosses no Link. It is found at query time, when the Hiker asks for loops (ADR-0028), by following the Seed's ElevationProfile and length, scored like a DayHike and listed among them, and left out when more than half of it lies on the Seed (or of the Seed on it) or when it is a Twin of a DayHike. It shares rows with DayHikes as the Ranking groups them (ADR-0020). It is named after a hiking place near where it starts, else by the trails it walks (ADR-0022), and shared, opened and edited like any ComposedHike.
 _Avoid_: generated route, composed DayHike, recommendation
 
 **Origin**:
@@ -62,7 +78,19 @@ _Avoid_: home, location, user location
 
 **DriveTime**:
 Travel time by car from Origin to a Trailhead, computed at query time by the local routing engine.
-_Avoid_: isochrone, drive estimate as a stored column, distance (distance may exist alongside time but is not the filter)
+_Avoid_: isochrone, drive estimate as a stored column, distance (a straight-line DistanceLimit may stand beside it; road distance is never computed)
+
+**DistanceLimit**:
+The Hiker's optional limit on the straight-line (great-circle) distance from Origin to where a hike starts (a DayHike's Trailhead, a SuggestedLoop's start), checked at query time (ADR-0032). It needs no routing engine. With a DriveTime limit too, a hike must be within both.
+_Avoid_: road distance, range, radius (the GroupingRadius is another thing)
+
+**GroupingRadius**:
+How near the start of a better row's hike a hike must start to be one of that row's versions rather than a row of its own (ADR-0020). Unless the Hiker sets it, it follows the query's limits: 5 % of the DistanceLimit, or of the DriveTime limit at 50 km per hour, the smaller, at least 500 m; 10 km with no limit (ADR-0032).
+_Avoid_: area size, cluster radius
+
+**Landmark**:
+A named place the hike search finds hikes by (ADR-0053, ADR-0055): an OSM Peak, Hut, Shelter or Viewpoint on a DayHike, a GeoNames lake, pass, mountain or ridge a DayHike passes within 2 km of (else within 10 km), or a GeoNames town or village a DayHike's Trailhead is within 5 km of; it lists its nearest DayHikes. Among equal matches the one with the most names (in other languages) comes first.
+_Avoid_: spot, POI, place (that is the Origin's "Find place")
 
 **Hut**:
 An OSM alpine or mountain hut near a Trailhead or along the DayHike geometry.
@@ -97,7 +125,7 @@ A terrain-derived description of which way DayHikeGeometry faces relative to the
 _Avoid_: exposure, sunny, shady, weather
 
 **LandCover**:
-The mix of surface along DayHikeGeometry, as fractions of tree, shrub, grass, bare, and permanent snow, used in the FeatureVector. Each GeometryStore vertex counts once. Fractions do not change with QueryMonth. Snow here is ice on the land-cover map, not the seasonal snowpack.
+The mix of surface along DayHikeGeometry, as fractions of tree, shrub, grass, bare, permanent snow and other (everything else, such as water, built-up and cropland), used in the FeatureVector. Each GeometryStore vertex counts once. Fractions do not change with QueryMonth. Snow here is ice on the land-cover map, not the seasonal snowpack.
 _Avoid_: NDVI, vegetation image, satellite picture, greenness, snow depth
 
 **ClimateNormal**:
@@ -137,7 +165,7 @@ A DayHike whose main walk ends within 50 m of its Trailhead, so its length is th
 _Avoid_: loop (the main walk's loop includes lollipops), circular, closed route
 
 **WayBack**:
-The shortest walk from where a hike ends back to its Trailhead: nothing when it ends there, a straight step across a gap of at most 50 m, else the shortest way along the TrailGraph's trails when it is shorter than the hike walked backwards, else the hike retraced. It never crosses a Link.
+The shortest walk from where a hike ends back to its Trailhead: nothing when it ends there, a straight step across a gap of at most 50 m, else the shortest way along the TrailGraph's trails when it is shorter than the hike walked backwards, else the hike retraced. The trail search looks only for ways back of up to 50 km; a hike with no shorter way back than that is retraced, so a long line costs no more to measure than a day hike (ADR-0035). It never crosses a Link.
 _Avoid_: return route, loop closure, descent route
 
 **ReturnToStart**:
@@ -177,8 +205,16 @@ The numeric Catalog description of a DayHike (length, elevation stats, Difficult
 _Avoid_: embedding, description, tags
 
 **Ranking**:
-An ordered list of Catalog DayHikes by similarity to the Seed set, or to a Wish. A DayHike's similarity to one Seed is the MeasureWeights-weighted mean of its calibrated Measure scores; with several Seeds the best Seed counts. Its score is that similarity. Of a group of Twins only the best is listed, and none of a Seed's Twins. An optional QueryMonth selects the ClimateNormal slice. The Seed carries the climate being matched. With ReturnToStart every hike in it is measured with its WayBack. From a serving export it lists one row per area: a hike, DayHike or SuggestedLoop, starting within 10 km of a better row's start is a version of that row, and a row holds at most three versions, each more than half off the others (ADR-0020).
+An ordered list of Catalog DayHikes by similarity to the Seed set, or to a Wish. A DayHike's similarity to one Seed is the MeasureWeights-weighted mean of its calibrated Measure scores; with several Seeds the best Seed counts. Its score is that similarity. Of a group of Twins only the best is listed, and none of a Seed's Twins. An optional QueryMonth selects the ClimateNormal slice. The Seed carries the climate being matched. With ReturnToStart every hike in it is measured with its WayBack. From a serving export it lists one row per area: a hike, DayHike or SuggestedLoop, starting within the GroupingRadius of a better row's start is a version of that row, and a row holds at most three versions, each more than half off the others (ADR-0020).
 _Avoid_: recommendation, unsupervised clustering, prediction, climate target
+
+**Draw**:
+The rows a page lists of a Ranking's best 30, picked without replacement with probability rising as exp(score / 0.005) and listed in score order (ADR-0047). A draw number names it: the page takes a random one per Find and one more per Redraw. The same draw number picks the Trailheads a SuggestedLoop search starts near, 20 of the best 60.
+_Avoid_: shuffle, random results, sample
+
+**Strict order**:
+The rows of a page as the Ranking has them, its best first, with nothing drawn: the Ranking before ADR-0047.
+_Avoid_: deterministic mode, exact mode
 
 **Measure**:
 One fact compared between two DayHikes, giving 1 (alike) to 0 (unlike), or nothing when either DayHike lacks the fact: length, the Hut along the way, the ProfileShape, and 24 more. Each has a kind (ratio, tolerance, mix, agree, profile) and is the unit the Hiker weights. There is no grouping of Measures into themes.

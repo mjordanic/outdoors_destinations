@@ -15,16 +15,17 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Iterable, Iterator, Mapping, Protocol, Sequence
 
 import numpy as np
-from sklearn.neighbors import BallTree
 
 from dayhike.osm import OsmRelation, OsmSnapshot, OsmWay
 
 if TYPE_CHECKING:
+    from sklearn.neighbors import BallTree
+
+    from dayhike.built import BuiltHikeSource
     from dayhike.similarity import SimilarityStore
 
 EARTH_RADIUS_M = 6_371_000
-MIN_LENGTH_M = 1_000  # inclusive DayHike length band
-MAX_LENGTH_M = 20_000
+MIN_LENGTH_M = 1_000  # shortest DayHike; there is no upper cap (ADR-0033)
 AMENITY_RADIUS_M = 20_000  # great-circle from Trailhead; zero counts are valid
 TRAILHEAD_ACCESS_RADIUS_M = 5_000  # parking near a line end or loop vertex
 GAP_JOIN_M = 50  # member-way ends this close join two pieces with a straight gap
@@ -33,6 +34,12 @@ LOOP_SHARE = 0.5  # a piece whose closed loop is at least this share of its leng
 STEM_ACCESS_RADIUS_M = 200  # a loop's dead end ending this close to parking is its stem
 STEM_MIN_LENGTH_M = 1_000  # else a loop's only dead end at least this long is its stem
 END_NAME_RADIUS_M = 1_000  # a named point this close to a line end can name that end
+LOWER_START_M = 100.0  # a line whose ends differ by more than this starts at the lower one (ADR-0048) ...
+END_ACCESS_M = 300.0  # ... unless no parking or place this close, nor a road, reaches it while one reaches the top
+ACCESS_ROADS = frozenset(
+    ("trunk", "primary", "secondary", "tertiary", "unclassified", "residential", "service", "living_street",
+     "pedestrian", "road")
+)  # fmt: skip
 PLACE_RADIUS_M = 5_000  # a label without name, ref or from/to names the nearest place this close
 OSM_ATTRIBUTION = "© OpenStreetMap contributors"
 AMENITY_KINDS = ("hut", "parking", "restaurant_cafe", "drinking_water")
@@ -41,6 +48,7 @@ NAME_ORIGIN_OSM_REF = "osm_ref"
 NAME_ORIGIN_FROM_TO = "osm_from_to"
 NAME_ORIGIN_PLACE = "nearest_place"
 NAME_ORIGIN_SYNTHETIC = "synthetic"
+KIND_RELATION = "relation"  # a DayHike that is one OSM relation; built ones are not (ADR-0038)
 LANDCOVER_FEATURE_NAMES = (
     "tree_fraction",
     "shrub_fraction",
@@ -118,6 +126,11 @@ class DayHike:
     feature_vector: FeatureVector
     name_origin: str = NAME_ORIGIN_OSM_NAME
     climate_months: tuple[tuple[float, float, float] | None, ...] = (None,) * 12
+    # A built DayHike (ADR-0038) is a "network" or "stage" walk, built from
+    # the OSM relations in ``parts``, that walks its Route ``route``.
+    kind: str = KIND_RELATION
+    parts: tuple[int, ...] = ()
+    route: str | None = None
 
 
 @dataclass(frozen=True)
@@ -155,7 +168,7 @@ class IngestReport:
     kept: int
     dropped_unnamed: int
     dropped_length: int
-    dropped_network: int
+    dropped_container: int
     named_osm_name: int = 0
     named_osm_ref: int = 0
     named_synthetic: int = 0
@@ -181,7 +194,9 @@ class Catalog:
     @classmethod
     def open(cls, path: Path | str) -> Catalog:
         path = Path(path)
-        connection = sqlite3.connect(path)
+        if not path.is_file():
+            raise FileNotFoundError(f"Catalog not found: {path}")
+        connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
         try:
             meta = dict(connection.execute("SELECT key, value FROM catalog_meta"))
             report_data = json.loads(meta["ingest_report"])
@@ -285,18 +300,13 @@ class Catalog:
             dayhike_columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(dayhikes)")
             }
-            if "name_origin" in dayhike_columns:
-                dayhike_rows = connection.execute(
-                    "SELECT id, name, length_m, difficulty, name_origin "
-                    "FROM dayhikes ORDER BY id"
-                )
-            else:
-                dayhike_rows = (
-                    (*row, NAME_ORIGIN_OSM_NAME)
-                    for row in connection.execute(
-                        "SELECT id, name, length_m, difficulty FROM dayhikes ORDER BY id"
-                    )
-                )
+            # A Catalog built before NameOrigin or built DayHikes (ADR-0038) lacks their columns.
+            name_origin = "name_origin" if "name_origin" in dayhike_columns else f"'{NAME_ORIGIN_OSM_NAME}'"
+            built = "kind, parts, route" if "kind" in dayhike_columns else f"'{KIND_RELATION}', NULL, NULL"
+            dayhike_rows = connection.execute(
+                f"SELECT id, name, length_m, difficulty, {name_origin}, {built} "
+                "FROM dayhikes ORDER BY id"
+            )
             dayhikes = tuple(
                 DayHike(
                     id=dayhike_id,
@@ -309,8 +319,11 @@ class Catalog:
                     climate_months=tuple(
                         climate_months_by_id.get(dayhike_id, [None] * 12)
                     ),
+                    kind=kind,
+                    parts=tuple(json.loads(parts)) if parts else (),
+                    route=route,
                 )
-                for dayhike_id, name, length_m, sac_scale, name_origin in dayhike_rows
+                for dayhike_id, name, length_m, sac_scale, name_origin, kind, parts, route in dayhike_rows
             )
             return cls(
                 path=path,
@@ -319,7 +332,8 @@ class Catalog:
                     kept=report_data["kept"],
                     dropped_unnamed=report_data["dropped_unnamed"],
                     dropped_length=report_data["dropped_length"],
-                    dropped_network=report_data["dropped_network"],
+                    # A Catalog built before ADR-0033 has no container count.
+                    dropped_container=report_data.get("dropped_container", 0),
                     named_osm_name=report_data.get("named_osm_name", 0),
                     named_osm_ref=report_data.get("named_osm_ref", 0),
                     named_synthetic=report_data.get("named_synthetic", 0),
@@ -382,6 +396,13 @@ def remove_similarity(
     shutil.rmtree(directory)
     if progress is not None:
         progress(f"removed stale similarity facts {directory}; run `dayhike build-similarity`")
+
+
+def ensure_column(connection: sqlite3.Connection, table: str, column: str, decl: str) -> None:
+    """Add ``column`` to ``table`` unless it is already there."""
+    existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+    if column not in existing:
+        connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
 def dayhike_label(
@@ -500,6 +521,8 @@ def build_catalog(
     progress: Callable[[str], None] | None = None,
     fresh: bool = False,
     snap_tolerance_m: float = SNAP_TOLERANCE_M,
+    sources: Sequence[BuiltHikeSource] | None = None,
+    dem_dir: Path | str | None = None,
 ) -> Catalog:
     """Ingest OSM XML or PBF snapshot(s) into a Catalog of DayHikes.
 
@@ -509,62 +532,102 @@ def build_catalog(
     ``fresh=True`` discards it and starts again. ``progress`` receives one
     line per stage (filter, relations, ways, nodes, assemble, write).
 
-    Unnamed `highway=path` ways, out-of-band lengths, and iwn/nwn superroutes are
-    counted in the ingest report and are not DayHikes. A missing OSM `name` is
-    kept with a Seed label (`name`, else `ref`, else `relation:{id}`). Attribution is stored
+    Unnamed `highway=path` ways are not DayHikes; relations under 1 km,
+    containers and node-network legs are counted in the ingest report and are
+    not DayHikes either (ADR-0033). A missing OSM `name` is
+    kept with a Seed label (ADR-0017, ``dayhike_label``): `name`; else `ref`
+    with the `from` and `to` tags or the nearest place; else `from – to`; else
+    "Hike near" the nearest place; else `relation:{id}`. Attribution is stored
     with the Catalog. DriveTime is not computed at ingest. Replaces the
     SQLite file if it exists, only after the new file is complete; overlapping
     snapshots keep one row per OSM id. The GeometryStore and the TrailGraph
-    (``snap_tolerance_m``, see ``dayhike.trailgraph``) are written beside it.
+    (``snap_tolerance_m``, see ``dayhike.trailgraph``) are written beside it,
+    and replace the old ones together with the Catalog, once all three are complete.
+    ``sources`` build DayHikes that are not one relation (ADR-0038); by
+    default ingest's own ``BUILT_HIKE_SOURCES``. The DEM tiles in ``dem_dir``
+    give the heights of line ends that orient lines (``LowerStart``); without
+    tiles there, height orients none. A ``dem_dir`` that is not a directory
+    is refused, so a mistyped path does not build a Catalog without heights.
     """
-    from dayhike.ingest import emit_progress, run_ingest, write_geometry_store
+    from dayhike.dem import point_heights
+    from dayhike.ingest import BUILT_HIKE_SOURCES, _connect_work, emit_progress, remove_work, run_ingest, write_geometry_store
     from dayhike.trailgraph import check_snap_tolerance, write_trailgraph
 
     check_snap_tolerance(snap_tolerance_m)
     catalog_path = Path(catalog_path)
-    kept, report, work_path = run_ingest(
-        _osm_paths(osm_path), catalog_path, progress=progress, fresh=fresh
+    if dem_dir is not None and not Path(dem_dir).is_dir():
+        raise FileNotFoundError(f"No DEM directory {dem_dir}")
+    heights = None if dem_dir is None else point_heights(dem_dir)
+    if dem_dir is not None and heights is None:
+        emit_progress(progress, "assemble", f"no DEM tiles in {dem_dir}: height orients no line")
+    kept, report, work_path, snapshot = run_ingest(
+        _osm_paths(osm_path),
+        catalog_path,
+        progress=progress,
+        fresh=fresh,
+        sources=BUILT_HIKE_SOURCES if sources is None else sources,
+        heights=heights,
     )
     emit_progress(progress, "write", str(catalog_path))
-    _write_sqlite(catalog_path, kept, report)
+    # Each file is written under a staging name and all are renamed together once
+    # every one is complete: a run stopped while writing leaves the previous set
+    # whole, and the work file to resume from.
+    staged: list[tuple[Path, Path]] = []
+
+    def stage(path: Path) -> Path:
+        staged.append((path.with_name(path.name + ".new"), path))
+        return staged[-1][0]
+
+    _write_sqlite(stage(catalog_path), kept, report)
     if work_path.exists():
-        work_conn = sqlite3.connect(work_path)
+        work_conn = _connect_work(work_path)
         try:
-            write_geometry_store(geometry_store_path_for(catalog_path), kept, work_conn)
+            write_geometry_store(stage(geometry_store_path_for(catalog_path)), kept, work_conn, snapshot, heights)
+            del snapshot  # the TrailGraph reads the work file on its own
             write_trailgraph(
-                trailgraph_path_for(catalog_path),
+                stage(trailgraph_path_for(catalog_path)),
                 work_conn,
                 snap_tolerance_m=snap_tolerance_m,
                 progress=progress,
             )
         finally:
             work_conn.close()
-        work_path.unlink()
+    for new, path in reversed(staged):  # the Catalog last
+        new.replace(path)
+    remove_work(work_path)
     remove_similarity(catalog_path, progress)
     return Catalog.open(catalog_path)
 
 
 def _osm_paths(osm_path: Path | str | Sequence[Path | str]) -> list[Path]:
+    """The snapshot files to ingest: each path given, a directory as the OSM
+    files in it."""
     if isinstance(osm_path, (str, Path)):
-        path = Path(osm_path)
-        if path.is_dir():
-            files = sorted(
-                candidate
-                for candidate in path.iterdir()
-                if candidate.suffix in {".osm", ".xml", ".pbf"}
-                or candidate.name.endswith(".osm.pbf")
-            )
-            if not files:
-                raise FileNotFoundError(f"No OSM files in {path}")
-            return files
+        osm_path = [osm_path]
+    return [file for path in osm_path for file in _osm_files(Path(path))]
+
+
+def _osm_files(path: Path) -> list[Path]:
+    if not path.is_dir():
         return [path]
-    return [Path(path) for path in osm_path]
+    # Ingest writes its osmium extract (``*.catalog.osm.pbf``, while being
+    # written ``*.writing.osm.pbf``) beside the source: not a source itself, and
+    # listing it would change the fingerprint and stop the next run resuming.
+    files = sorted(
+        candidate
+        for candidate in path.iterdir()
+        if candidate.suffix in {".osm", ".xml", ".pbf"}
+        and not candidate.name.endswith((".catalog.osm.pbf", ".writing.osm.pbf"))
+    )
+    if not files:
+        raise FileNotFoundError(f"No OSM files in {path}")
+    return files
 
 
 def _drop_reason(relation: OsmRelation, length_m: float, round_trip: bool = False) -> str | None:
-    if _is_network_superroute(relation, length_m):
-        return "network"
-    if length_m < MIN_LENGTH_M or length_m > MAX_LENGTH_M:
+    if _is_container(relation):
+        return "container"
+    if length_m < MIN_LENGTH_M:
         return "length"
     # A node-network route is one leg between two numbered junctions, not an outing.
     if relation.tags.get("network:type") == "node_network" and not round_trip:
@@ -572,15 +635,9 @@ def _drop_reason(relation: OsmRelation, length_m: float, round_trip: bool = Fals
     return None
 
 
-def _is_network_superroute(relation: OsmRelation, length_m: float) -> bool:
-    # iwn/long nwn relations are corridors, not a day outing a Hiker can name as a Seed.
-    network = relation.tags.get("network")
-    if network == "iwn":
-        return True
-    if network != "nwn":
-        return False
-    has_child_relations = any(member_type == "relation" for member_type, _ in relation.members)
-    return has_child_relations or length_m > MAX_LENGTH_M
+def _is_container(relation: OsmRelation) -> bool:
+    # A relation with no way of its own (a superroute of stages) holds no trail (ADR-0033).
+    return not any(member_type == "way" for member_type, _ in relation.members)
 
 
 def _dayhike_from_relation(
@@ -594,15 +651,42 @@ def _dayhike_from_relation(
 ) -> DayHike:
     # The main walk starts at the Trailhead.
     latitude, longitude = points[0]
-    sac_scale = _max_sac_scale(relation, snapshot.ways)
+    place = None if places is None else places.nearest(latitude, longitude, PLACE_RADIUS_M)
+    name, name_origin = dayhike_label(relation.id, relation.tags, place)
+    return _dayhike(
+        relation.id,
+        name,
+        name_origin,
+        vertices,
+        _max_sac_scale(relation, snapshot.ways),
+        snapshot,
+        amenity_index,
+        length_m,
+    )
+
+
+def _dayhike(
+    hike_id: int,
+    name: str,
+    name_origin: str,
+    vertices: Sequence[tuple[int, tuple[float, float]]],
+    sac_scale: str | None,
+    snapshot: OsmSnapshot,
+    amenity_index: _AmenityIndex | None,
+    length_m: float | None = None,
+    **built,
+) -> DayHike:
+    """The DayHike whose main walk is ``vertices``, from the Trailhead; its
+    length is their line length unless given."""
+    latitude, longitude = vertices[0][1]
+    if length_m is None:
+        length_m = _linestring_length_m([point for _, point in vertices])
     amenity_facts = _amenity_facts_at(latitude, longitude, amenity_index)
     elevation_min_m, elevation_max_m, elevation_gain_m = _elevation_stats(
         vertices, snapshot.node_elevations
     )
-    place = None if places is None else places.nearest(latitude, longitude, PLACE_RADIUS_M)
-    name, name_origin = dayhike_label(relation.id, relation.tags, place)
     return DayHike(
-        id=relation.id,
+        id=hike_id,
         name=name,
         trailhead=Trailhead(
             latitude=latitude,
@@ -620,6 +704,7 @@ def _dayhike_from_relation(
             amenity_facts=amenity_facts,
         ),
         name_origin=name_origin,
+        **built,
     )
 
 
@@ -633,14 +718,22 @@ class NamedPoints:
     def __init__(self, points: Sequence[tuple[float, float, str]]) -> None:
         self.names = [_name_words(name) for _, _, name in points]
         self.labels = [name for _, _, name in points]
+        from sklearn.neighbors import BallTree
         self.tree = BallTree(np.radians([(lat, lon) for lat, lon, _ in points]), metric="haversine")
         # How many points use each word: the rarest word of a from/to name identifies it.
         self.word_counts = Counter(word for words in self.names for word in set(words))
 
     def nearest(self, lat: float, lon: float, radius_m: float) -> str | None:
         """Name of the nearest point within ``radius_m``, or None."""
-        (distance,), (index,) = self.tree.query(np.radians([[lat, lon]]), k=1)
-        return self.labels[int(index[0])] if distance[0] * EARTH_RADIUS_M <= radius_m else None
+        return self.nearest_each([(lat, lon)], radius_m)[0]
+
+    def nearest_each(self, points: Sequence[tuple[float, float]], radius_m: float) -> list[str | None]:
+        """Per (lat, lon) of ``points``, ``nearest``, in one query."""
+        distance, index = self.tree.query(np.radians(points), k=1)
+        return [
+            self.labels[int(i)] if d * EARTH_RADIUS_M <= radius_m else None
+            for d, i in zip(distance[:, 0], index[:, 0])
+        ]
 
     def names_end(self, text: str, lat: float, lon: float) -> bool:
         """Whether a point within ``END_NAME_RADIUS_M`` has the rarest word of ``text``."""
@@ -668,9 +761,17 @@ def declared_ends(tags: Mapping[str, str]) -> tuple[str, str] | None:
     """The (from, to) names a hiking relation declares: its ``from`` and ``to``
     tags, else a name of exactly two parts joined by a spaced dash ("Dolič - Triglav").
     """
+    return tagged_ends(tags) or dashed_ends(tags)
+
+
+def tagged_ends(tags: Mapping[str, str]) -> tuple[str, str] | None:
+    """A hiking relation's ``from`` and ``to`` tags, when it has both."""
     start, end = ((tags.get(key) or "").strip() for key in ("from", "to"))
-    if start and end:
-        return start, end
+    return (start, end) if start and end else None
+
+
+def dashed_ends(tags: Mapping[str, str]) -> tuple[str, str] | None:
+    """The two parts of a name joined by a spaced dash ("Dolič - Triglav"), when it has exactly two."""
     parts = _NAME_DASH.split((tags.get("name") or "").strip())
     return (parts[0], parts[1]) if len(parts) == 2 and all(parts) else None
 
@@ -678,14 +779,25 @@ def declared_ends(tags: Mapping[str, str]) -> tuple[str, str] | None:
 EndChoice = Callable[[tuple[float, float], tuple[float, float]], "tuple[float, float] | None"]
 
 
-def declared_start(tags: Mapping[str, str], named: NamedPoints | None) -> EndChoice | None:
-    """Which of a line's two ends its ``from``/``to`` names make the start, or None.
+def first_choice(*choices: EndChoice | None) -> EndChoice | None:
+    """The end the first of ``choices`` that chooses one chooses, or None."""
+    given = [choice for choice in choices if choice is not None]
+    if not given:
+        return None
+
+    def choose(a: tuple[float, float], b: tuple[float, float]) -> tuple[float, float] | None:
+        return next((start for choice in given if (start := choice(a, b)) is not None), None)
+
+    return choose
+
+
+def declared_start(ends: tuple[str, str] | None, named: NamedPoints | None) -> EndChoice | None:
+    """Which of a line's two ends its (from, to) names ``ends`` make the start, or None.
 
     An end is the start when ``from`` names it and not the other end, or
     ``to`` names the other end and not it; when the names point both ways
-    or nowhere, there is no choice and parking decides (``_pick_trailhead``).
+    or nowhere, there is no choice and the next rule decides (ADR-0048).
     """
-    ends = declared_ends(tags)
     if ends is None or named is None:
         return None
     start_name, end_name = ends
@@ -702,11 +814,59 @@ def declared_start(tags: Mapping[str, str], named: NamedPoints | None) -> EndCho
     return choose
 
 
+Heights = Callable[[Sequence[tuple[float, float]]], Sequence["float | None"]]
+
+
+class LowerStart:
+    """Where height starts a one-way line (ADR-0048): at its lower end when its
+    two ends differ by more than ``LOWER_START_M``, unless nothing reaches the
+    lower end while something reaches the upper one. An end is reached when an
+    ``access`` point (parking or a place) lies within ``END_ACCESS_M`` of it or
+    a road (``ACCESS_ROADS``) of the line's ways passes through it.
+    ``heights`` gives the height of each point, None where unknown; with an
+    end's height unknown, height chooses nothing.
+    """
+
+    def __init__(self, heights: Heights, access: Sequence[tuple[float, float]]) -> None:
+        self.heights = heights
+        self.tree = _access_tree(access)
+
+    def choice(self, ways: Sequence[OsmWay], nodes: Mapping[int, tuple[float, float]]) -> EndChoice:
+        """The choice for a line walking ``ways`` (their nodes at ``nodes``)."""
+
+        def choose(a: tuple[float, float], b: tuple[float, float]) -> tuple[float, float] | None:
+            height_a, height_b = self.heights([a, b])
+            if height_a is None or height_b is None or abs(height_a - height_b) <= LOWER_START_M:
+                return None
+            low, high = (a, b) if height_a < height_b else (b, a)
+            roads = {
+                nodes[node_id]
+                for way in ways
+                if way.tags.get("highway") in ACCESS_ROADS
+                for node_id in way.node_ids
+                if node_id in nodes
+            }
+            if not self._reached(low, roads) and self._reached(high, roads):
+                return None
+            return low
+
+        return choose
+
+    def _reached(self, end: tuple[float, float], roads: set[tuple[float, float]]) -> bool:
+        if end in roads:
+            return True
+        if self.tree is None:
+            return False
+        distance, _ = self.tree.query(np.radians([end]), k=1)
+        return float(distance[0, 0]) * EARTH_RADIUS_M <= END_ACCESS_M
+
+
 def _access_tree(
     access_points: Sequence[tuple[float, float]],
 ) -> BallTree | None:
     if not access_points:
         return None
+    from sklearn.neighbors import BallTree
     return BallTree(np.radians(np.asarray(access_points, dtype=float)), metric="haversine")
 
 
@@ -732,6 +892,7 @@ def _amenity_index(
             kinds.append(kind)
     if not lats:
         return None
+    from sklearn.neighbors import BallTree
     tree = BallTree(
         np.radians(np.column_stack([lats, lons])), metric="haversine"
     )
@@ -812,18 +973,14 @@ def _elevation_stats(
 ) -> tuple[float | None, float | None, float | None]:
     from dayhike.similarity import elevation_gain
 
-    elevations = [
-        node_elevations[node_id]
-        for node_id, _ in vertices
-        if node_id in node_elevations
-    ]
-    if not elevations:
+    ele = np.array([node_elevations.get(node_id, np.nan) for node_id, _ in vertices], dtype=float)
+    elevations = ele[~np.isnan(ele)]
+    if not len(elevations):
         # OSM ele absent: missing, not zero. sample-dem fills this from FABDEM.
         return None, None, None
     # The same gain rule as the similarity facts (spikes dropped, 10 m dead-band).
     lat, lon = np.array([point for _, point in vertices], dtype=float).T
-    ele = np.array([node_elevations.get(node_id, np.nan) for node_id, _ in vertices], dtype=float)
-    return min(elevations), max(elevations), elevation_gain(lat, lon, ele)
+    return float(elevations.min()), float(elevations.max()), elevation_gain(lat, lon, ele)
 
 
 LEFTOVER_ROLES = frozenset(
@@ -892,8 +1049,9 @@ def assemble_main_walk(
     then its shortest odd-junction cycle paths until it can be walked once.
     When neither can be shed, it sheds the smaller side of a bridge (see
     ``_shed_bridge_side``) and both steps run again. It is walked from the end
-    its ``from``/``to`` names choose (``declared``, see ``declared_start``),
-    else from the end ``_pick_trailhead`` chooses with ``access_tree``.
+    ``declared`` chooses (its ``from``/``to`` tags, its height and its dashed
+    name, see ``declared_start`` and ``LowerStart``), else from the end
+    ``_pick_trailhead`` chooses with ``access_tree``.
     """
     listed: list[int] = []  # way id per member-way listing in the snapshot
     leftovers: list[str | None] = []
@@ -917,6 +1075,13 @@ def assemble_main_walk(
         listed.append(member_id)
     for way_id in first_listing:
         role_only.pop(way_id, None)
+    # The walk reads its member ways' nodes many times: look each up once (a NodeStore is slower than a dict).
+    nodes = {
+        node_id: point
+        for way in [*(ways[way_id] for way_id in first_listing), *role_only.values()]
+        for node_id in way.node_ids
+        if (point := nodes.get(node_id)) is not None
+    }
 
     way_nodes = {
         way_id: [node_id for node_id in ways[way_id].node_ids if node_id in nodes]
@@ -1108,6 +1273,7 @@ def _pairs_within_gap(
     if len(node_ids) < 2:
         return []
     points = np.radians([nodes[node_id] for node_id in node_ids])
+    from sklearn.neighbors import BallTree
     tree = BallTree(points, metric="haversine")
     near, distances = tree.query_radius(
         points, r=GAP_JOIN_M / EARTH_RADIUS_M, return_distance=True
@@ -1580,12 +1746,16 @@ def _member_way_length_m(
 
 
 def _max_sac_scale(relation: OsmRelation, ways: Mapping[int, OsmWay]) -> str | None:
-    # Strictest member-way sac_scale. Missing stays None, not silently "hiking".
+    return _strictest_sac_scale(
+        (member_id for member_type, member_id in relation.members if member_type == "way"), ways
+    )
+
+
+def _strictest_sac_scale(way_ids: Iterable[int], ways: Mapping[int, OsmWay]) -> str | None:
+    # Strictest sac_scale of the ways. Missing stays None, not silently "hiking".
     best: tuple[int, str] | None = None
-    for member_type, member_id in relation.members:
-        if member_type != "way":
-            continue
-        way = ways.get(member_id)
+    for way_id in way_ids:
+        way = ways.get(way_id)
         if way is None:
             continue
         scale = way.tags.get("sac_scale")
@@ -1633,7 +1803,10 @@ def _write_sqlite(path: Path, dayhikes: Iterable[DayHike], report: IngestReport)
                 name TEXT NOT NULL,
                 name_origin TEXT NOT NULL,
                 length_m REAL NOT NULL,
-                difficulty TEXT
+                difficulty TEXT,
+                kind TEXT NOT NULL,
+                parts TEXT,
+                route TEXT
             );
             CREATE TABLE trailheads (
                 dayhike_id INTEGER PRIMARY KEY REFERENCES dayhikes(id),
@@ -1692,7 +1865,7 @@ def _write_sqlite(path: Path, dayhikes: Iterable[DayHike], report: IngestReport)
                         "kept": report.kept,
                         "dropped_unnamed": report.dropped_unnamed,
                         "dropped_length": report.dropped_length,
-                        "dropped_network": report.dropped_network,
+                        "dropped_container": report.dropped_container,
                         "named_osm_name": report.named_osm_name,
                         "named_osm_ref": report.named_osm_ref,
                         "named_synthetic": report.named_synthetic,
@@ -1704,10 +1877,19 @@ def _write_sqlite(path: Path, dayhikes: Iterable[DayHike], report: IngestReport)
             ),
         )
         connection.executemany(
-            "INSERT INTO dayhikes (id, name, name_origin, length_m, difficulty) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO dayhikes (id, name, name_origin, length_m, difficulty, kind, parts, route) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             [
-                (hike.id, hike.name, hike.name_origin, hike.length_m, hike.difficulty.sac_scale)
+                (
+                    hike.id,
+                    hike.name,
+                    hike.name_origin,
+                    hike.length_m,
+                    hike.difficulty.sac_scale,
+                    hike.kind,
+                    json.dumps(list(hike.parts)) if hike.parts else None,
+                    hike.route,
+                )
                 for hike in dayhikes
             ],
         )

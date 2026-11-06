@@ -23,14 +23,14 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import sqlite3
 import time
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
-from sklearn.neighbors import BallTree
 
 from dayhike.catalog import (
     EARTH_RADIUS_M,
@@ -44,8 +44,9 @@ from dayhike.catalog import (
     similarity_dir_for,
     trailgraph_path_for,
 )
-from dayhike.dem import DEFAULT_DEM_DIR, dem_source_of, fabdem_tile_id
+from dayhike.dem import DEFAULT_DEM_DIR, dem_source_of, fabdem_tile_id, read_grid_cells
 from dayhike.landcover import DEFAULT_LANDCOVER_DIR, _landcover_fractions, worldcover_tile_id
+from dayhike.parallel import parallel_iter, parallel_map
 from dayhike.trailgraph import WAY_BACK_KINDS, ComposedWalk, TrailGraph, WayBack, round_trip, way_back
 
 Progress = Callable[[str], None]
@@ -55,6 +56,7 @@ PROFILE_RANGE_FLOOR_M = 50.0
 GAIN_HYSTERESIS_M = 10.0  # a climb or descent counts once it reaches this; DEM noise does not
 SPIKE_RISE_M = 10.0  # a vertex at least this far above (or below) both neighbours ...
 SPIKE_GRADE = 0.25  # ... and this steep on both sides is a DEM spike, not the trail
+SPIKE_RUN_M = 60.0  # a spike may be a run of vertices this long: two DEM cells (a path along a cliff or shore)
 STEEPNESS_STEP_M = 50.0  # elevation resampled this often along the walk
 STEEPEST_KM_WINDOW_M = 1_000.0
 CORRIDOR_M = 100.0  # amenity along the DayHike (GLOSSARY.md Corridor)
@@ -62,10 +64,12 @@ PEAK_SUMMITED_M = 50.0
 PEAKS_AROUND_M = 2_000.0
 TRAILHEAD_M = 500.0  # amenity at the Trailhead (GLOSSARY.md Trailhead)
 SEARCH_STEP_M = 100.0  # line points this far apart find candidate amenities
+_SEARCH_EVERY = 10  # rows_near asks the amenity tree around every 10th line point
 WATER_SOURCE_KINDS = ("drinking_water", "spring", "water_tap", "water_point")
 SOLAR_ASPECT_POINTS = 32  # about this many vertices sampled per DayHike
 SOLAR_ASPECT_OFFSET_ARCSEC = 2  # east and north offsets: two FABDEM cells
 SOLAR_ASPECT_MIN_SLOPE_DEG = 5.0  # flatter points face no way
+SOLAR_ASPECT_FLAT = 0.5  # a DayHike with heights but no sloped point faces no way: as east or west
 WATERSIDE_M = 200.0  # open water this close to the line counts (GLOSSARY.md WaterSide)
 WATERSIDE_STEP_M = 200.0  # a WaterSide probe this often along the walk
 WATERSIDE_MIN_SHARE = 0.1  # of the WorldCover cells around a probe that are water
@@ -78,6 +82,7 @@ CALIBRATION_QUANTILES = 1_024
 CALIBRATION_PAIRS = 100_000
 CALIBRATION_SEED = 20261024
 _HIKE_CHUNK = 2_000
+_NEAREST_CELLS = 1 << 20  # (point, segment) pairs per slice in nearest_on_line
 
 LANDCOVER_SHARE_COLUMNS = (
     "tree_share",
@@ -207,6 +212,8 @@ MEASURES = (
     Measure("steepest_km", "ratio", ("steepest_km_m",), 50),
 )
 MEASURE_NAMES = tuple(measure.name for measure in MEASURES)
+# Ratio Measures: a floor counts every value under it as one; a near pair above it meets that block by rarity.
+_FLOORED = frozenset(measure.name for measure in MEASURES if measure.kind == "ratio")
 # On by default: the page's basic set, the Measures a Hiker sees without
 # opening Advanced search (ADR-0031); the others are off until the Hiker
 # weights them.
@@ -232,13 +239,14 @@ CALIBRATION_KEYS = (
 _FACTS_VERSION = hashlib.sha256(
     json.dumps(
         [
-            FACT_COLUMNS, PROFILE_POINTS, PROFILE_RANGE_FLOOR_M, GAIN_HYSTERESIS_M, SPIKE_RISE_M, SPIKE_GRADE,
+            FACT_COLUMNS, PROFILE_POINTS, PROFILE_RANGE_FLOOR_M, GAIN_HYSTERESIS_M, SPIKE_RISE_M, SPIKE_GRADE, SPIKE_RUN_M,
             STEEPNESS_STEP_M, STEEPEST_KM_WINDOW_M, CORRIDOR_M, PEAK_SUMMITED_M, PEAKS_AROUND_M,
             TRAILHEAD_M, SEARCH_STEP_M, WATER_SOURCE_KINDS, SOLAR_ASPECT_POINTS,
-            SOLAR_ASPECT_OFFSET_ARCSEC, SOLAR_ASPECT_MIN_SLOPE_DEG, WATERSIDE_M,
+            SOLAR_ASPECT_OFFSET_ARCSEC, SOLAR_ASPECT_MIN_SLOPE_DEG, SOLAR_ASPECT_FLAT, WATERSIDE_M,
             WATERSIDE_STEP_M, WATERSIDE_MIN_SHARE, WATERSIDE_OVERVIEW, WORLDCOVER_WATER,
             TWIN_STEP_M, TWIN_M, TWIN_SHARE, sorted(_SURFACE_TAG_CLASS.items()), sorted(_ROAD_HIGHWAYS),
             sorted(_TRACKTYPE_CLASS.items()), GAP_JOIN_M, WAY_BACK_KINDS, WAY_BACK_COLUMNS,
+            "dry-stretch-every-pass",  # a WaterSource ends a DryStretch at every pass of it (``walk_facts``)
         ]
     ).encode()
 ).hexdigest()[:16]  # fmt: skip
@@ -250,6 +258,7 @@ _CALIBRATION_VERSION = hashlib.sha256(
             "rarity-rank-strict",  # the share strictly less alike, rarer agreements closer (``calibrate``)
             "dead-band-one-value",  # a dead band is one value for rarity (``measure_rarity``)
             "mix-rounded",  # equal float32 shares sum to a raw 1 (``measure_scores``)
+            "near-pairs-meet-the-floor-by-rarity",  # a ratio's raw-1 block by rarity below raw 1 (ADR-0050)
         ]
     ).encode()
 ).hexdigest()[:16]  # fmt: skip
@@ -425,7 +434,7 @@ def rank_dayhikes(
     candidate's similarity to one Seed is the weighted mean of its calibrated
     Measure scores over the Measures both DayHikes have; with several Seeds the
     best Seed counts. Ties break on the same weighted mean of raw scores, then
-    on DayHike id. ``score`` is that similarity: about 0.41 for a typical
+    on DayHike id. ``score`` is that similarity: about 0.43 for a typical
     random pair under the default weights, 1.0 when no random pair is as alike
     on any weighted Measure. Of a group of
     Twins only the best is kept, and none of a Seed's Twins. Seeds are
@@ -435,9 +444,9 @@ def rank_dayhikes(
     many items (every candidate is still scored). QueryMonth selects that
     month's climate in the monthly Measures. ``return_to_start`` measures
     Seeds and candidates alike with their way back to the start (ADR-0019),
-    else one way.
+    else one way; with it Round trip is left out, every hike being one.
     """
-    chosen = _measure_weights(weights)
+    chosen = _measure_weights(weights, return_to_start)
     _check_month(month)
     seed_ids = sorted({resolve_seed(catalog, name) for name in seeds})
     store = catalog.similarity.mode(return_to_start)
@@ -526,15 +535,15 @@ def score_rows(
     best_raw = np.full(len(rows), np.nan)
     for seed in seed_rows:
         raw = np.column_stack(
-            [measure_scores(store, measure, seed, rows, month=month) for measure in measures]
+            [ranked_scores(store, measure, seed, rows, month=month) for measure in measures]
         )
         calibrated = np.column_stack(
             [
                 calibrate(
                     store,
-                    _calibration_key(measure, month, seed),
+                    key := _calibration_key(measure, month, seed),
                     raw[:, j],
-                    measure_rarity(store, measure, seed, rows, month=month),
+                    _calibrated_rarity(store, measure, key, seed, rows, raw[:, j], month),
                 )
                 for j, measure in enumerate(measures)
             ]
@@ -544,6 +553,44 @@ def score_rows(
         best = np.where(better, similarity, best)
         best_raw = np.where(better, weighted_mean(raw, w), best_raw)
     return best, best_raw
+
+
+def ranked_scores(
+    store: SimilarityStore,
+    measure: Measure,
+    seed: int | OutsideSeed,
+    rows: np.ndarray,
+    *,
+    month: int | None = None,
+) -> np.ndarray:
+    """Raw scores of one Measure between a Seed and ``rows`` as a Ranking weighs them.
+
+    ``measure_scores``, except that a DayHike without a Difficulty grade scores 0
+    on Difficulty (as far apart as grades go) against a Seed that has one: a
+    hike with the Seed's grade ranks above one with no grade, which stays listed.
+    Against a Wish the same holds for every Measure the Wish asks a value of: a
+    DayHike with no data for it scores 0 there (``wish_unmeasured``).
+    The Calibration's random pairs still leave a missing grade out.
+    """
+    raw = measure_scores(store, measure, seed, rows, month=month)
+    if isinstance(seed, OutsideSeed) and seed.stated:
+        return np.where(wish_unmeasured(store, measure, seed, rows, month), 0.0, raw)
+    if measure.name != "difficulty":
+        return raw
+    (column,) = measure.columns
+    graded = ~np.isnan(_seed_value(store, seed, column))
+    return np.where(graded & np.isnan(store.column(column)[rows]), 0.0, raw)
+
+
+def wish_unmeasured(
+    store: SimilarityStore, measure: Measure, wish: OutsideSeed, rows: np.ndarray, month: int | None
+) -> np.ndarray:
+    """Per row, whether the Wish asks a value of ``measure`` and the DayHike has no
+    data for it (a fact column NaN, such as no elevation or no climate there)."""
+    columns = _columns(measure, month) if measure.columns else []
+    if not columns or any(np.isnan(_seed_value(store, wish, column)) for column in columns):
+        return np.zeros(len(rows), dtype=bool)
+    return np.isnan(np.column_stack([store.column(column)[rows] for column in columns])).any(axis=1)
 
 
 def measure_scores(
@@ -620,6 +667,27 @@ def measure_rarity(
         return np.where(np.isnan(low) | np.isnan(high) | (values.size == 0), np.nan, between / values.size)
 
 
+def _calibrated_rarity(
+    store: SimilarityStore,
+    measure: Measure,
+    key: str,
+    seed: int | OutsideSeed,
+    rows: np.ndarray,
+    raw: np.ndarray,
+    month: int | None,
+) -> np.ndarray:
+    """``measure_rarity`` of the rows whose calibration reads it, NaN elsewhere: every row
+    on a floored Measure, else only the rows at raw 1 (``calibrate``). A Ranking scores
+    every DayHike, and most are not at raw 1."""
+    if key.split("@")[0] in _FLOORED:
+        return measure_rarity(store, measure, seed, rows, month=month)
+    rarity = np.full(len(rows), np.nan)
+    at_one = raw == 1.0
+    if at_one.any():
+        rarity[at_one] = measure_rarity(store, measure, seed, rows[at_one], month=month)
+    return rarity
+
+
 def calibrate(
     store: SimilarityStore, key: str, scores: np.ndarray, rarity: np.ndarray | None = None
 ) -> np.ndarray:
@@ -627,9 +695,15 @@ def calibrate(
 
     A random pair is less alike when it scores lower, or when both score 1
     and its shared values are more common (a larger ``measure_rarity``, given
-    as ``rarity``). Every other tie is as alike, so 0 is a pair no random
-    pair is less alike than. NaN stays NaN; a key without random-pair scores
-    gives NaN.
+    as ``rarity``). On a ``ratio`` Measure a random pair at raw 1 is also less
+    alike than a pair below raw 1 whose values span a rarer stretch than its
+    shared value: two climbs of 166 and 167 m beat two that are both under the
+    100 m floor (ADR-0050). A pair whose values span the floor block has a
+    stretch as common as that block and gets no such credit, so a farther pair
+    above the floor on a rarer stretch can outrank it: against 101 m, 110 m
+    ranks above 80 m. Every other tie is as alike, so 0 is a pair no
+    random pair is less alike than. NaN stays NaN; a key without random-pair
+    scores gives NaN.
     """
     index = CALIBRATION_KEYS.index(key)
     below, ties = _below_and_ties(store.quantiles[index], scores)
@@ -637,7 +711,10 @@ def calibrate(
         return below
     rarer, as_rare = _below_and_ties(store.rarity[index], rarity)
     commoner = np.nan_to_num(1.0 - rarer - as_rare)
-    return np.where(scores == 1.0, below + ties * commoner, below)
+    if key.split("@")[0] not in _FLOORED:
+        return np.where(scores == 1.0, below + ties * commoner, below)
+    at_one = _below_and_ties(store.quantiles[index], np.array(1.0))[1]
+    return np.where(scores == 1.0, below + ties * commoner, below + at_one * commoner)
 
 
 def random_pair_shares(
@@ -714,7 +791,9 @@ def _calibration_key(measure: Measure, month: int | None, seed: int | OutsideSee
     return measure.name if month is None or not measure.monthly else f"{measure.name}@{month:02d}"
 
 
-def _measure_weights(weights: Mapping[str, float] | None) -> dict[str, float]:
+def _measure_weights(weights: Mapping[str, float] | None, return_to_start: bool = False) -> dict[str, float]:
+    """The weights above 0 (None is ``DEFAULT_WEIGHTS``). With ``return_to_start``
+    every hike is a round trip, so Round trip is left out (ADR-0022)."""
     if weights is None:
         weights = DEFAULT_WEIGHTS
     unknown = sorted(set(weights) - set(MEASURE_NAMES))
@@ -724,6 +803,11 @@ def _measure_weights(weights: Mapping[str, float] | None) -> dict[str, float]:
         if not 0 <= weight <= 100:
             raise ValueError(f"Measure weight must be 0-100, got {name}={weight}")
     chosen = {name: float(weight) for name, weight in weights.items() if weight > 0}
+    if return_to_start and chosen.pop("round_trip", None) and not chosen:
+        raise ValueError(
+            "Round trip is left out with Return to start (every hike is then a round trip); "
+            "give another Measure a weight above 0"
+        )
     if not chosen:
         raise ValueError("at least one Measure needs a weight above 0")
     return chosen
@@ -942,18 +1026,37 @@ def _build_facts(
         water_probes: dict[str, list[np.ndarray]] = {"": [], "_back": []}
         water_rows: dict[str, list[np.ndarray]] = {"": [], "_back": []}
         routes: list[np.ndarray | None] = [None] * n
-        for start in range(0, n, _HIKE_CHUNK):
+        if graph is not None:
+            graph._network()  # read once, here, so the workers share it
+        opened = {os.getpid(): geo}  # each process reads the GeometryStore through its own connection
+
+        def measure(start: int) -> tuple:
+            # Rows start.. of every array the facts fill, measured in a worker:
+            # facts, back_facts, profile, back_profile, back_rows, routes, then
+            # per suffix the SolarAspect and WaterSide probes and their rows.
+            if os.getpid() not in opened:
+                opened[os.getpid()] = sqlite3.connect(f"file:{geometry_store_path_for(catalog_path)}?mode=ro", uri=True)
             chunk = ids[start : start + _HIKE_CHUNK]
-            walks = _walks(geo, int(chunk[0]), int(chunk[-1]), has_landcover)
-            for row, dayhike_id in enumerate(chunk, start=start):
+            end = start + len(chunk)
+            part_facts, part_back_facts = facts[:, start:end].copy(), back_facts[:, start:end].copy()
+            part_profile, part_back_profile = profile[start:end].copy(), back_profile[start:end].copy()
+            part_back_rows = back_rows[:, start:end].copy()
+            part_routes: list[np.ndarray | None] = [None] * len(chunk)
+            part_probes: dict[str, list[np.ndarray]] = {"": [], "_back": []}
+            part_probe_rows: dict[str, list[np.ndarray]] = {"": [], "_back": []}
+            part_water_probes: dict[str, list[np.ndarray]] = {"": [], "_back": []}
+            part_water_rows: dict[str, list[np.ndarray]] = {"": [], "_back": []}
+            walks = _walks(opened[os.getpid()], int(chunk[0]), int(chunk[-1]), has_landcover)
+            for local, dayhike_id in enumerate(chunk):
+                row = start + local
                 walk = walks.get(int(dayhike_id))
                 if walk is None:
-                    for target in (facts, back_facts):
-                        target[column["round_trip"], row] = 0.0
+                    for target in (part_facts, part_back_facts):
+                        target[column["round_trip"], local] = 0.0
                         for name in ("peak_summited", "viewpoint_along", "peaks_around"):
-                            target[column[name], row] = 0.0
+                            target[column[name], local] = 0.0
                         for name in FACILITIES_FLAG_COLUMNS[:3]:
-                            target[column[name], row] = 0.0
+                            target[column[name], local] = 0.0
                     continue
                 lat, lon, ele, ways, codes = walk
                 one_way = ComposedWalk(
@@ -963,43 +1066,64 @@ def _build_facts(
                 back = way_back(lat, lon, graph)
                 trip = round_trip(one_way, back)
                 for suffix, measured, target, shapes in (
-                    ("", one_way, facts, profile),
-                    ("_back", trip, back_facts, back_profile),
+                    ("", one_way, part_facts, part_profile),
+                    ("_back", trip, part_back_facts, part_back_profile),
                 ):
                     for name, value in walk_facts(
                         measured.lat, measured.lon, measured.ele, measured.walked, along, peaks
                     ).items():
-                        target[column[name], row] = value
+                        target[column[name], local] = value
                     shape = profile_shape(measured.lat, measured.lon, measured.ele)
                     if shape is not None:
-                        shapes[row] = shape
+                        shapes[local] = shape
                     chosen = solar_aspect_points(len(measured.lat))
-                    probes[suffix].append(np.column_stack([measured.lat[chosen], measured.lon[chosen]]))
-                    probe_rows[suffix].append(np.full(chosen.size, row))
+                    part_probes[suffix].append(np.column_stack([measured.lat[chosen], measured.lon[chosen]]))
+                    part_probe_rows[suffix].append(np.full(chosen.size, row))
                     if len(measured.lat) >= 2:
-                        water_probes[suffix].append(_even_points(measured.lat, measured.lon, WATERSIDE_STEP_M))
-                        water_rows[suffix].append(np.full(len(water_probes[suffix][-1]), row))
+                        part_water_probes[suffix].append(_even_points(measured.lat, measured.lon, WATERSIDE_STEP_M))
+                        part_water_rows[suffix].append(np.full(len(part_water_probes[suffix][-1]), row))
                 if len(lat) >= 2:
-                    routes[row] = _even_points(lat, lon, TWIN_STEP_M).astype(np.float32)
-                _add_way_back(back_facts[:, row], len(lat), back, trip, graph, has_landcover)
-                back_rows[:, row] = (
+                    part_routes[local] = _even_points(lat, lon, TWIN_STEP_M).astype(np.float32)
+                _add_way_back(part_back_facts[:, local], len(lat), back, trip, graph, has_landcover)
+                part_back_rows[:, local] = (
                     back.metres, *climb_and_descent(trip.lat, trip.lon, trip.ele), WAY_BACK_KINDS.index(back.kind)
                 )
+            return (
+                part_facts, part_back_facts, part_profile, part_back_profile, part_back_rows, part_routes,
+                part_probes, part_probe_rows, part_water_probes, part_water_rows,
+            )  # fmt: skip
+
+        for start, measured in zip(range(0, n, _HIKE_CHUNK), parallel_iter(measure, range(0, n, _HIKE_CHUNK))):
+            end = min(start + _HIKE_CHUNK, n)
+            facts[:, start:end], back_facts[:, start:end], profile[start:end], back_profile[start:end] = measured[:4]
+            back_rows[:, start:end] = measured[4]
+            routes[start:end] = measured[5]
+            for gathered, part in zip((probes, probe_rows, water_probes, water_rows), measured[6:]):
+                for suffix in gathered:
+                    gathered[suffix] += part[suffix]
             if progress is not None:
-                progress(f"similarity facts: {min(start + _HIKE_CHUNK, n)}/{n} DayHikes")
+                progress(f"similarity facts: {end}/{n} DayHikes")
     finally:
         geo.close()
-    for suffix, target in (("", facts), ("_back", back_facts)):
-        if progress is not None:
-            progress(f"similarity facts{suffix}: SolarAspect")
-        points = np.concatenate(probes[suffix]) if probes[suffix] else np.empty((0, 2))
-        owners = np.concatenate(probe_rows[suffix]) if probe_rows[suffix] else np.empty(0, dtype=int)
-        target[column["southness"]] = solar_aspect_southness(dem_dir, points, owners, n)
-        if progress is not None:
-            progress(f"similarity facts{suffix}: WaterSide")
-        points = np.concatenate(water_probes[suffix]) if water_probes[suffix] else np.empty((0, 2))
-        owners = np.concatenate(water_rows[suffix]) if water_rows[suffix] else np.empty(0, dtype=int)
-        target[column["waterside_share"]] = waterside_share(landcover_dir, points, owners, n)
+    def both_ways(points: dict[str, list[np.ndarray]], rows: dict[str, list[np.ndarray]]) -> tuple[np.ndarray, np.ndarray]:
+        """The one-way and way-back points in one list, so each tile is read
+        once; owners of the way back are offset by ``n``."""
+        found = [*points[""], *points["_back"]]
+        owners = [*rows[""], *(owner + n for owner in rows["_back"])]
+        return (
+            np.concatenate(found) if found else np.empty((0, 2)),
+            np.concatenate(owners) if owners else np.empty(0, dtype=int),
+        )
+
+    if progress is not None:
+        progress("similarity facts: SolarAspect")
+    southness = solar_aspect_southness(dem_dir, *both_ways(probes, probe_rows), 2 * n)
+    if progress is not None:
+        progress("similarity facts: WaterSide")
+    waterside = waterside_share(landcover_dir, *both_ways(water_probes, water_rows), 2 * n)
+    for half, target in enumerate((facts, back_facts)):
+        target[column["southness"]] = southness[half * n : (half + 1) * n]
+        target[column["waterside_share"]] = waterside[half * n : (half + 1) * n]
     if progress is not None:
         progress("similarity facts: Twins")
     return {
@@ -1065,29 +1189,50 @@ class AmenityPoints:
         self.points = np.asarray(points, dtype=float).reshape(-1, 2)
         self.kinds = np.asarray(kinds, dtype=object)
         # An empty tree still answers queries: one dummy point at the South Pole.
+        from sklearn.neighbors import BallTree
         self.tree = BallTree(
             np.radians(self.points if len(self.points) else np.array([[-90.0, 0.0]])),
             metric="haversine",
         )
 
+    def rows_near(self, line: np.ndarray, radius_m: float) -> np.ndarray:
+        """Sorted rows of the points within hypot(radius, ``SEARCH_STEP_M`` / 2)
+        + 1 m of any ``line`` point (radians, at most ``SEARCH_STEP_M`` apart),
+        so every point within ``radius_m`` of the line.
+
+        The tree is asked around every ``_SEARCH_EVERY``-th line point only,
+        that far further out (a superset), then each point found is kept if a
+        line point is within the reach.
+        """
+        reach = (math.hypot(radius_m, SEARCH_STEP_M / 2) + 1.0) / EARTH_RADIUS_M
+        centres = np.arange(0, len(line), _SEARCH_EVERY)
+        # How far each line point is from the centre it is counted with.
+        owner = np.minimum(np.round(np.arange(len(line)) / _SEARCH_EVERY).astype(int), len(centres) - 1)
+        apart = _angle(line, line[centres[owner]]).max() if len(line) else 0.0
+        found = self.tree.query_radius(line[centres], r=reach + apart + 1.0 / EARTH_RADIUS_M)
+        hits = np.unique(np.concatenate(found)).astype(int) if len(found) else np.empty(0, dtype=int)
+        hits = hits[hits < len(self.points)]
+        if not hits.size:
+            return hits
+        from sklearn.neighbors import BallTree
+        near = BallTree(line, metric="haversine").query_radius(np.radians(self.points[hits]), r=reach, count_only=True)
+        return hits[near > 0]
+
     def near_line(
         self, lat: np.ndarray, lon: np.ndarray, line: np.ndarray, radius_m: float
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Kind, distance to the line and position along it of the points that
-        may lie within ``radius_m`` of the line (filter on the distance).
+        """Kind, distance to the line, position along it and (lat, lon) of the
+        points that may lie within ``radius_m`` of the line (filter on the distance).
 
         ``line`` points (radians) are at most ``SEARCH_STEP_M`` apart, so every
         point within ``radius_m`` of the line is within hypot(radius, step / 2)
         of one of them.
         """
-        reach = math.hypot(radius_m, SEARCH_STEP_M / 2) + 1.0
-        hits = self.tree.query_radius(line, r=reach / EARTH_RADIUS_M)
-        hits = np.unique(np.concatenate(hits)).astype(int)
-        hits = hits[hits < len(self.points)]
+        hits = self.rows_near(line, radius_m)
         distance, position = nearest_on_line(
             lat, lon, self.points[hits, 0], self.points[hits, 1]
         )
-        return self.kinds[hits], distance, position
+        return self.kinds[hits], distance, position, self.points[hits]
 
 
 def _walks(
@@ -1149,7 +1294,8 @@ def walk_facts(
     restaurant or cafe, Shelter or Viewpoint in the ``CORRIDOR_M`` Corridor,
     a Peak within ``PEAK_SUMMITED_M``, the Peaks within ``PEAKS_AROUND_M``,
     and the WaterSources in the Corridor with the DryStretch between them.
-    None of the facts depend on the walking direction.
+    Only TarmacApproach depends on the walking direction: it counts from the
+    start of a line (on a loop the shorter of the two ways counts).
     """
     round_trip = _haversine_m(lat[0], lon[0], lat[-1], lon[-1]) <= GAP_JOIN_M
     facts: dict[str, float] = {
@@ -1158,19 +1304,22 @@ def walk_facts(
         **dict(zip(("climb_grade", "steepest_km_m"), steepness(lat, lon, ele))),
         **trail_facts(walked, loop=round_trip),
     }
-    kinds, distance, position = np.empty(0, dtype=object), np.empty(0), np.empty(0)
+    kinds, distance, position, points = np.empty(0, dtype=object), np.empty(0), np.empty(0), np.empty((0, 2))
     peak_distance = np.empty(0)
     length = _path_length_m(lat, lon)
     if len(lat) >= 2:
         line = np.radians(_densify(lat, lon, SEARCH_STEP_M))
-        kinds, distance, position = along.near_line(lat, lon, line, CORRIDOR_M)
-        _, peak_distance, _ = peaks.near_line(lat, lon, line, PEAKS_AROUND_M)
+        kinds, distance, position, points = along.near_line(lat, lon, line, CORRIDOR_M)
+        _, peak_distance, _, _ = peaks.near_line(lat, lon, line, PEAKS_AROUND_M)
 
     def within(kind: str, radius_m: float) -> np.ndarray:
         return position[(kinds == kind) & (distance <= radius_m)]
 
     water = np.concatenate([within(kind, CORRIDOR_M) for kind in WATER_SOURCE_KINDS])
-    edges = np.concatenate([[0.0], np.sort(water), [length]])
+    # The DryStretch ends at every pass of a WaterSource: a walk that comes back by one passes it again.
+    wet = np.isin(kinds, WATER_SOURCE_KINDS) & (distance <= CORRIDOR_M)
+    passed = passes_on_line(lat, lon, points[wet, 0], points[wet, 1], CORRIDOR_M)
+    edges = np.concatenate([[0.0], np.sort(passed), [length]])
     facts.update(
         hut_along=float(within("hut", CORRIDOR_M).size > 0),
         restaurant_cafe_along=float(within("restaurant_cafe", CORRIDOR_M).size > 0),
@@ -1196,12 +1345,51 @@ def nearest_on_line(
     Closeness is measured on a flat plane around the chain; positions use
     haversine along the chain, so they add up to the chain length.
     """
+    distance, position = np.empty(0), np.empty(0)
+    for miss, place in _misses(chain_lat, chain_lon, point_lat, point_lon):
+        nearest = miss.argmin(axis=1)
+        rows = np.arange(len(miss))
+        distance = np.concatenate([distance, miss[rows, nearest]])
+        position = np.concatenate([position, place[rows, nearest]])
+    return distance, position
+
+
+def passes_on_line(
+    chain_lat: Sequence[float],
+    chain_lon: Sequence[float],
+    point_lat: Sequence[float],
+    point_lon: Sequence[float],
+    radius_m: float,
+) -> np.ndarray:
+    """Positions along a vertex chain (metres from its first vertex) where it
+    passes each point within ``radius_m``: per run of consecutive chain steps
+    within it, the closest place of the run (``nearest_on_line``'s, for a chain
+    that passes the point once). Sorted by point, then along the chain."""
+    passes = []
+    for miss, place in _misses(chain_lat, chain_lon, point_lat, point_lon):
+        for row in range(len(miss)):
+            near = np.flatnonzero(miss[row] <= radius_m)
+            for run in np.split(near, np.flatnonzero(np.diff(near) > 1) + 1) if near.size else ():
+                passes.append(place[row, run[miss[row, run].argmin()]])
+    return np.array(passes, dtype=float)
+
+
+def _misses(
+    chain_lat: Sequence[float],
+    chain_lon: Sequence[float],
+    point_lat: Sequence[float],
+    point_lon: Sequence[float],
+) -> Iterator[tuple[np.ndarray, np.ndarray]]:
+    """Per slice of the points, per (point, chain step) the
+    distance (m) from the point to the step and the position of the closest
+    place on it (metres from the chain's first vertex). Nothing for no points
+    or a chain of fewer than two vertices."""
     lat = np.asarray(chain_lat, dtype=float)
     lon = np.asarray(chain_lon, dtype=float)
     plat = np.asarray(point_lat, dtype=float)
     plon = np.asarray(point_lon, dtype=float)
     if plat.size == 0 or lat.size < 2:
-        return np.empty(0), np.empty(0)
+        return
     segment = _step_m(lat, lon)
     start = np.concatenate([[0.0], np.cumsum(segment)])
     lat0, lon0 = lat.mean(), lon.mean()
@@ -1212,20 +1400,19 @@ def nearest_on_line(
     py = np.radians(plat - lat0) * EARTH_RADIUS_M
     dx, dy = np.diff(x), np.diff(y)
     flat = dx**2 + dy**2
-    # Share of each segment, per (point, segment), clipped to the segment.
-    along = np.clip(
-        ((px[:, None] - x[:-1]) * dx + (py[:, None] - y[:-1]) * dy)
-        / np.where(flat > 0, flat, 1.0),
-        0.0,
-        1.0,
-    )
-    miss = np.hypot(x[:-1] + along * dx - px[:, None], y[:-1] + along * dy - py[:, None])
-    nearest = miss.argmin(axis=1)
-    rows = np.arange(len(px))
-    return (
-        miss[rows, nearest],
-        start[nearest] + along[rows, nearest] * segment[nearest],
-    )
+    # Points a slice at a time, so (point, segment) matrices stay small.
+    step = max(1, _NEAREST_CELLS // len(dx))
+    for first in range(0, len(px), step):
+        cx, cy = px[first : first + step], py[first : first + step]
+        # Share of each segment, per (point, segment), clipped to the segment.
+        along = np.clip(
+            ((cx[:, None] - x[:-1]) * dx + (cy[:, None] - y[:-1]) * dy)
+            / np.where(flat > 0, flat, 1.0),
+            0.0,
+            1.0,
+        )
+        miss = np.hypot(x[:-1] + along * dx - cx[:, None], y[:-1] + along * dy - cy[:, None])
+        yield miss, start[:-1] + along * segment
 
 
 def _densify(lat: np.ndarray, lon: np.ndarray, step_m: float) -> np.ndarray:
@@ -1262,43 +1449,74 @@ def elevation_gain(lat: np.ndarray, lon: np.ndarray, ele: np.ndarray) -> float:
 def climb_and_descent(lat: np.ndarray, lon: np.ndarray, ele: np.ndarray) -> tuple[float, float]:
     """Metres climbed and metres descended along the vertices in walk order.
 
+    Each is the mean of what one walk counts walked this way and walked back
+    (``_one_way_climb_and_descent``), so walking the other way swaps the two
+    exactly and a walk retraced climbs exactly what it descends (ADR-0048).
     Vertices without elevation are skipped; none with it gives NaN for both.
-    First a DEM spike is dropped: a vertex at least ``SPIKE_RISE_M`` above
-    or below both its neighbours with a grade of at least ``SPIKE_GRADE`` on
-    both sides (the ends stay). Then a change counts only once it moves
-    ``GAIN_HYSTERESIS_M`` from the last counted elevation, so DEM jitter
-    between vertices does not add up on long flat or cross-slope walks.
     """
-    ele = np.asarray(ele, dtype=float)
+    lat, lon, ele = (np.asarray(values, dtype=float) for values in (lat, lon, ele))
+    climb, descent = _one_way_climb_and_descent(lat, lon, ele)
+    back_climb, back_descent = _one_way_climb_and_descent(lat[::-1], lon[::-1], ele[::-1])
+    return (climb + back_descent) / 2, (descent + back_climb) / 2
+
+
+def _one_way_climb_and_descent(lat: np.ndarray, lon: np.ndarray, ele: np.ndarray) -> tuple[float, float]:
+    """Metres climbed and descended walking the vertices in their order.
+
+    First DEM spikes are dropped: a vertex, or a run of vertices at most
+    ``SPIKE_RUN_M`` long, every one at least ``SPIKE_RISE_M`` above (or every
+    one below) the vertices on both sides of it, with a grade of at least
+    ``SPIKE_GRADE`` into it and out of it (the ends stay). Each drop tests the
+    new last kept vertex again, so several can drop in a row. A path along a
+    steep shore or cliff reads cells of the water or the slope beside it that
+    way. Then a change counts only once it moves
+    ``GAIN_HYSTERESIS_M`` from the last counted elevation, so DEM jitter
+    between vertices does not add up on long flat or cross-slope walks; the
+    last vertex counts whatever it moved, so climb less descent is the end's
+    height less the start's.
+    """
     known = np.isfinite(ele)
-    along = np.concatenate([[0.0], np.cumsum(_step_m(np.asarray(lat, float), np.asarray(lon, float)))])
-    kept: list[tuple[float, float]] = []  # (metres along, elevation)
-    for here in zip(along[known].tolist(), ele[known].tolist()):
-        while len(kept) >= 2 and _is_spike(kept[-2], kept[-1], here):
-            kept.pop()
-        kept.append(here)
-    if not kept:
+    along = np.concatenate([[0.0], np.cumsum(_step_m(lat, lon))])
+    at, height = along[known].tolist(), ele[known].tolist()
+    if not height:
         return math.nan, math.nan
+    # The kept vertices, as a stack: ``kept_at`` / ``kept`` (metres along,
+    # elevation). A plain loop over floats: this runs on every walk.
+    kept_at, kept = [at[0]], [height[0]]
+    rise_m, grade, run_m = SPIKE_RISE_M, SPIKE_GRADE, SPIKE_RUN_M
+    for here_at, here in zip(at[1:], height[1:]):
+        # Drop the shortest spike ending at the last kept vertex, then look again.
+        while len(kept) >= 2 and abs(here - kept[-1]) >= grade * (here_at - kept_at[-1]):
+            start = len(kept) - 1
+            top = bottom = kept[start]
+            while True:
+                top, bottom = max(top, kept[start]), min(bottom, kept[start])
+                before = kept[start - 1]
+                if (bottom - max(before, here) >= rise_m or min(before, here) - top >= rise_m) and abs(
+                    kept[start] - before
+                ) >= grade * (kept_at[start] - kept_at[start - 1]):
+                    break
+                start -= 1
+                if start < 1 or kept_at[-1] - kept_at[start] > run_m:
+                    start = 0
+                    break
+            if not start:
+                break
+            del kept_at[start:], kept[start:]
+        kept_at.append(here_at)
+        kept.append(here)
     climb = descent = 0.0
-    last = kept[0][1]
-    for _, metres in kept[1:]:
-        if metres - last >= GAIN_HYSTERESIS_M:
+    last = kept[0]
+    step = GAIN_HYSTERESIS_M
+    for metres in kept:
+        if metres - last >= step:
             climb += metres - last
             last = metres
-        elif last - metres >= GAIN_HYSTERESIS_M:
+        elif last - metres >= step:
             descent += last - metres
             last = metres
-    return climb, descent
-
-
-def _is_spike(before: tuple[float, float], vertex: tuple[float, float], after: tuple[float, float]) -> bool:
-    rise, fall = vertex[1] - before[1], vertex[1] - after[1]
-    return (
-        rise * fall > 0
-        and min(abs(rise), abs(fall)) >= SPIKE_RISE_M
-        and abs(rise) >= SPIKE_GRADE * (vertex[0] - before[0])
-        and abs(fall) >= SPIKE_GRADE * (after[0] - vertex[0])
-    )
+    end = kept[-1]
+    return climb + max(end - last, 0.0), descent + max(last - end, 0.0)
 
 
 def profile_shape(
@@ -1461,20 +1679,28 @@ def solar_aspect_southness(
     At each point the DEM is read at the point and ``SOLAR_ASPECT_OFFSET_ARCSEC``
     east and north of it; the downslope direction gives (1 - its north
     component) / 2. Points flatter than ``SOLAR_ASPECT_MIN_SLOPE_DEG`` or
-    without a height are left out; a DayHike with none left is NaN.
+    without a height are left out. A DayHike with heights but no sloped point
+    is flat: it faces no way, ``SOLAR_ASPECT_FLAT`` (as east or west). One
+    with no height at all is NaN.
     """
-    southness = slope_southness(dem_dir, points[:, 0], points[:, 1])
+    southness, measured = _slope_southness(dem_dir, points[:, 0], points[:, 1])
     sloped = ~np.isnan(southness)
     count = np.bincount(owners[sloped], minlength=n)
     total = np.bincount(owners[sloped], weights=southness[sloped], minlength=n)
+    flat = np.bincount(owners[measured], minlength=n) > 0
     with np.errstate(invalid="ignore"):
-        return np.where(count > 0, total / count, np.nan)
+        return np.where(count > 0, total / count, np.where(flat, SOLAR_ASPECT_FLAT, np.nan))
 
 
 def slope_southness(dem_dir: Path | str, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
     """Southness of the slope at each point (see ``solar_aspect_southness``),
     NaN where it is flatter than ``SOLAR_ASPECT_MIN_SLOPE_DEG`` or has no height.
     """
+    return _slope_southness(dem_dir, lat, lon)[0]
+
+
+def _slope_southness(dem_dir: Path | str, lat: np.ndarray, lon: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """``slope_southness``, and whether each point has the three heights it reads."""
     offset = SOLAR_ASPECT_OFFSET_ARCSEC / 3600
     lat, lon = np.asarray(lat, dtype=float), np.asarray(lon, dtype=float)
     here, east, north = dem_heights(
@@ -1491,7 +1717,7 @@ def slope_southness(dem_dir: Path | str, lat: np.ndarray, lon: np.ndarray) -> np
         sloped = np.degrees(np.arctan(grade)) >= SOLAR_ASPECT_MIN_SLOPE_DEG
         # Downslope points against the gradient; its north component is
         # -rise_north / grade, so a slope rising northward faces south.
-        return np.where(sloped, (1 + rise_north / grade) / 2, np.nan)
+        return np.where(sloped, (1 + rise_north / grade) / 2, np.nan), ~np.isnan(grade)
 
 
 def waterside_share(
@@ -1592,7 +1818,8 @@ def twin_groups(routes: Sequence[np.ndarray | None]) -> np.ndarray:
     ``TWIN_STEP_M``, or None. Two DayHikes are Twins (the same route, walked
     either way) when at least ``TWIN_SHARE`` of each one's points lie within
     ``TWIN_M`` of the other's line; Twins of Twins join one group. Only pairs
-    whose lengths and point centres allow that share are compared.
+    whose lengths and point centres allow that share are compared, in
+    ``parallel_map``'s workers.
     """
     parent = np.arange(len(routes))
 
@@ -1609,15 +1836,24 @@ def twin_groups(routes: Sequence[np.ndarray | None]) -> np.ndarray:
     centre = np.radians([routes[row].mean(axis=0) for row in have])
     # Twins' centres lie within the off-route share of the longer walk.
     reach = np.maximum(TWIN_M, (1 - TWIN_SHARE) * length / TWIN_SHARE) / EARTH_RADIUS_M
+    from sklearn.neighbors import BallTree
     near = BallTree(centre, metric="haversine").query_radius(centre, r=reach)
 
-    for i, others in enumerate(near):
-        for j in others[others > i]:
-            if min(length[i], length[j]) < TWIN_SHARE * max(length[i], length[j]):
-                continue
-            if are_twins(routes[have[i]], routes[have[j]]):
-                first, second = sorted((root(have[i]), root(have[j])))
-                parent[second] = first
+    def twins_after(i: int) -> list[int]:
+        # The rows after ``i`` near it that are its Twins.
+        return [
+            have[j]
+            for j in near[i][near[i] > i]
+            if min(length[i], length[j]) >= TWIN_SHARE * max(length[i], length[j])
+            and are_twins(routes[have[i]], routes[have[j]])
+        ]
+
+    # A group's root is its first row whatever order the rows are compared in.
+    rows = range(len(have))
+    for i, twins in enumerate(parallel_map(twins_after, rows)):
+        for j in twins:
+            first, second = sorted((root(have[i]), root(j)))
+            parent[second] = first
     return np.array([root(row) for row in range(len(routes))])
 
 
@@ -1631,7 +1867,38 @@ def are_twins(a: np.ndarray, b: np.ndarray) -> bool:
         distance, _ = nearest_on_line(b[:, 0], b[:, 1], a[:, 0], a[:, 1])
         return float((distance <= TWIN_M).mean())
 
+    if _share_near_vertices(a, b) < TWIN_SHARE or _share_near_vertices(b, a) < TWIN_SHARE:
+        return False
     return share_on(a, b) >= TWIN_SHARE and share_on(b, a) >= TWIN_SHARE
+
+
+def _share_near_vertices(a: np.ndarray, b: np.ndarray) -> float:
+    """An upper bound of the share of ``a``'s points within ``TWIN_M`` of
+    ``b``'s line, from a KD-tree of ``b``'s vertices instead of every point
+    against every line piece.
+
+    On the flat plane ``nearest_on_line`` measures on, a point within
+    ``TWIN_M`` of a piece is within ``TWIN_M`` plus half the piece of one of
+    its ends; 1 m more covers rounding.
+    """
+    from scipy.spatial import cKDTree
+
+    lat, lon = np.asarray(b[:, 0], dtype=float), np.asarray(b[:, 1], dtype=float)
+    if len(lat) < 2:
+        return 1.0
+    lat0, lon0 = lat.mean(), lon.mean()
+    scale = math.cos(math.radians(lat0))
+
+    def flat(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
+        return np.column_stack(
+            [np.radians(lon - lon0) * EARTH_RADIUS_M * scale, np.radians(lat - lat0) * EARTH_RADIUS_M]
+        )
+
+    vertices = flat(lat, lon)
+    reach = TWIN_M + np.hypot(*np.diff(vertices, axis=0).T).max() / 2 + 1.0
+    points = flat(np.asarray(a[:, 0], dtype=float), np.asarray(a[:, 1], dtype=float))
+    distance, _ = cKDTree(vertices).query(points, distance_upper_bound=reach)
+    return float(np.isfinite(distance).mean())
 
 
 def dem_heights(dem_dir: Path | str, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
@@ -1659,7 +1926,7 @@ def dem_heights(dem_dir: Path | str, lat: np.ndarray, lon: np.ndarray) -> np.nda
             rows, cols = rasterio.transform.rowcol(dataset.transform, lon[at], lat[at])
             rows = np.clip(np.asarray(rows), 0, dataset.height - 1)
             cols = np.clip(np.asarray(cols), 0, dataset.width - 1)
-            values = dataset.read(1)[rows, cols].astype(float)
+            values = read_grid_cells(dataset, rows, cols).astype(float)
             if dataset.nodata is not None:
                 values[values == dataset.nodata] = np.nan
         heights[at] = values
@@ -1679,6 +1946,16 @@ def _step_m(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
 
 def _path_length_m(lat: np.ndarray, lon: np.ndarray) -> float:
     return float(_step_m(lat, lon).sum())
+
+
+def _angle(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Great-circle angle between (lat, lon) rows in radians, row by row."""
+    return 2 * np.arcsin(
+        np.sqrt(
+            np.sin((a[:, 0] - b[:, 0]) / 2) ** 2
+            + np.cos(a[:, 0]) * np.cos(b[:, 0]) * np.sin((a[:, 1] - b[:, 1]) / 2) ** 2
+        )
+    )
 
 
 def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

@@ -1,3 +1,4 @@
+import dayhike.parallel  # noqa: F401  first: it sets up Accelerate for forked workers before numpy loads
 from dayhike.dem import Bounds, fetch_dem, fetch_fabdem, sample_dem
 from dayhike.landcover import fetch_worldcover, sample_landcover
 from dayhike.climate import fetch_chelsa, sample_climate

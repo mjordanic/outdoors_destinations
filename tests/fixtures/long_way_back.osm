@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="dayhike-fixture">
+  <!-- Long walks for the WayBack bound (ADR-0035). Three separate networks,
+       far apart, each with a long walk and a shorter way back on trail.
+
+       Zigzag Line (3001): N1 - M1 - N2, about 2 x 98 km. Straight Back (3002),
+         N2 - N1, is a 120 km trail between its ends: shorter than retracing
+         the line, but longer than any ComposedHike may be.
+       Long Near Loop (3003): N3 - M2 - N4, about 2 x 92 km, ends 5 km apart.
+         Short Close (3004), N4 - N3, is the 5 km trail between them.
+       Wide Line (3005): N5 - M3 - N6, about 2 x 81 km, ends 40 km apart.
+         Detour Back (3006), N6 - M4 - N5, is the only trail between them:
+         74 km, shorter than retracing the line but past the bound. -->
+  <node id="1" lat="45.0000000" lon="6.0000000" version="1"/><!-- N1 -->
+  <node id="2" lat="45.5400000" lon="7.0000000" version="1"/><!-- M1 -->
+  <node id="3" lat="46.0800000" lon="6.0000000" version="1"/><!-- N2, 120 km north of N1 -->
+  <node id="4" lat="45.0000000" lon="10.0000000" version="1"/><!-- N3 -->
+  <node id="5" lat="45.5000000" lon="11.0000000" version="1"/><!-- M2 -->
+  <node id="6" lat="45.0000000" lon="10.0635000" version="1"/><!-- N4, 5 km east of N3 -->
+  <node id="7" lat="45.0000000" lon="14.0000000" version="1"/><!-- N5 -->
+  <node id="8" lat="45.1800000" lon="15.0000000" version="1"/><!-- M3 -->
+  <node id="9" lat="45.3600000" lon="14.0000000" version="1"/><!-- N6, 40 km north of N5 -->
+  <node id="10" lat="45.1800000" lon="13.6000000" version="1"/><!-- M4 -->
+  <way id="301" version="1">
+    <nd ref="1"/>
+    <nd ref="2"/>
+    <nd ref="3"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="302" version="1">
+    <nd ref="3"/>
+    <nd ref="1"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="303" version="1">
+    <nd ref="4"/>
+    <nd ref="5"/>
+    <nd ref="6"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="304" version="1">
+    <nd ref="6"/>
+    <nd ref="4"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="305" version="1">
+    <nd ref="7"/>
+    <nd ref="8"/>
+    <nd ref="9"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="306" version="1">
+    <nd ref="9"/>
+    <nd ref="10"/>
+    <nd ref="7"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <relation id="3001" version="1">
+    <member type="way" ref="301" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Zigzag Line"/>
+  </relation>
+  <relation id="3002" version="1">
+    <member type="way" ref="302" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Straight Back"/>
+  </relation>
+  <relation id="3003" version="1">
+    <member type="way" ref="303" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Long Near Loop"/>
+  </relation>
+  <relation id="3004" version="1">
+    <member type="way" ref="304" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Short Close"/>
+  </relation>
+  <relation id="3005" version="1">
+    <member type="way" ref="305" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Wide Line"/>
+  </relation>
+  <relation id="3006" version="1">
+    <member type="way" ref="306" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Detour Back"/>
+  </relation>
+</osm>
