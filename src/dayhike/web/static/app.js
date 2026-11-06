@@ -920,6 +920,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     <div class="slot-elevation"></div>
     <div class="charts"></div>
     <h3>${compare ? `Every measure: this hike against the ${compare.wish ? "one you want" : "liked one"}` : "The facts behind every measure"}</h3>
+    <p class="hint uncounted-note" hidden></p>
     <div class="table-wrap"><table class="facts"></table></div>`;
   card.querySelector(".share-hike")?.addEventListener("click", (event) => shareHike(hike, event.currentTarget, card.querySelector(".share-note")));
   card.querySelector(".download-gpx")?.addEventListener("click", (event) => downloadGpx(hike, event.currentTarget));
@@ -935,7 +936,42 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     stackedBar("Trail surface", shares(f, SURFACE), "No surface tags on this route."),
     climateChart(f, month),
   );
-  card.querySelector(".facts").replaceWith(factsTable(hike, compare, result, month, query?.weights, query?.return_to_start));
+  card.querySelector(".facts").replaceWith(factsTable(hike, compare, result, month, query, uncountedOf(compare, query)));
+  const note = card.querySelector(".uncounted-note"), line = compare && uncountedLine(query);
+  note.hidden = !line;
+  note.textContent = line || "";
+}
+
+// Why a Measure a query weighs 0 is not counted, as the detail table says it: weighted 0, behind a
+// closed Advanced search, or, while the Hiker describes a hike, one no value can be asked of.
+const UNCOUNTED = {
+  weight: { cell: "not counted (weight 0)", why: "have weight 0", how: "set their weight in step 2" },
+  advanced: { cell: "not counted (Advanced search closed)", why: "are behind a closed Advanced search", how: "open Advanced search in step 2" },
+  wish: { cell: "not counted (cannot be asked)", why: "cannot be asked of a hike you describe" },
+};
+
+// Each weight row's reason, kept with a query so its hikes say why a Measure did not count.
+function uncountedReasons() {
+  const reasons = {};
+  for (const row of document.querySelectorAll(".weight")) {
+    reasons[row.dataset.measure] = state.wishing && row.classList.contains("unwishable") ? "wish" : folded(row) ? "advanced" : "weight";
+  }
+  return reasons;
+}
+
+// The reason of each Measure a compared hike's table shows that the query does not count, by name.
+function uncountedOf(compare, query) {
+  if (!compare || !query?.weights) return {};
+  return Object.fromEntries(comparedMeasures(query.return_to_start).filter((m) => !query.weights[m.name])
+    .map((m) => [m.name, UNCOUNTED[query.uncounted?.[m.name]] ?? UNCOUNTED.weight]));
+}
+
+// The line above a compared hike's table while some of its rows are greyed: why, and how to count them.
+function uncountedLine(query) {
+  const reasons = [...new Set(Object.values(uncountedOf(true, query)))];
+  if (!reasons.length) return "";
+  const hows = reasons.map((r) => r.how).filter(Boolean);
+  return `Greyed measures ${reasons.map((r) => r.why).join(" or ")} and are not part of the score.${hows.length ? ` To count them, ${hows.join(" or ")}.` : ""}`;
 }
 
 // A built hike's head (ADR-0038): the OSM relations it is built from, a link to it,
@@ -951,7 +987,7 @@ function comparedMeasures(returnToStart) {
   return state.measures.filter((m) => !(returnToStart && m.name === "round_trip"));
 }
 
-function factsTable(hike, compare, result, month, weights, returnToStart) {
+function factsTable(hike, compare, result, month, query, uncounted) {
   const table = document.createElement("table");
   table.className = "facts";
   const head = compare
@@ -961,19 +997,21 @@ function factsTable(hike, compare, result, month, weights, returnToStart) {
   for (const group of state.groups) {
     const body = document.createElement("tbody");
     body.innerHTML = `<tr><th scope="rowgroup" colspan="${compare ? 4 : 2}">${escapeHtml(group.label)}</th></tr>`;
-    for (const measure of (compare ? comparedMeasures(returnToStart) : state.measures).filter((m) => m.group === group.name)) {
+    for (const measure of (compare ? comparedMeasures(query?.return_to_start) : state.measures).filter((m) => m.group === group.name)) {
       const row = document.createElement("tr");
-      if (compare && weights && !weights[measure.name]) row.className = "excluded";
-      const cells = [`<td title="${escapeHtml(measure.description)}">${escapeHtml(measure.label)}</td>`];
+      const reason = uncounted[measure.name], fade = reason ? ' class="faded"' : "";
+      if (reason) row.className = "excluded";
+      const cells = [`<td${fade} title="${escapeHtml(measure.description)}">${escapeHtml(measure.label)}</td>`];
       const values = compare ? [hike, compare] : [hike];
-      for (const _ of values) cells.push('<td class="num"></td>');
+      for (const h of values) cells.push(`<td class="num${reason && !h.wish ? " faded" : ""}"></td>`);
       if (compare) cells.push('<td class="num score"></td>');
       row.innerHTML = cells.join("");
       values.forEach((h, i) => {
         const cell = row.children[i + 1];
         if (h.wish) {
           const wanted = h.wish[measure.name];
-          cell.innerHTML = wanted == null ? '<span class="nodata">left out</span>' : escapeHtml(wishText(measure, wanted));
+          cell.innerHTML = reason ? `<span class="uncounted">${reason.cell}</span>`
+            : wanted == null ? '<span class="nodata">left out</span>' : escapeHtml(wishText(measure, wanted));
         } else if (measure.name === "profile") {
           const line = sparkline(h.profile_shape);
           if (line) cell.appendChild(line); else cell.innerHTML = '<span class="nodata">no data</span>';
@@ -985,11 +1023,13 @@ function factsTable(hike, compare, result, month, weights, returnToStart) {
       if (compare) {
         const { score, note } = result?.measures?.[measure.name] ?? {};
         const unasked = compare.wish && compare.wish[measure.name] == null; // a wish asks nothing of it
-        row.lastElementChild.innerHTML = score == null
+        const shown = score == null
           ? (note ? `– ${helpButton(measure.name)}<small class="note">${escapeHtml(note)}</small>`
-            : `<span class="nodata">${unasked ? "left out" : "no data"}</span>`)
+            : reason && unasked ? "" : `<span class="nodata">${unasked ? "left out" : "no data"}</span>`)
           : `<span class="bar"><i style="width:${Math.round(score * 100)}%"></i></span>${score.toFixed(2)} ${helpButton(measure.name)}${note ? `<small class="note">${escapeHtml(note)}</small>` : ""}`;
-        if (weights && !weights[measure.name]) row.lastElementChild.title = "Left out of this score";
+        // A Measure not counted keeps its score, faded, with why in plain text, not only in colour.
+        row.lastElementChild.innerHTML = reason
+          ? `${shown && `<span class="faded">${shown}</span>`}<small class="uncounted">${reason.cell}</small>` : shown;
       }
       body.appendChild(row);
     }
@@ -2259,7 +2299,7 @@ async function comparePair(id) {
     setStatus(error.message, true);
     return;
   }
-  const request = ++paired, filling = ++selecting, liked = state.liked;
+  const request = ++paired, filling = ++selecting, liked = state.liked, uncounted = uncountedReasons();
   setStatus("Scoring the pair…");
   try {
     const [pair, hike] = await Promise.all([
@@ -2273,7 +2313,7 @@ async function comparePair(id) {
     state.selected = { pair: id };
     renderDetail(card, hike, {
       role: "Compared with the liked hike", compare: liked, result: { ...pair, drive_hours: null },
-      query: { weights: pair.weights, month: pair.month, return_to_start: pair.return_to_start },
+      query: { weights: pair.weights, month: pair.month, return_to_start: pair.return_to_start, uncounted },
     });
     card.scrollIntoView({ behavior: "smooth", block: "start" });
     setStatus("");
@@ -2425,7 +2465,7 @@ function pageOf(pool) {
 }
 
 // The request for a Ranking: with the draw number, which draws the loop starts too, unless in Strict order.
-function asking(query, draw = state.draw) {
+function asking({ uncounted, ...query }, draw = state.draw) { // why a Measure is not counted stays on the page
   return state.strict ? query : { ...query, draw };
 }
 
@@ -2481,6 +2521,7 @@ async function findSimilar() {
     } else {
       query = { ...likedSeed(liked, "seed"), ...readWeights(), month, return_to_start: liked.way_back != null };
     }
+    query.uncounted = uncountedReasons();
     if ($("#drive-on").checked) {
       const typed = parseLatLon($("#origin").value);
       const warning = typed && swappedWarning(typed);
@@ -2563,7 +2604,7 @@ async function rank(query, liked, stale = false, draw = state.draw, place = stat
     if (request !== ranked || liked !== rankBasis()) return;
     state.query = {
       weights: body.weights, month: body.month, drive: Boolean(query.max_hours), km: Boolean(query.max_km),
-      return_to_start: body.return_to_start, wish: query.wish ?? null, group_km: body.group_km,
+      return_to_start: body.return_to_start, wish: query.wish ?? null, group_km: body.group_km, uncounted: query.uncounted,
     };
     // ``address``: what it was asked as, so an address typed or gone back to that asks otherwise marks it.
     state.asked = { query, basis: liked, place, address: shownAddress() };

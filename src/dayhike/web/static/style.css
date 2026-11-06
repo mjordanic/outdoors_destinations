@@ -124,7 +124,10 @@ svg text { font-size: 11px; fill: var(--muted); }
 .facts .nodata, .nodata { color: var(--muted); font-style: italic; }
 .bar { display: inline-block; width: 70px; height: 9px; background: #eef0ec; border-radius: 4px; vertical-align: middle; margin-right: 6px; overflow: hidden; }
 .bar > i { display: block; height: 100%; background: var(--green); }
-.facts tr.excluded td { opacity: 0.5; }
+/* A Measure not counted: its facts and score fade, and why stays in full contrast. */
+.facts tr.excluded .faded { opacity: 0.5; }
+.facts .uncounted { color: var(--muted); font-style: italic; }
+.facts td.score .uncounted { display: block; white-space: normal; font-size: 0.78rem; }
 
 .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; }
 #results-table { border-collapse: collapse; font-size: 0.82rem; min-width: 100%; }
