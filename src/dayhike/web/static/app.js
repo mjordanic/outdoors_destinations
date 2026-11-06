@@ -2722,7 +2722,7 @@ function noteLoops() {
   const drawn = !state.strict && unshown.length > 0;
   const why = versus === "below" ? "" : unshown.some((row) => row.score.toFixed(3) === best)
     ? state.strict ? `; it ranks just below #${state.results.length}` : "; it is not drawn on this page: Redraw or tick Strict order"
-    : `; it walks mostly the same trails as ${others}`;
+    : `; it ranks after the hikes it ties with, or walks mostly the same trails as ${others}`;
   const count = listed === rows.length ? `${listed} listed` : `${listed} listed in ${rows.length} row${rows.length === 1 ? "" : "s"}`;
   const where = listed
     ? `, ${count}: ${rows.join(", ")} (marked composed)${search?.found > listed ? `; the others rank lower, ${drawn ? "are not drawn on this page (Redraw or tick Strict order), " : ""}or walk mostly the same trails as ${others}` : ""}`

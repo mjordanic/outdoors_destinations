@@ -1118,13 +1118,13 @@ def test_a_row_whose_version_is_a_loop_is_marked_composed(browser, server) -> No
         ({"found": 14, "best": -0.01}, ", 14 found, none listed: the best scores {best}, below #{n}'s {last}."),
         (
             {"found": 14, "best": -0.0001},
-            ", 14 found, none listed: the best scores {last}, level with #{n}'s {last}; it walks mostly the same trails"
-            " as a listed hike or the hike you like.",
+            ", 14 found, none listed: the best scores {last}, level with #{n}'s {last}; it ranks after the hikes it ties with,"
+            " or walks mostly the same trails as a listed hike or the hike you like.",
         ),
         (
             {"found": 14, "best": 0.01},
-            ", 14 found, none listed: the best scores {best}, above #{n}'s {last}; it walks mostly the same trails"
-            " as a listed hike or the hike you like.",
+            ", 14 found, none listed: the best scores {best}, above #{n}'s {last}; it ranks after the hikes it ties with,"
+            " or walks mostly the same trails as a listed hike or the hike you like.",
         ),
         ({"found": 0, "best": None}, ", no loop found, so none is listed."),
     ],
@@ -1155,7 +1155,10 @@ def test_the_loop_note_says_plainly_when_no_loop_is_listed(browser, server, sear
     ("in_pool", "why"),
     [
         (True, "; it is not drawn on this page: Redraw or tick Strict order."),
-        (False, "; it walks mostly the same trails as a listed hike or the hike you like."),
+        (
+            False,
+            "; it ranks after the hikes it ties with, or walks mostly the same trails as a listed hike or the hike you like.",
+        ),
     ],
 )
 def test_a_loop_above_the_rows_drawn_says_why_it_is_not_listed(browser, server, monkeypatch, in_pool, why) -> None:
