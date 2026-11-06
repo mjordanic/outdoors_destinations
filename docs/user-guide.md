@@ -333,7 +333,8 @@ for example "multi-day, 1,073 km", in the search list, in the results and in
 its panel. When you start from a day hike, or describe one, these routes are
 listed after every day-length hike, so they do not take a day hike's place;
 their scores are unchanged. When you start from a multi-day route, or ask for
-a length over 40 km, they are listed by score like any other. Their day-sized
+a length over 40 km one way (over 80 km with Return to start on, as the
+length then counts the way back), they are listed by score like any other. Their day-sized
 stages are listed as hikes of their own (see Tips).
 
 #### Why one start can show 4 to 8 hikes
