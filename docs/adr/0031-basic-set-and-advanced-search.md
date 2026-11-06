@@ -1,5 +1,5 @@
 ---
-status: accepted (amends ADR-0016)
+status: accepted (amends ADR-0016; the Wish form's start amended by ADR-0057)
 ---
 
 # A basic set of Measures, the rest behind Advanced search
