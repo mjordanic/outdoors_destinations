@@ -296,6 +296,12 @@ Each hike has a score, and each thing compared has its own score. Press the
   we don't know is simply left out of the score. When you describe the hike
   you want, a hike with no data for something you asked for scores 0 on it
   instead, so it is listed below the hikes that have that data.
+- Open a hike to see every measure side by side with the hike you like (or
+  the one you want). A greyed row is a measure that is not part of the score:
+  it still shows the facts and its score, faded, and says why: "not counted
+  (weight 0)", "not counted (Advanced search closed)", or, when you describe
+  the hike you want, "not counted (cannot be asked)". A line above the table
+  says how to count them: set their weight in step 2, or open Advanced search.
 
 #### Why the list changes from visit to visit
 

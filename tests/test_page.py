@@ -385,7 +385,8 @@ def test_a_hike_found_for_a_wish_is_shown_against_what_the_hiker_wants(browser, 
     gain = facts.locator("tr", has=page.locator("td", has_text="Climbing"))
     assert gain.locator("td").nth(2).inner_text() == "900 m"
     waterside = facts.locator("tr", has=page.locator("td", has_text="Lake or sea"))
-    assert waterside.locator("td").nth(2).inner_text() == "left out"
+    assert waterside.locator("td").nth(2).inner_text() == "not counted (weight 0)"
+    assert waterside.locator("td.score").inner_text() == "not counted (weight 0)"
 
 
 def test_clicking_the_hut_box_as_the_guide_says_asks_for_a_hut(browser, server) -> None:
@@ -423,8 +424,97 @@ def test_a_measure_the_wish_does_not_ask_is_left_out_not_no_data(browser, server
     facts = page.locator("#selected table.facts")
     facts.wait_for()
     length = facts.locator("tr", has=page.locator("td", has_text="Length"))
-    assert length.locator("td").nth(3).inner_text() == "left out"
+    assert length.locator("td").nth(3).inner_text() == "not counted (cannot be asked)"
     assert "no data" not in facts.locator("td.score").all_inner_texts()
+    assert page.locator("#selected .uncounted-note").inner_text() == (
+        "Greyed measures cannot be asked of a hike you describe or have weight 0 and are not part of the score."
+        " To count them, set their weight in step 2."
+    )
+
+
+# How see-through an element looks: its own opacity times every ancestor's.
+SEEN_OPACITY = "e => { let o = 1; for (; e; e = e.parentElement) o *= Number(getComputedStyle(e).opacity); return o; }"
+
+
+def _compared(page):
+    """The Ridge Walk's first similar hike, opened beside it: its table of every measure."""
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.click()
+    facts = page.locator("#selected table.facts")
+    facts.wait_for()
+    return facts
+
+
+def test_a_measure_at_weight_0_keeps_its_faded_score_and_says_in_plain_text_it_is_not_counted(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    open_advanced(page)
+    for slider in page.locator('.weight input[type="range"]:not([disabled])').all():
+        slider.fill("50")
+    page.get_by_label("Length weight, 0 to 100").fill("0")
+
+    facts = _compared(page)
+
+    length = facts.locator("tr", has=page.locator("td", has_text="Length"))
+    assert length.get_attribute("class") == "excluded"
+    score = length.locator("td.score")
+    assert score.locator(".bar").count() == 1 and re.search(r"\d\.\d\d", score.inner_text())
+    assert score.locator(".uncounted").inner_text() == "not counted (weight 0)"
+    assert score.locator(".uncounted").evaluate(SEEN_OPACITY) == 1  # readable, not only a fainter colour
+    assert length.locator("td").nth(1).evaluate(SEEN_OPACITY) == 0.5  # its facts still show, faded
+    assert page.locator("#selected .uncounted-note").inner_text() == (
+        "Greyed measures have weight 0 and are not part of the score. To count them, set their weight in step 2."
+    )
+    counted = facts.locator("tr:not(.excluded) td.score")
+    assert counted.count() and not facts.locator("tr:not(.excluded) .uncounted").count()
+
+
+def test_no_line_above_the_table_while_every_measure_counts(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    open_advanced(page)
+    for slider in page.locator('.weight input[type="range"]:not([disabled])').all():
+        slider.fill("50")
+
+    facts = _compared(page)
+
+    assert not facts.locator("tr.excluded").count()
+    assert page.locator("#selected .uncounted-note").is_hidden()
+
+
+def test_a_measure_behind_a_closed_advanced_search_says_to_open_it(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    open_advanced(page)
+    page.get_by_label("Lowest point weight, 0 to 100").fill("50")
+    open_advanced(page)
+
+    facts = _compared(page)
+
+    lowest = facts.locator("tr", has=page.locator("td", has_text="Lowest point"))
+    assert lowest.get_attribute("class") == "excluded"
+    assert lowest.locator("td.score .uncounted").inner_text() == "not counted (Advanced search closed)"
+    assert page.locator("#selected .uncounted-note").inner_text() == (
+        "Greyed measures are behind a closed Advanced search and are not part of the score."
+        " To count them, open Advanced search in step 2."
+    )
+
+
+def test_a_pair_checked_says_which_measures_it_does_not_count(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_label("Climbing weight, 0 to 100").fill("0")
+    page.locator("#pair-search").fill("Valley Path")
+    page.locator("#pair-suggestions li", has_text="Valley Path").first.dispatch_event("mousedown")
+    page.locator("#selected").get_by_text("Compared with the liked hike").wait_for()
+
+    climbing = page.locator("#selected table.facts tr", has=page.locator("td", has_text="Climbing"))
+    assert climbing.locator("td.score .uncounted").inner_text() == "not counted (weight 0)"
+    lowest = page.locator("#selected table.facts tr", has=page.locator("td", has_text="Lowest point"))
+    assert lowest.locator("td.score .uncounted").inner_text() == "not counted (Advanced search closed)"
+    assert page.locator("#selected .uncounted-note").inner_text().startswith(
+        "Greyed measures have weight 0 or are behind a closed Advanced search and are not part of the score."
+    )
 
 
 def test_a_share_is_wished_in_percent_and_asked_as_a_share(browser, server) -> None:
