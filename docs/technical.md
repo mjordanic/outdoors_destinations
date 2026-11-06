@@ -2054,13 +2054,15 @@ the Measures `/api/measures` marks wishable (Advanced ones again only while it i
 unit and range (a yes/no Measure as a tick box) beside its weight. Length and
 dry stretch are typed in km, up to 2,000 km, and climb up to 100,000 m, with a hint under Length that over
 about 25 km is usually more than a day (ADR-0035). The form
-starts asking nothing: every weight is 0, and setting a value weighs that
-Measure 100; a Measure weighted 0 asks nothing. The liked-hike
+starts from the liked-hike form's default weights: the basic set at 100, each
+asking its Measure's default value from `/api/measures`, the rest at 0
+(ADR-0057). Typing a value of a Measure weighted 0 weighs it 100; a Measure
+weighted 0 asks nothing. The liked-hike
 weights are kept for when the Hiker goes back. "Find hikes" ranks with that wish
 instead of a Seed, the drive filter, month and Return to start work as before,
 and a result opens with what the Hiker asked for in place of the liked hike. The
 address, `#wish=elevation_gain:800:100,hut_along:1:50` (Measure, value in the
-Measure's fact units, metres for a length typed in km, weight), keeps the form for a reload or a shared link. "Back to a hike you liked" returns
+Measure's fact units, metres for a length typed in km, weight), keeps the form for a reload or a shared link; a wishable Measure it does not name weighs 0, and an address naming none opens the defaults. "Back to a hike you liked" returns
 to the search. A server whose Measures are not wishable shows no such button.
 
 ### Serving export and running it

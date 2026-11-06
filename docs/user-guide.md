@@ -99,15 +99,22 @@ much like your hike nearby. A long tour can then show up on the list too.
 No particular hike in mind? Press **"No particular hike in mind? Describe the
 one you want"** under the search.
 
-Example: you want a hike of about 10 km with 800 m of climbing and a hut on
-the way. Type 10 for Length and 800 for Climbing. Open **Advanced search** and
-click the "yes" box of Hut along: it already shows "yes", and the click turns
-it on (a second click asks for no hut). Press **Find hikes**.
+It starts like the normal search: the main features (Length, Climbing,
+Highest point, Typical temperature and Lake or sea) are on at weight 100, each
+asking for a typical value already in its box, and the Advanced ones are off.
+Change the values you care about, and slide the ones you don't care about to 0.
 
-Everything starts at "ask for nothing": the value boxes are empty, with a
-grey example value in each. Typing a value switches that measure on, at weight
-100. Sliding a measure's weight up without typing a value asks for the example
-value shown. **Back to a hike you liked** takes you back to the normal search.
+Example: you want a hike of about 10 km with 800 m of climbing and a hut on
+the way. Length already asks for 10; type 800 for Climbing. Slide Highest
+point, Typical temperature and Lake or sea to 0 if they don't matter to you.
+Open **Advanced search** and click the "yes" box of Hut along: it already
+shows "yes", and the click turns it on (a second click asks for no hut). Press
+**Find hikes**.
+
+Typing a value in a measure that is off switches it on, at weight 100. Sliding
+its weight up without typing a value asks for the grey example value shown.
+**Reset weights** brings back the starting values. **Back to a hike you liked**
+takes you back to the normal search.
 
 ### Say what matters to you
 

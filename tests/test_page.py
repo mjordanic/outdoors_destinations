@@ -154,6 +154,14 @@ def open_page(
 
 
 SHOWN = "rows => rows.map(r => r.dataset.measure)"
+# The wishable Measures of WISHABLE that the basic set weighs 100 by default, with the value each then asks.
+WISH_DEFAULTS = {"elevation_gain": 600, "highest": 1500, "waterside": 0.5}
+
+
+def wish_nothing(page) -> None:
+    """Turns off the basic Measures a wish weighs by default, so it asks only what the test sets."""
+    for label in ("Climbing", "Highest point", "Lake or sea"):
+        page.get_by_label(f"{label} weight, 0 to 100").fill("0")
 
 
 def open_advanced(page) -> None:
@@ -295,10 +303,10 @@ def test_a_wish_shows_the_basic_measures_and_asks_advanced_ones_only_while_open(
     page.get_by_label("Climbing you want, in m").fill("900")
     open_advanced(page)
 
-    page.wait_for_url("**/#wish=elevation_gain:900:100")
+    page.wait_for_url("**/#wish=elevation_gain:900:100,highest:1500:100,waterside:0.5:100")
     with page.expect_response(f"{server}/api/rank"):
         page.get_by_role("button", name="Find hikes").click()
-    assert api.ranked[-1]["wish"] == {"elevation_gain": 900}
+    assert api.ranked[-1]["wish"] == {**WISH_DEFAULTS, "elevation_gain": 900}
 
     shared = open_page(browser, server, Api(WISHABLE), hash="#wish=hut_along:0:100")
 
@@ -317,8 +325,8 @@ def test_a_hiker_with_no_hike_in_mind_gets_a_wish_form_of_the_wishable_measures(
     gain = page.get_by_label("Climbing you want, in m")
     assert gain.get_attribute("type") == "number"
     assert (gain.get_attribute("min"), gain.get_attribute("max"), gain.get_attribute("step")) == ("0", "3000", "50")
-    # Empty until asked, so no value looks asked while its weight is off; the default is a hint.
-    assert gain.input_value() == "" and gain.get_attribute("placeholder") == "600"
+    # A basic Measure is on by default and asks its default value, also shown as the hint.
+    assert gain.input_value() == "600" and gain.get_attribute("placeholder") == "600"
     hut = page.get_by_label("Hut along you want")
     assert hut.get_attribute("type") == "checkbox" and hut.is_checked()
     assert page.get_by_label("Climbing weight, 0 to 100").is_visible()
@@ -385,6 +393,8 @@ def test_clicking_the_hut_box_as_the_guide_says_asks_for_a_hut(browser, server) 
     page = open_page(browser, server, api)
     page.get_by_role("button", name="No particular hike in mind?").click()
     page.get_by_label("Climbing you want, in m").fill("800")
+    page.get_by_label("Highest point weight, 0 to 100").fill("0")
+    page.get_by_label("Lake or sea weight, 0 to 100").fill("0")
     open_advanced(page)
     hut = page.get_by_label("Hut along you want")
     assert hut.is_checked() and page.get_by_label("Hut along weight, 0 to 100").input_value() == "0"
@@ -400,6 +410,7 @@ def test_clicking_the_hut_box_as_the_guide_says_asks_for_a_hut(browser, server) 
 def test_a_measure_the_wish_does_not_ask_is_left_out_not_no_data(browser, server) -> None:
     page = open_page(browser, server, Api(WISHABLE))
     page.get_by_role("button", name="No particular hike in mind?").click()
+    wish_nothing(page)
     open_advanced(page)
     page.get_by_label("Hut along you want").click()
     page.get_by_role("button", name="Find hikes").click()
@@ -429,7 +440,48 @@ def test_a_share_is_wished_in_percent_and_asked_as_a_share(browser, server) -> N
     with page.expect_response(f"{server}/api/rank"):
         page.get_by_role("button", name="Find hikes").click()
 
-    assert api.ranked[-1]["wish"] == {"waterside": 0.3}
+    assert api.ranked[-1]["wish"] == {**WISH_DEFAULTS, "waterside": 0.3}
+
+
+def test_a_wish_starts_from_the_default_weights_of_the_liked_hike_form(browser, server) -> None:
+    api = Api(WISHABLE)
+    page = open_page(browser, server, api)
+    page.get_by_role("button", name="No particular hike in mind?").click()
+
+    # The basic set is on at its default weight, each asking its shown default value; the rest is off.
+    assert page.locator(".weight:visible:not(.excluded)").evaluate_all(SHOWN) == list(WISH_DEFAULTS)
+    assert page.get_by_label("Highest point you want, in m").input_value() == "1500"
+    page.wait_for_url("**/#wish=elevation_gain:600:100,highest:1500:100,waterside:0.5:100")
+    open_advanced(page)
+    assert page.get_by_label("Hut along weight, 0 to 100").input_value() == "0"
+    with page.expect_response(f"{server}/api/rank"):
+        page.get_by_role("button", name="Find hikes").click()
+
+    assert api.ranked[-1]["wish"] == WISH_DEFAULTS
+    assert api.ranked[-1]["weights"] == dict.fromkeys(WISH_DEFAULTS, 100)
+
+
+@pytest.mark.parametrize("width", [1280, 390])
+def test_a_wish_value_box_shows_its_whole_value(browser, server, width) -> None:
+    # The real wish inputs: Solar radiation's long unit, kJ/m²/day, once left its box too narrow for 16000.
+    with urllib.request.urlopen(f"{server}/api/measures") as response:
+        wishable = {m["name"]: m["wish"] for m in json.load(response)["measures"] if m["wish"]}
+    page = open_page(browser, server, Api(wishable), width=width)
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    open_advanced(page)
+    solar = page.get_by_label("Solar radiation you want, in kJ/m²/day")
+    solar.fill("16000")
+    solar.hover()  # the spinner shows and takes its room
+
+    # The box's text area, less the spinner (about 15 px), holds the value with every digit.
+    room, needed = solar.evaluate("""box => {
+      const style = getComputedStyle(box), text = document.createElement("canvas").getContext("2d");
+      text.font = style.font;
+      return [box.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 15,
+              text.measureText(box.value).width];
+    }""")
+    assert room >= needed
+    assert page.evaluate("document.documentElement.scrollWidth") <= width
 
 
 def test_a_wish_survives_a_reload_and_opens_from_its_link(browser, server) -> None:
@@ -476,11 +528,11 @@ def test_a_multi_day_length_is_wished_in_km_with_a_hint(browser, server) -> None
     length = page.get_by_label("Length you want, in km")
 
     assert (length.get_attribute("min"), length.get_attribute("max"), length.get_attribute("step")) == ("1", "2000", "0.5")
-    assert length.input_value() == "" and length.get_attribute("placeholder") == "10"
+    assert length.input_value() == "10" and length.get_attribute("placeholder") == "10"  # on by default
     assert page.get_by_text("Over about 25 km is usually more than a day").is_visible()
 
     length.fill("66")
-    page.get_by_label("Length weight, 0 to 100").fill("100")
+    wish_nothing(page)
     page.get_by_role("button", name="Find hikes").click()
     page.locator("#results-table tbody tr").first.wait_for()
 
@@ -569,8 +621,10 @@ def test_a_wish_asks_only_what_the_hiker_sets_and_leaves_the_liked_hike_weights_
     page.get_by_label("Climbing weight, 0 to 100").fill("70")
     page.get_by_role("button", name="No particular hike in mind?").click()
 
+    # The basic set weighs its default, as in the liked-hike form, not the liked hike's 70 for Climbing.
     weights = page.locator(".weight:visible input[aria-label$='weight, 0 to 100']")
-    assert set(weights.evaluate_all("inputs => inputs.map(i => i.type + i.value)")) == {"range0"}
+    assert set(weights.evaluate_all("inputs => inputs.map(i => i.type + i.value)")) == {"range100"}
+    wish_nothing(page)
     assert page.locator(".weight:visible:not(.excluded)").count() == 0  # all off, struck through
     page.get_by_label("Highest point you want, in m").fill("2000")
     open_advanced(page)
@@ -591,15 +645,18 @@ def test_a_wish_asks_only_what_the_hiker_sets_and_leaves_the_liked_hike_weights_
     assert page.locator("#weights .weight.excluded").count() == 0
 
 
-def test_resetting_a_wish_asks_nothing_again(browser, server) -> None:
+def test_resetting_a_wish_brings_back_the_default_weights_and_values(browser, server) -> None:
     page = open_page(browser, server, Api(WISHABLE))
     page.get_by_role("button", name="No particular hike in mind?").click()
     page.get_by_label("Highest point you want, in m").fill("2000")
+    page.get_by_label("Climbing weight, 0 to 100").fill("0")
 
     page.get_by_role("button", name="Reset weights").click()
 
-    assert page.get_by_label("Highest point weight, 0 to 100").input_value() == "0"
-    assert page.get_by_label("Highest point you want, in m").input_value() == ""
+    assert page.get_by_label("Highest point weight, 0 to 100").input_value() == "100"
+    assert page.get_by_label("Highest point you want, in m").input_value() == "1500"
+    assert page.get_by_label("Climbing weight, 0 to 100").input_value() == "100"
+    assert page.get_by_label("Climbing you want, in m").input_value() == "600"
 
 
 def test_a_hike_still_loading_leaves_the_wish_form_open(browser, server) -> None:
@@ -2106,6 +2163,8 @@ def test_a_value_typed_in_the_wish_form_switches_its_weight_on_and_a_weight_asks
     api = Api(WISHABLE)
     page = open_page(browser, server, api)
     page.get_by_role("button", name="No particular hike in mind?").click()
+    wish_nothing(page)
+    page.get_by_label("Highest point you want, in m").fill("")
 
     page.get_by_label("Climbing you want, in m").fill("900")
     page.get_by_label("Highest point weight, 0 to 100").fill("50")
@@ -2122,6 +2181,8 @@ def test_a_wish_weight_brought_back_after_a_reset_asks_the_shown_default(browser
     api = Api(WISHABLE)
     page = open_page(browser, server, api)
     page.get_by_role("button", name="No particular hike in mind?").click()
+    wish_nothing(page)
+    page.get_by_label("Climbing you want, in m").fill("")
     page.get_by_label("Climbing weight, 0 to 100").fill("50")
     page.get_by_role("button", name="Back to a hike you liked").click()
     page.get_by_role("button", name="Reset weights").click()
@@ -2135,7 +2196,7 @@ def test_a_wish_weight_brought_back_after_a_reset_asks_the_shown_default(browser
     assert api.ranked[-1]["weights"] == {"elevation_gain": 50}
 
 
-def test_going_back_to_a_liked_hike_leaves_the_wish_values_empty(browser, server) -> None:
+def test_going_back_to_a_liked_hike_leaves_the_wish_values_as_they_were(browser, server) -> None:
     page = open_page(browser, server, Api(WISHABLE))
     page.get_by_label("Length weight, 0 to 100").fill("70")
     page.get_by_role("button", name="No particular hike in mind?").click()
@@ -2143,7 +2204,9 @@ def test_going_back_to_a_liked_hike_leaves_the_wish_values_empty(browser, server
 
     page.get_by_role("button", name="No particular hike in mind?").click()
 
-    assert set(page.locator("input.wish[type=number]").evaluate_all("inputs => inputs.map(i => i.value)")) == {""}
+    values = page.locator(".weight:not(.unwishable) input.wish[type=number]")
+    asked = values.evaluate_all("inputs => Object.fromEntries(inputs.map(i => [i.closest('.weight').dataset.measure, i.value]))")
+    assert asked == {name: str(value) for name, value in WISH_DEFAULTS.items()}
 
 
 def test_a_wish_address_with_a_weight_and_no_value_asks_the_shown_default(browser, server) -> None:

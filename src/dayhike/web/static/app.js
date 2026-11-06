@@ -1120,7 +1120,7 @@ function wishInput(measure) {
   const unit = shownUnit(measure) ? escapeHtml(shownUnit(measure)) : "";
   // Empty until the Hiker asks it, so no value looks asked while its weight is off; the default shows as a hint.
   return `<span class="wish-value"><input class="wish" type="number"${range} value="" placeholder="${escapeHtml(toShown(measure, wish.default))}" inputmode="decimal"
-    aria-label="${label} you want${unit ? `, in ${unit}` : ""}">${unit ? `<span class="unit">${unit}</span>` : ""}</span>`;
+    aria-label="${label} you want${unit ? `, in ${unit}` : ""}">${unit ? `<span class="unit">${unit.replaceAll("/", "/<wbr>")}</span>` : ""}</span>`;
 }
 
 // What the Hiker wants of each Measure they weight (a measure weighted 0 or left out asks nothing).
@@ -1168,10 +1168,16 @@ function typedFact(row, typed) {
   return typed === "" || !Number.isFinite(value) ? typed : String(toFact(measure, value));
 }
 
-// Fills the form from a wish address: every wishable Measure it does not name weighs 0.
+// Fills the form from a wish address: every wishable Measure it does not name weighs 0. An address
+// naming none (a wish just opened, or reset) starts from the default weights, as the liked-hike form does.
 function applyWish(text) {
   const asked = new Map(text.split(",").filter(Boolean).map((part) => [part.split(":")[0], part.split(":")]));
   for (const row of document.querySelectorAll(".weight:not(.unwishable)")) {
+    if (!asked.size) {
+      setWeight(row, state.measures.find((m) => m.name === row.dataset.measure).default_weight);
+      askDefault(row);
+      continue;
+    }
     const value = row.querySelector("input.wish");
     const [, wanted, weight] = asked.get(row.dataset.measure) ?? [];
     if (wanted != null) {
@@ -1186,12 +1192,13 @@ function applyWish(text) {
   syncRoundTrip();
 }
 
-// Each mode keeps its own weights: a wish starts asking nothing, and a liked hike's weights
-// are as they were when the Hiker comes back.
+// Each mode keeps its own weights: a wish starts from the default weights, each Measure on asking
+// its shown default value, and a liked hike's weights are as they were when the Hiker comes back.
 function swapWeights(on) {
   const rows = [...document.querySelectorAll(".weight")];
   state.kept[on ? "seed" : "wish"] = rows.map((row) => row.querySelector("input:not(.wish)").value);
-  const back = state.kept[on ? "wish" : "seed"] ?? rows.map(() => "0");
+  const back = state.kept[on ? "wish" : "seed"]
+    ?? rows.map((row) => state.measures.find((m) => m.name === row.dataset.measure).default_weight);
   rows.forEach((row, i) => {
     setWeight(row, back[i]);
     if (on) askDefault(row);
@@ -3019,7 +3026,7 @@ async function start() {
   nameSearch($("#pair-search"), $("#pair-suggestions"), (id) => comparePair(id));
   $("#reset-weights").addEventListener("click", () => {
     buildWeights();
-    if (state.wishing) applyWish(""); // a wish asks nothing until the Hiker sets it
+    if (state.wishing) applyWish(""); // the default weights, each asking its shown default value
     markStale();
     syncAddress();
   });
