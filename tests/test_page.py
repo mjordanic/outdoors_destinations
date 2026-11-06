@@ -488,6 +488,24 @@ def test_a_wish_value_box_shows_its_whole_value(browser, server, width) -> None:
     assert page.evaluate("document.documentElement.scrollWidth") <= width
 
 
+@pytest.mark.parametrize("width", [1280, 390])
+def test_every_wish_row_fits_its_name_and_unit_in_their_columns(browser, server, width) -> None:
+    # Widening the value column for 16000 once pushed Typical temperature and Precipitation out of
+    # the name column on a desktop, and the unit "sources" out of the value column.
+    with urllib.request.urlopen(f"{server}/api/measures") as response:
+        wishable = {m["name"]: m["wish"] for m in json.load(response)["measures"] if m["wish"]}
+    page = open_page(browser, server, Api(wishable), width=width)
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    open_advanced(page)
+
+    overflowing = page.locator(".weight:visible").evaluate_all("""rows => rows.flatMap(row => {
+      const name = row.firstElementChild, value = row.querySelector(".wish-value");
+      return [name, value].filter(cell => cell && cell.scrollWidth > cell.clientWidth)
+        .map(cell => `${row.dataset.measure}: ${cell === name ? "name" : "value"}`);
+    })""")
+    assert overflowing == []
+
+
 def test_a_wish_survives_a_reload_and_opens_from_its_link(browser, server) -> None:
     page = open_page(browser, server, Api(WISHABLE))
     page.get_by_role("button", name="No particular hike in mind?").click()
