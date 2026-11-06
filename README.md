@@ -6,7 +6,7 @@ one you want instead, for example about 10 km with 800 m of climbing. You can
 also say where you start from and how far you will drive, such as "within
 2 hours of Munich".
 
-**[Try it now](https://dayhike-445079235401.europe-west1.run.app)**: free, no
+**[Try it now](https://hikesalike.com)**: free, no
 account, no ads. If nobody has used it lately, the first page can take up to
 about 20 seconds to load.
 
@@ -27,10 +27,11 @@ length and on climbing, out of 100.*
   in the east and south-east. The shaded countries on the map below have hikes.
 - **Finding ideas, not navigating.** Check the trail, the weather and a proper
   map before you go
-  ([terms and safety](https://dayhike-445079235401.europe-west1.run.app/terms.html)).
-- **Open source,** made by [mjordanic](https://github.com/mjordanic). Questions
-  or problems: [open an issue on GitHub](https://github.com/mjordanic/outdoors_destinations/issues)
-  (needs a free GitHub account).
+  ([terms and safety](https://hikesalike.com/terms.html)).
+- **Open source,** made by [mjordanic](https://github.com/mjordanic). Bugs and
+  problems: [open an issue on GitHub](https://github.com/mjordanic/outdoors_destinations/issues)
+  (needs a free GitHub account). Anything else:
+  [contact@hikesalike.com](mailto:contact@hikesalike.com).
 
 <p>
   <img src="src/dayhike/web/static/coverage.svg" alt="Map of Europe; the shaded countries have hikes" width="360">
