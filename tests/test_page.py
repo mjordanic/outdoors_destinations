@@ -38,7 +38,7 @@ WISHABLE = {
     "elevation_gain": {"kind": "number", "unit": "m", "min": 0, "max": 3000, "step": 50, "default": 600},
     "highest": {"kind": "number", "unit": "m", "min": 0, "max": 5000, "step": 50, "default": 1500},
     "hut_along": YES_NO,
-    "waterside": {"kind": "number", "unit": "share", "min": 0, "max": 1, "step": 0.05, "default": 0.5},
+    "waterside": {"kind": "number", "unit": "share", "min": 0, "max": 1, "step": 0.05, "default": 0},
     "round_trip": YES_NO,
 }
 
@@ -155,7 +155,7 @@ def open_page(
 
 SHOWN = "rows => rows.map(r => r.dataset.measure)"
 # The wishable Measures of WISHABLE that the basic set weighs 100 by default, with the value each then asks.
-WISH_DEFAULTS = {"elevation_gain": 600, "highest": 1500, "waterside": 0.5}
+WISH_DEFAULTS = {"elevation_gain": 600, "highest": 1500, "waterside": 0}
 
 
 def wish_nothing(page) -> None:
@@ -303,7 +303,7 @@ def test_a_wish_shows_the_basic_measures_and_asks_advanced_ones_only_while_open(
     page.get_by_label("Climbing you want, in m").fill("900")
     open_advanced(page)
 
-    page.wait_for_url("**/#wish=elevation_gain:900:100,highest:1500:100,waterside:0.5:100")
+    page.wait_for_url("**/#wish=elevation_gain:900:100,highest:1500:100,waterside:0:100")
     with page.expect_response(f"{server}/api/rank"):
         page.get_by_role("button", name="Find hikes").click()
     assert api.ranked[-1]["wish"] == {**WISH_DEFAULTS, "elevation_gain": 900}
@@ -433,7 +433,7 @@ def test_a_share_is_wished_in_percent_and_asked_as_a_share(browser, server) -> N
     page = open_page(browser, server, api)
     page.get_by_role("button", name="No particular hike in mind?").click()
     waterside = page.get_by_label("Lake or sea you want, in %")
-    assert waterside.get_attribute("placeholder") == "50"  # the default, in %
+    assert waterside.get_attribute("placeholder") == "0"  # the default, in %
     assert (waterside.get_attribute("min"), waterside.get_attribute("max"), waterside.get_attribute("step")) == ("0", "100", "5")
 
     waterside.fill("30")
@@ -451,7 +451,7 @@ def test_a_wish_starts_from_the_default_weights_of_the_liked_hike_form(browser, 
     # The basic set is on at its default weight, each asking its shown default value; the rest is off.
     assert page.locator(".weight:visible:not(.excluded)").evaluate_all(SHOWN) == list(WISH_DEFAULTS)
     assert page.get_by_label("Highest point you want, in m").input_value() == "1500"
-    page.wait_for_url("**/#wish=elevation_gain:600:100,highest:1500:100,waterside:0.5:100")
+    page.wait_for_url("**/#wish=elevation_gain:600:100,highest:1500:100,waterside:0:100")
     open_advanced(page)
     assert page.get_by_label("Hut along weight, 0 to 100").input_value() == "0"
     with page.expect_response(f"{server}/api/rank"):

@@ -246,7 +246,7 @@ WISH_INPUTS: dict[str, tuple[str | None, float, float, float, float]] = {
     "southness": (None, 0, 1, 0.05, 0.5),
     "water_count": ("sources", 0, 3, 1, 1),
     "dry_stretch": ("m", 0, 2_000_000, 500, 5_000),
-    "waterside": ("share", 0, 1, 0.05, 0.5),
+    "waterside": ("share", 0, 1, 0.05, 0),  # dry, as most hikes are: on by default, it favours no lake (ADR-0057)
     "tarmac_approach": ("m", 0, 5_000, 100, 0),
     "climb_grade": ("share", 0, 0.5, 0.01, 0.1),
     "steepest_km": ("m", 0, 800, 10, 150),
