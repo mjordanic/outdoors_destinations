@@ -34,6 +34,7 @@ h3 { font-size: 0.95rem; margin: 14px 0 6px; }
 }
 .controls { display: flex; flex-direction: column; gap: 12px; align-self: start;
   position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; padding-right: 4px; }
+.controls > * { flex-shrink: 0; }
 .content { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 
 .panel, .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
