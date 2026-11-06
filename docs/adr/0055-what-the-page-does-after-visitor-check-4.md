@@ -13,8 +13,7 @@ The scores and the hikes are unchanged; multi-day routes are ADR-0056.
 away. The Landmarks lacked the places meant: no hike passes within 2 km of the summit of Mont Blanc or of a
 big lake's GeoNames point, and Ratitovec is a GeoNames ridge no OSM Peak names. Now:
 
-- The GeoNames mountains are Landmarks too: `MT`, `PK` and `PKS` as peaks, `RDGE` as a ridge, `MTS` as a
-  mountain range. A peak or ridge keeps its GeoNames height, else the elevation model's at its point.
+- The GeoNames mountains are Landmarks too: `MT`, `PK` and `PKS` as peaks, `RDGE` as a ridge. A peak or ridge keeps its GeoNames height, else the elevation model's at its point.
 - A GeoNames Landmark with no hike within 2 km (`LANDMARK_NEAR_M`) is on the hikes passing within 10 km
   (`LANDMARK_FAR_M`): a big lake's shore, a summit no trail reaches. One with none there is still left out.
 - A GeoNames peak within 1.5 km (`LANDMARK_MERGE_M`) of an OSM Peak named as one of its names is that Peak:
@@ -26,7 +25,7 @@ big lake's GeoNames point, and Ratitovec is a GeoNames ridge no OSM Peak names. 
   all find Lago di Garda), so a respelling ("Vardåsen") is tried only when nothing is named so.
 
 On the review export `export_landmarks` now keeps 48,330 lakes (17,976 before), 11,579 passes (6,028),
-257,341 peaks (209,755), 6,255 ridges and 1,897 ranges. It took 3.6 min on one core here, peaking at 1.8 GB
+257,341 peaks (209,755), and 6,255 ridges. It took 3.6 min on one core here, peaking at 1.8 GB
 (ADR-0053: 5 min and 1.6 GB), and writes 128 MB (111 MB). A
 Landmark query takes 2-30 ms, up to 260 ms for two letters on a cold cache. An export from before opens
 as before: without the `names` column the order is the old one. The review site needs `dayhike export-places`

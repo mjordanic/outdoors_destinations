@@ -180,10 +180,10 @@ VILLAGE_M = 5_000  # a smaller populated place is kept this close to a Trailhead
 NOT_VILLAGE_CODES = ("PPLX", "PPLH", "PPLQ", "PPLW", "PPLCH")  # a section of a place; historical, abandoned, gone
 LANDMARK_KINDS = ("peak", "hut", "shelter", "viewpoint")  # the named points on hikes a Landmark is made of (ADR-0053)
 # GeoNames codes a Landmark is made of too (ADR-0055): lakes and passes the points lack, and the mountains
-# the points miss (a summit no hike passes within 2 km of, a ridge or massif no OSM Peak names)
+# the points miss (a summit no hike passes within 2 km of, a ridge no OSM Peak names)
 GEONAMES_LANDMARKS = {
     "LK": "lake", "LKS": "lake", "RSV": "lake", "PASS": "pass",
-    "MT": "peak", "PK": "peak", "PKS": "peak", "RDGE": "ridge", "MTS": "range",
+    "MT": "peak", "PK": "peak", "PKS": "peak", "RDGE": "ridge",
 }  # fmt: skip
 LANDMARK_NEAR_M = 2_000.0  # a GeoNames Landmark is on the hikes passing this close to its GeoNames point ...
 LANDMARK_FAR_M = 10_000.0  # ... else, with none, on those passing this close: a big lake's shore, a summit no trail reaches
@@ -1755,7 +1755,7 @@ class ServingData:
         straight line.
 
         Unless the Seed is a multi-day route (longer than ``MULTI_DAY_M`` one way) or a Wish asks a
-        length over it, every multi-day route comes after every day-length hike, best first in each
+        length over it one way (twice it with ``return_to_start``), every multi-day route comes after every day-length hike, best first in each
         (ADR-0056). One row per area: best first, a hike starting within ``group_m``
         (``GROUP_M`` when None) of a better row's start is a version of that row, listed in its
         ``versions`` (at most ``VERSIONS`` - 1, each walking more than
@@ -1796,7 +1796,7 @@ class ServingData:
         if kept is not None:
             rows, scores = rows[kept], scores[kept]
         # Unless the Seed is one, the multi-day routes come after every day-length hike (ADR-0056).
-        day_first = not self._multi_day_seed(seed, seed_row, seed_walk)
+        day_first = not self._multi_day_seed(seed, seed_row, seed_walk, return_to_start)
         if day_first:
             order = np.argsort(self._one_way_m[rows] > MULTI_DAY_M, kind="stable")
             rows, scores = rows[order], scores[order]
@@ -1865,10 +1865,13 @@ class ServingData:
             day_first,
         )
 
-    def _multi_day_seed(self, seed: Seed, seed_row: int | OutsideSeed, seed_walk: ComposedWalk | None) -> bool:
-        """Whether a Ranking looks for multi-day routes: its Seed is one, or its Wish asks a length over ``MULTI_DAY_M``."""
+    def _multi_day_seed(
+        self, seed: Seed, seed_row: int | OutsideSeed, seed_walk: ComposedWalk | None, return_to_start: bool
+    ) -> bool:
+        """Whether a Ranking looks for multi-day routes: its Seed is one, or its Wish asks a length over
+        ``MULTI_DAY_M`` one way (twice it with Return to start, the way back included)."""
         if isinstance(seed, Mapping):
-            return seed.get("length", 0) > MULTI_DAY_M
+            return seed.get("length", 0) > MULTI_DAY_M * (2 if return_to_start else 1)
         if seed_walk is not None:
             return float(_step_m(seed_walk.lat, seed_walk.lon).sum()) > MULTI_DAY_M
         return self.multi_day(seed_row)

@@ -23,8 +23,10 @@ suggestion in place of its length, beside its name in a Ranking's row, first in 
 map's "choose one" list and tooltip.
 
 **Listed after the day hikes.** Unless the Seed is itself a multi-day route, or a Wish asks a length over
-40 km, a Ranking lists every multi-day route after every day-length hike, by score within each, and says
-`day_first`. The scores are unchanged: a multi-day route still shows how alike it is, it only stops taking a
+40 km one way, a Ranking lists every multi-day route after every day-length hike, by score within each, and says
+`day_first`. With Return to start a Wish's length is the whole walk, way back included, so it asks for a
+multi-day route only over 80 km: a 45 km out-and-back Wish is a long day and still lists the day hikes first.
+The scores are unchanged: a multi-day route still shows how alike it is, it only stops taking a
 day hike's place. Rows, areas, loops near the best DayHikes, "Show 10 more" and the counts follow that order.
 The page draws its rows from the pool by score (ADR-0047); it draws a multi-day route of a `day_first`
 Ranking with its score less 1, so it is drawn only once the pool's day hikes run out, as in Strict order.

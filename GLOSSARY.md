@@ -89,7 +89,7 @@ How near the start of a better row's hike a hike must start to be one of that ro
 _Avoid_: area size, cluster radius
 
 **Landmark**:
-A named place the hike search finds hikes by (ADR-0053, ADR-0055): an OSM Peak, Hut, Shelter or Viewpoint on a DayHike, a GeoNames lake, pass, mountain, ridge or range a DayHike passes within 2 km of (else within 10 km), or a GeoNames town or village a DayHike's Trailhead is within 5 km of; it lists its nearest DayHikes. Among equal matches the one with the most names (in other languages) comes first.
+A named place the hike search finds hikes by (ADR-0053, ADR-0055): an OSM Peak, Hut, Shelter or Viewpoint on a DayHike, a GeoNames lake, pass, mountain or ridge a DayHike passes within 2 km of (else within 10 km), or a GeoNames town or village a DayHike's Trailhead is within 5 km of; it lists its nearest DayHikes. Among equal matches the one with the most names (in other languages) comes first.
 _Avoid_: spot, POI, place (that is the Origin's "Find place")
 
 **Hut**:

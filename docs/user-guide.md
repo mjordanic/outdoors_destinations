@@ -45,7 +45,7 @@ Pick one of three ways:
    keys, then Enter). It works the same on a phone and a computer.
    Once picked, the page moves to the hike's panel.
 
-   You can also type a **peak, hut, viewpoint, lake, pass, mountain range,
+   You can also type a **peak, hut, viewpoint, lake, pass, ridge,
    town or village** the hike goes to or starts from, in any language the
    place has a name in: "Gardasee", "Lake Garda" and "Lago di Garda" all find
    Lake Garda. Under the hike names the list then shows

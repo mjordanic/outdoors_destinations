@@ -23,7 +23,7 @@ const LEGEND = [
 ];
 // A Landmark's kind as the hike search says it (serving.export_landmarks).
 const LANDMARK_KINDS = { peak: "peak", hut: "hut", shelter: "shelter", viewpoint: "viewpoint", lake: "lake",
-  pass: "pass", ridge: "ridge", range: "mountain range", town: "town", village: "village" };
+  pass: "pass", ridge: "ridge", town: "town", village: "village" };
 const PEAK_SUMMITED_M = 50; // a hike this near a peak reaches its top (similarity.PEAK_SUMMITED_M)
 const SAC = ["", "T1 hiking", "T2 mountain hiking", "T3 demanding mountain", "T4 alpine hiking",
   "T5 demanding alpine", "T6 difficult alpine"];

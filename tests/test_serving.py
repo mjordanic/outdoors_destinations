@@ -894,6 +894,19 @@ def test_a_day_hikes_ranking_lists_the_multi_day_routes_after_every_day_hike(
     assert data.rank(RIDGE_WALK_ID, weights, limit=10).day_first is False
 
 
+def test_a_wish_asks_for_multi_day_routes_by_its_length_one_way(
+    data: ServingData, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(serving, "MULTI_DAY_M", 9_500.0)  # Ridge Walk (10 km one way) is multi-day here
+    wish, weights = {"length": 15_000.0}, {"length": 100.0}
+
+    # With Return to start 15 km is the whole walk, about 7.5 km out and back: a day hike.
+    assert data.rank(wish, weights, limit=10, return_to_start=True).day_first is True
+    # Without it 15 km is one way, over the multi-day length.
+    assert data.rank(wish, weights, limit=10, return_to_start=False).day_first is False
+    assert data.rank({"length": 19_600.0}, weights, limit=10, return_to_start=True).day_first is False
+
+
 def test_the_rows_after_leave_out_the_twin_of_a_hike_already_listed(
     data: ServingData, monkeypatch: pytest.MonkeyPatch
 ) -> None:
