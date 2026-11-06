@@ -34,6 +34,7 @@ h3 { font-size: 0.95rem; margin: 14px 0 6px; }
 }
 .controls { display: flex; flex-direction: column; gap: 12px; align-self: start;
   position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; padding-right: 4px; }
+.controls > * { flex-shrink: 0; }
 .content { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 
 .panel, .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
@@ -46,6 +47,8 @@ h3 { font-size: 0.95rem; margin: 14px 0 6px; }
 .return-bar { margin: 0; padding: 10px 12px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
 .error-text { color: #b42318; }
 .status { min-height: 1.2em; font-size: 0.9rem; margin: 0; }
+.find-why { margin: 0; }
+.find-why:empty { display: none; }
 .status.error { color: #b42318; }
 
 .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
@@ -124,7 +127,10 @@ svg text { font-size: 11px; fill: var(--muted); }
 .facts .nodata, .nodata { color: var(--muted); font-style: italic; }
 .bar { display: inline-block; width: 70px; height: 9px; background: #eef0ec; border-radius: 4px; vertical-align: middle; margin-right: 6px; overflow: hidden; }
 .bar > i { display: block; height: 100%; background: var(--green); }
-.facts tr.excluded td { opacity: 0.5; }
+/* A Measure not counted: its facts and score fade, and why stays in full contrast. */
+.facts tr.excluded .faded { opacity: 0.5; }
+.facts .uncounted { color: var(--muted); font-style: italic; }
+.facts td.score .uncounted { display: block; white-space: normal; font-size: 0.78rem; }
 
 .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; }
 #results-table { border-collapse: collapse; font-size: 0.82rem; min-width: 100%; }
@@ -222,13 +228,14 @@ summary.panel-title, #advanced > summary, #more-options > summary { display: fle
 .facts thead th { color: var(--muted); font-weight: 600; }
 .mode-switch { margin-top: 8px; width: 100%; text-align: left; }
 .weight .wish-value { display: none; }
-.wishing .weight { grid-template-columns: minmax(0, 1fr) 96px 72px 28px; }
+.wishing .weight { grid-template-columns: minmax(0, 1fr) 128px 56px 24px; }
 .wishing .weight .wish-value { display: flex; gap: 3px; align-items: center; font-size: 0.85rem; }
-.wishing .weight .wish-value input[type="number"] { min-width: 0; }
-.wishing .weight .unit { color: var(--muted); font-size: 0.78rem; }
+/* Room for a 5-digit value, such as 16000 kJ/m²/day, with the spinner shown; a long unit wraps at its "/". */
+.wishing .weight .wish-value input[type="number"] { flex: 0 0 calc(5ch + 36px); min-width: 0; }
+.wishing .weight .unit { min-width: 0; line-height: 1.1; color: var(--muted); font-size: 0.78rem; }
 .wishing .weight.unwishable, .wishing .weights-group.unwishable { display: none; }
 .wishing .weight.unused .wish-value { visibility: hidden; }
-.wish-head { display: grid; grid-template-columns: minmax(0, 1fr) 96px 72px 28px; gap: 6px; font-size: 0.75rem; color: var(--muted); margin-top: 6px; }
+.wish-head { display: grid; grid-template-columns: minmax(0, 1fr) 128px 56px 24px; gap: 6px; font-size: 0.75rem; color: var(--muted); margin-top: 6px; }
 .wish-head[hidden] { display: none; }
 
 /* The "?" beside a score and the explanation it opens (ADR-0025). */

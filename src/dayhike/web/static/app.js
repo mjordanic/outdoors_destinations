@@ -920,6 +920,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     <div class="slot-elevation"></div>
     <div class="charts"></div>
     <h3>${compare ? `Every measure: this hike against the ${compare.wish ? "one you want" : "liked one"}` : "The facts behind every measure"}</h3>
+    <p class="hint uncounted-note" hidden></p>
     <div class="table-wrap"><table class="facts"></table></div>`;
   card.querySelector(".share-hike")?.addEventListener("click", (event) => shareHike(hike, event.currentTarget, card.querySelector(".share-note")));
   card.querySelector(".download-gpx")?.addEventListener("click", (event) => downloadGpx(hike, event.currentTarget));
@@ -935,7 +936,44 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     stackedBar("Trail surface", shares(f, SURFACE), "No surface tags on this route."),
     climateChart(f, month),
   );
-  card.querySelector(".facts").replaceWith(factsTable(hike, compare, result, month, query?.weights, query?.return_to_start));
+  card.querySelector(".facts").replaceWith(factsTable(hike, compare, result, month, query, uncountedOf(compare, query)));
+  const note = card.querySelector(".uncounted-note"), line = compare && uncountedLine(query);
+  note.hidden = !line;
+  note.textContent = line || "";
+}
+
+// Why a Measure a query weighs 0 is not counted, as the detail table says it: weighted 0, behind a
+// closed Advanced search, or, while the Hiker describes a hike, one no value can be asked of.
+const UNCOUNTED = {
+  weight: { cell: "not counted (weight 0)", why: "have weight 0", how: "set their weight" },
+  advanced: { cell: "not counted (Advanced search closed)", why: "are behind a closed Advanced search", how: "open Advanced search" },
+  wish: { cell: "not counted (cannot be asked)", why: "cannot be asked of a hike you describe" },
+};
+
+// Each weight row's reason, kept with a query so its hikes say why a Measure did not count.
+function uncountedReasons() {
+  const reasons = {};
+  for (const row of document.querySelectorAll(".weight")) {
+    // Opening Advanced search counts a row only if it has a weight above 0: weight 0 wins over folded.
+    const held = folded(row) && Number(row.querySelector("input:not(.wish)").value) > 0;
+    reasons[row.dataset.measure] = state.wishing && row.classList.contains("unwishable") ? "wish" : held ? "advanced" : "weight";
+  }
+  return reasons;
+}
+
+// The reason of each Measure a compared hike's table shows that the query does not count, by name.
+function uncountedOf(compare, query) {
+  if (!compare || !query?.weights) return {};
+  return Object.fromEntries(comparedMeasures(query.return_to_start).filter((m) => !query.weights[m.name])
+    .map((m) => [m.name, UNCOUNTED[query.uncounted?.[m.name]] ?? UNCOUNTED.weight]));
+}
+
+// The line above a compared hike's table while some of its rows are greyed: why, and how to count them.
+function uncountedLine(query) {
+  const reasons = [...new Set(Object.values(uncountedOf(true, query)))];
+  if (!reasons.length) return "";
+  const hows = reasons.map((r) => r.how).filter(Boolean);
+  return `Greyed measures ${reasons.map((r) => r.why).join(" or ")} and are not part of the score.${hows.length ? ` To count them, ${hows.join(" or ")}${hows.length > 1 ? "," : ""} in step 2.` : ""}`;
 }
 
 // A built hike's head (ADR-0038): the OSM relations it is built from, a link to it,
@@ -951,7 +989,7 @@ function comparedMeasures(returnToStart) {
   return state.measures.filter((m) => !(returnToStart && m.name === "round_trip"));
 }
 
-function factsTable(hike, compare, result, month, weights, returnToStart) {
+function factsTable(hike, compare, result, month, query, uncounted) {
   const table = document.createElement("table");
   table.className = "facts";
   const head = compare
@@ -961,19 +999,21 @@ function factsTable(hike, compare, result, month, weights, returnToStart) {
   for (const group of state.groups) {
     const body = document.createElement("tbody");
     body.innerHTML = `<tr><th scope="rowgroup" colspan="${compare ? 4 : 2}">${escapeHtml(group.label)}</th></tr>`;
-    for (const measure of (compare ? comparedMeasures(returnToStart) : state.measures).filter((m) => m.group === group.name)) {
+    for (const measure of (compare ? comparedMeasures(query?.return_to_start) : state.measures).filter((m) => m.group === group.name)) {
       const row = document.createElement("tr");
-      if (compare && weights && !weights[measure.name]) row.className = "excluded";
-      const cells = [`<td title="${escapeHtml(measure.description)}">${escapeHtml(measure.label)}</td>`];
+      const reason = uncounted[measure.name], fade = reason ? ' class="faded"' : "";
+      if (reason) row.className = "excluded";
+      const cells = [`<td${fade} title="${escapeHtml(measure.description)}">${escapeHtml(measure.label)}</td>`];
       const values = compare ? [hike, compare] : [hike];
-      for (const _ of values) cells.push('<td class="num"></td>');
+      for (const h of values) cells.push(`<td class="num${reason && !h.wish ? " faded" : ""}"></td>`);
       if (compare) cells.push('<td class="num score"></td>');
       row.innerHTML = cells.join("");
       values.forEach((h, i) => {
         const cell = row.children[i + 1];
         if (h.wish) {
           const wanted = h.wish[measure.name];
-          cell.innerHTML = wanted == null ? '<span class="nodata">left out</span>' : escapeHtml(wishText(measure, wanted));
+          cell.innerHTML = reason ? `<span class="uncounted">${reason.cell}</span>`
+            : wanted == null ? '<span class="nodata">left out</span>' : escapeHtml(wishText(measure, wanted));
         } else if (measure.name === "profile") {
           const line = sparkline(h.profile_shape);
           if (line) cell.appendChild(line); else cell.innerHTML = '<span class="nodata">no data</span>';
@@ -985,11 +1025,13 @@ function factsTable(hike, compare, result, month, weights, returnToStart) {
       if (compare) {
         const { score, note } = result?.measures?.[measure.name] ?? {};
         const unasked = compare.wish && compare.wish[measure.name] == null; // a wish asks nothing of it
-        row.lastElementChild.innerHTML = score == null
+        const shown = score == null
           ? (note ? `– ${helpButton(measure.name)}<small class="note">${escapeHtml(note)}</small>`
-            : `<span class="nodata">${unasked ? "left out" : "no data"}</span>`)
+            : reason && unasked ? "" : `<span class="nodata">${unasked ? "left out" : "no data"}</span>`)
           : `<span class="bar"><i style="width:${Math.round(score * 100)}%"></i></span>${score.toFixed(2)} ${helpButton(measure.name)}${note ? `<small class="note">${escapeHtml(note)}</small>` : ""}`;
-        if (weights && !weights[measure.name]) row.lastElementChild.title = "Left out of this score";
+        // A Measure not counted keeps its score, faded, with why in plain text, not only in colour.
+        row.lastElementChild.innerHTML = reason
+          ? `${shown && `<span class="faded">${shown}</span>`}<small class="uncounted">${reason.cell}</small>` : shown;
       }
       body.appendChild(row);
     }
@@ -1120,7 +1162,7 @@ function wishInput(measure) {
   const unit = shownUnit(measure) ? escapeHtml(shownUnit(measure)) : "";
   // Empty until the Hiker asks it, so no value looks asked while its weight is off; the default shows as a hint.
   return `<span class="wish-value"><input class="wish" type="number"${range} value="" placeholder="${escapeHtml(toShown(measure, wish.default))}" inputmode="decimal"
-    aria-label="${label} you want${unit ? `, in ${unit}` : ""}">${unit ? `<span class="unit">${unit}</span>` : ""}</span>`;
+    aria-label="${label} you want${unit ? `, in ${unit}` : ""}">${unit ? `<span class="unit">${unit.replaceAll("/", "/<wbr>")}</span>` : ""}</span>`;
 }
 
 // What the Hiker wants of each Measure they weight (a measure weighted 0 or left out asks nothing).
@@ -1168,10 +1210,23 @@ function typedFact(row, typed) {
   return typed === "" || !Number.isFinite(value) ? typed : String(toFact(measure, value));
 }
 
-// Fills the form from a wish address: every wishable Measure it does not name weighs 0.
+// The weight a wish starts a Measure at: the liked-hike form's default, but Lake or sea off, as no
+// share it could ask is neutral (0 % ranks lakes down, 50 % up); the Hiker turns it on (ADR-0057).
+function wishDefaultWeight(row) {
+  return row.dataset.measure === "waterside" ? 0
+    : state.measures.find((m) => m.name === row.dataset.measure).default_weight;
+}
+
+// Fills the form from a wish address: every wishable Measure it does not name weighs 0. An address
+// naming none (a wish just opened, or reset) starts from the default weights, as the liked-hike form does.
 function applyWish(text) {
   const asked = new Map(text.split(",").filter(Boolean).map((part) => [part.split(":")[0], part.split(":")]));
   for (const row of document.querySelectorAll(".weight:not(.unwishable)")) {
+    if (!asked.size) {
+      setWeight(row, wishDefaultWeight(row));
+      askDefault(row);
+      continue;
+    }
     const value = row.querySelector("input.wish");
     const [, wanted, weight] = asked.get(row.dataset.measure) ?? [];
     if (wanted != null) {
@@ -1186,12 +1241,13 @@ function applyWish(text) {
   syncRoundTrip();
 }
 
-// Each mode keeps its own weights: a wish starts asking nothing, and a liked hike's weights
-// are as they were when the Hiker comes back.
+// Each mode keeps its own weights: a wish starts from the default weights, each Measure on asking
+// its shown default value, and a liked hike's weights are as they were when the Hiker comes back.
 function swapWeights(on) {
   const rows = [...document.querySelectorAll(".weight")];
   state.kept[on ? "seed" : "wish"] = rows.map((row) => row.querySelector("input:not(.wish)").value);
-  const back = state.kept[on ? "wish" : "seed"] ?? rows.map(() => "0");
+  const back = state.kept[on ? "wish" : "seed"]
+    ?? rows.map(wishDefaultWeight);
   rows.forEach((row, i) => {
     setWeight(row, back[i]);
     if (on) askDefault(row);
@@ -1214,7 +1270,7 @@ function setWishing(on) {
   $("#wish-card").hidden = !on;
   $("#results").hidden = $("#selected").hidden = true;
   $("#find").textContent = on ? "Find hikes" : "Find similar";
-  $("#find").disabled = !on && !state.liked;
+  syncFind();
   $("#return-bar").hidden = !on && !state.liked;
   if (on) {
     $("#weights-panel").open = true;
@@ -1224,11 +1280,7 @@ function setWishing(on) {
   }
   history.replaceState(null, "", on ? wishHash() : state.liked ? likedHash(state.liked) : location.pathname + location.search);
   const liked = state.liked;
-  if (!on && liked && (liked.way_back != null) !== returnToStart()) {
-    $("#find").disabled = true;
-    if (liked.route) chooseComposed(liked.route.text, liked.name_origin === "hiker" ? liked.name : null);
-    else choose(liked.id);
-  }
+  if (!on && liked && (liked.way_back != null) !== returnToStart()) remeasure(liked);
 }
 
 // ---------- search ----------
@@ -1412,13 +1464,37 @@ let LIKED_EMPTY = ""; // the liked-hike card's words while no hike is chosen, as
 
 let chosen = 0, shown = 0, ranked = 0, paired = 0, boxed = 0, placed = 0; // the latest of each request; an older response that lands later is dropped
 let selecting = 0; // the latest request to fill the hike card, a result or a compared hike: only it fills it
+let loading = 0, held = 0; // the hike request in flight (0: none), and the one Find waits for
+let ranking = false; // a Ranking runs: Find waits for it
+
+// Find is greyed out while there is nothing to rank or the page is busy; each time, the line beside it
+// says why: no hike chosen in its own words, a hike loading or a search running in the status line.
+function syncFind() {
+  const none = !state.wishing && !state.liked, busy = loading !== 0 && loading === chosen;
+  $("#find").disabled = none || ranking || (busy && held === chosen);
+  $("#find-why").textContent = none && !busy && !ranking
+    ? `Choose a hike first: search for one by name or select one on the map${$("#wish-on").hidden ? "" : ", or describe the one you want"}.`
+    : "";
+}
+
+// The liked hike measured again for the Return to start ticked now, Find greyed out until it is; when
+// it cannot be, Find stays usable and measures it again when pressed.
+async function remeasure(liked) {
+  const measured = liked.route
+    ? chooseComposed(liked.route.text, liked.name_origin === "hiker" ? liked.name : null)
+    : choose(liked.id);
+  held = chosen;
+  syncFind();
+  await measured;
+}
 
 // ``from``: "link" (the hike an address names; when it cannot be opened, the page shows no hike),
 // "map" (clicked on the map, which stays where it is), "search" (the hike's card is then scrolled to)
 // or null; ``note``: why Enter picked it, said beside its name.
 async function choose(id, { from = null, note = null } = {}) {
-  const request = ++chosen;
+  const request = loading = ++chosen;
   setStatus("Loading the hike…");
+  syncFind();
   try {
     const hike = await api(`/api/hikes/${id}?return_to_start=${returnToStart()}`);
     if (request !== chosen) return;
@@ -1428,7 +1504,6 @@ async function choose(id, { from = null, note = null } = {}) {
     $("#search").value = hike.name;
     $("#liked-name").textContent = `Chosen: ${hike.name}, ${lengthText(hike)}${note ? ` (${note})` : ""}`;
     $("#liked-name").classList.remove("error-text");
-    $("#find").disabled = false;
     $("#pair-search").disabled = false;
     $("#return-bar").hidden = false;
     history.replaceState(null, "", `#hike=${id}${modeHash()}`);
@@ -1439,13 +1514,22 @@ async function choose(id, { from = null, note = null } = {}) {
     pick.drawLoops();
     if (from !== "map") pick.follow();
     else pick.hint(`Chosen: ${hike.name}, ${lengthText(hike)}.`); // under the map clicked, not only above it
+    dropClearedHint();
     if (from === "search") $("#liked").scrollIntoView({ block: "start" }); // instant: a smooth scroll can be cut short
     setStatus("");
   } catch (error) {
     if (request !== chosen) return;
-    if (from === "link" && namesNothing(error)) brokenLink(error); else setStatus(error.message, true);
+    if (from === "link" && namesNothing(error)) brokenLink(error); else setStatus(notMeasured(error, request), true);
+  } finally {
+    if (request === chosen) loading = 0;
+    syncFind();
   }
 }
+
+// Why a hike was not loaded; for the liked hike measured again, that Find tries again.
+const notMeasured = (error, request) => request === held
+  ? `Your hike could not be measured again for Return to start: ${(error.reason ?? error.message).replace(/\.$/, "")}. Press Find similar to try again.`
+  : error.message;
 
 // The server read the request and found no such hike; not a dropped connection or a busy server.
 const namesNothing = (error) => [400, 404, 422].includes(error.status);
@@ -1464,6 +1548,13 @@ function brokenLink(error, malformed = false) {
   $("#liked-name").classList.add("error-text");
 }
 
+const CLEARED_HINT = "Cleared: your hike is gone too. Click a junction or a segment to draw a new one, or search for a hike by name.";
+
+// The design bar's "Cleared" hint is about the hike that was cleared: a new one, or none, replaces it.
+function dropClearedHint() {
+  if (compose.on && $("#map-pick-hint").textContent === CLEARED_HINT) compose.hintNext();
+}
+
 // No hike chosen: the page as it opens, with no list.
 function unchoose() {
   state.liked = null;
@@ -1474,7 +1565,8 @@ function unchoose() {
   $("#liked-name").textContent = "No hike chosen yet.";
   $("#liked-name").classList.remove("error-text");
   $("#search").value = "";
-  $("#find").disabled = $("#pair-search").disabled = true;
+  $("#pair-search").disabled = true;
+  syncFind();
   $("#return-bar").hidden = true;
   $("#results").hidden = $("#selected").hidden = true;
   pick.restyle();
@@ -1494,8 +1586,9 @@ function forgetBrokenLink() {
 
 // ``from``: "link" (an address), "compose" (the composer's Use this hike) or null.
 async function chooseComposed(route, name, from = null) {
-  const request = ++chosen;
+  const request = loading = ++chosen;
   setStatus("Measuring your hike…");
+  syncFind();
   try {
     const hike = await api("/api/compose", {
       method: "POST",
@@ -1511,7 +1604,6 @@ async function chooseComposed(route, name, from = null) {
     $("#compose-name").value = hike.name;
     compose.named = hike.name_origin === "hiker";
     compose.source = hike; // the drawing is the liked hike now: Clear clears it
-    $("#find").disabled = false;
     $("#pair-search").disabled = false;
     $("#return-bar").hidden = false;
     history.replaceState(null, "", routeHash(hike) + modeHash());
@@ -1523,14 +1615,18 @@ async function chooseComposed(route, name, from = null) {
     $("#selected").hidden = true;
     pick.restyle();
     pick.drawLoops();
+    dropClearedHint();
     setStatus("");
   } catch (error) {
     if (request !== chosen) return;
     if (from === "link" && namesNothing(error)) brokenLink(error, error.status === 422);
     else {
-      setStatus(error.message, true);
+      setStatus(notMeasured(error, request), true);
       if (from === "compose") pick.hint(`Not measured: ${error.message}`); // beside the button pressed
     }
+  } finally {
+    if (request === chosen) loading = 0;
+    syncFind();
   }
 }
 
@@ -2154,7 +2250,7 @@ const compose = {
       chosen++; // drops a hike still loading
       unchoose();
       history.replaceState(null, "", location.pathname + location.search);
-      pick.hint("Cleared: your hike is gone too. Click a junction or a segment to draw a new one, or search for a hike by name.");
+      pick.hint(CLEARED_HINT);
     }
   },
 
@@ -2245,7 +2341,7 @@ async function comparePair(id) {
     setStatus(error.message, true);
     return;
   }
-  const request = ++paired, filling = ++selecting, liked = state.liked;
+  const request = ++paired, filling = ++selecting, liked = state.liked, uncounted = uncountedReasons();
   setStatus("Scoring the pair…");
   try {
     const [pair, hike] = await Promise.all([
@@ -2259,7 +2355,7 @@ async function comparePair(id) {
     state.selected = { pair: id };
     renderDetail(card, hike, {
       role: "Compared with the liked hike", compare: liked, result: { ...pair, drive_hours: null },
-      query: { weights: pair.weights, month: pair.month, return_to_start: pair.return_to_start },
+      query: { weights: pair.weights, month: pair.month, return_to_start: pair.return_to_start, uncounted },
     });
     card.scrollIntoView({ behavior: "smooth", block: "start" });
     setStatus("");
@@ -2411,7 +2507,7 @@ function pageOf(pool) {
 }
 
 // The request for a Ranking: with the draw number, which draws the loop starts too, unless in Strict order.
-function asking(query, draw = state.draw) {
+function asking({ uncounted, ...query }, draw = state.draw) { // why a Measure is not counted stays on the page
   return state.strict ? query : { ...query, draw };
 }
 
@@ -2454,6 +2550,11 @@ function rankBasis() {
 }
 
 async function findSimilar() {
+  const was = state.liked;
+  if (!state.wishing && was && (was.way_back != null) !== returnToStart()) { // its measuring again failed
+    await remeasure(was);
+    if (state.liked === was) return; // still not measured: the status line says so
+  }
   const liked = rankBasis();
   if (!liked) return;
   let query, place = null;
@@ -2467,6 +2568,7 @@ async function findSimilar() {
     } else {
       query = { ...likedSeed(liked, "seed"), ...readWeights(), month, return_to_start: liked.way_back != null };
     }
+    query.uncounted = uncountedReasons();
     if ($("#drive-on").checked) {
       const typed = parseLatLon($("#origin").value);
       const warning = typed && swappedWarning(typed);
@@ -2540,7 +2642,9 @@ async function postRank(request, current = () => true) {
 // with "Show 10 more" asked for the rows past the first page (Suggest loops keeps the rows shown).
 async function rank(query, liked, stale = false, draw = state.draw, place = state.asked?.place, rows = 0) {
   const request = ++ranked;
-  $("#find").disabled = $("#suggest-loops").disabled = true;
+  ranking = true;
+  $("#suggest-loops").disabled = true;
+  syncFind();
   if (query.loops) $("#suggest-loops").textContent = "Suggesting loops…";
   setStatus(query.loops ? "Suggesting loops near these hikes…"
     : query.max_hours ? "Finding hikes within the drive, then ranking…" : "Ranking every hike…");
@@ -2549,7 +2653,7 @@ async function rank(query, liked, stale = false, draw = state.draw, place = stat
     if (request !== ranked || liked !== rankBasis()) return;
     state.query = {
       weights: body.weights, month: body.month, drive: Boolean(query.max_hours), km: Boolean(query.max_km),
-      return_to_start: body.return_to_start, wish: query.wish ?? null, group_km: body.group_km,
+      return_to_start: body.return_to_start, wish: query.wish ?? null, group_km: body.group_km, uncounted: query.uncounted,
     };
     // ``address``: what it was asked as, so an address typed or gone back to that asks otherwise marks it.
     state.asked = { query, basis: liked, place, address: shownAddress() };
@@ -2582,7 +2686,8 @@ async function rank(query, liked, stale = false, draw = state.draw, place = stat
       $("#results").classList.toggle("failed", error.status === 409);
     }
   } finally {
-    if (request === ranked) $("#find").disabled = $("#suggest-loops").disabled = false;
+    if (request === ranked) ranking = $("#suggest-loops").disabled = false;
+    syncFind();
     $("#suggest-loops").textContent = SUGGEST_LOOPS;
   }
 }
@@ -2981,6 +3086,7 @@ async function start() {
   scoreHelp.listen();
   buildWeights();
   $("#wish-on").hidden = !state.measures.some(wishable);
+  syncFind();
   $("#wish-on").addEventListener("click", () => {
     chosen++; // drops a hike still loading
     setWishing(true);
@@ -3019,7 +3125,7 @@ async function start() {
   nameSearch($("#pair-search"), $("#pair-suggestions"), (id) => comparePair(id));
   $("#reset-weights").addEventListener("click", () => {
     buildWeights();
-    if (state.wishing) applyWish(""); // a wish asks nothing until the Hiker sets it
+    if (state.wishing) applyWish(""); // the default weights, each asking its shown default value
     markStale();
     syncAddress();
   });
@@ -3095,6 +3201,7 @@ async function start() {
       if (!changed) return;
       chosen++; // drops a hike still loading
       unchoose(); // first: leaving a wish then keeps the address the home page's
+      dropClearedHint();
       if (state.wishing) setWishing(false);
       resetSettings();
       $("#return-on").checked = true;

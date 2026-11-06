@@ -88,6 +88,12 @@ scroll it sideways for every measure's score.
 If you change a setting after a search, a line under **Find similar** says
 the list is from before your change, so you see it where you are on a phone.
 
+While **Find similar** is greyed out, the line under it says why: no hike is
+chosen yet (choose one first), a hike is still loading, or a search is still
+running. If your hike cannot be measured again after you change Return to
+start, that line says so and **Find similar** stays usable: pressing it
+measures your hike again, then finds.
+
 If hikes on the list score below 0.43, what a typical pair of random hikes
 scores, a note above the list says from which row down the matches are weak,
 or that all are when even the best one is. This
@@ -99,15 +105,24 @@ much like your hike nearby. A long tour can then show up on the list too.
 No particular hike in mind? Press **"No particular hike in mind? Describe the
 one you want"** under the search.
 
-Example: you want a hike of about 10 km with 800 m of climbing and a hut on
-the way. Type 10 for Length and 800 for Climbing. Open **Advanced search** and
-click the "yes" box of Hut along: it already shows "yes", and the click turns
-it on (a second click asks for no hut). Press **Find hikes**.
+It starts like the normal search: the main features (Length, Climbing,
+Highest point and Typical temperature) are on at weight 100, each asking for a
+typical value already in its box, and the Advanced ones are off. Change the
+values you care about, and slide the ones you don't care about to 0. Lake or
+sea starts off, since no share suits every hike: turn it on and set the share
+you want.
 
-Everything starts at "ask for nothing": the value boxes are empty, with a
-grey example value in each. Typing a value switches that measure on, at weight
-100. Sliding a measure's weight up without typing a value asks for the example
-value shown. **Back to a hike you liked** takes you back to the normal search.
+Example: you want a hike of about 10 km with 800 m of climbing and a hut on
+the way. Length already asks for 10; type 800 for Climbing. Slide Highest
+point and Typical temperature to 0 if they don't matter to you.
+Open **Advanced search** and click the "yes" box of Hut along: it already
+shows "yes", and the click turns it on (a second click asks for no hut). Press
+**Find hikes**.
+
+Typing a value in a measure that is off switches it on, at weight 100. Sliding
+its weight up without typing a value asks for the grey example value shown.
+**Reset weights** brings back the starting values. **Back to a hike you liked**
+takes you back to the normal search.
 
 ### Say what matters to you
 
@@ -281,6 +296,13 @@ Each hike has a score, and each thing compared has its own score. Press the
   we don't know is simply left out of the score. When you describe the hike
   you want, a hike with no data for something you asked for scores 0 on it
   instead, so it is listed below the hikes that have that data.
+- Open a hike to see every measure side by side with the hike you like (or
+  the one you want). A greyed row is a measure that is not part of the score:
+  it still shows the facts and its score, faded, and says why: "not counted
+  (weight 0)", "not counted (Advanced search closed)" for a measure with a
+  weight above 0 in a closed Advanced search, or, when you describe
+  the hike you want, "not counted (cannot be asked)". A line above the table
+  says how to count them: set their weight in step 2, or open Advanced search.
 
 #### Why the list changes from visit to visit
 
