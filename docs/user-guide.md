@@ -299,7 +299,8 @@ Each hike has a score, and each thing compared has its own score. Press the
 - Open a hike to see every measure side by side with the hike you like (or
   the one you want). A greyed row is a measure that is not part of the score:
   it still shows the facts and its score, faded, and says why: "not counted
-  (weight 0)", "not counted (Advanced search closed)", or, when you describe
+  (weight 0)", "not counted (Advanced search closed)" for a measure with a
+  weight above 0 in a closed Advanced search, or, when you describe
   the hike you want, "not counted (cannot be asked)". A line above the table
   says how to count them: set their weight in step 2, or open Advanced search.
 
