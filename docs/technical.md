@@ -559,7 +559,7 @@ scores 0 on it the same way, so it ranks below the hikes that have that data
 ### What the score means
 
 Raw Measure scores sit on very different scales: a random pair of DayHikes
-scores 0.6 or more on `profile` nine times in ten, but rarely on `length`.
+scores 0.6 or more on `profile` about two times in three (with the way back), but rarely on `length`.
 Calibration maps each raw score to the share of random pairs (100,000, drawn
 once from the whole Catalog) strictly less alike on that Measure, so every
 Measure pulls with the weight it is given. A random pair is less alike when it
@@ -703,7 +703,7 @@ among random pairs, not a probability fitted to human judgement.
 **Validation.** What there is, and where it lives:
 
 - A blind-judge study (ADR-0016): judges rated the demo's top 10 for 17 Seeds
-  (170 rated pairs) from each hike's facts, map and profile. Re-averaging over
+  (170 rated pairs) from each hike's facts and profile (no map). Re-averaging over
   the ten Measures that separated good from poor results raised agreement
   with the judges from Spearman 0.31 to 0.46. ADR-0021 measured a WaterSide
   change on the same set (0.415 to 0.406 per Seed: noise for 17 Seeds). The
@@ -723,7 +723,7 @@ Other known limits and parked ideas are in [docs/future-work.md](future-work.md)
 fixture; 02, 04 and 04a use `data/catalog.sqlite` when present and the fixture
 otherwise; 05, the main
 calibration evidence, needs the full Europe build: about 35 GB of PBF, a
-21 GB GeometryStore, 11 GB of WorldCover and 5.4 GB of CHELSA, and hours of
+17 GB GeometryStore, 11 GB of WorldCover and 5.4 GB of CHELSA, and hours of
 compute (see [Clean rebuild](#clean-rebuild)).
 
 ### Rebuilding the facts
@@ -782,7 +782,7 @@ So a ranking server fits in 2 GB and is comfortable in 4 GB. Most of its memory
 is the Python DayHike objects `Catalog.open` builds; scoring itself needs the
 about 280 MB of memory-mapped arrays plus a few hundred MB per query. Building the
 facts needs 1.7 GB (not yet re-measured) and is best run where the
-GeometryStore (21 GB) lives, with only `data/catalog.similarity/` and the
+GeometryStore (17 GB) lives, with only `data/catalog.similarity/` and the
 Catalog copied to the server.
 
 ## 4. Optional Origin and max hours
@@ -2285,7 +2285,7 @@ limited to 2 GiB and 1 CPU like Cloud Run (`web/smoke.py`):
 
 | What | Measured |
 | --- | --- |
-| `export-serving` | 24 min without Valhalla tiles and with an existing snaps file (reads the 21 GB GeometryStore); peak memory not yet re-measured |
+| `export-serving` | 24 min without Valhalla tiles and with an existing snaps file (reads the 17 GB GeometryStore); peak memory not yet re-measured |
 | Export size | `hikes.sqlite` 154 MB, similarity 85 MB, snaps 4.5 MB, Trailheads 2.6 MB; total with tiles not yet re-measured |
 | Image | 3.2 GB uncompressed (Valhalla base 0.9 GB, Python and packages 0.5 GB, data 1.04 GB) |
 | Container start to first answer | 3 s (both processes); 215 MiB |
