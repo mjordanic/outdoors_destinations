@@ -559,7 +559,8 @@ scores 0 on it the same way, so it ranks below the hikes that have that data
 ### What the score means
 
 Raw Measure scores sit on very different scales: a random pair of DayHikes
-scores 0.6 or more on `profile` about two times in three (with the way back), but rarely on `length`.
+scores 0.6 or more on `profile` about two times in three (with the way
+back), but rarely on `length`.
 Calibration maps each raw score to the share of random pairs (100,000, drawn
 once from the whole Catalog) strictly less alike on that Measure, so every
 Measure pulls with the weight it is given. A random pair is less alike when it
