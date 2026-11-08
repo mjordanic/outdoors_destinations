@@ -45,7 +45,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -779,6 +779,26 @@ def create_app(
     @app.api_route("/{name}.html", methods=["GET", "HEAD"], include_in_schema=False)
     def page(name: str, request: Request) -> Response:
         return site_page(name, request)
+
+    def origin(request: Request) -> str:
+        """The public origin: ``site_url``, else the address the request came to."""
+        return site_url or str(request.base_url).rstrip("/")
+
+    @app.api_route("/robots.txt", methods=["GET", "HEAD"], include_in_schema=False)
+    def robots(request: Request) -> Response:
+        return PlainTextResponse(f"User-agent: *\nAllow: /\n\nSitemap: {origin(request)}/sitemap.xml\n")
+
+    # The site's pages; a Ranking is made on request, so no search is listed.
+    @app.api_route("/sitemap.xml", methods=["GET", "HEAD"], include_in_schema=False)
+    def sitemap(request: Request) -> Response:
+        urls = "".join(
+            f"  <url><loc>{origin(request)}/{'' if name == 'index' else f'{name}.html'}</loc></url>\n" for name in PAGES
+        )
+        body = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            f'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n{urls}</urlset>\n'
+        )
+        return Response(body, media_type="application/xml")
 
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="page")
     return app

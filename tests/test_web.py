@@ -1,6 +1,7 @@
 import threading
 import time
 from pathlib import Path
+from xml.etree import ElementTree
 
 import pytest
 from fastapi.testclient import TestClient
@@ -1336,3 +1337,36 @@ def test_with_the_site_url_each_page_names_itself_and_its_preview_image_by_full_
     assert "og:url" not in plain and 'content="social-preview.png"' in plain
     with pytest.raises(ValueError, match="https://host"):
         create_app(data, site_url="https://hikes.example/path")
+
+
+def test_robots_txt_allows_every_crawler_and_points_at_the_sitemap(data: ServingData) -> None:
+    response = TestClient(create_app(data, site_url="https://hikes.example")).get("/robots.txt")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    assert response.text == "User-agent: *\nAllow: /\n\nSitemap: https://hikes.example/sitemap.xml\n"
+
+
+def test_the_sitemap_lists_each_public_page_by_full_address_and_no_search(data: ServingData) -> None:
+    response = TestClient(create_app(data, site_url="https://hikes.example")).get("/sitemap.xml")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/xml")
+    root = ElementTree.fromstring(response.content)
+    namespace = "{http://www.sitemaps.org/schemas/sitemap/0.9}"
+    assert root.tag == f"{namespace}urlset"
+    assert [loc.text for loc in root.iter(f"{namespace}loc")] == [
+        "https://hikes.example/",
+        "https://hikes.example/about.html",
+        "https://hikes.example/credits.html",
+        "https://hikes.example/privacy.html",
+        "https://hikes.example/terms.html",
+    ]
+
+
+def test_without_the_site_url_robots_and_the_sitemap_name_the_address_asked(data: ServingData) -> None:
+    client = TestClient(create_app(data), base_url="http://localhost:8080")
+
+    assert "Sitemap: http://localhost:8080/sitemap.xml" in client.get("/robots.txt").text
+    assert "<loc>http://localhost:8080/about.html</loc>" in client.get("/sitemap.xml").text
+    assert client.head("/robots.txt").status_code == 200 and client.head("/sitemap.xml").status_code == 200
