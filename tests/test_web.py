@@ -253,12 +253,13 @@ def test_the_score_explanation_says_what_a_score_means_and_how_it_is_made(client
     # The rarity rank (ADR-0026): the share of random pairs less alike, a rare match counting for more.
     assert "Share of random hike pairs less alike" in help_["measure"]
     assert "0.9 means only 1 pair in 10" in help_["measure"]
-    assert "about 0.43" in help_["overall"] and "0.75 beats 99" in help_["overall"]  # under the basic set (ADR-0031)
-    # Two dry hikes: identical, but it tells little; as the rebuild 4 Calibration scores them (0.208).
-    assert "0.21 on Lake or sea" in text and "79 %" in text and "never near water 0.21" in text
+    assert "about 0.47" in help_["overall"] and "0.85 beats 99" in help_["overall"]  # under the basic set (ADR-0031)
+    # Two hikes with no water source: identical, but it tells little (0.648 on the rebuild 4 Calibration).
+    assert "0.65 on Water sources" in text and "35 %" in text and "pass no water source 0.65" in text
     assert "not compared" in text and "0.95" in text  # a shared absence; both passing a hut
+    assert "two dry hikes" in text and "not compared on it" in text  # Lake or sea (ADR-0058)
     assert "What does 0.1 mean" in " ".join(section["title"] for section in help_["sections"])
-    assert "Kattegat" in text and "0.13" in text
+    assert "Ruta Teresiana" in text and "0.15" in text and "0.74" in text
     assert "count half" not in text and "score 1.0" not in text  # the rules ADR-0026 replaced
     for source in ("OpenStreetMap", "FABDEM", "WorldCover", "CHELSA"):
         assert source in text
@@ -897,7 +898,7 @@ def test_info_gives_where_most_hikes_are_and_what_a_typical_pair_scores(client: 
     box = info["coverage"]
 
     assert box[0] <= south <= north <= box[2] and box[1] <= west <= east <= box[3]
-    assert info["typical_pair"] == serving.TYPICAL_PAIR == 0.43
+    assert info["typical_pair"] == serving.TYPICAL_PAIR == 0.47
 
 
 def test_the_about_page_shows_the_wordmark_and_the_tagline(client: TestClient) -> None:

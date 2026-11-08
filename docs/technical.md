@@ -533,7 +533,7 @@ way instead of with its way back.
 | `southness` | SolarAspect from FABDEM (1 south, 0 north, 0.5 east, west or flat) | tolerance | D = 1 |
 | `water_count` | WaterSources in the Corridor, capped at 3 | tolerance | D = 3 |
 | `dry_stretch` | DryStretch | ratio | floor 1 km |
-| `waterside` | WaterSide: share of the walk within 200 m of sea, lake or wide river (WorldCover) | tolerance | D = 0.5, dead band 0.15 (ADR-0021) |
+| `waterside` | WaterSide: share of the walk within 200 m of sea, lake or wide river (WorldCover) | tolerance | D = 0.5, dead band 0.15 (ADR-0021); a share under it is dry, and two dry hikes are not compared (ADR-0058) |
 | `hut_along`, `restaurant_cafe_along`, `shelter_along` | that amenity in the Corridor | agree | — |
 | `restaurant_cafe_trailhead`, `parking_trailhead` | that amenity within 500 m of the Trailhead | agree | — |
 | `surface` | SurfaceMix (paved, gravel, natural, rock) | mix | — |
@@ -559,7 +559,8 @@ scores 0 on it the same way, so it ranks below the hikes that have that data
 ### What the score means
 
 Raw Measure scores sit on very different scales: a random pair of DayHikes
-scores 0.6 or more on `profile` nine times in ten, but rarely on `length`.
+scores 0.6 or more on `profile` about two times in three (with the way
+back), but rarely on `length`.
 Calibration maps each raw score to the share of random pairs (100,000, drawn
 once from the whole Catalog) strictly less alike on that Measure, so every
 Measure pulls with the weight it is given. A random pair is less alike when it
@@ -571,9 +572,11 @@ by rarity too: two climbs of 166 and 167 m beat two that are both under 100 m
 Ties never count half. On the seven OSM flags (Peak summited, Viewpoint, Hut,
 restaurant or cafe along, Shelter, restaurant or cafe at the Trailhead,
 parking) two DayHikes that both lack the feature are not compared, and the
-Measure drops out of that pair's mean. The printed score is the similarity
+Measure drops out of that pair's mean. WaterSide does the same for two dry
+DayHikes, both under 0.15 of the walk beside water (ADR-0058): its random
+pairs are the ones where either is beside water. The printed score is the similarity
 itself, the weighted mean of the calibrated Measure scores: a typical random
-pair scores about 0.43 under the default weights, 0.75 beats 99 random pairs in
+pair scores about 0.47 under the default weights, 0.85 beats 99 random pairs in
 100, and 1.0 needs a pair no random pair is as alike as on every weighted
 Measure, so the best matches stay apart instead of all reading 1.000. Ties in
 order break on the uncalibrated weighted mean, then on DayHike id.
@@ -587,20 +590,21 @@ Reading a score, as the web demo explains it beside every score (ADR-0025):
   highest points 400 m or more apart). In bits, −log₂(1 − s) is the evidence
   that the hikes are alike: 0.5 is 1 bit, 0.9 about 3, 0.99 about 7.
 - **Rare shared values tell more.** Two hikes that both pass a hut score 0.95
-  on it; two that are both never near water score 0.16 on WaterSide, since 84%
-  of random pairs are as alike there. Values a Measure counts as the same are
+  on it; two that both pass no water source score 0.65 on Water sources, since
+  35% of random pairs are as alike there. Values a Measure counts as the same are
   one value: WaterSide shares under 0.15, Water sources 3 or more, values at or
   under a `ratio` floor.
 - **Nothing mapped in common is not evidence.** Two hikes with no hut mapped
   are not compared on it: the cell shows a dash and the other Measures count.
+  Two dry hikes are not compared on WaterSide either, as most hikes are dry.
   A Wish's "no" is the Hiker's answer, so a hike without one matches it,
   scored against every random pair (those with none included): most hikes
   have no hut, so a Wish of "no hut" scores a hike without one about 0.16.
 - **Alike hikes can score low on one Measure.** A low number means what they
-  share there is common, or they are further apart on it than most pairs. The
-  Kattegat coast walks Kattegatstien and Kattegatkysten (56% and 30% of the way
-  beside water) score 0.10 on WaterSide, as most random pairs are two dry hikes
-  that count as alike; their overall score is still 0.74.
+  share there is common, or they are further apart on it than most pairs.
+  Ruta Teresiana (108 km) and stage 8 of the Via Normanna (16 km) climb about
+  as much, top out near 1,170 m and are as warm, but score 0.15 on Length;
+  their overall score is still 0.74.
 - **Where the facts come from.** OpenStreetMap (the line, SAC grade, surface,
   peaks, viewpoints, huts, shelters, water sources, restaurants, parking),
   FABDEM (heights, climb, profile, steepness, slope aspect), ESA WorldCover
@@ -611,9 +615,10 @@ Reading a score, as the web demo explains it beside every score (ADR-0025):
 The page's words live in `SCORE_HELP` and `MEASURE_INFO` in
 `dayhike.serving` and reach the page through `/api/measures`, so a change to
 the scoring rule changes them in one place. Their example numbers (a typical
-pair 0.43, 0.75 beating 99 in 100, a hut 0.95, WaterSide 0.16, the Kattegat
-pair's 0.13 and 0.75, near climbs 1.00 against both under the floor 0.88) are
-fixed text measured on the Catalog of ADR-0050 (the rebuild-4 export): a
+pair 0.47, 0.85 beating 99 in 100, a best match 0.97, a hut 0.95, no water
+source 0.65, the Ruta Teresiana pair's 0.15 and 0.74, near climbs 1.00 against
+both under the floor 0.88) are fixed text measured on the Catalog of ADR-0050
+(the rebuild-4 export, re-fitted for ADR-0058): a
 rebuild does not recompute them, and the tests check the strings, not the
 numbers.
 
@@ -703,7 +708,7 @@ among random pairs, not a probability fitted to human judgement.
 **Validation.** What there is, and where it lives:
 
 - A blind-judge study (ADR-0016): judges rated the demo's top 10 for 17 Seeds
-  (170 rated pairs) from each hike's facts, map and profile. Re-averaging over
+  (170 rated pairs) from each hike's facts and profile (no map). Re-averaging over
   the ten Measures that separated good from poor results raised agreement
   with the judges from Spearman 0.31 to 0.46. ADR-0021 measured a WaterSide
   change on the same set (0.415 to 0.406 per Seed: noise for 17 Seeds). The
@@ -723,7 +728,7 @@ Other known limits and parked ideas are in [docs/future-work.md](future-work.md)
 fixture; 02, 04 and 04a use `data/catalog.sqlite` when present and the fixture
 otherwise; 05, the main
 calibration evidence, needs the full Europe build: about 35 GB of PBF, a
-21 GB GeometryStore, 11 GB of WorldCover and 5.4 GB of CHELSA, and hours of
+17 GB GeometryStore, 11 GB of WorldCover and 5.4 GB of CHELSA, and hours of
 compute (see [Clean rebuild](#clean-rebuild)).
 
 ### Rebuilding the facts
@@ -782,7 +787,7 @@ So a ranking server fits in 2 GB and is comfortable in 4 GB. Most of its memory
 is the Python DayHike objects `Catalog.open` builds; scoring itself needs the
 about 280 MB of memory-mapped arrays plus a few hundred MB per query. Building the
 facts needs 1.7 GB (not yet re-measured) and is best run where the
-GeometryStore (21 GB) lives, with only `data/catalog.similarity/` and the
+GeometryStore (17 GB) lives, with only `data/catalog.similarity/` and the
 Catalog copied to the server.
 
 ## 4. Optional Origin and max hours
@@ -2164,7 +2169,7 @@ short:
 | Method | Path | Answers |
 | --- | --- | --- |
 | GET | `/api/health` | that the server is up |
-| GET | `/api/info` | hike count, coverage box, `core` (the box of the middle 80 % of Trailheads, where the map opens), `typical_pair` (0.43: below it the page calls a list's matches weak), attribution, which features are on |
+| GET | `/api/info` | hike count, coverage box, `core` (the box of the middle 80 % of Trailheads, where the map opens), `typical_pair` (0.47: below it the page calls a list's matches weak), attribution, which features are on |
 | GET | `/api/measures` | the Measures, grouped, with their plain descriptions |
 | GET | `/api/search?q=` | hikes by name |
 | GET | `/api/place?q=` | places by name, for the drive-time Origin |
@@ -2285,7 +2290,7 @@ limited to 2 GiB and 1 CPU like Cloud Run (`web/smoke.py`):
 
 | What | Measured |
 | --- | --- |
-| `export-serving` | 24 min without Valhalla tiles and with an existing snaps file (reads the 21 GB GeometryStore); peak memory not yet re-measured |
+| `export-serving` | 24 min without Valhalla tiles and with an existing snaps file (reads the 17 GB GeometryStore); peak memory not yet re-measured |
 | Export size | `hikes.sqlite` 154 MB, similarity 85 MB, snaps 4.5 MB, Trailheads 2.6 MB; total with tiles not yet re-measured |
 | Image | 3.2 GB uncompressed (Valhalla base 0.9 GB, Python and packages 0.5 GB, data 1.04 GB) |
 | Container start to first answer | 3 s (both processes); 215 MiB |

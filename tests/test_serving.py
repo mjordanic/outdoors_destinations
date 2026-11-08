@@ -408,6 +408,25 @@ def test_compare_notes_tell_identical_values_and_values_counted_the_same(data: S
     assert notes["shelter_along"] == {"score": None, "raw": None, "note": "Neither has one mapped: not compared"}
 
 
+def test_compare_notes_say_two_dry_hikes_are_not_compared_on_lake_or_sea(data: ServingData) -> None:
+    # ADR-0058: two shares under 0.15 are both dry, not compared; a waterside pair counts the pairs
+    # where either is beside water.
+    facts = np.array(data.store.facts)
+    column = FACT_COLUMNS.index("waterside_share")
+    facts[column, :4] = (0.0, 0.12, 0.3, 0.6)
+    quantiles = np.tile(np.linspace(0, 1, data.store.quantiles.shape[1]), (len(data.store.quantiles), 1))
+    store = dataclasses.replace(data.store, facts=facts, quantiles=quantiles)
+
+    dry, wet = scored_measures(store, 0, np.array([1, 2]), None)
+    (apart,) = scored_measures(store, 2, np.array([3]), None)
+
+    assert dry["waterside"] == {
+        "score": None, "raw": None, "note": "Both dry (less than 15 % of the walk beside water): not compared"
+    }
+    assert wet["waterside"]["score"] is not None
+    assert apart["waterside"]["note"].endswith("random hike pairs where either is beside water")
+
+
 def test_rank_respects_the_limit_and_the_allowed_rows(data: ServingData) -> None:
     assert len(data.rank(RIDGE_WALK_ID, {"length": 100}, limit=2)) == 2
     allowed = np.array([data.row_of(1003)])
