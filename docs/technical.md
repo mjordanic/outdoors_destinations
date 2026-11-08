@@ -2111,7 +2111,10 @@ privacy page names GoatCounter only once it is set. No page sets a cookie or wri
 `--site-url https://HOST` (`DAYHIKE_SITE_URL`) is the site's public address:
 each page then names itself in `og:url` and its share preview image by full
 address, which link previews need; unset, the image address stays relative. A
-value other than `https://host` is refused at start.
+value other than `https://host` is refused at start. `/robots.txt` allows every
+crawler and names `/sitemap.xml`, which lists the five pages by full address at
+the site URL (unset, at the address the request came to); a Ranking is made on
+request, so no search or API address is listed.
 
 The page opens behind a loading screen, the logo and "Loading…", which says
 "Waking the server" when the first answer is slow (a start from zero), and that
