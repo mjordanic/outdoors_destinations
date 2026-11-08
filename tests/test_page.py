@@ -2794,13 +2794,13 @@ def test_a_list_whose_best_scores_below_a_typical_pair_says_the_matches_are_weak
 
     poor = page.locator("#results-poor")
     assert poor.is_visible()
-    assert poor.inner_text().startswith("Weak matches: the best of these scores 0.310, below the 0.43 of a typical pair")
+    assert poor.inner_text().startswith("Weak matches: the best of these scores 0.310, below the 0.47 of a typical pair")
 
     page.unroute(f"{server}/api/rank")
     page.route(f"{server}/api/rank", Pool([0.8, 0.3, 0.2]))
     page.get_by_label("Strict order").check()
     _find(page)
-    page.locator("#results-poor").get_by_text("From #2 down, these score below the 0.43").wait_for()
+    page.locator("#results-poor").get_by_text("From #2 down, these score below the 0.47").wait_for()
 
     page.unroute(f"{server}/api/rank")
     page.route(f"{server}/api/rank", Pool([0.8, 0.7, 0.6]))

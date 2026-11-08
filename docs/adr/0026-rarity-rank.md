@@ -1,5 +1,5 @@
 ---
-status: accepted (supersedes ADR-0023; amends ADR-0013, ADR-0016, ADR-0021, ADR-0022, ADR-0025; a near pair on a ratio Measure amended by ADR-0050)
+status: accepted (supersedes ADR-0023; amends ADR-0013, ADR-0016, ADR-0021, ADR-0022, ADR-0025; a near pair on a ratio Measure amended by ADR-0050; WaterSide, decision 3, amended by ADR-0058)
 ---
 
 # Rarity rank: a score is the share of random pairs less alike

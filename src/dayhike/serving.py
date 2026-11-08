@@ -108,6 +108,7 @@ from dayhike.similarity import (
     _even_points,
     _haversine_m,
     _measure_weights,
+    _measured,
     _path_length_m,
     _resample,
     _step_m,
@@ -218,7 +219,7 @@ MEASURE_INFO: dict[str, tuple[str, str, str, str]] = {
     "southness": ("weather", "Sun-facing slopes", "Which way the slopes face: 1 south, 0 north, 0.5 east or west; a flat walk faces no way and counts 0.5 (from FABDEM); scored by the gap against random hike pairs.", "FABDEM slopes along the line."),
     "water_count": ("water", "Water sources", "WaterSources within 100 m of the line, counted up to 3; scored by the gap against random hike pairs.", "OpenStreetMap drinking water, springs, taps and water points."),
     "dry_stretch": ("water", "Dry stretch", "Longest walk between WaterSources; scored by the shorter over the longer (floor 1 km), against random hike pairs.", "OpenStreetMap drinking water, springs, taps and water points."),
-    "waterside": ("basic", "Lake or sea", "Share of the walk within 200 m of sea, lake or wide river (WorldCover); scored by the gap against random hike pairs, a gap under 0.15 counting as none, lowest from 0.5 apart. Any share under 15 % counts as dry, the same as none: so many hikes are dry, it says little, and two hikes that match closely on a less common share, like 50 % and 55 %, are the closer match.", "ESA WorldCover 2021 permanent water (sea, lakes, wide rivers)."),
+    "waterside": ("basic", "Lake or sea", "Share of the walk within 200 m of sea, lake or wide river (WorldCover); scored by the gap against random hike pairs where either is beside water, a gap under 0.15 counting as none, lowest from 0.5 apart. Any share under 15 % counts as dry, the same as none, and two dry hikes are not compared on it: so many hikes are dry, it says little, and two hikes that match closely on a less common share, like 50 % and 55 %, are the closer match.", "ESA WorldCover 2021 permanent water (sea, lakes, wide rivers)."),
     "hut_along": ("facilities", "Hut along", "A Hut within 100 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap huts."),
     "restaurant_cafe_along": ("facilities", "Restaurant or cafe along", "A restaurant or cafe within 100 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap restaurants and cafes."),
     "shelter_along": ("facilities", "Shelter along", "A Shelter within 100 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap shelters."),
@@ -269,6 +270,11 @@ FLOOR_TEXT = {
     "steepest_km": "both 50 m or less",
 }
 
+# Lake or sea is a presence Measure (ADR-0058): two dry hikes are not compared, as two hikes without an
+# OSM flag's feature are not, and its random pairs are those where either is beside water.
+NOT_COMPARED = {"waterside": "both dry"}
+PRESENT_TEXT = {"waterside": "is beside water"}
+
 # A DayHike with no data for a Measure a Wish asks a value of scores 0 there (ADR-0052).
 UNMEASURED_NOTE = "No data for this hike: counts as 0 against the value you asked for"
 
@@ -280,13 +286,16 @@ def score_note(
     shows for it (two decimals, half rounding up): the share of random hike
     pairs less alike. ``tied`` is the share of random hike pairs scoring the
     same raw score. ``same`` is "identical" when the two values are, else why
-    the Measure counts them as the same (ADR-0022), or "not compared" when
-    neither has an OSM flag's feature mapped. ``pairs`` names the random
-    pairs compared: for an OSM flag, those where either has one, but every
-    pair for a Wish's "no".
+    the Measure counts them as the same (ADR-0022), "not compared" when
+    neither has an OSM flag's feature mapped, or "both dry" when both are
+    dry on Lake or sea. ``pairs`` names the random pairs compared: for an
+    OSM flag, those where either has one, and on Lake or sea those where
+    either is beside water, but every pair for a Wish of none.
     """
     if same == "not compared":
         return "Neither has one mapped: not compared"
+    if same == "both dry":
+        return "Both dry (less than 15 % of the walk beside water): not compared"
     if score is None or tied is None:
         return None
     percent = _percent(score)
@@ -313,10 +322,10 @@ def _percent(share: float) -> int:
 # scoring rule changes the words in one place.
 # What a typical random pair of hikes scores under the default weights: the page says a list whose best row
 # scores below it holds nothing much alike (ADR-0054).
-TYPICAL_PAIR = 0.43
+TYPICAL_PAIR = 0.47
 SCORE_HELP = {
     "overall": "Average of the measure scores below, under your weights. Each one is the share of random hike "
-    f"pairs less alike than these two. A typical pair scores about {TYPICAL_PAIR}; with the default weights, 0.75 beats "
+    f"pairs less alike than these two. A typical pair scores about {TYPICAL_PAIR}; with the default weights, 0.85 beats "
     "99 random pairs in 100.",
     "measure": "Share of random hike pairs less alike than these two on this measure: 0.9 means only 1 pair "
     "in 10 is as alike; 0 means nothing in common.",
@@ -327,8 +336,8 @@ SCORE_HELP = {
             "of hikes, drawn once from the whole catalog. A measure's score is the share of those random pairs "
             "that are less alike than these two. So it says how close the two hikes are, and also how rare it "
             "is to be that close: a match counts for more when fewer random pairs manage it. Two hikes whose "
-            "lengths are within 2 % score 0.99 on length. Two hikes that are both never near open water score "
-            "only 0.21 on Lake or sea: they are identical there, but 79 % of random pairs are too, so it tells "
+            "lengths are within 2 % score 0.99 on length. Two hikes that both pass no water source score only "
+            "0.65 on Water sources: they are identical there, but 35 % of random pairs are too, so it tells "
             "little. A score of 0.5 means half of random pairs are at least as alike: an ordinary match. 0.9 "
             "means only 1 pair in 10 is; 0.99 means 1 in 100. 0 means the hikes have nothing in common on that "
             "measure: one passes a hut and the other does not, or their highest points are 400 m or more apart. "
@@ -339,7 +348,7 @@ SCORE_HELP = {
         {
             "title": "Rare shared values tell more",
             "text": "When two hikes have the same value, the score says how rare that value is: two hikes that "
-            "both pass a mountain hut score 0.95, two that are both never near water 0.21. Values a measure "
+            "both pass a mountain hut score 0.95, two that both pass no water source 0.65. Values a measure "
             "counts as the same are one value: Lake or sea shares under 0.15, Water sources 3 or more, values at "
             "or under a measure's floor (walks under 1 km on Length). Many hikes share such a value, so it says "
             "little: two climbs of 166 m and 167 m are a closer match (1.00) than two climbs both under 100 m (0.88).",
@@ -350,19 +359,20 @@ SCORE_HELP = {
             "OpenStreetMap, the two are not compared on that measure. A missing map entry may only mean that "
             "nobody mapped it, and most hikes lack these things anyway. The measure then shows a dash and is "
             "left out of their score; the other measures count instead. When both hikes have one, the score "
-            "shows how unusual that is: two hikes that both pass a mountain hut score 0.95. A wish for none is "
-            "your answer, not a missing entry, so a hike without one matches it, and that counts by how rare "
-            "it is: most random pairs both lack a hut, so a wish for no hut scores a hike without one about "
-            "0.16.",
+            "shows how unusual that is: two hikes that both pass a mountain hut score 0.95. Lake or sea works "
+            "the same way: two dry hikes, both less than 15 % of the walk beside water, are not compared on it, "
+            "as most hikes are dry. A wish for none is your answer, not a missing entry, so a hike without one "
+            "matches it, and that counts by how rare it is: most random pairs both lack a hut, so a wish for no "
+            "hut scores a hike without one about 0.16.",
         },
         {
             "title": "What does 0.1 mean when the hikes look similar?",
             "text": "A low number on one measure does not mean the hikes are unalike overall. It means that what "
             "they share on that measure is common, or that they are further apart on it than most pairs of "
-            "hikes. For example, Kattegatstien and Kattegatkysten are both Danish coast walks, 56 % and 30 % "
-            "of the way beside water. On Lake or sea they score 0.13. Most hikes never come near water, and two "
-            "such hikes count as alike, so 87 % of random pairs are at least as alike there. Their overall "
-            "score is still 0.75, as high as only 1 random pair in 100, because every other measure matches.",
+            "hikes. For example, Ruta Teresiana and stage 8 of the Via Normanna climb about as much, top out "
+            "near 1,170 m and are as warm in summer, but one is a 108 km pilgrim route and the other a 16 km "
+            "stage. On Length they score 0.15: 85 % of random pairs are closer in length. Their overall score "
+            "is still 0.74, higher than 93 random pairs in 100, because the other measures match.",
         },
         {
             "title": "The overall score",
@@ -370,8 +380,8 @@ SCORE_HELP = {
             "their ratios matter, and a measure with no data on either hike, or not compared, drops out; "
             "when you describe the hike you want, a hike with no data for a measure you asked for scores 0 "
             "on it instead. A "
-            "typical random pair of hikes scores about 0.43. With the default weights, 0.75 beats 99 random "
-            "pairs in 100, and the best match for a hike usually scores about 0.84.",
+            "typical random pair of hikes scores about 0.47. With the default weights, 0.85 beats 99 random "
+            "pairs in 100, and the best match for a hike usually scores about 0.97.",
         },
         {
             "title": "Where the facts come from",
@@ -2152,7 +2162,7 @@ def scored_measures(
         key = _calibration_key(measure, month, seed)
         same = _sameness(store, measure, seed, rows, month, raw)
         calibrated = calibrate(store, key, raw, measure_rarity(store, measure, seed, rows, month=month))
-        pairs = "random hike pairs where either has one" if key == measure.name and measure.presence else "random hike pairs"
+        pairs = f"random hike pairs where either {PRESENT_TEXT.get(measure.name, 'has one')}" if key == measure.name and measure.presence else "random hike pairs"
         unmeasured = (
             wish_unmeasured(store, measure, seed, rows, month)
             if isinstance(seed, OutsideSeed) and seed.stated
@@ -2176,8 +2186,9 @@ def _sameness(
     store: SimilarityStore, measure, seed: int | OutsideSeed, rows: np.ndarray, month: int | None, raw: np.ndarray
 ) -> list[str | None]:
     """Per row, "identical" when its value of the Measure is the Seed's, else
-    why a raw score of 1 counts two different values as the same, else "not
-    compared" when neither has an OSM flag's feature, else None."""
+    "not compared" when neither has an OSM flag's feature or "both dry" when
+    both are dry on Lake or sea, else why a raw score of 1 counts two
+    different values as the same, else None."""
     if measure.kind == "profile":
         left = seed.profile if isinstance(seed, OutsideSeed) else store.profile[seed]
         identical = (store.profile[rows] == left).all(axis=-1)
@@ -2195,9 +2206,13 @@ def _sameness(
             reason = FLOOR_TEXT[measure.name]
         else:
             reason = "close enough to score the same"
-    absent = np.isnan(raw) & identical & (store.facts[index[0]][rows] == 0) if measure.presence else np.zeros(len(rows), bool)
+    absent = (
+        np.isnan(raw) & (_measured(measure, left[0]) == 0) & (_measured(measure, store.facts[index[0]][rows]) == 0)
+        if measure.presence
+        else np.zeros(len(rows), bool)
+    )
     return [
-        "not compared" if none else "identical" if same else reason if one else None
+        NOT_COMPARED.get(measure.name, "not compared") if none else "identical" if same else reason if one else None
         for same, one, none in zip(identical.tolist(), (raw == 1.0).tolist(), absent.tolist())
     ]
 

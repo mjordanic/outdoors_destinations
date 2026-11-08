@@ -7,11 +7,11 @@ query scores its Seeds against every DayHike with numpy, one Measure at a time,
 and nothing is rebuilt per request.
 
 A Measure compares one fact of two DayHikes and gives a score in [0, 1], or
-NaN when either DayHike lacks the fact or neither has an OSM flag's feature
-mapped. Calibration maps each raw score to the share of random DayHike pairs
-strictly less alike on that Measure: scoring lower, or equal on a commoner
-value (the rarity rank, ADR-0026), so Measures on very different raw scales
-can be weighted against each other.
+NaN when either DayHike lacks the fact, neither has an OSM flag's feature
+mapped, or both are dry on Lake or sea. Calibration maps each raw score to the
+share of random DayHike pairs strictly less alike on that Measure: scoring
+lower, or equal on a commoner value (the rarity rank, ADR-0026), so Measures
+on very different raw scales can be weighted against each other.
 
 Every DayHike has a second set of facts, measured with its way back to its
 Trailhead (ADR-0019), with its own Calibration; a query compares Seeds and
@@ -166,14 +166,16 @@ class Measure:
 
     ``kind`` is ``ratio`` (smaller over larger, each raised to ``constant``),
     ``tolerance`` (1 at equal values, 0 once they differ by ``constant``;
-    values first capped at ``cap``, and gaps under ``dead_band`` count as
-    equal), ``mix`` (shared share of fraction
+    values first capped at ``cap`` and put to 0 under ``dead_band``, and gaps
+    under ``dead_band`` count as equal), ``mix`` (shared share of fraction
     columns), ``agree`` (1 when two yes/no flags agree) or ``profile`` (1 -
     mean abs difference of two ProfileShapes, the better of forward or
     reversed). A ``monthly`` Measure reads the QueryMonth column of its fact
-    when the query sets one. A ``presence`` Measure is an OSM flag: two
-    DayHikes that both lack its feature are not compared on it (NaN), as a
-    missing map entry may only mean nobody mapped it.
+    when the query sets one. A ``presence`` Measure is a feature a DayHike
+    may lack: two DayHikes that both lack it are not compared on it (NaN).
+    On an OSM flag that is a 0, as a missing map entry may only mean nobody
+    mapped it; on WaterSide a share under the dead band, two dry hikes, as
+    most hikes are (ADR-0058).
     """
 
     name: str
@@ -203,7 +205,7 @@ MEASURES = (
     Measure("southness", "tolerance", ("southness",), 1),
     Measure("water_count", "tolerance", ("water_count",), 3, cap=3),
     Measure("dry_stretch", "ratio", ("dry_stretch_m",), 1_000),
-    Measure("waterside", "tolerance", ("waterside_share",), 0.5, dead_band=0.15),
+    Measure("waterside", "tolerance", ("waterside_share",), 0.5, dead_band=0.15, presence=True),
     *(Measure(flag, "agree", (flag,), presence=True) for flag in FACILITIES_FLAG_COLUMNS),
     Measure("surface", "mix", SURFACE_SHARE_COLUMNS),
     Measure("tarmac_approach", "tolerance", ("tarmac_approach_m",), 2_000),
@@ -223,7 +225,7 @@ DEFAULT_WEIGHTS = {name: 100.0 if name in CORE_MEASURES else 0.0 for name in MEA
 # a ProfileShape is no single value (GLOSSARY.md Wish).
 WISHABLE = tuple(measure.name for measure in MEASURES if measure.kind in ("ratio", "tolerance", "agree"))
 # Calibration rows: every Measure, then each monthly Measure once per QueryMonth,
-# then each OSM flag over every random pair, for a Wish's "no" (``EVERY_PAIR``).
+# then each presence Measure over every random pair, for a Wish of none (``EVERY_PAIR``).
 EVERY_PAIR = "+every-pair"
 CALIBRATION_KEYS = (
     *MEASURE_NAMES,
@@ -259,6 +261,7 @@ _CALIBRATION_VERSION = hashlib.sha256(
             "dead-band-one-value",  # a dead band is one value for rarity (``measure_rarity``)
             "mix-rounded",  # equal float32 shares sum to a raw 1 (``measure_scores``)
             "near-pairs-meet-the-floor-by-rarity",  # a ratio's raw-1 block by rarity below raw 1 (ADR-0050)
+            "two-dry-hikes-not-compared",  # WaterSide is a presence Measure, a dry share 0 (ADR-0058)
         ]
     ).encode()
 ).hexdigest()[:16]  # fmt: skip
@@ -383,7 +386,7 @@ class OutsideSeed:
     ``stated`` marks a Wish: its yes/no facts are the Hiker's answers, not
     map entries, so a DayHike that lacks an OSM flag's feature is compared
     with a "no" on it, against every random pair, those where neither has
-    one included (``EVERY_PAIR``).
+    one included (``EVERY_PAIR``); likewise a dry hike with a dry WaterSide share.
     """
 
     facts: np.ndarray
@@ -434,7 +437,7 @@ def rank_dayhikes(
     candidate's similarity to one Seed is the weighted mean of its calibrated
     Measure scores over the Measures both DayHikes have; with several Seeds the
     best Seed counts. Ties break on the same weighted mean of raw scores, then
-    on DayHike id. ``score`` is that similarity: about 0.43 for a typical
+    on DayHike id. ``score`` is that similarity: about 0.47 for a typical
     random pair under the default weights, 1.0 when no random pair is as alike
     on any weighted Measure. Of a group of
     Twins only the best is kept, and none of a Seed's Twins. Seeds are
@@ -605,7 +608,7 @@ def measure_scores(
     """Raw scores of one Measure between DayHike rows ``a`` and ``b``.
 
     ``a`` is one row (a Seed), an ``OutsideSeed``, or an array of rows paired with ``b``.
-    ``every_pair`` compares two DayHikes that both lack an OSM flag's feature too.
+    ``every_pair`` compares two DayHikes that both lack a presence Measure's feature too.
     """
 
     def seed_column(name: str) -> np.ndarray:
@@ -622,9 +625,13 @@ def measure_scores(
         shared = sum(np.minimum(seed_column(name), store.column(name)[b]) for name in columns)
         return np.minimum(np.round(shared, 6), 1.0)
     left, right = seed_column(columns[0]), store.column(columns[0])[b]
+    stated = every_pair or (isinstance(a, OutsideSeed) and a.stated)
+    absent = (
+        (_measured(measure, left) == 0) & (_measured(measure, right) == 0)
+        if measure.presence and not stated
+        else False
+    )
     if measure.kind == "agree":
-        stated = every_pair or (isinstance(a, OutsideSeed) and a.stated)
-        absent = (left == 0) & (right == 0) if measure.presence and not stated else False
         return np.where(np.isnan(left) | np.isnan(right) | absent, np.nan, left == right)
     if measure.kind == "ratio":
         left = np.maximum(left, measure.constant)
@@ -632,10 +639,12 @@ def measure_scores(
         return np.minimum(left, right) / np.maximum(left, right)
     if measure.cap is not None:
         left, right = np.minimum(left, measure.cap), np.minimum(right, measure.cap)
+    if measure.dead_band is not None:  # a share under the band is dry, the same as none (ADR-0058)
+        left, right = np.where(left < measure.dead_band, 0.0, left), np.where(right < measure.dead_band, 0.0, right)
     gap = np.abs(left - right)
     if measure.dead_band is not None:
         gap = np.where(gap < measure.dead_band, 0.0, gap)
-    return np.maximum(0.0, 1.0 - gap / measure.constant)
+    return np.where(absent, np.nan, np.maximum(0.0, 1.0 - gap / measure.constant))
 
 
 def measure_rarity(
@@ -783,10 +792,11 @@ def _measured(measure: Measure, values: np.ndarray) -> np.ndarray:
 
 
 def _calibration_key(measure: Measure, month: int | None, seed: int | OutsideSeed) -> str:
-    """The Calibration row of a Measure against a Seed: a Wish's "no" on an OSM
-    flag is compared with every random pair (``EVERY_PAIR``)."""
+    """The Calibration row of a Measure against a Seed: a Wish of none on a
+    presence Measure (a "no" on an OSM flag, a dry share on WaterSide) is
+    compared with every random pair (``EVERY_PAIR``)."""
     stated = isinstance(seed, OutsideSeed) and seed.stated
-    if measure.presence and stated and seed.facts[FACT_COLUMNS.index(measure.columns[0])] == 0:
+    if measure.presence and stated and _measured(measure, seed.facts[FACT_COLUMNS.index(measure.columns[0])]) == 0:
         return f"{measure.name}{EVERY_PAIR}"
     return measure.name if month is None or not measure.monthly else f"{measure.name}@{month:02d}"
 
@@ -880,7 +890,7 @@ def calibrate_similarity(
 
     ``CALIBRATION_PAIRS`` random pairs of distinct DayHikes are scored on every
     ``CALIBRATION_KEYS`` entry (an ``EVERY_PAIR`` key comparing those that both
-    lack the OSM flag's feature too); ``CALIBRATION_QUANTILES`` evenly spaced
+    lack a presence Measure's feature too); ``CALIBRATION_QUANTILES`` evenly spaced
     quantiles of the scored ones are kept per key, and as many of the
     ``measure_rarity`` of those scoring raw 1, after as many of each fact
     column's values over the DayHikes, for the facts one way and with the way

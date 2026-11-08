@@ -1,3 +1,4 @@
+import hashlib
 import json
 import math
 import os
@@ -17,6 +18,7 @@ from dayhike.similarity import (
     FACILITIES_FLAG_COLUMNS,
     LANDCOVER_SHARE_COLUMNS,
     MEASURES,
+    WISHABLE,
     OutsideSeed,
     SURFACE_SHARE_COLUMNS,
     TWIN_STEP_M,
@@ -97,9 +99,12 @@ def test_water_count_is_capped_before_the_tolerance() -> None:
 
 
 def test_waterside_counts_gaps_under_its_dead_band_as_equal() -> None:
-    # A cove or a bridge (gap under 0.15) is no difference; wider gaps keep the tolerance.
-    scores = _scores("waterside", waterside_share=[0.0, 0.107, 0.149, 0.2, 0.5, 0.8])
-    assert scores == pytest.approx([1.0, 1.0, 1.0, 0.6, 0.0, 0.0])
+    # A cove or a bridge (gap under 0.15) is no difference; wider gaps keep the tolerance. A share
+    # under 0.15 is dry, the same as none (ADR-0058).
+    scores = _scores("waterside", waterside_share=[0.2, 0.3, 0.34, 0.5, 0.8, 0.0, 0.107, 0.149])
+    assert scores == pytest.approx([1.0, 1.0, 1.0, 0.4, 0.0, 0.6, 0.6, 0.6])
+    # Two dry hikes (both shares under the dead band) are not compared (ADR-0058).
+    assert np.isnan(_scores("waterside", waterside_share=[0.0, 0.107, 0.149, 0.2])[:3]).all()
 
 
 def test_mix_is_the_shared_share_and_missing_with_any_share_missing() -> None:
@@ -310,20 +315,29 @@ def test_sharing_a_rare_value_scores_above_sharing_a_common_one(tmp_path: Path) 
     assert one_way == pytest.approx([0.424], abs=0.01)
 
 
-def test_two_dry_hikes_score_low_on_waterside_and_the_dead_band_is_one_value(tmp_path: Path) -> None:
-    # 82 hikes are dry and 10 touch water for 0.1 of the walk (inside the dead band, so dry for rarity);
-    # 8 walk beside water. Both dry-ish: 92 * 91 / 9,900 = 84.6 % of random pairs, as in the Catalog.
+def test_two_dry_hikes_are_not_compared_on_waterside_and_waterside_pairs_rank_among_pairs_by_water(
+    tmp_path: Path,
+) -> None:
+    # ADR-0058. 82 hikes are dry and 10 touch water for 0.1 of the walk (under the dead band, so dry too);
+    # 8 walk beside water. Both dry: 92 * 91 / 9,900 = 84.6 % of random pairs, as in the Catalog. The
+    # random pairs compared are the 15.4 % where either is beside water.
     shares = [0.0] * 82 + [0.1] * 10 + [0.3, 0.3, 0.5, 0.5, 0.7, 0.7, 0.9, 0.9]
-    store = _calibrated(tmp_path, 100, waterside_share=shares)
+    store = _calibrated(tmp_path, 100, waterside_share=shares, length_m=np.linspace(5_000, 15_000, 100))
 
     dry, _ = score_rows(store, [0], np.array([1, 82, 92]), {"waterside": 100})
-    wet, _ = score_rows(store, [92], np.array([93]), {"waterside": 100})
+    wet, _ = score_rows(store, [92], np.array([93, 94, 0, 98]), {"waterside": 100})
+    with_length, _ = score_rows(store, [0], np.array([1]), {"waterside": 100, "length": 100})
+    length, _ = score_rows(store, [0], np.array([1]), {"length": 100})
 
-    # 84.6 % of random pairs (and the 0.1 % that are two equal waterside hikes) are at least as alike.
-    assert dry[:2] == pytest.approx([0.153, 0.153], abs=0.01)
-    assert dry[1] == dry[0]
-    assert wet == pytest.approx([1.0], abs=0.01)
-    assert dry[2] < dry[0]
+    # Two dry hikes, 0.1 beside water or none, are not compared: the Measure drops out of the mean.
+    assert np.isnan(dry[:2]).all() and with_length == pytest.approx(length)
+    # A dry hike against one 0.3 beside water: 0.3 apart, closer than 74 % of the pairs compared,
+    # most of which are a dry hike against one 0.5 or more beside water.
+    assert dry[2] == pytest.approx(0.74, abs=0.02)
+    # Both 0.3 beside water: a rare shared value, above every pair compared but the equal ones;
+    # then 0.3 against 0.5, against none, and against 0.9 (nothing in common).
+    assert wet == pytest.approx([0.996, 0.98, 0.74, 0.0], abs=0.02)
+    assert wet[0] > wet[1] > wet[2] > wet[3]
 
 
 def test_two_close_climbs_beat_two_flat_walks_counted_the_same_under_the_floor(tmp_path: Path) -> None:
@@ -353,15 +367,62 @@ def test_a_pair_spanning_the_floor_gets_no_rarity_credit_so_a_farther_rare_pair_
     assert scores[1] > scores[0]  # 110 m ranks above 80 m against 101 m
 
 
-def test_a_near_pair_on_a_tolerance_measure_stays_below_its_dead_band(tmp_path: Path) -> None:
-    # Lake or sea keeps ADR-0026: a gap past the dead band is below every pair counted the same (the Kattegat pair).
+def test_a_wish_for_a_dry_hike_scores_a_dry_hike_by_how_common_being_dry_is(tmp_path: Path) -> None:
+    # A Wish's share is the Hiker's answer, so a dry hike is compared with a wish for a dry one,
+    # against every random pair: 84.6 % are both dry (and 0.1 % two equal waterside hikes), as alike.
     shares = [0.0] * 82 + [0.1] * 10 + [0.3, 0.3, 0.5, 0.5, 0.7, 0.7, 0.9, 0.9]
     store = _calibrated(tmp_path, 100, waterside_share=shares)
+    rows = np.array([0, 82, 92, 98])
 
-    dry, _ = score_rows(store, [0], np.array([1]), {"waterside": 100})
-    apart, _ = score_rows(store, [94], np.array([96]), {"waterside": 100})  # 0.5 and 0.7
+    dry, _ = score_rows(store, [OutsideSeed.wished({"waterside": 0.05})], rows, {"waterside": 100})
+    wet, _ = score_rows(store, [OutsideSeed.wished({"waterside": 0.3})], rows, {"waterside": 100})
 
-    assert apart[0] < dry[0]
+    assert dry == pytest.approx([0.153, 0.153, 0.115, 0.0], abs=0.01)
+    # A wish for 0.3 beside water ranks among the pairs where either is beside water, as two hikes do:
+    # none, 0.1 (dry too), 0.3 and 0.9 beside water.
+    assert wet == pytest.approx([0.74, 0.74, 0.996, 0.0], abs=0.02)
+
+
+def _every_other_measure(tmp_path: Path) -> str:
+    """Digest of every Measure's calibrated scores but Lake or sea's, on 300 seeded random DayHikes:
+    five Seeds and a Wish against every DayHike."""
+    rng = np.random.default_rng(20261108)
+    rows = 300
+    columns: dict[str, np.ndarray] = {}
+    for measure in MEASURES:
+        names = [
+            f"{column}_{month:02d}" if month else column
+            for column in measure.columns
+            for month in ([None, *range(1, 13)] if measure.monthly else [None])
+        ]
+        for name in names:
+            if measure.kind == "agree":
+                columns[name] = (rng.random(rows) < 0.2).astype(float)
+            elif measure.kind == "mix":
+                columns[name] = rng.random(rows)
+            else:
+                spread = rng.exponential(2 * measure.constant, rows)
+                columns[name] = np.where(rng.random(rows) < 0.3, 0.0, np.round(spread, 2))
+    for mix in (LANDCOVER_SHARE_COLUMNS, SURFACE_SHARE_COLUMNS):
+        total = sum(columns[name] for name in mix)
+        for name in mix:
+            columns[name] = columns[name] / total
+    columns["waterside_share"] = np.where(rng.random(rows) < 0.8, 0.0, rng.random(rows))
+    store = _calibrated(tmp_path, rows, profile=rng.random((rows, 64)), **columns)
+    wish = OutsideSeed.wished({name: 0 if BY_NAME[name].kind == "agree" else 1.0 for name in WISHABLE})
+    digest = hashlib.sha256()
+    for measure in MEASURES:
+        if measure.name == "waterside":
+            continue
+        for seed in [0, 1, 2, 3, 4, wish]:
+            scores, _ = score_rows(store, [seed], np.arange(rows), {measure.name: 100})
+            digest.update(np.round(scores, 9).tobytes())
+    return digest.hexdigest()
+
+
+def test_lake_or_sea_changes_no_other_measure(tmp_path: Path) -> None:
+    # Pinned on the code before ADR-0058: Lake or sea's rule leaves every other Measure's score as it was.
+    assert _every_other_measure(tmp_path) == "42fdd93061ff489305a8e3d8742134a36834959c3f13384e600b8c577cd305e5"
 
 
 def test_a_hike_without_a_grade_ranks_below_one_with_the_wished_grade_when_difficulty_weighs(tmp_path: Path) -> None:

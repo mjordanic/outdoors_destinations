@@ -1,5 +1,5 @@
 ---
-status: accepted (amends ADR-0028, ADR-0032, ADR-0041 and ADR-0047; amended by ADR-0055)
+status: accepted (amends ADR-0028, ADR-0032, ADR-0041 and ADR-0047; amended by ADR-0055; the help text's dry Lake-or-sea example and typical pair by ADR-0058)
 ---
 
 # What the page does after visitor check 3
