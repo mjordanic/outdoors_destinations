@@ -1,5 +1,5 @@
 ---
-status: accepted (amends ADR-0016; the compare note amended by ADR-0022 and ADR-0025; ties no longer count half since ADR-0026)
+status: accepted (amends ADR-0016; the compare note amended by ADR-0022 and ADR-0025; ties no longer count half since ADR-0026; two dry hikes are not compared since ADR-0058)
 ---
 
 # A dead band for WaterSide, and the compare score said in words

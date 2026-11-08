@@ -1,5 +1,5 @@
 ---
-status: accepted (amends ADR-0026)
+status: accepted (amends ADR-0026; Lake or sea's rule amended by ADR-0058)
 ---
 
 # A near pair meets the values counted the same under a floor by rarity

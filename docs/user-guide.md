@@ -94,7 +94,7 @@ running. If your hike cannot be measured again after you change Return to
 start, that line says so and **Find similar** stays usable: pressing it
 measures your hike again, then finds.
 
-If hikes on the list score below 0.43, what a typical pair of random hikes
+If hikes on the list score below 0.47, what a typical pair of random hikes
 scores, a note above the list says from which row down the matches are weak,
 or that all are when even the best one is. This
 happens most with a tight distance or drive limit: there is simply nothing
