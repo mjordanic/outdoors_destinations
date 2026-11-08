@@ -361,7 +361,15 @@ The steps, once there is a host account:
    The server fills in the GoatCounter tag (`<!--analytics-->`) and, with
    `DAYHIKE_SITE_URL`, the pages' `og:url` and full preview image address; a
    shell copy keeps the placeholder and the relative image, so fill them the
-   same way if those settings are on.
+   same way if those settings are on. The server also generates `/robots.txt`
+   and `/sitemap.xml`; they are not in `static`, so publish both with the
+   shell, for example fetched from the running app with `DAYHIKE_SITE_URL` set
+   to the custom domain:
+
+   ```bash
+   curl -fsS https://SERVICE.run.app/robots.txt -o "$SHELL_DIR/robots.txt"
+   curl -fsS https://SERVICE.run.app/sitemap.xml -o "$SHELL_DIR/sitemap.xml"
+   ```
 3. Publish `$SHELL_DIR` on the static host after every `gcloud run deploy`, so
    the shell and the API stay the same version (on Cloudflare Pages:
    `wrangler pages deploy "$SHELL_DIR" --project-name gofindmeahike`).
