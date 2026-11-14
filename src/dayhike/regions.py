@@ -1,6 +1,7 @@
 """Regions: the area a build covers, as configuration rather than code.
 
-A region is a TOML file: a ``label`` for people, the Geofabrik ``extracts``
+A region is a TOML file: a ``label`` for people, optionally its ``continent``
+(the site's pages read as a Europe build while every region is in Europe), the Geofabrik ``extracts``
 (PBF URLs) that ``fetch-extracts`` downloads, the ``bounds`` box that
 ``fetch-dem``, ``fetch-landcover`` and ``fetch-climate`` cover, and a ``map``
 table, the coverage map's ``view`` box and its projection ``centre``. The
@@ -38,6 +39,7 @@ class Region:
     bounds: Bounds
     view: Bounds  # the coverage map's frame
     centre: tuple[float, float]  # the coverage map's projection centre (lon, lat)
+    continent: str | None = None  # "Europe", "North America", ...: what the site's pages call a Europe build
 
 
 def region_names() -> list[str]:
@@ -61,6 +63,7 @@ def load_region(name_or_path: str | Path) -> Region:
             bounds=_box(data["bounds"]),
             view=_box(data["map"]["view"]),
             centre=(float(data["map"]["centre"]["lon"]), float(data["map"]["centre"]["lat"])),
+            continent=None if data.get("continent") is None else str(data["continent"]),
         )
     except (OSError, tomllib.TOMLDecodeError, KeyError, TypeError, ValueError) as exc:
         raise RegionError(f"{path}: {exc}") from exc
@@ -80,6 +83,11 @@ def view_around(regions: Sequence[Region]) -> Bounds:
 def extracts_of(regions: Sequence[Region]) -> list[str]:
     """Every region's extracts, each once, in order."""
     return list(dict.fromkeys(url for region in regions for url in region.extracts))
+
+
+def labels_text(labels: Sequence[str]) -> str:
+    """Labels as one phrase: "Europe", "Europe and Colorado", "Europe, Colorado and Utah"."""
+    return labels[0] if len(labels) == 1 else ", ".join(labels[:-1]) + " and " + labels[-1]
 
 
 def _box(table: dict) -> Bounds:

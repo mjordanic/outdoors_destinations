@@ -10,6 +10,7 @@ import pytest
 from dayhike import Catalog, build_catalog, build_similarity, rank_dayhikes
 from dayhike import serving
 from dayhike.catalog import Origin
+from dayhike.regions import load_region
 from dayhike.serving import (
     ELEVATION_POINTS,
     FLOOR_TEXT,
@@ -631,6 +632,17 @@ def test_a_rerun_without_tiles_or_snaps_drops_the_old_ones(catalog_path: Path, t
     assert json.loads((out / "meta.json").read_text())["drive_time"] is False
     assert not (out / "snaps.npz").exists() and not (out / "valhalla").exists()
     assert (tiles / "valhalla_tiles.tar").read_bytes() == b"tiles"
+
+
+def test_the_export_names_the_regions_it_was_built_from(catalog_path: Path, export: Path, tmp_path: Path) -> None:
+    assert "regions" not in json.loads((export / "meta.json").read_text())  # none given: the pages say Europe
+
+    out = export_serving(catalog_path, tmp_path / "out", regions=[load_region("europe"), load_region("us-colorado")])
+
+    assert json.loads((out / "meta.json").read_text())["regions"] == [
+        {"label": "Europe", "continent": "Europe"},
+        {"label": "Colorado", "continent": "North America"},
+    ]
 
 
 CITIES = Path(__file__).parent / "fixtures" / "geonames.txt"

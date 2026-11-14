@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from dayhike import build_catalog, build_similarity, serving, web
 from dayhike.serving import ServingData, export_landmarks, export_places, export_serving
 from dayhike.similarity import CORE_MEASURES, FACILITIES_FLAG_COLUMNS, MEASURE_NAMES
-from dayhike.web import RESULTS, create_app
+from dayhike.web import RESULTS, create_app, site_pages
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
 RIDGE_WALK_ID = 1001
@@ -891,6 +891,34 @@ def test_the_about_page_and_the_header_count_the_hikes_of_this_export(data: Serv
     assert f'<span id="count">{count}</span>' in client.get("/").text
     assert "160,000" not in client.get("/about.html").text + client.get("/").text
     assert b"160" not in client.get("/wordmark.svg").content.split(b"<path")[0]  # the art no longer says a count
+
+
+EUROPE = {"label": "Europe", "continent": "Europe"}
+ALPS = {"label": "the Alps and the Dinarides", "continent": "Europe"}
+COLORADO = {"label": "Colorado", "continent": "North America"}
+
+
+def test_the_pages_name_the_regions_of_the_export_and_a_europe_build_reads_as_before() -> None:
+    before = site_pages(None)
+    for regions in ([EUROPE], [ALPS], [EUROPE, ALPS]):
+        assert site_pages(None, regions=regions) == before  # only Europe: the pages as they were
+
+    assert "hikes across Europe." in before["index"] and "hikes across Europe." in before["about"]
+    assert 'alt="Map of Europe with the covered countries shaded"' in before["index"]
+    assert "thin in much of the east" in before["about"] and "works across the European Union" in before["terms"]
+    for page in before.values():
+        assert "<!--regions-->" not in page and "<!--if-" not in page
+
+    us = site_pages(None, regions=[COLORADO])
+    both = site_pages(None, regions=[EUROPE, COLORADO])
+    for pages, covered in ((us, "Colorado"), (both, "Europe and Colorado")):
+        assert f"find similar ones across {covered}, from" in pages["index"]
+        assert f"hikes across {covered}.</p>" in pages["index"] and f"hikes across {covered}.</p>" in pages["about"]
+        assert 'src="coverage.svg"' not in pages["index"]  # the packaged map is of Europe
+        assert f"It covers {covered} where OpenStreetMap maps hiking routes" in pages["about"]
+        assert "central Europe" not in pages["about"]
+    assert "Europe" not in us["index"] + us["about"]
+    assert "European Union" not in us["terms"] and "European Union" in both["terms"]
 
 
 def test_info_gives_where_most_hikes_are_and_what_a_typical_pair_scores(client: TestClient) -> None:

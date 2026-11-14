@@ -1,0 +1,9 @@
+# Rhode Island: the smallest US state, the US test build (tests/test_real_data_us.py, web/smoke.py --us).
+label = "Rhode Island"
+continent = "North America"
+extracts = ["https://download.geofabrik.de/north-america/us/rhode-island-latest.osm.pbf"]
+bounds = { south = 41.1, west = -71.95, north = 42.05, east = -71.1 }
+
+[map]
+view = { west = -72.1, south = 41.0, east = -70.9, north = 42.2 }
+centre = { lon = -71.5, lat = 41.6 }
