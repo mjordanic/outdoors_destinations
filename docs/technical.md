@@ -197,7 +197,7 @@ call on your machine.
 | `data/web-serving/` | Serving export for the web demo (`export-serving`) | **gitignored** |
 | `data/geonames/` | GeoNames `allCountries.zip` for the demo's place search | gitignored |
 | `src/dayhike/web/static/` | The demo page, its script, the About, credits, Privacy and Terms pages, the logo (mark, wordmark, touch icon and social preview) and the coverage map | yes |
-| `web/` | Dockerfile, local compose file and smoke script of the demo | yes |
+| `web/` | Data and web Dockerfiles, Cloud Build config, local compose file and smoke script of the demo | yes |
 | `data/valhalla/compose.yaml` | How to run Valhalla | yes |
 | `data/valhalla/prepare-roads.sh` | osmium filter: car roads only, no buildings | yes |
 | `data/valhalla/prepare-highways.sh` | osmium filter: motorway/trunk/primary only | yes |
@@ -1695,7 +1695,7 @@ Ranking by Seed does **not** need Valhalla. Valhalla is only for `--origin` /
 It is a **Docker** service, not a Python package. `uv sync` does not install
 it. The image is
 [`ghcr.io/gis-ops/docker-valhalla/valhalla`](https://github.com/gis-ops/docker-valhalla),
-Valhalla 3.5.1, pinned to the digest `web/Dockerfile` serves (tiles are version-sensitive).
+Valhalla 3.5.1, pinned to the digest `web/data.Dockerfile` serves (tiles are version-sensitive).
 Compose file: [`data/valhalla/compose.yaml`](../data/valhalla/compose.yaml).
 API used: `POST /sources_to_targets` (matrix, costing `auto`). On the detailed
 car tiles that is all; on the highways-only tiles (`--highways`, what the live

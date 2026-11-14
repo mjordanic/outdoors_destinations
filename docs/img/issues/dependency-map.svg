@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 560" role="img" aria-label="Dependency map of the HikesAlike issues">
+  <title>Issue dependency map</title>
+  <style>text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;fill:#1f2a24}.m{fill:#5d6b62}.h{font-weight:700;fill:#245f3c}.b rect{fill:#fff;stroke:#7a8b80}.b text{font-size:12px}.n{fill:#e8f1eb !important;stroke:#2f7d4f !important;stroke-width:2}</style>
+  <defs><marker id="a" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#c2410c"/></marker></defs>
+  <rect x="0" y="0" width="900" height="560" fill="#ffffff"/>
+  <text x="20" y="24" class="h" font-size="15">Tracking issues (epics) and what blocks what</text>
+  <text x="20" y="42" font-size="12" class="m">Orange arrow: "Blocked by" (the arrow points at the issue that waits). Green-edged box: new in this revision.</text>
+
+  <!-- Epic 31 base map -->
+  <rect x="15" y="55" width="205" height="215" rx="8" fill="#f8faf6" stroke="#d9dfd6"/>
+  <text x="25" y="76" class="h" font-size="13">#31 Base map we control</text>
+  <g class="b">
+    <rect x="25" y="90" width="185" height="36" rx="5"/><text x="33" y="113">#1 tile source setting</text>
+    <rect x="25" y="150" width="185" height="36" rx="5"/><text x="33" y="173">#2 vector renderer</text>
+    <rect x="25" y="210" width="185" height="36" rx="5"/><text x="33" y="233">#3 Europe PMTiles + host</text>
+  </g>
+  <path d="M117 126 L117 148" stroke="#c2410c" stroke-width="2" marker-end="url(#a)"/>
+  <path d="M117 210 L117 188" stroke="#c2410c" stroke-width="2" stroke-dasharray="4 3" marker-end="url(#a)"/>
+
+  <!-- Epic 35 OSM coverage -->
+  <rect x="235" y="55" width="205" height="215" rx="8" fill="#f8faf6" stroke="#d9dfd6"/>
+  <text x="245" y="76" class="h" font-size="13">#35 More hikes from OSM</text>
+  <g class="b">
+    <rect x="245" y="90" width="185" height="36" rx="5"/><text x="253" y="113">#5 read more paths</text>
+    <rect x="245" y="150" width="88" height="36" rx="5"/><text x="251" y="173">#6 destin.</text>
+    <rect x="342" y="150" width="88" height="36" rx="5"/><text x="348" y="173">#7 named</text>
+    <rect class="n" x="245" y="210" width="185" height="36" rx="5"/><text x="253" y="227">#38 popularity signal</text><text x="253" y="241" font-size="10" class="m">+ list of trails we miss</text>
+  </g>
+  <path d="M289 126 L289 148" stroke="#c2410c" stroke-width="2" marker-end="url(#a)"/>
+  <path d="M386 126 L386 148" stroke="#c2410c" stroke-width="2" marker-end="url(#a)"/>
+
+  <!-- Epic 34 registries -->
+  <rect x="455" y="55" width="430" height="215" rx="8" fill="#f8faf6" stroke="#d9dfd6"/>
+  <text x="465" y="76" class="h" font-size="13">#34 Hikes from open official registries</text>
+  <g class="b">
+    <rect class="n" x="465" y="90" width="195" height="36" rx="5"/><text x="473" y="113">#33 sources register (file)</text>
+    <rect class="n" x="680" y="90" width="195" height="36" rx="5"/><text x="688" y="113">#32 source of every hike</text>
+    <rect x="575" y="150" width="200" height="36" rx="5"/><text x="583" y="173">#8 external layers + Ireland</text>
+    <rect x="465" y="210" width="95" height="36" rx="5"/><text x="471" y="227" font-size="11">#13 check ES,</text><text x="471" y="241" font-size="11">SE, UK, DE</text>
+    <rect x="575" y="210" width="70" height="36" rx="5"/><text x="583" y="233">#9 FI</text>
+    <rect x="652" y="210" width="70" height="36" rx="5"/><text x="660" y="233">#10 NO</text>
+    <rect x="729" y="210" width="70" height="36" rx="5"/><text x="737" y="233">#11 FR</text>
+    <rect x="806" y="210" width="70" height="36" rx="5"/><text x="812" y="233">#12 S.Tyrol</text>
+  </g>
+  <path d="M600 126 L640 148" stroke="#c2410c" stroke-width="2" marker-end="url(#a)"/>
+  <path d="M760 126 L720 148" stroke="#c2410c" stroke-width="2" marker-end="url(#a)"/>
+  <path d="M512 126 L512 208" stroke="#c2410c" stroke-width="2" marker-end="url(#a)"/>
+  <path d="M640 186 L612 208" stroke="#c2410c" stroke-width="2" marker-end="url(#a)"/>
+  <path d="M665 186 L687 208" stroke="#c2410c" stroke-width="2" marker-end="url(#a)"/>
+  <path d="M700 186 L760 208" stroke="#c2410c" stroke-width="2" marker-end="url(#a)"/>
+  <path d="M740 186 L835 208" stroke="#c2410c" stroke-width="2" marker-end="url(#a)"/>
+
+  <!-- Epic 16 worldwide -->
+  <rect x="15" y="285" width="560" height="150" rx="8" fill="#f8faf6" stroke="#d9dfd6"/>
+  <text x="25" y="306" class="h" font-size="13">#16 One worldwide site, starting with the US (branch "us")</text>
+  <g class="b">
+    <rect x="25" y="320" width="120" height="36" rx="5"/><text x="33" y="343">#14 regions</text>
+    <rect x="25" y="385" width="120" height="36" rx="5"/><text x="33" y="408">#17 page text</text>
+    <rect x="160" y="385" width="120" height="36" rx="5"/><text x="168" y="408">#18 USGS 3DEP</text>
+    <rect x="160" y="320" width="120" height="36" rx="5"/><text x="168" y="343">#15 units</text>
+    <rect class="n" x="295" y="320" width="130" height="36" rx="5"/><text x="303" y="343">#36 world catalog</text>
+    <rect class="n" x="295" y="385" width="130" height="36" rx="5"/><text x="303" y="402">#37 emergency</text><text x="303" y="415" font-size="10" class="m">numbers per hike</text>
+    <rect x="440" y="320" width="125" height="36" rx="5" stroke-dasharray="4 3"/><text x="448" y="343">#7 (from #35)</text>
+  </g>
+  <path d="M85 356 L85 383" stroke="#c2410c" stroke-width="2" marker-end="url(#a)"/>
+  <path d="M120 356 L190 383" stroke="#c2410c" stroke-width="2" marker-end="url(#a)"/>
+  <path d="M780 126 C 820 300, 400 330, 270 383" fill="none" stroke="#c2410c" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#a)"/>
+  
+
+  <!-- standalone -->
+  <rect x="590" y="315" width="295" height="120" rx="8" fill="#f8faf6" stroke="#d9dfd6"/>
+  <text x="600" y="336" class="h" font-size="13">Stand-alone</text>
+  <g class="b">
+    <rect x="600" y="347" width="130" height="30" rx="5"/><text x="608" y="367">#4 ODbL download</text>
+    <rect x="745" y="347" width="130" height="30" rx="5"/><text x="753" y="367">#29 → #30 deploy</text>
+    <rect x="600" y="392" width="275" height="30" rx="5"/><text x="608" y="412">#19 #20 #21 scoring · #22 photos</text>
+  </g>
+  <path d="M800 128 C 850 200, 720 300, 680 345" fill="none" stroke="#7a8b80" stroke-width="1.5" stroke-dasharray="2 3"/>
+  <text x="20" y="465" font-size="12" class="m">#4 reads #32's source column once external hikes exist (dotted grey: "related", not blocking).</text>
+  <text x="20" y="485" font-size="12" class="m">Dashed orange #32 → #18: a build that mixes DEMs records which DEM each hike was read from. Bugs #23–#28 stand alone: label "bug", no epic.</text>
+  <text x="20" y="510" font-size="12" class="m">Numbers are draft numbers. GitHub gives real ones on filing; the filing script rewrites every "#n" in the bodies from a draft → real map.</text>
+</svg>

@@ -2,7 +2,10 @@
 
 The HikesAlike demo is one container: the FastAPI app (`dayhike serve`) and a
 highways-only Valhalla for the drive-time filter, with the serving export baked
-into the image. Nothing is written at run time; Cloud Run scales it to zero
+into the image. The image is built in two parts: a data image (the pinned
+Valhalla base plus the serving export at `/data`, `web/data.Dockerfile`), built
+once per data refresh, and the web image (`web/Dockerfile`), which starts `FROM`
+the data image and adds uv, the venv and the code. Nothing is written at run time; Cloud Run scales it to zero
 when idle and starts it again on the next visit (a cold start of up to about 20 s).
 
 The demo runs on Cloud Run today (the README links it; setup and measurements are in
@@ -42,7 +45,8 @@ never opens.
 
 ## 2. Run it locally
 
-Same image as Cloud Run:
+Same images as Cloud Run (compose builds the data image first, then the web
+image on it):
 
 ```bash
 DAYHIKE_SERVING="$PWD/data/web-serving" docker compose -f web/compose.yaml up --build
@@ -75,11 +79,14 @@ gcloud services enable run.googleapis.com artifactregistry.googleapis.com billin
 gcloud artifacts repositories create dayhike --repository-format=docker --location=europe-west1
 gcloud auth configure-docker europe-west1-docker.pkg.dev   # edits ~/.docker/config.json
 
-# cleanup policy: keep the last 9 versions (3 pushes), delete the rest once older than 30 days
+# cleanup policy: keep the last 9 versions (3 pushes), delete the rest once older than 30 days;
+# never delete a data image (every web image is built on one)
 cat > /tmp/ar-cleanup.json <<'EOF'
 [
   {"name": "keep-recent-releases", "action": {"type": "Keep"},
    "mostRecentVersions": {"keepCount": 9}},
+  {"name": "keep-data-images", "action": {"type": "Keep"},
+   "condition": {"packageNamePrefixes": ["data"]}},
   {"name": "delete-older-than-30d", "action": {"type": "Delete"},
    "condition": {"tagState": "ANY", "olderThan": "30d"}}
 ]
@@ -87,10 +94,16 @@ EOF
 gcloud artifacts repositories set-cleanup-policies dayhike --location=europe-west1 \
   --policy=/tmp/ar-cleanup.json --dry-run      # then again with --no-dry-run
 
-# the image is 1 to 2.4 GB compressed, so the push takes a couple of minutes
-IMAGE=europe-west1-docker.pkg.dev/PROJECT/dayhike/web:$(git rev-parse --short HEAD)
+# the data image, once per data refresh: 1 to 2.4 GB compressed, a push of a couple of minutes
+REPO=europe-west1-docker.pkg.dev/PROJECT/dayhike
+DATA_IMAGE=$REPO/data:$(jq -r .facts_version data/web-serving/meta.json)
+docker buildx build --platform linux/amd64 -f web/data.Dockerfile \
+  --build-context serving=data/web-serving -t "$DATA_IMAGE" --push .
+
+# the web image, on every code change: only the layers above the data image are pushed
+IMAGE=$REPO/web:$(git rev-parse --short HEAD)
 docker buildx build --platform linux/amd64 -f web/Dockerfile \
-  --build-context serving=data/web-serving -t "$IMAGE" --push .
+  --build-arg DATA_IMAGE="$DATA_IMAGE" -t "$IMAGE" --push .
 
 gcloud run deploy dayhike --image "$IMAGE" --region europe-west1 \
   --allow-unauthenticated \
@@ -102,7 +115,10 @@ gcloud run deploy dayhike --image "$IMAGE" --region europe-west1 \
 For the live site, `DAYHIKE_SITE_URL` is `https://hikesalike.com`.
 
 Artifact Registry storage is not covered by the Cloud Run spend cap (section 5),
-and each push adds 1 to 2.4 GB, hence the cleanup policy. `docker buildx` pushes
+and each push of a data image adds 1 to 2.4 GB, hence the cleanup policy. A web
+image shares the data image's layers, so pushing one adds only its code layers
+(section 9 has the sizes). The policy keeps every data image; delete one by hand
+once no kept web image is built on it. `docker buildx` pushes
 three versions per tag: an image index (the tagged one), the `linux/amd64`
 image and an attestation. Cloud Run runs the untagged `linux/amd64` digest.
 Cleanup never deletes an image that a kept index references, but it deletes the
@@ -316,9 +332,16 @@ If an alert fires and the traffic is abuse, close the public access at once:
 
 ## 7. Update or roll back
 
-Rebuild the export and the image with a new tag, then `gcloud run deploy` again;
+A code change needs only a new web image: build it on the current data image
+(section 3) and `gcloud run deploy` again, or let the deploy workflow do it
+(section 9). A data refresh rebuilds the export, then the data image with the
+new `facts_version` tag, then the web image on it.
 `gcloud run services update-traffic dayhike --region europe-west1 --to-revisions REVISION=100`
-goes back to an earlier revision.
+goes back to an earlier revision (`gcloud run revisions list --service dayhike --region europe-west1`
+lists them); the image it runs must still be kept (section 3). That pins the
+traffic to the revision: a later `gcloud run deploy` by hand gets none until
+`gcloud run services update-traffic dayhike --region europe-west1 --to-latest`
+(the deploy workflow does this itself).
 
 ## 8. A loading shell on a static host (not done yet)
 
@@ -385,3 +408,108 @@ file is in the repository):
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
 ```
+
+## 9. Deploy from GitHub Actions (not set up yet)
+
+**Not set up.** `.github/workflows/deploy.yml` is written, but the cloud identity
+and the repository variables below do not exist yet, so its deploy job is
+skipped. Nothing below has been run.
+
+On a push to `main`, or by hand (`workflow_dispatch` on `main`), the workflow:
+
+1. runs the tests (`ci.yml`, called as a reusable workflow);
+2. authenticates with Workload Identity Federation
+   (`google-github-actions/auth`): the run's GitHub OIDC token is traded for a
+   short-lived Google token, so no key or secret is stored anywhere;
+3. builds the web image in Cloud Build (`web/cloudbuild.yaml`) on top of the
+   current data image, tagged with the commit SHA. Cloud Build pushes one version per image, not the three of
+   `docker buildx` (section 3), so the cleanup policy keeps the last 9 deploys;
+4. deploys it as a new revision with `--no-traffic` and a `c-<sha>` tag, which
+   gives the candidate its own URL while visitors stay on the current revision;
+5. runs `web/smoke.py --url` against that URL. A failure stops the job here:
+   the candidate keeps its tag and no traffic, and the live revision is untouched;
+6. checks that the candidate is still the latest revision, sends all traffic to
+   the latest revision (so a later `gcloud run deploy` by hand, section 7, takes
+   the traffic as usual), then removes the candidate's tag.
+
+The deploy changes only the image: memory, CPU, scaling and the environment
+variables stay as section 3 set them. A data refresh is still built and pushed by
+hand (section 3), followed by a change of `DAYHIKE_DATA_IMAGE`; the next run
+builds on it. To roll back, move traffic to an earlier revision as in section 7,
+or re-run the workflow on an earlier commit. A failed candidate can be removed
+with `gcloud run services update-traffic dayhike --region europe-west1 --remove-tags c-SHA`.
+
+The workflow never runs on pull requests, and must never be given a
+`pull_request` or `pull_request_target` trigger: the repository is public, and a
+fork's pull request must never reach the deploy credentials. The identity
+provider below accepts only tokens for this repository's `main`.
+
+### Repository variables
+
+Set as repository variables, not environment variables: the job's `if` reads
+`GCP_WORKLOAD_IDENTITY_PROVIDER` before any environment applies. None is a
+secret. The deploy job runs in the `production` environment, which can require a
+reviewer before each deploy.
+
+| Variable | Example form |
+| --- | --- |
+| `GCP_WORKLOAD_IDENTITY_PROVIDER` | `projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github/providers/github` |
+| `GCP_SERVICE_ACCOUNT` | `DEPLOY_SA@PROJECT.iam.gserviceaccount.com` |
+| `GCP_PROJECT` | `PROJECT` |
+| `GCP_REGION` | `europe-west1` |
+| `CLOUD_RUN_SERVICE` | `dayhike` |
+| `DAYHIKE_IMAGE_REPO` | `europe-west1-docker.pkg.dev/PROJECT/dayhike` |
+| `DAYHIKE_DATA_IMAGE` | `europe-west1-docker.pkg.dev/PROJECT/dayhike/data:FACTS_VERSION` |
+
+### One-time cloud setup (by the maintainer)
+
+`OWNER/REPO` is this repository, `DEPLOY_SA` a new service account for the
+workflow, `RUNTIME_SA` the account the Cloud Run service runs as. Cloud Build
+bills build minutes past its free tier.
+
+```bash
+export CLOUDSDK_CORE_PROJECT=PROJECT
+gcloud services enable cloudbuild.googleapis.com iamcredentials.googleapis.com sts.googleapis.com
+
+gcloud iam workload-identity-pools create github --location=global
+gcloud iam workload-identity-pools providers create-oidc github --location=global \
+  --workload-identity-pool=github --issuer-uri=https://token.actions.githubusercontent.com \
+  --attribute-mapping=google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref \
+  --attribute-condition="assertion.repository == 'OWNER/REPO' && assertion.ref == 'refs/heads/main'"
+
+gcloud iam service-accounts create DEPLOY_SA
+gcloud iam service-accounts add-iam-policy-binding DEPLOY_SA@PROJECT.iam.gserviceaccount.com \
+  --role=roles/iam.workloadIdentityUser \
+  --member="principalSet://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github/attribute.repository/OWNER/REPO"
+```
+
+Then grant `DEPLOY_SA` the least it needs, and check each role against the
+current Google documentation before granting it: submit builds
+(`roles/cloudbuild.builds.editor`), upload the build source to the Cloud Build
+bucket (`roles/storage.objectAdmin` on `gs://PROJECT_cloudbuild`), read the
+build log it streams (`roles/logging.viewer`), deploy revisions and move traffic
+(`roles/run.developer`), and act as the runtime account
+(`roles/iam.serviceAccountUser` on `RUNTIME_SA`). The account Cloud Build runs
+as needs `roles/artifactregistry.writer` on the `dayhike` repository, to pull
+the data image and push the web image.
+
+### What a code-only deploy pushes
+
+The data image is the Valhalla base plus the serving export; the web image adds
+the uv binary, the dependency layer, the code and `start.sh` on top of it. The
+split adds no layer and no file: the image is the same size as before, and the
+container runs the same files, so its memory is unchanged. What changes is the
+order. Before, the export was copied after the code, so every code change made a
+new export layer (6.0 GB unpacked in the image deployed before the split, 1 to
+2.4 GB compressed) that was pushed again. Now a code-only change rebuilds only
+the code layers. Measured on the test-fixture export with a local registry:
+
+| Push | New layers | Compressed |
+| --- | --- | --- |
+| Data image (fixture export, Valhalla base) | 9 | 221 MB |
+| First web image on it (uv, dependencies, code) | 7 | 184 MB |
+| Web image after a code-only change | 3 | 1.4 MB |
+
+With the full export, only the data image's push grows; the two web pushes stay
+the same size. A change to `uv.lock` also pushes the dependency layer again
+(about 180 MB).
