@@ -623,12 +623,20 @@ def _write_hikes(
 
 def _check_trailgraph_sampled(source: Path, store: SimilarityStore) -> None:
     """Refuse a TrailGraph ``sample-trailgraph`` never ran on when the similarity
-    facts read the rasters: its ComposedHikes would lack those facts."""
+    facts read the rasters, or ran on before it read land cover along long
+    steps: its ComposedHikes would lack those facts or measure them otherwise."""
     if not source.is_file() or all(np.isnan(store.column(name)).all() for name in _RASTER_FACTS):
         return
     graph = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
     try:
         unsampled = graph.execute("SELECT 1 FROM segments WHERE landcover IS NULL LIMIT 1").fetchone()
+        if unsampled is None and not np.isnan(store.column("tree_share")).all():
+            read_along = "landcover_along" in {row[1] for row in graph.execute("PRAGMA table_info(segments)")}
+            unsampled = (
+                graph.execute("SELECT 1 FROM segments WHERE landcover_along IS NULL LIMIT 1").fetchone()
+                if read_along
+                else (1,)
+            )
     finally:
         graph.close()
     if unsampled is not None:

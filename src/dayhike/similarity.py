@@ -45,7 +45,14 @@ from dayhike.catalog import (
     trailgraph_path_for,
 )
 from dayhike.dem import DEFAULT_DEM_DIR, dem_source_of, fabdem_tile_id, read_grid_cells
-from dayhike.landcover import DEFAULT_LANDCOVER_DIR, _landcover_fractions, worldcover_tile_id
+from dayhike.landcover import (
+    ALONG_MIN_M,
+    ALONG_STEP_M,
+    DEFAULT_LANDCOVER_DIR,
+    _landcover_fractions,
+    along_rows_of_vertices,
+    worldcover_tile_id,
+)
 from dayhike.parallel import parallel_iter, parallel_map
 from dayhike.trailgraph import WAY_BACK_KINDS, ComposedWalk, TrailGraph, WayBack, round_trip, way_back
 
@@ -250,6 +257,7 @@ _FACTS_VERSION = hashlib.sha256(
             sorted(_TRACKTYPE_CLASS.items()), GAP_JOIN_M, WAY_BACK_KINDS, WAY_BACK_COLUMNS,
             "dry-stretch-every-pass",  # a WaterSource ends a DryStretch at every pass of it (``walk_facts``)
             "landcover-by-length",  # LandCover shares weigh each vertex by half its two segments (``_landcover_fractions``)
+            "landcover-along-steps", ALONG_MIN_M, ALONG_STEP_M,  # ...and long steps by the classes read along them
         ]
     ).encode()
 ).hexdigest()[:16]  # fmt: skip
@@ -1031,7 +1039,18 @@ def _build_facts(
         back_facts, back_profile = facts.copy(), profile.copy()
         back_rows = np.zeros((len(WAY_BACK_COLUMNS), n), dtype=np.float32)
         back_rows[1:3] = np.nan
-        has_landcover = "landcover" in {row[1] for row in geo.execute("PRAGMA table_info(vertices)")}
+        vertex_columns = {row[1] for row in geo.execute("PRAGMA table_info(vertices)")}
+        has_landcover = "landcover" in vertex_columns
+        has_along = "landcover_along" in vertex_columns
+        if (
+            has_landcover
+            and not has_along
+            and geo.execute("SELECT 1 FROM vertices WHERE landcover IS NOT NULL LIMIT 1").fetchone()
+        ):
+            raise ValueError(
+                f"{geometry_store_path_for(catalog_path)}: land cover was sampled before it was "
+                "read along long steps; run `dayhike sample-landcover`"
+            )
         probes: dict[str, list[np.ndarray]] = {"": [], "_back": []}
         probe_rows: dict[str, list[np.ndarray]] = {"": [], "_back": []}
         water_probes: dict[str, list[np.ndarray]] = {"": [], "_back": []}
@@ -1057,7 +1076,7 @@ def _build_facts(
             part_probe_rows: dict[str, list[np.ndarray]] = {"": [], "_back": []}
             part_water_probes: dict[str, list[np.ndarray]] = {"": [], "_back": []}
             part_water_rows: dict[str, list[np.ndarray]] = {"": [], "_back": []}
-            walks = _walks(opened[os.getpid()], int(chunk[0]), int(chunk[-1]), has_landcover)
+            walks = _walks(opened[os.getpid()], int(chunk[0]), int(chunk[-1]), has_landcover, has_along)
             for local, dayhike_id in enumerate(chunk):
                 row = start + local
                 walk = walks.get(int(dayhike_id))
@@ -1069,10 +1088,10 @@ def _build_facts(
                         for name in FACILITIES_FLAG_COLUMNS[:3]:
                             target[column[name], local] = 0.0
                     continue
-                lat, lon, ele, ways, codes = walk
+                lat, lon, ele, ways, codes, codes_along = walk
                 one_way = ComposedWalk(
                     None, None, None, None, lat, lon, ele, codes,
-                    np.full(len(lat), -1), np.full(len(lat), np.nan), ways, None, {},
+                    np.full(len(lat), -1), np.full(len(lat), np.nan), ways, None, {}, codes_along,
                 )  # fmt: skip
                 back = way_back(lat, lon, graph)
                 trip = round_trip(one_way, back)
@@ -1168,7 +1187,7 @@ def _add_way_back(
     if back.walk is not None and back.walk.sac_scale is not None:
         facts[column["difficulty_rank"]] = np.fmax(facts[column["difficulty_rank"]], SAC_SCALE_RANK[back.walk.sac_scale])
     if has_landcover and np.any(trip.landcover > 0):
-        fractions = list(_landcover_fractions(trip.landcover, trip.lat, trip.lon))
+        fractions = list(_landcover_fractions(trip.landcover, trip.lat, trip.lon, trip.landcover_along))
         fractions.append(max(1.0 - sum(fractions), 0.0))
         facts[[column[name] for name in LANDCOVER_SHARE_COLUMNS]] = fractions
     cells = trip.climate_cell[one_way:]
@@ -1246,15 +1265,20 @@ class AmenityPoints:
 
 
 def _walks(
-    geo: sqlite3.Connection, first_id: int, last_id: int, has_landcover: bool = False
-) -> dict[int, tuple[np.ndarray, np.ndarray, np.ndarray, list[tuple[float, str | None]], np.ndarray]]:
-    """DayHikeGeometry (lat, lon, ele), walked ways and per-vertex WorldCover
-    class (0 missing, and without ``has_landcover``) for DayHikes in an id range.
+    geo: sqlite3.Connection, first_id: int, last_id: int, has_landcover: bool = False, has_along: bool = False
+) -> dict[
+    int, tuple[np.ndarray, np.ndarray, np.ndarray, list[tuple[float, str | None]], np.ndarray, np.ndarray | None]
+]:
+    """DayHikeGeometry (lat, lon, ele), walked ways, per-vertex WorldCover
+    class (0 missing, and without ``has_landcover``) and the classes read
+    along its steps (``along_rows``; None without ``has_along``) for DayHikes
+    in an id range.
 
     Ways are (walked metres, surface class) in walk order; Leftovers are out.
     """
     vertices = geo.execute(
-        f"SELECT dayhike_id, latitude, longitude, ele, {'landcover' if has_landcover else 'NULL'} FROM vertices "
+        f"SELECT dayhike_id, latitude, longitude, ele, {'landcover' if has_landcover else 'NULL'}, "
+        f"{'landcover_along' if has_along else 'NULL'} FROM vertices "
         "WHERE dayhike_id BETWEEN ? AND ? ORDER BY dayhike_id, seq",
         (first_id, last_id),
     ).fetchall()
@@ -1270,7 +1294,7 @@ def _walks(
     if not vertices:
         return {}
     table = np.array(
-        [(i, lat, lon, math.nan if ele is None else ele, code or 0) for i, lat, lon, ele, code in vertices],
+        [(i, lat, lon, math.nan if ele is None else ele, code or 0) for i, lat, lon, ele, code, _ in vertices],
         dtype=float,
     )
     hike_ids, starts = np.unique(table[:, 0], return_index=True)
@@ -1282,6 +1306,7 @@ def _walks(
             table[start:end, 3],
             ways.get(int(dayhike_id), []),
             table[start:end, 4].astype(np.int64),
+            along_rows_of_vertices([row[5] for row in vertices[start:end]]) if has_along else None,
         )
         for dayhike_id, start, end in zip(hike_ids, starts, ends)
     }

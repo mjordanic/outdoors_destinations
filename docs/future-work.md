@@ -140,9 +140,12 @@ driving polygons are expensive. ADR-0004 keeps DriveTime on the matrix API.
 
 ## 9. LandCover along the line, not per vertex
 
-**Built since:** the length-weighted shares (the second row below) are ADR-0059.
-On three new samples of 400 hikes they misassign a mean of 1.6–1.8 % of the walk,
-against 3.5–3.6 % for the vertex count. Reading along segments stays parked.
+**Built since:** ADR-0059. The vertices weigh by length (the second row of the
+first table), and steps over 40 m are read every 20 m at most (the row "Segments
+over 40 m, every 20 m" of the second table): on three new samples of 400 hikes
+the walk misassigned falls from 3.5–3.6 % (vertex count) and 1.6–1.8 % (vertices
+by length) to 1.23–1.42 %, for 1.35 times the points read. The rest of this
+section is the study that led there.
 
 ### Why it's parked
 
@@ -163,6 +166,27 @@ density, not long gaps, is most of the error. The `landcover` Measure inherits
 it one to one. That is small next to the gap between real similar
 and dissimilar pairs, so it waits.
 
+Reading along segments, measured again after ADR-0059 on the same three samples
+of 400 (the samples ADR-0059 uses, truth as above, now 5.3–5.6 % of the walked
+length in segments over 100 m). Each read stands for an equal part of its
+segment. Shorter segments keep half to each end vertex:
+
+| Reads added | Mean error (3 samples) | p95 | Worst | Points read |
+| --- | --- | --- | --- | --- |
+| None (ADR-0059) | 1.64 / 1.83 / 1.73 % | 4.6–5.8 % | 24.8 % | 1× |
+| Segments over 100 m, every 25 m | 1.42 / 1.68 / 1.55 % | 3.9–5.4 % | 12.1 % | 1.05–1.06× |
+| Segments over 50 m, every 25 m | 1.28 / 1.50 / 1.34 % | 3.4–4.7 % | 10.9 % | 1.19–1.22× |
+| Segments over 40 m, every 20 m (built, ADR-0059) | 1.23 / 1.42 / 1.25 % | 3.0–4.5 % | 11.2 % | 1.32–1.37× |
+| Segments over 30 m, every 15 m | 1.14 / 1.34 / 1.21 % | 3.1–4.4 % | 11.2 % | 1.61–1.68× |
+| Segments over 20 m, every 10 m | 1.01 / 1.18 / 1.04 % | 2.9–4.2 % | 11.2 % | 2.32–2.44× |
+
+The first row that stays under 1.5 % on every sample is segments over 40 m read
+every 20 m, for about a third more points read. Even 10 m reads leave about 1 %,
+because a vertex and the point the truth reads beside it can fall in
+different 10 m WorldCover cells. No re-weighting of the vertex classes gets
+there. A cap on how much of a long segment each end vertex may claim made the
+error worse at every cap tried (100, 50, 25, 15 and 10 m).
+
 Same pattern, not yet measured: ClimateNormal is a per-vertex mean (1 km grid,
 small effect expected), and elevation gain is read only at vertices, so a climb
 inside a long segment is missed.
@@ -175,8 +199,8 @@ inside a long segment is missed.
   length instead of "each GeometryStore vertex counts once", and `sample-landcover`
   and `build-similarity` are rerun to refresh the Catalog fractions and the
   similarity facts. Ranking changes with it.
-- Reading along segments only if review shows the worst cases matter; it needs
-  a new raster pass and somewhere to keep the extra points.
+- Reading along segments (built: ADR-0059 reads steps over 40 m every 20 m,
+  kept in `vertices.landcover_along` and `segments.landcover_along`).
 - Elevation gain measured the same way before deciding whether it needs the
   same treatment.
 

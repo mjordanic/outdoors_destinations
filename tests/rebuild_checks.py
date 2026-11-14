@@ -71,7 +71,9 @@ GEOMETRY_SCHEMA = {
         "relation_tags",
     ],
     "geometry_meta": ["key", "value"],
-    "vertices": ["dayhike_id", "seq", "node_id", "latitude", "longitude", "ele", "landcover"],
+    "vertices": [
+        "dayhike_id", "seq", "node_id", "latitude", "longitude", "ele", "landcover", "landcover_along",
+    ],
     "ways": [
         "dayhike_id", "seq", "way_id", "node_ids", "tags", "in_chain", "leftover", "walked_m",
         "walk_order",
