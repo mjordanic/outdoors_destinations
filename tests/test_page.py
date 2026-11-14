@@ -3408,9 +3408,6 @@ def test_every_length_and_height_of_a_hike_switches_to_miles_and_feet_and_back(b
     facts = page.locator("#liked table.facts")
     highest = facts.locator("tr", has=page.locator("td", has_text="Highest point")).locator("td").nth(1).inner_text()
     assert highest.endswith(" ft"), highest
-    # The score explained by the server says its lengths in miles and feet too.
-    title = facts.locator("td", has_text="Highest point").first.get_attribute("title")
-    assert "1,312 ft apart" in title and " m apart" not in title, title
 
     page.locator("#units").select_option("metric")
     assert page.locator("#liked .badges li").all_inner_texts() == metric
@@ -3445,6 +3442,41 @@ def test_a_wish_typed_in_miles_and_feet_is_sent_in_metres_and_its_link_keeps_the
     assert shared.get_by_label("Length you want, in mi").input_value() == "10"
     old = open_page(browser, server, api, hash="#wish=length:12500:100")  # a link from before the switch
     assert old.get_by_label("Length you want, in km").input_value() == "12.5"
+
+
+def test_values_shown_rounded_in_miles_and_feet_keep_their_metres_and_km(browser, server) -> None:
+    api = Api({**WISHABLE, "length": KM_LENGTH})
+    page = open_page(browser, server, api)
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    assert page.get_by_label("Length you want, in km").input_value() == "10"
+    page.locator("#units").select_option("imperial")
+    assert page.get_by_label("Length you want, in mi").input_value() == "6.21"
+    page.get_by_label("Highest point weight, 0 to 100").fill("0")
+    page.get_by_role("button", name="Find hikes").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+    assert api.ranked[-1]["wish"] == {"length": 10000, "elevation_gain": 600}  # the defaults, not 6.21 mi and 1969 ft
+
+    page.locator("#units").select_option("metric")
+    assert page.get_by_label("Length you want, in km").input_value() == "10"
+    assert page.get_by_label("Climbing you want, in m").input_value() == "600"
+    page.get_by_label("Climbing you want, in m").fill("700")  # typed: what is typed
+    page.locator("#units").select_option("imperial")
+    page.locator("#units").select_option("metric")
+    assert page.get_by_label("Climbing you want, in m").input_value() == "700"
+
+    limits = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    limits.get_by_text("Chosen: Ridge Walk").wait_for()
+    limits.get_by_label("Only hikes near a starting place").check()
+    limits.get_by_label("From", exact=True).fill("45.2, 15.1")
+    limits.get_by_label("Max drive hours", exact=True).uncheck()
+    limits.get_by_label("Max km, straight line", exact=True).check()
+    limits.locator("#units").select_option("imperial")
+    assert limits.get_by_label("Max mi value").input_value() == "31.1"
+    limits.locator("#units").select_option("metric")
+    assert limits.get_by_label("Max km value").input_value() == "50"
+    limits.locator("#units").select_option("imperial")
+    limits.get_by_role("button", name="Find similar").click()
+    limits.wait_for_url("**km=50&units=imperial")
 
 
 def test_a_distance_limit_typed_in_miles_is_asked_in_km(browser, server) -> None:

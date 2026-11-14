@@ -494,16 +494,12 @@ def emergency_services() -> dict[str, dict]:
         }
 
 
-COAST_DEG = 1.0  # without places, a Trailhead outside every country shape takes the nearest one this near
-
-
 def export_countries(out_dir: Path | str, countries_path: Path | str | None = None) -> Path:
     """Write ``countries.npy`` into the export ``out_dir``: per Trailhead the ISO 3166 code of the
     country it is in, from Natural Earth admin-0 country shapes (``countries_path``, the GeoJSON
     the coverage map reads); for a Trailhead outside every shape (an island or coast the
-    simplified shapes leave out) the country of the nearest place in ``places.sqlite``, or
-    without places, of the nearest shape within ``COAST_DEG``. Reads only ``trailheads.npy``
-    and ``places.sqlite``.
+    simplified shapes leave out) the country of the nearest place in ``places.sqlite``. Reads
+    only ``trailheads.npy`` and ``places.sqlite``.
 
     Raises ServingExportError, writing nothing, when a Trailhead has no country, or its country
     no row in ``EMERGENCY_PATH``: every hike shows its emergency number.
@@ -534,11 +530,6 @@ def export_countries(out_dir: Path | str, countries_path: Path | str | None = No
             missing = np.flatnonzero(codes == "")
             _, nearest = cKDTree(_unit(where[:, 0], where[:, 1])).query(_unit(trailheads[missing, 0], trailheads[missing, 1]))
             codes[missing] = np.array([country for country, *_ in rows], dtype="<U2")[nearest]
-    if (codes == "").any() and countries_path is not None:
-        # Without places: a Trailhead on an island or coast the simplified shapes leave out takes the nearest one.
-        missing = np.flatnonzero(codes == "")
-        at, shape = tree.query_nearest(points[missing], max_distance=COAST_DEG)
-        codes[missing[at[::-1]]] = shape_codes[shape[::-1]]  # of equally near shapes, the first
     known = emergency_services()
     unknown = {code: int((codes == code).sum()) for code in sorted(set(codes.tolist()) - set(known))}
     if unknown:

@@ -101,6 +101,8 @@ def test_a_hike_in_a_country_with_no_row_fails_the_export(export: Path, catalog_
     bare = export_serving(catalog_path, tmp_path / "bare")  # no places, no shapes: no country at all
     with pytest.raises(ServingExportError, match="no country"):
         export_countries(bare)
+    with pytest.raises(ServingExportError, match="no country"):  # a shape beside the hikes is not theirs
+        export_countries(bare, _countries(tmp_path / "near.geojson", ("HR", 16, 44)))
     assert ServingData(bare).detail(RIDGE_WALK_ID)["emergency"] is None
 
 

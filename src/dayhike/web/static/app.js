@@ -224,25 +224,37 @@ const kmTyped = (id, shown) => {
   return kmRange(id).find((km) => kmShown(km) === shown) ?? rounded((shown * MILE_M) / 1000, 3);
 };
 const limitText = (km) => `${kmShown(km)} ${limitUnit()}`;
-// A limit as typed into ``id``, in km for an address: the text as it is when it is no number.
-const typedKm = (id, text) => (text.trim() === "" || !Number.isFinite(Number(text)) ? text : String(kmTyped(id, Number(text))));
+const isNumber = (text) => text.trim() !== "" && Number.isFinite(Number(text));
+
+// Fills ``input`` with ``fact`` (metres for a wish, km for a limit) shown as ``text``: while its text
+// stays so, it means that fact, not the rounded number shown.
+function fill(input, fact, text) {
+  input.value = input.dataset.shown = text;
+  input.dataset.fact = String(fact);
+}
+// What ``input`` means in fact units: the fact it was filled with while its text is unchanged, else
+// ``typed`` of the number typed.
+const factOf = (input, typed) => (input.value !== "" && input.dataset.shown === input.value ? Number(input.dataset.fact) : typed(Number(input.value)));
+// The limit in ``id``, in km.
+const limitKm = (id) => factOf($(id), (shown) => kmTyped(id, shown));
+// The limit in ``id``, in km for an address: the text as it is when it is no number.
+const typedKm = (id) => (isNumber($(id).value) ? String(limitKm(id)) : $(id).value);
 
 // Shows every length and height in ``units`` ("metric" or "imperial"). A value typed (a wish's, a
 // limit's) keeps what it means, converted; the hikes and the list shown are drawn again.
 function setUnits(units) {
   if (units === state.units) return;
-  const limits = ["#km", "#group-km"].map((id) => typedKm(id, $(id).value)), opened = OPENED["#km"] && typedKm("#km", OPENED["#km"].value);
+  const limits = ["#km", "#group-km"].map((id) => (isNumber($(id).value) ? limitKm(id) : null));
   const wishes = [...document.querySelectorAll(".weight input.wish[type=number]")].map((input) => {
     const measure = state.measures.find((m) => m.name === input.closest(".weight").dataset.measure);
-    return [input, measure, input.value === "" || !Number.isFinite(Number(input.value)) ? null : toFact(measure, Number(input.value))];
+    return [input, measure, isNumber(input.value) ? factOf(input, (shown) => wishFact(measure, shown)) : null];
   });
   const chosen = state.liked && lengthText(state.liked);
   state.units = units;
   $("#units").value = units;
   if (chosen) $("#liked-name").textContent = $("#liked-name").textContent.replace(chosen, lengthText(state.liked));
-  const shown = (km) => (km.trim() === "" || !Number.isFinite(Number(km)) ? km : String(kmShown(Number(km))));
-  ["#km", "#group-km"].forEach((id, i) => { $(id).value = shown(limits[i]); });
-  if (opened != null) OPENED["#km"].value = shown(opened);
+  ["#km", "#group-km"].forEach((id, i) => { if (limits[i] != null) fill($(id), limits[i], String(kmShown(limits[i]))); });
+  if (OPENED["#km"]) OPENED["#km"].value = String(kmShown(OPENED["#km"].km));
   for (const node of document.querySelectorAll(".limit-unit")) node.textContent = limitUnit();
   $("#km").setAttribute("aria-label", `Max ${limitUnit()} value`);
   Object.entries(imperial() ? { min: kmShown(1), max: kmShown(state.info?.max_km ?? 200), step: "any" } : { min: 1, max: 200, step: 1 })
@@ -253,13 +265,9 @@ function setUnits(units) {
     for (const [key, value] of Object.entries(wishAttributes(measure))) input.setAttribute(key, value);
     const unit = input.parentElement.querySelector(".unit");
     if (unit) unit.innerHTML = escapeHtml(shownUnit(measure)).replaceAll("/", "/<wbr>");
-    if (fact != null) input.value = String(toShown(measure, fact));
+    if (fact != null) fill(input, fact, String(toShown(measure, fact)));
   }
   for (const note of document.querySelectorAll(".length-note")) note.textContent = lengthNote();
-  for (const label of document.querySelectorAll(".weight label.name")) {
-    const measure = state.measures.find((m) => m.name === label.closest(".weight").dataset.measure);
-    label.title = unitsText(measure.description);
-  }
   if (!state.info) return; // the page is still opening: nothing drawn yet
   showGroupDefault();
   const section = $("#results"), stale = section.classList.contains("stale"), staleNote = $("#results-stale").hidden;
@@ -273,15 +281,6 @@ function setUnits(units) {
   for (const card of [$("#liked"), $("#selected")]) {
     if (!card.hidden && card._shown) renderDetail(card, ...card._shown);
   }
-}
-
-// Lengths and heights in the server's words ("floor 1 km", "both 100 m or less"), in miles and feet.
-function unitsText(text) {
-  if (!imperial() || text == null) return text;
-  return text.replace(/(\d[\d,]*(?:\.\d+)?) (km|m)\b(?![²³\/])/g, (_, number, unit) => {
-    const metres = Number(number.replaceAll(",", "")) * (unit === "km" ? 1000 : 1);
-    return unit === "km" ? `${rounded(metres / MILE_M, 1).toLocaleString("en")} mi` : `${Math.round(metres / FOOT_M).toLocaleString("en")} ft`;
-  });
 }
 
 const fmt = {
@@ -550,10 +549,10 @@ function modeHash() {
       if (!typed) parts.push(`place=${encodeURIComponent(origin.label)}`);
     }
     if ($("#hours-on").checked && !$("#hours-on").disabled) parts.push(`hours=${encodeURIComponent($("#hours").value)}`);
-    if ($("#km-on").checked) parts.push(`km=${encodeURIComponent(typedKm("#km", $("#km").value))}`);
+    if ($("#km-on").checked) parts.push(`km=${encodeURIComponent(typedKm("#km"))}`);
   }
   const group = $("#group-km").value.trim();
-  if (group) parts.push(`group=${encodeURIComponent(typedKm("#group-km", group))}`);
+  if (group) parts.push(`group=${encodeURIComponent(typedKm("#group-km"))}`);
   // Miles and feet always; km and m only where the browser's locale would show miles, so a shared
   // link keeps the units and every address from before the switch reads as it did.
   if (state.units !== localeUnits() || imperial()) parts.push(`units=${state.units}`);
@@ -633,7 +632,7 @@ function applySettings(parts, weights) {
       $("#km-on").checked = parts.has("km");
     }
     if (hours > 0) $("#hours").value = String(hours);
-    if (km > 0) $("#km").value = String(kmShown(km));
+    if (km > 0) fill($("#km"), km, String(kmShown(km)));
     if (from) {
       const label = decoded(parts.get("place") ?? "")?.trim().slice(0, 200) || from.label;
       $("#origin").value = label;
@@ -642,7 +641,10 @@ function applySettings(parts, weights) {
     }
   }
   const group = Number(parts.get("group"));
-  if (parts.has("group")) $("#group-km").value = group >= 0.1 && group <= 50 ? String(kmShown(group)) : "";
+  if (parts.has("group")) {
+    if (group >= 0.1 && group <= 50) fill($("#group-km"), group, String(kmShown(group)));
+    else $("#group-km").value = "";
+  }
   showGroupDefault();
   syncRoundTrip();
 }
@@ -662,8 +664,9 @@ function resetSettings() {
   placed++; // drops a place lookup still running
   $("#origin").value = $("#origin-found").textContent = "";
   state.origin = state.missed = null;
-  for (const [id, { value, checked }] of Object.entries(OPENED)) {
-    $(id).value = value;
+  for (const [id, { value, checked, km }] of Object.entries(OPENED)) {
+    if (km != null) fill($(id), km, value);
+    else $(id).value = value;
     $(id).checked = checked;
   }
   $("#group-km").value = "";
@@ -845,11 +848,11 @@ function helpHtml(key) {
   const help = state.scoreHelp;
   const measure = state.measures.find((m) => m.name === key);
   const head = measure
-    ? `<h3 id="score-help-title">${escapeHtml(measure.label)}</h3><p>${escapeHtml(unitsText(measure.description))}</p>
+    ? `<h3 id="score-help-title">${escapeHtml(measure.label)}</h3><p>${escapeHtml(measure.description)}</p>
        <p><strong>Data:</strong> ${escapeHtml(measure.source)}</p><p>${escapeHtml(help.measure)}</p>`
     : `<h3 id="score-help-title">${key === "overall" ? "Similarity score" : "Measure scores"}</h3>
        <p>${escapeHtml(key === "overall" ? help.overall : help.measure)}</p>`;
-  const sections = help.sections.map((s) => `<h4>${escapeHtml(s.title)}</h4><p>${escapeHtml(unitsText(s.text))}</p>`).join("");
+  const sections = help.sections.map((s) => `<h4>${escapeHtml(s.title)}</h4><p>${escapeHtml(s.text)}</p>`).join("");
   // A cue while more of the text is below the box's edge (ADR-0054).
   return `<button type="button" class="help-close" aria-label="Close">×</button>${head}${sections}<p class="help-more" aria-hidden="true">More below ↓ scroll</p>`;
 }
@@ -1230,7 +1233,7 @@ function factsTable(hike, compare, result, month, query, uncounted) {
       const row = document.createElement("tr");
       const reason = uncounted[measure.name], fade = reason ? ' class="faded"' : "";
       if (reason) row.className = "excluded";
-      const cells = [`<td${fade} title="${escapeHtml(unitsText(measure.description))}">${escapeHtml(measure.label)}</td>`];
+      const cells = [`<td${fade} title="${escapeHtml(measure.description)}">${escapeHtml(measure.label)}</td>`];
       const values = compare ? [hike, compare] : [hike];
       for (const h of values) cells.push(`<td class="num${reason && !h.wish ? " faded" : ""}"></td>`);
       if (compare) cells.push('<td class="num score"></td>');
@@ -1253,9 +1256,9 @@ function factsTable(hike, compare, result, month, query, uncounted) {
         const { score, note } = result?.measures?.[measure.name] ?? {};
         const unasked = compare.wish && compare.wish[measure.name] == null; // a wish asks nothing of it
         const shown = score == null
-          ? (note ? `– ${helpButton(measure.name)}<small class="note">${escapeHtml(unitsText(note))}</small>`
+          ? (note ? `– ${helpButton(measure.name)}<small class="note">${escapeHtml(note)}</small>`
             : reason && unasked ? "" : `<span class="nodata">${unasked ? "left out" : "no data"}</span>`)
-          : `<span class="bar"><i style="width:${Math.round(score * 100)}%"></i></span>${score.toFixed(2)} ${helpButton(measure.name)}${note ? `<small class="note">${escapeHtml(unitsText(note))}</small>` : ""}`;
+          : `<span class="bar"><i style="width:${Math.round(score * 100)}%"></i></span>${score.toFixed(2)} ${helpButton(measure.name)}${note ? `<small class="note">${escapeHtml(note)}</small>` : ""}`;
         // A Measure not counted keeps its score, faded, with why in plain text, not only in colour.
         row.lastElementChild.innerHTML = reason
           ? `${shown && `<span class="faded">${shown}</span>`}<small class="uncounted">${reason.cell}</small>` : shown;
@@ -1285,7 +1288,7 @@ function buildWeights() {
       row.dataset.measure = measure.name;
       const id = `w-${measure.name}`;
       row.innerHTML = `
-        <label class="name" for="${id}" title="${escapeHtml(unitsText(measure.description))}">${escapeHtml(measure.label)}</label>
+        <label class="name" for="${id}" title="${escapeHtml(measure.description)}">${escapeHtml(measure.label)}</label>
         ${wishable(measure) ? wishInput(measure) : ""}
         <input id="${id}" type="range" min="0" max="100" step="10" value="${measure.default_weight}" aria-label="${escapeHtml(measure.label)} weight, 0 to 100">
         <output for="${id}"></output>`;
@@ -1334,7 +1337,9 @@ function setWeight(row, weight) {
 // A wish weight given to a Measure with no value yet asks its default value.
 function askDefault(row) {
   const value = row.querySelector("input.wish");
-  if (value?.value === "" && Number(row.querySelector("input:not(.wish)").value) > 0) value.value = value.placeholder;
+  if (value?.value === "" && Number(row.querySelector("input:not(.wish)").value) > 0) {
+    fill(value, state.measures.find((m) => m.name === row.dataset.measure).wish.default, value.placeholder);
+  }
 }
 
 // Round trip tells no hike from another while every hike returns to its start: greyed out then.
@@ -1381,6 +1386,13 @@ const shownUnit = (measure) => imperialShown(measure)?.unit ?? measure.wish.disp
 const perShown = (measure) => imperialShown(measure)?.per ?? measure.wish.display?.per ?? 1;
 const toShown = (measure, value) => rounded(value / perShown(measure), imperialShown(measure)?.digits ?? 6);
 const toFact = (measure, value) => Math.round(value * perShown(measure) * 1e6) / 1e6;
+// A wish typed as shown, in fact units; typed at an end of its range as shown, rounded to miles or feet: that end.
+function wishFact(measure, shown) {
+  const { min, max } = measure.wish;
+  if (imperialShown(measure) && shown === toShown(measure, min)) return min;
+  if (imperialShown(measure) && shown === toShown(measure, max)) return max;
+  return toFact(measure, shown);
+}
 
 function lengthNote() {
   return `Over about ${imperial() ? "16 mi" : "25 km"} is usually more than a day. With Return to start a line counts there and back.`;
@@ -1416,10 +1428,7 @@ function readWish(weights) {
     if (yesNo(measure)) { wish[measure.name] = input.checked; continue; }
     input.setCustomValidity(""); // valid unless it is out of range again
     const { min, max } = measure.wish, unit = shownUnit(measure);
-    let value = toFact(measure, Number(input.value));
-    // Typed at an end of the range as shown, rounded to miles or feet: that end.
-    if (imperialShown(measure) && Number(input.value) === toShown(measure, min)) value = min;
-    if (imperialShown(measure) && Number(input.value) === toShown(measure, max)) value = max;
+    const value = factOf(input, (shown) => wishFact(measure, shown));
     if (input.value === "" || !Number.isFinite(value) || value < (min ?? -Infinity) || value > (max ?? Infinity)) {
       const range = `${toShown(measure, min)} to ${toShown(measure, max)}${unit ? ` ${unit}` : ""}`;
       input.setCustomValidity(range);
@@ -1437,7 +1446,7 @@ function wishProblem(row) {
   const input = row.querySelector("input.wish");
   if (!input || input.type === "checkbox") return "";
   const measure = state.measures.find((m) => m.name === row.dataset.measure), { min, max } = measure.wish;
-  const unit = shownUnit(measure), value = toFact(measure, Number(input.value));
+  const unit = shownUnit(measure), value = factOf(input, (shown) => wishFact(measure, shown));
   const range = `${toShown(measure, min)} to ${toShown(measure, max)}${unit ? ` ${unit}` : ""}`;
   if (input.validity.badInput || (input.value === "" && Number(row.querySelector("input:not(.wish)").value) > 0)) {
     return `${measure.label} takes a number from ${range}.`;
@@ -1492,15 +1501,15 @@ function wishHash() {
   for (const row of document.querySelectorAll(".weight:not(.unwishable)")) {
     const [value, number] = row.querySelectorAll("input");
     if (folded(row) || !(Number(number.value) > 0)) continue;
-    parts.push(`${row.dataset.measure}:${value.type === "checkbox" ? Number(value.checked) : typedFact(row, value.value)}:${number.value}`);
+    parts.push(`${row.dataset.measure}:${value.type === "checkbox" ? Number(value.checked) : typedFact(row, value)}:${number.value}`);
   }
   return `#wish=${parts.join(",")}${modeHash()}`;
 }
 
-// A typed number in its Measure's fact units, or the text as typed when it is no number.
-function typedFact(row, typed) {
-  const measure = state.measures.find((m) => m.name === row.dataset.measure), value = Number(typed);
-  return typed === "" || !Number.isFinite(value) ? typed : String(toFact(measure, value));
+// A wish box's number in its Measure's fact units, or the text as typed when it is no number.
+function typedFact(row, input) {
+  const measure = state.measures.find((m) => m.name === row.dataset.measure);
+  return isNumber(input.value) ? String(factOf(input, (shown) => wishFact(measure, shown))) : input.value;
 }
 
 // The weight a wish starts a Measure at: the liked-hike form's default, but Lake or sea off, as no
@@ -1525,7 +1534,8 @@ function applyWish(text) {
     if (wanted != null) {
       const measure = state.measures.find((m) => m.name === row.dataset.measure);
       if (value.type === "checkbox") value.checked = wanted === "1";
-      else value.value = wanted === "" || !Number.isFinite(Number(wanted)) ? wanted : String(toShown(measure, Number(wanted)));
+      else if (isNumber(wanted)) fill(value, Number(wanted), String(toShown(measure, Number(wanted))));
+      else value.value = wanted;
       if (row.closest("#advanced")) $("#advanced").open = true;
     }
     setWeight(row, Number(weight) > 0 ? Math.max(Number(weight), 10) : 0);
@@ -2744,7 +2754,7 @@ function groupDefaultKm() {
   const limits = [];
   if ($("#drive-on").checked) {
     if ($("#hours-on").checked && Number($("#hours").value) > 0) limits.push(Number($("#hours").value) * kmh);
-    if ($("#km-on").checked && Number($("#km").value) > 0) limits.push(kmTyped("#km", Number($("#km").value)));
+    if ($("#km-on").checked && Number($("#km").value) > 0) limits.push(limitKm("#km"));
   }
   return limits.length ? Math.max(least, share * Math.min(...limits)) : km;
 }
@@ -2881,14 +2891,14 @@ async function findSimilar() {
         query.max_hours = hours;
       }
       if (byKm) {
-        const km = kmTyped("#km", Number($("#km").value));
+        const km = limitKm("#km");
         if (!(km >= 1 && km <= state.info.max_km)) throw new Error(`Max ${limitUnit()} is from ${kmShown(1)} to ${kmShown(state.info.max_km)}.`);
         query.max_km = km;
       }
     }
     const group = $("#group-km").value.trim();
     if (group !== "") { // empty: the server groups by the limits (ADR-0032)
-      const km = kmTyped("#group-km", Number(group));
+      const km = limitKm("#group-km");
       if (!(km >= 0.1 && km <= 50)) throw new Error(`Group hikes starting within ${kmShown(0.1)} to ${limitText(50)}.`);
       query.group_km = km;
     }
@@ -3039,7 +3049,7 @@ function renderResults() {
   $("#results-loops").hidden = !state.info.compose || body.loops; // SuggestedLoops on request (ADR-0028)
   const table = $("#results-table");
   const measureHeads = comparedMeasures(body.return_to_start).map((m) =>
-    `<th class="measure${body.weights[m.name] ? "" : " excluded"}" title="${escapeHtml(`${m.label}: ${unitsText(m.description)}`)}">${escapeHtml(m.label)} ${helpButton(m.name)}</th>`).join("");
+    `<th class="measure${body.weights[m.name] ? "" : " excluded"}" title="${escapeHtml(`${m.label}: ${m.description}`)}">${escapeHtml(m.label)} ${helpButton(m.name)}</th>`).join("");
   const figures = body.return_to_start ? "with the way back" : "one way";
   table.innerHTML = `<thead><tr><th>#</th><th class="name">Hike</th><th>Score ${helpButton("overall")}</th>${state.query.drive ? "<th>Drive</th>" : ""}${state.query.km ? '<th title="Straight line from the starting place">Distance</th>' : ""}<th title="Length, ${figures}">Length${body.return_to_start ? " with way back" : ""}</th><th title="Climb and descent, ${figures}">Up / down${body.return_to_start ? " with way back" : ""}</th>${measureHeads}</tr></thead>`;
   state.expanded = null;
@@ -3232,7 +3242,7 @@ function resultRow(result, number, open) {
   const cells = comparedMeasures(back).map((m) => {
     const { score, note } = result.measures[m.name];
     const missing = wish && wish[m.name] == null ? "not in your wish" : "no data";
-    if (score == null) return `<td class="cell none" title="${escapeHtml(unitsText(note) ?? missing)}">–</td>`;
+    if (score == null) return `<td class="cell none" title="${escapeHtml(note ?? missing)}">–</td>`;
     if (!weights[m.name]) {
       return `<td class="cell left-out" title="${escapeHtml(m.label)}: ${score.toFixed(2)}, left out of this ranking">${Math.round(score * 100)}</td>`;
     }
@@ -3409,6 +3419,7 @@ async function start() {
   });
   showGroupDefault();
   for (const id of ["#hours", "#km", "#hours-on", "#km-on"]) OPENED[id] = { value: $(id).value, checked: $(id).checked };
+  OPENED["#km"].km = limitKm("#km");
   LIKED_EMPTY = $("#liked").innerHTML;
   nameSearch($("#search"), $("#suggestions"), (id, note) => choose(id, { from: "search", note }), (landmark, open) => {
     const town = landmark.kind === "town" || landmark.kind === "village";

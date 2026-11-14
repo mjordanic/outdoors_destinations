@@ -2039,8 +2039,7 @@ named "…: way back to the start" (a retrace or step drawn from the line, a
 trail way back from `GET /api/hikes/{id}/way-back`). The Units switch in the header shows every
 length and height in km and metres or in miles and feet; only the page converts: the API, a wish's
 values and `&km=`/`&group=` stay in metres and km whatever it shows (ADR-0035), so links and the API
-do not change. The server's own words with a length (a Measure's description, a score note such as
-"both 100 m or less") are converted on the page too. The default comes from the browser: miles
+do not change. The default comes from the browser: miles
 and feet when its locale's country is the US, Liberia or Myanmar, else km and metres. An address carries
 `&units=imperial` while miles and feet show, and `&units=metric` only where the browser would
 default to miles; an address without it opens in the browser's default. The filters a list was
@@ -2219,8 +2218,9 @@ countries GeoJSON the coverage map reads) it writes `countries.npy`, the
 country each Trailhead is in, for the hike's emergency number;
 `dayhike export-countries --out data/web-serving --countries /tmp/countries.geojson`
 adds it beside an existing export. A Trailhead outside every (simplified)
-shape, on a coast, takes the country of the nearest place in `places.sqlite`.
-Both stop, writing nothing, when a Trailhead's country has no row in
+shape, on a coast, takes the country of the nearest place in `places.sqlite`;
+without places it has no country. `export-countries` stops writing nothing, and
+`export-serving --countries` stops before `meta.json`, when a Trailhead's country has no row in
 `src/dayhike/data/emergency.csv`: add the country there (its emergency
 numbers, mountain rescue service and website, how to reach it, and an
 official source: the government's, its emergency service's or its mountain
