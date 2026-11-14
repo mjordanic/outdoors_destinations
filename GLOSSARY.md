@@ -36,6 +36,10 @@ _Avoid_: start, parking (parking is an amenity near a Trailhead)
 The local database of DayHikes, Trailheads, AmenityFacts, and FeatureVectors. Built from an OSM snapshot, not queried live. It does not hold DayHikeGeometry or raw amenity points.
 _Avoid_: dataset, index, graph (the routing graph is Valhalla's, not the Catalog)
 
+**Region**:
+The area one build covers, as a region file (TOML in `src/dayhike/data/regions/` or anywhere): its Geofabrik extracts, the box the DEM, LandCover and climate rasters cover, and the coverage map's frame and projection centre. One Catalog can be built from several Regions. Without one, the fetch commands read `alps-dinarides` and the coverage map draws `europe`. A Region's box runs west to east; one crossing 180° is not supported.
+_Avoid_: area, country list, bbox (the box is one part of a Region)
+
 **DayHikeGeometry**:
 The ordered lon/lat vertices of a DayHike's main walk, starting at the Trailhead: the longest connected piece of its OSM member ways (ways a few tens of metres apart count as connected), each way at most once, without Leftovers. Consecutive ways meet; there is no jump between them. The similarity facts are built from it; Ranking does not read it.
 _Avoid_: path, route, trace, LineString, chain

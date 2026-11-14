@@ -82,6 +82,7 @@ const state = {
   mapAt: null, // where the hike map opens next: the last Landmark or start place found while it was closed
   missed: null, // the place text the last lookup found nothing for
   geocoded: new Map(),
+  units: "metric", // "metric" (km and m) or "imperial" (miles and feet): only how the page shows lengths
 };
 
 // ---------- helpers ----------
@@ -194,16 +195,111 @@ function niceTicks(low, high, count) {
   return ticks;
 }
 
+// ---------- units: km and metres, or miles and feet ----------
+
+// Facts, the API and addresses stay in metres and km whatever the page shows (ADR-0035).
+const FOOT_M = 0.3048, MILE_M = 1609.344;
+// Miles and feet by default where the browser's locale is one of these countries.
+const IMPERIAL_REGIONS = ["US", "LR", "MM"];
+const imperial = () => state.units === "imperial";
+const rounded = (value, digits) => Math.round(value * 10 ** digits) / 10 ** digits + 0;
+
+function localeUnits() {
+  try {
+    const region = new Intl.Locale(navigator.language).maximize().region;
+    return IMPERIAL_REGIONS.includes(region) ? "imperial" : "metric";
+  } catch {
+    return "metric";
+  }
+}
+
+// A distance limit (the starting place's, the grouping radius) is typed in km or miles; sent in km.
+const limitUnit = () => (imperial() ? "mi" : "km");
+const kmShown = (km) => (imperial() ? rounded((km * 1000) / MILE_M, 1) : km);
+// The km range of the limit typed into ``id``: the starting place's, or the grouping radius's.
+const kmRange = (id) => (id === "#km" ? [1, state.info?.max_km ?? 200] : [0.1, 50]);
+// The limit typed into ``id``, in km; typed at an end of its range as shown, rounded to miles: that end.
+const kmTyped = (id, shown) => {
+  if (!imperial()) return shown;
+  return kmRange(id).find((km) => kmShown(km) === shown) ?? rounded((shown * MILE_M) / 1000, 3);
+};
+const limitText = (km) => `${kmShown(km)} ${limitUnit()}`;
+// A limit as typed into ``id``, in km for an address: the text as it is when it is no number.
+const typedKm = (id, text) => (text.trim() === "" || !Number.isFinite(Number(text)) ? text : String(kmTyped(id, Number(text))));
+
+// Shows every length and height in ``units`` ("metric" or "imperial"). A value typed (a wish's, a
+// limit's) keeps what it means, converted; the hikes and the list shown are drawn again.
+function setUnits(units) {
+  if (units === state.units) return;
+  const limits = ["#km", "#group-km"].map((id) => typedKm(id, $(id).value)), opened = OPENED["#km"] && typedKm("#km", OPENED["#km"].value);
+  const wishes = [...document.querySelectorAll(".weight input.wish[type=number]")].map((input) => {
+    const measure = state.measures.find((m) => m.name === input.closest(".weight").dataset.measure);
+    return [input, measure, input.value === "" || !Number.isFinite(Number(input.value)) ? null : toFact(measure, Number(input.value))];
+  });
+  const chosen = state.liked && lengthText(state.liked);
+  state.units = units;
+  $("#units").value = units;
+  if (chosen) $("#liked-name").textContent = $("#liked-name").textContent.replace(chosen, lengthText(state.liked));
+  const shown = (km) => (km.trim() === "" || !Number.isFinite(Number(km)) ? km : String(kmShown(Number(km))));
+  ["#km", "#group-km"].forEach((id, i) => { $(id).value = shown(limits[i]); });
+  if (opened != null) OPENED["#km"].value = shown(opened);
+  for (const node of document.querySelectorAll(".limit-unit")) node.textContent = limitUnit();
+  $("#km").setAttribute("aria-label", `Max ${limitUnit()} value`);
+  Object.entries(imperial() ? { min: kmShown(1), max: kmShown(state.info?.max_km ?? 200), step: "any" } : { min: 1, max: 200, step: 1 })
+    .forEach(([key, value]) => $("#km").setAttribute(key, String(value)));
+  $("#group-km").setAttribute("max", String(kmShown(50)));
+  for (const [input, measure, fact] of wishes) {
+    for (const key of ["min", "max", "step"]) input.removeAttribute(key);
+    for (const [key, value] of Object.entries(wishAttributes(measure))) input.setAttribute(key, value);
+    const unit = input.parentElement.querySelector(".unit");
+    if (unit) unit.innerHTML = escapeHtml(shownUnit(measure)).replaceAll("/", "/<wbr>");
+    if (fact != null) input.value = String(toShown(measure, fact));
+  }
+  for (const note of document.querySelectorAll(".length-note")) note.textContent = lengthNote();
+  for (const label of document.querySelectorAll(".weight label.name")) {
+    const measure = state.measures.find((m) => m.name === label.closest(".weight").dataset.measure);
+    label.title = unitsText(measure.description);
+  }
+  if (!state.info) return; // the page is still opening: nothing drawn yet
+  showGroupDefault();
+  const section = $("#results"), stale = section.classList.contains("stale"), staleNote = $("#results-stale").hidden;
+  const selected = !$("#selected").hidden;
+  if (!section.hidden && state.answer) {
+    renderResults();
+    section.classList.toggle("stale", stale);
+    $("#results-stale").hidden = staleNote;
+    $("#selected").hidden = !selected;
+  }
+  for (const card of [$("#liked"), $("#selected")]) {
+    if (!card.hidden && card._shown) renderDetail(card, ...card._shown);
+  }
+}
+
+// Lengths and heights in the server's words ("floor 1 km", "both 100 m or less"), in miles and feet.
+function unitsText(text) {
+  if (!imperial() || text == null) return text;
+  return text.replace(/(\d[\d,]*(?:\.\d+)?) (km|m)\b(?![²³\/])/g, (_, number, unit) => {
+    const metres = Number(number.replaceAll(",", "")) * (unit === "km" ? 1000 : 1);
+    return unit === "km" ? `${rounded(metres / MILE_M, 1).toLocaleString("en")} mi` : `${Math.round(metres / FOOT_M).toLocaleString("en")} ft`;
+  });
+}
+
 const fmt = {
-  km: (m) => (m < 50 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(m < 10000 ? 1 : 0)} km`), // no "0.0 km"
-  m: (m) => `${(Math.round(m) + 0).toLocaleString("en")} m`, // + 0: no "-0 m"
+  km: (m) => (imperial()
+    ? (m < MILE_M / 10 ? `${Math.round(m / FOOT_M).toLocaleString("en")} ft` : `${(m / MILE_M).toFixed(m < 10 * MILE_M ? 1 : 0)} mi`)
+    : m < 50 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(m < 10000 ? 1 : 0)} km`), // no "0.0 km"
+  m: (m) => `${(Math.round(imperial() ? m / FOOT_M : m) + 0).toLocaleString("en")} ${imperial() ? "ft" : "m"}`, // + 0: no "-0 m"
+  // A short height or distance, without a thousands comma: "1234 m", "35 ft".
+  short: (m) => `${Math.round(imperial() ? m / FOOT_M : m)} ${imperial() ? "ft" : "m"}`,
+  // A long length in whole km or miles: "1,073 km".
+  long: (m) => `${Math.round(m / (imperial() ? MILE_M : 1000)).toLocaleString("en")} ${imperial() ? "mi" : "km"}`,
   pct: (x) => `${Math.round(x * 100)} %`,
   yes: (x) => (x ? "yes" : "no"),
 };
 
 // Climb and descent in the drawn direction; "flat" when neither reaches the 10 m a climb needs to count.
 function upDown(climb, descent) {
-  return climb === 0 && descent === 0 ? "flat (no 10 m climb or descent)" : `↑ ${fmt.m(climb)} ↓ ${fmt.m(descent)}`;
+  return climb === 0 && descent === 0 ? `flat (no ${imperial() ? "33 ft" : "10 m"} climb or descent)` : `↑ ${fmt.m(climb)} ↓ ${fmt.m(descent)}`;
 }
 
 // Climb and descent in the drawn direction, said with the way back or one way when the hike is
@@ -223,7 +319,7 @@ function lengthText(hike) {
 
 // A multi-day route's mark, with its length one way: "multi-day, 1,073 km" (ADR-0056).
 function multiDayText(hike) {
-  return `multi-day, ${Math.round(hike.walk_m / 1000).toLocaleString("en")} km`;
+  return `multi-day, ${fmt.long(hike.walk_m)}`;
 }
 
 function factColumn(column, month) {
@@ -417,7 +513,8 @@ function returnToStart() {
 // The search settings on the left as an address's parts, so a shared link or a reload opens the same
 // search (ADR-0054): "&oneway", "&strict", "&month=1", "&w=length:50,hut_along:100" (the weights moved
 // from their defaults; a wish carries its own), "&adv" (Advanced search open), "&from=46.05,14.5",
-// "&place=Ljubljana%2C%20SI", "&hours=2", "&km=50" (only hikes near a starting place) and "&group=3".
+// "&place=Ljubljana%2C%20SI", "&hours=2", "&km=50" (only hikes near a starting place), "&group=3"
+// (both in km whatever the page shows) and "&units=imperial" (miles and feet).
 function modeHash() {
   const parts = [];
   if (!returnToStart()) parts.push("oneway");
@@ -438,10 +535,13 @@ function modeHash() {
       if (!typed) parts.push(`place=${encodeURIComponent(origin.label)}`);
     }
     if ($("#hours-on").checked && !$("#hours-on").disabled) parts.push(`hours=${encodeURIComponent($("#hours").value)}`);
-    if ($("#km-on").checked) parts.push(`km=${encodeURIComponent($("#km").value)}`);
+    if ($("#km-on").checked) parts.push(`km=${encodeURIComponent(typedKm("#km", $("#km").value))}`);
   }
   const group = $("#group-km").value.trim();
-  if (group) parts.push(`group=${encodeURIComponent(group)}`);
+  if (group) parts.push(`group=${encodeURIComponent(typedKm("#group-km", group))}`);
+  // Miles and feet always; km and m only where the browser's locale would show miles, so a shared
+  // link keeps the units and every address from before the switch reads as it did.
+  if (state.units !== localeUnits() || imperial()) parts.push(`units=${state.units}`);
   return parts.map((part) => `&${part}`).join("");
 }
 
@@ -495,6 +595,7 @@ function shownAddress() {
 // Fills the search settings an address's ``parts`` (readLink) name; those it does not name stay as they
 // are (on a page just opened, their defaults). ``weights``: also the weights (not a wish's).
 function applySettings(parts, weights) {
+  if (["metric", "imperial"].includes(parts.get("units"))) setUnits(parts.get("units"));
   const month = parts.get("month");
   if (month != null) $("#month").value = /^([1-9]|1[0-2])$/.test(month) ? month : "";
   if (weights && parts.has("w")) {
@@ -517,7 +618,7 @@ function applySettings(parts, weights) {
       $("#km-on").checked = parts.has("km");
     }
     if (hours > 0) $("#hours").value = String(hours);
-    if (km > 0) $("#km").value = String(km);
+    if (km > 0) $("#km").value = String(kmShown(km));
     if (from) {
       const label = decoded(parts.get("place") ?? "")?.trim().slice(0, 200) || from.label;
       $("#origin").value = label;
@@ -526,7 +627,7 @@ function applySettings(parts, weights) {
     }
   }
   const group = Number(parts.get("group"));
-  if (parts.has("group")) $("#group-km").value = group >= 0.1 && group <= 50 ? String(group) : "";
+  if (parts.has("group")) $("#group-km").value = group >= 0.1 && group <= 50 ? String(kmShown(group)) : "";
   showGroupDefault();
   syncRoundTrip();
 }
@@ -567,7 +668,7 @@ function elevationChart(hike, onHover, width) {
   const wrap = document.createElement("div");
   wrap.className = "chart elevation";
   const title = document.createElement("h3");
-  title.textContent = "Elevation profile (metres above sea level)";
+  title.textContent = `Elevation profile (${imperial() ? "feet" : "metres"} above sea level)`;
   wrap.appendChild(title);
   if (!hike.elevation) {
     wrap.appendChild(nodata("No elevation data for this hike."));
@@ -575,22 +676,25 @@ function elevationChart(hike, onHover, width) {
   }
   const metres = hike.elevation.metres, step = hike.elevation.step_m;
   const total = step * (metres.length - 1);
+  // The axes in the units shown: heights in metres or feet, distance in km or miles.
+  const per = imperial() ? FOOT_M : 1, mile = imperial() ? MILE_M : 1000;
+  const heights = metres.map((m) => Math.round(m / per));
   // Drawn at the width it is shown, so the labels keep their size.
   const W = Math.max(300, Math.round(width || 640)), H = 210, L = 46, R = 10, T = 12, B = 26;
-  let low = Math.min(...metres), high = Math.max(...metres);
-  const span = Math.max(high - low, 100);
+  let low = Math.min(...heights), high = Math.max(...heights);
+  const span = Math.max(high - low, 100 / per);
   low -= span * 0.08; high += span * 0.12;
   const x = (d) => L + (d / total) * (W - L - R);
   const y = (m) => T + (1 - (m - low) / (high - low)) * (H - T - B);
-  const root = svg("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Elevation from ${Math.min(...metres)} to ${Math.max(...metres)} m` });
+  const root = svg("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Elevation from ${Math.min(...heights)} to ${Math.max(...heights)} ${imperial() ? "ft" : "m"}` });
   for (const t of niceTicks(low, high, 4)) {
     svg("line", { x1: L, x2: W - R, y1: y(t), y2: y(t), stroke: "#eef0ec" }, root);
     svg("text", { x: L - 6, y: y(t) + 4, "text-anchor": "end" }, root).textContent = t.toLocaleString("en");
   }
-  for (const t of niceTicks(0, total / 1000, Math.max(3, Math.floor(W / 110)))) {
-    svg("text", { x: x(t * 1000), y: H - 8, "text-anchor": "middle" }, root).textContent = `${t} km`;
+  for (const t of niceTicks(0, total / mile, Math.max(3, Math.floor(W / 110)))) {
+    svg("text", { x: x(t * mile), y: H - 8, "text-anchor": "middle" }, root).textContent = `${t} ${imperial() ? "mi" : "km"}`;
   }
-  const line = metres.map((m, i) => `${x(i * step).toFixed(1)},${y(m).toFixed(1)}`).join(" ");
+  const line = heights.map((h, i) => `${x(i * step).toFixed(1)},${y(h).toFixed(1)}`).join(" ");
   svg("polygon", { points: `${x(0)},${y(low)} ${line} ${x(total)},${y(low)}`, fill: "#dcebdf" }, root);
   svg("polyline", { points: line, fill: "none", stroke: "#2f7d4f", "stroke-width": 2 }, root);
   const at = (d) => {
@@ -601,7 +705,7 @@ function elevationChart(hike, onHover, width) {
   for (const p of hike.points) {
     if (p.where !== "line" || p.along_m == null || (p.kind === "peak" && p.off_m > 50)) continue;
     const [label, color] = KINDS[p.kind] || [p.kind, "#333"];
-    const dot = svg("circle", { cx: x(p.along_m), cy: y(at(p.along_m)), r: 4.5, fill: color, stroke: "#fff", "stroke-width": 1.5 }, root);
+    const dot = svg("circle", { cx: x(p.along_m), cy: y(at(p.along_m) / per), r: 4.5, fill: color, stroke: "#fff", "stroke-width": 1.5 }, root);
     svg("title", {}, dot).textContent = `${label}${p.name ? `: ${p.name}` : ""} at ${fmt.km(p.along_m)}, ${fmt.m(at(p.along_m))}`;
   }
   const cursor = svg("line", { y1: T, y2: H - B, stroke: "#c2410c", "stroke-width": 1, visibility: "hidden" }, root);
@@ -614,7 +718,7 @@ function elevationChart(hike, onHover, width) {
     const d = Math.min(total, Math.max(0, ((px - L) / (W - L - R)) * total));
     cursor.setAttribute("x1", x(d)); cursor.setAttribute("x2", x(d));
     cursor.setAttribute("visibility", "visible");
-    readout.textContent = `${(d / 1000).toFixed(1)} km · ${Math.round(at(d))} m`;
+    readout.textContent = `${(d / mile).toFixed(1)} ${imperial() ? "mi" : "km"} · ${fmt.short(at(d))}`;
     onHover(d / total);
   };
   overlay.addEventListener("mousemove", move);
@@ -726,11 +830,11 @@ function helpHtml(key) {
   const help = state.scoreHelp;
   const measure = state.measures.find((m) => m.name === key);
   const head = measure
-    ? `<h3 id="score-help-title">${escapeHtml(measure.label)}</h3><p>${escapeHtml(measure.description)}</p>
+    ? `<h3 id="score-help-title">${escapeHtml(measure.label)}</h3><p>${escapeHtml(unitsText(measure.description))}</p>
        <p><strong>Data:</strong> ${escapeHtml(measure.source)}</p><p>${escapeHtml(help.measure)}</p>`
     : `<h3 id="score-help-title">${key === "overall" ? "Similarity score" : "Measure scores"}</h3>
        <p>${escapeHtml(key === "overall" ? help.overall : help.measure)}</p>`;
-  const sections = help.sections.map((s) => `<h4>${escapeHtml(s.title)}</h4><p>${escapeHtml(s.text)}</p>`).join("");
+  const sections = help.sections.map((s) => `<h4>${escapeHtml(s.title)}</h4><p>${escapeHtml(unitsText(s.text))}</p>`).join("");
   // A cue while more of the text is below the box's edge (ADR-0054).
   return `<button type="button" class="help-close" aria-label="Close">×</button>${head}${sections}<p class="help-more" aria-hidden="true">More below ↓ scroll</p>`;
 }
@@ -836,9 +940,9 @@ function pointText(p) {
   const [label] = KINDS[p.kind] || [p.kind];
   const parts = [`<strong>${escapeHtml(label)}</strong>`];
   if (p.name) parts.push(escapeHtml(p.name));
-  if (p.ele != null) parts.push(`${Math.round(p.ele)} m`);
-  if (p.where === "trailhead") parts.push(`${p.off_m} m from the trailhead`);
-  else if (p.kind === "peak" && p.off_m > 50) parts.push(`${p.off_m} m off the route`);
+  if (p.ele != null) parts.push(fmt.short(p.ele));
+  if (p.where === "trailhead") parts.push(`${fmt.short(p.off_m)} from the trailhead`);
+  else if (p.kind === "peak" && p.off_m > 50) parts.push(`${fmt.short(p.off_m)} off the route`);
   else parts.push(`at ${fmt.km(p.along_m)}`);
   return parts.join("<br>");
 }
@@ -882,6 +986,7 @@ function drawMap(node, hike) {
 // ``query``: the weights and month the compare scores were made with (a Ranking's, or a pair's).
 function renderDetail(card, hike, { role, compare = null, result = null, query = state.query }) {
   if (card._map) card._map.remove();
+  card._shown = [hike, { role, compare, result, query }]; // drawn again in the other units (setUnits)
   card._hike = hike; // its "Link to this hike" follows the settings (refreshHikeLinks)
   card.hidden = false;
   card.classList.remove("empty");
@@ -915,6 +1020,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     ${hike.route ? `<p class="hint">Drawn from trail segments${hike.routes?.length ? ` along ${escapeHtml(hike.routes.slice(0, 5).join(", "))}${hike.routes.length > 5 ? " and more" : ""}` : ""}; measured as drawn${hike.way_back ? ", with its way back" : ""}.</p>` : ""}
     ${hike.way_back && hike.way_back.kind !== "none" ? `<p class="hint">Length, climb, descent and every measure include the way back to the start (${escapeHtml(wayBackText(hike.way_back))}); the map and profile show the hike itself.</p>` : ""}
     <ul class="badges">${badges.map((b) => `<li>${escapeHtml(b)}</li>`).join("")}</ul>
+    ${emergencyLine(hike.emergency)}
     <div class="map"></div>
     <div class="legend">${LEGEND.map(([label, color]) => `<span style="--c:${color}">${label}</span>`).join("")}</div>
     <div class="slot-elevation"></div>
@@ -940,6 +1046,19 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
   const note = card.querySelector(".uncounted-note"), line = compare && uncountedLine(query);
   note.hidden = !line;
   note.textContent = line || "";
+}
+
+// The emergency number and mountain rescue service of the country a hike starts in, with its sources;
+// a hike near a border shows its start country's (112 works across the EU).
+function emergencyLine(emergency) {
+  if (!emergency) return '<p class="emergency">In an emergency, call the local emergency number.</p>';
+  const { name, numbers, rescue, rescue_url: url, how, sources } = emergency;
+  const link = (href, text) => `<a href="${escapeHtml(href)}" target="_blank" rel="noopener">${escapeHtml(text)}</a>`;
+  const parts = [`<strong>Emergency: ${numbers.map(escapeHtml).join(" or ")}</strong>`];
+  if (rescue) parts.push(`Mountain rescue: ${url ? link(url, rescue) : escapeHtml(rescue)}`);
+  if (how && how !== `Call ${numbers[0]}.`) parts.push(escapeHtml(how));
+  const cited = `${sources.length === 1 ? "source" : "sources"} ${sources.map((href) => link(href, new URL(href).hostname.replace(/^www\./, ""))).join(", ")}`;
+  return `<p class="emergency" title="Emergency services where this hike starts: ${escapeHtml(name)}">${parts.join(" · ")} <small>(${escapeHtml(name)}, ${cited})</small></p>`;
 }
 
 // Why a Measure a query weighs 0 is not counted, as the detail table says it: weighted 0, behind a
@@ -1003,7 +1122,7 @@ function factsTable(hike, compare, result, month, query, uncounted) {
       const row = document.createElement("tr");
       const reason = uncounted[measure.name], fade = reason ? ' class="faded"' : "";
       if (reason) row.className = "excluded";
-      const cells = [`<td${fade} title="${escapeHtml(measure.description)}">${escapeHtml(measure.label)}</td>`];
+      const cells = [`<td${fade} title="${escapeHtml(unitsText(measure.description))}">${escapeHtml(measure.label)}</td>`];
       const values = compare ? [hike, compare] : [hike];
       for (const h of values) cells.push(`<td class="num${reason && !h.wish ? " faded" : ""}"></td>`);
       if (compare) cells.push('<td class="num score"></td>');
@@ -1026,9 +1145,9 @@ function factsTable(hike, compare, result, month, query, uncounted) {
         const { score, note } = result?.measures?.[measure.name] ?? {};
         const unasked = compare.wish && compare.wish[measure.name] == null; // a wish asks nothing of it
         const shown = score == null
-          ? (note ? `– ${helpButton(measure.name)}<small class="note">${escapeHtml(note)}</small>`
+          ? (note ? `– ${helpButton(measure.name)}<small class="note">${escapeHtml(unitsText(note))}</small>`
             : reason && unasked ? "" : `<span class="nodata">${unasked ? "left out" : "no data"}</span>`)
-          : `<span class="bar"><i style="width:${Math.round(score * 100)}%"></i></span>${score.toFixed(2)} ${helpButton(measure.name)}${note ? `<small class="note">${escapeHtml(note)}</small>` : ""}`;
+          : `<span class="bar"><i style="width:${Math.round(score * 100)}%"></i></span>${score.toFixed(2)} ${helpButton(measure.name)}${note ? `<small class="note">${escapeHtml(unitsText(note))}</small>` : ""}`;
         // A Measure not counted keeps its score, faded, with why in plain text, not only in colour.
         row.lastElementChild.innerHTML = reason
           ? `${shown && `<span class="faded">${shown}</span>`}<small class="uncounted">${reason.cell}</small>` : shown;
@@ -1058,12 +1177,12 @@ function buildWeights() {
       row.dataset.measure = measure.name;
       const id = `w-${measure.name}`;
       row.innerHTML = `
-        <label class="name" for="${id}" title="${escapeHtml(measure.description)}">${escapeHtml(measure.label)}</label>
+        <label class="name" for="${id}" title="${escapeHtml(unitsText(measure.description))}">${escapeHtml(measure.label)}</label>
         ${wishable(measure) ? wishInput(measure) : ""}
         <input id="${id}" type="range" min="0" max="100" step="10" value="${measure.default_weight}" aria-label="${escapeHtml(measure.label)} weight, 0 to 100">
         <output for="${id}"></output>`;
       if (measure.name === "length") {
-        row.insertAdjacentHTML("beforeend", '<p class="hint length-note">Over about 25 km is usually more than a day. With Return to start a line counts there and back.</p>');
+        row.insertAdjacentHTML("beforeend", `<p class="hint length-note">${lengthNote()}</p>`);
       }
       if (measure.name === "round_trip") {
         row.insertAdjacentHTML("beforeend", '<p class="hint weight-note">Left out with Return to start: every hike is then a round trip.</p>');
@@ -1147,10 +1266,26 @@ function folded(row) {
 const wishable = (measure) => measure.wish != null;
 const yesNo = (measure) => measure.wish.kind === "yes/no";
 // A number wish is sent in the Measure's fact units; the page may show it in another, such as km for metres (ADR-0035).
-const shownUnit = (measure) => measure.wish.display?.unit ?? measure.wish.unit;
-const perShown = (measure) => measure.wish.display?.per ?? 1;
-const toShown = (measure, value) => Math.round((value / perShown(measure)) * 1e6) / 1e6;
+// In miles and feet a length in km is typed in miles and a height in metres in feet, rounded as typed.
+const imperialShown = (measure) => (!imperial() || measure.wish.unit !== "m" ? null
+  : measure.wish.display?.unit === "km" ? { unit: "mi", per: MILE_M, digits: 2 } : { unit: "ft", per: FOOT_M, digits: 0 });
+const shownUnit = (measure) => imperialShown(measure)?.unit ?? measure.wish.display?.unit ?? measure.wish.unit;
+const perShown = (measure) => imperialShown(measure)?.per ?? measure.wish.display?.per ?? 1;
+const toShown = (measure, value) => rounded(value / perShown(measure), imperialShown(measure)?.digits ?? 6);
 const toFact = (measure, value) => Math.round(value * perShown(measure) * 1e6) / 1e6;
+
+function lengthNote() {
+  return `Over about ${imperial() ? "16 mi" : "25 km"} is usually more than a day. With Return to start a line counts there and back.`;
+}
+
+// A number wish input's range, default and name in the units shown; in miles and feet any step
+// (a step of 500 m is no round number of miles).
+function wishAttributes(measure) {
+  const wish = measure.wish, unit = shownUnit(measure) ?? "";
+  const range = Object.fromEntries(["min", "max", "step"].filter((key) => wish[key] != null).map((key) => [key, String(toShown(measure, wish[key]))]));
+  if (imperialShown(measure)) range.step = "any";
+  return { ...range, placeholder: String(toShown(measure, wish.default)), "aria-label": `${measure.label} you want${unit ? `, in ${unit}` : ""}` };
+}
 
 // The value input of a weight row: a yes/no toggle, or a number in the Measure's unit and range.
 function wishInput(measure) {
@@ -1158,11 +1293,10 @@ function wishInput(measure) {
   if (yesNo(measure)) {
     return `<label class="wish-value"><input class="wish" type="checkbox"${wish.default ? " checked" : ""} aria-label="${label} you want"> yes</label>`;
   }
-  const range = ["min", "max", "step"].filter((key) => wish[key] != null).map((key) => ` ${key}="${escapeHtml(toShown(measure, wish[key]))}"`).join("");
+  const attributes = Object.entries(wishAttributes(measure)).map(([key, value]) => ` ${key}="${escapeHtml(value)}"`).join("");
   const unit = shownUnit(measure) ? escapeHtml(shownUnit(measure)) : "";
   // Empty until the Hiker asks it, so no value looks asked while its weight is off; the default shows as a hint.
-  return `<span class="wish-value"><input class="wish" type="number"${range} value="" placeholder="${escapeHtml(toShown(measure, wish.default))}" inputmode="decimal"
-    aria-label="${label} you want${unit ? `, in ${unit}` : ""}">${unit ? `<span class="unit">${unit.replaceAll("/", "/<wbr>")}</span>` : ""}</span>`;
+  return `<span class="wish-value"><input class="wish" type="number" value="" inputmode="decimal"${attributes}>${unit ? `<span class="unit">${unit.replaceAll("/", "/<wbr>")}</span>` : ""}</span>`;
 }
 
 // What the Hiker wants of each Measure they weight (a measure weighted 0 or left out asks nothing).
@@ -1173,7 +1307,11 @@ function readWish(weights) {
     const input = document.querySelector(`.weight[data-measure="${measure.name}"] input.wish`);
     if (yesNo(measure)) { wish[measure.name] = input.checked; continue; }
     input.setCustomValidity(""); // valid unless it is out of range again
-    const value = toFact(measure, Number(input.value)), { min, max } = measure.wish, unit = shownUnit(measure);
+    const { min, max } = measure.wish, unit = shownUnit(measure);
+    let value = toFact(measure, Number(input.value));
+    // Typed at an end of the range as shown, rounded to miles or feet: that end.
+    if (imperialShown(measure) && Number(input.value) === toShown(measure, min)) value = min;
+    if (imperialShown(measure) && Number(input.value) === toShown(measure, max)) value = max;
     if (input.value === "" || !Number.isFinite(value) || value < (min ?? -Infinity) || value > (max ?? Infinity)) {
       const range = `${toShown(measure, min)} to ${toShown(measure, max)}${unit ? ` ${unit}` : ""}`;
       input.setCustomValidity(range);
@@ -2452,16 +2590,16 @@ function groupDefaultKm() {
   const limits = [];
   if ($("#drive-on").checked) {
     if ($("#hours-on").checked && Number($("#hours").value) > 0) limits.push(Number($("#hours").value) * kmh);
-    if ($("#km-on").checked && Number($("#km").value) > 0) limits.push(Number($("#km").value));
+    if ($("#km-on").checked && Number($("#km").value) > 0) limits.push(kmTyped("#km", Number($("#km").value)));
   }
   return limits.length ? Math.max(least, share * Math.min(...limits)) : km;
 }
 
 function showGroupDefault() {
   const { km, share, min_km: least, kmh } = state.info.grouping;
-  const now = String(Math.round(groupDefaultKm() * 10) / 10);
+  const now = String(rounded(kmShown(groupDefaultKm()), 1));
   $("#group-km").placeholder = now;
-  $("#group-hint").textContent = `A hike starting this near a better one is listed as one of its versions, not in a row of its own. Empty: ${now} km for this search, ${share * 100} % of the limit (a drive hour counts as ${kmh} km), at least ${least} km; ${km} km with no limit.`;
+  $("#group-hint").textContent = `A hike starting this near a better one is listed as one of its versions, not in a row of its own. Empty: ${now} ${limitUnit()} for this search, ${share * 100} % of the limit (a drive hour counts as ${limitText(kmh)}), at least ${limitText(least)}; ${limitText(km)} with no limit.`;
 }
 
 // ---------- ranking ----------
@@ -2589,15 +2727,15 @@ async function findSimilar() {
         query.max_hours = hours;
       }
       if (byKm) {
-        const km = Number($("#km").value);
-        if (!(km >= 1 && km <= state.info.max_km)) throw new Error(`Max km is from 1 to ${state.info.max_km}.`);
+        const km = kmTyped("#km", Number($("#km").value));
+        if (!(km >= 1 && km <= state.info.max_km)) throw new Error(`Max ${limitUnit()} is from ${kmShown(1)} to ${kmShown(state.info.max_km)}.`);
         query.max_km = km;
       }
     }
     const group = $("#group-km").value.trim();
     if (group !== "") { // empty: the server groups by the limits (ADR-0032)
-      const km = Number(group);
-      if (!(km >= 0.1 && km <= 50)) throw new Error("Group hikes starting within 0.1 to 50 km.");
+      const km = kmTyped("#group-km", Number(group));
+      if (!(km >= 0.1 && km <= 50)) throw new Error(`Group hikes starting within ${kmShown(0.1)} to ${limitText(50)}.`);
       query.group_km = km;
     }
   } catch (error) {
@@ -2717,7 +2855,7 @@ function renderResults() {
   $("#results-stale").hidden = true;
   $("#selected").hidden = true;
   // The limits named with their starting place: a limit kept from an earlier search is plain to see.
-  const limits = [body.max_hours && `a ${body.max_hours} h drive`, body.max_km && `${body.max_km} km`].filter(Boolean).join(" and ");
+  const limits = [body.max_hours && `a ${body.max_hours} h drive`, body.max_km && limitText(body.max_km)].filter(Boolean).join(" and ");
   const considered = body.reachable == null
     ? `${state.info.dayhikes.toLocaleString("en")} hikes`
     : `${body.reachable.toLocaleString("en")} hikes within ${limits} of ${state.asked.place}`;
@@ -2729,7 +2867,7 @@ function renderResults() {
     ? " Loops are searched from a limited number of starting points near the most similar hikes, so they are not every loop there is and can change when the catalog is rebuilt."
     : "";
   const versions = shown.some((result) => result.versions.length)
-    ? ` Hikes starting within ${body.group_km} km of a better one are its versions: click a row with versions to list the others (var 2, 3) under it and see each on the map.`
+    ? ` Hikes starting within ${limitText(body.group_km)} of a better one are its versions: click a row with versions to list the others (var 2, 3) under it and see each on the map.`
     : "";
   $("#wish-card").hidden = true;
   $("#results-title").textContent = state.query.wish ? "Hikes closest to the one you want" : "Most similar hikes";
@@ -2747,7 +2885,7 @@ function renderResults() {
   $("#results-loops").hidden = !state.info.compose || body.loops; // SuggestedLoops on request (ADR-0028)
   const table = $("#results-table");
   const measureHeads = comparedMeasures(body.return_to_start).map((m) =>
-    `<th class="measure${body.weights[m.name] ? "" : " excluded"}" title="${escapeHtml(`${m.label}: ${m.description}`)}">${escapeHtml(m.label)} ${helpButton(m.name)}</th>`).join("");
+    `<th class="measure${body.weights[m.name] ? "" : " excluded"}" title="${escapeHtml(`${m.label}: ${unitsText(m.description)}`)}">${escapeHtml(m.label)} ${helpButton(m.name)}</th>`).join("");
   const figures = body.return_to_start ? "with the way back" : "one way";
   table.innerHTML = `<thead><tr><th>#</th><th class="name">Hike</th><th>Score ${helpButton("overall")}</th>${state.query.drive ? "<th>Drive</th>" : ""}${state.query.km ? '<th title="Straight line from the starting place">Distance</th>' : ""}<th title="Length, ${figures}">Length${body.return_to_start ? " with way back" : ""}</th><th title="Climb and descent, ${figures}">Up / down${body.return_to_start ? " with way back" : ""}</th>${measureHeads}</tr></thead>`;
   state.expanded = null;
@@ -2768,7 +2906,7 @@ function showFilters() {
   const body = state.answer, { query, place } = state.asked;
   const chips = [];
   if (body.max_hours) chips.push([`Within a ${body.max_hours} h drive of ${place}`, () => dropLimit("#hours-on")]);
-  if (body.max_km) chips.push([`Within ${body.max_km} km of ${place}`, () => dropLimit("#km-on")]);
+  if (body.max_km) chips.push([`Within ${limitText(body.max_km)} of ${place}`, () => dropLimit("#km-on")]);
   if (body.month) {
     chips.push([`Weather in ${MONTHS[body.month - 1]}`, () => {
       $("#month").value = "";
@@ -2783,7 +2921,7 @@ function showFilters() {
     }]);
   }
   if (query.group_km != null) {
-    chips.push([`Grouped within ${query.group_km} km`, () => {
+    chips.push([`Grouped within ${limitText(query.group_km)}`, () => {
       $("#group-km").value = "";
       showGroupDefault();
       findSimilar();
@@ -2863,7 +3001,7 @@ function notePoor() {
   note.hidden = typical == null || weak < 0;
   if (note.hidden) return;
   const like = state.query.wish ? "what you want" : "this hike";
-  const limits = [body.max_hours && `a ${body.max_hours} h drive`, body.max_km && `${body.max_km} km`].filter(Boolean).join(" and ");
+  const limits = [body.max_hours && `a ${body.max_hours} h drive`, body.max_km && limitText(body.max_km)].filter(Boolean).join(" and ");
   const near = limits ? `within ${limits} of ${state.asked.place}` : "";
   note.textContent = weak === 0
     ? `Weak matches: the best of these scores ${rows[0].score.toFixed(3)}, below the ${typical} of a typical pair of random hikes, so ${near
@@ -2929,7 +3067,7 @@ function resultRow(result, number, open) {
   const cells = comparedMeasures(back).map((m) => {
     const { score, note } = result.measures[m.name];
     const missing = wish && wish[m.name] == null ? "not in your wish" : "no data";
-    if (score == null) return `<td class="cell none" title="${escapeHtml(note ?? missing)}">–</td>`;
+    if (score == null) return `<td class="cell none" title="${escapeHtml(unitsText(note) ?? missing)}">–</td>`;
     if (!weights[m.name]) {
       return `<td class="cell left-out" title="${escapeHtml(m.label)}: ${score.toFixed(2)}, left out of this ranking">${Math.round(score * 100)}</td>`;
     }
@@ -2952,7 +3090,7 @@ function resultRow(result, number, open) {
   row.innerHTML = `<td><span class="number">${number}</span>${picked}</td><td class="name" title="${escapeHtml(result.name)}"><span class="hike-name">${tag}${escapeHtml(result.name)}</span>${versions || more ? `<span class="badge-line">${versions}${more}</span>` : ""}</td>
     <td class="score">${result.score.toFixed(3)}</td>
     ${drive ? `<td>${result.drive_hours.toFixed(1)} h</td>` : ""}
-    ${km ? `<td>${result.distance_km.toFixed(1)} km</td>` : ""}
+    ${km ? `<td>${(imperial() ? (result.distance_km * 1000) / MILE_M : result.distance_km).toFixed(1)} ${limitUnit()}</td>` : ""}
     <td class="figure">${result.length_m != null ? fmt.km(result.length_m) : "–"}</td>
     <td class="figure">${result.climb_m != null ? upDown(result.climb_m, result.descent_m) : "–"}</td>${cells}`;
   row.addEventListener("click", open);
@@ -2964,7 +3102,7 @@ function resultRow(result, number, open) {
 
 // Why a row's good matches starting in its area are not listed (ADR-0046).
 function moreHereNote(count) {
-  return `Only the best hike of each area (hikes starting within ${state.query.group_km} km of it) is listed, with up to 2 versions that walk mostly other trails. ${count === 1 ? "This one scores" : `These ${count} score`} within 0.05 of it but ${count === 1 ? "is" : "are"} not listed, and later pages do not show ${count === 1 ? "it" : "them"}.`;
+  return `Only the best hike of each area (hikes starting within ${limitText(state.query.group_km)} of it) is listed, with up to 2 versions that walk mostly other trails. ${count === 1 ? "This one scores" : `These ${count} score`} within 0.05 of it but ${count === 1 ? "is" : "are"} not listed, and later pages do not show ${count === 1 ? "it" : "them"}.`;
 }
 
 // The versions of a row, catalog or composed, on the map, and under it as rows var 2 and 3:
@@ -3099,6 +3237,11 @@ async function start() {
     $("#drive-off").hidden = false;
     $("#km-on").checked = true;
   }
+  setUnits(localeUnits());
+  $("#units").addEventListener("change", (event) => {
+    setUnits(event.target.value);
+    syncAddress();
+  });
   showGroupDefault();
   for (const id of ["#hours", "#km", "#hours-on", "#km-on"]) OPENED[id] = { value: $(id).value, checked: $(id).checked };
   LIKED_EMPTY = $("#liked").innerHTML;

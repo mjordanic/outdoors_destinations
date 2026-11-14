@@ -55,6 +55,8 @@
     <h1><a class="home" href="/">HikesAlike</a></h1>
     <p class="tagline">Hikes like the ones you love, out of <span id="count"><!--dayhikes-->160,000<!--/dayhikes--></span> hikes across Europe.</p>
   </div>
+  <label class="units-switch" title="Show lengths and heights in km and metres, or in miles and feet">Units
+    <select id="units" autocomplete="off"><option value="metric">km, m</option><option value="imperial">mi, ft</option></select></label>
   <img class="coverage" src="coverage.svg" alt="Map of Europe with the covered countries shaded" width="120" height="68"
        title="Shaded: the countries this demo covers">
 </header>
@@ -121,7 +123,7 @@
         <p class="hint" id="drive-hint">An estimate: motorway, trunk and primary roads, plus a straight line at 35 km/h to and from them. Good to about ±10 min; a 4 h limit is 4 h ± 30 min.</p>
         <p id="drive-off" class="hint" hidden>The drive-time limit is not available on this server.</p>
         <div class="row limit">
-          <label class="check"><input type="checkbox" id="km-on" autocomplete="off"> Max km, straight line</label>
+          <label class="check"><input type="checkbox" id="km-on" autocomplete="off"> Max <span class="limit-unit">km</span>, straight line</label>
           <input id="km" type="number" autocomplete="off" min="1" max="200" step="1" value="50" aria-label="Max km value">
         </div>
         <p class="hint">As the crow flies from the starting place to where the hike starts, not by road.</p>
@@ -129,7 +131,7 @@
       <details id="more-options">
         <summary>More options</summary>
         <div class="row">
-          <label for="group-km">Group hikes starting within (km)</label>
+          <label for="group-km">Group hikes starting within (<span class="limit-unit">km</span>)</label>
           <input id="group-km" type="number" autocomplete="off" min="0.1" max="50" step="0.1" inputmode="decimal">
         </div>
         <p class="hint" id="group-hint"></p>

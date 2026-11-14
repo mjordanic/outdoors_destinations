@@ -33,6 +33,10 @@ similarity directory live. It writes a directory a server memory-maps:
   (``export_landmarks``, ADR-0053), each with its nearest hikes; written by
   every export and by ``export_places``. An export without it still opens
   and searches hike names only.
+- ``countries.npy``: per Trailhead (``trailheads.npy`` order) the ISO 3166 code of the
+  country the hike starts in, for its emergency number (``export_countries``), when
+  a Natural Earth countries file is given. ``export_countries`` writes it beside an
+  existing export too; without it a hike's country is that of the town nearest its start.
 - ``meta.json``: written last, so a directory without it is incomplete.
 
 ``ServingData`` opens such a directory without ``Catalog.open``: name search,
@@ -46,6 +50,7 @@ lists them among them (``dayhike.loops``, ADR-0020).
 
 from __future__ import annotations
 
+import csv
 import functools
 import heapq
 import itertools
@@ -463,6 +468,85 @@ class ServingExportError(ValueError):
     """The inputs of a serving export do not fit together."""
 
 
+# Per country (ISO 3166 code) the emergency numbers and mountain rescue service a hike starting
+# there shows, each row with its sources: one small table, edited by hand.
+EMERGENCY_PATH = Path(__file__).parent / "data" / "emergency.csv"
+
+
+@functools.cache
+def emergency_services() -> dict[str, dict]:
+    """``EMERGENCY_PATH`` by country code: country, name, numbers, rescue, rescue_url, how, sources
+    and notes (why a row has no official national source, else None)."""
+    with EMERGENCY_PATH.open(newline="", encoding="utf-8") as file:
+        return {
+            row["country"]: {
+                "country": row["country"],
+                "name": row["name"],
+                "numbers": row["numbers"].split(),
+                "rescue": row["rescue"] or None,
+                "rescue_url": row["rescue_url"] or None,
+                "how": row["how"],
+                "sources": row["source"].split(),
+                "notes": row["notes"] or None,
+            }
+            for row in csv.DictReader(file)
+        }
+
+
+COAST_DEG = 1.0  # without places, a Trailhead outside every country shape takes the nearest one this near
+
+
+def export_countries(out_dir: Path | str, countries_path: Path | str | None = None) -> Path:
+    """Write ``countries.npy`` into the export ``out_dir``: per Trailhead the ISO 3166 code of the
+    country it is in, from Natural Earth admin-0 country shapes (``countries_path``, the GeoJSON
+    the coverage map reads); for a Trailhead outside every shape (an island or coast the
+    simplified shapes leave out) the country of the nearest place in ``places.sqlite``, or
+    without places, of the nearest shape within ``COAST_DEG``. Reads only ``trailheads.npy``
+    and ``places.sqlite``.
+
+    Raises ServingExportError, writing nothing, when a Trailhead has no country, or its country
+    no row in ``EMERGENCY_PATH``: every hike shows its emergency number.
+    """
+    from scipy.spatial import cKDTree
+
+    out = Path(out_dir)
+    trailheads = np.load(out / "trailheads.npy").reshape(-1, 2)
+    codes = np.full(len(trailheads), "", dtype="<U2")
+    if countries_path is not None:
+        shapes, shape_codes = [], []
+        for feature in json.loads(Path(countries_path).read_text())["features"]:
+            properties = feature["properties"]
+            code = next((c for c in (properties.get("ISO_A2_EH"), properties.get("ISO_A2")) if c and c != "-99"), None)
+            if code:
+                shapes.append(shapely.geometry.shape(feature["geometry"]))
+                shape_codes.append(code)
+        points = shapely.points(trailheads[:, 1], trailheads[:, 0])
+        tree, shape_codes = shapely.STRtree(shapes), np.array(shape_codes, dtype="<U2")
+        at, shape = tree.query(points, predicate="within")
+        codes[at] = shape_codes[shape]
+    places = out / "places.sqlite"
+    if (codes == "").any() and places.is_file():
+        with sqlite3.connect(f"file:{places}?mode=ro", uri=True) as db:
+            rows = db.execute("SELECT country, lat, lon FROM places WHERE country != ''").fetchall()
+        if rows:
+            where = np.array([(lat, lon) for _, lat, lon in rows])
+            missing = np.flatnonzero(codes == "")
+            _, nearest = cKDTree(_unit(where[:, 0], where[:, 1])).query(_unit(trailheads[missing, 0], trailheads[missing, 1]))
+            codes[missing] = np.array([country for country, *_ in rows], dtype="<U2")[nearest]
+    if (codes == "").any() and countries_path is not None:
+        # Without places: a Trailhead on an island or coast the simplified shapes leave out takes the nearest one.
+        missing = np.flatnonzero(codes == "")
+        at, shape = tree.query_nearest(points[missing], max_distance=COAST_DEG)
+        codes[missing[at[::-1]]] = shape_codes[shape[::-1]]  # of equally near shapes, the first
+    known = emergency_services()
+    unknown = {code: int((codes == code).sum()) for code in sorted(set(codes.tolist()) - set(known))}
+    if unknown:
+        listed = ", ".join(f"{code or 'no country'} ({count} Trailheads)" for code, count in unknown.items())
+        raise ServingExportError(f"no emergency number for {listed}: add the country to {EMERGENCY_PATH}")
+    np.save(out / "countries.npy", codes)
+    return out / "countries.npy"
+
+
 def export_serving(
     catalog_path: Path | str,
     out_dir: Path | str,
@@ -471,6 +555,7 @@ def export_serving(
     snaps_path: Path | str | None = None,
     valhalla_url: str | None = None,
     geonames_path: Path | str | None = None,
+    countries_path: Path | str | None = None,
     progress: Progress | None = None,
 ) -> Path:
     """Write the serving export of a Catalog into ``out_dir`` (see the module doc).
@@ -481,7 +566,8 @@ def export_serving(
     can be (same disk), else copied. ``snaps_path`` seeds ``snaps.npz`` from an
     existing snap cache; with ``valhalla_url`` every Trailhead not in it is
     snapped now, so a server never has to. ``geonames_path`` is a GeoNames
-    dump (``allCountries``, zip or txt) for ``places.sqlite``.
+    dump (``allCountries``, zip or txt) for ``places.sqlite``; ``countries_path`` the Natural
+    Earth countries GeoJSON for ``countries.npy``.
     """
     started = time.monotonic()
     catalog_path, out = Path(catalog_path), Path(out_dir)
@@ -527,6 +613,10 @@ def export_serving(
     else:
         (out / "places.sqlite").unlink(missing_ok=True)
     export_landmarks(out, geonames_path)
+    if countries_path is not None:
+        export_countries(out, countries_path)
+    else:
+        (out / "countries.npy").unlink(missing_ok=True)
     # The elevation map in use: FABDEM, unless the GeometryStore was sampled from Copernicus GLO-30 (ADR-0030).
     elevation = {} if "copernicus" in sources else {"fabdem": FABDEM_ATTRIBUTION}
     meta = {
@@ -1220,6 +1310,8 @@ class ServingData:
                     self._landmark_names = "l.names"
             threading.Thread(target=lambda: self._landmark_spellings, daemon=True).start()
         self._one_way_m = self.store.mode(False).column("length_m")  # what makes a hike multi-day (ADR-0056)
+        countries = self.directory / "countries.npy"
+        self.countries = np.load(countries) if countries.is_file() else None
 
     def _db(self) -> sqlite3.Connection:
         return sqlite3.connect(self._db_uri, uri=True)
@@ -1400,6 +1492,16 @@ class ServingData:
         near = self._near_town(lat, lon)
         return f"{near[0]}, {near[1]}" if near else None
 
+    def emergency(self, lat: float, lon: float, row: int | None = None) -> dict | None:
+        """The emergency numbers and mountain rescue service of the country a hike starts in
+        (``emergency_services``): its Trailhead's in ``countries.npy`` (``row``), else the country of
+        the town nearest its start, however far; None with neither, or with no row for the country."""
+        code = str(self.countries[row]) if row is not None and self.countries is not None else ""
+        towns, tree = self._towns
+        if not code and tree is not None:
+            code = towns[int(tree.query(_unit(lat, lon)[0])[1])][1]
+        return emergency_services().get(code)
+
     def multi_day(self, row: int) -> bool:
         """Whether a hike is a multi-day route: longer than ``MULTI_DAY_M`` one way (ADR-0056)."""
         return bool(self._one_way_m[row] > MULTI_DAY_M)
@@ -1500,6 +1602,7 @@ class ServingData:
             "walk_m": walk_m,
             "multi_day": self.multi_day(row),
             "region": self._region(row),
+            "emergency": self.emergency(*map(float, self.trailheads[row]), row),
             **self._climb(row, (climb_m, descent_m), return_to_start),
             "line": line,
             "elevation": None
@@ -1612,6 +1715,7 @@ class ServingData:
             "walk_m": walk_m,
             "multi_day": walk_m > MULTI_DAY_M,
             "region": self._place_near(float(lat[0]), float(lon[0])),
+            "emergency": self.emergency(float(lat[0]), float(lon[0])),
             "climb_m": climb_m,
             "descent_m": descent_m,
             "line": line,

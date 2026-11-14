@@ -93,8 +93,22 @@ def browser() -> Iterator["sync_api.Browser"]:
             launched = playwright.chromium.launch()
         except sync_api.Error as error:
             pytest.skip(f"no Chromium for Playwright (uv run playwright install chromium): {error}")
-        yield launched
+        yield Browser(launched)
         launched.close()
+
+
+class Browser:
+    """The browser, its pages in British English unless a test asks for a locale: km and metres (the
+    page's default units come from the locale)."""
+
+    def __init__(self, browser) -> None:
+        self._browser = browser
+
+    def new_page(self, **options):
+        return self._browser.new_page(**{"locale": "en-GB", **options})
+
+    def __getattr__(self, name):
+        return getattr(self._browser, name)
 
 
 class Api:
@@ -137,9 +151,13 @@ def open_page(
     init: str = "",
     draw: int | None = None,
     touch: bool = False,
+    locale: str = "en-GB",
+    timezone: str | None = None,
 ):
-    """``draw``: the draw number each Find takes, in place of a random one; ``touch``: a phone's touch screen."""
-    page = browser.new_page(viewport={"width": width, "height": 900}, has_touch=touch, is_mobile=touch)
+    """``draw``: the draw number each Find takes, in place of a random one; ``touch``: a phone's touch screen;
+    ``locale`` and ``timezone``: the browser's, which choose the units the page opens in."""
+    zone = {"timezone_id": timezone} if timezone else {}
+    page = browser.new_page(viewport={"width": width, "height": 900}, has_touch=touch, is_mobile=touch, locale=locale, **zone)
     if init:
         page.add_init_script(init)
     page.set_default_timeout(5000)
@@ -3114,3 +3132,168 @@ def test_a_multi_day_route_is_marked_in_the_list_and_panel_and_drawn_only_after_
     page.route(f"{server}/api/hikes/1001*", lambda route: route.fulfill(json={**route.fetch().json(), "multi_day": True, "walk_m": 1_073_000}))
     page.evaluate(f"location.hash = '#hike={RIDGE_WALK_ID}'")
     page.locator("#liked .badges li").first.get_by_text("multi-day, 1,073 km").wait_for()
+
+
+# ---------- units: km and metres, or miles and feet ----------
+
+FOOT_M, MILE_M = 0.3048, 1609.344
+
+
+def _elevation_axis(page) -> list[str]:
+    return page.locator("#liked .chart.elevation svg text").all_text_contents()
+
+
+def test_the_units_follow_the_browsers_locale_whatever_its_time_zone(browser, server) -> None:
+    us = open_page(browser, server, Api({}), locale="en-US", timezone="America/Denver", hash=f"#hike={RIDGE_WALK_ID}")
+    us.get_by_text("Chosen: Ridge Walk").wait_for()
+    assert us.locator("#units").input_value() == "imperial"
+    assert any(re.fullmatch(r"↑ [\d,]+ ft ↓ [\d,]+ ft with the way back", b) for b in us.locator("#liked .badges li").all_inner_texts())
+
+    for locale, timezone, units in (("en-US", "Europe/Zagreb", "imperial"), ("en-GB", "America/Denver", "metric"), ("hr-HR", "Europe/Zagreb", "metric")):
+        page = open_page(browser, server, Api({}), locale=locale, timezone=timezone)
+        assert page.locator("#units").input_value() == units, (locale, timezone)
+
+
+def test_every_length_and_height_of_a_hike_switches_to_miles_and_feet_and_back(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    metric = page.locator("#liked .badges li").all_inner_texts()
+    assert any(re.fullmatch(r"[\d.]+ km.*", b) for b in metric), metric
+    assert "Elevation profile (metres above sea level)" in page.locator("#liked .chart.elevation h3").inner_text()
+    assert any(text.endswith(" km") for text in _elevation_axis(page))
+
+    page.locator("#units").select_option("imperial")
+    page.wait_for_url("**&units=imperial")
+    assert re.fullmatch(r"Chosen: Ridge Walk, [\d.]+ mi one way \([\d.]+ mi with the way back\)", page.locator("#liked-name").inner_text())
+    badges = page.locator("#liked .badges li").all_inner_texts()
+    assert any(re.fullmatch(r"[\d.]+ (mi|ft).*", b) for b in badges), badges
+    assert any(re.fullmatch(r"↑ [\d,]+ ft ↓ [\d,]+ ft with the way back", b) for b in badges), badges
+    assert not any(re.search(r"\d (km|m)\b", b) for b in badges), badges
+    assert page.locator("#liked .chart.elevation h3").inner_text() == "Elevation profile (feet above sea level)"
+    axis = _elevation_axis(page)
+    assert any(text.endswith(" mi") for text in axis) and not any(text.endswith(" km") for text in axis), axis
+    facts = page.locator("#liked table.facts")
+    highest = facts.locator("tr", has=page.locator("td", has_text="Highest point")).locator("td").nth(1).inner_text()
+    assert highest.endswith(" ft"), highest
+    # The score explained by the server says its lengths in miles and feet too.
+    title = facts.locator("td", has_text="Highest point").first.get_attribute("title")
+    assert "1,312 ft apart" in title and " m apart" not in title, title
+
+    page.locator("#units").select_option("metric")
+    assert page.locator("#liked .badges li").all_inner_texts() == metric
+    assert "units=" not in page.url  # km and m are the default in British English
+
+
+def test_a_wish_typed_in_miles_and_feet_is_sent_in_metres_and_its_link_keeps_the_units(browser, server) -> None:
+    api = Api({**WISHABLE, "length": KM_LENGTH})
+    page = open_page(browser, server, api)
+    page.locator("#units").select_option("imperial")
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    length, climbing = page.get_by_label("Length you want, in mi"), page.get_by_label("Climbing you want, in ft")
+    assert length.input_value() == "6.21" and climbing.input_value() == "1969"  # the defaults, 10 km and 600 m
+
+    length.fill("10")
+    climbing.fill("2000")
+    page.get_by_label("Highest point weight, 0 to 100").fill("0")
+    page.get_by_role("button", name="Find hikes").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+
+    assert api.ranked[-1]["wish"] == {"length": 10 * MILE_M, "elevation_gain": round(2000 * FOOT_M, 6)}
+    page.wait_for_url("**/#wish=length:16093.44:100,elevation_gain:609.6:100**units=imperial")
+
+    # Typed values convert both ways.
+    page.locator("#units").select_option("metric")
+    assert page.get_by_label("Length you want, in km").input_value() == "16.09344"
+    assert page.get_by_label("Climbing you want, in m").input_value() == "609.6"
+    page.locator("#units").select_option("imperial")
+    assert length.input_value() == "10" and climbing.input_value() == "2000"
+
+    shared = open_page(browser, server, api, hash="#wish=length:16093.44:100&units=imperial")
+    assert shared.get_by_label("Length you want, in mi").input_value() == "10"
+    old = open_page(browser, server, api, hash="#wish=length:12500:100")  # a link from before the switch
+    assert old.get_by_label("Length you want, in km").input_value() == "12.5"
+
+
+def test_a_distance_limit_typed_in_miles_is_asked_in_km(browser, server) -> None:
+    api = Api({})
+    page = open_page(browser, server, api, hash=f"#hike={RIDGE_WALK_ID}&units=imperial")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_label("Only hikes near a starting place").check()
+    page.get_by_label("From", exact=True).fill("45.2, 15.1")
+    page.get_by_label("Max drive hours", exact=True).uncheck()
+    page.get_by_label("Max mi, straight line", exact=True).check()
+    assert page.get_by_label("Max mi value").input_value() == "31.1"  # the 50 km it opens with
+    page.get_by_label("Max mi value").fill("20")
+
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+
+    assert api.ranked[-1]["max_km"] == round(20 * MILE_M / 1000, 3)
+    assert page.locator("#results-table tbody tr").first.locator("td").nth(3).inner_text() == "0.0 mi"
+    assert page.locator("#results-filters").get_by_text("Within 20 mi of 45.2, 15.1").is_visible()
+    page.wait_for_url("**km=32.187**units=imperial")
+
+
+def test_a_distance_limit_at_an_end_of_its_range_in_miles_is_that_end_in_km(browser, server) -> None:
+    api = Api({})
+    page = open_page(browser, server, api, hash=f"#hike={RIDGE_WALK_ID}&from=45.2,15.1&km=200&group=50&units=imperial")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    assert page.get_by_label("Max mi value").input_value() == "124.3"
+    assert page.locator("#group-km").input_value() == "31.1"
+
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+    assert api.ranked[-1]["max_km"] == 200 and api.ranked[-1]["group_km"] == 50
+    page.wait_for_url("**km=200&group=50&units=imperial")
+
+    page.get_by_label("Max mi value").fill("0.6")
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-filters").get_by_text("Within 0.6 mi of 45.2, 15.1").wait_for()
+    page.wait_for_url("**km=1&group=50&units=imperial")
+    assert api.ranked[-1]["max_km"] == 1
+
+
+# ---------- the emergency number where a hike starts ----------
+
+
+def test_a_croatian_hike_shows_112_and_the_hgss(browser, server) -> None:
+    from dayhike.serving import emergency_services
+
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    line = page.locator("#liked .emergency")
+    assert line.inner_text().startswith("Emergency: 112 · Mountain rescue: HGSS (Croatia, sources hgss.hr, digital-strategy.ec.europa.eu)"), line.inner_text()
+    assert line.get_by_role("link", name="HGSS", exact=True).get_attribute("href").startswith("https://")
+    cited = [line.get_by_role("link", name=host, exact=True).get_attribute("href") for host in ("hgss.hr", "digital-strategy.ec.europa.eu")]
+    assert cited == emergency_services()["HR"]["sources"]
+
+
+@pytest.mark.parametrize(
+    ("code", "shown"),
+    [
+        ("GB", "Emergency: 999 or 112 · Mountain rescue: Mountain Rescue · Call 999 or 112, ask for Police, then Mountain Rescue."),
+        ("US", "Emergency: 911 · Mountain rescue: Mountain Rescue Association (United States, sources nps.gov, mra.org, gov.uk)"),
+    ],
+)
+def test_a_uk_or_us_hike_shows_its_own_countrys_number(browser, server, code, shown) -> None:
+    from dayhike.serving import emergency_services
+
+    def elsewhere(route) -> None:
+        route.fulfill(json={**route.fetch().json(), "emergency": emergency_services()[code]})
+
+    page = browser.new_page()
+    page.route(lambda url: not url.startswith(server), lambda route: route.abort())
+    page.route(f"{server}/api/hikes/{RIDGE_WALK_ID}*", elsewhere)
+    page.goto(f"{server}/#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    assert page.locator("#liked .emergency").inner_text().startswith(shown)
+    assert "HGSS" not in page.locator("#liked").inner_text()
+
+
+def test_a_hike_with_no_known_country_says_to_call_the_local_number(browser, server) -> None:
+    page = browser.new_page()
+    page.route(lambda url: not url.startswith(server), lambda route: route.abort())
+    page.route(f"{server}/api/hikes/{RIDGE_WALK_ID}*", lambda route: route.fulfill(json={**route.fetch().json(), "emergency": None}))
+    page.goto(f"{server}/#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    assert page.locator("#liked .emergency").inner_text() == "In an emergency, call the local emergency number."

@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 330" role="img" aria-label="Raster tiles are pictures per zoom level; vector tiles are data the browser draws">
+  <title>Raster pictures versus vector data</title>
+  <style>text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;fill:#1f2a24}.m{fill:#5d6b62}.h{font-weight:700;fill:#245f3c}</style>
+  <rect x="0" y="0" width="900" height="330" fill="#ffffff"/>
+  <!-- raster -->
+  <rect x="15" y="15" width="430" height="300" rx="8" fill="#fff4ec" stroke="#f3d3bd"/>
+  <text x="30" y="40" font-weight="700" font-size="15">Raster: a ready-made picture for every square</text>
+  <g stroke="#c2410c" fill="#fde3cf">
+    <rect x="40" y="60" width="40" height="40"/>
+    <rect x="100" y="60" width="20" height="20"/><rect x="120" y="60" width="20" height="20"/><rect x="100" y="80" width="20" height="20"/><rect x="120" y="80" width="20" height="20"/>
+  </g>
+  <g stroke="#c2410c" fill="#fde3cf" stroke-width="0.6">
+    <rect x="160" y="60" width="10" height="10"/><rect x="170" y="60" width="10" height="10"/><rect x="180" y="60" width="10" height="10"/><rect x="190" y="60" width="10" height="10"/>
+    <rect x="160" y="70" width="10" height="10"/><rect x="170" y="70" width="10" height="10"/><rect x="180" y="70" width="10" height="10"/><rect x="190" y="70" width="10" height="10"/>
+    <rect x="160" y="80" width="10" height="10"/><rect x="170" y="80" width="10" height="10"/><rect x="180" y="80" width="10" height="10"/><rect x="190" y="80" width="10" height="10"/>
+    <rect x="160" y="90" width="10" height="10"/><rect x="170" y="90" width="10" height="10"/><rect x="180" y="90" width="10" height="10"/><rect x="190" y="90" width="10" height="10"/>
+  </g>
+  <text x="220" y="85" font-size="13">… ×4 at every zoom</text>
+  <text x="30" y="135" font-size="13">Europe, from a commercial tile seller (Geofabrik):</text>
+  <text x="30" y="157" font-size="13">zoom 0–14: <tspan font-weight="700">13 million pictures, 38 GB</tspan></text>
+  <text x="30" y="177" font-size="13">zoom 0–16: <tspan font-weight="700">209 million pictures, 415 GB</tspan></text>
+  <text x="30" y="205" font-size="13">OSM's own server: bulk download is <tspan font-weight="700" fill="#9b1c1c">forbidden</tspan>.</text>
+  <text x="30" y="225" font-size="13">Drawing our own: a map database needing 64–128 GB</text>
+  <text x="30" y="243" font-size="13">of memory plus long rendering runs.</text>
+  <text x="30" y="275" font-size="12" class="m">A new style or fresher data = render or buy them all again.</text>
+  <text x="30" y="295" font-size="12" class="m">Leaflet (today's map library) shows these directly.</text>
+  <!-- vector -->
+  <rect x="455" y="15" width="430" height="300" rx="8" fill="#e8f1eb" stroke="#bcd8c4"/>
+  <text x="470" y="40" font-weight="700" font-size="15" fill="#245f3c">Vector: map data the browser draws itself</text>
+  <rect x="480" y="58" width="110" height="60" rx="6" fill="#fff" stroke="#2f7d4f"/>
+  <text x="490" y="80" font-size="12">europe.pmtiles</text><text x="490" y="98" font-size="12" class="m">one file</text>
+  <path d="M595 88 L640 88" stroke="#2f7d4f" stroke-width="3"/>
+  <rect x="645" y="58" width="220" height="60" rx="6" fill="#fff" stroke="#2f7d4f"/>
+  <path d="M655 105 C 690 70, 730 100, 760 75 S 830 90, 855 70" fill="none" stroke="#7a8b80" stroke-width="3"/>
+  <path d="M655 85 L 855 100" fill="none" stroke="#c2410c" stroke-width="2" stroke-dasharray="4 3"/>
+  <text x="790" y="112" font-size="11" class="m">drawn live</text>
+  <text x="470" y="157" font-size="13">Protomaps publishes a free world build (ODbL),</text>
+  <text x="470" y="177" font-size="13">about 120 GB at zoom 0–15; cut out Europe with</text>
+  <text x="470" y="197" font-size="13"><tspan font-weight="700">pmtiles extract</tspan>: est. 35–50 GB (half at zoom 14).</text>
+  <text x="470" y="225" font-size="13">Zooms past the last level stay sharp (overzoom).</text>
+  <text x="470" y="243" font-size="13">Restyle without rebuilding the file.</text>
+  <text x="470" y="275" font-size="12" class="m">Needs a vector renderer (MapLibre, or protomaps-leaflet,</text>
+  <text x="470" y="295" font-size="12" class="m">which is now in maintenance mode).</text>
+</svg>

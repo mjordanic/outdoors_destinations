@@ -1,4 +1,4 @@
-"""A rough SVG map of Europe with the parts the Catalog covers shaded.
+"""A rough SVG map of a region (default Europe) with the parts the Catalog covers shaded.
 
 Coverage comes from the Catalog, not from a list: every Trailhead is placed in
 a country polygon (Natural Earth admin-0 countries, public domain), and a
@@ -6,10 +6,16 @@ polygon part (a mainland, an island, an exclave) is shaded when it holds at
 least ``min_hikes`` Trailheads and ``min_density`` per 1,000 km², so a few
 hikes near a border do not shade all of European Russia. Rerun it after the
 Catalog changes.
+
+One region is drawn in a Lambert azimuthal equal-area projection around its
+centre (``dayhike.regions``); several regions, or the whole world, in the
+Equal Earth projection (``centre=None``). Both keep areas, so the density rule
+holds; Equal Earth does not tear apart far from a centre.
 """
 
 from __future__ import annotations
 
+import functools
 import json
 import math
 import sqlite3
@@ -18,8 +24,9 @@ from pathlib import Path
 import numpy as np
 import shapely
 
-VIEW = (-32.0, 32.0, 47.0, 72.0)  # west, south, east, north (degrees): Azores and Madeira too
-CENTRE = (10.0, 52.0)  # Lambert azimuthal equal-area centre (lon, lat)
+VIEW = (-32.0, 32.0, 47.0, 72.0)  # west, south, east, north (degrees): Europe's region file's map view
+CENTRE = (10.0, 52.0)  # Lambert azimuthal equal-area centre (lon, lat); None for Equal Earth
+WORLD_VIEW = (-180.0, -60.0, 180.0, 84.0)  # Antarctica left out
 WIDTH = 1000.0  # SVG user units across
 SIMPLIFY = 1.2  # SVG units
 MIN_HIKES = 10
@@ -40,8 +47,12 @@ def coverage_map(
     *,
     min_hikes: int = MIN_HIKES,
     min_density: float = MIN_DENSITY,
+    view: tuple[float, float, float, float] = VIEW,
+    centre: tuple[float, float] | None = CENTRE,
+    label: str = "Europe",
 ) -> list[tuple[str, int]]:
-    """Write the SVG; return (country, Trailheads) for every covered country, most first."""
+    """Write the SVG of ``view`` (west, south, east, north), named ``label`` for screen
+    readers; return (country, Trailheads) for every covered country, most first."""
     catalog = sqlite3.connect(f"file:{catalog_path}?mode=ro", uri=True)
     try:
         trailheads = np.array(
@@ -59,25 +70,26 @@ def coverage_map(
     parts = np.array(parts, dtype=object)
     _, part_at = shapely.STRtree(parts).query(shapely.points(trailheads), predicate="within")
     counts = np.bincount(part_at, minlength=len(parts))
-    view = shapely.box(*VIEW)
+    project = functools.partial(_project, centre=centre)
+    frame_box = shapely.box(*view)
     shapes = []
     covered: dict[str, int] = {}
     # The projection is equal-area on a unit sphere.
-    areas_km2 = shapely.area(_project(parts)) * EARTH_RADIUS_KM**2
+    areas_km2 = shapely.area(project(parts)) * EARTH_RADIUS_KM**2
     for name, part, count, area_km2 in zip(names, parts, counts, areas_km2):
         is_covered = bool(count >= min_hikes and count / area_km2 * 1000 >= min_density)
         if is_covered:
             covered[name] = covered.get(name, 0) + int(count)
-        clipped = shapely.intersection(part, view)
+        clipped = shapely.intersection(part, frame_box)
         if not clipped.is_empty:
             shapes.append((clipped, is_covered))
-    frame = _project(shapely.segmentize(view, 0.5))
+    frame = project(shapely.segmentize(frame_box, 0.5))
     x0, y0, x1, y1 = frame.bounds
     scale = WIDTH / (x1 - x0)
     height = (y1 - y0) * scale
 
     def to_svg(geometry):
-        projected = _project(geometry)
+        projected = project(geometry)
         flipped = shapely.transform(projected, lambda xy: np.column_stack([(xy[:, 0] - x0) * scale, (y1 - xy[:, 1]) * scale]))
         return shapely.simplify(flipped, SIMPLIFY)
 
@@ -90,7 +102,7 @@ def coverage_map(
             paths.append(f'<path fill="{fill}" d="{d}"/>')
     svg = (
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {WIDTH:.0f} {height:.0f}" '
-        f'role="img" aria-label="Map of Europe; the shaded land has DayHikes in the Catalog">'
+        f'role="img" aria-label="Map of {label}; the shaded land has DayHikes in the Catalog">'
         f"<title>DayHike coverage</title>"
         f'<g fill-rule="evenodd">' + "".join(paths) + "</g></svg>\n"
     )
@@ -98,8 +110,10 @@ def coverage_map(
     return sorted(covered.items(), key=lambda item: -item[1])
 
 
-def _project(geometry):
-    lon0, lat0 = map(math.radians, CENTRE)
+def _project(geometry, centre: tuple[float, float] | None = CENTRE):
+    if centre is None:
+        return shapely.transform(geometry, _equal_earth)
+    lon0, lat0 = map(math.radians, centre)
 
     def laea(lonlat: np.ndarray) -> np.ndarray:
         lon, lat = np.radians(lonlat[:, 0]), np.radians(lonlat[:, 1])
@@ -112,6 +126,18 @@ def _project(geometry):
         )
 
     return shapely.transform(geometry, laea)
+
+
+def _equal_earth(lonlat: np.ndarray) -> np.ndarray:
+    """Equal Earth (Šavrič, Patterson and Jenny 2018), equal-area on the unit sphere."""
+    a1, a2, a3, a4 = 1.340264, -0.081106, 0.000893, 0.003796
+    lon, lat = np.radians(lonlat[:, 0]), np.radians(lonlat[:, 1])
+    theta = np.arcsin(math.sqrt(3) / 2 * np.sin(lat))
+    t2 = theta**2
+    t6 = t2**3
+    x = 2 * math.sqrt(3) * lon * np.cos(theta) / (3 * (9 * a4 * t6 * t2 + 7 * a3 * t6 + 3 * a2 * t2 + a1))
+    y = theta * (a1 + a2 * t2 + t6 * (a3 + a4 * t2))
+    return np.column_stack([x, y])
 
 
 def _path(geometry) -> str:

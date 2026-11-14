@@ -178,7 +178,47 @@ values or by other code).
 For a continent PBF (for example `europe-latest.osm.pbf`), ingest is the same
 command. After ingest, widen raster coverage with
 `dayhike fetch-dem --bounds south,west,north,east` (same `--bounds` on
-`fetch-landcover` and `fetch-climate`) then sample again.
+`fetch-landcover` and `fetch-climate`), or `--region europe`, then sample again.
+
+### Regions
+
+What one build covers is a **region file**, not code. The packaged ones are in
+`src/dayhike/data/regions/`: `alps-dinarides` (the eight PRD extracts, the
+default of the fetch commands), `europe` (the continent extract, the default of
+`coverage-map`) and `us-colorado` (one US state, an example outside Europe).
+A region file is TOML:
+
+```toml
+label = "Colorado"                      # the coverage map's name for it ("Map of Colorado")
+extracts = ["https://download.geofabrik.de/north-america/us/colorado-latest.osm.pbf"]
+bounds = { south = 36.9, west = -109.1, north = 41.1, east = -102.0 }   # raster box, WGS84
+
+[map]
+view = { west = -110.0, south = 36.5, east = -101.0, north = 41.5 }     # coverage map frame
+centre = { lon = -105.5, lat = 39.0 }   # Lambert azimuthal equal-area centre
+```
+
+`fetch-extracts`, `fetch-dem`, `fetch-landcover`, `fetch-climate` and
+`coverage-map` take `--region NAME` (a packaged region) or `--region
+path/to/file.toml`, repeatable. Several regions download every region's
+extracts once, and the DEM and WorldCover tiles of each region's `bounds`, so
+two regions build into one Catalog with the commands above (`fetch-climate`
+clips its one file per variable to the box around all the regions' `bounds`). `--bounds` still works on the
+raster commands, instead of `--region`. Without either, every command does
+what it did before regions: the Alps + Dinarides box and extracts, the Europe
+map.
+
+```bash
+uv run dayhike fetch-extracts --region us-colorado --dest data/osm-us
+uv run dayhike fetch-dem --region europe --region us-colorado    # each region's own tiles
+uv run dayhike coverage-map --countries /tmp/countries.geojson --region europe --region us-colorado --out /tmp/m.svg
+```
+
+Every box must run west to east (`west < east`) within ±180°: a region that
+crosses the 180° meridian (Alaska's Aleutians, Fiji, eastern Chukotka) is not
+supported; split it, or leave the far side out. The CHELSA clip of regions
+far apart (Europe plus the US) is the box around both, mostly ocean: large on
+disk, but nothing reads its empty cells.
 
 Nothing is fetched from the network at rank time except that optional Valhalla
 call on your machine.
@@ -1982,7 +2022,7 @@ it is off. Clicking a result shows it the same way, next to the
 liked hike. Every shown hike has "Link to this hike" (`#hike=<id>` for a
 catalog or built hike, its `#compose=` link for a composed one, with `&oneway`
 when set, and the search settings: `&month=`, `&w=` (the weights moved from their defaults, `name:weight`
-comma-separated), `&adv`, `&from=lat,lon`, `&place=`, `&hours=`, `&km=` and `&group=`; a wish link carries the
+comma-separated), `&adv`, `&from=lat,lon`, `&place=`, `&hours=`, `&km=`, `&group=` and `&units=`; a wish link carries the
 same but its own weights; ADR-0054) and two buttons: Share sends that address to a touch screen's share
 sheet, or copies it on a computer or where the sheet fails (a line beside the
 button then says "Link copied", or shows the link when it cannot be copied),
@@ -1991,7 +2031,14 @@ and Download GPX saves the hike as drawn (the served, simplified line) as a GPX
 ElevationProfile, credited to OpenStreetMap under the ODbL and to the
 elevation map; with Return to start on, its WayBack follows as a second track
 named "…: way back to the start" (a retrace or step drawn from the line, a
-trail way back from `GET /api/hikes/{id}/way-back`). The filters a list was
+trail way back from `GET /api/hikes/{id}/way-back`). The Units switch in the header shows every
+length and height in km and metres or in miles and feet; only the page converts: the API, a wish's
+values and `&km=`/`&group=` stay in metres and km whatever it shows (ADR-0035), so links and the API
+do not change. The server's own words with a length (a Measure's description, a score note such as
+"both 100 m or less") are converted on the page too. The default comes from the browser: miles
+and feet when its locale's country is the US, Liberia or Myanmar, else km and metres. An address carries
+`&units=imperial` while miles and feet show, and `&units=metric` only where the browser would
+default to miles; an address without it opens in the browser's default. The filters a list was
 found with (its limits and place, month, one way, grouping radius) show as
 labels above it, each with a × that drops it and finds again. An optional starting place with a maximum drive (up to 4 h), a
 maximum straight-line distance (up to 200 km, from the start to where a hike
@@ -2159,7 +2206,20 @@ Viewpoints on the hikes, the places of `places.sqlite` with the hikes starting
 within 5 km, and with `--geonames` the lakes, passes and mountains within 2 km
 of a hike, else 10 km, a GeoNames peak at an OSM Peak of its name adding its
 names to it, and each Landmark with how many names it has (ADR-0055);
-`export-places` rewrites it too. Rerun it
+`export-places` rewrites it too. With `--countries` (the Natural Earth
+countries GeoJSON the coverage map reads) it writes `countries.npy`, the
+country each Trailhead is in, for the hike's emergency number;
+`dayhike export-countries --out data/web-serving --countries /tmp/countries.geojson`
+adds it beside an existing export. A Trailhead outside every (simplified)
+shape, on a coast, takes the country of the nearest place in `places.sqlite`.
+Both stop, writing nothing, when a Trailhead's country has no row in
+`src/dayhike/data/emergency.csv`: add the country there (its emergency
+numbers, mountain rescue service and website, how to reach it, and an
+official source: the government's, its emergency service's or its mountain
+rescue's site, with gov.uk travel advice or the EU 112 page only as an extra;
+where none is found, `notes` says so) and run it again. Without `countries.npy` a hike's country
+is that of the town nearest its start, so the emergency line shows on an
+export from before it too, with `places.sqlite`. Rerun it
 after any rebuild; `meta.json` is written last, so a half-written export never
 opens.
 
@@ -2245,7 +2305,10 @@ excluded and month, giving the score a Ranking would show for `b` with `a` as
 the Seed and every Measure's score. Every hike the API lists (search, Landmarks, a map box,
 detail, compose and a Ranking's DayHike rows) has `multi_day`, longer than 40 km one way (ADR-0056), and its
 one-way `walk_m`; those of search, Landmarks, a Ranking, a detail and compose also have `region`, the nearest town
-within 30 km of its start and that town's country ("Igls, AT"; null without `places.sqlite`). A Ranking that waits 25 s for its turn answers 503 with
+within 30 km of its start and that town's country ("Igls, AT"; null without `places.sqlite`).
+A detail and compose also have `emergency`, the row of `src/dayhike/data/emergency.csv` for
+the country the hike starts in (`country`, `name`, `numbers`, `rescue`, `rescue_url`, `how`,
+`sources`, `notes`): the Trailhead's in `countries.npy`, else the nearest town's; null with neither. A Ranking that waits 25 s for its turn answers 503 with
 `Retry-After: 5`. Detail, compose, rank and pair take
 `return_to_start` (default true; `?return_to_start=false` on `GET
 /api/hikes/{id}`): true measures every hike with its way back to its start
@@ -2331,6 +2394,10 @@ curl -L -o /tmp/countries.geojson \
   https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_admin_0_countries.geojson
 uv run dayhike coverage-map --catalog data/catalog.sqlite --countries /tmp/countries.geojson
 ```
+
+`--region` draws another region's map view ([Regions](#regions)); several
+regions, or `--world`, are drawn in one Equal Earth projection (equal-area
+like the default Lambert azimuthal one, so the same parts count as covered).
 
 The mark (two mountains and a trail) is drawn by hand for this project.
 
@@ -2506,7 +2573,7 @@ CLI: `dayhike ingest`, `dayhike fetch-extracts`, `dayhike fetch-dem`,
 `dayhike fetch-climate`, `dayhike sample-climate`, `dayhike sample-trailgraph`,
 `dayhike build-similarity` (`--calibrate-only`), `dayhike rank` (`--weight`,
 `--month`, `--limit`, `--one-way`), `dayhike compose` (the Route text of a shared link,
-`--name`, `--weight`, `--month`, `--limit`, `--one-way`; reads a serving export; a SuggestedLoop is listed by its link text, and each row's versions indented under it), `dayhike nearby`, `dayhike export-serving`, `dayhike export-places`, `dayhike serve`, `dayhike coverage-map`.
+`--name`, `--weight`, `--month`, `--limit`, `--one-way`; reads a serving export; a SuggestedLoop is listed by its link text, and each row's versions indented under it), `dayhike nearby`, `dayhike export-serving`, `dayhike export-places`, `dayhike export-countries`, `dayhike serve`, `dayhike coverage-map`.
 
 Docstrings on those functions use the glossary in `GLOSSARY.md`.
 Examples: [`01`](../notebooks/01_raw_data_and_ingestion.ipynb) ingest,
