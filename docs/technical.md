@@ -197,7 +197,7 @@ call on your machine.
 | `data/web-serving/` | Serving export for the web demo (`export-serving`) | **gitignored** |
 | `data/geonames/` | GeoNames `allCountries.zip` for the demo's place search | gitignored |
 | `src/dayhike/web/static/` | The demo page, its script, the About, credits, Privacy and Terms pages, the logo (mark, wordmark, touch icon and social preview) and the coverage map | yes |
-| `web/` | Dockerfile, local compose file and smoke script of the demo | yes |
+| `web/` | Data and web Dockerfiles, Cloud Build config, local compose file and smoke script of the demo | yes |
 | `data/valhalla/compose.yaml` | How to run Valhalla | yes |
 | `data/valhalla/prepare-roads.sh` | osmium filter: car roads only, no buildings | yes |
 | `data/valhalla/prepare-highways.sh` | osmium filter: motorway/trunk/primary only | yes |

@@ -141,7 +141,7 @@ Reach = Callable[[list[tuple[float, float]]], list[float | None]]  # drive hours
 Seed = int | Route | Mapping[str, float]  # a DayHike id, a ComposedHike, or a Wish (Measure name to value)
 
 SERVING_FORMAT = 5
-SERVING_ROOT = "/data"  # where the container finds the export (web/Dockerfile)
+SERVING_ROOT = "/data"  # where the container finds the export (web/data.Dockerfile)
 LINE_TOLERANCE_M = 10.0
 LINE_END_M = 2.0  # a served line's end lies this close to the TrailGraph vertex it was (1e-5 degree kept)
 ELEVATION_POINTS = 128
