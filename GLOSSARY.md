@@ -44,6 +44,10 @@ _Avoid_: imported hike, official hike, third-party hike
 Where a DayHike comes from: a row of the sources register (`docs/sources.csv`) and the record's own id there, its `source_ref`. An OSM DayHike is `osm`: a relation DayHike points at its relation, a DayStage at its tour, a NetworkHike at the signpost it starts from. An external hike points at its record in its register and links its page (ADR-0062). Its licence and credit come from the register row, which also lists the sources planned, being checked, watched and rejected, with the reason and the date the licence was read (ADR-0060).
 _Avoid_: provider, origin (an Origin is where the Hiker starts), dataset
 
+**Region**:
+The area one build covers, as a region file (TOML in `src/dayhike/data/regions/` or anywhere): its Geofabrik extracts, the box the DEM, LandCover and climate rasters cover, and the coverage map's frame and projection centre. One Catalog can be built from several Regions. Without one, the fetch commands read `alps-dinarides` and the coverage map draws `europe`. A Region's box runs west to east; one crossing 180° is not supported.
+_Avoid_: area, country list, bbox (the box is one part of a Region)
+
 **DayHikeGeometry**:
 The ordered lon/lat vertices of a DayHike's main walk, starting at the Trailhead: the longest connected piece of its OSM member ways (ways a few tens of metres apart count as connected), each way at most once, without Leftovers. Consecutive ways meet; there is no jump between them. The similarity facts are built from it; Ranking does not read it.
 _Avoid_: path, route, trace, LineString, chain

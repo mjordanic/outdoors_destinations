@@ -1,0 +1,8 @@
+# One US state, as an example of a region outside Europe.
+label = "Colorado"
+extracts = ["https://download.geofabrik.de/north-america/us/colorado-latest.osm.pbf"]
+bounds = { south = 36.9, west = -109.1, north = 41.1, east = -102.0 }
+
+[map]
+view = { west = -110.0, south = 36.5, east = -101.0, north = 41.5 }
+centre = { lon = -105.5, lat = 39.0 }
