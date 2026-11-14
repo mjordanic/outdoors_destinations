@@ -48,6 +48,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from dayhike.catalog import MatrixClient, Origin, straight_line_distances_m
 from dayhike.serving import (
@@ -111,6 +112,33 @@ BUILD = hashlib.sha256(
 ).hexdigest()
 
 PAGES = ("index", "about", "credits", "privacy", "terms")  # the site's pages, served with its settings filled in
+# A mistyped address gets this page, not the API's JSON: it is served under any path, so its links are absolute.
+NOT_FOUND_PAGE = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Page not found — HikesAlike</title>
+  <link rel="icon" href="/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="top">
+  <a class="home" href="/"><img class="mark" src="/mark.svg" alt="" width="44" height="44"></a>
+  <div class="brand">
+    <h1><a class="home" href="/">HikesAlike</a></h1>
+    <p class="tagline">Hikes like the ones you love.</p>
+  </div>
+</header>
+<main class="layout">
+  <section class="panel">
+    <h2 class="panel-title">Page not found</h2>
+    <p class="hint">This address is not one of the site's pages. Check it, or <a href="/">search for a hike</a>.</p>
+  </section>
+</main>
+</body>
+</html>
+"""
 # The elevation credits of an export sampled from Copernicus GLO-30 (ADR-0030), in place of
 # FABDEM's between <!--elevation--> and <!--/elevation--> on each page that names it.
 COPERNICUS_CREDITS = {
@@ -517,6 +545,13 @@ def create_app(
             CORSMiddleware, allow_origins=list(cors_origins), allow_methods=["GET", "HEAD", "POST"],
             allow_headers=["Content-Type", TAB_HEADER], max_age=3600,
         )
+
+    # A mistyped page address is a page a visitor can read, not the API's JSON; /api/ keeps the JSON 404.
+    @app.exception_handler(StarletteHTTPException)
+    async def not_found(request: Request, error: StarletteHTTPException) -> Response:
+        if error.status_code == 404 and not request.url.path.startswith("/api/"):
+            return HTMLResponse(NOT_FOUND_PAGE, status_code=404)
+        return JSONResponse({"detail": error.detail}, status_code=error.status_code, headers=error.headers)
 
     # A refusal leaves out the input it refuses: a NaN or Infinity in the body cannot be written back as JSON.
     @app.exception_handler(RequestValidationError)
