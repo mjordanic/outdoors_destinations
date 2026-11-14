@@ -446,7 +446,8 @@ the other sample steps, so a server without rasters can compute a composed
 hike's facts with the same rules as a DayHike's. It does not touch the Catalog
 and needs rerunning after every ingest. `export-serving` refuses a TrailGraph
 it never ran on only when the similarity facts hold a raster fact (tree share,
-temperature, southness or WaterSide); otherwise the export goes through and its
+temperature, southness or WaterSide), and, when they hold land cover, one
+that did not read land cover along long steps (ADR-0059); otherwise the export goes through and its
 composed hikes keep OSM `ele` while the Catalog's hikes have FABDEM heights, so
 run it whenever you sampled heights. The way back of
 every DayHike reads these samples too (ADR-0019), so it deletes the similarity
