@@ -352,3 +352,108 @@ and keeps the curve.
 - Hikers saying waterside Seeds' lists feel too dry, with the weight lever not
   enough. Then a separate random-pair population for waterside-and-dry pairs,
   rather than a sharper raw score, would be the place to look.
+
+---
+
+## 15. A popularity signal from open data
+
+### Why it's parked
+
+HikesAlike knows what a hike is like, not whether people know it. Issue #156
+measured candidate signals from open sources only (Wikidata and Wikimedia
+pageviews, CC0; Wikimedia Commons geotags; OpenStreetMap, ODbL) for one region,
+Slovenia, against two hand-made lists: 30 well-known day hikes (Triglav from
+Aljažev dom and Dolič, the Seven Lakes valley from Komarča and Planina Blato,
+Vintgar gorge, Stol, Mangart, Krn, Okrešelj, Velika planina, Jalovec, Golica,
+Snežnik, Nanos, Slavnik, Uršlja gora, Kum, the Pohorje lakes, Storžič,
+Juliana Trail stage 1, Mala Osojnica above Bled, Rakov Škocjan, Škocjan Caves
+and others) and 30 obscure ones (village and forest walks picked by name from a
+seeded random sample of the region's hikes, before any signal was looked at).
+The hikes are the 2,007 that start inside Slovenia in a fresh Slovenia-only
+ingest of the 2026-09-17 Geofabrik extract with today's rules (1,642 relation
+hikes, 365 DayStages).
+
+"Separation" is the chance a well-known hike scores above an obscure one (ties
+count half): 0.5 is no better than a coin, 1.0 is perfect. "Coverage" is the
+share of the region's hikes with a non-zero value.
+
+| Signal | Separation | Well-known / obscure non-zero | Coverage |
+| --- | ---: | ---: | ---: |
+| Commons: distinct uploaders of geotagged files within 150 m of the line | **0.90** | 29 / 15 | not measured region-wide |
+| Commons: the same per km | 0.78 | 29 / 15 | not measured region-wide |
+| OSM: hiking relations sharing each member way (mean) | **0.82** | 30 / 30 | 100 % |
+| Named points' page views, 12 months, sl/en/de/it/hr/hu articles (sum) | 0.70 | 14 / 3 | 23 % (points with an article in those six languages; views were read for the 60 only) |
+| Named points' Wikipedia languages (max sitelinks) | 0.68 | 14 / 4 | 28 % |
+| OSM: guideposts within 50 m, per 10 km | 0.60 | 30 / 22 | 81 % |
+| OSM: route network level (iwn > nwn > rwn > lwn) | 0.48 | 27 / 30 | 96 % |
+| OSM: `osmc:symbol` present | 0.43 | 24 / 28 | 85 % |
+| OSM: `wikidata=*` on the hike's own relation | 0.50 | 0 / 0 | 2 % (DayStages of tagged long routes only) |
+
+- **Commons** separates best. At 3 or more distinct uploaders it picks 23 of
+  the 30 well-known hikes and 3 of the 30 obscure ones; at 5 or more, 13 and
+  none. Part of that is length (the well-known median is 5.4 km, the obscure
+  3.4 km): per km it drops to 0.78. Files on round coordinates (3 decimals or
+  fewer) were dropped as a place, not a photo spot; counting uploaders, not
+  files, removes bulk uploads. Only the count is kept, never a name.
+- **Route sharing** costs nothing (it is in the Catalog's own OSM data) and
+  separates well, but it marks trail hubs near huts and valley bases as much as
+  fame.
+- **Wikipedia** covers a hike only through an OSM point within 150 m that
+  has `wikidata=*` (a named peak, hut, viewpoint, waterfall, gorge or cave): 28
+  % of hikes. Lakes are areas, not nodes, so the Seven Lakes hikes score 0.
+  No Slovenian day-hike relation has `wikidata=*`; only long-distance routes
+  do. The pageviews API throttles anonymous clients hard (HTTP 429 at about one
+  request a second), so page views were read for the 60 listed hikes only.
+- **OSM tags** do not separate here: Slovenia tags nearly every hike `lwn` with
+  the standard red-and-white `osmc:symbol`, famous or not.
+
+**Gap list (Wikidata).** 49 Wikidata items in Slovenia that are trails: the
+subclasses of hiking trail (`Q2143825`) and trail (`Q628179`, `Q1966910`)
+with `P17 = Q215` or a coordinate inside the country, plus the members of
+sl.wikipedia's trail categories (Naravoslovne učne poti v Sloveniji,
+Pohodništvo v Sloveniji, Pohodne poti, Slovenska planinska pot), which find
+items Wikidata gives no class.
+
+| Status | Items |
+| --- | ---: |
+| A hike, by the item's OSM relation (`P402`, or the relation's `wikidata=*`) | 4 |
+| A hike, by name and place, or by hand | 13 |
+| A long route whose sections or DayStages are hikes | 9 |
+| An OSM relation, but no hike starts in Slovenia | 3 |
+| No hike | 20 |
+
+Of the 20 with no hike, 15 are short local trails, most of them educational
+(učne poti), with no OSM relation and no path of that name, which is OSM mapping work; one has 10
+ways named "Pot ob Rakah" (#125); two are Destinations (the Kokra canyon, the
+Pekel gorge at Borovnica, where a hike ends but none walks the gorge) (#124);
+two are multi-day routes with no OSM relation (the Walk of Peace, Via Dinarica
+Blue).
+
+**Gap list (Destinations).** Of the 461 OSM points in Slovenia with
+`wikidata=*` that are a peak, cave, waterfall, saddle, hut or gorge (huts are
+mostly mapped as areas, so only 7 are points), 251 have a hike within 150 m and 123 have none within 500 m: 92 peaks, 14 caves, 12
+waterfalls, 4 saddles and a gorge. Slap Boka (930 m from the nearest hike, 9
+Wikipedia languages) and the Veliki Kozjak waterfall (544 m) are the best
+known; Slap Savica (233 m) and Peričnik (159 m) are just off a hike's line.
+These are #124's Destinations.
+
+**Recommendation: none now; a badge later, if a second region agrees.** No
+signal is good enough to change a score: the only strong one, Commons, is not
+measured beyond the 60 hikes, and ranking by fame would push down the obscure
+hikes HikesAlike is good at finding. A "well-known" badge (3 or more distinct
+Commons uploaders within 150 m) is the candidate, with route sharing as a
+free second opinion. A tie-break or a filter would need the same data and more
+trust in it than one region gives. The Wikidata gap lists are useful today:
+they feed #124 and #125.
+
+### What would have to be true to start
+
+- The same lists for a second region with different mapping habits (the
+  Écrins, or a US state), with Commons still separating at 0.85 or better.
+- Commons counts for every hike from the dumps, not the API: the 2026-11
+  `commonswiki-latest-geo_tags.sql.gz` is 0.8 GB, but the uploader is in the
+  18.8 GB `image` table, so a build step that streams both and keeps one count
+  per hike. Calling the API per hike would take about 20 requests a hike,
+  millions for Europe, and the API throttles.
+- An ADR for the badge: what it says, its threshold, and that it never changes
+  a score or the order of a Ranking.
