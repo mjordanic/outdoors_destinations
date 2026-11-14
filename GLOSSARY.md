@@ -36,6 +36,10 @@ _Avoid_: start, parking (parking is an amenity near a Trailhead)
 The local database of DayHikes, Trailheads, AmenityFacts, and FeatureVectors. Built from an OSM snapshot, not queried live. It does not hold DayHikeGeometry or raw amenity points.
 _Avoid_: dataset, index, graph (the routing graph is Valhalla's, not the Catalog)
 
+**Source**:
+Where a DayHike comes from: a row of the sources register (`docs/sources.csv`) and the record's own id there, its `source_ref`. Every DayHike is `osm` today: a relation DayHike points at its relation, a DayStage at its tour, a NetworkHike at the signpost it starts from. Its licence and credit come from the register row, which also lists the sources planned, being checked, watched and rejected, with the reason and the date the licence was read (ADR-0059).
+_Avoid_: provider, origin (an Origin is where the Hiker starts), dataset
+
 **DayHikeGeometry**:
 The ordered lon/lat vertices of a DayHike's main walk, starting at the Trailhead: the longest connected piece of its OSM member ways (ways a few tens of metres apart count as connected), each way at most once, without Leftovers. Consecutive ways meet; there is no jump between them. The similarity facts are built from it; Ranking does not read it.
 _Avoid_: path, route, trace, LineString, chain

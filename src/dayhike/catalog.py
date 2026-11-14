@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Iterable, Iterator, Mapping, Protocol, Sequenc
 import numpy as np
 
 from dayhike.osm import OsmRelation, OsmSnapshot, OsmWay
+from dayhike.sources import SOURCE_OSM, osm_source_ref, require_used
 
 if TYPE_CHECKING:
     from sklearn.neighbors import BallTree
@@ -1786,6 +1787,8 @@ def _write_sqlite(path: Path, dayhikes: Iterable[DayHike], report: IngestReport)
     dayhikes = tuple(dayhikes)
     if len({hike.id for hike in dayhikes}) != len(dayhikes):
         raise ValueError("duplicate DayHike ids in catalog ingest")
+    # Every DayHike comes from OpenStreetMap today; its Source is a register id (ADR-0059).
+    require_used({SOURCE_OSM})
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     if tmp.exists():
@@ -1806,7 +1809,9 @@ def _write_sqlite(path: Path, dayhikes: Iterable[DayHike], report: IngestReport)
                 difficulty TEXT,
                 kind TEXT NOT NULL,
                 parts TEXT,
-                route TEXT
+                route TEXT,
+                source TEXT NOT NULL,
+                source_ref TEXT NOT NULL
             );
             CREATE TABLE trailheads (
                 dayhike_id INTEGER PRIMARY KEY REFERENCES dayhikes(id),
@@ -1877,8 +1882,8 @@ def _write_sqlite(path: Path, dayhikes: Iterable[DayHike], report: IngestReport)
             ),
         )
         connection.executemany(
-            "INSERT INTO dayhikes (id, name, name_origin, length_m, difficulty, kind, parts, route) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO dayhikes (id, name, name_origin, length_m, difficulty, kind, parts, route, "
+            "source, source_ref) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 (
                     hike.id,
@@ -1889,6 +1894,8 @@ def _write_sqlite(path: Path, dayhikes: Iterable[DayHike], report: IngestReport)
                     hike.kind,
                     json.dumps(list(hike.parts)) if hike.parts else None,
                     hike.route,
+                    SOURCE_OSM,
+                    osm_source_ref(hike.id, hike.kind, hike.parts, hike.route),
                 )
                 for hike in dayhikes
             ],

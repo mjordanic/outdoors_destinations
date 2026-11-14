@@ -123,6 +123,7 @@ from dayhike.similarity import (
     wish_unmeasured,
     score_rows,
 )
+from dayhike.sources import SOURCE_OSM, osm_record_url, osm_source_ref
 from dayhike.trailgraph import (
     TRAILHEAD_KINDS,
     WAY_BACK_KINDS,
@@ -492,10 +493,15 @@ def export_serving(
         # A Catalog built before built DayHikes (ADR-0038) holds relations only.
         columns = {row[1] for row in catalog.execute("PRAGMA table_info(dayhikes)")}
         built = "d.kind, d.parts, d.route" if "kind" in columns else f"'{KIND_RELATION}', NULL, NULL"
-        hikes = catalog.execute(
-            "SELECT d.id, d.name, d.name_origin, d.difficulty, t.latitude, t.longitude, "
-            f"{built} FROM dayhikes d JOIN trailheads t ON t.dayhike_id = d.id ORDER BY d.id"
-        ).fetchall()
+        # A Catalog built before Sources (ADR-0059) is all OpenStreetMap: its source_ref is derived.
+        source = "d.source, d.source_ref" if "source" in columns else "NULL, NULL"
+        hikes = [
+            (*row[:9], row[9] or SOURCE_OSM, row[10] or osm_source_ref(row[0], row[6], json.loads(row[7] or "[]"), row[8]))
+            for row in catalog.execute(
+                "SELECT d.id, d.name, d.name_origin, d.difficulty, t.latitude, t.longitude, "
+                f"{built}, {source} FROM dayhikes d JOIN trailheads t ON t.dayhike_id = d.id ORDER BY d.id"
+            )
+        ]
         attribution = dict(catalog.execute("SELECT key, value FROM catalog_meta"))["attribution"]
     finally:
         catalog.close()
@@ -570,7 +576,8 @@ def _write_hikes(
             "CREATE TABLE hikes ("
             " id INTEGER PRIMARY KEY, name TEXT NOT NULL, name_origin TEXT NOT NULL,"
             " sac_scale TEXT, walk_m REAL, line TEXT, elevation BLOB, climb_m REAL, descent_m REAL,"
-            " points BLOB NOT NULL, kind TEXT NOT NULL, parts TEXT, route TEXT);"
+            " points BLOB NOT NULL, kind TEXT NOT NULL, parts TEXT, route TEXT,"
+            " source TEXT NOT NULL, source_ref TEXT NOT NULL);"
             "CREATE VIRTUAL TABLE hike_boxes USING rtree(id, south, north, west, east)"
         )
         for start in range(0, len(hikes), _HIKE_CHUNK):
@@ -598,9 +605,9 @@ def _write_hikes(
                 )
             _name_points(geo, rows)
             db.executemany(
-                "INSERT INTO hikes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO hikes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
-                    (*row[:9], zlib.compress(json.dumps(row[-1], ensure_ascii=False).encode()), *row[9:12])
+                    (*row[:9], zlib.compress(json.dumps(row[-1], ensure_ascii=False).encode()), *row[9:14])
                     for row in rows
                 ],
             )
@@ -1204,6 +1211,7 @@ class ServingData:
         self._db_uri = f"file:{self.directory / 'hikes.sqlite'}?mode=ro&immutable=1"
         with self._db() as db:
             self._folded = [_fold(name) for (name,) in db.execute("SELECT name FROM hikes ORDER BY id")]
+            self._has_source = "source" in {row[1] for row in db.execute("PRAGMA table_info(hikes)")}
         # One string of every folded name between newlines: str.find walks it in C.
         self._haystack = "\n" + "\n".join(self._folded) + "\n"
         self._starts = np.cumsum([1] + [len(name) + 1 for name in self._folded[:-1]])
@@ -1483,13 +1491,17 @@ class ServingData:
         row = self.row_of(dayhike_id)
         store = self.store.mode(return_to_start)
         with self._db() as db:
-            name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points, kind, parts, route = (
+            # An export made before Sources (ADR-0059) is all OpenStreetMap.
+            source = "source, source_ref" if self._has_source else f"'{SOURCE_OSM}', NULL"
+            name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points, kind, parts, route, source, source_ref = (
                 db.execute(
                     "SELECT name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points, "
-                    "kind, parts, route FROM hikes WHERE id = ?",
+                    f"kind, parts, route, {source} FROM hikes WHERE id = ?",
                     (dayhike_id,),
                 ).fetchone()
             )
+        if source_ref is None:
+            source_ref = osm_source_ref(dayhike_id, kind, json.loads(parts or "[]"), route)
         profile = np.frombuffer(elevation, dtype="<i2").tolist() if elevation else None
         return {
             "id": dayhike_id,
@@ -1513,6 +1525,12 @@ class ServingData:
             "built": None
             if kind == KIND_RELATION
             else {"kind": kind, "parts": json.loads(parts), "route": route},
+            # Where the hike comes from: a sources register id, its record there and a link to it.
+            "source": {
+                "id": source,
+                "ref": source_ref,
+                "url": osm_record_url(source_ref) if source == SOURCE_OSM else None,
+            },
         }
 
     def way_back_walk(self, dayhike_id: int) -> dict:
@@ -1628,6 +1646,8 @@ class ServingData:
                 **(walk_line(back.walk.lat, back.walk.lon, back.walk.ele) if back.walk is not None else {"line": None, "ele": None}),
             },
             "built": None,
+            # Drawn from OSM trail segments, it is no record of its own (ADR-0059).
+            "source": {"id": SOURCE_OSM, "ref": None, "url": None},
         }
 
     def _labels(self, relation_ids: list[int]) -> dict[int, str]:

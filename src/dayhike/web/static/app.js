@@ -912,6 +912,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     </div>
     ${hike.line ? '<p class="hike-actions"><button type="button" class="secondary share-hike">Share</button> <button type="button" class="secondary download-gpx">Download GPX</button> <span class="share-note" role="status" hidden></span></p>' : ""}
     ${scoreLine}
+    ${sourceLine(hike)}
     ${hike.route ? `<p class="hint">Drawn from trail segments${hike.routes?.length ? ` along ${escapeHtml(hike.routes.slice(0, 5).join(", "))}${hike.routes.length > 5 ? " and more" : ""}` : ""}; measured as drawn${hike.way_back ? ", with its way back" : ""}.</p>` : ""}
     ${hike.way_back && hike.way_back.kind !== "none" ? `<p class="hint">Length, climb, descent and every measure include the way back to the start (${escapeHtml(wayBackText(hike.way_back))}); the map and profile show the hike itself.</p>` : ""}
     <ul class="badges">${badges.map((b) => `<li>${escapeHtml(b)}</li>`).join("")}</ul>
@@ -974,6 +975,17 @@ function uncountedLine(query) {
   if (!reasons.length) return "";
   const hows = reasons.map((r) => r.how).filter(Boolean);
   return `Greyed measures ${reasons.map((r) => r.why).join(" or ")} and are not part of the score.${hows.length ? ` To count them, ${hows.join(" or ")}${hows.length > 1 ? "," : ""} in step 2.` : ""}`;
+}
+
+// Where a hike not from OpenStreetMap comes from (ADR-0059): its sources register id and its record
+// there; an OSM hike's head already links its relation.
+function sourceLine(hike) {
+  const source = hike.source;
+  if (!source || source.id === "osm") return "";
+  const ref = source.url
+    ? `<a href="${escapeHtml(source.url)}" target="_blank" rel="noopener">${escapeHtml(source.ref)}</a>`
+    : escapeHtml(source.ref);
+  return `<p class="hint source-line">Source: ${escapeHtml(source.id)}, record ${ref}</p>`;
 }
 
 // A built hike's head (ADR-0038): the OSM relations it is built from, a link to it,

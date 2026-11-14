@@ -59,6 +59,15 @@ The words the code uses (DayHike, Seed, Measure, Trailhead, …) are defined in
 [GLOSSARY.md](GLOSSARY.md). Design decisions are in [docs/adr/](docs/adr/),
 one file each.
 
+## Data sources
+
+A new data source starts as a row in the sources register,
+[`docs/sources.csv`](docs/sources.csv), in a pull request: its licence and the
+link to the licence page, whether it can sit beside OpenStreetMap data, its
+status and the date you read the licence. A rejected source gets a row too,
+with the clause that decided it, so no one checks it again. Only a source with
+status `used` may be ingested; `tests/test_sources.py` checks the file.
+
 ## Issues
 
 Report bugs and ask questions in
