@@ -1057,7 +1057,7 @@ function emergencyLine(emergency) {
   const parts = [`<strong>Emergency: ${numbers.map(escapeHtml).join(" or ")}</strong>`];
   if (rescue) parts.push(`Mountain rescue: ${url ? link(url, rescue) : escapeHtml(rescue)}`);
   if (how && how !== `Call ${numbers[0]}.`) parts.push(escapeHtml(how));
-  const cited = sources.length === 1 ? link(sources[0], "source") : `sources ${sources.map((href, i) => link(href, String(i + 1))).join(" ")}`;
+  const cited = `${sources.length === 1 ? "source" : "sources"} ${sources.map((href) => link(href, new URL(href).hostname.replace(/^www\./, ""))).join(", ")}`;
   return `<p class="emergency" title="Emergency services where this hike starts: ${escapeHtml(name)}">${parts.join(" · ")} <small>(${escapeHtml(name)}, ${cited})</small></p>`;
 }
 
