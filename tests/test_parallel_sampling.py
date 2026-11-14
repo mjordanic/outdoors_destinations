@@ -59,7 +59,7 @@ def test_sampling_writes_the_same_files_with_any_worker_count(tmp_path, monkeypa
 @pytest.mark.parametrize(
     "module, reader, sample",
     [
-        (dem, "sample_elevations", lambda catalog, dem_dir, landcover_dir: sample_dem(catalog, dem_dir)),
+        (dem, "sample_elevations_and_sources", lambda catalog, dem_dir, landcover_dir: sample_dem(catalog, dem_dir)),
         (landcover, "_sample_open_datasets", lambda catalog, dem_dir, landcover_dir: sample_landcover(catalog, landcover_dir)),
     ],
 )

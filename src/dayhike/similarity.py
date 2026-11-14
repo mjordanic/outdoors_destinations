@@ -44,7 +44,7 @@ from dayhike.catalog import (
     similarity_dir_for,
     trailgraph_path_for,
 )
-from dayhike.dem import DEFAULT_DEM_DIR, dem_source_of, fabdem_tile_id, read_grid_cells
+from dayhike.dem import DEFAULT_DEM_DIR, dem_tiles, fabdem_tile_id, read_grid_cells
 from dayhike.landcover import (
     ALONG_MIN_M,
     ALONG_STEP_M,
@@ -1999,17 +1999,18 @@ def dem_heights(dem_dir: Path | str, lat: np.ndarray, lon: np.ndarray) -> np.nda
     import rasterio
 
     heights = np.full(len(lat), np.nan)
-    source = dem_source_of(dem_dir)
-    if source is None:
+    files = dem_tiles(dem_dir)
+    if not files:
         return heights
     corners = np.column_stack([np.floor(lat), np.floor(lon)]).astype(int)
     unique, tiles = np.unique(corners, axis=0, return_inverse=True)
     order = np.argsort(tiles.ravel(), kind="stable")
     bounds = np.searchsorted(tiles.ravel()[order], np.arange(len(unique) + 1))
     for tile, (south, west) in enumerate(unique):
-        path = Path(dem_dir) / source.tile_file(fabdem_tile_id(south, west))
-        if not path.is_file():
+        file = files.get(fabdem_tile_id(south, west))
+        if file is None:
             continue
+        path = file[1]
         at = order[bounds[tile] : bounds[tile + 1]]
         with rasterio.open(path) as dataset:
             rows, cols = rasterio.transform.rowcol(dataset.transform, lon[at], lat[at])

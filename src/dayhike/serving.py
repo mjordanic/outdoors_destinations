@@ -88,7 +88,7 @@ from dayhike.catalog import (
     straight_line_distances_m,
     trailgraph_path_for,
 )
-from dayhike.dem import FABDEM_ATTRIBUTION
+from dayhike.dem import COPERNICUS, DEM_ATTRIBUTION_KEYS, FABDEM_ATTRIBUTION
 from dayhike.extracts import UrlRetrieve
 from dayhike.loops import LOOP_SEEDS, LOOP_TRAILHEADS, LoopTarget, find_loops
 from dayhike.similarity import (
@@ -418,14 +418,24 @@ def name_dem(text: str, attribution: Mapping[str, str]) -> str:
     """``text`` naming the elevation map an export was sampled from (ADR-0030).
 
     MEASURE_INFO and SCORE_HELP name FABDEM, the default. An export sampled
-    from Copernicus GLO-30 carries its attribution, and the texts name it.
+    from Copernicus GLO-30 carries its attribution, and the texts name it; one
+    with hikes read from USGS 3DEP names it too, or alone (ADR-0062).
     """
-    if "copernicus" not in attribution:
+    fabdem = "FABDEM, a 30 m elevation map with forests and buildings removed"
+    names = []
+    if "copernicus" in attribution:
+        names.append(("Copernicus GLO-30", "Copernicus GLO-30, a 30 m elevation map of the surface, tree tops and roofs included"))
+    elif "fabdem" in attribution or "usgs_3dep" not in attribution:
+        names.append(("FABDEM", fabdem))
+    if "usgs_3dep" in attribution:
+        names.append(("USGS 3DEP", "USGS 3DEP 1″, a 30 m bare-earth elevation map of the United States"))
+    if names == [("FABDEM", fabdem)]:
         return text
-    return text.replace(
-        "FABDEM, a 30 m elevation map with forests and buildings removed",
-        "Copernicus GLO-30, a 30 m elevation map of the surface, tree tops and roofs included",
-    ).replace("FABDEM", "Copernicus GLO-30")
+    return (
+        text.replace(fabdem, "\0")
+        .replace("FABDEM", " or ".join(short for short, _ in names))
+        .replace("\0", ", or ".join(long for _, long in names))
+    )
 
 
 MEASURE_GROUPS: dict[str, str] = {
@@ -588,8 +598,15 @@ def export_serving(
             )
         ]
         attribution = dict(catalog.execute("SELECT key, value FROM catalog_meta"))["attribution"]
+        # The DEMs each DayHike's heights were read from (ADR-0062); a Catalog sampled before has none.
+        dem_of = (
+            {dayhike_id: dem for dayhike_id, dem in catalog.execute("SELECT id, dem_source FROM dayhikes") if dem}
+            if "dem_source" in columns
+            else {}
+        )
     finally:
         catalog.close()
+    dems_used = {register_id for dem in dem_of.values() for register_id in dem.split(",")}
     ids = np.array([row[0] for row in hikes], dtype=np.int64)
     try:
         store = SimilarityStore.open_for(catalog_path, ids)
@@ -602,7 +619,8 @@ def export_serving(
         shutil.copyfile(similarity_dir_for(catalog_path) / name, similarity / name)
     trailheads = np.array([(row[4], row[5]) for row in hikes], dtype=np.float64).reshape(-1, 2)
     np.save(out / "trailheads.npy", trailheads)
-    sources = _write_hikes(catalog_path, out / "hikes.sqlite", hikes, progress)
+    # Only a build that mixes DEMs says per hike which one it read (ADR-0060, ADR-0062).
+    sources = _write_hikes(catalog_path, out / "hikes.sqlite", hikes, progress, dem_of if len(dems_used) > 1 else None)
     external = external_sources({row[9] for row in hikes})
     compose = _write_trailgraph(trailgraph_path_for(catalog_path), out / "trailgraph.sqlite", progress)
     # A rerun without tiles or snaps drops the old ones: they may be for other tiles.
@@ -623,8 +641,13 @@ def export_serving(
         export_countries(out, countries_path)
     else:
         (out / "countries.npy").unlink(missing_ok=True)
-    # The elevation map in use: FABDEM, unless the GeometryStore was sampled from Copernicus GLO-30 (ADR-0030).
-    elevation = {} if "copernicus" in sources else {"fabdem": FABDEM_ATTRIBUTION}
+    # The elevation maps in use: those the DayHikes record (ADR-0062); for a Catalog sampled before,
+    # FABDEM, unless the GeometryStore was sampled from Copernicus GLO-30 (ADR-0030).
+    if dems_used:
+        sources = {key: value for key, value in sources.items() if DEM_ATTRIBUTION_KEYS.get(key) in (None, *dems_used)}
+        elevation = {"fabdem": FABDEM_ATTRIBUTION} if "fabdem" in dems_used else {}
+    else:
+        elevation = {} if "copernicus" in sources else {"fabdem": FABDEM_ATTRIBUTION}
     meta = {
         "format": SERVING_FORMAT,
         "dayhikes": len(ids),
@@ -647,8 +670,13 @@ def _write_hikes(
     path: Path,
     hikes: list[tuple],
     progress: Progress | None,
+    dem_of: Mapping[int, str] | None = None,
 ) -> dict[str, str]:
-    """Write ``hikes.sqlite``; return the GeometryStore's source attributions."""
+    """Write ``hikes.sqlite``; return the GeometryStore's source attributions.
+
+    With ``dem_of``, each DayHike's ``dem_source`` (a build that mixes DEMs),
+    hikes.sqlite has a ``dem_source`` column, and only a hike read from
+    Copernicus GLO-30 has its profile smoothed."""
     path.unlink(missing_ok=True)
     geo = sqlite3.connect(f"file:{geometry_store_path_for(catalog_path)}?mode=ro", uri=True)
     db = sqlite3.connect(path)
@@ -669,7 +697,9 @@ def _write_hikes(
             " id INTEGER PRIMARY KEY, name TEXT NOT NULL, name_origin TEXT NOT NULL,"
             " sac_scale TEXT, walk_m REAL, line TEXT, elevation BLOB, climb_m REAL, descent_m REAL,"
             " points BLOB NOT NULL, kind TEXT NOT NULL, parts TEXT, route TEXT,"
-            " source TEXT NOT NULL, source_ref TEXT NOT NULL, source_url TEXT);"
+            " source TEXT NOT NULL, source_ref TEXT NOT NULL, source_url TEXT"
+            + (", dem_source TEXT" if dem_of is not None else "")
+            + ");"
             "CREATE VIRTUAL TABLE hike_boxes USING rtree(id, south, north, west, east)"
         )
         for start in range(0, len(hikes), _HIKE_CHUNK):
@@ -686,7 +716,12 @@ def _write_hikes(
                     kept_lat, kept_lon = simplify_line(lat, lon, LINE_TOLERANCE_M)
                     line = encode_polyline(kept_lat, kept_lon)
                     boxes.append((dayhike_id, kept_lat.min(), kept_lat.max(), kept_lon.min(), kept_lon.max()))
-                    profile = drawn_profile(lat, lon, ele, smooth="copernicus" in sources)
+                    smooth = (
+                        "copernicus" in sources
+                        if dem_of is None
+                        else COPERNICUS.register_id in dem_of.get(dayhike_id, "").split(",")
+                    )
+                    profile = drawn_profile(lat, lon, ele, smooth=smooth)
                     if profile is not None:
                         elevation = np.round(profile).astype("<i2").tobytes()
                         climb_m, descent_m = (round(v) for v in climb_and_descent(lat, lon, ele))
@@ -697,9 +732,14 @@ def _write_hikes(
                 )
             _name_points(geo, rows)
             db.executemany(
-                "INSERT INTO hikes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                f"INSERT INTO hikes VALUES ({', '.join('?' * (16 if dem_of is None else 17))})",
                 [
-                    (*row[:9], zlib.compress(json.dumps(row[-1], ensure_ascii=False).encode()), *row[9:15])
+                    (
+                        *row[:9],
+                        zlib.compress(json.dumps(row[-1], ensure_ascii=False).encode()),
+                        *row[9:15],
+                        *(() if dem_of is None else (dem_of.get(row[0]),)),
+                    )
                     for row in rows
                 ],
             )
@@ -1329,6 +1369,7 @@ class ServingData:
             columns = {row[1] for row in db.execute("PRAGMA table_info(hikes)")}
             self._has_source = "source" in columns
             self._has_source_url = "source_url" in columns
+            self._has_dem = "dem_source" in columns  # a build that mixes DEMs (ADR-0062)
         # One string of every folded name between newlines: str.find walks it in C.
         self._haystack = "\n" + "\n".join(self._folded) + "\n"
         self._starts = np.cumsum([1] + [len(name) + 1 for name in self._folded[:-1]])
@@ -1623,10 +1664,11 @@ class ServingData:
             # An export made before Sources (ADR-0060) is all OpenStreetMap.
             source = "source, source_ref" if self._has_source else f"'{SOURCE_OSM}', NULL"
             source += ", source_url" if self._has_source_url else ", NULL"
-            name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points, kind, parts, route, source, source_ref, source_url = (
+            dem = "dem_source" if self._has_dem else "NULL"
+            name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points, kind, parts, route, source, source_ref, source_url, dem_source = (
                 db.execute(
                     "SELECT name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points, "
-                    f"kind, parts, route, {source} FROM hikes WHERE id = ?",
+                    f"kind, parts, route, {source}, {dem} FROM hikes WHERE id = ?",
                     (dayhike_id,),
                 ).fetchone()
             )
@@ -1668,6 +1710,9 @@ class ServingData:
                     if key in ("name", "licence", "licence_url")
                 },
             },
+            # The register ids of the DEMs its heights were read from, in a build that mixes DEMs (ADR-0062);
+            # else None, the export's one elevation map.
+            "dem_source": dem_source,
         }
 
     def way_back_walk(self, dayhike_id: int) -> dict:
@@ -1786,6 +1831,7 @@ class ServingData:
             "built": None,
             # Drawn from OSM trail segments, it is no record of its own (ADR-0060).
             "source": {"id": SOURCE_OSM, "ref": None, "url": None},
+            "dem_source": None,
         }
 
     def _labels(self, relation_ids: list[int]) -> dict[int, str]:

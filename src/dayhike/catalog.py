@@ -1848,7 +1848,8 @@ def _write_sqlite(path: Path, dayhikes: Iterable[DayHike], report: IngestReport)
                 route TEXT,
                 source TEXT NOT NULL,
                 source_ref TEXT NOT NULL,
-                source_url TEXT
+                source_url TEXT,
+                dem_source TEXT
             );
             CREATE TABLE trailheads (
                 dayhike_id INTEGER PRIMARY KEY REFERENCES dayhikes(id),

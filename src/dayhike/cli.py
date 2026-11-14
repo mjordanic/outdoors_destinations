@@ -145,7 +145,9 @@ def main(argv: list[str] | None = None) -> int:
         choices=list(DEM_SOURCES),
         default="fabdem",
         help="Elevation map: fabdem, bare earth, non-commercial (default); or copernicus, "
-        "GLO-30 with tree tops and roofs, commercial use allowed. Keep one per directory",
+        "GLO-30 with tree tops and roofs, commercial use allowed; or 3dep, USGS 3DEP 1 arc-second, "
+        "bare earth, US only, public domain. Keep one of fabdem and copernicus per directory; "
+        "3dep tiles beside them are read where they are",
     )
     fetch_lc = subparsers.add_parser(
         "fetch-landcover",
@@ -183,7 +185,7 @@ def main(argv: list[str] | None = None) -> int:
         "--dem",
         type=Path,
         default=DEFAULT_DEM_DIR,
-        help="Directory of FABDEM or Copernicus GLO-30 GeoTIFFs (default: data/dem)",
+        help="Directory of FABDEM or Copernicus GLO-30 GeoTIFFs, and USGS 3DEP ones for the US (default: data/dem)",
     )
     sample.add_argument(
         "--landcover",

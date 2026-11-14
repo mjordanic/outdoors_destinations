@@ -454,8 +454,11 @@ async function gpxText(hike) {
   const tracks = [gpxTrack(hike.name, points, heights)];
   const back = await wayBackTrack(hike, points, heights);
   if (back) tracks.push(gpxTrack(`${hike.name}: way back to the start (${fmt.km(hike.way_back.m)}, ${WAY_BACK[hike.way_back.kind]})`, back.points, back.heights));
-  const { fabdem, copernicus } = state.info?.attribution ?? {};
-  const dem = hike.elevation && (fabdem ?? copernicus), gap = gpxGap(hike);
+  const { fabdem, copernicus, usgs_3dep } = state.info?.attribution ?? {};
+  // A build that mixes DEMs names the ones each hike was read from (ADR-0062).
+  const credits = { fabdem, "copernicus-glo30": copernicus, "usgs-3dep": usgs_3dep };
+  const read = hike.dem_source ? hike.dem_source.split(",").map((id) => credits[id]).filter(Boolean).join(" ") : null;
+  const dem = hike.elevation && (read || (fabdem ?? copernicus ?? usgs_3dep)), gap = gpxGap(hike);
   // A hike from an external source (ADR-0062) is credited to it under its licence, not to OpenStreetMap.
   const external = hike.source && hike.source.id !== "osm" && hike.source.name ? hike.source : null;
   const credit = external ? `Route data: ${escapeHtml(external.name)}, ${escapeHtml(external.licence ?? "")}.` : "Route data © OpenStreetMap contributors, ODbL 1.0.";

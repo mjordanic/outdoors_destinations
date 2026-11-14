@@ -25,6 +25,7 @@ FABDEM_ATTRIBUTION = (
     "provided under COPERNICUS by the European Union and ESA; all rights reserved."
 )
 COPERNICUS_DATASET = "https://copernicus-dem-30m.s3.amazonaws.com"
+USGS_3DEP_DATASET = "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/1/TIFF/current"
 Progress = Callable[[str], None]
 Retrieve = Callable[[str, str], None]
 
@@ -68,34 +69,54 @@ def fabdem_archive_id(tile_id: str) -> str:
 
 @dataclass(frozen=True)
 class DemSource:
-    """An elevation map in 1° GeoTIFF tiles, each named by its southwest corner.
+    """An elevation map in 1° GeoTIFF tiles, each named by a corner.
 
     FABDEM is the default: bare earth, forests and buildings removed (ADR-0008).
     Copernicus GLO-30 is the alternative: a surface model, tree tops and roofs
-    included, free for commercial use (ADR-0030).
+    included, free for commercial use (ADR-0030). Both cover the world. USGS
+    3DEP 1″ is bare earth for the United States only: a ``regional`` source,
+    read where it has a tile, with a world source elsewhere (ADR-0062).
     """
 
     name: str
     label: str
-    file_format: str  # one tile's file name, from {ns}{lat}{ew}{lon} of its corner
-    url_format: str  # its HTTPS URL, from {stem} (file name without .tif) and {archive}
+    file_format: str  # one tile's file name, from {ns}{lat}{ew}{lon} of its corner ({n}, {e} in lower case)
+    url_format: str  # its HTTPS URL, from {stem} (file name without .tif), {archive} and {corner} (n40w106)
     excluded: frozenset[str] = frozenset()  # land tiles the source does not publish
+    register_id: str = ""  # its row in docs/sources.csv
+    regional: bool = False  # covers part of the world: read before the world source where it has a tile
+    north_named: bool = False  # tiles named by their northwest corner, not their southwest one
 
     def tile_file(self, tile_id: str) -> str:
-        lat, lon = _parse_tile(tile_id)
-        return self.file_format.format(
-            ns="N" if lat >= 0 else "S", lat=abs(lat), ew="E" if lon >= 0 else "W", lon=abs(lon)
-        )
+        return self.file_format.format(**self._corner(tile_id))
 
     def tile_url(self, tile_id: str) -> str:
-        file = self.tile_file(tile_id)
+        corner = self._corner(tile_id)
+        file = self.file_format.format(**corner)
         return self.url_format.format(
-            stem=file.removesuffix(".tif"), archive=fabdem_archive_id(tile_id), file=file
+            stem=file.removesuffix(".tif"),
+            archive=fabdem_archive_id(tile_id),
+            file=file,
+            corner=f"{corner['n']}{corner['lat']:02d}{corner['e']}{corner['lon']:03d}",
         )
+
+    def tile_of_file(self, name: str) -> str:
+        """The 1° tile id (its southwest corner) of one of this source's file names."""
+        match = re.search(r"([NSns])(\d{2})(?:_00_)?([EWew])(\d{3})", name)
+        assert match is not None, name
+        lat = int(match[2]) * (1 if match[1] in "Nn" else -1) - self.north_named
+        lon = int(match[4]) * (1 if match[3] in "Ee" else -1)
+        return format_corner(lat, lon)
 
     def tiles_in(self, raster_dir: Path) -> dict[str, Path]:
         """This source's tiles in raster_dir, by tile id."""
-        return {_tile_of_file(path.name): path for path in raster_dir.glob(self._pattern())}
+        return {self.tile_of_file(path.name): path for path in raster_dir.glob(self._pattern())}
+
+    def _corner(self, tile_id: str) -> dict[str, object]:
+        lat, lon = _parse_tile(tile_id)
+        lat += self.north_named
+        ns, ew = "N" if lat >= 0 else "S", "E" if lon >= 0 else "W"
+        return {"ns": ns, "n": ns.lower(), "lat": abs(lat), "ew": ew, "e": ew.lower(), "lon": abs(lon)}
 
     def has_tiles_in(self, raster_dir: Path) -> bool:
         return next(raster_dir.glob(self._pattern()), None) is not None
@@ -109,6 +130,7 @@ FABDEM = DemSource(
     "FABDEM",
     "{ns}{lat:02d}{ew}{lon:03d}_FABDEM_" + FABDEM_VERSION + ".tif",
     FABDEM_DATASET + "/{archive}/{file}",
+    register_id="fabdem",
 )
 # GLO-30 Public leaves out these tiles (Armenia, Azerbaijan and their borders): the
 # GLO-90 bucket's tileList.txt holds them, the GLO-30 bucket's does not (2026-10-30).
@@ -132,23 +154,52 @@ COPERNICUS = DemSource(
     "Copernicus_DSM_COG_10_{ns}{lat:02d}_00_{ew}{lon:03d}_00_DEM.tif",
     COPERNICUS_DATASET + "/{stem}/{file}",
     COPERNICUS_EXCLUDED_TILES,
+    register_id="copernicus-glo30",
+)
+# USGS public domain; the credit USGS asks for, and what the map is.
+USGS_3DEP_ATTRIBUTION = (
+    "USGS 3D Elevation Program (3DEP) 1 arc-second, a bare-earth elevation map of the United States, "
+    "public domain. Credit: U.S. Geological Survey."
+)
+# 3DEP 1″: one folder per tile, each named by its northwest corner (n40w106 holds 39-40 °N);
+# NAD83, about 1 m off WGS 84, read as it is; each tile runs 6 cells past its 1° edges.
+USGS_3DEP = DemSource(
+    "3dep",
+    "USGS 3DEP 1″",
+    "USGS_1_{n}{lat:02d}{e}{lon:03d}.tif",
+    USGS_3DEP_DATASET + "/{corner}/{file}",
+    register_id="usgs-3dep",
+    regional=True,
+    north_named=True,
 )
 
 
-DEM_SOURCES = {source.name: source for source in (FABDEM, COPERNICUS)}
+DEM_SOURCES = {source.name: source for source in (FABDEM, COPERNICUS, USGS_3DEP)}
 
 
-def dem_source_of(raster_dir: Path | str) -> DemSource | None:
-    """The source whose tiles raster_dir holds; None when it holds none.
+def dem_sources_of(raster_dir: Path | str) -> tuple[DemSource, ...]:
+    """The sources whose tiles raster_dir holds, in the order they are read:
+    the regional ones (USGS 3DEP), then the one world source.
 
-    One directory holds one source, so a DayHike is never measured on two maps.
+    A directory holds at most one world source, so FABDEM and Copernicus
+    GLO-30 never mix; a regional source is read where it has a tile (ADR-0062).
     """
     raster_dir = Path(raster_dir)
     found = [source for source in DEM_SOURCES.values() if source.has_tiles_in(raster_dir)]
-    if len(found) > 1:
-        labels = " and ".join(source.label for source in found)
-        raise ValueError(f"{raster_dir} holds tiles of {labels}; keep one elevation source per directory")
-    return found[0] if found else None
+    world = [source for source in found if not source.regional]
+    if len(world) > 1:
+        labels = " and ".join(source.label for source in world)
+        raise ValueError(f"{raster_dir} holds tiles of {labels}; keep one world elevation source per directory")
+    return tuple(source for source in found if source.regional) + tuple(world)
+
+
+def dem_tiles(raster_dir: Path | str) -> dict[str, tuple[DemSource, Path]]:
+    """Each 1° tile id the DEM tiles in raster_dir cover, with the source and
+    file it is read from: a regional source's tile where there is one."""
+    tiles: dict[str, tuple[DemSource, Path]] = {}
+    for source in reversed(dem_sources_of(raster_dir)):
+        tiles.update({tile_id: (source, path) for tile_id, path in source.tiles_in(Path(raster_dir)).items()})
+    return tiles
 
 
 def tiles_covering(bounds: Bounds) -> list[str]:
@@ -288,18 +339,31 @@ def sample_elevations(
     Copernicus GLO-30 maps tree tops. Given WorldCover tiles in
     ``landcover_dir``, a point with trees within ``CANOPY_RADIUS_M`` is
     lowered toward its canopy floor (``_canopy_floor``) by the share of tree
-    cover there; a point with none reads as it is (ADR-0030). FABDEM is bare
-    earth and always reads as it is.
+    cover there; a point with none reads as it is (ADR-0030). FABDEM and
+    USGS 3DEP are bare earth and always read as they are.
+    """
+    return sample_elevations_and_sources(raster_dir, points, landcover_dir)[0]
+
+
+def sample_elevations_and_sources(
+    raster_dir: Path | str,
+    points: Sequence[tuple[float, float]],
+    landcover_dir: Path | str | None = None,
+) -> tuple[list[float | None], list[DemSource | None]]:
+    """``sample_elevations``, and the source each height was read from (None uncovered).
+
+    A point reads the tile of its 1° cell (``dem_tiles``): USGS 3DEP's where
+    the directory has one, else the world source's.
     """
     import rasterio
 
-    raster_dir = Path(raster_dir)
     out: list[float | None] = [None] * len(points)
-    source = dem_source_of(raster_dir)
-    if source is None:
-        return out
+    read_from: list[DemSource | None] = [None] * len(points)
+    tiles = dem_tiles(raster_dir)
+    if not tiles:
+        return out, read_from
     shares = None
-    if source is COPERNICUS and landcover_dir is not None and points:
+    if COPERNICUS in dem_sources_of(raster_dir) and landcover_dir is not None and points:
         from dayhike.landcover import tree_share
 
         shares = np.nan_to_num(tree_share(landcover_dir, *np.array(points, dtype=float).T, CANOPY_RADIUS_M)).tolist()
@@ -307,21 +371,22 @@ def sample_elevations(
     for index, (lat, lon) in enumerate(points):
         buckets.setdefault(fabdem_tile_id(lat, lon), []).append(index)
     for tile_id, indices in buckets.items():
-        path = raster_dir / source.tile_file(tile_id)
-        if not path.is_file():
+        if tile_id not in tiles:
             continue
+        source, path = tiles[tile_id]
         with rasterio.open(path) as dataset:
             coords = _tile_coords(dataset, [points[index] for index in indices])
             for index, value in zip(indices, _read_heights(dataset, coords), strict=True):
                 out[index] = value
-            if shares is not None:
+                read_from[index] = None if value is None else source
+            if shares is not None and source is COPERNICUS:
                 near = [k for k, index in enumerate(indices) if shares[index] > 0 and out[index] is not None]
                 if near:
                     floors = _canopy_floor(dataset, *np.array([coords[k] for k in near]).T)
                     for k, floor in zip(near, floors.tolist(), strict=True):
                         index = indices[k]
                         out[index] -= shares[index] * (out[index] - floor)
-    return out
+    return out, read_from
 
 
 def _tile_coords(dataset, points: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
@@ -329,7 +394,8 @@ def _tile_coords(dataset, points: Sequence[tuple[float, float]]) -> list[tuple[f
 
     A GLO-30 or FABDEM grid stops half a cell short of its tile's east and south
     edges; outside it a GLO-30 read gives 0 and a FABDEM read nodata. A point
-    there reads the edge cell, as ``dem_heights`` does.
+    there reads the edge cell, as ``dem_heights`` does. A 3DEP grid runs past
+    every edge, so no point of its 1° cell is moved.
     """
     box = dataset.bounds
     half_x, half_y = dataset.res[0] / 2, dataset.res[1] / 2
@@ -358,9 +424,9 @@ class PointHeights:
     of their ends (ADR-0048). It keeps the last ``POINT_TILES_OPEN`` tiles
     open, in each process apart, and every height it read."""
 
-    def __init__(self, raster_dir: Path | str, source: DemSource) -> None:
+    def __init__(self, raster_dir: Path | str, tiles: dict[str, tuple[DemSource, Path]]) -> None:
         self.raster_dir = Path(raster_dir)
-        self.source = source
+        self.tiles = tiles
         self._pid: int | None = None
         self._open: dict[str, object] = {}
         self._read: dict[tuple[float, float], float | None] = {}
@@ -382,8 +448,7 @@ class PointHeights:
             return self._open[tile_id]
         import rasterio
 
-        path = self.raster_dir / self.source.tile_file(tile_id)
-        dataset = rasterio.open(path) if path.is_file() else None
+        dataset = rasterio.open(self.tiles[tile_id][1]) if tile_id in self.tiles else None
         if len(self._open) >= POINT_TILES_OPEN:
             oldest = self._open.pop(next(iter(self._open)))
             if oldest is not None:
@@ -395,8 +460,8 @@ class PointHeights:
 def point_heights(raster_dir: Path | str) -> PointHeights | None:
     """``PointHeights`` on the tiles in ``raster_dir``; None when it holds none."""
     raster_dir = Path(raster_dir)
-    source = dem_source_of(raster_dir) if raster_dir.is_dir() else None
-    return None if source is None else PointHeights(raster_dir, source)
+    tiles = dem_tiles(raster_dir) if raster_dir.is_dir() else {}
+    return PointHeights(raster_dir, tiles) if tiles else None
 
 
 def require_worldcover(landcover_dir: Path | str | None) -> None:
@@ -463,10 +528,14 @@ def sample_dem(
 ) -> int:
     """Write DEM elevations onto covered GeometryStore vertices and Catalog stats.
 
-    The tiles in raster_dir name the source. Copernicus GLO-30 needs the
+    The tiles in raster_dir name the sources: USGS 3DEP where it has a tile,
+    else the one world source (``dem_tiles``). Copernicus GLO-30 needs the
     WorldCover tiles in ``landcover_dir`` to read the ground under trees
-    (``sample_elevations``) and records its attribution in the GeometryStore;
-    FABDEM, the default, removes it.
+    (``sample_elevations``). Copernicus GLO-30 and USGS 3DEP record their
+    attribution in the GeometryStore while the directory holds their tiles;
+    FABDEM, the default, needs none. Each DayHike sampled records in the
+    Catalog's ``dayhikes.dem_source`` the register ids of the sources its
+    heights were read from (ADR-0062).
     """
     catalog_path = Path(catalog_path)
     raster_dir = Path(raster_dir)
@@ -474,18 +543,18 @@ def sample_dem(
     store_path = geometry_store_path_for(catalog_path)
     if not store_path.is_file():
         raise FileNotFoundError(store_path)
-    source = dem_source_of(raster_dir)
-    if source is None:
+    sources = dem_sources_of(raster_dir)
+    if not sources:
         return 0
-    if source is COPERNICUS:
+    if COPERNICUS in sources:
         require_worldcover(landcover_dir)
-    available = set(source.tiles_in(raster_dir))
+    available = set(dem_tiles(raster_dir))
     south = min(_parse_tile(tile_id)[0] for tile_id in available)
     west = min(_parse_tile(tile_id)[1] for tile_id in available)
     north = max(_parse_tile(tile_id)[0] + 1 for tile_id in available)
     east = max(_parse_tile(tile_id)[1] + 1 for tile_id in available)
     sampled = 0
-    touched: set[int] = set()
+    touched: dict[int, set[str]] = {}
     if progress is not None:
         progress("dem sample: vertices")
     write = sqlite3.connect(store_path)
@@ -499,8 +568,8 @@ def sample_dem(
                 (south, north, west, east),
             )
 
-            def chunk_updates(rows: list[tuple]) -> list[tuple[float, int, int]]:
-                # A chunk's (elevation, dayhike_id, seq) updates, sampled in a worker.
+            def chunk_updates(rows: list[tuple]) -> list[tuple[float, int, int, str]]:
+                # A chunk's (elevation, dayhike_id, seq, register id) updates, sampled in a worker.
                 coverable = [
                     (int(dayhike_id), int(seq), float(lat), float(lon))
                     for dayhike_id, seq, lat, lon in rows
@@ -508,17 +577,17 @@ def sample_dem(
                 ]
                 if not coverable:
                     return []
-                elevations = sample_elevations(
+                elevations, read_from = sample_elevations_and_sources(
                     raster_dir,
                     [(lat, lon) for _id, _seq, lat, lon in coverable],
                     landcover_dir,
                 )
                 return [
-                    (elevation, dayhike_id, seq)
-                    for (dayhike_id, seq, _lat, _lon), elevation in zip(
-                        coverable, elevations, strict=True
+                    (elevation, dayhike_id, seq, source.register_id)
+                    for (dayhike_id, seq, _lat, _lon), elevation, source in zip(
+                        coverable, elevations, read_from, strict=True
                     )
-                    if elevation is not None
+                    if elevation is not None and source is not None
                 ]
 
             chunks = iter(lambda: cursor.fetchmany(_VERTEX_CHUNK), [])
@@ -527,19 +596,20 @@ def sample_dem(
                     continue
                 write.executemany(
                     "UPDATE vertices SET ele = ? WHERE dayhike_id = ? AND seq = ?",
-                    updates,
+                    [update[:3] for update in updates],
                 )
                 sampled += len(updates)
-                touched.update(dayhike_id for _elevation, dayhike_id, _seq in updates)
+                for _elevation, dayhike_id, _seq, register_id in updates:
+                    touched.setdefault(dayhike_id, set()).add(register_id)
                 if progress is not None:
                     progress(f"dem sample: {sampled} vertices")
-            if source is COPERNICUS:
-                write.execute(
-                    "INSERT OR REPLACE INTO geometry_meta (key, value) VALUES ('copernicus_attribution', ?)",
-                    (COPERNICUS_ATTRIBUTION,),
-                )
-            else:
-                write.execute("DELETE FROM geometry_meta WHERE key = 'copernicus_attribution'")
+            for source, key, text in _ATTRIBUTIONS:
+                if source in sources:
+                    write.execute(
+                        "INSERT OR REPLACE INTO geometry_meta (key, value) VALUES (?, ?)", (key, text)
+                    )
+                else:
+                    write.execute("DELETE FROM geometry_meta WHERE key = ?", (key,))
             write.commit()
         finally:
             read.close()
@@ -553,9 +623,40 @@ def sample_dem(
         return 0
     if progress is not None:
         progress("dem sample: feature_vectors")
-    _refresh_catalog_elevations(catalog_path, store_path, touched)
+    _refresh_catalog_elevations(catalog_path, store_path, set(touched))
+    _record_dem_sources(catalog_path, touched)
     remove_similarity(catalog_path, progress)
     return sampled
+
+
+# The GeometryStore key of each source that records its attribution there.
+_ATTRIBUTIONS = (
+    (COPERNICUS, "copernicus_attribution", COPERNICUS_ATTRIBUTION),
+    (USGS_3DEP, "usgs_3dep_attribution", USGS_3DEP_ATTRIBUTION),
+)
+# The register id of each such source, by its key in an export's attribution.
+DEM_ATTRIBUTION_KEYS = {key.removesuffix("_attribution"): source.register_id for source, key, _ in _ATTRIBUTIONS}
+
+
+def dem_source_value(register_ids: set[str]) -> str:
+    """A DayHike's ``dem_source``: the register ids of the sources its heights
+    were read from, in ``DEM_SOURCES`` order, comma-separated (one, but for a
+    hike that crosses the edge of a regional source)."""
+    return ",".join(source.register_id for source in DEM_SOURCES.values() if source.register_id in register_ids)
+
+
+def _record_dem_sources(catalog_path: Path, by_hike: dict[int, set[str]]) -> None:
+    catalog = sqlite3.connect(catalog_path)
+    try:
+        if "dem_source" not in {row[1] for row in catalog.execute("PRAGMA table_info(dayhikes)")}:
+            catalog.execute("ALTER TABLE dayhikes ADD COLUMN dem_source TEXT")
+        catalog.executemany(
+            "UPDATE dayhikes SET dem_source = ? WHERE id = ?",
+            [(dem_source_value(ids), dayhike_id) for dayhike_id, ids in by_hike.items()],
+        )
+        catalog.commit()
+    finally:
+        catalog.close()
 
 
 def _refresh_catalog_elevations(
@@ -611,12 +712,6 @@ def format_corner(lat_sw: int, lon_sw: int) -> str:
     ns = "N" if lat_sw >= 0 else "S"
     ew = "E" if lon_sw >= 0 else "W"
     return f"{ns}{abs(lat_sw):02d}{ew}{abs(lon_sw):03d}"
-
-
-def _tile_of_file(name: str) -> str:
-    match = re.search(r"([NS]\d{2})(?:_00_)?([EW]\d{3})", name)
-    assert match is not None, name
-    return match[1] + match[2]
 
 
 def _parse_tile(tile_id: str) -> tuple[int, int]:
