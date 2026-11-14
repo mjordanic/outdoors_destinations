@@ -287,7 +287,7 @@ call on your machine.
 | `data/catalog.snaps.npz` | Where Trailheads snap onto the highway tiles (`--highways` cache, a few MB) | **gitignored** |
 | `data/valhalla/mjolnir.drive-time.json` | Valhalla flags: no walk/bike/driveways | yes |
 | `data/valhalla/*.osm.pbf` | Road extract for tiles | **gitignored** |
-| `data/dem/` | FABDEM (or Copernicus GLO-30) 1° GeoTIFFs for elevation | **gitignored** |
+| `data/dem/` | FABDEM (or Copernicus GLO-30) 1° GeoTIFFs for elevation, and USGS 3DEP ones for the US | **gitignored** |
 | `data/landcover/` | ESA WorldCover 2021 map GeoTIFFs | **gitignored** |
 | `data/climate/` | CHELSA V2.1 monthly GeoTIFFs | **gitignored** |
 
@@ -391,7 +391,7 @@ print(resolve_seed(catalog, "ridge walk"))  # 1001; case-insensitive exact match
 
 | Table | Contents |
 | --- | --- |
-| `dayhikes` | id (the OSM relation id, a built DayHike's hashed id from 2^40 up, or an external hike's from 2^39 up), Seed label, `name_origin`, length_m, Difficulty (`sac_scale` or NULL), `kind` (`relation`, `network`, `stage`, `external`), `parts` (JSON list of the OSM relations a built DayHike is built from, else NULL), `route` (a built DayHike's Route, else NULL), `source` (a sources register id, `osm` for every OSM hike), `source_ref` (its record there: `relation/{id}`, for a NetworkHike `node/{id}` of its start, for an external hike its record id; ADR-0060) and `source_url` (an external hike's record page, else NULL; ADR-0062) |
+| `dayhikes` | id (the OSM relation id, a built DayHike's hashed id from 2^40 up, or an external hike's from 2^39 up), Seed label, `name_origin`, length_m, Difficulty (`sac_scale` or NULL), `kind` (`relation`, `network`, `stage`, `external`), `parts` (JSON list of the OSM relations a built DayHike is built from, else NULL), `route` (a built DayHike's Route, else NULL), `source` (a sources register id, `osm` for every OSM hike), `source_ref` (its record there: `relation/{id}`, for a NetworkHike `node/{id}` of its start, for an external hike its record id; ADR-0060), `source_url` (an external hike's record page, else NULL; ADR-0062) and `dem_source` (the register ids of the DEMs `sample-dem` read its heights from, comma-separated, NULL before; ADR-0063) |
 | `trailheads` | lat/lon used for amenities and DriveTime |
 | `amenity_facts` | per DayHike: hut, parking, restaurant_cafe, drinking_water (count + nearest_m) |
 | `feature_vectors` | length, elevation min/max/gain, Difficulty ordinal, LandCover fractions, regime climate |
@@ -1391,7 +1391,7 @@ tiles (`fetch-landcover`, `--landcover`) and refuse to run without them. The
 page draws a Copernicus ElevationProfile smoothed over 90 m; climb, descent
 and every fact read the heights as sampled. ADR-0030 has the numbers.
 Tiles GLO-30 Public leaves out (Armenia, Azerbaijan and their borders) are
-not asked for; sea tiles are not in the bucket. Keep one source per
+not asked for; sea tiles are not in the bucket. Keep one world source per
 directory: every DEM step reads the source from the tile names in its
 `--dem` directory and refuses a directory that holds both.
 
@@ -1413,6 +1413,29 @@ non-commercial limit only when all three DEM steps above ran with the same
 Copernicus `--dem` over tiles covering every DayHike. Otherwise some values are
 still FABDEM, and its credit and the non-commercial limit still apply.
 
+**USGS 3DEP for the United States (ADR-0063):** `--source 3dep` downloads the
+USGS 3DEP 1 arc-second GeoTIFFs of a box from the USGS staged-products bucket
+(`https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/1/TIFF/current/`,
+no account), about 50 MB a tile, public domain ("Credit: U.S. Geological
+Survey"). It is bare earth, so no canopy floor is applied. Each tile is named by
+its northwest corner (`USGS_1_n40w106.tif` holds 39-40 °N, 106-105 °W), runs 6
+cells past every 1° edge and is NAD83, read as it is (about 1 m off WGS 84).
+Its tiles may sit in the same `--dem` directory as one world source's: every
+DEM step reads a point from the tiles of its own 1° cell, the 3DEP one where the
+directory has it and it holds data there (not its nodata, −999999), else the
+world source's, and never from a neighbour's overlap. `sample-dem` records in `dayhikes.dem_source` the register ids of the
+DEMs each DayHike was read from (`fabdem`, `copernicus-glo30`, `usgs-3dep`;
+two, comma-separated, for a hike crossing the edge of 3DEP), and writes
+`usgs_3dep_attribution` into `geometry_meta` while the directory holds 3DEP
+tiles. The serving export then credits exactly the DEMs its hikes record, and
+smooths the drawn profile only of hikes read from Copernicus. A Europe build is
+unchanged.
+
+```bash
+uv run dayhike fetch-dem --source 3dep --bounds 40.1,-105.9,40.6,-105.4  # Rocky Mountain NP: one tile
+uv run dayhike sample-dem
+```
+
 **Store and update SQLite:** `dayhike sample-dem` reads those GeoTIFFs and:
 
 1. Writes sampled metres onto GeometryStore `vertices.ele` for vertices that
@@ -1424,7 +1447,7 @@ still FABDEM, and its credit and the non-commercial limit still apply.
 2. Recomputes Catalog `feature_vectors.elevation_min_m` / `elevation_max_m` /
    `elevation_gain_m` for DayHikes that got DEM samples (the larger of climb
    and descent after the spike, noisy-stretch and 10 m rules of `elevation_gain` under
-   **Measures**, not max−min).
+   **Measures**, not max−min), and records their `dayhikes.dem_source`.
 
 It does not add or drop DayHikes, does not change amenities, and does not
 download tiles. `--catalog` defaults to `data/catalog.sqlite`; `--dem`
@@ -2644,7 +2667,7 @@ The same seams the CLI wraps:
 - `dayhike.catalog.trailgraph_path_for` / `dayhike.trailgraph.write_trailgraph` / `dayhike.trailgraph.sample_trailgraph` (not exported from `dayhike` itself) — the TrailGraph sidecar, written at ingest and sampled from the rasters
 - `dayhike.trailgraph.TrailGraph` / `Route` — open a TrailGraph (or its serving copy) and compute the facts of a ComposedHike
 - `dayhike.loops.find_loops` — the beam search for SuggestedLoops near given Trailheads (`ServingData.rank` measures and lists them)
-- `fetch_fabdem` / `fetch_dem` / `sample_dem` — local FABDEM (or Copernicus GLO-30, `source=COPERNICUS`) tiles → GeometryStore vertices and Catalog elevation
+- `fetch_fabdem` / `fetch_dem` / `sample_dem` — local FABDEM (or Copernicus GLO-30, `source=COPERNICUS`; and USGS 3DEP for the US, `source=USGS_3DEP`) tiles → GeometryStore vertices and Catalog elevation
 - `fetch_worldcover` / `sample_landcover` — local WorldCover tiles → GeometryStore classes and Catalog fractions
 - `fetch_chelsa` / `sample_climate` — local CHELSA rasters → Catalog hike-level monthly means
 - `filter_by_drive_time` — Ranking filtered by DriveTime from Origin
@@ -2746,6 +2769,12 @@ WorldDEM-30. https://doi.org/10.5270/ESA-c5d3d65, from AWS Open Data
 (https://registry.opendata.aws/copernicus-dem/), free of charge including
 commercial use under the Copernicus DEM licence. Written into GeometryStore
 `geometry_meta` when a Catalog has been sampled from it.
+
+USGS 3DEP 1 arc-second (for the United States, ADR-0063): USGS 3D Elevation
+Program, https://www.usgs.gov/3d-elevation-program, in the U.S. public domain
+(https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits).
+Credit: U.S. Geological Survey. Written into GeometryStore `geometry_meta`
+when a Catalog has been sampled from a directory holding its tiles.
 
 ESA WorldCover 2021: © ESA WorldCover project 2021 / Contains modified
 Copernicus Sentinel data (2021) processed by ESA WorldCover consortium.

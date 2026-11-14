@@ -133,6 +133,25 @@ COPERNICUS_CREDITS = {
     "gain, profile shape, steepness, slope aspect) are computed from it; it maps the surface, so tree tops and roofs "
     "are included.",
 }
+# The elevation credits of hikes read from USGS 3DEP in the United States (ADR-0063): after the world DEM's
+# between <!--elevation--> and <!--/elevation-->, joined by the first text, or alone in a build with no world DEM.
+USGS_3DEP_CREDITS = {
+    "index": (" and ", '<a href="https://www.usgs.gov/3d-elevation-program">USGS 3DEP</a> (public domain)'),
+    "terms": (" ", "In the United States they are computed from USGS 3DEP 1 arc-second, in the U.S. public domain."),
+    "credits": (
+        " ",
+        'USGS 3D Elevation Program (3DEP) 1 arc-second, from the <a href="https://www.usgs.gov/3d-elevation-program">'
+        "U.S. Geological Survey</a>, in the U.S. public domain "
+        '(<a href="https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits">USGS copyrights '
+        "and credits</a>). Credit: U.S. Geological Survey. The elevation profiles and the elevation-derived values of "
+        "the hikes in the United States are computed from it; it maps bare earth.",
+    ),
+}
+# The texts of USGS_3DEP_CREDITS that read otherwise alone, with no world DEM's text before them.
+USGS_3DEP_ALONE_CREDITS = {
+    "terms": "The elevation profiles and the values derived from elevation (heights, gain, profile shape, steepness, "
+    "slope aspect) are computed from USGS 3DEP 1 arc-second, in the U.S. public domain.",
+}
 PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")  # a GoatCounter code
 SITE_URL = re.compile(r"https://[A-Za-z0-9.-]+(:[0-9]+)?")  # the public origin a shared link names
 OSM_TILES = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -333,6 +352,8 @@ def site_pages(
     place_search: bool = False,
     *,
     copernicus: bool = False,
+    fabdem: bool = True,
+    usgs_3dep: bool = False,
     site_url: str | None = None,
     dayhikes: int | None = None,
     basemap: BaseMap = BaseMap(),
@@ -346,6 +367,8 @@ def site_pages(
     With ``place_search`` (the export has GeoNames places) the place-search credit names GeoNames, not Nominatim,
     and the privacy page keeps its ``places`` text, not its ``nominatim`` text.
     With ``copernicus`` (an export sampled from Copernicus GLO-30), the pages credit it instead of FABDEM.
+    With ``usgs_3dep`` (hikes read from USGS 3DEP) they credit it too, or alone when neither ``copernicus``
+    nor ``fabdem`` (an export none of whose hikes was read from FABDEM).
     A ``basemap`` from another provider than the OpenStreetMap Foundation's tiles is credited, between
     ``<!--basemap-->`` and ``<!--/basemap-->``, by its attribution in place of the Foundation's tile policy;
     a vector one by the Protomaps basemap and the software that draws it.
@@ -397,8 +420,16 @@ def site_pages(
                 ' (geonames.org), <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</span>'
             )
             html = re.sub(r'<span id="place-credit">.*?</span>', credit, html, flags=re.S)
-        if copernicus and name in COPERNICUS_CREDITS:
-            html = re.sub(r"<!--elevation-->.*?<!--/elevation-->", COPERNICUS_CREDITS[name], html, flags=re.S)
+        if (copernicus and name in COPERNICUS_CREDITS) or (usgs_3dep and name in USGS_3DEP_CREDITS):
+
+            def elevation(block: re.Match, name: str = name) -> str:
+                world = COPERNICUS_CREDITS.get(name, block[1]) if copernicus else block[1]
+                if not usgs_3dep or name not in USGS_3DEP_CREDITS:
+                    return world
+                joiner, credit = USGS_3DEP_CREDITS[name]
+                return world + joiner + credit if copernicus or fabdem else USGS_3DEP_ALONE_CREDITS.get(name, credit)
+
+            html = re.sub(r"<!--elevation-->(.*?)<!--/elevation-->", elevation, html, flags=re.S)
         if basemap.pmtiles is not None:
             html = re.sub(r"<!--basemap-->.*?<!--/basemap-->", VECTOR_CREDIT, html, flags=re.S)
         elif basemap.url != OSM_TILES:
@@ -520,6 +551,8 @@ def create_app(
         goatcounter,
         data.places is not None,
         copernicus="copernicus" in data.meta["attribution"],
+        fabdem="fabdem" in data.meta["attribution"],
+        usgs_3dep="usgs_3dep" in data.meta["attribution"],
         site_url=site_url,
         dayhikes=data.meta["dayhikes"],
         basemap=basemap,

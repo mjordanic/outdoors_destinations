@@ -892,7 +892,7 @@ def sample_trailgraph(
     """
     from dayhike import dem
     from dayhike.climate import _climate_rasters
-    from dayhike.dem import COPERNICUS, dem_source_of, require_worldcover
+    from dayhike.dem import COPERNICUS, dem_sources_of, require_worldcover
     from dayhike.landcover import _raster_paths, along_points, sample_landcover_classes
     from dayhike.similarity import slope_southness
 
@@ -900,9 +900,9 @@ def sample_trailgraph(
     if not path.is_file():
         raise FileNotFoundError(path)
     dem_dir, landcover_dir, climate_dir = Path(dem_dir), Path(landcover_dir), Path(climate_dir)
-    source = dem_source_of(dem_dir)
-    has_dem = source is not None
-    if source is COPERNICUS:
+    sources = dem_sources_of(dem_dir)
+    has_dem = bool(sources)
+    if COPERNICUS in sources:
         require_worldcover(landcover_dir)
     has_landcover = bool(_raster_paths(landcover_dir)) if landcover_dir.is_dir() else False
     rasters = _climate_rasters(climate_dir) if climate_dir.is_dir() else []

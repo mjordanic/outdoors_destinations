@@ -454,8 +454,8 @@ async function gpxText(hike) {
   const tracks = [gpxTrack(hike.name, points, heights)];
   const back = await wayBackTrack(hike, points, heights);
   if (back) tracks.push(gpxTrack(`${hike.name}: way back to the start (${fmt.km(hike.way_back.m)}, ${WAY_BACK[hike.way_back.kind]})`, back.points, back.heights));
-  const { fabdem, copernicus } = state.info?.attribution ?? {};
-  const dem = hike.elevation && (fabdem ?? copernicus), gap = gpxGap(hike);
+  const { fabdem, copernicus, usgs_3dep } = state.info?.attribution ?? {};
+  const dem = hike.elevation && [fabdem, copernicus, usgs_3dep].filter(Boolean).join(" "), gap = gpxGap(hike);
   // A hike from an external source (ADR-0062) is credited to it under its licence, not to OpenStreetMap.
   const external = hike.source && hike.source.id !== "osm" && hike.source.name ? hike.source : null;
   const credit = external ? `Route data: ${escapeHtml(external.name)}, ${escapeHtml(external.licence ?? "")}.` : "Route data © OpenStreetMap contributors, ODbL 1.0.";

@@ -56,6 +56,7 @@ CATALOG_SCHEMA = {
         "id", "name", "name_origin", "length_m", "difficulty", "kind", "parts", "route", "source",
         "source_ref",
         "source_url",
+        "dem_source",
     ],
     "feature_vectors": [
         "dayhike_id", "length_m", "elevation_min_m", "elevation_max_m", "elevation_gain_m",

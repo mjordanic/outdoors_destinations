@@ -44,7 +44,7 @@ from dayhike.catalog import (
     similarity_dir_for,
     trailgraph_path_for,
 )
-from dayhike.dem import DEFAULT_DEM_DIR, dem_source_of, fabdem_tile_id, read_grid_cells
+from dayhike.dem import DEFAULT_DEM_DIR, DemSource, dem_tiles, fabdem_tile_id, read_grid_cells, read_in_order
 from dayhike.landcover import (
     ALONG_MIN_M,
     ALONG_STEP_M,
@@ -1993,32 +1993,39 @@ def _share_near_vertices(a: np.ndarray, b: np.ndarray) -> float:
 def dem_heights(dem_dir: Path | str, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
     """DEM height of the cell holding each point; NaN without a tile or data.
 
-    Each covering tile is read once. A point in the half-cell margin outside
-    its tile's grid reads the tile's edge cell.
+    Each covering tile is read once, in ``read_in_order``: a point on a nodata
+    cell of a 3DEP tile reads the world source's. A point in the half-cell
+    margin outside its tile's grid reads the tile's edge cell.
     """
     import rasterio
 
     heights = np.full(len(lat), np.nan)
-    source = dem_source_of(dem_dir)
-    if source is None:
+    files = dem_tiles(dem_dir)
+    if not files:
         return heights
     corners = np.column_stack([np.floor(lat), np.floor(lon)]).astype(int)
     unique, tiles = np.unique(corners, axis=0, return_inverse=True)
     order = np.argsort(tiles.ravel(), kind="stable")
     bounds = np.searchsorted(tiles.ravel()[order], np.arange(len(unique) + 1))
     for tile, (south, west) in enumerate(unique):
-        path = Path(dem_dir) / source.tile_file(fabdem_tile_id(south, west))
-        if not path.is_file():
+        tile_files = files.get(fabdem_tile_id(south, west))
+        if tile_files is None:
             continue
         at = order[bounds[tile] : bounds[tile + 1]]
-        with rasterio.open(path) as dataset:
-            rows, cols = rasterio.transform.rowcol(dataset.transform, lon[at], lat[at])
-            rows = np.clip(np.asarray(rows), 0, dataset.height - 1)
-            cols = np.clip(np.asarray(cols), 0, dataset.width - 1)
-            values = read_grid_cells(dataset, rows, cols).astype(float)
-            if dataset.nodata is not None:
-                values[values == dataset.nodata] = np.nan
-        heights[at] = values
+
+        def read(_source: DemSource, path: Path, k: list[int]) -> list[float | None]:
+            points = at[k]
+            with rasterio.open(path) as dataset:
+                rows, cols = rasterio.transform.rowcol(dataset.transform, lon[points], lat[points])
+                rows = np.clip(np.asarray(rows), 0, dataset.height - 1)
+                cols = np.clip(np.asarray(cols), 0, dataset.width - 1)
+                values = read_grid_cells(dataset, rows, cols).astype(float)
+                if dataset.nodata is not None:
+                    values[values == dataset.nodata] = np.nan
+            return [None if math.isnan(value) else value for value in values.tolist()]
+
+        values, _ = read_in_order(tile_files, len(at), read)
+        heights[at] = [np.nan if value is None else value for value in values]
     return heights
 
 
