@@ -914,7 +914,7 @@ def test_the_pages_name_the_regions_of_the_export_and_a_europe_build_reads_as_be
     for pages, covered in ((us, "Colorado"), (both, "Europe and Colorado")):
         assert f"find similar ones across {covered}, from" in pages["index"]
         assert f"hikes across {covered}.</p>" in pages["index"] and f"hikes across {covered}.</p>" in pages["about"]
-        assert f'alt="Map of {covered} with the covered countries shaded"' in pages["index"]
+        assert 'src="coverage.svg"' not in pages["index"]  # the packaged map is of Europe
         assert f"It covers {covered} where OpenStreetMap maps hiking routes" in pages["about"]
         assert "central Europe" not in pages["about"]
     assert "Europe" not in us["index"] + us["about"]

@@ -2233,11 +2233,12 @@ crawler and names `/sitemap.xml`, which lists the five pages by full address at
 the site URL (unset, at the address the request came to); a Ranking is made on
 request, so no search or API address is listed.
 The pages name what the export covers from its `meta.json` regions
-(`export-serving --region`): the tagline, the share description, the coverage
-map's text and the About page say "hikes across Europe" while every region is in
-Europe, or the regions' labels ("Europe and Colorado") once one is not; the
-About page's Europe coverage note and the Terms page's "112 works across the
-European Union" stay only where Europe is covered.
+(`export-serving --region`): the tagline, the share description and the About
+page say "hikes across Europe" while every region is in Europe, or the regions'
+labels ("Europe and Colorado") once one is not. The header's coverage map, a map
+of Europe, is shown only while every region is in Europe; the About page's
+Europe coverage note and the Terms page's "112 works across the European Union"
+stay only where Europe is covered.
 
 The page opens behind a loading screen, the logo and "Loading…", which says
 "Waking the server" when the first answer is slow (a start from zero), and that

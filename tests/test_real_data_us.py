@@ -103,6 +103,6 @@ def test_the_pages_name_the_state_and_not_europe() -> None:
     index, about, terms = (client.get(path).text for path in ("/", "/about.html", "/terms.html"))
 
     assert "hikes across Rhode Island.</p>" in index and "hikes across Rhode Island.</p>" in about
-    assert 'alt="Map of Rhode Island with the covered countries shaded"' in index
+    assert 'src="coverage.svg"' not in index  # the packaged map is of Europe
     assert "It covers Rhode Island where OpenStreetMap maps hiking routes" in about
     assert "Europe" not in index + about and "European Union" not in terms
