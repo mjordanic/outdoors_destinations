@@ -2022,7 +2022,7 @@ it is off. Clicking a result shows it the same way, next to the
 liked hike. Every shown hike has "Link to this hike" (`#hike=<id>` for a
 catalog or built hike, its `#compose=` link for a composed one, with `&oneway`
 when set, and the search settings: `&month=`, `&w=` (the weights moved from their defaults, `name:weight`
-comma-separated), `&adv`, `&from=lat,lon`, `&place=`, `&hours=`, `&km=` and `&group=`; a wish link carries the
+comma-separated), `&adv`, `&from=lat,lon`, `&place=`, `&hours=`, `&km=`, `&group=` and `&units=`; a wish link carries the
 same but its own weights; ADR-0054) and two buttons: Share sends that address to a touch screen's share
 sheet, or copies it on a computer or where the sheet fails (a line beside the
 button then says "Link copied", or shows the link when it cannot be copied),
@@ -2031,7 +2031,15 @@ and Download GPX saves the hike as drawn (the served, simplified line) as a GPX
 ElevationProfile, credited to OpenStreetMap under the ODbL and to the
 elevation map; with Return to start on, its WayBack follows as a second track
 named "…: way back to the start" (a retrace or step drawn from the line, a
-trail way back from `GET /api/hikes/{id}/way-back`). The filters a list was
+trail way back from `GET /api/hikes/{id}/way-back`). The Units switch in the header shows every
+length and height in km and metres or in miles and feet; only the page converts: the API, a wish's
+values and `&km=`/`&group=` stay in metres and km whatever it shows (ADR-0035), so links and the API
+do not change. The server's own words with a length (a Measure's description, a score note such as
+"both 100 m or less") are converted on the page too. The default comes from the browser: miles
+and feet when its locale's country is the US, Liberia or Myanmar and its time zone is not in
+Europe (many in Europe browse in US English), else km and metres. An address carries
+`&units=imperial` while miles and feet show, and `&units=metric` only where the browser would
+default to miles; an address without it opens in the browser's default. The filters a list was
 found with (its limits and place, month, one way, grouping radius) show as
 labels above it, each with a × that drops it and finds again. An optional starting place with a maximum drive (up to 4 h), a
 maximum straight-line distance (up to 200 km, from the start to where a hike
