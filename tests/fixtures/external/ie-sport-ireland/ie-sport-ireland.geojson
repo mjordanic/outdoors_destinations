@@ -13,6 +13,9 @@
   "properties": {"TrailID": 3, "Name": "Short Fixture Loop", "Activity": "Walking", "Website": null, "Latitude": null, "Longitude": null},
   "geometry": {"type": "LineString", "coordinates": [[15.6, 45.7], [15.6, 45.7044966080]]}},
  {"type": "Feature",
+  "properties": {"TrailID": 5, "Name": "Lough Fixture Way Again", "Activity": "Walking", "Website": null, "Latitude": 45.4, "Longitude": 15.3},
+  "geometry": {"type": "LineString", "coordinates": [[15.3, 45.4], [15.31, 45.41], [15.3, 45.42]]}},
+ {"type": "Feature",
   "properties": {"TrailID": 4, "Name": "Fixture Cycle Route", "Activity": "Cycling", "Website": null, "Latitude": 45.8, "Longitude": 15.8},
   "geometry": {"type": "LineString", "coordinates": [[15.8, 45.8], [15.8, 45.9]]}}
 ]}

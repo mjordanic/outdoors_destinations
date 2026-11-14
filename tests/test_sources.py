@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from dayhike import build_catalog, build_similarity
+from dayhike.external import EXTERNAL_SOURCES
 from dayhike.serving import ServingData, export_serving
 from dayhike.sources import (
     COLUMNS,
@@ -48,6 +49,19 @@ def test_every_register_row_has_its_fields_and_allowed_values() -> None:
         for column in ("url", "licence_url"):
             assert row[column].startswith("https://"), (where, column)
         assert row["issue"] == "" or re.fullmatch(r"#\d+", row["issue"]), where
+
+
+def test_every_hike_source_an_export_can_carry_has_its_licence_in_data_licenses() -> None:
+    table = {}
+    for line in DATA_LICENSES.read_text().splitlines():
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if line.startswith("|") and len(cells) == 3:
+            table[cells[0]] = re.sub(r"\[(.*?)\]\(.*?\)", r"\1", cells[1])
+    carried = {"osm", *EXTERNAL_SOURCES}
+
+    for row in read_register():
+        if row["kind"] == "hikes" and row["status"] == "used" and row["id"] in carried:
+            assert table.get(row["name"]) == row["licence"], row["id"]
 
 
 def test_every_used_source_is_in_data_licenses() -> None:

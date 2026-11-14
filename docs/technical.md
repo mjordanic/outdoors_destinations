@@ -1605,8 +1605,9 @@ its own DayHike of kind `external`, its line the source's own with no OSM way,
 its id hashed from `(source, source_ref)` from 2^39 up to 2^40, and `source_url`
 links its record. One under 1 km is dropped, and so is one that is a Twin of a
 relation DayHike (the OSM hike is listed) or of an external hike kept before
-it; the ingest report counts `external_added`, `dropped_external_twin` and
-`dropped_external_length`. Sport Ireland's adapter (`ie-sport-ireland`) keeps the
+it; the ingest report counts `external_added`, `dropped_external_twin` (Twins
+of relation DayHikes), `dropped_external_duplicate` (Twins of an external hike
+kept before) and `dropped_external_length`. Sport Ireland's adapter (`ie-sport-ireland`) keeps the
 walking trails, starts each at its listed start, and keeps the longest part of a
 multi-part line with the parts that meet it within 50 m.
 

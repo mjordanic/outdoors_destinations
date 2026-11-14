@@ -160,14 +160,15 @@ def run_ingest(
                 lower,
             )
             kept += _build_hikes(conn, sources, context, amenity_index)
-        external_counts = {"added": 0, "twin": 0, "length": 0}
+        external_counts = {"added": 0, "twin": 0, "duplicate": 0, "length": 0}
         if external:
             emit_progress(progress, "assemble", "external hikes")
             added, external_counts = _add_external(conn, external, relation_hikes, walks, snapshot, amenity_index)
             emit_progress(
                 progress,
                 "assemble",
-                f"external hikes: {external_counts['added']} added, {external_counts['twin']} Twins "
+                f"external hikes: {external_counts['added']} added, {external_counts['twin']} Twins of OSM hikes, "
+                f"{external_counts['duplicate']} Twins of external hikes "
                 f"and {external_counts['length']} under 1 km dropped",
             )
             kept = sorted([*kept, *added], key=lambda hike: hike.id)
@@ -185,6 +186,7 @@ def run_ingest(
             named_place=origin_counts[NAME_ORIGIN_PLACE],
             external_added=external_counts["added"],
             dropped_external_twin=external_counts["twin"],
+            dropped_external_duplicate=external_counts["duplicate"],
             dropped_external_length=external_counts["length"],
         )
         return kept, report, work_path, snapshot
@@ -891,9 +893,9 @@ def _add_external(
 ) -> tuple[list[DayHike], dict[str, int]]:
     """The DayHikes of the external hikes (ADR-0062) and how many were added
     and dropped. One under 1 km is dropped, and so is a Twin of a relation
-    DayHike or of an external hike kept before it (the Twin rule: the OSM hike
-    is listed). Their lines wait in the work file for the GeometryStore."""
-    counts = {"added": 0, "twin": 0, "length": 0}
+    DayHike (the Twin rule: the OSM hike is listed) or of an external hike kept
+    before it (counted apart, as a duplicate). Their lines wait in the work file for the GeometryStore."""
+    counts = {"added": 0, "twin": 0, "duplicate": 0, "length": 0}
     candidates: list[tuple[str, ExternalHike]] = []
     for source_id, hikes in external:
         for hike in hikes:
@@ -930,8 +932,11 @@ def _add_external(
     added: dict[int, DayHike] = {}
     kept_groups: set[int] = set()
     for (source_id, hike), group in zip(candidates, groups):
-        if group < len(given) or group in kept_groups:
+        if group < len(given):
             counts["twin"] += 1
+            continue
+        if group in kept_groups:
+            counts["duplicate"] += 1
             continue
         dayhike = external_dayhike(source_id, hike, snapshot, amenity_index)
         if dayhike.id in added:

@@ -35,7 +35,7 @@ def test_the_sport_ireland_adapter_reads_walking_trails_from_their_start() -> No
     hikes = {hike.ref: hike for hike in read_external(SOURCE, EXTERNAL_DIR)}
 
     # The cycle route is not a walk.
-    assert sorted(hikes) == ["trail/1", "trail/2", "trail/3"]
+    assert sorted(hikes) == ["trail/1", "trail/2", "trail/3", "trail/5"]
     lough = hikes["trail/2"]
     assert (lough.name, lough.url) == ("Lough Fixture Way", LOUGH_URL)
     # Listed from its far end, it starts at the trail's own start; the part 13 km away is left out.
@@ -97,9 +97,15 @@ def test_ingest_adds_an_external_hike_and_drops_its_twin_of_an_osm_hike(catalog_
     assert (lough.source, lough.source_ref, lough.source_url) == (SOURCE, "trail/2", LOUGH_URL)
     assert (lough.trailhead.latitude, lough.trailhead.longitude) == (45.4, 15.3)
     assert lough.difficulty.sac_scale is None
-    # Ridge Walk Trail lies 16 m beside Ridge Walk: the OSM hike is listed. Short Fixture Loop is under 1 km.
+    # Ridge Walk Trail lies 16 m beside Ridge Walk: the OSM hike is listed. Lough Fixture Way Again is
+    # Lough Fixture Way listed twice, so it is a duplicate, not a Twin of an OSM hike. Short Fixture Loop is under 1 km.
     report = catalog.ingest_report
-    assert (report.external_added, report.dropped_external_twin, report.dropped_external_length) == (1, 1, 1)
+    assert (
+        report.external_added,
+        report.dropped_external_twin,
+        report.dropped_external_duplicate,
+        report.dropped_external_length,
+    ) == (1, 1, 1, 1)
     assert report.kept == plain.ingest_report.kept + 1
     # The OSM hikes are as they were.
     assert [hike for hike in catalog.dayhikes if hike.kind != "external"] == list(plain.dayhikes)
