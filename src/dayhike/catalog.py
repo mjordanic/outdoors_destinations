@@ -50,6 +50,7 @@ NAME_ORIGIN_FROM_TO = "osm_from_to"
 NAME_ORIGIN_PLACE = "nearest_place"
 NAME_ORIGIN_SYNTHETIC = "synthetic"
 KIND_RELATION = "relation"  # a DayHike that is one OSM relation; built ones are not (ADR-0038)
+KIND_EXTERNAL = "external"  # a DayHike from an external source, not OpenStreetMap (ADR-0062)
 LANDCOVER_FEATURE_NAMES = (
     "tree_fraction",
     "shrub_fraction",
@@ -132,6 +133,12 @@ class DayHike:
     kind: str = KIND_RELATION
     parts: tuple[int, ...] = ()
     route: str | None = None
+    # Where it comes from (ADR-0060): a sources register id, its record there
+    # (None for an OSM hike: derived, see ``osm_source_ref``) and the record's
+    # page, for an external hike (ADR-0062).
+    source: str = SOURCE_OSM
+    source_ref: str | None = None
+    source_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -176,6 +183,12 @@ class IngestReport:
     dropped_node_network: int = 0
     named_from_to: int = 0
     named_place: int = 0
+    # External hikes (ADR-0062): added, and dropped as a Twin of a relation DayHike,
+    # as a Twin of an external hike kept before it, or under 1 km.
+    external_added: int = 0
+    dropped_external_twin: int = 0
+    dropped_external_duplicate: int = 0
+    dropped_external_length: int = 0
 
 
 @dataclass(frozen=True)
@@ -304,8 +317,11 @@ class Catalog:
             # A Catalog built before NameOrigin or built DayHikes (ADR-0038) lacks their columns.
             name_origin = "name_origin" if "name_origin" in dayhike_columns else f"'{NAME_ORIGIN_OSM_NAME}'"
             built = "kind, parts, route" if "kind" in dayhike_columns else f"'{KIND_RELATION}', NULL, NULL"
+            # A Catalog built before Sources (ADR-0060) or external hikes (ADR-0062) is all OpenStreetMap.
+            source = "source, source_ref" if "source" in dayhike_columns else f"'{SOURCE_OSM}', NULL"
+            source_url = "source_url" if "source_url" in dayhike_columns else "NULL"
             dayhike_rows = connection.execute(
-                f"SELECT id, name, length_m, difficulty, {name_origin}, {built} "
+                f"SELECT id, name, length_m, difficulty, {name_origin}, {built}, {source}, {source_url} "
                 "FROM dayhikes ORDER BY id"
             )
             dayhikes = tuple(
@@ -323,8 +339,12 @@ class Catalog:
                     kind=kind,
                     parts=tuple(json.loads(parts)) if parts else (),
                     route=route,
+                    source=source,
+                    source_ref=None if source == SOURCE_OSM else source_ref,
+                    source_url=source_url,
                 )
-                for dayhike_id, name, length_m, sac_scale, name_origin, kind, parts, route in dayhike_rows
+                for dayhike_id, name, length_m, sac_scale, name_origin, kind, parts, route, source, source_ref, source_url
+                in dayhike_rows
             )
             return cls(
                 path=path,
@@ -341,6 +361,10 @@ class Catalog:
                     dropped_node_network=report_data.get("dropped_node_network", 0),
                     named_from_to=report_data.get("named_from_to", 0),
                     named_place=report_data.get("named_place", 0),
+                    external_added=report_data.get("external_added", 0),
+                    dropped_external_twin=report_data.get("dropped_external_twin", 0),
+                    dropped_external_duplicate=report_data.get("dropped_external_duplicate", 0),
+                    dropped_external_length=report_data.get("dropped_external_length", 0),
                 ),
                 attribution=meta["attribution"],
             )
@@ -524,6 +548,8 @@ def build_catalog(
     snap_tolerance_m: float = SNAP_TOLERANCE_M,
     sources: Sequence[BuiltHikeSource] | None = None,
     dem_dir: Path | str | None = None,
+    external: Sequence[str] = (),
+    external_dir: Path | str | None = None,
 ) -> Catalog:
     """Ingest OSM XML or PBF snapshot(s) into a Catalog of DayHikes.
 
@@ -549,8 +575,13 @@ def build_catalog(
     give the heights of line ends that orient lines (``LowerStart``); without
     tiles there, height orients none. A ``dem_dir`` that is not a directory
     is refused, so a mistyped path does not build a Catalog without heights.
+    ``external`` names external sources (ADR-0062) whose hikes, cached under
+    ``external_dir`` (default ``data/external``) by ``dayhike fetch-external``,
+    are added as DayHikes of kind ``external``; a source the register does not
+    list as used is refused.
     """
     from dayhike.dem import point_heights
+    from dayhike.external import EXTERNAL_DIR, read_external
     from dayhike.ingest import BUILT_HIKE_SOURCES, _connect_work, emit_progress, remove_work, run_ingest, write_geometry_store
     from dayhike.trailgraph import check_snap_tolerance, write_trailgraph
 
@@ -558,6 +589,10 @@ def build_catalog(
     catalog_path = Path(catalog_path)
     if dem_dir is not None and not Path(dem_dir).is_dir():
         raise FileNotFoundError(f"No DEM directory {dem_dir}")
+    external_hikes = [
+        (source_id, read_external(source_id, EXTERNAL_DIR if external_dir is None else external_dir))
+        for source_id in dict.fromkeys(external)
+    ]
     heights = None if dem_dir is None else point_heights(dem_dir)
     if dem_dir is not None and heights is None:
         emit_progress(progress, "assemble", f"no DEM tiles in {dem_dir}: height orients no line")
@@ -568,6 +603,7 @@ def build_catalog(
         fresh=fresh,
         sources=BUILT_HIKE_SOURCES if sources is None else sources,
         heights=heights,
+        external=external_hikes,
     )
     emit_progress(progress, "write", str(catalog_path))
     # Each file is written under a staging name and all are renamed together once
@@ -1787,8 +1823,8 @@ def _write_sqlite(path: Path, dayhikes: Iterable[DayHike], report: IngestReport)
     dayhikes = tuple(dayhikes)
     if len({hike.id for hike in dayhikes}) != len(dayhikes):
         raise ValueError("duplicate DayHike ids in catalog ingest")
-    # Every DayHike comes from OpenStreetMap today; its Source is a register id (ADR-0060).
-    require_used({SOURCE_OSM})
+    # Every DayHike's Source is a register id the register lists as used (ADR-0060).
+    require_used({SOURCE_OSM, *(hike.source for hike in dayhikes)})
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     if tmp.exists():
@@ -1811,7 +1847,8 @@ def _write_sqlite(path: Path, dayhikes: Iterable[DayHike], report: IngestReport)
                 parts TEXT,
                 route TEXT,
                 source TEXT NOT NULL,
-                source_ref TEXT NOT NULL
+                source_ref TEXT NOT NULL,
+                source_url TEXT
             );
             CREATE TABLE trailheads (
                 dayhike_id INTEGER PRIMARY KEY REFERENCES dayhikes(id),
@@ -1877,13 +1914,17 @@ def _write_sqlite(path: Path, dayhikes: Iterable[DayHike], report: IngestReport)
                         "dropped_node_network": report.dropped_node_network,
                         "named_from_to": report.named_from_to,
                         "named_place": report.named_place,
+                        "external_added": report.external_added,
+                        "dropped_external_twin": report.dropped_external_twin,
+                        "dropped_external_duplicate": report.dropped_external_duplicate,
+                        "dropped_external_length": report.dropped_external_length,
                     }
                 ),
             ),
         )
         connection.executemany(
             "INSERT INTO dayhikes (id, name, name_origin, length_m, difficulty, kind, parts, route, "
-            "source, source_ref) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "source, source_ref, source_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 (
                     hike.id,
@@ -1894,8 +1935,9 @@ def _write_sqlite(path: Path, dayhikes: Iterable[DayHike], report: IngestReport)
                     hike.kind,
                     json.dumps(list(hike.parts)) if hike.parts else None,
                     hike.route,
-                    SOURCE_OSM,
-                    osm_source_ref(hike.id, hike.kind, hike.parts, hike.route),
+                    hike.source,
+                    hike.source_ref or osm_source_ref(hike.id, hike.kind, hike.parts, hike.route),
+                    hike.source_url,
                 )
                 for hike in dayhikes
             ],

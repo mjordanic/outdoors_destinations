@@ -13,6 +13,7 @@ import numpy as np
 import osmium
 
 from dayhike.built import BuildContext, BuiltHikeSource, built_dayhike
+from dayhike.external import EXTERNAL_ID_MAX, EXTERNAL_ID_MIN, ExternalHike, external_dayhike, long_enough
 from dayhike.catalog import (
     GAP_JOIN_M,
     KIND_RELATION,
@@ -51,6 +52,7 @@ from dayhike.osm import (
     amenity_kind,
 )
 from dayhike.parallel import parallel_iter, parallel_map
+from dayhike.similarity import TWIN_SHARE, TWIN_STEP_M, _even_points, _step_m, twin_groups
 from dayhike.stages import day_stages
 
 INGEST_WORK_SCHEMA = 9
@@ -96,6 +98,7 @@ def run_ingest(
     fresh: bool = False,
     sources: Sequence[BuiltHikeSource] = BUILT_HIKE_SOURCES,
     heights: Heights | None = None,
+    external: Sequence[tuple[str, Sequence[ExternalHike]]] = (),
 ) -> tuple[list[DayHike], IngestReport, Path, OsmSnapshot]:
     catalog_path = Path(catalog_path)
     catalog_path.parent.mkdir(parents=True, exist_ok=True)
@@ -141,9 +144,10 @@ def run_ingest(
             _dayhike_from_relation,
             named,
             named_points(snapshot.places),
-            walks if sources else None,
+            walks if sources or external else None,
             lower,
         )
+        relation_hikes = tuple(kept)
         if sources:
             emit_progress(progress, "assemble", "built DayHikes")
             context = BuildContext(
@@ -156,6 +160,18 @@ def run_ingest(
                 lower,
             )
             kept += _build_hikes(conn, sources, context, amenity_index)
+        external_counts = {"added": 0, "twin": 0, "duplicate": 0, "length": 0}
+        if external:
+            emit_progress(progress, "assemble", "external hikes")
+            added, external_counts = _add_external(conn, external, relation_hikes, walks, snapshot, amenity_index)
+            emit_progress(
+                progress,
+                "assemble",
+                f"external hikes: {external_counts['added']} added, {external_counts['twin']} Twins of OSM hikes, "
+                f"{external_counts['duplicate']} Twins of external hikes "
+                f"and {external_counts['length']} under 1 km dropped",
+            )
+            kept = sorted([*kept, *added], key=lambda hike: hike.id)
         origin_counts = Counter(hike.name_origin for hike in kept)
         report = IngestReport(
             kept=len(kept),
@@ -168,6 +184,10 @@ def run_ingest(
             dropped_node_network=report_counts["node_network"],
             named_from_to=origin_counts[NAME_ORIGIN_FROM_TO],
             named_place=origin_counts[NAME_ORIGIN_PLACE],
+            external_added=external_counts["added"],
+            dropped_external_twin=external_counts["twin"],
+            dropped_external_duplicate=external_counts["duplicate"],
+            dropped_external_length=external_counts["length"],
         )
         return kept, report, work_path, snapshot
     finally:
@@ -861,6 +881,81 @@ def _build_hikes(
             )
     conn.commit()
     return sorted(built.values(), key=lambda hike: hike.id)
+
+
+def _add_external(
+    conn: sqlite3.Connection,
+    external: Sequence[tuple[str, Sequence[ExternalHike]]],
+    relation_hikes: Sequence[DayHike],
+    walks: dict[int, _StoredWalk],
+    snapshot: OsmSnapshot,
+    amenity_index,
+) -> tuple[list[DayHike], dict[str, int]]:
+    """The DayHikes of the external hikes (ADR-0062) and how many were added
+    and dropped. One under 1 km is dropped, and so is a Twin of a relation
+    DayHike (the Twin rule: the OSM hike is listed) or of an external hike kept
+    before it (counted apart, as a duplicate). Their lines wait in the work file for the GeometryStore."""
+    counts = {"added": 0, "twin": 0, "duplicate": 0, "length": 0}
+    candidates: list[tuple[str, ExternalHike]] = []
+    for source_id, hikes in external:
+        for hike in hikes:
+            if long_enough(hike):
+                candidates.append((source_id, hike))
+            else:
+                counts["length"] += 1
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS built_walks (id INTEGER PRIMARY KEY, vertices TEXT NOT NULL, ways TEXT NOT NULL)"
+    )
+    conn.execute("DELETE FROM built_walks WHERE id >= ? AND id < ?", (EXTERNAL_ID_MIN, EXTERNAL_ID_MAX))
+    if not candidates:
+        conn.commit()
+        return [], counts
+    routes = [_twin_route(hike.points) for _, hike in candidates]
+    # Only relation DayHikes that start near the external hikes, with a length that allows a Twin, are compared.
+    lengths = [float(_step_m(route[:, 0], route[:, 1]).sum()) for route in routes]
+    reach_m = max(lengths) / TWIN_SHARE
+    points = np.concatenate(routes)
+    south, west = points.min(axis=0)
+    north, east = points.max(axis=0)
+    pad_lat = reach_m / 111_320
+    pad_lon = reach_m / (111_320 * max(0.1, np.cos(np.radians(max(abs(south), abs(north))))))
+    given = [
+        _twin_route([point for _, point in _stored_walk(walks[hike.id], snapshot.nodes).vertices])
+        for hike in relation_hikes
+        if hike.id in walks
+        and TWIN_SHARE * min(lengths) <= hike.length_m <= reach_m
+        and south - pad_lat <= hike.trailhead.latitude <= north + pad_lat
+        and west - pad_lon <= hike.trailhead.longitude <= east + pad_lon
+    ]
+    # A group's root is its first row, so a group holding a relation has a root below len(given).
+    groups = twin_groups([*given, *routes])[len(given) :]
+    added: dict[int, DayHike] = {}
+    kept_groups: set[int] = set()
+    for (source_id, hike), group in zip(candidates, groups):
+        if group < len(given):
+            counts["twin"] += 1
+            continue
+        if group in kept_groups:
+            counts["duplicate"] += 1
+            continue
+        dayhike = external_dayhike(source_id, hike, snapshot, amenity_index)
+        if dayhike.id in added:
+            continue
+        kept_groups.add(int(group))
+        added[dayhike.id] = dayhike
+        conn.execute(
+            "INSERT INTO built_walks (id, vertices, ways) VALUES (?, ?, ?)",
+            (dayhike.id, json.dumps([[0, lat, lon] for lat, lon in hike.points]), json.dumps([])),
+        )
+    conn.commit()
+    counts["added"] = len(added)
+    return sorted(added.values(), key=lambda hike: hike.id), counts
+
+
+def _twin_route(points: Sequence[tuple[float, float]]) -> np.ndarray:
+    # The line as (lat, lon) rows every TWIN_STEP_M, as Twins are compared.
+    array = np.asarray(points, dtype=float)
+    return _even_points(array[:, 0], array[:, 1], TWIN_STEP_M)
 
 
 # A MainWalk held compactly: its vertices as node ids (their points are the

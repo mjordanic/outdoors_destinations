@@ -71,6 +71,7 @@ import shapely
 
 from dayhike.catalog import (
     EARTH_RADIUS_M,
+    KIND_EXTERNAL,
     KIND_RELATION,
     MAX_CAR_SPEED_MS,
     NAME_ORIGIN_SYNTHETIC,
@@ -123,7 +124,7 @@ from dayhike.similarity import (
     wish_unmeasured,
     score_rows,
 )
-from dayhike.sources import SOURCE_OSM, osm_record_url, osm_source_ref
+from dayhike.sources import SOURCE_OSM, osm_record_url, osm_source_ref, read_register
 from dayhike.trailgraph import (
     TRAILHEAD_KINDS,
     WAY_BACK_KINDS,
@@ -495,11 +496,18 @@ def export_serving(
         built = "d.kind, d.parts, d.route" if "kind" in columns else f"'{KIND_RELATION}', NULL, NULL"
         # A Catalog built before Sources (ADR-0060) is all OpenStreetMap: its source_ref is derived.
         source = "d.source, d.source_ref" if "source" in columns else "NULL, NULL"
+        # An external hike's record page (ADR-0062); a Catalog from before has none.
+        source_url = "d.source_url" if "source_url" in columns else "NULL"
         hikes = [
-            (*row[:9], row[9] or SOURCE_OSM, row[10] or osm_source_ref(row[0], row[6], json.loads(row[7] or "[]"), row[8]))
+            (
+                *row[:9],
+                row[9] or SOURCE_OSM,
+                row[10] or osm_source_ref(row[0], row[6], json.loads(row[7] or "[]"), row[8]),
+                row[11],
+            )
             for row in catalog.execute(
                 "SELECT d.id, d.name, d.name_origin, d.difficulty, t.latitude, t.longitude, "
-                f"{built}, {source} FROM dayhikes d JOIN trailheads t ON t.dayhike_id = d.id ORDER BY d.id"
+                f"{built}, {source}, {source_url} FROM dayhikes d JOIN trailheads t ON t.dayhike_id = d.id ORDER BY d.id"
             )
         ]
         attribution = dict(catalog.execute("SELECT key, value FROM catalog_meta"))["attribution"]
@@ -518,6 +526,7 @@ def export_serving(
     trailheads = np.array([(row[4], row[5]) for row in hikes], dtype=np.float64).reshape(-1, 2)
     np.save(out / "trailheads.npy", trailheads)
     sources = _write_hikes(catalog_path, out / "hikes.sqlite", hikes, progress)
+    external = external_sources({row[9] for row in hikes})
     compose = _write_trailgraph(trailgraph_path_for(catalog_path), out / "trailgraph.sqlite", progress)
     # A rerun without tiles or snaps drops the old ones: they may be for other tiles.
     if valhalla_dir is not None:
@@ -541,7 +550,9 @@ def export_serving(
         "facts_version": json.loads((similarity / "meta.json").read_text())["facts_version"],
         "line_tolerance_m": LINE_TOLERANCE_M,
         "elevation_points": ELEVATION_POINTS,
-        "attribution": {"osm": attribution, **elevation, **sources},
+        "attribution": {"osm": attribution, **elevation, **sources, **external_credits(external)},
+        # Each external source's name, licence and page from the sources register (ADR-0062).
+        "sources": external,
         "drive_time": (out / "valhalla" / "valhalla.json").is_file() and (out / "snaps.npz").is_file(),
         "compose": compose,
         "export_seconds": round(time.monotonic() - started, 1),
@@ -577,7 +588,7 @@ def _write_hikes(
             " id INTEGER PRIMARY KEY, name TEXT NOT NULL, name_origin TEXT NOT NULL,"
             " sac_scale TEXT, walk_m REAL, line TEXT, elevation BLOB, climb_m REAL, descent_m REAL,"
             " points BLOB NOT NULL, kind TEXT NOT NULL, parts TEXT, route TEXT,"
-            " source TEXT NOT NULL, source_ref TEXT NOT NULL);"
+            " source TEXT NOT NULL, source_ref TEXT NOT NULL, source_url TEXT);"
             "CREATE VIRTUAL TABLE hike_boxes USING rtree(id, south, north, west, east)"
         )
         for start in range(0, len(hikes), _HIKE_CHUNK):
@@ -605,9 +616,9 @@ def _write_hikes(
                 )
             _name_points(geo, rows)
             db.executemany(
-                "INSERT INTO hikes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO hikes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
-                    (*row[:9], zlib.compress(json.dumps(row[-1], ensure_ascii=False).encode()), *row[9:14])
+                    (*row[:9], zlib.compress(json.dumps(row[-1], ensure_ascii=False).encode()), *row[9:15])
                     for row in rows
                 ],
             )
@@ -619,6 +630,21 @@ def _write_hikes(
         geo.close()
         db.close()
     return sources
+
+
+def external_sources(source_ids: set[str]) -> dict[str, dict[str, str]]:
+    """The name, licence and page of each source in ``source_ids`` other than
+    OpenStreetMap, from the sources register (ADR-0062)."""
+    return {
+        row["id"]: {key: row[key] for key in ("name", "licence", "licence_url", "url")}
+        for row in read_register()
+        if row["id"] in source_ids and row["id"] != SOURCE_OSM
+    }
+
+
+def external_credits(external: dict[str, dict[str, str]]) -> dict[str, str]:
+    """The attribution line of each external source."""
+    return {source_id: f"{row['name']} ({row['url']}), {row['licence']}" for source_id, row in external.items()}
 
 
 def _check_trailgraph_sampled(source: Path, store: SimilarityStore) -> None:
@@ -1219,7 +1245,9 @@ class ServingData:
         self._db_uri = f"file:{self.directory / 'hikes.sqlite'}?mode=ro&immutable=1"
         with self._db() as db:
             self._folded = [_fold(name) for (name,) in db.execute("SELECT name FROM hikes ORDER BY id")]
-            self._has_source = "source" in {row[1] for row in db.execute("PRAGMA table_info(hikes)")}
+            columns = {row[1] for row in db.execute("PRAGMA table_info(hikes)")}
+            self._has_source = "source" in columns
+            self._has_source_url = "source_url" in columns
         # One string of every folded name between newlines: str.find walks it in C.
         self._haystack = "\n" + "\n".join(self._folded) + "\n"
         self._starts = np.cumsum([1] + [len(name) + 1 for name in self._folded[:-1]])
@@ -1501,7 +1529,8 @@ class ServingData:
         with self._db() as db:
             # An export made before Sources (ADR-0060) is all OpenStreetMap.
             source = "source, source_ref" if self._has_source else f"'{SOURCE_OSM}', NULL"
-            name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points, kind, parts, route, source, source_ref = (
+            source += ", source_url" if self._has_source_url else ", NULL"
+            name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points, kind, parts, route, source, source_ref, source_url = (
                 db.execute(
                     "SELECT name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points, "
                     f"kind, parts, route, {source} FROM hikes WHERE id = ?",
@@ -1531,13 +1560,19 @@ class ServingData:
             "way_back": _way_back(*store.way_back[[0, 3], row]) if return_to_start else None,
             # A built DayHike (ADR-0038): what kind, the OSM relations it is built from, its Route.
             "built": None
-            if kind == KIND_RELATION
+            if kind in (KIND_RELATION, KIND_EXTERNAL)
             else {"kind": kind, "parts": json.loads(parts), "route": route},
-            # Where the hike comes from: a sources register id, its record there and a link to it.
+            # Where the hike comes from: a sources register id, its record there and a link to it;
+            # for an external source (ADR-0062) also its name, licence and licence page.
             "source": {
                 "id": source,
                 "ref": source_ref,
-                "url": osm_record_url(source_ref) if source == SOURCE_OSM else None,
+                "url": osm_record_url(source_ref) if source == SOURCE_OSM else source_url,
+                **{
+                    key: value
+                    for key, value in self.meta.get("sources", {}).get(source, {}).items()
+                    if key in ("name", "licence", "licence_url")
+                },
             },
         }
 
