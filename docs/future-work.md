@@ -244,21 +244,29 @@ more than 5 % (a sample of 1,348). Against
 gains: Ben Nevis Mountain Path 1,357 m (about 1,350 m), BergeSeen Trail D5
 1,693 m (OSM 1,692 m), a 15 km Dutch coast path 28 m (21 m height range).
 
-Routes cut into a cliff side still get far too much: Levada da Ribeira da
-Janela (Madeira, 357 m height range, nearly flat in reality) has 1,557 m. There
-the DEM is wrong by 20–40 m over many vertices in a row, which neither the
-spike filter nor the 10 m dead-band removes; a wider median filter that fixes
-it also cuts real mountain gain by about 10 %. A path along a steep lake shore
-is the same: Rhodannenberg – Vorauen on Klöntalersee (83 m height range) reads
-the lake's flattened surface and the slope above it in turn, 408 m one way
-before the run rule and 248 m after it; a 90 m moving average would give 162 m
-but trims real climbs by about 10 % (7 % where the height range is over 500 m).
+Routes cut into a cliff side got far too much: Levada da Ribeira da Janela
+(Madeira, 357 m height range, nearly flat in reality) had 1,557 m. There the DEM
+is wrong by 20–40 m over many vertices in a row, which neither the spike filter
+nor the 10 m dead-band removes; a wider median filter that fixes it also cuts
+real mountain gain by about 10 %. A path along a steep lake shore is the same:
+Rhodannenberg – Vorauen on Klöntalersee (83 m height range) reads the lake's
+flattened surface and the slope above it in turn, 408 m one way before the run
+rule and 248 m after it.
+
+Since ADR-0062 the gain smooths only the noisy stretches: where the kept heights
+stray 2.5 m or more on average from their 90 m moving average over 200 m either
+side, they are that moving average. On 26 OSM relations along a bisse, Suone,
+canal or steep lake shore the median error against their tags falls from 16 %
+to 10 %; the median random DayHike does not change. Rhodannenberg – Vorauen now
+climbs 177 m and Marlinger Waalweg 314 m (475 m before). Levada da Ribeira da
+Janela still climbs 1,077 m: on long, sparsely noded stretches the DEM is wrong
+by more than a moving average can mend. In Liechtenstein, where FABDEM already
+counts 14 % less than the OSM tags, the median error rises from 15 % to 18 %.
 
 ### What would have to be true to start
 
-- A better DEM in steep valleys (lidar where a country publishes it), or a
-  rule that recognises a canal or cliff-side path (OSM `waterway=canal` along
-  the route, a levada name) and smooths only there.
+- A better DEM in steep valleys and on Madeira: lidar where a country publishes
+  it openly, read for those areas (issue #138's second direction).
 
 ---
 
