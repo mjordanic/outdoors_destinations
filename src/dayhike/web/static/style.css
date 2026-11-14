@@ -143,6 +143,10 @@ svg text { font-size: 11px; fill: var(--muted); }
 #results-table td.name .hike-name { display: block; overflow: hidden; text-overflow: ellipsis; }
 #results-table td.name .badge-line { display: block; white-space: normal; }
 #results-table tbody tr { cursor: pointer; }
+/* The head of a block "Show 10 more" adds: its words stay in view while the table scrolls sideways. */
+#results-table tbody tr.block-head { cursor: default; }
+#results-table tr.block-head th { background: #f3f6f2; font-weight: 500; text-align: left; white-space: normal; }
+#results-table tr.block-head span { position: sticky; left: 6px; display: inline-block; max-width: min(560px, calc(100vw - 80px)); }
 #results-table tbody tr:hover td, #results-table tbody tr.active td { background: #e8f1ea; }
 #results-table td.cell { text-align: center; min-width: 30px; color: #1f2a24; font-variant-numeric: tabular-nums; }
 #results-table td.cell.none { color: var(--muted); background: #fafafa; }

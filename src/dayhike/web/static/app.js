@@ -2839,9 +2839,20 @@ function noteLoops() {
     : "";
 }
 
-// Rows for the results from ``from`` on, at the end of the table.
+// Rows for the results from ``from`` on, at the end of the table. A block "Show 10 more" adds is headed by
+// what its numbers mean: unless in Strict order its rows are drawn from another pool, so they are in score
+// order among themselves and a row may score above one in a block before it (ADR-0047).
 function listRows(from) {
   const tbody = $("#results-table tbody");
+  if (from > 0 && state.results.length > from) {
+    const head = document.createElement("tr");
+    head.className = "block-head";
+    const span = state.results.length > from + 1 ? `#${from + 1}–${state.results.length}` : `#${from + 1}`;
+    head.innerHTML = `<th colspan="${$("#results-table thead tr").cells.length}" scope="rowgroup"><span>${state.strict
+      ? `${span}: the next hikes of the ranking, in order.`
+      : `${span}: the next hikes, drawn from the areas not listed above. They are in score order among themselves, so one may score above a hike listed higher up.`}</span></th>`;
+    tbody.appendChild(head);
+  }
   state.results.slice(from).forEach((result, k) => {
     const i = from + k;
     const row = resultRow(result, i + 1, () => showResult(i));

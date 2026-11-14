@@ -1056,7 +1056,7 @@ def test_show_more_appends_the_next_rows_under_the_table(browser, server, monkey
 
     page.get_by_label("Length weight, 0 to 100").fill("10")  # the shown Ranking's query is the one continued
     more.click()
-    page.locator("#results-table tbody tr").nth(1).wait_for()
+    page.locator("#results-table tbody tr[data-index]").nth(1).wait_for()
 
     lat, lon = page.evaluate("state.results[0].trailhead")
     # Loops are searched for the first rows only (ADR-0054).
@@ -1065,9 +1065,13 @@ def test_show_more_appends_the_next_rows_under_the_table(browser, server, monkey
     assert page.locator("#results-table tbody tr td:first-child").all_inner_texts() == ["1", "2"]
     with page.expect_response(f"{server}/api/rank"):
         more.click()
-    page.locator("#results-table tbody tr").nth(2).wait_for()
+    page.locator("#results-table tbody tr[data-index]").nth(2).wait_for()
     assert len(set(_listed(page))) == 3
     assert page.locator("#results-more").is_hidden()  # the last answer held the last area
+    # In Strict order each block goes on with the ranking, and its head says so.
+    assert page.locator("#results-table tr.block-head").all_inner_texts() == [
+        "#2: the next hikes of the ranking, in order.", "#3: the next hikes of the ranking, in order.",
+    ]  # fmt: skip
 
 
 def _names(page) -> list[str]:
@@ -1213,7 +1217,7 @@ def test_each_next_page_is_drawn_from_the_areas_not_shown_with_the_same_draw_num
     _find(page)
     for shown in (1, 2):
         page.get_by_role("button", name="Show 1 more").click()
-        page.locator("#results-table tbody tr").nth(shown).wait_for()
+        page.locator("#results-table tbody tr[data-index]").nth(shown).wait_for()
 
     names = _names(page)
     starts = page.evaluate("state.results.map(r => ({lat: r.trailhead[0], lon: r.trailhead[1]}))")
@@ -1222,6 +1226,12 @@ def test_each_next_page_is_drawn_from_the_areas_not_shown_with_the_same_draw_num
     assert {asked["draw"] for asked in pool.asked} == {11}
     assert names == [pool.names(pool.drawn(11, 1, answer=k), answer=k)[0] for k in range(3)]
     assert page.locator("#results-more").is_hidden()
+    # Each block is drawn from its own pool: its head says its numbers are not ranks across blocks.
+    heads = page.locator("#results-table tbody tr.block-head").all_inner_texts()
+    assert [head.split(":")[0] for head in heads] == ["#2", "#3"]
+    assert all("in score order among themselves, so one may score above a hike listed higher up" in h for h in heads)
+    rows = page.locator("#results-table tbody tr").evaluate_all("rows => rows.map(r => r.className || r.dataset.index)")
+    assert rows == ["0", "block-head", "1", "block-head", "2"]
 
 
 def test_a_strict_link_opens_in_strict_order_and_the_address_follows_the_tick(browser, server) -> None:
