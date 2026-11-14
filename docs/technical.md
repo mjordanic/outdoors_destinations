@@ -1386,8 +1386,8 @@ DEMs each DayHike was read from (`fabdem`, `copernicus-glo30`, `usgs-3dep`;
 two, comma-separated, for a hike crossing the edge of 3DEP), and writes
 `usgs_3dep_attribution` into `geometry_meta` while the directory holds 3DEP
 tiles. The serving export then credits exactly the DEMs its hikes record, and
-only an export whose hikes read more than one DEM gets a per-hike `dem_source`
-column. A Europe build is unchanged.
+smooths the drawn profile only of hikes read from Copernicus. A Europe build is
+unchanged.
 
 ```bash
 uv run dayhike fetch-dem --source 3dep --bounds 40.1,-105.9,40.6,-105.4  # Rocky Mountain NP: one tile
@@ -2237,7 +2237,7 @@ ElevationProfile at 128 equal steps in metres, the metres it climbs and
 descends in the walking direction (export format 2), and the amenity points the
 Measures count (WaterSources, Huts, restaurants, Shelters and Viewpoints in the
 Corridor, Peaks within 2 km, parking and restaurants within 500 m of the
-Trailhead) with their OSM names, its `source`, `source_ref` (ADR-0060) `source_url` (ADR-0062), in a build that mixes DEMs its `dem_source` (ADR-0062), plus an R*Tree of each simplified line's
+Trailhead) with their OSM names, its `source`, `source_ref` (ADR-0060) and `source_url` (ADR-0062), plus an R*Tree of each simplified line's
 bounding box for the map picker (export format 3), and, when the Catalog has a
 TrailGraph, `trailgraph.sqlite`: its Segments with a simplified line and the
 metres each climbs either way, the Junctions, amenity points and sampled
@@ -2310,8 +2310,7 @@ only inside a longer one, else `words`), `GET /api/hikes/{id}/way-back`
 encoded `line` and `ele`, metres per point, found again on the TrailGraph
 between the served line's ends; else null), `GET /api/hikes/{id}` (with `built`, `{"kind", "parts",
 "route"}` for a built DayHike, else null; ADR-0038; and `source`, `{"id", "ref",
-"url"}`, its sources register id, its record there and a link to it; ADR-0060; and `dem_source`, the
-register ids of the DEMs its heights were read from in a build that mixes DEMs, else null; ADR-0062), `GET
+"url"}`, its sources register id, its record there and a link to it; ADR-0060), `GET
 /api/hikes?south=&west=&north=&east=` (the hikes whose line's bounding box
 meets that box, for "Select hike on map", each with its id, name, walk length,
 `multi_day` and encoded line; when the box holds more than 100, none are listed and

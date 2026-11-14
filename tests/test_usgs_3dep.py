@@ -226,7 +226,7 @@ def test_a_hike_read_from_two_dems_records_both_in_one_order() -> None:
     assert dem_source_value({"copernicus-glo30"}) == "copernicus-glo30"
 
 
-def test_the_export_of_a_two_region_build_credits_each_dem_and_says_which_one_a_hike_read(two_regions: Path) -> None:
+def test_the_export_of_a_two_region_build_credits_each_dem(two_regions: Path) -> None:
     export = export_serving(two_regions, two_regions.parent / "web-serving")
     meta = json.loads((export / "meta.json").read_text())
 
@@ -234,20 +234,18 @@ def test_the_export_of_a_two_region_build_credits_each_dem_and_says_which_one_a_
     assert "FABDEM" in meta["attribution"]["fabdem"]
     assert "copernicus" not in meta["attribution"]
     with sqlite3.connect(export / "hikes.sqlite") as hikes:
-        dems = dict(hikes.execute("SELECT name, dem_source FROM hikes"))
-    assert dems["Valley Path"] == "usgs-3dep" and dems["Ridge Walk"] == "fabdem"
+        assert "dem_source" not in {row[1] for row in hikes.execute("PRAGMA table_info(hikes)")}
 
-    data = ServingData(export)
-    client = TestClient(create_app(data, None))
+    client = TestClient(create_app(ServingData(export), None))
     valley = next(row for row in client.get("/api/search", params={"q": "valley"}).json()["results"])
-    assert client.get(f"/api/hikes/{valley['id']}").json()["dem_source"] == "usgs-3dep"
+    assert "dem_source" not in client.get(f"/api/hikes/{valley['id']}").json()
     credits = client.get("/credits.html").text
     assert "FABDEM V1-2" in credits and "Credit: U.S. Geological Survey" in credits
     sources = {measure["name"]: measure["source"] for measure in client.get("/api/measures").json()["measures"]}
     assert sources["highest"] == "FABDEM or USGS 3DEP elevation along the line."
 
 
-def test_a_build_on_one_dem_writes_no_dem_column_in_the_export(tmp_path: Path) -> None:
+def _one_dem_build(tmp_path: Path) -> Path:
     catalog_path = tmp_path / "catalog.sqlite"
     build_catalog(FIXTURE, catalog_path)
     dem_dir = tmp_path / "dem"
@@ -256,14 +254,44 @@ def test_a_build_on_one_dem_writes_no_dem_column_in_the_export(tmp_path: Path) -
     sample_dem(catalog_path, dem_dir)
     _sample_trailgraph(catalog_path, dem_dir)
     build_similarity(catalog_path, dem_dir)
+    return catalog_path
+
+
+def test_a_build_on_one_dem_credits_only_it(tmp_path: Path) -> None:
+    catalog_path = _one_dem_build(tmp_path)
 
     export = export_serving(catalog_path, tmp_path / "web-serving")
 
     assert set(_dem_by_name(catalog_path).values()) <= {"fabdem", None}
-    with sqlite3.connect(export / "hikes.sqlite") as hikes:
-        assert "dem_source" not in {row[1] for row in hikes.execute("PRAGMA table_info(hikes)")}
     assert list(json.loads((export / "meta.json").read_text())["attribution"])[:2] == ["osm", "fabdem"]
-    assert ServingData(export).detail(1001)["dem_source"] is None
+
+
+def test_only_hikes_read_from_copernicus_are_drawn_smoothed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from dayhike import serving
+    from dayhike.catalog import geometry_store_path_for
+
+    catalog_path = _one_dem_build(tmp_path)
+    # Copernicus tiles in the DEM folder that no hike read still credit it in the GeometryStore.
+    with sqlite3.connect(geometry_store_path_for(catalog_path)) as geo:
+        geo.execute("INSERT OR REPLACE INTO geometry_meta (key, value) VALUES ('copernicus_attribution', 'Copernicus')")
+    smoothed: list[bool] = []
+    drawn = serving.drawn_profile
+    monkeypatch.setattr(serving, "drawn_profile", lambda *walk, smooth: smoothed.append(smooth) or drawn(*walk, smooth=smooth))
+
+    export = export_serving(catalog_path, tmp_path / "web-serving")
+
+    assert smoothed and not any(smoothed)
+    assert "copernicus" not in json.loads((export / "meta.json").read_text())["attribution"]
+
+    with sqlite3.connect(catalog_path) as catalog:
+        catalog.execute("UPDATE dayhikes SET dem_source = 'copernicus-glo30' WHERE name = 'Ridge Walk'")
+        ids = [row[0] for row in catalog.execute("SELECT id FROM dayhikes WHERE dem_source IS NOT NULL ORDER BY id")]
+        (ridge,) = catalog.execute("SELECT id FROM dayhikes WHERE name = 'Ridge Walk'").fetchone()
+    smoothed.clear()
+    export_serving(catalog_path, tmp_path / "web-serving")
+
+    assert len(smoothed) == len(ids)
+    assert [hike for hike, smooth in zip(ids, smoothed) if smooth] == [ridge]
 
 
 def test_the_pages_and_texts_credit_3dep_beside_a_world_dem_or_alone() -> None:
