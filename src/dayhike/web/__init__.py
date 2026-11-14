@@ -42,11 +42,13 @@ from pathlib import Path
 import numpy as np
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from dayhike.catalog import MatrixClient, Origin, straight_line_distances_m
@@ -523,6 +525,16 @@ def create_app(
     async def refuse(request: Request, error: RequestValidationError) -> JSONResponse:
         errors = [{key: value for key, value in e.items() if key != "input"} for e in error.errors()]
         return JSONResponse({"detail": jsonable_encoder(errors)}, status_code=422)
+
+    # An unknown address is a page in the site's style; the API keeps its JSON answer. (Not named
+    # 404.html: the page mount would answer every unknown address with that file, under /api/ too.)
+    not_found = (STATIC_DIR / "not-found.html").read_text(encoding="utf-8")
+
+    @app.exception_handler(StarletteHTTPException)
+    async def missing(request: Request, error: StarletteHTTPException) -> Response:
+        if error.status_code == 404 and not request.url.path.startswith("/api/"):
+            return HTMLResponse(not_found, status_code=404)
+        return await http_exception_handler(request, error)
 
     # Reads answer HEAD too (health checks); otherwise HEAD falls through to the page mount's 404.
     @app.api_route("/api/health", methods=["GET", "HEAD"])
