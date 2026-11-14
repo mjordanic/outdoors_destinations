@@ -1030,8 +1030,9 @@ def test_the_privacy_page_names_goatcounter_only_once_it_is_set(data: ServingDat
 def test_the_terms_page_warns_hikers_and_restricts_no_reuse_beyond_the_data_licences(client: TestClient) -> None:
     terms = client.get("/terms.html").text
 
-    for warning in ("crowd-sourced", "estimates", "closures", "weather", "navigation", "112", "HGSS", "SAC"):
+    for warning in ("crowd-sourced", "estimates", "closures", "weather", "navigation", "112", "emergency number", "SAC"):
         assert warning in terms, warning
+    assert "HGSS" not in terms and "Croatian" not in terms  # each hike's panel names its own country's service
     for licence in ("ODbL", "CC BY-NC-SA 4.0", "MIT licence"):
         assert licence in terms, licence
     assert "no further restriction" in terms

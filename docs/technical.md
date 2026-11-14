@@ -2207,7 +2207,18 @@ Viewpoints on the hikes, the places of `places.sqlite` with the hikes starting
 within 5 km, and with `--geonames` the lakes, passes and mountains within 2 km
 of a hike, else 10 km, a GeoNames peak at an OSM Peak of its name adding its
 names to it, and each Landmark with how many names it has (ADR-0055);
-`export-places` rewrites it too. Rerun it
+`export-places` rewrites it too. With `--countries` (the Natural Earth
+countries GeoJSON the coverage map reads) it writes `countries.npy`, the
+country each Trailhead is in, for the hike's emergency number;
+`dayhike export-countries --out data/web-serving --countries /tmp/countries.geojson`
+adds it beside an existing export. A Trailhead outside every (simplified)
+shape, on a coast, takes the country of the nearest place in `places.sqlite`.
+Both stop, writing nothing, when a Trailhead's country has no row in
+`src/dayhike/data/emergency.csv`: add the country there (its emergency
+numbers, mountain rescue service and website, how to reach it, and an
+official source) and run it again. Without `countries.npy` a hike's country
+is that of the town nearest its start, so the emergency line shows on an
+export from before it too, with `places.sqlite`. Rerun it
 after any rebuild; `meta.json` is written last, so a half-written export never
 opens.
 
@@ -2293,7 +2304,10 @@ excluded and month, giving the score a Ranking would show for `b` with `a` as
 the Seed and every Measure's score. Every hike the API lists (search, Landmarks, a map box,
 detail, compose and a Ranking's DayHike rows) has `multi_day`, longer than 40 km one way (ADR-0056), and its
 one-way `walk_m`; those of search, Landmarks, a Ranking, a detail and compose also have `region`, the nearest town
-within 30 km of its start and that town's country ("Igls, AT"; null without `places.sqlite`). A Ranking that waits 25 s for its turn answers 503 with
+within 30 km of its start and that town's country ("Igls, AT"; null without `places.sqlite`).
+A detail and compose also have `emergency`, the row of `src/dayhike/data/emergency.csv` for
+the country the hike starts in (`country`, `name`, `numbers`, `rescue`, `rescue_url`, `how`,
+`sources`): the Trailhead's in `countries.npy`, else the nearest town's; null with neither. A Ranking that waits 25 s for its turn answers 503 with
 `Retry-After: 5`. Detail, compose, rank and pair take
 `return_to_start` (default true; `?return_to_start=false` on `GET
 /api/hikes/{id}`): true measures every hike with its way back to its start
@@ -2558,7 +2572,7 @@ CLI: `dayhike ingest`, `dayhike fetch-extracts`, `dayhike fetch-dem`,
 `dayhike fetch-climate`, `dayhike sample-climate`, `dayhike sample-trailgraph`,
 `dayhike build-similarity` (`--calibrate-only`), `dayhike rank` (`--weight`,
 `--month`, `--limit`, `--one-way`), `dayhike compose` (the Route text of a shared link,
-`--name`, `--weight`, `--month`, `--limit`, `--one-way`; reads a serving export; a SuggestedLoop is listed by its link text, and each row's versions indented under it), `dayhike nearby`, `dayhike export-serving`, `dayhike export-places`, `dayhike serve`, `dayhike coverage-map`.
+`--name`, `--weight`, `--month`, `--limit`, `--one-way`; reads a serving export; a SuggestedLoop is listed by its link text, and each row's versions indented under it), `dayhike nearby`, `dayhike export-serving`, `dayhike export-places`, `dayhike export-countries`, `dayhike serve`, `dayhike coverage-map`.
 
 Docstrings on those functions use the glossary in `GLOSSARY.md`.
 Examples: [`01`](../notebooks/01_raw_data_and_ingestion.ipynb) ingest,

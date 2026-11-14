@@ -3232,3 +3232,45 @@ def test_a_distance_limit_typed_in_miles_is_asked_in_km(browser, server) -> None
     assert page.locator("#results-table tbody tr").first.locator("td").nth(3).inner_text() == "0.0 mi"
     assert page.locator("#results-filters").get_by_text("Within 20 mi of 45.2, 15.1").is_visible()
     page.wait_for_url("**km=32.187**units=imperial")
+
+
+# ---------- the emergency number where a hike starts ----------
+
+
+def test_a_croatian_hike_shows_112_and_the_hgss(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    line = page.locator("#liked .emergency")
+    assert line.inner_text().startswith("Emergency: 112 · Mountain rescue: HGSS (Croatia, source)"), line.inner_text()
+    assert line.get_by_role("link", name="HGSS").get_attribute("href").startswith("https://")
+
+
+@pytest.mark.parametrize(
+    ("code", "shown"),
+    [
+        ("GB", "Emergency: 999 or 112 · Mountain rescue: Mountain Rescue · Call 999 or 112, ask for Police, then Mountain Rescue."),
+        ("US", "Emergency: 911 (United States, source)"),
+    ],
+)
+def test_a_uk_or_us_hike_shows_its_own_countrys_number(browser, server, code, shown) -> None:
+    from dayhike.serving import emergency_services
+
+    def elsewhere(route) -> None:
+        route.fulfill(json={**route.fetch().json(), "emergency": emergency_services()[code]})
+
+    page = browser.new_page()
+    page.route(lambda url: not url.startswith(server), lambda route: route.abort())
+    page.route(f"{server}/api/hikes/{RIDGE_WALK_ID}*", elsewhere)
+    page.goto(f"{server}/#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    assert page.locator("#liked .emergency").inner_text().startswith(shown)
+    assert "HGSS" not in page.locator("#liked").inner_text()
+
+
+def test_a_hike_with_no_known_country_says_to_call_the_local_number(browser, server) -> None:
+    page = browser.new_page()
+    page.route(lambda url: not url.startswith(server), lambda route: route.abort())
+    page.route(f"{server}/api/hikes/{RIDGE_WALK_ID}*", lambda route: route.fulfill(json={**route.fetch().json(), "emergency": None}))
+    page.goto(f"{server}/#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    assert page.locator("#liked .emergency").inner_text() == "In an emergency, call the local emergency number."

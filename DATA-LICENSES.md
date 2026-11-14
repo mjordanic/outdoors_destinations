@@ -16,7 +16,8 @@ builds from those inputs, keep the licences of their sources:
 | ESA WorldCover 2021 | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | Land-cover shares and the waterside share per hike. |
 | CHELSA V2.1 | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | Per-hike monthly climate averages. |
 | GeoNames `allCountries` | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | The towns and villages of the web demo's place search ("Find place"), served from `places.sqlite` in the serving export. |
-| Natural Earth | Public domain | Country shapes of the coverage map. |
+| Natural Earth | Public domain | Country shapes of the coverage map, and the country each hike starts in. |
+| Emergency numbers | Facts, each row citing its official source | `src/dayhike/data/emergency.csv`: per country the emergency numbers and mountain rescue service a hike's panel shows, gathered by hand from the EU's 112 page, the UK government's travel advice and the rescue services' own sites. |
 
 The full citations and notices are in the technical docs'
 [Attribution](docs/technical.md#attribution) section and on the web demo's Data and

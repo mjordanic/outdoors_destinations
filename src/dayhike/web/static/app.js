@@ -1016,6 +1016,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     ${hike.route ? `<p class="hint">Drawn from trail segments${hike.routes?.length ? ` along ${escapeHtml(hike.routes.slice(0, 5).join(", "))}${hike.routes.length > 5 ? " and more" : ""}` : ""}; measured as drawn${hike.way_back ? ", with its way back" : ""}.</p>` : ""}
     ${hike.way_back && hike.way_back.kind !== "none" ? `<p class="hint">Length, climb, descent and every measure include the way back to the start (${escapeHtml(wayBackText(hike.way_back))}); the map and profile show the hike itself.</p>` : ""}
     <ul class="badges">${badges.map((b) => `<li>${escapeHtml(b)}</li>`).join("")}</ul>
+    ${emergencyLine(hike.emergency)}
     <div class="map"></div>
     <div class="legend">${LEGEND.map(([label, color]) => `<span style="--c:${color}">${label}</span>`).join("")}</div>
     <div class="slot-elevation"></div>
@@ -1041,6 +1042,18 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
   const note = card.querySelector(".uncounted-note"), line = compare && uncountedLine(query);
   note.hidden = !line;
   note.textContent = line || "";
+}
+
+// The emergency number and mountain rescue service of the country a hike starts in, with its source;
+// a hike near a border shows its start country's (112 works across the EU).
+function emergencyLine(emergency) {
+  if (!emergency) return '<p class="emergency">In an emergency, call the local emergency number.</p>';
+  const { name, numbers, rescue, rescue_url: url, how, sources } = emergency;
+  const link = (href, text) => `<a href="${escapeHtml(href)}" target="_blank" rel="noopener">${escapeHtml(text)}</a>`;
+  const parts = [`<strong>Emergency: ${numbers.map(escapeHtml).join(" or ")}</strong>`];
+  if (rescue) parts.push(`Mountain rescue: ${url ? link(url, rescue) : escapeHtml(rescue)}`);
+  if (how && how !== `Call ${numbers[0]}.`) parts.push(escapeHtml(how));
+  return `<p class="emergency" title="Emergency services where this hike starts: ${escapeHtml(name)}">${parts.join(" · ")} <small>(${escapeHtml(name)}, ${link(sources[0], "source")})</small></p>`;
 }
 
 // Why a Measure a query weighs 0 is not counted, as the detail table says it: weighted 0, behind a

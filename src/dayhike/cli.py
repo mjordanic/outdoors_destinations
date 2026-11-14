@@ -363,6 +363,21 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="GeoNames allCountries.zip for the page's place search; downloaded there when missing",
     )
+    export.add_argument(
+        "--countries",
+        type=Path,
+        help="Natural Earth admin-0 countries GeoJSON: the country each hike starts in, for its emergency number",
+    )
+    countries = subparsers.add_parser(
+        "export-countries",
+        help="Add the country each hike starts in (for its emergency number) beside an existing serving export",
+    )
+    countries.add_argument("--out", type=Path, default=Path("data/web-serving"))
+    countries.add_argument(
+        "--countries",
+        type=Path,
+        help="Natural Earth admin-0 countries GeoJSON; without it, the country of the place nearest each Trailhead",
+    )
     places = subparsers.add_parser(
         "export-places", help="Add GeoNames place search and the hike search's Landmarks beside an existing serving export"
     )
@@ -421,8 +436,17 @@ def main(argv: list[str] | None = None) -> int:
         os.environ[WORKERS_ENV] = str(args.workers)  # the stage's code reads it (dayhike.parallel)
     if args.command == "export-serving":
         return _export_serving(
-            args.catalog, args.out, args.valhalla_tiles, args.snaps, args.valhalla_url, args.geonames
+            args.catalog, args.out, args.valhalla_tiles, args.snaps, args.valhalla_url, args.geonames, args.countries
         )
+    if args.command == "export-countries":
+        from dayhike.serving import ServingExportError, export_countries
+
+        try:
+            print(export_countries(args.out, args.countries))
+        except ServingExportError as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        return 0
     if args.command == "export-places":
         from dayhike.serving import export_landmarks, export_places, fetch_geonames
 
@@ -720,6 +744,7 @@ def _export_serving(
     snaps: Path | None,
     valhalla_url: str | None,
     geonames: Path | None,
+    countries: Path | None,
 ) -> int:
     from dayhike.serving import ServingExportError, export_serving, fetch_geonames
 
@@ -732,6 +757,7 @@ def _export_serving(
                 snaps_path=snaps,
                 valhalla_url=valhalla_url,
                 geonames_path=geonames and fetch_geonames(geonames),
+                countries_path=countries,
                 progress=_progress,
             )
         )
