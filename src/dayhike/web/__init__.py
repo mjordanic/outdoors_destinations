@@ -146,6 +146,11 @@ USGS_3DEP_CREDITS = {
         "the hikes in the United States are computed from it; it maps bare earth.",
     ),
 }
+# The texts of USGS_3DEP_CREDITS that read otherwise alone, with no world DEM's text before them.
+USGS_3DEP_ALONE_CREDITS = {
+    "terms": "The elevation profiles and the values derived from elevation (heights, gain, profile shape, steepness, "
+    "slope aspect) are computed from USGS 3DEP 1 arc-second, in the U.S. public domain.",
+}
 PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")  # a GoatCounter code
 SITE_URL = re.compile(r"https://[A-Za-z0-9.-]+(:[0-9]+)?")  # the public origin a shared link names
 OSM_TILES = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -409,7 +414,7 @@ def site_pages(
                 if not usgs_3dep or name not in USGS_3DEP_CREDITS:
                     return world
                 joiner, credit = USGS_3DEP_CREDITS[name]
-                return world + joiner + credit if copernicus or fabdem else credit
+                return world + joiner + credit if copernicus or fabdem else USGS_3DEP_ALONE_CREDITS.get(name, credit)
 
             html = re.sub(r"<!--elevation-->(.*?)<!--/elevation-->", elevation, html, flags=re.S)
         if basemap.pmtiles is not None:

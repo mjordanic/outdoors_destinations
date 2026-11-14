@@ -318,6 +318,10 @@ def test_the_pages_and_texts_credit_3dep_beside_a_world_dem_or_alone() -> None:
         assert "FABDEM" in beside[name] and "USGS" in beside[name]
         assert "FABDEM" not in alone[name] and "USGS" in alone[name]
         assert "USGS 3DEP" not in default[name]
+    assert "In the United States they are computed from USGS 3DEP" in beside["terms"]
+    assert "The elevation profiles and the values derived from elevation (heights, gain, profile shape, steepness, " \
+        "slope aspect) are computed from USGS 3DEP 1 arc-second" in alone["terms"]
+    assert "they are computed" not in alone["terms"]
     with_copernicus = site_pages(None, copernicus=True, usgs_3dep=True)["credits"]
     assert "Copernicus DEM GLO-30" in with_copernicus and "Credit: U.S. Geological Survey" in with_copernicus
 
