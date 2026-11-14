@@ -140,6 +140,10 @@ driving polygons are expensive. ADR-0004 keeps DriveTime on the matrix API.
 
 ## 9. LandCover along the line, not per vertex
 
+**Built since:** the length-weighted shares (the second row below) are ADR-0059.
+On three new samples of 400 hikes they misassign a mean of 1.6–1.8 % of the walk,
+against 3.5–3.6 % for the vertex count. Reading along segments stays parked.
+
 ### Why it's parked
 
 LandCover fractions count each GeometryStore vertex once. OSM vertices are dense
@@ -150,7 +154,7 @@ a long segment is never read. Measured on the notebook 05 region (400 of its
 
 | Method | Share of the walk misassigned: mean / p95 / worst | Points read |
 | --- | --- | --- |
-| Vertex count (today) | 2.7% / 8.0% / 14.4% | 1× vertices |
+| Vertex count (before ADR-0059) | 2.7% / 8.0% / 14.4% | 1× vertices |
 | Vertex weighted by half its two segments | 1.3% / 3.9% / 11.7% | 1× (no new reads) |
 | Read every 25 m along segments | 1.2% / 4.0% / 7.9% | 1.3× |
 
@@ -273,3 +277,46 @@ usually its retrace, so most would compare like a shorter out-and-back.
   its WayBack as it grows, within the same per-request budget as loops.
 - A rule for which of the near-copies of one line to keep, since a line
   can end at any Junction along its last Segments.
+
+---
+
+## 14. Sharper Lake or sea between barely-wet and dry hikes
+
+### Why it's parked
+
+Since ADR-0058 a dry hike scores about 0.78 on Lake or sea against a hike 20 %
+beside water, so a waterside Seed's top 10 can fill with dry hikes. Measured on
+notebook 05's region (4,581 DayHikes with a trailhead in 42.3–46.9° N,
+13.3–19.5° E, 163 of them beside water, the Calibration re-fitted on random
+pairs of these hikes, the way back, default weights, 100 waterside Seeds,
+40 random Seeds):
+
+| Option | Top 10 beside water (Seeds 0.15–0.25 / 0.25–0.4 / ≥ 0.4) | Seeds with a dry hike in their top 10 | Compared random pairs at raw 0 | Top-10 places kept, 40 random Seeds |
+| --- | --- | --- | --- | --- |
+| ADR-0058 as shipped | 51 % (16 / 56 / 79 %) | 84 | 30 % | 100 % |
+| A waterside-and-dry gap counts 1.5× | 54 % (17 / 54 / 88 %) | 78 | 47 % | 98.8 % |
+| … counts 2× | 60 % (19 / 68 / 90 %) | 72 | 65 % | 97.7 % |
+| … counts 3× | 72 % (39 / 84 / 94 %) | 57 | 88 % | 96.5 % |
+| Such a pair takes the gap of the shares as measured | 47 % (15 / 45 / 78 %) | 87 | 29 % | 99.5 % |
+| As shipped, Lake or sea weighed 2× the other core Measures | 71 % (29 / 87 / 97 %) | 47 | 30 % | — |
+| … weighed 3× | 79 % (43 / 93 / 100 %) | 36 | 30 % | — |
+
+The first dry hike in a top 10 is at a median rank of 2 or 3 in every option.
+The region has few waterside hikes (3.6 %), so its shares are lower than the
+Europe Catalog's 82.6 %; the options are compared with each other.
+
+Most compared random pairs are a dry hike against a waterside one, so the
+Calibration ranks any such pair high whatever its raw score: stretching the gap
+changes the calibrated score only once it reaches raw 0 (a 0.2-and-dry pair
+stays about 0.8 at 1.5× and 2×, and drops to 0 at 3×). That gain comes from
+piling pairs on raw 0, the jump in the curve ADR-0058 removed (88 % of compared
+pairs at raw 0 at 3×). Taking the measured gap makes it worse. Every option
+leaves every other Measure's Calibration byte for byte the same. Raising Lake
+or sea's weight, which a Hiker can already do, gives more than any rule change
+and keeps the curve.
+
+### What would have to be true to start
+
+- Hikers saying waterside Seeds' lists feel too dry, with the weight lever not
+  enough. Then a separate random-pair population for waterside-and-dry pairs,
+  rather than a sharper raw score, would be the place to look.

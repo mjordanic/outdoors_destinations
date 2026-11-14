@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 400" role="img" aria-label="Counting vertices against weighting them by length">
+  <title>Land cover: counting points versus weighting them by length</title>
+  <style>text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;fill:#1f2a24}.m{fill:#5d6b62}.h{font-weight:700;fill:#245f3c}</style>
+  <rect x="0" y="0" width="900" height="400" fill="#ffffff"/>
+  <text x="20" y="28" class="h" font-size="16">One hike: a bendy stretch in forest, then a long straight stretch across grass</text>
+  <!-- map strip -->
+  <rect x="40" y="45" width="290" height="120" fill="#cfe5d4"/>
+  <rect x="330" y="45" width="530" height="120" fill="#f3ecc8"/>
+  <text x="50" y="62" font-size="12" class="m">forest</text>
+  <text x="790" y="62" font-size="12" class="m">grass</text>
+  <polyline points="50,105 80,85 110,125 140,85 170,125 200,85 230,125 260,85 290,125 320,105 345,105 600,105 850,105" fill="none" stroke="#c2410c" stroke-width="4" stroke-linejoin="round"/>
+  <g fill="#fff" stroke="#1f2a24" stroke-width="1.5">
+    <circle cx="50" cy="105" r="5"/><circle cx="80" cy="85" r="5"/><circle cx="110" cy="125" r="5"/><circle cx="140" cy="85" r="5"/><circle cx="170" cy="125" r="5"/><circle cx="200" cy="85" r="5"/><circle cx="230" cy="125" r="5"/><circle cx="260" cy="85" r="5"/><circle cx="290" cy="125" r="5"/><circle cx="320" cy="105" r="5"/>
+    <circle cx="345" cy="105" r="5"/><circle cx="600" cy="105" r="5"/><circle cx="850" cy="105" r="5"/>
+  </g>
+  <text x="50" y="155" font-size="12">10 points on the bends</text>
+  <text x="560" y="155" font-size="12">3 points on 500 m of straight path</text>
+  <!-- three answers -->
+  <g>
+    <rect x="40" y="190" width="260" height="140" rx="8" fill="#fff4ec" stroke="#f3d3bd"/>
+    <text x="55" y="214" class="h" font-size="14">Today: count points</text>
+    <text x="55" y="236" font-size="12">each point counts once</text>
+    <text x="55" y="270" font-size="30" font-weight="700" fill="#c2410c">77 % forest</text>
+    <text x="55" y="295" font-size="12">10 of 13 points are in forest</text>
+    <text x="55" y="315" font-size="12" class="m">bends weigh more than their length</text>
+  </g>
+  <g>
+    <rect x="320" y="190" width="260" height="140" rx="8" fill="#e8f1eb" stroke="#bcd8c4"/>
+    <text x="335" y="214" class="h" font-size="14">Proposed: weight by length</text>
+    <text x="335" y="236" font-size="12">each point counts half of its two pieces</text>
+    <text x="335" y="270" font-size="30" font-weight="700" fill="#245f3c">47 % forest</text>
+    <text x="335" y="295" font-size="12">same points, same raster reads</text>
+    <text x="335" y="315" font-size="12" class="m">only the arithmetic changes</text>
+  </g>
+  <g>
+    <rect x="600" y="190" width="260" height="140" rx="8" fill="#f8faf6" stroke="#d9dfd6"/>
+    <text x="615" y="214" class="h" font-size="14">Truth: read every 10 m</text>
+    <text x="615" y="236" font-size="12">what the walker actually crosses</text>
+    <text x="615" y="270" font-size="30" font-weight="700" fill="#5d6b62">47 % forest</text>
+    <text x="615" y="295" font-size="12">needs new points and a new raster pass</text>
+    <text x="615" y="315" font-size="12" class="m">kept only as the check</text>
+  </g>
+  <text x="20" y="360" font-size="13">Measured on 400 hikes (docs/future-work.md §9): share of the walk put in the wrong class,</text>
+  <text x="20" y="380" font-size="13"><tspan font-weight="700">count points 2.7 %</tspan> (p95 8.0 %) → <tspan font-weight="700">weight by length 1.3 %</tspan> (p95 3.9 %), with no new raster reads.</text>
+</svg>

@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 430" role="img" aria-label="Which parts of the hike data come from OpenStreetMap and go into the ODbL download">
+  <title>What goes into the ODbL download</title>
+  <style>text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;fill:#1f2a24}.m{fill:#5d6b62}.h{font-weight:700;fill:#245f3c}.w{fill:#fff;font-weight:700}</style>
+  <rect x="0" y="0" width="900" height="430" fill="#ffffff"/>
+  <text x="20" y="28" class="h" font-size="16">One hike in the site's data, coloured by where each part comes from</text>
+  <!-- row of blocks -->
+  <g font-size="12">
+    <rect x="20" y="50" width="380" height="170" rx="8" fill="#2f7d4f"/>
+    <text x="35" y="74" class="w" font-size="14">From OpenStreetMap (ODbL)</text>
+    <text x="35" y="98" fill="#fff">name, kind, route id, parts</text>
+    <text x="35" y="118" fill="#fff">the line (geometry) and its length</text>
+    <text x="35" y="138" fill="#fff">difficulty (sac_scale)</text>
+    <text x="35" y="158" fill="#fff">start point (Trailhead), parking, cafés</text>
+    <text x="35" y="178" fill="#fff">peaks, huts, water, viewpoints near the line</text>
+    <text x="35" y="198" fill="#fff">Landmarks (named peaks, huts, lakes)</text>
+
+    <rect x="415" y="50" width="225" height="80" rx="8" fill="#8a5a2b"/>
+    <text x="428" y="72" class="w">Elevation: FABDEM or</text>
+    <text x="428" y="88" class="w">Copernicus GLO-30</text>
+    <text x="428" y="108" fill="#fff">profile, climb, descent,</text>
+    <text x="428" y="123" fill="#fff">highest, lowest, aspect</text>
+
+    <rect x="655" y="50" width="225" height="80" rx="8" fill="#2a7f86"/>
+    <text x="668" y="72" class="w">Land cover: ESA WorldCover</text>
+    <text x="668" y="92" fill="#fff">tree / shrub / grass /</text>
+    <text x="668" y="108" fill="#fff">bare / snow shares,</text>
+    <text x="668" y="123" fill="#fff">lake-or-sea share</text>
+
+    <rect x="415" y="140" width="225" height="80" rx="8" fill="#3b6fb6"/>
+    <text x="428" y="162" class="w">Climate: CHELSA</text>
+    <text x="428" y="182" fill="#fff">monthly temperature,</text>
+    <text x="428" y="198" fill="#fff">rain, sunshine</text>
+
+    <rect x="655" y="140" width="225" height="80" rx="8" fill="#6d5bb0"/>
+    <text x="668" y="162" class="w">Places: GeoNames</text>
+    <text x="668" y="182" fill="#fff">town and village search</text>
+    <text x="668" y="198" fill="#fff">(places.sqlite)</text>
+  </g>
+  <!-- arrows -->
+  <path d="M210 225 L210 270" stroke="#2f7d4f" stroke-width="4" marker-end="url(#a)"/>
+  <defs><marker id="a" markerWidth="10" markerHeight="10" refX="5" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#2f7d4f"/></marker>
+  <marker id="b" markerWidth="10" markerHeight="10" refX="5" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5d6b62"/></marker></defs>
+  <rect x="20" y="275" width="380" height="95" rx="8" fill="#e8f1eb" stroke="#2f7d4f" stroke-width="2"/>
+  <text x="35" y="300" class="h" font-size="14">hikes-osm.sqlite: the free download</text>
+  <text x="35" y="322" font-size="12">only the green part, with the ODbL text inside</text>
+  <text x="35" y="342" font-size="12">and "© OpenStreetMap contributors"</text>
+  <text x="35" y="360" font-size="12" class="m">rebuilt with every data refresh</text>
+  <path d="M647 225 L647 270" stroke="#5d6b62" stroke-width="3" stroke-dasharray="6 4" marker-end="url(#b)"/>
+  <rect x="415" y="275" width="465" height="95" rx="8" fill="#f8faf6" stroke="#d9dfd6"/>
+  <text x="430" y="300" class="h" font-size="14">Stays on the site, credited, not in the download</text>
+  <text x="430" y="322" font-size="12">Each source keeps its own licence (DATA-LICENSES.md).</text>
+  <text x="430" y="342" font-size="12">Not made from OSM data, so OSM's share-alike rule</text>
+  <text x="430" y="360" font-size="12">does not reach it (OSMF Collective Database guideline).</text>
+  <text x="20" y="400" font-size="12" class="m">Hikes from other open registries (Ireland, Finland …) are separate rows with their own licence: they are left out of the ODbL file, or</text>
+  <text x="20" y="418" font-size="12" class="m">shipped beside it under their own licence. The per-hike source column (issue 32) is what lets the export tell them apart.</text>
+</svg>

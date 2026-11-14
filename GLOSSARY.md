@@ -125,7 +125,7 @@ A terrain-derived description of which way DayHikeGeometry faces relative to the
 _Avoid_: exposure, sunny, shady, weather
 
 **LandCover**:
-The mix of surface along DayHikeGeometry, as fractions of tree, shrub, grass, bare, permanent snow and other (everything else, such as water, built-up and cropland), used in the FeatureVector. Each GeometryStore vertex counts once. Fractions do not change with QueryMonth. Snow here is ice on the land-cover map, not the seasonal snowpack.
+The mix of surface along DayHikeGeometry, as fractions of tree, shrub, grass, bare, permanent snow and other (everything else, such as water, built-up and cropland), used in the FeatureVector. Shares are by length: each GeometryStore vertex stands for half of the two segments beside it (ADR-0059). Fractions do not change with QueryMonth. Snow here is ice on the land-cover map, not the seasonal snowpack.
 _Avoid_: NDVI, vegetation image, satellite picture, greenness, snow depth
 
 **ClimateNormal**:

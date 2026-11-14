@@ -1755,11 +1755,10 @@ class TrailGraph:
             facts["highest_m"], facts["lowest_m"] = float(known.max()), float(known.min())
         if walk.sac_scale is not None:
             facts["difficulty_rank"] = float(SAC_SCALE_RANK[walk.sac_scale])
-        codes = walk.landcover[walk.landcover > 0]
-        if codes.size:
+        if np.any(walk.landcover > 0):
             from dayhike.landcover import _landcover_fractions
 
-            shares = list(_landcover_fractions(codes.tolist()))
+            shares = list(_landcover_fractions(walk.landcover, lat, lon))
             shares.append(max(1.0 - sum(shares), 0.0))
             facts.update(zip(LANDCOVER_SHARE_COLUMNS, shares))
         cells = walk.climate_cell[walk.climate_cell >= 0]
