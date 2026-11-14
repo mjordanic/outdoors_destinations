@@ -3257,18 +3257,22 @@ def test_a_distance_limit_at_an_end_of_its_range_in_miles_is_that_end_in_km(brow
 
 
 def test_a_croatian_hike_shows_112_and_the_hgss(browser, server) -> None:
+    from dayhike.serving import emergency_services
+
     page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
     page.get_by_text("Chosen: Ridge Walk").wait_for()
     line = page.locator("#liked .emergency")
-    assert line.inner_text().startswith("Emergency: 112 · Mountain rescue: HGSS (Croatia, source)"), line.inner_text()
+    assert line.inner_text().startswith("Emergency: 112 · Mountain rescue: HGSS (Croatia, sources 1 2)"), line.inner_text()
     assert line.get_by_role("link", name="HGSS").get_attribute("href").startswith("https://")
+    cited = [line.get_by_role("link", name=str(i + 1), exact=True).get_attribute("href") for i in range(2)]
+    assert cited == emergency_services()["HR"]["sources"]
 
 
 @pytest.mark.parametrize(
     ("code", "shown"),
     [
         ("GB", "Emergency: 999 or 112 · Mountain rescue: Mountain Rescue · Call 999 or 112, ask for Police, then Mountain Rescue."),
-        ("US", "Emergency: 911 (United States, source)"),
+        ("US", "Emergency: 911 · Mountain rescue: Mountain Rescue Association (United States, sources 1 2 3)"),
     ],
 )
 def test_a_uk_or_us_hike_shows_its_own_countrys_number(browser, server, code, shown) -> None:

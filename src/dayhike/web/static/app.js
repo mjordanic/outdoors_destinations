@@ -1048,7 +1048,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
   note.textContent = line || "";
 }
 
-// The emergency number and mountain rescue service of the country a hike starts in, with its source;
+// The emergency number and mountain rescue service of the country a hike starts in, with its sources;
 // a hike near a border shows its start country's (112 works across the EU).
 function emergencyLine(emergency) {
   if (!emergency) return '<p class="emergency">In an emergency, call the local emergency number.</p>';
@@ -1057,7 +1057,8 @@ function emergencyLine(emergency) {
   const parts = [`<strong>Emergency: ${numbers.map(escapeHtml).join(" or ")}</strong>`];
   if (rescue) parts.push(`Mountain rescue: ${url ? link(url, rescue) : escapeHtml(rescue)}`);
   if (how && how !== `Call ${numbers[0]}.`) parts.push(escapeHtml(how));
-  return `<p class="emergency" title="Emergency services where this hike starts: ${escapeHtml(name)}">${parts.join(" · ")} <small>(${escapeHtml(name)}, ${link(sources[0], "source")})</small></p>`;
+  const cited = sources.length === 1 ? link(sources[0], "source") : `sources ${sources.map((href, i) => link(href, String(i + 1))).join(" ")}`;
+  return `<p class="emergency" title="Emergency services where this hike starts: ${escapeHtml(name)}">${parts.join(" · ")} <small>(${escapeHtml(name)}, ${cited})</small></p>`;
 }
 
 // Why a Measure a query weighs 0 is not counted, as the detail table says it: weighted 0, behind a
