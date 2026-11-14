@@ -186,11 +186,13 @@ command. After ingest, widen raster coverage with
 What one build covers is a **region file**, not code. The packaged ones are in
 `src/dayhike/data/regions/`: `alps-dinarides` (the eight PRD extracts, the
 default of the fetch commands), `europe` (the continent extract, the default of
-`coverage-map`) and `us-colorado` (one US state, an example outside Europe).
+`coverage-map`), `us-colorado` (one US state, an example outside Europe) and
+`us-rhode-island` (the smallest state, the [US test build](#a-us-build)).
 A region file is TOML:
 
 ```toml
-label = "Colorado"                      # the coverage map's name for it ("Map of Colorado")
+label = "Colorado"                      # the coverage map's and the site's name for it ("Map of Colorado")
+continent = "North America"             # optional; while every region is in "Europe" the site says Europe
 extracts = ["https://download.geofabrik.de/north-america/us/colorado-latest.osm.pbf"]
 bounds = { south = 36.9, west = -109.1, north = 41.1, east = -102.0 }   # raster box, WGS84
 
@@ -220,6 +222,46 @@ crosses the 180° meridian (Alaska's Aleutians, Fiji, eastern Chukotka) is not
 supported; split it, or leave the far side out. The CHELSA clip of regions
 far apart (Europe plus the US) is the box around both, mostly ocean: large on
 disk, but nothing reads its empty cells.
+
+`export-serving --region NAME` (repeatable, the regions the Catalog was built
+from) records each region's label and continent in the export's `meta.json`, and
+the site's pages name them ([Site pages](#site-pages-and-settings)). Without it,
+or with only regions in Europe, the pages read as the Europe site always has.
+
+### A US build
+
+The US tests (`tests/test_real_data_us.py`, `web/smoke.py --us`) run on a
+build of `us-rhode-island`: a 53 MB extract, 23 DayHikes, two FABDEM tiles, one
+WorldCover tile and a 1 km CHELSA clip; every step takes seconds. In a directory
+of its own (`US`):
+
+```bash
+curl -L -o $US/osm/rhode-island-latest.osm.pbf https://download.geofabrik.de/north-america/us/rhode-island-latest.osm.pbf
+B=41.1,-71.95,42.05,-71.1     # the region's bounds
+uv run dayhike fetch-dem --bounds $B --dest $US/dem
+uv run dayhike ingest $US/osm/rhode-island-latest.osm.pbf --catalog $US/catalog.sqlite --dem $US/dem
+uv run dayhike sample-dem --catalog $US/catalog.sqlite --dem $US/dem
+uv run dayhike fetch-landcover --bounds $B --dest $US/landcover
+uv run dayhike sample-landcover --catalog $US/catalog.sqlite --landcover $US/landcover
+uv run dayhike fetch-climate --bounds $B --dest $US/climate
+uv run dayhike sample-climate --catalog $US/catalog.sqlite --climate $US/climate
+uv run dayhike sample-trailgraph --catalog $US/catalog.sqlite --dem $US/dem --landcover $US/landcover --climate $US/climate
+uv run dayhike build-similarity --catalog $US/catalog.sqlite --dem $US/dem --landcover $US/landcover
+
+# highway tiles as in "Highway tiles" below, from the state's extract (18 tiles, 1.6 MB), served on 8002
+./data/valhalla/prepare-highways.sh $US/osm/rhode-island-latest.osm.pbf $US/valhalla
+uv run dayhike export-serving --catalog $US/catalog.sqlite --out $US/web-serving \
+  --valhalla-tiles $US/valhalla --valhalla-url http://127.0.0.1:8002 --region us-rhode-island
+
+DAYHIKE_REAL_DATA=1 DAYHIKE_US_DATA_DIR=$US uv run pytest tests/test_real_data_us.py
+uv run --extra web python web/smoke.py --us --data $US/web-serving --valhalla-url http://127.0.0.1:8002
+```
+
+`fetch-climate` downloads each global CHELSA file (36 files, about 5.4 GB) to
+clip it. The checks hold the North South Trail, Cliff Walk and Benson Mountain
+Trail to their lengths, every hike's heights to the coast and Jerimoth Hill
+(247 m), and drive times from Providence; the pages must say "Rhode Island" and
+not Europe.
 
 Nothing is fetched from the network at rank time except that optional Valhalla
 call on your machine.
@@ -2162,6 +2204,7 @@ uv run dayhike serve --data data/web-serving --valhalla-url http://127.0.0.1:800
 # expects the full Europe export: on a smaller one its first check fails, as it
 # wants more than 100,000 DayHikes):
 uv run python web/smoke.py --data data/web-serving --valhalla-url http://127.0.0.1:8002
+# --us checks the one-state US build instead (see "A US build")
 
 # the same container Cloud Run runs (app + Valhalla + data):
 DAYHIKE_SERVING="$PWD/data/web-serving" docker compose -f web/compose.yaml up --build
@@ -2189,6 +2232,12 @@ value other than `https://host` is refused at start. `/robots.txt` allows every
 crawler and names `/sitemap.xml`, which lists the five pages by full address at
 the site URL (unset, at the address the request came to); a Ranking is made on
 request, so no search or API address is listed.
+The pages name what the export covers from its `meta.json` regions
+(`export-serving --region`): the tagline, the share description, the coverage
+map's text and the About page say "hikes across Europe" while every region is in
+Europe, or the regions' labels ("Europe and Colorado") once one is not; the
+About page's Europe coverage note and the Terms page's "112 works across the
+European Union" stay only where Europe is covered.
 
 The page opens behind a loading screen, the logo and "Loading…", which says
 "Waking the server" when the first answer is slow (a start from zero), and that
@@ -2464,6 +2513,7 @@ DAYHIKE_REAL_DATA=1 uv run pytest -m real_data
 | `DAYHIKE_VALHALLA_URL` | `http://127.0.0.1:8002` | Valhalla serving `DAYHIKE_DATA_DIR/valhalla/highways-eu` |
 | `DAYHIKE_SERVING_DIR` | `DAYHIKE_DATA_DIR/web-serving` | the serving export of that Catalog (`dayhike export-serving`) |
 | `DAYHIKE_REAL_CATALOG` | `DAYHIKE_DATA_DIR/catalog.sqlite` | another Catalog for `tests/test_real_data.py` |
+| `DAYHIKE_US_DATA_DIR` | unset | the [US build](#a-us-build) for `tests/test_real_data_us.py`; skipped without it |
 
 | File | Checks |
 | --- | --- |
@@ -2477,6 +2527,7 @@ DAYHIKE_REAL_DATA=1 uv run pytest -m real_data
 | `test_drive_time_real.py` | rebuilt highway tiles: tile counts, Valhalla 3.5.1, city routes within 2–5% of the reference, `nearby --highways` sets from Munich, Oslo and Lisbon (Jaccard ≥ 0.999, times within a minute), the same eight Trailheads with no highway |
 | `test_serving_export_real.py` | the serving export: same ids and Trailheads as the store, a byte copy of it; data ≤ 6 GB and tiles ≤ 900 MB; simplified lines within 10 m (+1.5 m polyline rounding) on 2,000 DayHikes; no rasters or per-vertex climate; every attribution; golden rankings from the export; the tile tar is the built one |
 | `test_real_data.py` | the main walk, WaterSources, the similarity facts, notebook 05 (which reads `data/` of its checkout and must see the Catalog under test) |
+| `test_real_data_us.py` | on the [US build](#a-us-build): known trails and their lengths, day stages, heights, land cover and climate on every hike, a Ranking, drive times from Providence, the pages naming Rhode Island and not Europe |
 | `test_notebooks_real.py` | every notebook runs top to bottom in a Jupyter kernel on `data/` of its checkout (skipped when `DAYHIKE_DATA_DIR` points elsewhere); `02`, `04`, `04a` and `05` read the real Catalog, `01` and `03` the fixture; about 2 minutes |
 
 ## Clean rebuild

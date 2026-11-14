@@ -91,6 +91,7 @@ from dayhike.catalog import (
 from dayhike.dem import FABDEM_ATTRIBUTION
 from dayhike.extracts import UrlRetrieve
 from dayhike.loops import LOOP_SEEDS, LOOP_TRAILHEADS, LoopTarget, find_loops
+from dayhike.regions import Region
 from dayhike.similarity import (
     ALONG_KINDS,
     CALIBRATION_PAIRS,
@@ -549,6 +550,7 @@ def export_serving(
     valhalla_url: str | None = None,
     geonames_path: Path | str | None = None,
     countries_path: Path | str | None = None,
+    regions: Sequence[Region] = (),
     progress: Progress | None = None,
 ) -> Path:
     """Write the serving export of a Catalog into ``out_dir`` (see the module doc).
@@ -560,7 +562,8 @@ def export_serving(
     existing snap cache; with ``valhalla_url`` every Trailhead not in it is
     snapped now, so a server never has to. ``geonames_path`` is a GeoNames
     dump (``allCountries``, zip or txt) for ``places.sqlite``; ``countries_path`` the Natural
-    Earth countries GeoJSON for ``countries.npy``.
+    Earth countries GeoJSON for ``countries.npy``. ``regions``, the ones the Catalog was built from, are
+    named in ``meta.json`` (label and continent) for the site's pages; none leaves them saying Europe.
     """
     started = time.monotonic()
     catalog_path, out = Path(catalog_path), Path(out_dir)
@@ -638,6 +641,8 @@ def export_serving(
         "compose": compose,
         "export_seconds": round(time.monotonic() - started, 1),
     }
+    if regions:
+        meta["regions"] = [{"label": region.label, "continent": region.continent} for region in regions]
     (out / "meta.json").write_text(json.dumps(meta, indent=1, ensure_ascii=False))
     return out
 

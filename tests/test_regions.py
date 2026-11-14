@@ -11,6 +11,7 @@ from dayhike.regions import (
     RegionError,
     bounds_around,
     extracts_of,
+    labels_text,
     load_region,
     region_names,
 )
@@ -39,11 +40,19 @@ def test_the_defaults_are_todays_europe_build() -> None:
 
 
 def test_every_packaged_region_loads() -> None:
-    assert {"alps-dinarides", "europe", "us-colorado"} <= set(region_names())
+    assert {"alps-dinarides", "europe", "us-colorado", "us-rhode-island"} <= set(region_names())
     for name in region_names():
         region = load_region(name)
         assert region.extracts and all(url.startswith("https://download.geofabrik.de/") for url in region.extracts)
         assert region.bounds.west < region.bounds.east and region.view.west < region.view.east
+        assert region.continent == ("North America" if name.startswith("us-") else "Europe")
+
+
+def test_a_region_without_a_continent_loads_and_labels_read_as_one_phrase(tmp_path: Path) -> None:
+    assert load_region(_region_file(tmp_path / "hikeland.toml", label="Hikeland", west=14.0, east=16.0)).continent is None
+    assert labels_text(["Europe"]) == "Europe"
+    assert labels_text(["Europe", "Colorado"]) == "Europe and Colorado"
+    assert labels_text(["Europe", "Colorado", "Utah"]) == "Europe, Colorado and Utah"
 
 
 def test_a_box_must_run_west_to_east(tmp_path: Path) -> None:
@@ -58,6 +67,19 @@ def test_two_regions_cover_the_box_around_both_and_all_their_extracts() -> None:
     assert bounds_around(regions) == Bounds(south=36.9, west=-109.1, north=50.6, east=20.4)
     assert extracts_of(regions) == [*GEOFABRIK_EXTRACTS, "https://download.geofabrik.de/north-america/us/colorado-latest.osm.pbf"]
     assert extracts_of([regions[0], regions[0]]) == list(GEOFABRIK_EXTRACTS)
+
+
+def test_export_serving_passes_the_regions_on(tmp_path: Path, monkeypatch) -> None:
+    import dayhike.serving
+
+    given: list = []
+    monkeypatch.setattr(dayhike.serving, "export_serving", lambda *_, regions, **__: given.append(regions) or tmp_path)
+
+    assert cli.main(["export-serving", "--out", str(tmp_path)]) == 0
+    assert cli.main(["export-serving", "--out", str(tmp_path), "--region", "europe", "--region", "us-colorado"]) == 0
+    assert given == [[], [load_region("europe"), load_region("us-colorado")]]
+    with pytest.raises(SystemExit):
+        cli.main(["export-serving", "--out", str(tmp_path), "--region", "atlantis"])
 
 
 def test_fetch_commands_read_the_regions(tmp_path: Path, monkeypatch) -> None:

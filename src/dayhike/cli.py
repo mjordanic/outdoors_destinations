@@ -25,9 +25,11 @@ from dayhike.extracts import fetch_geofabrik_extracts
 from dayhike.regions import (
     DEFAULT_MAP_REGION,
     DEFAULT_REGION,
+    Region,
     RegionError,
     bounds_around,
     extracts_of,
+    labels_text,
     load_region,
     region_names,
     view_around,
@@ -393,6 +395,13 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="Natural Earth admin-0 countries GeoJSON: the country each hike starts in, for its emergency number",
     )
+    export.add_argument(
+        "--region",
+        action="append",
+        default=[],
+        help=f"A region the Catalog covers: one of {', '.join(region_names())}, or a region .toml file; "
+        "repeatable. The site's pages name them (without it, or with only regions in Europe, they say Europe)",
+    )
     countries = subparsers.add_parser(
         "export-countries",
         help="Add the country each hike starts in (for its emergency number) beside an existing serving export",
@@ -472,8 +481,13 @@ def main(argv: list[str] | None = None) -> int:
     if getattr(args, "workers", None) is not None:
         os.environ[WORKERS_ENV] = str(args.workers)  # the stage's code reads it (dayhike.parallel)
     if args.command == "export-serving":
+        try:
+            regions = [load_region(name) for name in args.region]
+        except RegionError as exc:
+            export.error(str(exc))
         return _export_serving(
-            args.catalog, args.out, args.valhalla_tiles, args.snaps, args.valhalla_url, args.geonames, args.countries
+            args.catalog, args.out, args.valhalla_tiles, args.snaps, args.valhalla_url, args.geonames, args.countries,
+            regions,
         )
     if args.command == "export-countries":
         from dayhike.serving import ServingExportError, export_countries
@@ -515,8 +529,7 @@ def main(argv: list[str] | None = None) -> int:
             (region,) = args.region
             frame = {"view": _wsen(region.view), "centre": region.centre, "label": region.label}
         else:
-            labels = [region.label for region in args.region]
-            label = ", ".join(labels[:-1]) + " and " + labels[-1]
+            label = labels_text([region.label for region in args.region])
             frame = {"view": _wsen(view_around(args.region)), "centre": None, "label": label}
         for country, count in coverage_map(args.catalog, args.countries, args.out, **frame):
             print(f"{country}\t{count}")
@@ -800,6 +813,7 @@ def _export_serving(
     valhalla_url: str | None,
     geonames: Path | None,
     countries: Path | None,
+    regions: list[Region],
 ) -> int:
     from dayhike.serving import ServingExportError, export_serving, fetch_geonames
 
@@ -813,6 +827,7 @@ def _export_serving(
                 valhalla_url=valhalla_url,
                 geonames_path=geonames and fetch_geonames(geonames),
                 countries_path=countries,
+                regions=regions,
                 progress=_progress,
             )
         )

@@ -36,7 +36,7 @@ import time
 import unicodedata
 import urllib.error
 from collections import deque
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from html import escape as html_escape
 from pathlib import Path
@@ -71,6 +71,7 @@ from dayhike.serving import (
     group_radius_m,
     name_dem,
 )
+from dayhike.regions import labels_text
 from dayhike.similarity import DEFAULT_WEIGHTS, MEASURES, WISHABLE, Measure
 from dayhike.trailgraph import Route, RouteError
 
@@ -336,6 +337,7 @@ def site_pages(
     dayhikes: int | None = None,
     basemap: BaseMap = BaseMap(),
     sources: Mapping[str, Mapping[str, str]] | None = None,
+    regions: Sequence[Mapping[str, str | None]] | None = None,
 ) -> dict[str, str]:
     """Each page's HTML with the GoatCounter tag where a code is set.
 
@@ -349,11 +351,15 @@ def site_pages(
     a vector one by the Protomaps basemap and the software that draws it.
     ``sources`` (the export's external sources, ADR-0062: name, licence, licence_url and url per register id)
     are credited one item each between ``<!--external-->`` and ``<!--/external-->``.
+    ``regions`` (the export's, each a label and a continent) name what the site covers between ``<!--regions-->``
+    and ``<!--/regions-->``: "Europe" while every region is in Europe (or none is given, an export from before
+    regions), else their labels ("Europe and Colorado"). Then ``europe`` (only Europe), ``elsewhere`` (not only
+    Europe) and ``eu`` (some of Europe) are on, for the text that holds only there.
     With ``site_url`` (the public origin, ``https://host``) each page names its own address (``og:url``) and its
     share preview image by full address, as link previews need; else the image stays relative.
 
     Text between ``<!--if-goatcounter-->`` and ``<!--/if-goatcounter-->`` (or ``places``,
-    ``nominatim``) is kept only when that setting is on.
+    ``nominatim``, ``europe``, ``elsewhere``, ``eu``) is kept only when that setting is on.
 
     The tag loads the self-hosted ``count.js``, which counts at ``https://<code>.goatcounter.com/count``.
     """
@@ -365,15 +371,22 @@ def site_pages(
         f'<script data-goatcounter="https://{goatcounter}.goatcounter.com/count"'
         ' async src="vendor/goatcounter/count.js"></script>'
     )
+    continents = [region.get("continent") for region in regions or [{"continent": "Europe"}]]
+    europe_only = all(continent == "Europe" for continent in continents)
+    covered = "Europe" if europe_only else labels_text([str(region["label"]) for region in regions])
     pages = {}
     for name in PAGES:
         html = (STATIC_DIR / f"{name}.html").read_text(encoding="utf-8").replace("<!--analytics-->", analytics)
         if dayhikes is not None:
             html = re.sub(r"<!--dayhikes-->.*?<!--/dayhikes-->", f"{dayhikes:,}", html, flags=re.S)
+        html = re.sub(r"<!--regions-->.*?<!--/regions-->", html_escape(covered), html, flags=re.S)
         settings = {
             "goatcounter": goatcounter is not None,
             "places": place_search,
             "nominatim": not place_search,
+            "europe": europe_only,
+            "elsewhere": not europe_only,
+            "eu": "Europe" in continents,
         }
         for setting, on in settings.items():  # text true only once it is set
             block = rf"<!--if-{setting}-->(.*?)<!--/if-{setting}-->"
@@ -511,6 +524,7 @@ def create_app(
         dayhikes=data.meta["dayhikes"],
         basemap=basemap,
         sources=data.meta.get("sources"),
+        regions=data.meta.get("regions"),
     )
     app = FastAPI(title="HikesAlike", docs_url="/api/docs", openapi_url="/api/openapi.json")
     limiters = {"rank": RateLimiter(rank_rate, RATE_WINDOW_S), "api": RateLimiter(api_rate, RATE_WINDOW_S)}

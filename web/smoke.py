@@ -2,9 +2,11 @@
 
     uv run --extra web python web/smoke.py --data data/web-serving [--valhalla-url URL]
     uv run python web/smoke.py --url http://127.0.0.1:8080   # a server already running
+    uv run --extra web python web/smoke.py --us --data US_BUILD/web-serving   # the one-state US build
 
 With --data it starts `dayhike serve` on a free port, checks it, reports the
 server's resident memory, and stops it. Exits non-zero on the first failure.
+--us checks the us-rhode-island build (tests/test_real_data_us.py) instead of Europe.
 """
 
 from __future__ import annotations
@@ -17,16 +19,44 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 
-# (search text, exact DayHike name expected among the hits)
-KNOWN = [
-    ("Pot kralja Triglava", "Pot kralja Triglava"),
-    ("Vršič - Razor", "Vršič - Razor"),
-    ("koca pri savici", "Koča pri Savici - Dom na Komni"),
-    ("Mosor-Kosa", "Mosor-Kosa"),
-]
-ORIGINS = {"Ljubljana": (46.0569, 14.5058), "Munich": (48.137, 11.575)}
+
+@dataclass(frozen=True)
+class Build:
+    min_dayhikes: int
+    known: list[tuple[str, str]]  # (search text, exact DayHike name expected among the hits); the first is the Seed
+    origins: dict[str, tuple[float, float]]
+    hours: tuple[float, float]  # drive-time limits
+    covers: str  # what the page says the hikes are across
+    min_results: int | None = None  # rows a Ranking answers with at least; None: a full page (/api/info "results")
+
+
+EUROPE = Build(
+    min_dayhikes=100_000,
+    known=[
+        ("Pot kralja Triglava", "Pot kralja Triglava"),
+        ("Vršič - Razor", "Vršič - Razor"),
+        ("koca pri savici", "Koča pri Savici - Dom na Komni"),
+        ("Mosor-Kosa", "Mosor-Kosa"),
+    ],
+    origins={"Ljubljana": (46.0569, 14.5058), "Munich": (48.137, 11.575)},
+    hours=(2, 4),
+    covers="Europe",
+)
+US = Build(
+    min_dayhikes=20,
+    known=[
+        ("cliff walk", "Cliff Walk"),
+        ("North South Trail", "North South Trail"),
+        ("benson mountain", "Benson Mountain Trail"),
+    ],
+    origins={"Providence": (41.824, -71.4128)},
+    hours=(1, 2),
+    covers="Rhode Island",
+    min_results=5,  # its 23 hikes group into fewer rows than a page
+)
 
 
 def call(base: str, path: str, body: dict | None = None) -> tuple[dict, float]:
@@ -58,13 +88,19 @@ def check(condition: bool, message: str) -> None:
         raise SystemExit(1)
 
 
-def smoke(base: str, drive: bool, pid: int | None) -> None:
+def smoke(base: str, drive: bool, pid: int | None, build: Build = EUROPE) -> None:
     info, ms = call(base, "/api/info")
-    check(info["dayhikes"] > 100_000, f"info: {info['dayhikes']} DayHikes, drive_time={info['drive_time']} ({ms:.0f} ms)")
+    check(
+        info["dayhikes"] > build.min_dayhikes,
+        f"info: {info['dayhikes']} DayHikes, drive_time={info['drive_time']} ({ms:.0f} ms)",
+    )
     if pid:
         print(f"     server RSS after start: {rss_mb(pid):.0f} MB")
+    with urllib.request.urlopen(base + "/", timeout=120) as response:
+        page = response.read().decode()
+    check(f"hikes across {build.covers}." in page, f"page: hikes across {build.covers}")
     seeds = {}
-    for query, name in KNOWN:
+    for query, name in build.known:
         hits, ms = call(base, "/api/search?" + urllib.parse.urlencode({"q": query}))
         found = [hit for hit in hits["results"] if hit["name"] == name]
         check(bool(found), f"search {query!r} finds {name!r} ({len(hits['results'])} hits, {ms:.0f} ms)")
@@ -89,7 +125,7 @@ def smoke(base: str, drive: bool, pid: int | None) -> None:
             f"map view around {name} (±{half:.4f}°): {len(in_view['results'])} hikes, "
             f"too_many={in_view['too_many']} ({ms:.0f} ms)",
         )
-    seed = seeds["Pot kralja Triglava"]
+    seed = seeds[build.known[0][1]]
     for label, body in [
         ("all 26 Measures", {"seed": seed}),
         ("effort + altitude", {"seed": seed, "weights": {"length": 100, "elevation_gain": 100, "highest": 60}}),
@@ -98,12 +134,13 @@ def smoke(base: str, drive: bool, pid: int | None) -> None:
         ranked, ms = call(base, "/api/rank", body)
         top = ranked["results"][0]
         check(
-            info["results"] <= len(ranked["results"]) <= info["draw"]["pool"] and 0 <= top["score"] <= 1,
+            (build.min_results or info["results"]) <= len(ranked["results"]) <= info["draw"]["pool"]
+            and 0 <= top["score"] <= 1,
             f"rank {label}: top {top['name']!r} score {top['score']:.3f} ({ms:.0f} ms)",
         )
     if drive:
-        for city, (lat, lon) in ORIGINS.items():
-            for hours in (2, 4):
+        for city, (lat, lon) in build.origins.items():
+            for hours in build.hours:
                 body = {"seed": seed, "origin": {"lat": lat, "lon": lon}, "max_hours": hours}
                 ranked, ms = call(base, "/api/rank", body)
                 worst = max((r["drive_hours"] for r in ranked["results"]), default=0)
@@ -127,9 +164,11 @@ def main() -> int:
     parser.add_argument("--url", help="A running server; skips starting one")
     parser.add_argument("--data", type=Path, help="Serving export to start `dayhike serve` on")
     parser.add_argument("--valhalla-url", help="Highways-only Valhalla for the drive-time checks")
+    parser.add_argument("--us", action="store_true", help="Check the one-state US build, not Europe")
     args = parser.parse_args()
+    build = US if args.us else EUROPE
     if args.url:
-        smoke(args.url.rstrip("/"), drive=call(args.url, "/api/info")[0]["drive_time"], pid=None)
+        smoke(args.url.rstrip("/"), drive=call(args.url, "/api/info")[0]["drive_time"], pid=None, build=build)
         return 0
     if args.data is None:
         parser.error("give --url or --data")
@@ -150,7 +189,7 @@ def main() -> int:
                     raise SystemExit("server did not start")
                 time.sleep(0.1)
         print(f"     server ready in {time.monotonic() - started:.1f} s")
-        smoke(base, drive=args.valhalla_url is not None, pid=server.pid)
+        smoke(base, drive=args.valhalla_url is not None, pid=server.pid, build=build)
     finally:
         server.terminate()
         server.wait()
