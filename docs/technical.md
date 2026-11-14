@@ -349,7 +349,7 @@ print(resolve_seed(catalog, "ridge walk"))  # 1001; case-insensitive exact match
 
 | Table | Contents |
 | --- | --- |
-| `dayhikes` | id (the OSM relation id, a built DayHike's hashed id from 2^40 up, or an external hike's from 2^39 up), Seed label, `name_origin`, length_m, Difficulty (`sac_scale` or NULL), `kind` (`relation`, `network`, `stage`, `external`), `parts` (JSON list of the OSM relations a built DayHike is built from, else NULL), `route` (a built DayHike's Route, else NULL), `source` (a sources register id, `osm` for every OSM hike), `source_ref` (its record there: `relation/{id}`, for a NetworkHike `node/{id}` of its start, for an external hike its record id; ADR-0060) `source_url` (an external hike's record page, else NULL; ADR-0062) and `dem_source` (the register ids of the DEMs `sample-dem` read its heights from, comma-separated, NULL before; ADR-0062) |
+| `dayhikes` | id (the OSM relation id, a built DayHike's hashed id from 2^40 up, or an external hike's from 2^39 up), Seed label, `name_origin`, length_m, Difficulty (`sac_scale` or NULL), `kind` (`relation`, `network`, `stage`, `external`), `parts` (JSON list of the OSM relations a built DayHike is built from, else NULL), `route` (a built DayHike's Route, else NULL), `source` (a sources register id, `osm` for every OSM hike), `source_ref` (its record there: `relation/{id}`, for a NetworkHike `node/{id}` of its start, for an external hike its record id; ADR-0060) `source_url` (an external hike's record page, else NULL; ADR-0062) and `dem_source` (the register ids of the DEMs `sample-dem` read its heights from, comma-separated, NULL before; ADR-0063) |
 | `trailheads` | lat/lon used for amenities and DriveTime |
 | `amenity_facts` | per DayHike: hut, parking, restaurant_cafe, drinking_water (count + nearest_m) |
 | `feature_vectors` | length, elevation min/max/gain, Difficulty ordinal, LandCover fractions, regime climate |
@@ -1371,7 +1371,7 @@ non-commercial limit only when all three DEM steps above ran with the same
 Copernicus `--dem` over tiles covering every DayHike. Otherwise some values are
 still FABDEM, and its credit and the non-commercial limit still apply.
 
-**USGS 3DEP for the United States (ADR-0062):** `--source 3dep` downloads the
+**USGS 3DEP for the United States (ADR-0063):** `--source 3dep` downloads the
 USGS 3DEP 1 arc-second GeoTIFFs of a box from the USGS staged-products bucket
 (`https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/1/TIFF/current/`,
 no account), about 50 MB a tile, public domain ("Credit: U.S. Geological
@@ -2718,7 +2718,7 @@ WorldDEM-30. https://doi.org/10.5270/ESA-c5d3d65, from AWS Open Data
 commercial use under the Copernicus DEM licence. Written into GeometryStore
 `geometry_meta` when a Catalog has been sampled from it.
 
-USGS 3DEP 1 arc-second (for the United States, ADR-0062): USGS 3D Elevation
+USGS 3DEP 1 arc-second (for the United States, ADR-0063): USGS 3D Elevation
 Program, https://www.usgs.gov/3d-elevation-program, in the U.S. public domain
 (https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits).
 Credit: U.S. Geological Survey. Written into GeometryStore `geometry_meta`

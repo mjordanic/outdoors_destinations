@@ -132,7 +132,7 @@ COPERNICUS_CREDITS = {
     "gain, profile shape, steepness, slope aspect) are computed from it; it maps the surface, so tree tops and roofs "
     "are included.",
 }
-# The elevation credits of hikes read from USGS 3DEP in the United States (ADR-0062): after the world DEM's
+# The elevation credits of hikes read from USGS 3DEP in the United States (ADR-0063): after the world DEM's
 # between <!--elevation--> and <!--/elevation-->, joined by the first text, or alone in a build with no world DEM.
 USGS_3DEP_CREDITS = {
     "index": (" and ", '<a href="https://www.usgs.gov/3d-elevation-program">USGS 3DEP</a> (public domain)'),

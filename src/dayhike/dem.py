@@ -75,7 +75,7 @@ class DemSource:
     Copernicus GLO-30 is the alternative: a surface model, tree tops and roofs
     included, free for commercial use (ADR-0030). Both cover the world. USGS
     3DEP 1″ is bare earth for the United States only: a ``regional`` source,
-    read where it has a tile, with a world source elsewhere (ADR-0062).
+    read where it has a tile, with a world source elsewhere (ADR-0063).
     """
 
     name: str
@@ -182,7 +182,7 @@ def dem_sources_of(raster_dir: Path | str) -> tuple[DemSource, ...]:
     the regional ones (USGS 3DEP), then the one world source.
 
     A directory holds at most one world source, so FABDEM and Copernicus
-    GLO-30 never mix; a regional source is read where it has a tile (ADR-0062).
+    GLO-30 never mix; a regional source is read where it has a tile (ADR-0063).
     """
     raster_dir = Path(raster_dir)
     found = [source for source in DEM_SOURCES.values() if source.has_tiles_in(raster_dir)]
@@ -535,7 +535,7 @@ def sample_dem(
     attribution in the GeometryStore while the directory holds their tiles;
     FABDEM, the default, needs none. Each DayHike sampled records in the
     Catalog's ``dayhikes.dem_source`` the register ids of the sources its
-    heights were read from (ADR-0062).
+    heights were read from (ADR-0063).
     """
     catalog_path = Path(catalog_path)
     raster_dir = Path(raster_dir)

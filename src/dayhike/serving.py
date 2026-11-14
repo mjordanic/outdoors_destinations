@@ -419,7 +419,7 @@ def name_dem(text: str, attribution: Mapping[str, str]) -> str:
 
     MEASURE_INFO and SCORE_HELP name FABDEM, the default. An export sampled
     from Copernicus GLO-30 carries its attribution, and the texts name it; one
-    with hikes read from USGS 3DEP names it too, or alone (ADR-0062).
+    with hikes read from USGS 3DEP names it too, or alone (ADR-0063).
     """
     fabdem = "FABDEM, a 30 m elevation map with forests and buildings removed"
     names = []
@@ -598,7 +598,7 @@ def export_serving(
             )
         ]
         attribution = dict(catalog.execute("SELECT key, value FROM catalog_meta"))["attribution"]
-        # The DEMs each DayHike's heights were read from (ADR-0062); a Catalog sampled before has none.
+        # The DEMs each DayHike's heights were read from (ADR-0063); a Catalog sampled before has none.
         dem_of = (
             {dayhike_id: dem for dayhike_id, dem in catalog.execute("SELECT id, dem_source FROM dayhikes") if dem}
             if "dem_source" in columns
@@ -640,7 +640,7 @@ def export_serving(
         export_countries(out, countries_path)
     else:
         (out / "countries.npy").unlink(missing_ok=True)
-    # The elevation maps in use: those the DayHikes record (ADR-0062); for a Catalog sampled before,
+    # The elevation maps in use: those the DayHikes record (ADR-0063); for a Catalog sampled before,
     # FABDEM, unless the GeometryStore was sampled from Copernicus GLO-30 (ADR-0030).
     if dems_used:
         sources = {key: value for key, value in sources.items() if DEM_ATTRIBUTION_KEYS.get(key) in (None, *dems_used)}
@@ -673,7 +673,7 @@ def _write_hikes(
 ) -> dict[str, str]:
     """Write ``hikes.sqlite``; return the GeometryStore's source attributions.
 
-    With ``dem_of``, each DayHike's ``dem_source`` (ADR-0062), only a hike read
+    With ``dem_of``, each DayHike's ``dem_source`` (ADR-0063), only a hike read
     from Copernicus GLO-30 has its profile smoothed."""
     path.unlink(missing_ok=True)
     geo = sqlite3.connect(f"file:{geometry_store_path_for(catalog_path)}?mode=ro", uri=True)
