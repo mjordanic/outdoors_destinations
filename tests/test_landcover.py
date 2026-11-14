@@ -15,7 +15,11 @@ from dayhike import (
 )
 from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS
 from dayhike.landcover import (
+    ALONG_MIN_M,
+    ALONG_STEP_M,
     _landcover_fractions,
+    along_points,
+    along_rows,
     fetch_worldcover,
     tree_share,
     worldcover_tile_id,
@@ -208,7 +212,8 @@ def test_other_class_codes_count_in_denominator_only(tmp_path: Path) -> None:
 
     catalog = Catalog.open(catalog_path)
     valley = next(hike for hike in catalog.dayhikes if hike.id == 1002)
-    assert valley.feature_vector.tree_fraction == 0.5
+    # The 5 km step between them is read along: tree north of 45.225, cropland south.
+    assert valley.feature_vector.tree_fraction == pytest.approx(0.02 / 0.045, abs=0.005)
     assert valley.feature_vector.shrub_fraction == 0.0
     assert valley.feature_vector.grass_fraction == 0.0
     assert valley.feature_vector.bare_fraction == 0.0
@@ -243,6 +248,99 @@ def test_fractions_leave_out_unsampled_vertices_and_share_the_rest() -> None:
 
     assert tree == pytest.approx(0.5)
     assert grass == pytest.approx(0.5)
+
+
+def test_steps_over_the_threshold_are_read_at_the_middles_of_equal_pieces() -> None:
+    # Along the equator 0.001 degrees is about 111 m: the first step is read
+    # at the middles of six pieces of about 18.5 m, the 22 m step not at all.
+    lon = np.array([0.0, 0.001, 0.0012])
+    lat = np.zeros_like(lon)
+
+    counts, points = along_points(lat, lon)
+
+    assert ALONG_MIN_M == 40.0 and ALONG_STEP_M == 20.0
+    assert counts.tolist() == [6, 0]
+    assert points[:, 1] == pytest.approx((np.arange(6) + 0.5) / 6 * 0.001)
+    assert points[:, 0].tolist() == [0.0] * 6
+
+
+def test_fractions_share_a_step_read_along_by_its_reads_not_its_ends() -> None:
+    # Two tree vertices 111 m apart; four of the five reads between them are
+    # grass. The ends alone would say all tree.
+    lon = np.array([0.0, 0.001])
+    lat = np.zeros_like(lon)
+    codes = np.array([10, 10])
+    along = along_rows(np.array([5]), np.array([30, 30, 10, 30, 30]))
+
+    tree, shrub, grass, bare, snow = _landcover_fractions(codes, lat, lon, along)
+
+    assert tree == pytest.approx(0.2)
+    assert grass == pytest.approx(0.8)
+    assert _landcover_fractions(codes, lat, lon) == (1.0, 0.0, 0.0, 0.0, 0.0)
+
+
+def test_fractions_mix_read_steps_with_end_halves_of_short_ones() -> None:
+    # A 111 m step read along (all grass), then a 22 m step between a tree
+    # and a bare vertex shared half and half: 111 grass, 11 tree, 11 bare.
+    lon = np.array([0.0, 0.001, 0.0012])
+    lat = np.zeros_like(lon)
+    codes = np.array([10, 10, 60])
+    along = along_rows(np.array([6, 0]), np.full(6, 30))
+    steps = np.array([0.001, 0.0002])
+
+    tree, _, grass, bare, _ = _landcover_fractions(codes, lat, lon, along)
+
+    assert grass == pytest.approx(steps[0] / steps.sum())
+    assert tree == pytest.approx(steps[1] / 2 / steps.sum())
+    assert bare == pytest.approx(steps[1] / 2 / steps.sum())
+
+
+def test_fractions_leave_out_unclassified_reads_and_fall_back_to_the_ends() -> None:
+    lon = np.array([0.0, 0.001, 0.002])
+    lat = np.zeros_like(lon)
+    codes = np.array([10, 10, 30])
+    # The first step: two of four reads have no class, the others are grass.
+    # The second step: no read has a class, so its ends share it.
+    along = along_rows(np.array([4, 4]), np.array([0, 30, 0, 30, 0, 0, 0, 0]))
+
+    tree, _, grass, _, _ = _landcover_fractions(codes, lat, lon, along)
+
+    # first step: 0.5 grass of its length counts; second: 0.5 tree, 0.5 grass
+    assert tree == pytest.approx(0.5 / 1.5)
+    assert grass == pytest.approx(1.0 / 1.5)
+
+
+def test_sample_reads_long_steps_along_the_line(tmp_path: Path) -> None:
+    catalog_path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, catalog_path)
+    # Valley Path is one 5 km step from (45.2, 15.1) to (45.245, 15.1). Both
+    # ends are tree; a band of grass lies across its middle third.
+    _write_class_tif(
+        tmp_path / "valley_band.tif",
+        west=15.09,
+        south=45.2 - 0.0075,
+        east=15.11,
+        north=45.245 + 0.0075,
+        codes=np.array([[10], [30], [10]], dtype="uint8"),
+    )
+
+    sample_landcover(catalog_path, tmp_path)
+
+    store = sqlite3.connect(geometry_store_path_for(catalog_path))
+    try:
+        rows = store.execute(
+            "SELECT landcover, landcover_along FROM vertices WHERE dayhike_id = 1002 ORDER BY seq"
+        ).fetchall()
+    finally:
+        store.close()
+    assert [code for code, _ in rows] == [10, 10]
+    reads = np.frombuffer(rows[0][1], dtype="u1")
+    assert len(reads) == 251  # 5,004 m in pieces of at most 20 m
+    assert rows[1][1] is None  # the last vertex has no step after it
+    valley = next(hike for hike in Catalog.open(catalog_path).dayhikes if hike.id == 1002)
+    assert valley.feature_vector.grass_fraction == pytest.approx((reads == 30).mean())
+    assert valley.feature_vector.grass_fraction == pytest.approx(0.02 / 0.045, abs=0.005)
+    assert valley.feature_vector.tree_fraction == pytest.approx((reads == 10).mean())
 
 
 def test_permanent_snow_code_fills_snow_fraction_not_tree(tmp_path: Path) -> None:

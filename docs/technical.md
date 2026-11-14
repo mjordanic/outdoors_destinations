@@ -158,10 +158,10 @@ What each step **does not** do:
 | `fetch-dem` | GeoTIFFs in `data/dem/` | touch SQLite; sample heights |
 | `sample-dem` | `vertices.ele` + Catalog elevation | download rasters; rewrite hike list |
 | `fetch-landcover` | GeoTIFFs in `data/landcover/` | touch SQLite; sample classes |
-| `sample-landcover` | `vertices.landcover` + Catalog fractions | download rasters; rewrite hike list |
+| `sample-landcover` | `vertices.landcover`, `vertices.landcover_along` + Catalog fractions | download rasters; rewrite hike list |
 | `fetch-climate` | GeoTIFFs in `data/climate/` | touch SQLite; sample climate |
 | `sample-climate` | Catalog monthly means (drops an old `vertex_climate`) | download rasters; rewrite hike list |
-| `sample-trailgraph` | per-vertex height, LandCover, climate cell, southness and water cells in the TrailGraph | touch the Catalog or GeometryStore; download rasters |
+| `sample-trailgraph` | per-vertex height, LandCover, climate cell, southness, LandCover along long steps and water cells in the TrailGraph | touch the Catalog or GeometryStore; download rasters |
 | `build-similarity` | `data/catalog.similarity/` (facts + Calibration, one way and with the way back) | touch any SQLite file; download anything |
 | `rank` | nothing on disk | fetch OSM or rasters; rebuild facts |
 
@@ -341,7 +341,7 @@ each way once, in walk order, with no Leftover:
 | Table | Contents |
 | --- | --- |
 | `dayhikes` | id, Seed label, `name_origin`, length, `unconnected_m`, Difficulty, member list, relation tags |
-| `vertices` | ordered DayHikeGeometry: `seq`, OSM `node_id`, lat, lon, `ele`, `landcover` |
+| `vertices` | ordered DayHikeGeometry: `seq`, OSM `node_id`, lat, lon, `ele`, `landcover`, `landcover_along` (the classes read along the step to the next vertex when it is over 40 m) |
 | `ways` | member ways in listed order: node id lists, way tags, `in_chain` (1 when any part of the way is walked), `leftover` (the reason when not), `walked_m`, `walk_order` |
 | `amenities` | raw points: OSM id, kind, lat, lon, tags |
 | `geometry_meta` | OSM attribution; WorldCover and CHELSA after those samples |
@@ -431,7 +431,7 @@ web demo as "connect here" and never walked unless picked. See
 | Table | Contents |
 | --- | --- |
 | `junctions` | id (the OSM node id; a crossing is negative), lat, lon, degree, and `key`, its name in a shared link (the OSM node id, or `c{lat}_{lon}` in 1e-7 degrees for a crossing) |
-| `segments` | id, kind (`trail`, `gap`, `link`), Junctions `a` and `b`, length, strictest `sac_scale`, OSM way and relation ids, node ids, vertices as packed arrays: coordinates (1e-7 degree integers), `ele`, `landcover`, `climate_cell`, `southness`, per-way runs of steps (`parts`: way, negative against its node order, metres, surface, steps, `sac_scale`), and `step_ab` / `step_ba`, how a shared link names it walked from `a` and from `b` |
+| `segments` | id, kind (`trail`, `gap`, `link`), Junctions `a` and `b`, length, strictest `sac_scale`, OSM way and relation ids, node ids, vertices as packed arrays: coordinates (1e-7 degree integers), `ele`, `landcover`, `climate_cell`, `southness`, `landcover_along` (the classes read along each step over 40 m, step by step), per-way runs of steps (`parts`: way, negative against its node order, metres, surface, steps, `sac_scale`), and `step_ab` / `step_ba`, how a shared link names it walked from `a` and from `b` |
 | `segment_boxes` | R*Tree of each Segment's bounding box |
 | `segment_ways` | the Segments of each OSM way, for resolving a shared link |
 | `relations` | id, name, ref and network of the relations on the Segments |
@@ -658,11 +658,14 @@ NetworkHikes and 33,646 DayStages). The README rounds the live one.
   interpolation, no points added between vertices (see **Elevation from
   FABDEM**). Gain, highest point and ProfileShape therefore depend on how densely
   OSM nodes a way.
-- LandCover shares weigh each vertex by half of its two segments, so densely
-  noded stretches (switchbacks, carefully mapped parts) count for their length
-  (ADR-0059). On three samples of 400 hikes this misassigns a mean of 1.6–1.8 %
-  of the walk (p95 4.5–5.8 %) against WorldCover read every 10 m, against
-  3.5–3.6 % when each vertex counted once ([future work §9](future-work.md#9-landcover-along-the-line-not-per-vertex)).
+- LandCover shares are by length (ADR-0059): a step between two vertices of
+  up to 40 m goes half to each of them, and a longer step goes to WorldCover
+  read at the middles of equal pieces of at most 20 m along it. So densely
+  noded stretches (switchbacks, carefully mapped parts) count for their length,
+  and a long straight step is not taken for the class at its two ends. On three
+  samples of 400 hikes this misassigns a mean of 1.23–1.42 % of the walk (p95
+  3.0–4.5 %) against WorldCover read every 10 m, against 1.6–1.8 % from the
+  vertices alone and 3.5–3.6 % when each vertex counted once ([future work §9](future-work.md#9-landcover-along-the-line-not-per-vertex)).
   Climate means still count each vertex once.
   WaterSide and Twins sample at even spacing instead.
 - Length is the haversine distance on a sphere of radius 6,371,000 m.
@@ -1429,7 +1432,9 @@ Measure (its permanent-water class). CHELSA V2.1 normals are 1981–2010.
 
 1. `sample-landcover` writes the map class onto GeometryStore
    `vertices.landcover` for vertices that fall on a downloaded tile.
-   Uncovered vertices stay NULL. It then writes Catalog
+   Uncovered vertices stay NULL. Along each step over 40 m it also reads the
+   class every 20 m at most and keeps those classes in
+   `vertices.landcover_along` of the step's first vertex. It then writes Catalog
    `tree_fraction` / `shrub_fraction` / `grass_fraction` / `bare_fraction` /
    `snow_fraction` (by length, ADR-0059; crop, built-up,
    water, wetland, and moss stay in the leftover share).

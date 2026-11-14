@@ -455,6 +455,71 @@ def test_composing_a_dayhikes_own_segments_reproduces_its_facts(sampled: Path) -
     assert 0 < store.facts[FACT_COLUMNS.index("waterside_share"), loop] < 1
 
 
+def test_long_steps_are_read_along_in_the_catalog_and_the_trailgraph(sampled: Path) -> None:
+    from dayhike.landcover import (
+        LANDCOVER_FEATURE_NAMES,
+        _landcover_fractions,
+        along_points,
+        along_rows_of_vertices,
+    )
+
+    # Every TrailGraph Segment holds one class per read its steps need.
+    segments = _segments(sampled)
+    for segment in segments:
+        lat, lon = decode_coords(segment["coords"]).T
+        assert len(segment["landcover_along"]) == along_points(lat, lon)[0].sum()
+    assert sum(len(segment["landcover_along"]) for segment in segments) > 0
+    # The Catalog's shares are the vertices' and the reads', and the reads change some of them.
+    store = sqlite3.connect(geometry_store_path_for(sampled))
+    catalog = sqlite3.connect(sampled)
+    changed = 0
+    try:
+        for (dayhike_id,) in store.execute("SELECT DISTINCT dayhike_id FROM vertices"):
+            rows = store.execute(
+                "SELECT COALESCE(landcover, 0), latitude, longitude, landcover_along FROM vertices "
+                "WHERE dayhike_id = ? ORDER BY seq",
+                (dayhike_id,),
+            ).fetchall()
+            codes, lat, lon = np.array([row[:3] for row in rows], dtype=float).T
+            stored = catalog.execute(
+                f"SELECT {', '.join(LANDCOVER_FEATURE_NAMES)} FROM feature_vectors WHERE dayhike_id = ?",
+                (dayhike_id,),
+            ).fetchone()
+            along = along_rows_of_vertices([row[3] for row in rows])
+            assert stored == pytest.approx(_landcover_fractions(codes, lat, lon, along))
+            changed += stored != pytest.approx(_landcover_fractions(codes, lat, lon), abs=1e-3)
+    finally:
+        store.close()
+        catalog.close()
+    assert changed > 0
+
+
+def test_a_retraced_way_back_reads_the_same_steps_backwards() -> None:
+    from dayhike.landcover import _landcover_fractions, along_rows
+    from dayhike.trailgraph import ComposedWalk, WayBack
+
+    # 111 m read along (grass), then 22 m between a tree and a bare vertex.
+    lon = np.array([0.0, 0.001, 0.0012])
+    lat = np.zeros_like(lon)
+    walk = ComposedWalk(
+        None, None, None, None, lat, lon, np.zeros(3), np.array([10, 10, 60]), np.full(3, -1), np.full(3, np.nan),
+        [], None, {}, along_rows(np.array([6, 0]), np.full(6, 30)),
+    )  # fmt: skip
+    one_way = _landcover_fractions(walk.landcover, lat, lon, walk.landcover_along)
+
+    retraced = round_trip(walk, WayBack("retrace", 0.0))
+    stepped = round_trip(walk, WayBack("step", 0.0))
+
+    steps = walk.landcover_along[:2].tolist()
+    assert retraced.landcover_along.tolist() == [*steps, *steps[::-1], [0] * 7]
+    back = _landcover_fractions(retraced.landcover, retraced.lat, retraced.lon, retraced.landcover_along)
+    assert back == pytest.approx(one_way)
+    assert len(stepped.landcover_along) == len(stepped.lat) == 4
+    # The straight step back (133 m) is not read along: its two ends share it.
+    grass = _landcover_fractions(stepped.landcover, stepped.lat, stepped.lon, stepped.landcover_along)[2]
+    assert grass == pytest.approx(0.001 / (0.001 + 0.0002 + 0.0012))
+
+
 def test_sampling_again_changes_nothing_but_drops_the_similarity_facts(sampled: Path, tmp_path: Path) -> None:
     catalog = tmp_path / "catalog.sqlite"
     for name in ("catalog.sqlite", "catalog.geometry.sqlite", "catalog.trailgraph.sqlite"):
@@ -828,6 +893,21 @@ def test_the_export_refuses_a_trailgraph_never_sampled_when_the_facts_are(sample
         export_serving(catalog, tmp_path / "out")
     assert not (tmp_path / "out" / "meta.json").exists()
 
+
+
+def test_the_export_refuses_a_trailgraph_sampled_before_land_cover_was_read_along(sampled: Path, tmp_path: Path) -> None:
+    from dayhike.serving import ServingExportError, export_serving
+
+    catalog = tmp_path / "catalog.sqlite"
+    for name in ("catalog.sqlite", "catalog.geometry.sqlite", "catalog.trailgraph.sqlite"):
+        shutil.copyfile(sampled.parent / name, tmp_path / name)
+    shutil.copytree(similarity_dir_for(sampled), similarity_dir_for(catalog))
+    with sqlite3.connect(trailgraph_path_for(catalog)) as db:
+        db.execute("ALTER TABLE segments DROP COLUMN landcover_along")
+    db.close()
+
+    with pytest.raises(ServingExportError, match="run `dayhike sample-trailgraph`"):
+        export_serving(catalog, tmp_path / "out")
 
 # ---------- the way back (ADR-0019) ----------
 
