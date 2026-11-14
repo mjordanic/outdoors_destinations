@@ -18,6 +18,12 @@ ADR-0010 made LandCover a mean along DayHikeGeometry with each GeometryStore ver
 
 The mean error halves, as the earlier study found (2.7 % to 1.3 % on an older build of the region), but it stays above that study's 1.3 %. The worst hike can get worse: one vertex alone in a long segment now carries half of that segment, where the class may change midway. Reading points along long segments (about 1.2 % in that study) is the expensive option and stays parked in §9.
 
+**Issue #137 stays open.** Its acceptance asks for three things this change does not yet give:
+
+- **The 1.5 % target was missed.** The mean error by length is 1.6–1.8 % on the three samples of 400 regional hikes above, not below 1.5 %.
+- **Notebook 05's comparison was not re-run.** Notebook 05 reads the full Europe similarity store, and this round had no Europe-scale runs, so the table above comes from a regional sample and the notebook comparison is not reproduced on this branch.
+- **The data reruns are pending.** `dayhike sample-landcover` and `dayhike build-similarity` have not been run on the Europe Catalog (see Storage).
+
 **Storage.** The facts version changes (`landcover-by-length`), so stored similarity facts are refused until `dayhike build-similarity` is run. The Catalog fractions change only when `dayhike sample-landcover` is run again, which also removes the similarity facts. Neither has been run on the Europe Catalog yet, so the site shows the old shares until both run and a new serving export is made.
 
 **Considered Options**: keep counting each vertex once (twice the error, for no saving); read WorldCover every 25 m along the line (a new raster pass and extra points to store, for little more gain). Rejected.
