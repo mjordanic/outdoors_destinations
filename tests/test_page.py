@@ -1891,6 +1891,32 @@ def test_a_liked_hike_downloads_as_a_gpx_track_that_credits_openstreetmap_and_li
     assert min(heights) >= min(hike["elevation"]["metres"]) and max(heights) <= max(hike["elevation"]["metres"])
 
 
+def test_a_gpx_shorter_than_the_hike_s_length_says_by_how_much_on_the_card_and_in_the_file(browser, server) -> None:
+    with urllib.request.urlopen(f"{server}/api/hikes/{RIDGE_WALK_ID}?return_to_start=false") as response:
+        hike = json.load(response)
+    line = decode_polyline(hike["line"])
+    gpx_m = sum(metres_between(a, b) for a, b in itertools.pairwise(line))
+    assert gpx_m == pytest.approx(hike["walk_m"], rel=0.01)  # the test catalog's lines lose nothing
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}&oneway")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    assert page.locator("#liked .gpx-note").count() == 0
+    # A walk 5 % longer than its simplified line, as a winding trail is.
+    walk_m = gpx_m / 0.95
+    page.route(f"{server}/api/hikes/{RIDGE_WALK_ID}*", lambda route: route.fulfill(json={**route.fetch().json(), "walk_m": walk_m}))
+    page.evaluate("location.hash = '#hike=1002&oneway'")
+    page.get_by_text("Chosen: Valley Path").wait_for()
+    page.evaluate(f"location.hash = '#hike={RIDGE_WALK_ID}&oneway'")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+
+    says = (
+        f"GPS apps measure this GPX about 5 % shorter, {gpx_m / 1000:.1f} km against {walk_m / 1000:.1f} km: "
+        "its line is simplified to within 10 m of the trail, which cuts small bends."
+    )
+    assert page.locator("#liked .gpx-note").inner_text() == says
+    _, gpx = downloaded_gpx(page, "#liked")
+    assert gpx.find(f"{GPX}metadata").findtext(f"{GPX}desc").endswith(says)
+
+
 def test_a_hike_measured_with_its_way_back_downloads_the_way_back_as_a_second_track(browser, server) -> None:
     with urllib.request.urlopen(f"{server}/api/hikes/{RIDGE_WALK_ID}") as response:
         hike = json.load(response)

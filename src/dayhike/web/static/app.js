@@ -334,6 +334,20 @@ async function wayBackTrack(hike, points, heights) {
   return { points: decodePolyline(hike.wayBackLine.line), heights: hike.wayBackLine.ele };
 }
 
+// What a GPS app measures the GPX of ``hike`` against its length on the page, when it is 1 % or more
+// shorter, else null: the served line, which the GPX is, is simplified to within 10 m of the trail
+// (``serving.LINE_TOLERANCE_M``), and that cuts small bends, most often by 1 to 3 % (issue #144).
+function gpxGap(hike) {
+  if (!hike.line || !hike.walk_m) return null;
+  const points = decodePolyline(hike.line);
+  let gpx = 0;
+  for (let i = 1; i < points.length; i++) gpx += metresBetween(points[i - 1], points[i]);
+  const short = 1 - gpx / hike.walk_m;
+  if (short < 0.01) return null;
+  const km = (m) => `${(m / 1000).toFixed(1)} km`, oneWay = hike.way_back && hike.way_back.kind !== "none" ? " one way" : "";
+  return `GPS apps measure this GPX about ${Math.round(short * 100)} % shorter, ${km(gpx)} against ${km(hike.walk_m)}${oneWay}: its line is simplified to within 10 m of the trail, which cuts small bends.`;
+}
+
 // ``hike`` as a GPX 1.1 file for hiking and GPS apps: its line as served with heights from its
 // profile, credited to OpenStreetMap and the elevation map; measured with its way back, the way
 // back as a second track named so.
@@ -344,10 +358,10 @@ async function gpxText(hike) {
   const back = await wayBackTrack(hike, points, heights);
   if (back) tracks.push(gpxTrack(`${hike.name}: way back to the start (${fmt.km(hike.way_back.m)}, ${WAY_BACK[hike.way_back.kind]})`, back.points, back.heights));
   const { fabdem, copernicus } = state.info?.attribution ?? {};
-  const dem = hike.elevation && (fabdem ?? copernicus);
+  const dem = hike.elevation && (fabdem ?? copernicus), gap = gpxGap(hike);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="HikesAlike" xmlns="http://www.topografix.com/GPX/1/1">
-<metadata><name>${name}</name><desc>Route data © OpenStreetMap contributors, ODbL 1.0.${dem ? ` Heights: ${escapeHtml(dem)}` : ""}</desc>
+<metadata><name>${name}</name><desc>Route data © OpenStreetMap contributors, ODbL 1.0.${dem ? ` Heights: ${escapeHtml(dem)}` : ""}${gap ? ` ${escapeHtml(gap)}` : ""}</desc>
 <copyright author="OpenStreetMap contributors"><license>https://opendatacommons.org/licenses/odbl/</license></copyright>
 <link href="${url}"><text>${name}</text></link></metadata>
 ${tracks.join("\n")}
@@ -912,6 +926,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
         : `<span><a href="https://www.openstreetmap.org/relation/${hike.id}" target="_blank" rel="noopener">OpenStreetMap relation ${hike.id}</a> · <a class="hike-link" href="${likedHash(hike)}" title="This address opens this hike">Link to this hike</a></span>`}
     </div>
     ${hike.line ? '<p class="hike-actions"><button type="button" class="secondary share-hike">Share</button> <button type="button" class="secondary download-gpx">Download GPX</button> <span class="share-note" role="status" hidden></span></p>' : ""}
+    ${gpxGap(hike) ? `<p class="hint gpx-note">${escapeHtml(gpxGap(hike))}</p>` : ""}
     ${scoreLine}
     ${hike.route ? `<p class="hint">Drawn from trail segments${hike.routes?.length ? ` along ${escapeHtml(hike.routes.slice(0, 5).join(", "))}${hike.routes.length > 5 ? " and more" : ""}` : ""}; measured as drawn${hike.way_back ? ", with its way back" : ""}.</p>` : ""}
     ${hike.way_back && hike.way_back.kind !== "none" ? `<p class="hint">Length, climb, descent and every measure include the way back to the start (${escapeHtml(wayBackText(hike.way_back))}); the map and profile show the hike itself.</p>` : ""}
