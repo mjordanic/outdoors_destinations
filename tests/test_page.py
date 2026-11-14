@@ -2247,6 +2247,25 @@ def test_a_wish_value_out_of_range_or_no_number_says_so_beside_its_box_and_find_
     assert page.locator("#find-why").inner_text() == ""
 
 
+def test_an_emptied_wish_box_whose_weight_is_above_0_says_so_and_find_waits(browser, server) -> None:
+    page = open_page(browser, server, Api({**WISHABLE, "length": LENGTH_WISH}))
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    box = page.get_by_label("Length you want, in km")
+    row = page.locator('.weight[data-measure="length"]')
+    says = "Length takes a number from 1 to 2000 km."
+
+    box.fill("")
+
+    assert row.locator(".wish-error").inner_text() == says
+    assert row.locator(".wish-error").is_visible()
+    assert box.get_attribute("aria-invalid") == "true"
+    assert page.get_by_role("button", name="Find hikes").is_disabled()
+    assert page.locator("#find-why").inner_text() == says
+
+    page.get_by_label("Length weight, 0 to 100").fill("0")
+    assert page.get_by_role("button", name="Find hikes").is_enabled()
+
+
 def test_a_wrong_wish_value_whose_weight_is_0_does_not_hold_find(browser, server) -> None:
     page = open_page(browser, server, Api({**WISHABLE, "length": LENGTH_WISH}))
     page.get_by_role("button", name="No particular hike in mind?").click()

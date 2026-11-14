@@ -901,7 +901,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
   card.hidden = false;
   card.classList.remove("empty");
   const month = compare ? query?.month : Number($("#month").value) || null;
-  const f = hike.facts;
+  const f = hike.facts, gap = gpxGap(hike);
   const badges = [
     hike.multi_day && multiDayText(hike),
     hike.region && `near ${hike.region}`,
@@ -926,7 +926,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
         : `<span><a href="https://www.openstreetmap.org/relation/${hike.id}" target="_blank" rel="noopener">OpenStreetMap relation ${hike.id}</a> · <a class="hike-link" href="${likedHash(hike)}" title="This address opens this hike">Link to this hike</a></span>`}
     </div>
     ${hike.line ? '<p class="hike-actions"><button type="button" class="secondary share-hike">Share</button> <button type="button" class="secondary download-gpx">Download GPX</button> <span class="share-note" role="status" hidden></span></p>' : ""}
-    ${gpxGap(hike) ? `<p class="hint gpx-note">${escapeHtml(gpxGap(hike))}</p>` : ""}
+    ${gap ? `<p class="hint gpx-note">${escapeHtml(gap)}</p>` : ""}
     ${scoreLine}
     ${hike.route ? `<p class="hint">Drawn from trail segments${hike.routes?.length ? ` along ${escapeHtml(hike.routes.slice(0, 5).join(", "))}${hike.routes.length > 5 ? " and more" : ""}` : ""}; measured as drawn${hike.way_back ? ", with its way back" : ""}.</p>` : ""}
     ${hike.way_back && hike.way_back.kind !== "none" ? `<p class="hint">Length, climb, descent and every measure include the way back to the start (${escapeHtml(wayBackText(hike.way_back))}); the map and profile show the hike itself.</p>` : ""}
@@ -1202,14 +1202,16 @@ function readWish(weights) {
 }
 
 // Why the value typed in a weight row's wish box cannot be asked, or "": no number, or out of its
-// Measure's range. An empty box is not wrong: a weight given asks its shown default.
+// Measure's range. An empty box asks nothing only at weight 0.
 function wishProblem(row) {
   const input = row.querySelector("input.wish");
   if (!input || input.type === "checkbox") return "";
   const measure = state.measures.find((m) => m.name === row.dataset.measure), { min, max } = measure.wish;
   const unit = shownUnit(measure), value = toFact(measure, Number(input.value));
   const range = `${toShown(measure, min)} to ${toShown(measure, max)}${unit ? ` ${unit}` : ""}`;
-  if (input.validity.badInput) return `${measure.label} takes a number from ${range}.`;
+  if (input.validity.badInput || (input.value === "" && Number(row.querySelector("input:not(.wish)").value) > 0)) {
+    return `${measure.label} takes a number from ${range}.`;
+  }
   if (input.value === "" || (value >= (min ?? -Infinity) && value <= (max ?? Infinity))) return "";
   return `${measure.label} must be from ${range}.`;
 }
@@ -1332,7 +1334,7 @@ function setWishing(on) {
   $("#wish-card").hidden = !on;
   $("#results").hidden = $("#selected").hidden = true;
   $("#find").textContent = on ? "Find hikes" : "Find similar";
-  syncFind();
+  checkWishes();
   $("#return-bar").hidden = !on && !state.liked;
   if (on) {
     $("#weights-panel").open = true;
