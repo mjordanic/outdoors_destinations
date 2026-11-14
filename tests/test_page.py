@@ -3464,6 +3464,14 @@ def test_values_shown_rounded_in_miles_and_feet_keep_their_metres_and_km(browser
     page.locator("#units").select_option("metric")
     assert page.get_by_label("Climbing you want, in m").input_value() == "700"
 
+    # Filled in km, cleared, then typed in miles: what is typed, in miles.
+    page.get_by_label("Length you want, in km").fill("")
+    page.locator("#units").select_option("imperial")
+    page.get_by_label("Length you want, in mi").fill("10")
+    page.get_by_role("button", name="Find hikes").click()
+    page.wait_for_url("**/#wish=length:16093.44:**")
+    page.locator("#units").select_option("metric")
+
     limits = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
     limits.get_by_text("Chosen: Ridge Walk").wait_for()
     limits.get_by_label("Only hikes near a starting place").check()
@@ -3477,6 +3485,18 @@ def test_values_shown_rounded_in_miles_and_feet_keep_their_metres_and_km(browser
     limits.locator("#units").select_option("imperial")
     limits.get_by_role("button", name="Find similar").click()
     limits.wait_for_url("**km=50&units=imperial")
+
+    grouping = Api({})
+    grouped = open_page(browser, server, grouping, hash=f"#hike={RIDGE_WALK_ID}&group=5")
+    grouped.get_by_text("Chosen: Ridge Walk").wait_for()
+    grouped.locator("#more-options summary").click()
+    assert grouped.locator("#group-km").input_value() == "5"
+    grouped.locator("#group-km").fill("")
+    grouped.locator("#units").select_option("imperial")
+    grouped.locator("#group-km").fill("5")
+    grouped.get_by_role("button", name="Find similar").click()
+    grouped.locator("#results-table tbody tr").first.wait_for()
+    assert grouping.ranked[-1]["group_km"] == round(5 * MILE_M / 1000, 3)  # 5 mi, not the 5 km it was filled with
 
 
 def test_a_distance_limit_typed_in_miles_is_asked_in_km(browser, server) -> None:

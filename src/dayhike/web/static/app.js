@@ -227,14 +227,16 @@ const limitText = (km) => `${kmShown(km)} ${limitUnit()}`;
 const isNumber = (text) => text.trim() !== "" && Number.isFinite(Number(text));
 
 // Fills ``input`` with ``fact`` (metres for a wish, km for a limit) shown as ``text``: while its text
-// stays so, it means that fact, not the rounded number shown.
+// and the units stay so, it means that fact, not the rounded number shown.
 function fill(input, fact, text) {
   input.value = input.dataset.shown = text;
   input.dataset.fact = String(fact);
+  input.dataset.units = state.units;
 }
-// What ``input`` means in fact units: the fact it was filled with while its text is unchanged, else
-// ``typed`` of the number typed.
-const factOf = (input, typed) => (input.value !== "" && input.dataset.shown === input.value ? Number(input.dataset.fact) : typed(Number(input.value)));
+// What ``input`` means in fact units: the fact it was filled with while its text and the units are
+// unchanged, else ``typed`` of the number typed.
+const factOf = (input, typed) => (input.value !== "" && input.dataset.shown === input.value && input.dataset.units === state.units
+  ? Number(input.dataset.fact) : typed(Number(input.value)));
 // The limit in ``id``, in km.
 const limitKm = (id) => factOf($(id), (shown) => kmTyped(id, shown));
 // The limit in ``id``, in km for an address: the text as it is when it is no number.
