@@ -1,11 +1,13 @@
 # syntax=docker/dockerfile:1
 # The web demo: FastAPI app + highways-only Valhalla in one container, data baked in.
 #
-#   docker build -f web/Dockerfile --build-context serving=data/web-serving -t dayhike-web .
+#   docker build -f web/Dockerfile --build-arg DATA_IMAGE=dayhike-data:FACTS_VERSION -t dayhike-web .
 #
-# The `serving` build context is a directory written by `dayhike export-serving`.
-# Valhalla 3.5.1: the same image that built the highways tiles (tiles are version-sensitive).
-FROM ghcr.io/gis-ops/docker-valhalla/valhalla:latest@sha256:060da5b92e6024a67f65135c236d918b021d63e73d1808a0d55b7e7cbd17240c
+# DATA_IMAGE is the data image (web/data.Dockerfile): Valhalla 3.5.1 plus the serving
+# export at /data. Its layers come first, so a code-only change rebuilds and pushes only
+# the layers that follow.
+ARG DATA_IMAGE=dayhike-data
+FROM ${DATA_IMAGE}
 
 USER root
 COPY --from=ghcr.io/astral-sh/uv:0.11.13 /uv /usr/local/bin/uv
@@ -20,7 +22,6 @@ RUN uv sync --frozen --no-dev --extra web --no-install-project
 COPY src ./src
 RUN uv sync --frozen --no-dev --extra web --no-editable && rm -rf /app/src
 
-COPY --from=serving . /data
 COPY web/start.sh /app/start.sh
 
 USER valhalla

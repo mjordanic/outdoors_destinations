@@ -168,7 +168,7 @@ def test_the_valhalla_that_builds_tiles_is_the_pinned_one_that_serves_them() -> 
     repo = Path(__file__).resolve().parents[1]
     instructions = [
         line.split()
-        for line in (repo / "web" / "Dockerfile").read_text().splitlines()
+        for line in (repo / "web" / "data.Dockerfile").read_text().splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     ]
     served = next(words[1] for words in instructions if words[0].upper() == "FROM")

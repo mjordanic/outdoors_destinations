@@ -5,6 +5,7 @@ on:
     branches: [develop, main, "feature/**"]
   push:
     branches: [develop]
+  workflow_call:  # the deploy workflow runs the tests first
 
 permissions:
   contents: read

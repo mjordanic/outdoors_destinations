@@ -1,0 +1,88 @@
+# Deploy the web demo to Cloud Run (docs/deploy.md, section 9): run the tests, build the
+# web image on top of the data image in Cloud Build, deploy it as a tagged candidate that
+# gets no traffic, smoke-test the candidate's URL, and only then move all traffic to it.
+#
+# Every account-specific value is a repository (or `production` environment) variable;
+# until GCP_WORKLOAD_IDENTITY_PROVIDER is set, the deploy job is skipped. There are no
+# secrets: Workload Identity Federation trades this run's GitHub OIDC token for a
+# short-lived Google token. Never add a pull_request or pull_request_target trigger: the
+# repository is public, and a pull request must never reach the deploy credentials.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PROJECT: ${{ vars.GCP_PROJECT }}
+      REGION: ${{ vars.GCP_REGION }}
+      SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
+      IMAGE: ${{ vars.DAYHIKE_IMAGE_REPO }}/web:${{ github.sha }}
+      CACHE_IMAGE: ${{ vars.DAYHIKE_IMAGE_REPO }}/web:latest
+      DATA_IMAGE: ${{ vars.DAYHIKE_DATA_IMAGE }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build the web image on the data image
+        run: |
+          gcloud builds submit --project "$PROJECT" --region "$REGION" \
+            --config web/cloudbuild.yaml \
+            --substitutions "_IMAGE=$IMAGE,_DATA_IMAGE=$DATA_IMAGE,_CACHE_IMAGE=$CACHE_IMAGE" .
+
+      - name: Deploy a candidate without traffic
+        id: candidate
+        run: |
+          tag="c-${GITHUB_SHA::12}"
+          gcloud run deploy "$SERVICE" --project "$PROJECT" --region "$REGION" \
+            --image "$IMAGE" --no-traffic --tag "$tag"
+          described=$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format json)
+          revision=$(jq -r --arg tag "$tag" '.status.traffic[] | select(.tag == $tag) | .revisionName' <<<"$described")
+          url=$(jq -r --arg tag "$tag" '.status.traffic[] | select(.tag == $tag) | .url' <<<"$described")
+          test -n "$revision" && test -n "$url"
+          { echo "tag=$tag"; echo "revision=$revision"; echo "url=$url"; } >> "$GITHUB_OUTPUT"
+          echo "Candidate $revision at $url" >> "$GITHUB_STEP_SUMMARY"
+
+      # A failure here ends the job: the candidate keeps its tag and no traffic.
+      - name: Smoke-test the candidate
+        env:
+          URL: ${{ steps.candidate.outputs.url }}
+        run: python3 web/smoke.py --url "$URL"
+
+      - name: Move all traffic to the candidate
+        env:
+          TAG: ${{ steps.candidate.outputs.tag }}
+          REVISION: ${{ steps.candidate.outputs.revision }}
+        run: |
+          gcloud run services update-traffic "$SERVICE" --project "$PROJECT" --region "$REGION" \
+            --to-revisions "$REVISION=100"
+          gcloud run services update-traffic "$SERVICE" --project "$PROJECT" --region "$REGION" \
+            --remove-tags "$TAG"
+          echo "Promoted $REVISION" >> "$GITHUB_STEP_SUMMARY"

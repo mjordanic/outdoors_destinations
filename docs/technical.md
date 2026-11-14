@@ -1695,7 +1695,7 @@ Ranking by Seed does **not** need Valhalla. Valhalla is only for `--origin` /
 It is a **Docker** service, not a Python package. `uv sync` does not install
 it. The image is
 [`ghcr.io/gis-ops/docker-valhalla/valhalla`](https://github.com/gis-ops/docker-valhalla),
-Valhalla 3.5.1, pinned to the digest `web/Dockerfile` serves (tiles are version-sensitive).
+Valhalla 3.5.1, pinned to the digest `web/data.Dockerfile` serves (tiles are version-sensitive).
 Compose file: [`data/valhalla/compose.yaml`](../data/valhalla/compose.yaml).
 API used: `POST /sources_to_targets` (matrix, costing `auto`). On the detailed
 car tiles that is all; on the highways-only tiles (`--highways`, what the live
