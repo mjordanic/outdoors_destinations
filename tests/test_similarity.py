@@ -547,6 +547,13 @@ def test_climb_and_descent_follow_the_walking_direction() -> None:
     assert all(math.isnan(v) for v in climb_and_descent(*_north_line([math.nan])))
 
 
+def test_climb_and_descent_on_vertices_at_one_spot_do_not_raise() -> None:
+    for heights in ([100.0, 120.0, 100.0], [100.0, 100.0, 100.0], [100.0, 120.0, 140.0, 100.0]):
+        lats, lons = np.full(len(heights), 46.0), np.full(len(heights), 14.0)
+        climb, descent = climb_and_descent(lats, lons, np.array(heights))
+        assert math.isfinite(climb) and math.isfinite(descent)
+
+
 def test_elevation_gain_ignores_jitter_below_the_hysteresis() -> None:
     flat = [5.0, 8.0, 4.0, 9.0, 3.0, 7.0, 5.0] * 20
     assert elevation_gain(*_north_line(flat)) == 0.0

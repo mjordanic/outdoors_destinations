@@ -1549,7 +1549,7 @@ def _smooth_noisy(at: Sequence[float], height: Sequence[float]) -> list[float]:
     below it in turn for hundreds of metres; a real climb, even a steep one,
     seldom strays that far from its own moving average (ADR-0062).
     """
-    if len(height) < 3:
+    if len(height) < 3 or at[-1] <= at[0]:
         return list(height)
     at_m, metres = np.asarray(at, dtype=float), np.asarray(height, dtype=float)
     first, last = at_m[0], at_m[-1]
