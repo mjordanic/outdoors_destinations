@@ -279,9 +279,13 @@ button.help:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
   .suggestions li { min-height: 44px; padding: 10px 8px; }
   #results-table tbody td { padding-top: 12px; padding-bottom: 12px; }
   .filter-chips .chip-clear { min-width: 44px; min-height: 44px; }
-  /* The "?" stays small beside its score, but takes a tap 44 px across. */
-  button.help { position: relative; }
-  button.help::after { content: ""; position: absolute; inset: -12px; }
+  /* The "?" is drawn as small a circle as on a computer, but the button is 44 px each way: a wider tap
+     area drawn outside it would be cut off by its cell or covered by the "?" of the next column. */
+  button.help { width: 44px; height: 44px; border: none; border-radius: 0; background: radial-gradient(circle, #fff 9px, var(--green) 9.5px 10px, transparent 10.5px); }
+  #results-table th.measure { height: auto; } /* grows to hold its name and the "?" */
+  /* Its clear edges reach over the gap before it and the cell's padding, so the Score column stays in view. */
+  .facts td.score button.help { margin: 0 -6px 0 -12px; }
+  button.help:hover, button.help[aria-expanded="true"] { background: radial-gradient(circle, var(--green) 10px, transparent 10.5px); }
   .leaflet-touch .leaflet-bar a, .leaflet-bar a { width: 44px; height: 44px; line-height: 44px; font-size: 22px; }
   .compose-tools button.primary { min-height: 44px; }
 }

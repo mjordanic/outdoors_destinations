@@ -2538,8 +2538,6 @@ def test_every_control_on_a_phone_takes_a_tap_44_px_across(browser, server) -> N
     assert page.evaluate(TAPPED) == []
     zoom = page.locator(".pick-map .leaflet-control-zoom-in").bounding_box()
     assert zoom["width"] >= 44 and zoom["height"] >= 44
-    # The "?" beside a score stays small but takes a tap 44 px across.
-    assert page.locator("button.help").first.evaluate("b => getComputedStyle(b, '::after').inset") == "-12px"
     assert page.evaluate("document.documentElement.scrollWidth") <= 390
 
 
@@ -3114,3 +3112,25 @@ def test_a_multi_day_route_is_marked_in_the_list_and_panel_and_drawn_only_after_
     page.route(f"{server}/api/hikes/1001*", lambda route: route.fulfill(json={**route.fetch().json(), "multi_day": True, "walk_m": 1_073_000}))
     page.evaluate(f"location.hash = '#hike={RIDGE_WALK_ID}'")
     page.locator("#liked .badges li").first.get_by_text("multi-day, 1,073 km").wait_for()
+
+
+# The points of the 44 px square centred on each visible "?" that a tap there does not reach it.
+HELP_MISSES = """() => [...document.querySelectorAll('button.help')].filter((b) => b.offsetParent).flatMap((b, i) => {
+  b.scrollIntoView({block: 'center', inline: 'center'});
+  const box = b.getBoundingClientRect();
+  const [x, y] = [box.left + box.width / 2, box.top + box.height / 2];
+  return [-21, 0, 21].flatMap((dx) => [-21, 0, 21].map((dy) => [dx, dy]))
+    .filter(([dx, dy]) => document.elementFromPoint(x + dx, y + dy)?.closest('button.help') !== b)
+    .map(([dx, dy]) => `${b.dataset.help}#${i} ${dx},${dy}`);
+})"""
+
+
+def test_every_help_button_on_a_phone_takes_a_tap_anywhere_in_a_44_px_square(browser, server) -> None:
+    page = open_page(browser, server, Api({}), width=390, hash=f"#hike={RIDGE_WALK_ID}", touch=True)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.click()
+    page.locator("#selected table.facts button.help").first.wait_for()
+
+    assert page.locator("#results-table button.help").count() > 3
+    assert page.evaluate(HELP_MISSES) == []
