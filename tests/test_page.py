@@ -1058,6 +1058,7 @@ def test_with_a_pmtiles_file_set_both_maps_draw_it_as_vectors_and_ask_openstreet
     for corner in page.locator(".leaflet-control-attribution").all():
         assert "© OpenStreetMap contributors" in corner.inner_text() and "Protomaps" in corner.inner_text()
     assert "Protomaps basemap" in page.request.get(f"{vector_server}/credits.html").text()
+    assert page.evaluate("pick.map.getMaxZoom()") == 19
 
 
 def test_with_no_base_map_set_the_page_loads_no_vector_map_script(browser, server) -> None:

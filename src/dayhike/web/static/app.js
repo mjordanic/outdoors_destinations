@@ -849,18 +849,22 @@ const PROTOMAPS_CREDIT = '<a href="https://protomaps.com">Protomaps</a>';
 
 // The base map, from the server's setting (/api/info basemap): raster tiles (#120), with OpenStreetMap always
 // credited and the tile provider beside it when it names one; or, with a PMTiles file named, the vector map
-// drawn under the overlays (#119), falling back to the raster tiles where it cannot be drawn.
-function baseLayer() {
+// drawn under the overlays (#119), falling back to the raster tiles where it cannot be drawn. Added to ``map``,
+// which zooms in no further than the setting's max zoom.
+function addBaseLayer(map) {
   const { url, attribution, max_zoom: maxZoom, pmtiles: file } = state.info?.basemap ?? { url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", max_zoom: 19 };
   const raster = () => L.tileLayer(url, { maxZoom, attribution: attribution ? `${OSM_CREDIT} · ${attribution}` : OSM_CREDIT });
-  if (!file) return raster();
-  // The group holds the zoom limit at once; the vector layer joins it once its scripts have loaded.
-  const base = L.layerGroup([], { maxZoom });
+  map.setMaxZoom(maxZoom);
+  if (!file) {
+    raster().addTo(map);
+    return;
+  }
+  // The vector layer joins the group once its scripts have loaded.
+  const base = L.layerGroup().addTo(map);
   vectorScripts().then(
     () => base.addLayer(L.maplibreGL({ style: vectorStyle(file) })),
     (error) => { console.warn("the vector base map cannot be drawn here:", error); base.addLayer(raster()); },
   );
-  return base;
 }
 
 // MapLibre GL JS with the maplibre-gl-leaflet layer, the PMTiles reader and the Protomaps style, all from
@@ -924,7 +928,7 @@ function vectorStyle(file) {
 
 function drawMap(node, hike) {
   const map = L.map(node, { scrollWheelZoom: false });
-  baseLayer().addTo(map);
+  addBaseLayer(map);
   const latlngs = hike.line ? decodePolyline(hike.line) : [];
   if (latlngs.length) L.polyline(latlngs, { color: "#c2410c", weight: 4, opacity: 0.9 }).addTo(map);
   for (const p of hike.points) {
@@ -1762,7 +1766,7 @@ const pick = {
     if (!this.map) {
       // Canvas with a tolerance: a tap a few pixels off a thin line still hits it.
       this.map = L.map(card.querySelector(".pick-map"), { renderer: L.canvas({ tolerance: PICK_TOLERANCE_PX }) });
-      baseLayer().addTo(this.map);
+      addBaseLayer(this.map);
       this.map.createPane(START_PANE).style.zIndex = 450;
       this.layer = L.layerGroup().addTo(this.map);
       // Where most hikes are, until there is a hike or a starting place to show (ADR-0054).
