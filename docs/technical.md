@@ -1972,7 +1972,9 @@ each to open. The GroupingRadius follows the search (ADR-0032): 5 % of the
 distance limit, or of the drive limit at 50 km per hour, the smaller, at least
 0.5 km, and 10 km with no limit. "More options", under the limits, sets it from 0.1 to 50 km.
 "Show 10 more" under the table adds the next 10 areas of the shown Ranking, up
-to 100 rows, loops included when they were asked. A loop that mostly walks the liked hike again is not suggested. The "Return to start" tick
+to 100 rows, loops included when they were asked; each added block is headed by its row numbers
+and, unless in Strict order, that its rows are drawn from the areas not listed above, in score order
+among themselves only (ADR-0047). A loop that mostly walks the liked hike again is not suggested. The "Return to start" tick
 box above "Find similar" (on by default) measures the liked hike and every hike
 compared with it with its way back to its start, so a summit line is compared
 up and back; off, every hike is compared one way. While it is on, Round trip
@@ -1986,7 +1988,8 @@ comma-separated), `&adv`, `&from=lat,lon`, `&place=`, `&hours=`, `&km=` and `&gr
 same but its own weights; ADR-0054) and two buttons: Share sends that address to a touch screen's share
 sheet, or copies it on a computer or where the sheet fails (a line beside the
 button then says "Link copied", or shows the link when it cannot be copied),
-and Download GPX saves the hike as drawn (the served, simplified line) as a GPX
+and Download GPX saves the hike as drawn (the served line, simplified to within 10 m, so 1 % or
+more shorter in a GPS app's measure says so in the panel and the GPX description) as a GPX
 1.1 track, made in the browser, with a height per point from its
 ElevationProfile, credited to OpenStreetMap under the ODbL and to the
 elevation map; with Return to start on, its WayBack follows as a second track
@@ -2062,7 +2065,9 @@ about 25 km is usually more than a day (ADR-0035). The form
 starts from the liked-hike form's default weights: the basic set at 100, each
 asking its Measure's default value from `/api/measures`, the rest at 0, and
 Lake or sea at 0, as no share it could ask is neutral (ADR-0057). Typing a value of a Measure weighted 0 weighs it 100; a Measure
-weighted 0 asks nothing. The liked-hike
+weighted 0 asks nothing. A value outside its Measure's `wish` `min` to `max`, not a number, or
+an emptied box at a weight above 0 says why beside its box, and "Find hikes" stays greyed out with that
+reason under it until it is fixed or the row asks nothing (weight 0, left out or folded away). The liked-hike
 weights are kept for when the Hiker goes back. "Find hikes" ranks with that wish
 instead of a Seed, the drive filter, month and Return to start work as before,
 and a result opens with what the Hiker asked for in place of the liked hike. The
@@ -2098,7 +2103,8 @@ DAYHIKE_SERVING="$PWD/data/web-serving" docker compose -f web/compose.yaml up --
 
 Beside the demo the site has About, Data and credits, Privacy and Terms and
 safety pages (`about.html`, `credits.html`, `privacy.html`, `terms.html`), with the logo home and the same footer links on
-every page; the demo's footer is a short credit line, and the full credits are
+every page; an unknown address outside `/api/` answers 404 with `not-found.html`, a short page in the same style
+linking to the search, while `/api/*` keeps its JSON 404; the demo's footer is a short credit line, and the full credits are
 on `credits.html`. The server fills in one optional setting:
 `dayhike serve --goatcounter CODE` (container: `DAYHIKE_GOATCOUNTER`) adds the
 cookieless GoatCounter tag to every page. Unset, no page loads analytics.

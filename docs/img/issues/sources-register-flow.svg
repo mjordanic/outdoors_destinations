@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 360" role="img" aria-label="How the sources register, the per-hike source and the credits fit together">
+  <title>Sources register and per-hike source</title>
+  <style>text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;fill:#1f2a24}.m{fill:#5d6b62}.h{font-weight:700;fill:#245f3c}</style>
+  <defs><marker id="a" markerWidth="10" markerHeight="10" refX="6" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#245f3c"/></marker></defs>
+  <rect x="0" y="0" width="900" height="360" fill="#ffffff"/>
+  <!-- register -->
+  <rect x="20" y="20" width="330" height="320" rx="8" fill="#f8faf6" stroke="#d9dfd6"/>
+  <text x="35" y="45" class="h" font-size="15">docs/sources.csv: every source ever looked at</text>
+  <g font-size="12">
+    <rect x="35" y="60" width="300" height="22" fill="#e8f1eb"/><text x="42" y="76" font-weight="700">source · licence · status · reason · checked</text>
+    <rect x="35" y="84" width="300" height="22" fill="#fff"/><text x="42" y="100">osm · ODbL · <tspan fill="#2f7d4f" font-weight="700">used</tspan> · the catalog · 2026-11</text>
+    <rect x="35" y="108" width="300" height="22" fill="#fff"/><text x="42" y="124">copernicus-glo30 · Copernicus · <tspan fill="#2f7d4f" font-weight="700">used</tspan></text>
+    <rect x="35" y="132" width="300" height="22" fill="#fff"/><text x="42" y="148">ie-sport-ireland · CC BY 4.0 · <tspan fill="#3b6fb6" font-weight="700">planned</tspan></text>
+    <rect x="35" y="156" width="300" height="22" fill="#fff"/><text x="42" y="172">es-fedme · ? · <tspan fill="#a16207" font-weight="700">to check</tspan></text>
+    <rect x="35" y="180" width="300" height="22" fill="#fff"/><text x="42" y="196">no-ut · CC BY-NC · <tspan fill="#9b1c1c" font-weight="700">rejected</tspan> · non-commercial</text>
+    <rect x="35" y="204" width="300" height="22" fill="#fff"/><text x="42" y="220">alltrails · terms · <tspan fill="#9b1c1c" font-weight="700">rejected</tspan> · no scraping</text>
+    <rect x="35" y="228" width="300" height="22" fill="#fff"/><text x="42" y="244">wikivoyage · CC BY-SA · <tspan fill="#9b1c1c" font-weight="700">rejected</tspan> · not ODbL</text>
+    <text x="42" y="270" class="m">… one row per candidate, used or not,</text>
+    <text x="42" y="288" class="m">reviewed in pull requests like code.</text>
+    <text x="42" y="312" class="m">A test checks every column is filled</text>
+    <text x="42" y="328" class="m">and every "used" row has a credit.</text>
+  </g>
+  <!-- arrows to right -->
+  <path d="M352 95 L420 95" stroke="#245f3c" stroke-width="3" marker-end="url(#a)"/>
+  <rect x="425" y="20" width="455" height="150" rx="8" fill="#e8f1eb" stroke="#bcd8c4"/>
+  <text x="440" y="45" class="h" font-size="15">Every hike row says where it came from</text>
+  <g font-size="12">
+    <text x="440" y="70">dayhikes.source = "osm" · source_ref = "relation/123456"</text>
+    <text x="440" y="90">dayhikes.source = "ie-sport-ireland" · source_ref = "IE-0815"</text>
+    <text x="440" y="110">plus the DEM the heights were read from, when a build mixes DEMs</text>
+    <text x="440" y="134" class="m">The source id must exist in docs/sources.csv with status "used";</text>
+    <text x="440" y="152" class="m">ingest refuses an unknown one.</text>
+  </g>
+  <path d="M650 172 L650 205" stroke="#245f3c" stroke-width="3" marker-end="url(#a)"/>
+  <g font-size="12">
+    <rect x="425" y="210" width="140" height="130" rx="8" fill="#fff" stroke="#d9dfd6"/>
+    <text x="437" y="232" font-weight="700">Hike panel</text>
+    <text x="437" y="252">"Source: Sport</text><text x="437" y="268">Ireland, CC BY 4.0"</text>
+    <text x="437" y="288" class="m">and a link to the</text><text x="437" y="304" class="m">original record</text>
+    <rect x="582" y="210" width="140" height="130" rx="8" fill="#fff" stroke="#d9dfd6"/>
+    <text x="594" y="232" font-weight="700">Credits</text>
+    <text x="594" y="252">credits.html,</text><text x="594" y="268">DATA-LICENSES.md,</text><text x="594" y="284">/api/info list the</text><text x="594" y="300">sources in use</text>
+    <rect x="740" y="210" width="140" height="130" rx="8" fill="#fff" stroke="#d9dfd6"/>
+    <text x="752" y="232" font-weight="700">ODbL download</text>
+    <text x="752" y="252">takes only rows</text><text x="752" y="268">with source "osm"</text>
+    <text x="752" y="288" class="m">other sources ship</text><text x="752" y="304" class="m">under their own</text><text x="752" y="320" class="m">licence, or not at all</text>
+  </g>
+</svg>

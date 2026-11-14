@@ -214,7 +214,7 @@ MEASURE_INFO: dict[str, tuple[str, str, str, str]] = {
     "viewpoint_along": ("scenery", "Viewpoint along", "A Viewpoint within 100 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap viewpoints."),
     "peaks_around": ("scenery", "Peaks around", "Peaks within 2 km of the line; scored by the fewer over the more (floor 1), against random hike pairs. No peak and 1 peak count as the same: so many hikes share that, it says little, and two hikes that match closely on a less common count, like 12 and 13 peaks, are the closer match.", "OpenStreetMap peaks."),
     "temperature": ("basic", "Typical temperature", "Mean temperature (June-August, or the chosen month); scored by the gap against random hike pairs, lowest from 10 °C apart.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
-    "precipitation": ("weather", "Precipitation", "Mean monthly precipitation (or the chosen month's); scored by the smaller over the larger (floor 10 mm), against random hike pairs.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
+    "precipitation": ("weather", "Precipitation", "Mean monthly precipitation over the whole year, not June-August (or the chosen month's); scored by the smaller over the larger (floor 10 mm), against random hike pairs.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
     "solar_radiation": ("weather", "Solar radiation", "Solar radiation (June-August, or the chosen month), kJ/m²/day; scored by the gap against random hike pairs, lowest from 5,000 apart.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
     "southness": ("weather", "Sun-facing slopes", "Which way the slopes face: 1 south, 0 north, 0.5 east or west; a flat walk faces no way and counts 0.5 (from FABDEM); scored by the gap against random hike pairs.", "FABDEM slopes along the line."),
     "water_count": ("water", "Water sources", "WaterSources within 100 m of the line, counted up to 3; scored by the gap against random hike pairs.", "OpenStreetMap drinking water, springs, taps and water points."),
@@ -390,7 +390,7 @@ SCORE_HELP = {
             "start. FABDEM, a 30 m elevation map with forests and buildings removed: heights, climb, "
             "profile shape, steepness and which way the slopes face. ESA WorldCover 2021: land cover and "
             "the share of the walk within 200 m of open water. CHELSA V2.1 climate normals for 1981-2010: "
-            "temperature, precipitation and solar radiation, for June-August or the chosen month. "
+            "temperature and solar radiation for June-August, precipitation for the whole year, or all three for the chosen month. "
             "With Return to start, every hike is measured with its way back to the start. "
             "A measure's ? names the one it uses.",
         },

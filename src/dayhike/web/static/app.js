@@ -259,7 +259,8 @@ function factText(measure, facts, month) {
     case "peaks_around": return `${v}`;
     case "water_count": return v >= 3 ? "3 or more" : `${v}`;
     case "temperature": return `${v.toFixed(1)} °C`;
-    case "precipitation": return `${Math.round(v)} mm / month`;
+    // Without a month it is the average month of the whole year, not of June-August (``climate.regime``).
+    case "precipitation": return `${Math.round(v)} mm / month${month ? "" : ", averaged over the year"}`;
     case "solar_radiation": return `${Math.round(v).toLocaleString("en")} kJ/m²/day`;
     case "southness": return `${v.toFixed(2)} (${v >= 0.6 ? "south-facing" : v <= 0.4 ? "north-facing" : "mixed or flat"})`;
     case "climb_grade": return `${(v * 100).toFixed(1)} %`;
@@ -333,6 +334,20 @@ async function wayBackTrack(hike, points, heights) {
   return { points: decodePolyline(hike.wayBackLine.line), heights: hike.wayBackLine.ele };
 }
 
+// What a GPS app measures the GPX of ``hike`` against its length on the page, when it is 1 % or more
+// shorter, else null: the served line, which the GPX is, is simplified to within 10 m of the trail
+// (``serving.LINE_TOLERANCE_M``), and that cuts small bends, most often by 1 to 3 % (issue #144).
+function gpxGap(hike) {
+  if (!hike.line || !hike.walk_m) return null;
+  const points = decodePolyline(hike.line);
+  let gpx = 0;
+  for (let i = 1; i < points.length; i++) gpx += metresBetween(points[i - 1], points[i]);
+  const short = 1 - gpx / hike.walk_m;
+  if (short < 0.01) return null;
+  const km = (m) => `${(m / 1000).toFixed(1)} km`, oneWay = hike.way_back && hike.way_back.kind !== "none" ? " one way" : "";
+  return `GPS apps measure this GPX about ${Math.round(short * 100)} % shorter, ${km(gpx)} against ${km(hike.walk_m)}${oneWay}: its line is simplified to within 10 m of the trail, which cuts small bends.`;
+}
+
 // ``hike`` as a GPX 1.1 file for hiking and GPS apps: its line as served with heights from its
 // profile, credited to OpenStreetMap and the elevation map; measured with its way back, the way
 // back as a second track named so.
@@ -343,10 +358,10 @@ async function gpxText(hike) {
   const back = await wayBackTrack(hike, points, heights);
   if (back) tracks.push(gpxTrack(`${hike.name}: way back to the start (${fmt.km(hike.way_back.m)}, ${WAY_BACK[hike.way_back.kind]})`, back.points, back.heights));
   const { fabdem, copernicus } = state.info?.attribution ?? {};
-  const dem = hike.elevation && (fabdem ?? copernicus);
+  const dem = hike.elevation && (fabdem ?? copernicus), gap = gpxGap(hike);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="HikesAlike" xmlns="http://www.topografix.com/GPX/1/1">
-<metadata><name>${name}</name><desc>Route data © OpenStreetMap contributors, ODbL 1.0.${dem ? ` Heights: ${escapeHtml(dem)}` : ""}</desc>
+<metadata><name>${name}</name><desc>Route data © OpenStreetMap contributors, ODbL 1.0.${dem ? ` Heights: ${escapeHtml(dem)}` : ""}${gap ? ` ${escapeHtml(gap)}` : ""}</desc>
 <copyright author="OpenStreetMap contributors"><license>https://opendatacommons.org/licenses/odbl/</license></copyright>
 <link href="${url}"><text>${name}</text></link></metadata>
 ${tracks.join("\n")}
@@ -886,7 +901,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
   card.hidden = false;
   card.classList.remove("empty");
   const month = compare ? query?.month : Number($("#month").value) || null;
-  const f = hike.facts;
+  const f = hike.facts, gap = gpxGap(hike);
   const badges = [
     hike.multi_day && multiDayText(hike),
     hike.region && `near ${hike.region}`,
@@ -911,6 +926,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
         : `<span><a href="https://www.openstreetmap.org/relation/${hike.id}" target="_blank" rel="noopener">OpenStreetMap relation ${hike.id}</a> · <a class="hike-link" href="${likedHash(hike)}" title="This address opens this hike">Link to this hike</a></span>`}
     </div>
     ${hike.line ? '<p class="hike-actions"><button type="button" class="secondary share-hike">Share</button> <button type="button" class="secondary download-gpx">Download GPX</button> <span class="share-note" role="status" hidden></span></p>' : ""}
+    ${gap ? `<p class="hint gpx-note">${escapeHtml(gap)}</p>` : ""}
     ${scoreLine}
     ${hike.route ? `<p class="hint">Drawn from trail segments${hike.routes?.length ? ` along ${escapeHtml(hike.routes.slice(0, 5).join(", "))}${hike.routes.length > 5 ? " and more" : ""}` : ""}; measured as drawn${hike.way_back ? ", with its way back" : ""}.</p>` : ""}
     ${hike.way_back && hike.way_back.kind !== "none" ? `<p class="hint">Length, climb, descent and every measure include the way back to the start (${escapeHtml(wayBackText(hike.way_back))}); the map and profile show the hike itself.</p>` : ""}
@@ -1185,6 +1201,53 @@ function readWish(weights) {
   return wish;
 }
 
+// Why the value typed in a weight row's wish box cannot be asked, or "": no number, or out of its
+// Measure's range. An empty box asks nothing only at weight 0.
+function wishProblem(row) {
+  const input = row.querySelector("input.wish");
+  if (!input || input.type === "checkbox") return "";
+  const measure = state.measures.find((m) => m.name === row.dataset.measure), { min, max } = measure.wish;
+  const unit = shownUnit(measure), value = toFact(measure, Number(input.value));
+  const range = `${toShown(measure, min)} to ${toShown(measure, max)}${unit ? ` ${unit}` : ""}`;
+  if (input.validity.badInput || (input.value === "" && Number(row.querySelector("input:not(.wish)").value) > 0)) {
+    return `${measure.label} takes a number from ${range}.`;
+  }
+  if (input.value === "" || (value >= (min ?? -Infinity) && value <= (max ?? Infinity))) return "";
+  return `${measure.label} must be from ${range}.`;
+}
+
+// Each wish value that cannot be asked says why beside its box, and Find waits for it (``wishBlockers``).
+function checkWishes() {
+  for (const row of document.querySelectorAll(".weight")) {
+    const problem = wishProblem(row), input = row.querySelector("input.wish");
+    let note = row.querySelector(".wish-error");
+    if (!problem) {
+      note?.remove();
+      input?.removeAttribute("aria-invalid");
+      input?.removeAttribute("aria-describedby");
+      continue;
+    }
+    if (!note) {
+      note = document.createElement("p");
+      note.className = "hint wish-error";
+      note.id = `wish-error-${row.dataset.measure}`;
+      row.appendChild(note);
+    }
+    note.textContent = problem;
+    input.setAttribute("aria-invalid", "true");
+    input.setAttribute("aria-describedby", note.id);
+  }
+  syncFind();
+}
+
+// What the wish boxes the query asks say is wrong with them: a row left out, folded away or at weight 0 asks nothing.
+function wishBlockers() {
+  return [...document.querySelectorAll(".weight")]
+    .filter((row) => row.querySelector(".wish-error") && !leftOut(row) && !folded(row)
+      && Number(row.querySelector("input:not(.wish)").value) > 0)
+    .map((row) => row.querySelector(".wish-error").textContent);
+}
+
 function wishText(measure, value) {
   if (typeof value === "boolean") return fmt.yes(value);
   if (!measure.wish) return value.toLocaleString("en");
@@ -1239,6 +1302,7 @@ function applyWish(text) {
     askDefault(row);
   }
   syncRoundTrip();
+  checkWishes();
 }
 
 // Each mode keeps its own weights: a wish starts from the default weights, each Measure on asking
@@ -1270,7 +1334,7 @@ function setWishing(on) {
   $("#wish-card").hidden = !on;
   $("#results").hidden = $("#selected").hidden = true;
   $("#find").textContent = on ? "Find hikes" : "Find similar";
-  syncFind();
+  checkWishes();
   $("#return-bar").hidden = !on && !state.liked;
   if (on) {
     $("#weights-panel").open = true;
@@ -1471,10 +1535,11 @@ let ranking = false; // a Ranking runs: Find waits for it
 // says why: no hike chosen in its own words, a hike loading or a search running in the status line.
 function syncFind() {
   const none = !state.wishing && !state.liked, busy = loading !== 0 && loading === chosen;
-  $("#find").disabled = none || ranking || (busy && held === chosen);
+  const wrong = state.wishing ? wishBlockers() : [];
+  $("#find").disabled = none || ranking || (busy && held === chosen) || wrong.length > 0;
   $("#find-why").textContent = none && !busy && !ranking
     ? `Choose a hike first: search for one by name or select one on the map${$("#wish-on").hidden ? "" : ", or describe the one you want"}.`
-    : "";
+    : wrong.join(" ");
 }
 
 // The liked hike measured again for the Return to start ticked now, Find greyed out until it is; when
@@ -2839,9 +2904,20 @@ function noteLoops() {
     : "";
 }
 
-// Rows for the results from ``from`` on, at the end of the table.
+// Rows for the results from ``from`` on, at the end of the table. A block "Show 10 more" adds is headed by
+// what its numbers mean: unless in Strict order its rows are drawn from another pool, so they are in score
+// order among themselves and a row may score above one in a block before it (ADR-0047).
 function listRows(from) {
   const tbody = $("#results-table tbody");
+  if (from > 0 && state.results.length > from) {
+    const head = document.createElement("tr");
+    head.className = "block-head";
+    const span = state.results.length > from + 1 ? `#${from + 1}–${state.results.length}` : `#${from + 1}`;
+    head.innerHTML = `<th colspan="${$("#results-table thead tr").cells.length}" scope="rowgroup"><span>${state.strict
+      ? `${span}: the next hikes of the ranking, in order.`
+      : `${span}: the next hikes, drawn from the areas not listed above. They are in score order among themselves, so one may score above a hike listed higher up.`}</span></th>`;
+    tbody.appendChild(head);
+  }
   state.results.slice(from).forEach((result, k) => {
     const i = from + k;
     const row = resultRow(result, i + 1, () => showResult(i));
@@ -3126,10 +3202,13 @@ async function start() {
   $("#reset-weights").addEventListener("click", () => {
     buildWeights();
     if (state.wishing) applyWish(""); // the default weights, each asking its shown default value
+    checkWishes();
     markStale();
     syncAddress();
   });
   for (const host of [$("#weights"), $("#advanced-weights")]) {
+    host.addEventListener("input", checkWishes);
+    host.addEventListener("change", checkWishes);
     host.addEventListener("input", markStale);
     host.addEventListener("change", markStale);
     // The address keeps the weights (and a wish) as they are set, so a reload or a shared link opens them again.
@@ -3142,6 +3221,7 @@ async function start() {
     );
     if (counts) markStale();
     syncAddress();
+    syncFind(); // a wish box folded away asks nothing
   });
   $("#drive-on").addEventListener("change", (event) => { $("#drive").hidden = !event.target.checked; markStale(); });
   $("#origin").addEventListener("input", () => { placed++; state.origin = null; state.missed = null; $("#origin-found").textContent = ""; markStale(); });
