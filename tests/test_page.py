@@ -3152,7 +3152,7 @@ def test_precipitation_without_a_month_says_it_is_the_year_s_average_not_the_sum
     page.route(f"{server}/api/hikes/*", lambda route: route.fulfill(json=_rained(route.fetch().json())))
     page.route(f"{server}/api/pair", lambda route: route.fulfill(json=_rained(route.fetch().json())))
     page.get_by_text("Chosen: Ridge Walk").wait_for()
-    assert page.locator("#month option:checked").inner_text() == "Summer (Jun–Aug); precipitation: year average"
+    assert page.locator("#month-hint").inner_text() == "With Summer, precipitation is the average month of the whole year, not of June–August."
     page.locator("#pair-search").fill("Valley Path")
     page.locator("#pair-suggestions li", has_text="Valley Path").first.dispatch_event("mousedown")
     row = page.locator("#selected table.facts tr", has_text="Precipitation")
