@@ -308,7 +308,7 @@ print(resolve_seed(catalog, "ridge walk"))  # 1001; case-insensitive exact match
 
 | Table | Contents |
 | --- | --- |
-| `dayhikes` | id (the OSM relation id, or a built DayHike's hashed id from 2^40 up), Seed label, `name_origin`, length_m, Difficulty (`sac_scale` or NULL), `kind` (`relation`, `network`, `stage`), `parts` (JSON list of the OSM relations a built DayHike is built from, else NULL), `route` (a built DayHike's Route, else NULL) |
+| `dayhikes` | id (the OSM relation id, or a built DayHike's hashed id from 2^40 up), Seed label, `name_origin`, length_m, Difficulty (`sac_scale` or NULL), `kind` (`relation`, `network`, `stage`), `parts` (JSON list of the OSM relations a built DayHike is built from, else NULL), `route` (a built DayHike's Route, else NULL), `source` (a sources register id, `osm` today) and `source_ref` (its record there: `relation/{id}`, or for a NetworkHike `node/{id}` of its start; ADR-0060) |
 | `trailheads` | lat/lon used for amenities and DriveTime |
 | `amenity_facts` | per DayHike: hut, parking, restaurant_cafe, drinking_water (count + nearest_m) |
 | `feature_vectors` | length, elevation min/max/gain, Difficulty ordinal, LandCover fractions, regime climate |
@@ -2136,7 +2136,7 @@ ElevationProfile at 128 equal steps in metres, the metres it climbs and
 descends in the walking direction (export format 2), and the amenity points the
 Measures count (WaterSources, Huts, restaurants, Shelters and Viewpoints in the
 Corridor, Peaks within 2 km, parking and restaurants within 500 m of the
-Trailhead) with their OSM names, plus an R*Tree of each simplified line's
+Trailhead) with their OSM names, its `source` and `source_ref` (ADR-0060), plus an R*Tree of each simplified line's
 bounding box for the map picker (export format 3), and, when the Catalog has a
 TrailGraph, `trailgraph.sqlite`: its Segments with a simplified line and the
 metres each climbs either way, the Junctions, amenity points and sampled
@@ -2194,7 +2194,8 @@ only inside a longer one, else `words`), `GET /api/hikes/{id}/way-back`
 (`kind` and `m` as the detail's `way_back`, and for a trail way back its
 encoded `line` and `ele`, metres per point, found again on the TrailGraph
 between the served line's ends; else null), `GET /api/hikes/{id}` (with `built`, `{"kind", "parts",
-"route"}` for a built DayHike, else null; ADR-0038), `GET
+"route"}` for a built DayHike, else null; ADR-0038; and `source`, `{"id", "ref",
+"url"}`, its sources register id, its record there and a link to it; ADR-0060), `GET
 /api/hikes?south=&west=&north=&east=` (the hikes whose line's bounding box
 meets that box, for "Select hike on map", each with its id, name, walk length,
 `multi_day` and encoded line; when the box holds more than 100, none are listed and
