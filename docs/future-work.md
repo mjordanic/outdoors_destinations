@@ -374,7 +374,7 @@ share of the region's hikes with a non-zero value.
 | Commons: distinct uploaders of geotagged files within 150 m of the line | **0.90** | 29 / 15 | not measured region-wide |
 | Commons: the same per km | 0.78 | 29 / 15 | not measured region-wide |
 | OSM: hiking relations sharing each member way (mean) | **0.82** | 30 / 30 | 100 % |
-| Named points' page views, 12 months, sl/en/de/it/hr/hu articles (sum) | 0.70 | 14 / 3 | 5 % |
+| Named points' page views, 12 months, sl/en/de/it/hr/hu articles (sum) | 0.70 | 14 / 3 | 23 % (points with an article in those six languages; views were read for the 60 only) |
 | Named points' Wikipedia languages (max sitelinks) | 0.68 | 14 / 4 | 28 % |
 | OSM: guideposts within 50 m, per 10 km | 0.60 | 30 / 22 | 81 % |
 | OSM: route network level (iwn > nwn > rwn > lwn) | 0.48 | 27 / 30 | 96 % |
