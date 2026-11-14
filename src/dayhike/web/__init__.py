@@ -48,8 +48,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
-from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel, Field, field_validator, model_validator
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from dayhike.catalog import MatrixClient, Origin, straight_line_distances_m
 from dayhike.serving import (
