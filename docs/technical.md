@@ -2555,9 +2555,10 @@ next to the DayHikes. The OSM extracts are downloaded from Geofabrik GmbH
 Catalog, the GeometryStore and the web demo's serving export are derivative
 databases of OpenStreetMap: when one is used publicly (the web demo does), it
 is offered under the ODbL, together with this code as the method that makes
-it. The demo's base map is OpenStreetMap's own tiles
+it. The demo's base map is by default OpenStreetMap's own tiles
 (https://operations.osmfoundation.org/policies/tiles/), used under the OSM
-Foundation's tile usage policy. Its place search reads GeoNames towns and
+Foundation's tile usage policy; `docs/deploy.md` section 3 sets another tile
+provider or a vector base map (ADR-0061). Its place search reads GeoNames towns and
 villages (GeoNames, https://www.geonames.org/, CC BY 4.0) when the
 export has `places.sqlite`, and Nominatim
 (https://operations.osmfoundation.org/policies/nominatim/, under the OSM
@@ -2605,7 +2606,12 @@ climate has been sampled.
 Natural Earth (https://www.naturalearthdata.com/, public domain): country
 shapes of the coverage map. Valhalla (MIT, https://github.com/valhalla/valhalla)
 computes DriveTime. The demo page uses Leaflet 1.9.4 (BSD-2-Clause), served from
-`src/dayhike/web/static/vendor/leaflet/` with its licence, and, when analytics
+`src/dayhike/web/static/vendor/leaflet/` with its licence; with a vector base map
+set (ADR-0061), MapLibre GL JS 6.16.0 (BSD-3-Clause), maplibre-gl-leaflet 0.1.4
+(ISC), PMTiles 4.5.0 (BSD-3-Clause) and @protomaps/basemaps 5.7.2 (BSD-3-Clause,
+with Noto Sans glyphs under the SIL OFL and Mapzen-derived sprites under MIT),
+each served from its own folder under `src/dayhike/web/static/vendor/` with its
+licence; and, when analytics
 are on, GoatCounter's `count.js` v2.7.0 (ISC), served from
 `src/dayhike/web/static/vendor/goatcounter/` with its licence; the server runs
 FastAPI (MIT) and Uvicorn (BSD-3-Clause).

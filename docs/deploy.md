@@ -127,6 +127,10 @@ What the flags do:
 | `DAYHIKE_SITE_URL=https://HOST` (optional) | The site's public address (the live site's is `https://hikesalike.com`; before a custom domain, the Cloud Run URL). Each page then names itself in `og:url` and its preview image by full address, so a shared link shows the preview, and `/robots.txt` and `/sitemap.xml` name pages at it; unset, the image address stays relative and most link previews show none. |
 | `DAYHIKE_GOATCOUNTER=CODE` (optional) | Cookieless visit counts at `https://CODE.goatcounter.com`: every page loads the self-hosted `vendor/goatcounter/count.js`, and "Find" is counted as an event. Unset, no page loads analytics. Not set yet: no GoatCounter account. |
 | `DAYHIKE_CORS_ORIGINS="https://HOST ..."` (optional) | The origins whose pages may call the API (CORS): the loading shell of section 8. Unset, no other origin may. Not set yet: no shell. |
+| `DAYHIKE_TILE_URL=TEMPLATE` (optional) | The raster tile URL template both maps load their base map from, with `{z}`, `{x}` and `{y}` (for example `https://tiles.example.com/{z}/{x}/{y}.png`). Unset, the maps use `tile.openstreetmap.org` (section 6). `/api/info` names it as `basemap`. |
+| `DAYHIKE_TILE_ATTRIBUTION=HTML` (optional) | The tile provider's credit, as its terms ask for it: the map corner shows it beside "© OpenStreetMap contributors", which always stays, and the Data and credits page says the tiles are served by it. |
+| `DAYHIKE_TILE_MAX_ZOOM=N` (optional) | The deepest zoom the provider serves (default 19). |
+| `DAYHIKE_PMTILES_URL=URL` (optional) | A vector base map: a PMTiles file in the [Protomaps basemap](https://docs.protomaps.com/basemaps/downloads) schema, by full address or relative to the page. Both maps then draw it with MapLibre GL JS under their overlays (ADR-0061), credited "© OpenStreetMap contributors · Protomaps", and ask no raster tiles; a browser without WebGL 2 falls back to the raster tiles above. The host must answer range requests and, on another origin, allow the site's origin by CORS with the `range` request header and the `etag` response header exposed ([Protomaps cloud storage guide](https://docs.protomaps.com/pmtiles/cloud-storage)). Not set yet: no file is hosted (#121). |
 
 The service also carries a service-level `scaling.maxInstanceCount` of 20 in
 the Cloud Run v2 API, next to the revision-level `template.scaling.maxInstanceCount`
@@ -295,7 +299,8 @@ If an alert fires and the traffic is abuse, close the public access at once:
   or change that page to offer the export another way (for example a download of `hikes.sqlite`).
 - **Tile and place-search policies.** The map uses `tile.openstreetmap.org`,
   run by the OSM Foundation for low-volume use under its usage policy; if
-  traffic grows, switch to a paid tile provider. Export with `--geonames` so
+  traffic grows, switch to another tile provider with `DAYHIKE_TILE_URL` and
+  `DAYHIKE_TILE_ATTRIBUTION` (section 3). Export with `--geonames` so
   the origin search reads `places.sqlite`; without it the page falls back to
   Nominatim, which allows at most one request a second over all visitors.
 - **Privacy page.** `privacy.html` names the host (Google Cloud Run,
