@@ -259,7 +259,8 @@ function factText(measure, facts, month) {
     case "peaks_around": return `${v}`;
     case "water_count": return v >= 3 ? "3 or more" : `${v}`;
     case "temperature": return `${v.toFixed(1)} °C`;
-    case "precipitation": return `${Math.round(v)} mm / month`;
+    // Without a month it is the average month of the whole year, not of June-August (``climate.regime``).
+    case "precipitation": return `${Math.round(v)} mm / month${month ? "" : ", averaged over the year"}`;
     case "solar_radiation": return `${Math.round(v).toLocaleString("en")} kJ/m²/day`;
     case "southness": return `${v.toFixed(2)} (${v >= 0.6 ? "south-facing" : v <= 0.4 ? "north-facing" : "mixed or flat"})`;
     case "climb_grade": return `${(v * 100).toFixed(1)} %`;

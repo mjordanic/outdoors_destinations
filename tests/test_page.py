@@ -3121,6 +3121,27 @@ def test_the_designer_walks_to_a_junction_clicked_and_its_messages_leave_the_map
     assert page.evaluate("compose.route.length") == 0
 
 
+def test_precipitation_without_a_month_says_it_is_the_year_s_average_not_the_summer_s(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.route(f"{server}/api/hikes/*", lambda route: route.fulfill(json=_rained(route.fetch().json())))
+    page.route(f"{server}/api/pair", lambda route: route.fulfill(json=_rained(route.fetch().json())))
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    assert page.locator("#month option:checked").inner_text() == "Summer (Jun–Aug); precipitation: year average"
+    page.locator("#pair-search").fill("Valley Path")
+    page.locator("#pair-suggestions li", has_text="Valley Path").first.dispatch_event("mousedown")
+    row = page.locator("#selected table.facts tr", has_text="Precipitation")
+
+    row.get_by_text("80 mm / month, averaged over the year").first.wait_for()
+
+
+def _rained(body: dict) -> dict:
+    """Every hike in ``body`` with 80 mm a month over the year."""
+    for hike in (body, body.get("a"), body.get("b")):
+        if isinstance(hike, dict) and "facts" in hike:
+            hike["facts"]["precipitation_mm"] = 80.0
+    return body
+
+
 def test_the_pair_table_shows_its_score_column_on_a_phone(browser, server) -> None:
     page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", width=390, touch=True)
     page.get_by_text("Chosen: Ridge Walk").wait_for()
