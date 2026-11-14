@@ -18,6 +18,17 @@ builds from those inputs, keep the licences of their sources:
 | GeoNames `allCountries` | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | The towns and villages of the web demo's place search ("Find place"), served from `places.sqlite` in the serving export. |
 | Natural Earth | Public domain | Country shapes of the coverage map. |
 
+The OpenStreetMap snapshots are downloaded from Geofabrik's extracts, which
+carry the same ODbL. The web demo's base map tiles come from the OpenStreetMap tile server, under
+its [tile usage policy](https://operations.osmfoundation.org/policies/tiles/).
+When an export has no `places.sqlite`, its place search asks Nominatim, which
+serves OpenStreetMap data.
+
+Every data source the project uses, plans, is checking or rejected is listed,
+with its licence, the reason and the date its licence was last read, in the
+sources register [`docs/sources.csv`](docs/sources.csv) (ADR-0060). Each hike
+records its source there.
+
 The full citations and notices are in the technical docs'
 [Attribution](docs/technical.md#attribution) section and on the web demo's Data and
 credits page (`credits.html`).
