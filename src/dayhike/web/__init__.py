@@ -37,6 +37,7 @@ import unicodedata
 import urllib.error
 from collections import deque
 from collections.abc import Callable
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
@@ -130,6 +131,43 @@ COPERNICUS_CREDITS = {
 }
 PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")  # a GoatCounter code
 SITE_URL = re.compile(r"https://[A-Za-z0-9.-]+(:[0-9]+)?")  # the public origin a shared link names
+OSM_TILES = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+# The credits page's base-map credit when the maps draw a vector PMTiles file (BaseMap.pmtiles).
+VECTOR_CREDIT = (
+    'drawn from vector tiles of the <a href="https://docs.protomaps.com/basemaps/downloads">Protomaps basemap</a> '
+    "(an ODbL Produced Work of OpenStreetMap, Natural Earth and osmdata.openstreetmap.de), in its light style "
+    '(<a href="https://github.com/protomaps/basemaps">Protomaps</a>, BSD-3-Clause and CC0, icons after '
+    '<a href="https://github.com/tangrams/icons">Mapzen</a>, MIT) with <a href="https://notofonts.github.io/">Noto Sans</a> '
+    '(SIL OFL), by <a href="https://maplibre.org/">MapLibre GL JS</a> (BSD-3-Clause), '
+    '<a href="https://github.com/maplibre/maplibre-gl-leaflet">maplibre-gl-leaflet</a> (ISC) and '
+    '<a href="https://github.com/protomaps/PMTiles">PMTiles</a> (BSD-3-Clause), all served from this site'
+)
+
+
+@dataclass(frozen=True)
+class BaseMap:
+    """Where both maps' raster base tiles come from (#120): the OpenStreetMap Foundation's by default.
+
+    ``url`` is a tile URL template with ``{z}``, ``{x}`` and ``{y}`` (``{s}``, ``{r}`` as Leaflet fills them);
+    ``attribution`` is the provider's credit HTML, shown beside "© OpenStreetMap contributors", which always
+    stays; ``max_zoom`` is the deepest zoom the provider serves. A template without its three places, or a
+    max zoom outside 0-22, is a ValueError.
+
+    ``pmtiles``, the URL of a vector PMTiles file in the Protomaps basemap schema (absolute, or relative to the
+    page), makes the maps draw it instead (#119), with MapLibre GL JS under the overlays, zoomable to
+    ``max_zoom``; the raster tiles are then only the fallback for a browser that cannot draw it.
+    """
+
+    url: str = OSM_TILES
+    attribution: str | None = None
+    max_zoom: int = 19
+    pmtiles: str | None = None
+
+    def __post_init__(self) -> None:
+        if not all(place in self.url for place in ("{z}", "{x}", "{y}")):
+            raise ValueError(f"a tile URL template has {{z}}, {{x}} and {{y}}, not {self.url!r}")
+        if not 0 <= self.max_zoom <= 22:
+            raise ValueError(f"a tile max zoom is 0 to 22, not {self.max_zoom}")
 
 DriveClientFactory = Callable[[float], MatrixClient]
 MEASURE_KINDS = {measure.name: measure.kind for measure in MEASURES}
@@ -293,6 +331,7 @@ def site_pages(
     copernicus: bool = False,
     site_url: str | None = None,
     dayhikes: int | None = None,
+    basemap: BaseMap = BaseMap(),
 ) -> dict[str, str]:
     """Each page's HTML with the GoatCounter tag where a code is set.
 
@@ -301,6 +340,9 @@ def site_pages(
     With ``place_search`` (the export has GeoNames places) the place-search credit names GeoNames, not Nominatim,
     and the privacy page keeps its ``places`` text, not its ``nominatim`` text.
     With ``copernicus`` (an export sampled from Copernicus GLO-30), the pages credit it instead of FABDEM.
+    A ``basemap`` from another provider than the OpenStreetMap Foundation's tiles is credited, between
+    ``<!--basemap-->`` and ``<!--/basemap-->``, by its attribution in place of the Foundation's tile policy;
+    a vector one by the Protomaps basemap and the software that draws it.
     With ``site_url`` (the public origin, ``https://host``) each page names its own address (``og:url``) and its
     share preview image by full address, as link previews need; else the image stays relative.
 
@@ -338,6 +380,11 @@ def site_pages(
             html = re.sub(r'<span id="place-credit">.*?</span>', credit, html, flags=re.S)
         if copernicus and name in COPERNICUS_CREDITS:
             html = re.sub(r"<!--elevation-->.*?<!--/elevation-->", COPERNICUS_CREDITS[name], html, flags=re.S)
+        if basemap.pmtiles is not None:
+            html = re.sub(r"<!--basemap-->.*?<!--/basemap-->", VECTOR_CREDIT, html, flags=re.S)
+        elif basemap.url != OSM_TILES:
+            served = f"served by {basemap.attribution}" if basemap.attribution else "served by another tile provider"
+            html = re.sub(r"<!--basemap-->.*?<!--/basemap-->", served, html, flags=re.S)
         if site_url is not None:
             address = f"{site_url}/" if name == "index" else f"{site_url}/{name}.html"
             html = html.replace('content="social-preview.png"', f'content="{site_url}/social-preview.png"').replace(
@@ -426,6 +473,7 @@ def create_app(
     goatcounter: str | None = None,
     cors_origins: tuple[str, ...] = (),
     site_url: str | None = None,
+    basemap: BaseMap = BaseMap(),
 ) -> FastAPI:
     """The app over one serving export.
 
@@ -436,7 +484,8 @@ def create_app(
     ``goatcounter`` fills in the pages (``site_pages``); a value that
     is not a plain name is a ValueError, and so is ``site_url``, the public origin
     (``https://host``) the pages' share previews name. ``cors_origins`` are the other origins
-    (``https://host``) whose pages may call the API.
+    (``https://host``) whose pages may call the API. ``basemap`` is where the page's maps load their
+    base tiles (``/api/info`` names it; the credits page credits it).
     """
     pages = site_pages(
         goatcounter,
@@ -444,6 +493,7 @@ def create_app(
         copernicus="copernicus" in data.meta["attribution"],
         site_url=site_url,
         dayhikes=data.meta["dayhikes"],
+        basemap=basemap,
     )
     app = FastAPI(title="HikesAlike", docs_url="/api/docs", openapi_url="/api/openapi.json")
     limiters = {"rank": RateLimiter(rank_rate, RATE_WINDOW_S), "api": RateLimiter(api_rate, RATE_WINDOW_S)}
@@ -452,7 +502,7 @@ def create_app(
     # may come later), the code and the settings.
     settings = (
         f"{BUILD} {drive_client is not None} {MAX_DRIVE_HOURS} {RESULTS} {POOL} {data.places is not None} "
-        f"{data.landmarks is not None}"
+        f"{data.landmarks is not None} {basemap}"
     ).encode()
     etag = f'W/"{hashlib.sha256((data.directory / "meta.json").read_bytes() + settings).hexdigest()[:16]}"'
     attribution = data.meta["attribution"]
@@ -558,6 +608,8 @@ def create_app(
             "draw": {"pool": POOL, "t": DRAW_T},
             # The default grouping radius (ADR-0032): share of the limit, a drive hour as kmh km, at least min_km, km with none.
             "grouping": {"km": GROUP_M / 1000, "share": GROUP_SHARE, "min_km": GROUP_MIN_M / 1000, "kmh": GROUP_KMH},
+            # Where both maps load their base tiles; the page credits OpenStreetMap beside the provider (#120).
+            "basemap": asdict(basemap),
         }
 
     score_help = {

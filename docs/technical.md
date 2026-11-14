@@ -2605,7 +2605,12 @@ climate has been sampled.
 Natural Earth (https://www.naturalearthdata.com/, public domain): country
 shapes of the coverage map. Valhalla (MIT, https://github.com/valhalla/valhalla)
 computes DriveTime. The demo page uses Leaflet 1.9.4 (BSD-2-Clause), served from
-`src/dayhike/web/static/vendor/leaflet/` with its licence, and, when analytics
+`src/dayhike/web/static/vendor/leaflet/` with its licence; with a vector base map
+set (ADR-0061), MapLibre GL JS 6.16.0 (BSD-3-Clause), maplibre-gl-leaflet 0.1.4
+(ISC), PMTiles 4.5.0 (BSD-3-Clause) and @protomaps/basemaps 5.7.2 (BSD-3-Clause,
+with Noto Sans glyphs under the SIL OFL and Mapzen-derived sprites under MIT),
+each served from its own folder under `src/dayhike/web/static/vendor/` with its
+licence; and, when analytics
 are on, GoatCounter's `count.js` v2.7.0 (ISC), served from
 `src/dayhike/web/static/vendor/goatcounter/` with its licence; the server runs
 FastAPI (MIT) and Uvicorn (BSD-3-Clause).

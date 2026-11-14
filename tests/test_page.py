@@ -21,6 +21,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 import uvicorn
+from starlette.routing import Mount
+from starlette.staticfiles import StaticFiles
 
 from dayhike import build_catalog, build_similarity, web
 from dayhike.serving import ServingData, decode_polyline, draw_noise, drawn, encode_polyline, export_serving
@@ -64,6 +66,21 @@ def data(tmp_path_factory: pytest.TempPathFactory) -> ServingData:
 def server(data: ServingData) -> Iterator[str]:
     # Every test here asks from one address: the budgets per minute (RANK_RATE, API_RATE) are not under test.
     yield from serve(create_app(data, lambda max_hours: Matrix(), rank_rate=1_000, api_rate=100_000))
+
+
+@pytest.fixture(scope="module")
+def vector_server(data: ServingData) -> Iterator[str]:
+    """The app drawing its maps from a vector PMTiles file: one z10 Protomaps tile over the catalog's hikes,
+    served (with range requests) beside the page."""
+    app = create_app(data, lambda max_hours: Matrix(), rank_rate=1_000, api_rate=100_000, basemap=web.BaseMap(pmtiles="fixtures/basemap.pmtiles"))
+    app.router.routes.insert(0, Mount("/fixtures", StaticFiles(directory=FIXTURE.parent)))
+    yield from serve(app)
+
+
+@pytest.fixture(params=["raster", "vector"])
+def map_server(request) -> str:
+    """The app with each kind of base map: every overlay and click works over both."""
+    return request.getfixturevalue("server" if request.param == "raster" else "vector_server")
 
 
 @pytest.fixture(scope="module")
@@ -988,6 +1005,74 @@ def test_the_page_runs_leaflet_1_9_4_from_its_own_server_and_asks_unpkg_for_noth
     assert not [url for url in asked if "unpkg.com" in url]
 
 
+def test_both_maps_load_their_tiles_from_the_tile_provider_set_and_credit_it_beside_openstreetmap(browser, data) -> None:
+    credit = '<a href="https://tiles.example.com/terms">Example Tiles</a>'
+    basemap = web.BaseMap("https://tiles.example.com/{z}/{x}/{y}.png", credit, 17)
+    for server in serve(create_app(data, basemap=basemap)):
+        page = browser.new_page()
+        page.set_default_timeout(5000)
+        tiles: list[str] = []
+
+        def tile(route) -> None:
+            tiles.append(route.request.url)
+            route.fulfill(status=404)
+
+        page.route(lambda url: not url.startswith(server), lambda route: route.abort())
+        page.route("https://tiles.example.com/**", tile)
+        page.goto(f"{server}/#hike={RIDGE_WALK_ID}")
+        page.get_by_text("Chosen: Ridge Walk").wait_for()
+        page.locator("#map-pick-on").check()
+        page.wait_for_function("() => document.querySelectorAll('.leaflet-container').length === 2")
+
+        corners = page.locator(".leaflet-control-attribution")
+        assert corners.count() == 2
+        for corner in corners.all():
+            assert "© OpenStreetMap contributors" in corner.inner_text() and "Example Tiles" in corner.inner_text()
+        page.wait_for_function("() => document.querySelectorAll('.leaflet-tile').length > 0")
+        assert tiles and all(re.fullmatch(r"https://tiles\.example\.com/\d+/\d+/\d+\.png", url) for url in tiles)
+        assert page.evaluate("pick.map.getMaxZoom()") == 17
+        page.close()
+
+
+@pytest.mark.parametrize("phone", [False, True])
+def test_with_a_pmtiles_file_set_both_maps_draw_it_as_vectors_and_ask_openstreetmap_for_no_tile(browser, vector_server, phone) -> None:
+    asked: list[str] = []
+    page = browser.new_page(viewport={"width": 390 if phone else 1280, "height": 900}, has_touch=phone, is_mobile=phone)
+    page.set_default_timeout(30_000)  # MapLibre's first draw is slow on a CI machine's software WebGL
+    page.on("request", lambda request: asked.append(request.url))
+    page.route(lambda url: not url.startswith(vector_server), lambda route: route.abort())
+    page.goto(f"{vector_server}/#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.locator("#map-pick-on").check()
+    # Over the fixture's one tile: MapLibre draws zoom 10 at Leaflet's zoom 11.
+    page.evaluate("pick.map.setView([45.0, 15.05], 11, { animate: false })")
+
+    drawn = """() => { const gl = []; pick.map.eachLayer((layer) => layer.getMaplibreMap && gl.push(layer.getMaplibreMap()));
+      return gl.length > 0 && gl.every((map) => map.loaded() && map.queryRenderedFeatures().length > 0); }"""
+    page.wait_for_function(drawn)
+    page.wait_for_function("() => document.querySelectorAll('canvas.maplibregl-canvas').length === 2")
+
+    assert f"{vector_server}/fixtures/basemap.pmtiles" in asked
+    assert f"{vector_server}/vendor/maplibre-gl/maplibre-gl.mjs" in asked
+    assert not [url for url in asked if "openstreetmap.org" in url or not url.startswith((vector_server, "blob:", "data:"))]
+    for corner in page.locator(".leaflet-control-attribution").all():
+        assert "© OpenStreetMap contributors" in corner.inner_text() and "Protomaps" in corner.inner_text()
+    assert "Protomaps basemap" in page.request.get(f"{vector_server}/credits.html").text()
+
+
+def test_with_no_base_map_set_the_page_loads_no_vector_map_script(browser, server) -> None:
+    asked: list[str] = []
+    page = browser.new_page()
+    page.on("request", lambda request: asked.append(request.url))
+    page.route(lambda url: not url.startswith(server), lambda route: route.abort())  # no tiles
+    page.goto(f"{server}/#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.locator(".leaflet-tile").first.wait_for(state="attached")
+
+    assert not [url for url in asked if "maplibre" in url or "pmtiles" in url or "protomaps" in url]
+    assert any(url.startswith("https://tile.openstreetmap.org/") for url in asked)
+
+
 def test_loops_are_suggested_only_when_the_hiker_asks_for_them(browser, server) -> None:
     api = Api({})
     page = open_page(browser, server, api, hash=f"#hike={RIDGE_WALK_ID}")
@@ -1802,9 +1887,9 @@ def click_map(page, at: tuple[float, float], east_px: int) -> list[int]:
 
 
 @pytest.mark.parametrize("drawn_first", ["stage 1", "stage 2"])
-def test_a_click_on_a_line_where_two_hikes_meet_chooses_the_line_clicked(browser, server, drawn_first) -> None:
+def test_a_click_on_a_line_where_two_hikes_meet_chooses_the_line_clicked(browser, map_server, drawn_first) -> None:
     one, two = drawn_hike("Stage 1", WEST, START), drawn_hike("Stage 2", START, EAST)
-    page = map_dots(browser, server, [one, two] if drawn_first == "stage 1" else [two, one])
+    page = map_dots(browser, map_server, [one, two] if drawn_first == "stage 1" else [two, one])
 
     assert click_map(page, START, -8) == [one["id"]]  # 8 px west of where they meet: on stage 1
     assert click_map(page, START, 8) == [two["id"]]
@@ -1812,9 +1897,9 @@ def test_a_click_on_a_line_where_two_hikes_meet_chooses_the_line_clicked(browser
     assert click_map(page, (45.0620, 6.5250), 0) == []  # off every line: nothing
 
 
-def test_the_hike_under_the_pointer_is_the_one_a_click_would_choose(browser, server) -> None:
+def test_the_hike_under_the_pointer_is_the_one_a_click_would_choose(browser, map_server) -> None:
     one, two = drawn_hike("Stage 1", WEST, START), drawn_hike("Stage 2", START, EAST)
-    page = map_dots(browser, server, [one, two])
+    page = map_dots(browser, map_server, [one, two])
 
     at = page.evaluate("([lat, lon]) => pick.map.latLngToContainerPoint([lat, lon]).add([-8, 0])", START)
     box = page.locator("#map-pick .pick-map").bounding_box()

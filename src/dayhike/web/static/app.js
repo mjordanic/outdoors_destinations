@@ -843,12 +843,88 @@ function pointText(p) {
   return parts.join("<br>");
 }
 
+const OSM_CREDIT = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+
+const PROTOMAPS_CREDIT = '<a href="https://protomaps.com">Protomaps</a>';
+
+// The base map, from the server's setting (/api/info basemap): raster tiles (#120), with OpenStreetMap always
+// credited and the tile provider beside it when it names one; or, with a PMTiles file named, the vector map
+// drawn under the overlays (#119), falling back to the raster tiles where it cannot be drawn.
+function baseLayer() {
+  const { url, attribution, max_zoom: maxZoom, pmtiles: file } = state.info?.basemap ?? { url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", max_zoom: 19 };
+  const raster = () => L.tileLayer(url, { maxZoom, attribution: attribution ? `${OSM_CREDIT} · ${attribution}` : OSM_CREDIT });
+  if (!file) return raster();
+  // The group holds the zoom limit at once; the vector layer joins it once its scripts have loaded.
+  const base = L.layerGroup([], { maxZoom });
+  vectorScripts().then(
+    () => base.addLayer(L.maplibreGL({ style: vectorStyle(file) })),
+    (error) => { console.warn("the vector base map cannot be drawn here:", error); base.addLayer(raster()); },
+  );
+  return base;
+}
+
+// MapLibre GL JS with the maplibre-gl-leaflet layer, the PMTiles reader and the Protomaps style, all from
+// vendor/, loaded once and only for the vector base map. A browser without WebGL 2 cannot draw it.
+let vectorLoaded = null;
+function vectorScripts() {
+  const at = (path) => new URL(path, document.baseURI).href;
+  const script = (path) => new Promise((resolve, reject) => {
+    document.head.append(Object.assign(document.createElement("script"), { src: at(path), onload: resolve, onerror: reject }));
+  });
+  vectorLoaded ??= (async () => {
+    if (!document.createElement("canvas").getContext("webgl2")) throw new Error("no WebGL 2");
+    document.head.append(Object.assign(document.createElement("link"), { rel: "stylesheet", href: at("vendor/maplibre-gl/maplibre-gl.css") }));
+    window.maplibregl = await import(at("vendor/maplibre-gl/maplibre-gl.mjs"));
+    await Promise.all(["vendor/maplibre-gl-leaflet/leaflet-maplibre-gl.js", "vendor/pmtiles/pmtiles.js", "vendor/protomaps-basemaps/basemaps.js"].map(script));
+    maplibregl.addProtocol("pmtiles", new pmtiles.Protocol().tile);
+  })();
+  return vectorLoaded;
+}
+
+// For hikers: paths and tracks dashed in brown as on the raster map, and peaks named with their height from
+// zoom 12 on (the light style shows them from 14, unnamed by height).
+const HIKING_PATHS = {
+  id: "hiking_paths", type: "line", source: "protomaps", "source-layer": "roads", minzoom: 12,
+  filter: ["all", ["==", ["get", "kind"], "path"], ["!", ["has", "is_tunnel"]]],
+  paint: { "line-color": "#a0522d", "line-width": ["interpolate", ["linear"], ["zoom"], 12, 0.6, 16, 1.6], "line-dasharray": [3, 2] },
+};
+const PEAKS = {
+  id: "peaks", type: "symbol", source: "protomaps", "source-layer": "pois", minzoom: 12,
+  filter: ["==", ["get", "kind"], "peak"],
+  layout: {
+    "icon-image": "peak",
+    "text-field": ["concat", ["coalesce", ["get", "name"], ""], ["case", ["has", "elevation"], ["concat", "\n", ["to-string", ["round", ["get", "elevation"]]], " m"], ""]],
+    "text-font": ["Noto Sans Regular"], "text-size": 11, "text-offset": [0, 0.9], "text-anchor": "top", "text-max-width": 8,
+  },
+  paint: { "text-color": "#6b4a2b", "text-halo-color": "#fff", "text-halo-width": 1 },
+};
+
+function outdoorLayers(layers) {
+  return [...layers.flatMap((layer) => {
+    if (layer.id === "roads_other") return [layer, HIKING_PATHS];
+    if (layer.id === "pois") return [{ ...layer, filter: ["all", layer.filter, ["!=", ["get", "kind"], "peak"]] }];
+    return [layer];
+  }), PEAKS];
+}
+
+// The Protomaps light style over the PMTiles ``file``, with English labels where OpenStreetMap has them,
+// its glyphs and sprites from vendor/.
+function vectorStyle(file) {
+  const vendor = new URL("vendor/protomaps-basemaps/", document.baseURI).href;
+  return {
+    version: 8,
+    glyphs: `${vendor}fonts/{fontstack}/{range}.pbf`,
+    sprite: `${vendor}sprites/light`,
+    sources: {
+      protomaps: { type: "vector", url: `pmtiles://${new URL(file, document.baseURI).href}`, attribution: `${OSM_CREDIT} · ${PROTOMAPS_CREDIT}` },
+    },
+    layers: outdoorLayers(basemaps.layers("protomaps", basemaps.namedFlavor("light"), { lang: "en" })),
+  };
+}
+
 function drawMap(node, hike) {
   const map = L.map(node, { scrollWheelZoom: false });
-  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 19,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-  }).addTo(map);
+  baseLayer().addTo(map);
   const latlngs = hike.line ? decodePolyline(hike.line) : [];
   if (latlngs.length) L.polyline(latlngs, { color: "#c2410c", weight: 4, opacity: 0.9 }).addTo(map);
   for (const p of hike.points) {
@@ -1686,10 +1762,7 @@ const pick = {
     if (!this.map) {
       // Canvas with a tolerance: a tap a few pixels off a thin line still hits it.
       this.map = L.map(card.querySelector(".pick-map"), { renderer: L.canvas({ tolerance: PICK_TOLERANCE_PX }) });
-      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        maxZoom: 19,
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-      }).addTo(this.map);
+      baseLayer().addTo(this.map);
       this.map.createPane(START_PANE).style.zIndex = 450;
       this.layer = L.layerGroup().addTo(this.map);
       // Where most hikes are, until there is a hike or a starting place to show (ADR-0054).

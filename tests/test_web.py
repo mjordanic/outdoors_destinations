@@ -989,6 +989,51 @@ def test_the_credits_page_credits_every_source_with_the_fabdem_dataset(client: T
     assert 'href="https://doi.org/10.1088/1748-9326/ac4d4f"' in credits
 
 
+def test_info_names_the_openstreetmap_tiles_as_the_base_map_by_default(client: TestClient) -> None:
+    assert client.get("/api/info").json()["basemap"] == {
+        "url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png", "attribution": None, "max_zoom": 19, "pmtiles": None,
+    }
+    assert "served by the OpenStreetMap Foundation" in client.get("/credits.html").text
+
+
+def test_another_tile_provider_is_named_in_info_and_credited_beside_openstreetmap(data: ServingData) -> None:
+    credit = '<a href="https://tiles.example.com/terms">Example Tiles</a>'
+    basemap = web.BaseMap("https://tiles.example.com/{z}/{x}/{y}.png", credit, 17)
+    client = TestClient(create_app(data, basemap=basemap))
+
+    info = client.get("/api/info")
+    assert info.json()["basemap"] == {
+        "url": "https://tiles.example.com/{z}/{x}/{y}.png", "attribution": credit, "max_zoom": 17, "pmtiles": None,
+    }
+    assert info.headers["etag"] != TestClient(create_app(data)).get("/api/info").headers["etag"]
+    credits = client.get("/credits.html").text
+    assert f"OpenStreetMap</a> contributors, served by {credit}." in credits
+    assert "OpenStreetMap Foundation" not in credits
+
+
+def test_a_pmtiles_base_map_is_named_in_info_and_credited_with_the_software_that_draws_it(data: ServingData) -> None:
+    client = TestClient(create_app(data, basemap=web.BaseMap(pmtiles="https://maps.example.com/europe.pmtiles")))
+
+    assert client.get("/api/info").json()["basemap"]["pmtiles"] == "https://maps.example.com/europe.pmtiles"
+    credits = client.get("/credits.html").text
+    for credit in ("Protomaps basemap", "MapLibre GL JS", "maplibre-gl-leaflet", "PMTiles", "Noto Sans", "SIL OFL"):
+        assert credit in credits, credit
+    assert "OpenStreetMap Foundation" not in credits
+    for path in (
+        "vendor/maplibre-gl/maplibre-gl.mjs", "vendor/maplibre-gl/maplibre-gl-worker.mjs", "vendor/maplibre-gl/LICENSE.txt",
+        "vendor/maplibre-gl-leaflet/LICENSE", "vendor/pmtiles/LICENSE", "vendor/protomaps-basemaps/LICENSE.md",
+        "vendor/protomaps-basemaps/OFL.txt", "vendor/protomaps-basemaps/sprites/LICENSE.md",
+        "vendor/protomaps-basemaps/fonts/Noto Sans Regular/0-255.pbf", "vendor/protomaps-basemaps/sprites/light@2x.png",
+    ):
+        assert client.get(f"/{path}").status_code == 200, path
+
+
+@pytest.mark.parametrize(("url", "max_zoom"), [("https://tiles.example.com/{z}/{x}.png", 19), (web.OSM_TILES, 23)])
+def test_a_tile_template_without_z_x_y_or_a_max_zoom_past_22_is_refused(url: str, max_zoom: int) -> None:
+    with pytest.raises(ValueError):
+        web.BaseMap(url, max_zoom=max_zoom)
+
+
 def test_the_home_page_footer_is_a_short_credit_line_to_the_full_credits(client: TestClient) -> None:
     home = client.get("/").text
     footer = home[home.index("<footer"):]

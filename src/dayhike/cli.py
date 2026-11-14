@@ -403,6 +403,18 @@ def main(argv: list[str] | None = None) -> int:
     serve.add_argument(
         "--site-url", help="The site's public origin (https://host): shared links then get a preview image"
     )
+    serve.add_argument(
+        "--tile-url",
+        help="Raster base-map tile URL template with {z}/{x}/{y}; omit for tile.openstreetmap.org",
+    )
+    serve.add_argument(
+        "--tile-attribution", help="The tile provider's credit (HTML), shown beside the OpenStreetMap credit"
+    )
+    serve.add_argument("--tile-max-zoom", type=int, help="The deepest zoom the tile provider serves (default 19)")
+    serve.add_argument(
+        "--pmtiles-url",
+        help="A vector PMTiles base map (Protomaps basemap): the maps draw it with MapLibre GL JS, raster tiles the fallback",
+    )
     coverage = subparsers.add_parser(
         "coverage-map", help="Draw the SVG map of Europe with the covered countries shaded"
     )
@@ -437,6 +449,10 @@ def main(argv: list[str] | None = None) -> int:
             args.goatcounter,
             tuple(args.cors_origin),
             args.site_url,
+            args.tile_url,
+            args.tile_attribution,
+            args.tile_max_zoom,
+            args.pmtiles_url,
         )
     if args.command == "coverage-map":
         from dayhike.coverage import coverage_map
@@ -729,11 +745,15 @@ def _serve(
     goatcounter: str | None,
     cors_origins: tuple[str, ...],
     site_url: str | None = None,
+    tile_url: str | None = None,
+    tile_attribution: str | None = None,
+    tile_max_zoom: int | None = None,
+    pmtiles_url: str | None = None,
 ) -> int:
     try:
         import uvicorn
 
-        from dayhike.web import create_app
+        from dayhike.web import BaseMap, create_app
     except ImportError:
         print("the web demo needs its extra: uv sync --extra web", file=sys.stderr)
         return 1
@@ -751,6 +771,7 @@ def _serve(
         def drive_client(max_hours: float) -> HighwayDriveTimeClient:
             return HighwayDriveTimeClient(max_hours, snaps)
 
+    tiles = {"url": tile_url, "attribution": tile_attribution, "max_zoom": tile_max_zoom, "pmtiles": pmtiles_url}
     try:
         app = create_app(
             serving,
@@ -759,6 +780,7 @@ def _serve(
             goatcounter=goatcounter,
             cors_origins=cors_origins,
             site_url=site_url,
+            basemap=BaseMap(**{key: value for key, value in tiles.items() if value is not None}),
         )
     except ValueError as exc:
         print(exc, file=sys.stderr)
