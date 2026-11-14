@@ -1,0 +1,10 @@
+# All of Europe, as the live Catalog: one Geofabrik continent extract.
+# What coverage-map draws without --region.
+label = "Europe"
+extracts = ["https://download.geofabrik.de/europe-latest.osm.pbf"]
+bounds = { south = 32.6, west = -31.3, north = 71.2, east = 46.4 }
+
+[map]
+# Azores and Madeira too.
+view = { west = -32.0, south = 32.0, east = 47.0, north = 72.0 }
+centre = { lon = 10.0, lat = 52.0 }

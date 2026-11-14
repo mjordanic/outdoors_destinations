@@ -1,0 +1,18 @@
+# The Alps and the Dinarides: the eight extracts of the first Catalog (the PRD regions).
+# What fetch-extracts, fetch-dem, fetch-landcover and fetch-climate read without --region.
+label = "the Alps and the Dinarides"
+extracts = [
+    "https://download.geofabrik.de/europe/croatia-latest.osm.pbf",
+    "https://download.geofabrik.de/europe/slovenia-latest.osm.pbf",
+    "https://download.geofabrik.de/europe/bosnia-herzegovina-latest.osm.pbf",
+    "https://download.geofabrik.de/europe/montenegro-latest.osm.pbf",
+    "https://download.geofabrik.de/europe/austria-latest.osm.pbf",
+    "https://download.geofabrik.de/europe/switzerland-latest.osm.pbf",
+    "https://download.geofabrik.de/europe/italy/nord-est-latest.osm.pbf",
+    "https://download.geofabrik.de/europe/germany/bayern-latest.osm.pbf",
+]
+bounds = { south = 41.8, west = 5.9, north = 50.6, east = 20.4 }
+
+[map]
+view = { west = 4.0, south = 40.5, east = 22.0, north = 51.5 }
+centre = { lon = 13.0, lat = 46.0 }
