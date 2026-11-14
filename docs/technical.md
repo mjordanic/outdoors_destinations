@@ -1379,9 +1379,9 @@ Survey"). It is bare earth, so no canopy floor is applied. Each tile is named by
 its northwest corner (`USGS_1_n40w106.tif` holds 39-40 °N, 106-105 °W), runs 6
 cells past every 1° edge and is NAD83, read as it is (about 1 m off WGS 84).
 Its tiles may sit in the same `--dem` directory as one world source's: every
-DEM step reads a point from the tile of its own 1° cell, the 3DEP one where the
-directory has it, else the world source's, and never from a neighbour's
-overlap. `sample-dem` records in `dayhikes.dem_source` the register ids of the
+DEM step reads a point from the tiles of its own 1° cell, the 3DEP one where the
+directory has it and it holds data there (not its nodata, −999999), else the
+world source's, and never from a neighbour's overlap. `sample-dem` records in `dayhikes.dem_source` the register ids of the
 DEMs each DayHike was read from (`fabdem`, `copernicus-glo30`, `usgs-3dep`;
 two, comma-separated, for a hike crossing the edge of 3DEP), and writes
 `usgs_3dep_attribution` into `geometry_meta` while the directory holds 3DEP

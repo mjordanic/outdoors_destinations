@@ -193,13 +193,40 @@ def dem_sources_of(raster_dir: Path | str) -> tuple[DemSource, ...]:
     return tuple(source for source in found if source.regional) + tuple(world)
 
 
-def dem_tiles(raster_dir: Path | str) -> dict[str, tuple[DemSource, Path]]:
+def dem_tiles(raster_dir: Path | str) -> dict[str, tuple[tuple[DemSource, Path], ...]]:
     """Each 1° tile id the DEM tiles in raster_dir cover, with the source and
-    file it is read from: a regional source's tile where there is one."""
-    tiles: dict[str, tuple[DemSource, Path]] = {}
-    for source in reversed(dem_sources_of(raster_dir)):
-        tiles.update({tile_id: (source, path) for tile_id, path in source.tiles_in(Path(raster_dir)).items()})
+    file of every tile for it, in the order they are read: a regional
+    source's first, then the world source's (``read_in_order``)."""
+    tiles: dict[str, tuple[tuple[DemSource, Path], ...]] = {}
+    for source in dem_sources_of(raster_dir):
+        for tile_id, path in source.tiles_in(Path(raster_dir)).items():
+            tiles[tile_id] = (*tiles.get(tile_id, ()), (source, path))
     return tiles
+
+
+def read_in_order(
+    files: Sequence[tuple[DemSource, Path]],
+    count: int,
+    read: Callable[[DemSource, Path, list[int]], Sequence[float | None]],
+) -> tuple[list[float | None], list[DemSource | None]]:
+    """The heights of ``count`` points of one 1° cell, and the source of each.
+
+    Each point is read from the first of the cell's ``files`` with data under
+    it: ``read(source, path, at)`` gives the heights of the points at
+    indices ``at`` on that file, None at nodata. So a point on a nodata cell
+    of a regional tile reads the world source's tile (ADR-0063).
+    """
+    heights: list[float | None] = [None] * count
+    read_from: list[DemSource | None] = [None] * count
+    missing = list(range(count))
+    for source, path in files:
+        if not missing:
+            break
+        for index, value in zip(missing, read(source, path, missing), strict=True):
+            if value is not None:
+                heights[index], read_from[index] = value, source
+        missing = [index for index in missing if heights[index] is None]
+    return heights, read_from
 
 
 def tiles_covering(bounds: Bounds) -> list[str]:
@@ -352,8 +379,8 @@ def sample_elevations_and_sources(
 ) -> tuple[list[float | None], list[DemSource | None]]:
     """``sample_elevations``, and the source each height was read from (None uncovered).
 
-    A point reads the tile of its 1° cell (``dem_tiles``): USGS 3DEP's where
-    the directory has one, else the world source's.
+    A point reads the tiles of its 1° cell (``dem_tiles``): USGS 3DEP's where
+    the directory has one and it has data there, else the world source's.
     """
     import rasterio
 
@@ -373,19 +400,22 @@ def sample_elevations_and_sources(
     for tile_id, indices in buckets.items():
         if tile_id not in tiles:
             continue
-        source, path = tiles[tile_id]
-        with rasterio.open(path) as dataset:
-            coords = _tile_coords(dataset, [points[index] for index in indices])
-            for index, value in zip(indices, _read_heights(dataset, coords), strict=True):
-                out[index] = value
-                read_from[index] = None if value is None else source
-            if shares is not None and source is COPERNICUS:
-                near = [k for k, index in enumerate(indices) if shares[index] > 0 and out[index] is not None]
-                if near:
-                    floors = _canopy_floor(dataset, *np.array([coords[k] for k in near]).T)
-                    for k, floor in zip(near, floors.tolist(), strict=True):
-                        index = indices[k]
-                        out[index] -= shares[index] * (out[index] - floor)
+
+        def read(source: DemSource, path: Path, at: list[int]) -> list[float | None]:
+            with rasterio.open(path) as dataset:
+                coords = _tile_coords(dataset, [points[indices[k]] for k in at])
+                values = _read_heights(dataset, coords)
+                if shares is not None and source is COPERNICUS:
+                    near = [j for j, k in enumerate(at) if shares[indices[k]] > 0 and values[j] is not None]
+                    if near:
+                        floors = _canopy_floor(dataset, *np.array([coords[j] for j in near]).T)
+                        for j, floor in zip(near, floors.tolist(), strict=True):
+                            values[j] -= shares[indices[at[j]]] * (values[j] - floor)
+            return values
+
+        heights, sources = read_in_order(tiles[tile_id], len(indices), read)
+        for index, value, source in zip(indices, heights, sources, strict=True):
+            out[index], read_from[index] = value, source
     return out, read_from
 
 
@@ -424,11 +454,11 @@ class PointHeights:
     of their ends (ADR-0048). It keeps the last ``POINT_TILES_OPEN`` tiles
     open, in each process apart, and every height it read."""
 
-    def __init__(self, raster_dir: Path | str, tiles: dict[str, tuple[DemSource, Path]]) -> None:
+    def __init__(self, raster_dir: Path | str, tiles: dict[str, tuple[tuple[DemSource, Path], ...]]) -> None:
         self.raster_dir = Path(raster_dir)
         self.tiles = tiles
         self._pid: int | None = None
-        self._open: dict[str, object] = {}
+        self._open: dict[Path, object] = {}
         self._read: dict[tuple[float, float], float | None] = {}
 
     def __call__(self, points: Sequence[tuple[float, float]]) -> list[float | None]:
@@ -436,24 +466,24 @@ class PointHeights:
             self._pid, self._open, self._read = os.getpid(), {}, {}
         for point in points:
             if point not in self._read:
-                dataset = self._dataset(fabdem_tile_id(*point))
-                self._read[point] = (
-                    None if dataset is None else _read_heights(dataset, _tile_coords(dataset, [point]))[0]
-                )
+                files = self.tiles.get(fabdem_tile_id(*point), ())
+                self._read[point] = read_in_order(files, 1, lambda _source, path, _at: self._heights(path, point))[0][0]
         return [self._read[point] for point in points]
 
-    def _dataset(self, tile_id: str):
-        if tile_id in self._open:
-            self._open[tile_id] = self._open.pop(tile_id)  # the newest
-            return self._open[tile_id]
+    def _heights(self, path: Path, point: tuple[float, float]) -> list[float | None]:
+        dataset = self._dataset(path)
+        return _read_heights(dataset, _tile_coords(dataset, [point]))
+
+    def _dataset(self, path: Path):
+        if path in self._open:
+            self._open[path] = self._open.pop(path)  # the newest
+            return self._open[path]
         import rasterio
 
-        dataset = rasterio.open(self.tiles[tile_id][1]) if tile_id in self.tiles else None
+        dataset = rasterio.open(path)
         if len(self._open) >= POINT_TILES_OPEN:
-            oldest = self._open.pop(next(iter(self._open)))
-            if oldest is not None:
-                oldest.close()
-        self._open[tile_id] = dataset
+            self._open.pop(next(iter(self._open))).close()
+        self._open[path] = dataset
         return dataset
 
 
@@ -528,8 +558,8 @@ def sample_dem(
 ) -> int:
     """Write DEM elevations onto covered GeometryStore vertices and Catalog stats.
 
-    The tiles in raster_dir name the sources: USGS 3DEP where it has a tile,
-    else the one world source (``dem_tiles``). Copernicus GLO-30 needs the
+    The tiles in raster_dir name the sources: USGS 3DEP where it has a tile
+    with data, else the one world source (``read_in_order``). Copernicus GLO-30 needs the
     WorldCover tiles in ``landcover_dir`` to read the ground under trees
     (``sample_elevations``). Copernicus GLO-30 and USGS 3DEP record their
     attribution in the GeometryStore while the directory holds their tiles;

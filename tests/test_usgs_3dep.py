@@ -138,16 +138,31 @@ def test_3dep_nodata_reads_as_uncovered(tmp_path: Path) -> None:
     assert sample_elevations(tmp_path, [(39.5, -105.9), (39.5, -105.1)]) == [None, 2000.0]
 
 
+def test_3dep_nodata_reads_the_world_tile_of_the_point(tmp_path: Path) -> None:
+    # A 3DEP tile reaching past the border holds nodata there; the world tile covers it.
+    _write_3dep_tile(tmp_path, "N39W106", 2000.0, nodata_west_half=True)
+    _write_world_tile(tmp_path / "N39W106_FABDEM_V1-2.tif", 2010.0, west=-106.01, south=38.99, east=-104.99, north=40.01)
+    points = [(39.5, -105.9), (39.5, -105.1)]
+
+    heights, sources = sample_elevations_and_sources(tmp_path, points)
+    assert heights == [2010.0, 2000.0]
+    assert sources == [FABDEM, USGS_3DEP]
+    point = point_heights(tmp_path)
+    assert point is not None and point(points) == [2010.0, 2000.0]
+    lat, lon = np.array(points).T
+    assert dem_heights(tmp_path, lat, lon).tolist() == [2010.0, 2000.0]
+
+
 def test_3dep_is_read_where_it_has_a_tile_and_the_world_source_elsewhere(tmp_path: Path) -> None:
     _write_3dep_tile(tmp_path, "N39W106", 2000.0)
     _write_world_tile(tmp_path / "Copernicus_DSM_COG_10_N39_00_W106_00_DEM.tif", 2010.0, west=-106.01, south=38.99, east=-104.99, north=40.01)
     _write_world_tile(tmp_path / "Copernicus_DSM_COG_10_N40_00_W106_00_DEM.tif", 3010.0, west=-106.01, south=39.99, east=-104.99, north=41.01)
     _write_world_tile(tmp_path / "Copernicus_DSM_COG_10_N45_00_E015_00_DEM.tif", 987.0, **EUROPE_BOX)
 
-    assert {tile: source for tile, (source, _) in dem_tiles(tmp_path).items()} == {
-        "N39W106": USGS_3DEP,
-        "N40W106": COPERNICUS,
-        "N45E015": COPERNICUS,
+    assert {tile: [source for source, _ in files] for tile, files in dem_tiles(tmp_path).items()} == {
+        "N39W106": [USGS_3DEP, COPERNICUS],
+        "N40W106": [COPERNICUS],
+        "N45E015": [COPERNICUS],
     }
     heights, sources = sample_elevations_and_sources(tmp_path, [(39.5, -105.5), (40.5, -105.5), (45.2, 15.1), (0.0, 0.0)])
     assert heights == [2000.0, 3010.0, 987.0, None]
