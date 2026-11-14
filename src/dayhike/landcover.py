@@ -360,24 +360,22 @@ def _refresh_catalog_fractions(
     try:
         for name in LANDCOVER_FEATURE_NAMES:
             ensure_column(catalog, "feature_vectors", name, "REAL")
-        by_hike: dict[int, list[int]] = {dayhike_id: [] for dayhike_id in hike_ids}
+        by_hike: dict[int, list[tuple[int, float, float]]] = {dayhike_id: [] for dayhike_id in hike_ids}
         ids = list(hike_ids)
         for start in range(0, len(ids), _HIKE_IN_CHUNK):
             chunk = ids[start : start + _HIKE_IN_CHUNK]
             placeholders = ",".join("?" * len(chunk))
-            for dayhike_id, code in store.execute(
-                "SELECT dayhike_id, landcover FROM vertices "
+            for dayhike_id, code, lat, lon in store.execute(
+                "SELECT dayhike_id, landcover, latitude, longitude FROM vertices "
                 f"WHERE dayhike_id IN ({placeholders}) ORDER BY dayhike_id, seq",
                 chunk,
             ):
-                if code is None:
-                    continue
-                by_hike[int(dayhike_id)].append(int(code))
-        updates = [
-            (*_landcover_fractions(codes), dayhike_id)
-            for dayhike_id, codes in by_hike.items()
-            if codes
-        ]
+                by_hike[int(dayhike_id)].append((code or 0, lat, lon))
+        updates = []
+        for dayhike_id, rows in by_hike.items():
+            codes, lat, lon = np.array(rows, dtype=float).reshape(-1, 3).T
+            if np.any(codes > 0):
+                updates.append((*_landcover_fractions(codes, lat, lon), dayhike_id))
         catalog.executemany(
             "UPDATE feature_vectors SET tree_fraction = ?, shrub_fraction = ?, "
             "grass_fraction = ?, bare_fraction = ?, snow_fraction = ? "
@@ -391,13 +389,31 @@ def _refresh_catalog_fractions(
 
 
 def _landcover_fractions(
-    codes: Sequence[int],
+    codes: np.ndarray, lat: np.ndarray, lon: np.ndarray
 ) -> tuple[float, float, float, float, float]:
-    n = len(codes)
-    return (
-        codes.count(_TREE) / n,
-        codes.count(_SHRUB) / n,
-        codes.count(_GRASS) / n,
-        codes.count(_BARE) / n,
-        codes.count(_SNOW) / n,
-    )
+    """Tree, shrub, grass, bare and snow shares of a line by length.
+
+    ``codes`` is the WorldCover class of each vertex of the line (0 where it
+    has none). Each vertex stands for half of its two segments; vertices
+    without a class are left out and the others share the length. Needs at
+    least one classified vertex.
+    """
+    codes = np.asarray(codes)
+    weights = _vertex_weights_m(np.asarray(lat, dtype=float), np.asarray(lon, dtype=float))
+    classified = codes > 0
+    codes, weights = codes[classified], weights[classified]
+    if weights.sum() <= 0:  # every classified vertex on one spot
+        weights = np.ones(len(codes))
+    total = weights.sum()
+    return tuple(float(weights[codes == code].sum() / total) for code in (_TREE, _SHRUB, _GRASS, _BARE, _SNOW))
+
+
+def _vertex_weights_m(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
+    """Half the haversine metres of the segments on either side of each vertex."""
+    phi, lam = np.radians(lat), np.radians(lon)
+    a = np.sin(np.diff(phi) / 2) ** 2 + np.cos(phi[:-1]) * np.cos(phi[1:]) * np.sin(np.diff(lam) / 2) ** 2
+    halves = EARTH_RADIUS_M * np.arcsin(np.sqrt(a))
+    weights = np.zeros(len(lat))
+    weights[:-1] += halves
+    weights[1:] += halves
+    return weights
