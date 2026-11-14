@@ -2555,9 +2555,10 @@ next to the DayHikes. The OSM extracts are downloaded from Geofabrik GmbH
 Catalog, the GeometryStore and the web demo's serving export are derivative
 databases of OpenStreetMap: when one is used publicly (the web demo does), it
 is offered under the ODbL, together with this code as the method that makes
-it. The demo's base map is OpenStreetMap's own tiles
+it. The demo's base map is by default OpenStreetMap's own tiles
 (https://operations.osmfoundation.org/policies/tiles/), used under the OSM
-Foundation's tile usage policy. Its place search reads GeoNames towns and
+Foundation's tile usage policy; `docs/deploy.md` section 3 sets another tile
+provider or a vector base map (ADR-0061). Its place search reads GeoNames towns and
 villages (GeoNames, https://www.geonames.org/, CC BY 4.0) when the
 export has `places.sqlite`, and Nominatim
 (https://operations.osmfoundation.org/policies/nominatim/, under the OSM
