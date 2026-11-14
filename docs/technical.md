@@ -1431,7 +1431,7 @@ Measure (its permanent-water class). CHELSA V2.1 normals are 1981–2010.
    `vertices.landcover` for vertices that fall on a downloaded tile.
    Uncovered vertices stay NULL. It then writes Catalog
    `tree_fraction` / `shrub_fraction` / `grass_fraction` / `bare_fraction` /
-   `snow_fraction` (each GeometryStore vertex counted once; crop, built-up,
+   `snow_fraction` (by length, ADR-0059; crop, built-up,
    water, wetland, and moss stay in the leftover share).
 2. `sample-climate` finds each GeometryStore vertex's climate cell once (the
    36 rasters share one grid), reads each raster once, one at a time, keeps

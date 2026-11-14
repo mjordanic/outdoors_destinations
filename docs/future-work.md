@@ -154,7 +154,7 @@ a long segment is never read. Measured on the notebook 05 region (400 of its
 
 | Method | Share of the walk misassigned: mean / p95 / worst | Points read |
 | --- | --- | --- |
-| Vertex count (today) | 2.7% / 8.0% / 14.4% | 1× vertices |
+| Vertex count (before ADR-0059) | 2.7% / 8.0% / 14.4% | 1× vertices |
 | Vertex weighted by half its two segments | 1.3% / 3.9% / 11.7% | 1× (no new reads) |
 | Read every 25 m along segments | 1.2% / 4.0% / 7.9% | 1.3× |
 
