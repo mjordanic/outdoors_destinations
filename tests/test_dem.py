@@ -405,9 +405,10 @@ def test_copernicus_under_trees_reads_the_ground_below_the_canopy(tmp_path: Path
     # The hill and the dip stay; the tree tops go.
     assert np.abs(raw[forest] - ground[forest]).max() == pytest.approx(18.0, abs=0.01)
     assert np.abs(floor[forest] - ground[forest]).max() < 4.0
-    # The climb drops most single tree tops as DEM spikes (a run of up to 60 m), but not all of them.
-    assert elevation_gain(lat[forest], lon[forest], raw[forest]) > elevation_gain(
-        lat[forest], lon[forest], ground[forest]
+    # The climb drops most single tree tops as DEM spikes (a run of up to 60 m) and reads the
+    # rest as a noisy stretch at its moving average (ADR-0062), so it hardly sees them; the heights do.
+    assert elevation_gain(lat[forest], lon[forest], raw[forest]) == pytest.approx(
+        elevation_gain(lat[forest], lon[forest], ground[forest]), abs=5.0
     )
     assert elevation_gain(lat[forest], lon[forest], floor[forest]) == pytest.approx(
         elevation_gain(lat[forest], lon[forest], ground[forest]), abs=5.0

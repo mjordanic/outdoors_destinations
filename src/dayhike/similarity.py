@@ -64,6 +64,10 @@ GAIN_HYSTERESIS_M = 10.0  # a climb or descent counts once it reaches this; DEM 
 SPIKE_RISE_M = 10.0  # a vertex at least this far above (or below) both neighbours ...
 SPIKE_GRADE = 0.25  # ... and this steep on both sides is a DEM spike, not the trail
 SPIKE_RUN_M = 60.0  # a spike may be a run of vertices this long: two DEM cells (a path along a cliff or shore)
+NOISY_MEAN_M = 2.5  # where heights stray this far on average from their moving average ...
+NOISY_REACH_M = 200.0  # ... this far either side (a path cut into a cliff or along a steep shore) ...
+NOISY_WINDOW_M = 90.0  # ... they are that moving average, over this length: three DEM cells
+NOISY_STEP_M = 10.0  # how far the heights stray is read at the vertices and this often between them
 STEEPNESS_STEP_M = 50.0  # elevation resampled this often along the walk
 STEEPEST_KM_WINDOW_M = 1_000.0
 CORRIDOR_M = 100.0  # amenity along the DayHike (GLOSSARY.md Corridor)
@@ -249,6 +253,7 @@ _FACTS_VERSION = hashlib.sha256(
     json.dumps(
         [
             FACT_COLUMNS, PROFILE_POINTS, PROFILE_RANGE_FLOOR_M, GAIN_HYSTERESIS_M, SPIKE_RISE_M, SPIKE_GRADE, SPIKE_RUN_M,
+            NOISY_MEAN_M, NOISY_REACH_M, NOISY_WINDOW_M, NOISY_STEP_M,
             STEEPNESS_STEP_M, STEEPEST_KM_WINDOW_M, CORRIDOR_M, PEAK_SUMMITED_M, PEAKS_AROUND_M,
             TRAILHEAD_M, SEARCH_STEP_M, WATER_SOURCE_KINDS, SOLAR_ASPECT_POINTS,
             SOLAR_ASPECT_OFFSET_ARCSEC, SOLAR_ASPECT_MIN_SLOPE_DEG, SOLAR_ASPECT_FLAT, WATERSIDE_M,
@@ -1504,11 +1509,12 @@ def _one_way_climb_and_descent(lat: np.ndarray, lon: np.ndarray, ele: np.ndarray
     ``SPIKE_GRADE`` into it and out of it (the ends stay). Each drop tests the
     new last kept vertex again, so several can drop in a row. A path along a
     steep shore or cliff reads cells of the water or the slope beside it that
-    way. Then a change counts only once it moves
-    ``GAIN_HYSTERESIS_M`` from the last counted elevation, so DEM jitter
-    between vertices does not add up on long flat or cross-slope walks; the
-    last vertex counts whatever it moved, so climb less descent is the end's
-    height less the start's.
+    way. Where it reads them for longer, the kept heights are noisy: there
+    each is its moving average (``_smooth_noisy``). Then a change counts only
+    once it moves ``GAIN_HYSTERESIS_M`` from the last counted elevation, so DEM
+    jitter between vertices does not add up on long flat or cross-slope walks;
+    the last vertex counts whatever it moved, so climb less descent is the
+    end's height less the start's (the ends are never smoothed).
     """
     known = np.isfinite(ele)
     along = np.concatenate([[0.0], np.cumsum(_step_m(lat, lon))])
@@ -1540,6 +1546,7 @@ def _one_way_climb_and_descent(lat: np.ndarray, lon: np.ndarray, ele: np.ndarray
             del kept_at[start:], kept[start:]
         kept_at.append(here_at)
         kept.append(here)
+    kept = _smooth_noisy(kept_at, kept)
     climb = descent = 0.0
     last = kept[0]
     step = GAIN_HYSTERESIS_M
@@ -1552,6 +1559,53 @@ def _one_way_climb_and_descent(lat: np.ndarray, lon: np.ndarray, ele: np.ndarray
             last = metres
     end = kept[-1]
     return climb + max(end - last, 0.0), descent + max(last - end, 0.0)
+
+
+def _smooth_noisy(at: Sequence[float], height: Sequence[float]) -> list[float]:
+    """Heights (metres) at ``at`` (metres along the walk) with the noisy stretches smoothed.
+
+    The heights are read as a line between the vertices. Its moving average at
+    a place is its mean over ``NOISY_WINDOW_M`` centred there (less near an
+    end, so the ends keep their heights and a straight slope is its own
+    average). A vertex is noisy where the line strays ``NOISY_MEAN_M`` or more
+    on average from its moving average over ``NOISY_REACH_M`` either side; it
+    takes its moving average, the others keep their heights. A path cut into a
+    cliff, along a levada or a steep lake shore reads the DEM cells above and
+    below it in turn for hundreds of metres; a real climb, even a steep one,
+    seldom strays that far from its own moving average (ADR-0062).
+    """
+    if len(height) < 3 or at[-1] <= at[0]:
+        return list(height)
+    at_m, metres = np.asarray(at, dtype=float), np.asarray(height, dtype=float)
+    first, last = at_m[0], at_m[-1]
+
+    def moving_average(x: np.ndarray) -> np.ndarray:
+        half = np.minimum(NOISY_WINDOW_M / 2, np.minimum(x - first, last - x))
+        return _line_means(at_m, metres, x - half, x + half)
+
+    # How far the line strays, at the vertices and every NOISY_STEP_M between them.
+    points = np.union1d(at_m, np.arange(first, last, NOISY_STEP_M))
+    away = np.abs(_line_means(at_m, metres, points, points) - moving_average(points))
+    stray = _line_means(points, away, np.maximum(at_m - NOISY_REACH_M, first), np.minimum(at_m + NOISY_REACH_M, last))
+    return np.where(stray >= NOISY_MEAN_M, moving_average(at_m), metres).tolist()
+
+
+def _line_means(at: np.ndarray, values: np.ndarray, start: np.ndarray, end: np.ndarray) -> np.ndarray:
+    """Mean of the line through (``at``, ``values``) from each ``start`` to its ``end``
+    (all within ``at``'s range); the line's value where the two are equal."""
+    step = np.diff(at)
+    area = np.concatenate([[0.0], np.cumsum(step * (values[:-1] + values[1:]) / 2)])
+
+    def area_to(x: np.ndarray) -> np.ndarray:
+        i = np.clip(np.searchsorted(at, x, side="right") - 1, 0, len(at) - 2)
+        into = x - at[i]
+        slope = np.divide(values[i + 1] - values[i], step[i], out=np.zeros(len(i)), where=step[i] > 0)
+        return area[i] + into * (values[i] + slope * into / 2)
+
+    width = end - start
+    return np.where(
+        width > 0, (area_to(end) - area_to(start)) / np.where(width > 0, width, 1.0), np.interp(start, at, values)
+    )
 
 
 def profile_shape(

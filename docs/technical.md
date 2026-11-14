@@ -561,7 +561,7 @@ way instead of with its way back.
 | Measure | Fact | Kind | Constant |
 | --- | --- | --- | --- |
 | `length` | Catalog length | ratio | floor 1 km |
-| `elevation_gain` | metres climbed, larger of climb and descent (direction-free); DEM spikes are dropped: walking the vertices in order, a kept vertex, or a run of kept vertices up to 60 m long, all 10 m+ above (or all below) both the kept vertex before it and the next vertex, at 25 %+ grade into it and out of it, is dropped, and the test repeats on the new last kept vertex (the ends stay); a path along a steep shore or cliff reads the water or the slope beside it that way; then a change counts once it moves 10 m and the end counts what it moved; climb and descent are the means of the walk both ways (ADR-0048, lower end) | ratio | floor 100 m |
+| `elevation_gain` | metres climbed, larger of climb and descent (direction-free); DEM spikes are dropped: walking the vertices in order, a kept vertex, or a run of kept vertices up to 60 m long, all 10 m+ above (or all below) both the kept vertex before it and the next vertex, at 25 %+ grade into it and out of it, is dropped, and the test repeats on the new last kept vertex (the ends stay); a path along a steep shore or cliff reads the water or the slope beside it that way; where the kept heights, read as a line, stray 2.5 m+ on average over 200 m either side from their 90 m moving average (less near an end, so the ends stay), they are that moving average (ADR-0062); then a change counts once it moves 10 m and the end counts what it moved; climb and descent are the means of the walk both ways (ADR-0048, lower end) | ratio | floor 100 m |
 | `difficulty` | Difficulty as SAC rank 1–6 | tolerance | D = 3 |
 | `highest`, `lowest` | highest and lowest point | tolerance | D = 400 m |
 | `profile` | ProfileShape (64 points) | profile | — |
@@ -765,6 +765,10 @@ among random pairs, not a probability fitted to human judgement.
 - Elevation gain against 2,973 OSM `ascent` tags: median error 12 %, 5 % of
   hikes over 1.5 times the tag, with known failures on cliff-side routes
   ([future work §12](future-work.md#12-elevation-gain-on-cliff-side-and-gorge-routes)).
+  Against the 11,749 DayHikes with both `ascent` and `descent` tags: median
+  error 10.4 %, 2.8 % over 1.5 times the larger tag. On 26 bisse, Suone, canal
+  and steep lake-shore relations (`tests/fixtures/cliff_canal_gain.json`):
+  median error 9.8 %, 16.3 % before smoothing the noisy stretches (ADR-0062).
 - Code checks: identity, symmetry and reversed-direction checks in notebook 05,
   famous summit heights and golden rankings in `tests/test_golden.py`, and the
   byte-for-byte rebuild in `tests/test_pipeline_rebuild.py`.
@@ -1377,7 +1381,7 @@ still FABDEM, and its credit and the non-commercial limit still apply.
    or NULL.
 2. Recomputes Catalog `feature_vectors.elevation_min_m` / `elevation_max_m` /
    `elevation_gain_m` for DayHikes that got DEM samples (the larger of climb
-   and descent after the spike and 10 m rules of `elevation_gain` under
+   and descent after the spike, noisy-stretch and 10 m rules of `elevation_gain` under
    **Measures**, not max−min).
 
 It does not add or drop DayHikes, does not change amenities, and does not
