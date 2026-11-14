@@ -338,7 +338,10 @@ A code change needs only a new web image: build it on the current data image
 new `facts_version` tag, then the web image on it.
 `gcloud run services update-traffic dayhike --region europe-west1 --to-revisions REVISION=100`
 goes back to an earlier revision (`gcloud run revisions list --service dayhike --region europe-west1`
-lists them); the image it runs must still be kept (section 3).
+lists them); the image it runs must still be kept (section 3). That pins the
+traffic to the revision: a later `gcloud run deploy` by hand gets none until
+`gcloud run services update-traffic dayhike --region europe-west1 --to-latest`
+(the deploy workflow does this itself).
 
 ## 8. A loading shell on a static host (not done yet)
 
@@ -419,15 +422,15 @@ On a push to `main`, or by hand (`workflow_dispatch` on `main`), the workflow:
    (`google-github-actions/auth`): the run's GitHub OIDC token is traded for a
    short-lived Google token, so no key or secret is stored anywhere;
 3. builds the web image in Cloud Build (`web/cloudbuild.yaml`) on top of the
-   current data image, tagged with the commit SHA. The last web image built
-   there (`web:latest`) is the layer cache, so an unchanged `uv.lock` reuses the
-   dependency layer. Cloud Build pushes one version per image, not the three of
+   current data image, tagged with the commit SHA. Cloud Build pushes one version per image, not the three of
    `docker buildx` (section 3), so the cleanup policy keeps the last 9 deploys;
 4. deploys it as a new revision with `--no-traffic` and a `c-<sha>` tag, which
    gives the candidate its own URL while visitors stay on the current revision;
 5. runs `web/smoke.py --url` against that URL. A failure stops the job here:
    the candidate keeps its tag and no traffic, and the live revision is untouched;
-6. moves all traffic to the candidate's revision, then removes its tag.
+6. checks that the candidate is still the latest revision, sends all traffic to
+   the latest revision (so a later `gcloud run deploy` by hand, section 7, takes
+   the traffic as usual), then removes the candidate's tag.
 
 The deploy changes only the image: memory, CPU, scaling and the environment
 variables stay as section 3 set them. A data refresh is still built and pushed by

@@ -39,7 +39,6 @@ jobs:
       REGION: ${{ vars.GCP_REGION }}
       SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
       IMAGE: ${{ vars.DAYHIKE_IMAGE_REPO }}/web:${{ github.sha }}
-      CACHE_IMAGE: ${{ vars.DAYHIKE_IMAGE_REPO }}/web:latest
       DATA_IMAGE: ${{ vars.DAYHIKE_DATA_IMAGE }}
     steps:
       - uses: actions/checkout@v4
@@ -55,7 +54,7 @@ jobs:
         run: |
           gcloud builds submit --project "$PROJECT" --region "$REGION" \
             --config web/cloudbuild.yaml \
-            --substitutions "_IMAGE=$IMAGE,_DATA_IMAGE=$DATA_IMAGE,_CACHE_IMAGE=$CACHE_IMAGE" .
+            --substitutions "_IMAGE=$IMAGE,_DATA_IMAGE=$DATA_IMAGE" .
 
       - name: Deploy a candidate without traffic
         id: candidate
@@ -81,8 +80,11 @@ jobs:
           TAG: ${{ steps.candidate.outputs.tag }}
           REVISION: ${{ steps.candidate.outputs.revision }}
         run: |
+          latest=$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
+            --format 'value(status.latestCreatedRevisionName)')
+          test "$latest" = "$REVISION"
           gcloud run services update-traffic "$SERVICE" --project "$PROJECT" --region "$REGION" \
-            --to-revisions "$REVISION=100"
+            --to-latest
           gcloud run services update-traffic "$SERVICE" --project "$PROJECT" --region "$REGION" \
             --remove-tags "$TAG"
           echo "Promoted $REVISION" >> "$GITHUB_STEP_SUMMARY"

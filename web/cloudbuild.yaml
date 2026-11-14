@@ -1,10 +1,9 @@
 # Cloud Build config for the web image, submitted by .github/workflows/deploy.yml
 # (docs/deploy.md, section 9). It builds web/Dockerfile on top of the data image, so only
-# the code layers are new; _CACHE_IMAGE (the last web image built here) lends its layers
-# as cache, so an unchanged uv.lock reuses the dependency layer too.
+# the code layers are new.
 #
 #   gcloud builds submit --config web/cloudbuild.yaml \
-#     --substitutions _IMAGE=REPO/web:SHA,_DATA_IMAGE=REPO/data:FACTS_VERSION,_CACHE_IMAGE=REPO/web:latest .
+#     --substitutions _IMAGE=REPO/web:SHA,_DATA_IMAGE=REPO/data:FACTS_VERSION .
 steps:
   - name: gcr.io/cloud-builders/docker
     env: [DOCKER_BUILDKIT=1]
@@ -12,10 +11,7 @@ steps:
       - build
       - --file=web/Dockerfile
       - --build-arg=DATA_IMAGE=${_DATA_IMAGE}
-      - --build-arg=BUILDKIT_INLINE_CACHE=1
-      - --cache-from=${_CACHE_IMAGE}
       - --tag=${_IMAGE}
-      - --tag=${_CACHE_IMAGE}
       - .
-images: [$_IMAGE, $_CACHE_IMAGE]
+images: [$_IMAGE]
 timeout: 1800s
