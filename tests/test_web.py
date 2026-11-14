@@ -1370,3 +1370,19 @@ def test_without_the_site_url_robots_and_the_sitemap_name_the_address_asked(data
     assert "Sitemap: http://localhost:8080/sitemap.xml" in client.get("/robots.txt").text
     assert "<loc>http://localhost:8080/about.html</loc>" in client.get("/sitemap.xml").text
     assert client.head("/robots.txt").status_code == 200 and client.head("/sitemap.xml").status_code == 200
+
+
+def test_an_unknown_page_is_an_html_not_found_page(client: TestClient) -> None:
+    response = client.get("/nonexistent-page")
+
+    assert response.status_code == 404
+    assert response.headers["content-type"].startswith("text/html")
+    assert "Page not found" in response.text
+    assert 'href="/"' in response.text
+
+
+def test_an_unknown_api_path_stays_json(client: TestClient) -> None:
+    response = client.get("/api/nonexistent")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Not Found"}
