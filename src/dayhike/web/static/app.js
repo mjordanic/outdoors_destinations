@@ -359,10 +359,16 @@ async function gpxText(hike) {
   if (back) tracks.push(gpxTrack(`${hike.name}: way back to the start (${fmt.km(hike.way_back.m)}, ${WAY_BACK[hike.way_back.kind]})`, back.points, back.heights));
   const { fabdem, copernicus } = state.info?.attribution ?? {};
   const dem = hike.elevation && (fabdem ?? copernicus), gap = gpxGap(hike);
+  // A hike from an external source (ADR-0062) is credited to it under its licence, not to OpenStreetMap.
+  const external = hike.source && hike.source.id !== "osm" && hike.source.name ? hike.source : null;
+  const credit = external ? `Route data: ${escapeHtml(external.name)}, ${escapeHtml(external.licence ?? "")}.` : "Route data © OpenStreetMap contributors, ODbL 1.0.";
+  const copyright = external
+    ? `<copyright author="${escapeHtml(external.name)}">${external.licence_url ? `<license>${escapeHtml(external.licence_url)}</license>` : ""}</copyright>`
+    : '<copyright author="OpenStreetMap contributors"><license>https://opendatacommons.org/licenses/odbl/</license></copyright>';
   return `<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="HikesAlike" xmlns="http://www.topografix.com/GPX/1/1">
-<metadata><name>${name}</name><desc>Route data © OpenStreetMap contributors, ODbL 1.0.${dem ? ` Heights: ${escapeHtml(dem)}` : ""}${gap ? ` ${escapeHtml(gap)}` : ""}</desc>
-<copyright author="OpenStreetMap contributors"><license>https://opendatacommons.org/licenses/odbl/</license></copyright>
+<metadata><name>${name}</name><desc>${credit}${dem ? ` Heights: ${escapeHtml(dem)}` : ""}${gap ? ` ${escapeHtml(gap)}` : ""}</desc>
+${copyright}
 <link href="${url}"><text>${name}</text></link></metadata>
 ${tracks.join("\n")}
 </gpx>
@@ -1003,6 +1009,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
       ${hike.route
         ? `<span><a class="hike-link" href="${likedHash(hike)}" title="This address opens this hike as your hike">Link to this hike</a>${compare ? ' <button type="button" class="secondary edit-composed">Edit on the map</button>' : ""}</span>`
         : hike.built ? builtLinks(hike, compare)
+        : hike.source && hike.source.id !== "osm" ? `<span><a class="hike-link" href="${likedHash(hike)}" title="This address opens this hike">Link to this hike</a></span>`
         : `<span><a href="https://www.openstreetmap.org/relation/${hike.id}" target="_blank" rel="noopener">OpenStreetMap relation ${hike.id}</a> · <a class="hike-link" href="${likedHash(hike)}" title="This address opens this hike">Link to this hike</a></span>`}
     </div>
     ${hike.line ? '<p class="hike-actions"><button type="button" class="secondary share-hike">Share</button> <button type="button" class="secondary download-gpx">Download GPX</button> <span class="share-note" role="status" hidden></span></p>' : ""}
@@ -1073,15 +1080,18 @@ function uncountedLine(query) {
   return `Greyed measures ${reasons.map((r) => r.why).join(" or ")} and are not part of the score.${hows.length ? ` To count them, ${hows.join(" or ")}${hows.length > 1 ? "," : ""} in step 2.` : ""}`;
 }
 
-// Where a hike not from OpenStreetMap comes from (ADR-0060): its sources register id and its record
-// there; an OSM hike's head already links its relation.
+// Where a hike not from OpenStreetMap comes from (ADR-0060): its source, credited with its licence
+// (ADR-0062), and its record there; an OSM hike's head already links its relation.
 function sourceLine(hike) {
   const source = hike.source;
   if (!source || source.id === "osm") return "";
   const ref = source.url
     ? `<a href="${escapeHtml(source.url)}" target="_blank" rel="noopener">${escapeHtml(source.ref)}</a>`
     : escapeHtml(source.ref);
-  return `<p class="hint source-line">Source: ${escapeHtml(source.id)}, record ${ref}</p>`;
+  const licence = source.licence && (source.licence_url
+    ? `, <a href="${escapeHtml(source.licence_url)}" target="_blank" rel="noopener">${escapeHtml(source.licence)}</a>`
+    : `, ${escapeHtml(source.licence)}`);
+  return `<p class="hint source-line">Source: ${escapeHtml(source.name ?? source.id)}${licence || ""}, record ${ref}</p>`;
 }
 
 // A built hike's head (ADR-0038): the OSM relations it is built from, a link to it,

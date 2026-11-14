@@ -82,7 +82,32 @@ def main(argv: list[str] | None = None) -> int:
         help="Directory of FABDEM (or Copernicus GLO-30) GeoTIFFs: a line whose ends differ by more than "
         "100 m starts at its lower end (ADR-0048). Without it, height orients no line",
     )
+    ingest.add_argument(
+        "--external",
+        action="append",
+        default=[],
+        metavar="SOURCE",
+        help="Add the hikes of an external source cached by fetch-external, e.g. ie-sport-ireland "
+        "(ADR-0062); repeatable",
+    )
+    ingest.add_argument(
+        "--external-dir",
+        type=Path,
+        default=None,
+        help="Directory of the external sources' caches (default: data/external)",
+    )
     _add_workers(ingest)
+    fetch_ext = subparsers.add_parser(
+        "fetch-external",
+        help="Download an external hike source into data/external/<source> (does not ingest)",
+    )
+    fetch_ext.add_argument("--source", required=True, help="Sources register id, e.g. ie-sport-ireland")
+    fetch_ext.add_argument(
+        "--dest",
+        type=Path,
+        default=None,
+        help="Directory of the external sources' caches (default: data/external)",
+    )
     fetch = subparsers.add_parser(
         "fetch-extracts",
         help="Download Geofabrik PBFs into data/osm (does not ingest)",
@@ -468,6 +493,8 @@ def main(argv: list[str] | None = None) -> int:
             list_dayhikes=args.list_dayhikes,
             snap_tolerance_m=args.snap_tolerance,
             dem_dir=args.dem,
+            external=args.external,
+            external_dir=args.external_dir,
         )
     if args.command == "sample-trailgraph":
         try:
@@ -487,6 +514,14 @@ def main(argv: list[str] | None = None) -> int:
             )
         except ValueError as exc:
             compose.error(str(exc))
+    if args.command == "fetch-external":
+        from dayhike.external import EXTERNAL_DIR, fetch_external
+
+        try:
+            print(fetch_external(args.source, EXTERNAL_DIR if args.dest is None else args.dest))
+        except ValueError as exc:
+            fetch_ext.error(str(exc))
+        return 0
     if args.command == "fetch-extracts":
         return _fetch_extracts(args.dest)
     if args.command == "fetch-dem":
@@ -542,6 +577,8 @@ def _ingest(
     list_dayhikes: bool = False,
     snap_tolerance_m: float = SNAP_TOLERANCE_M,
     dem_dir: Path | None = None,
+    external: list[str] | tuple[str, ...] = (),
+    external_dir: Path | None = None,
 ) -> int:
     catalog = build_catalog(
         osm_paths,
@@ -550,6 +587,8 @@ def _ingest(
         fresh=fresh,
         snap_tolerance_m=snap_tolerance_m,
         dem_dir=dem_dir,
+        external=external,
+        external_dir=external_dir,
     )
     print(catalog.path)
     print(catalog.ingest_report)

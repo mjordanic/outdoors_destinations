@@ -5,7 +5,7 @@ A local Catalog of DayHikes built from OpenStreetMap, ranked by similarity to Se
 ## Language
 
 **DayHike**:
-A hiking outing stored in the Catalog, a day or longer. It is an OSM `route=hiking` or `route=foot` relation with trail of its own that survived the 1 km minimum, container and node-network rules: there is no upper length cap, a container (a relation with no way of its own, such as a superroute of stages) is not a DayHike, and neither is a `network:type=node_network` leg that is not a RoundTrip (ADR-0033, ADR-0034). Or it is a built DayHike, a NetworkHike or DayStage (ADR-0038). Its label is OSM `name`, else `ref` with `from – to` or the nearest place, else `from – to`, else "Hike near" the nearest place, else `relation:{id}` (ADR-0017). Its length is the length of its DayHikeGeometry, each way once: a there-and-back trail counts one way.
+A hiking outing stored in the Catalog, a day or longer. It is an OSM `route=hiking` or `route=foot` relation with trail of its own that survived the 1 km minimum, container and node-network rules: there is no upper length cap, a container (a relation with no way of its own, such as a superroute of stages) is not a DayHike, and neither is a `network:type=node_network` leg that is not a RoundTrip (ADR-0033, ADR-0034). Or it is a built DayHike, a NetworkHike or DayStage (ADR-0038), or an external hike (ADR-0062). Its label is OSM `name`, else `ref` with `from – to` or the nearest place, else `from – to`, else "Hike near" the nearest place, else `relation:{id}` (ADR-0017). Its length is the length of its DayHikeGeometry, each way once: a there-and-back trail counts one way.
 _Avoid_: destination, trail, route, path, recommendation
 
 **Built DayHike**:
@@ -36,8 +36,12 @@ _Avoid_: start, parking (parking is an amenity near a Trailhead)
 The local database of DayHikes, Trailheads, AmenityFacts, and FeatureVectors. Built from an OSM snapshot, not queried live. It does not hold DayHikeGeometry or raw amenity points.
 _Avoid_: dataset, index, graph (the routing graph is Valhalla's, not the Catalog)
 
+**External hike**:
+A DayHike from an open official trail register rather than OpenStreetMap, such as Sport Ireland's: its own record with its own line, name and Source, never merged into an OSM hike, so it keeps its source's licence. Its kind is `external`; its id is a hash of its Source and record id, from 2^39 up to 2^40. One that is a Twin of a relation DayHike is dropped: the OSM hike is listed (ADR-0062).
+_Avoid_: imported hike, official hike, third-party hike
+
 **Source**:
-Where a DayHike comes from: a row of the sources register (`docs/sources.csv`) and the record's own id there, its `source_ref`. Every DayHike is `osm` today: a relation DayHike points at its relation, a DayStage at its tour, a NetworkHike at the signpost it starts from. Its licence and credit come from the register row, which also lists the sources planned, being checked, watched and rejected, with the reason and the date the licence was read (ADR-0060).
+Where a DayHike comes from: a row of the sources register (`docs/sources.csv`) and the record's own id there, its `source_ref`. An OSM DayHike is `osm`: a relation DayHike points at its relation, a DayStage at its tour, a NetworkHike at the signpost it starts from. An external hike points at its record in its register and links its page (ADR-0062). Its licence and credit come from the register row, which also lists the sources planned, being checked, watched and rejected, with the reason and the date the licence was read (ADR-0060).
 _Avoid_: provider, origin (an Origin is where the Hiker starts), dataset
 
 **DayHikeGeometry**:

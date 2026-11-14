@@ -36,8 +36,9 @@ import time
 import unicodedata
 import urllib.error
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
+from html import escape as html_escape
 from pathlib import Path
 
 import numpy as np
@@ -334,6 +335,7 @@ def site_pages(
     site_url: str | None = None,
     dayhikes: int | None = None,
     basemap: BaseMap = BaseMap(),
+    sources: Mapping[str, Mapping[str, str]] | None = None,
 ) -> dict[str, str]:
     """Each page's HTML with the GoatCounter tag where a code is set.
 
@@ -345,6 +347,8 @@ def site_pages(
     A ``basemap`` from another provider than the OpenStreetMap Foundation's tiles is credited, between
     ``<!--basemap-->`` and ``<!--/basemap-->``, by its attribution in place of the Foundation's tile policy;
     a vector one by the Protomaps basemap and the software that draws it.
+    ``sources`` (the export's external sources, ADR-0062: name, licence, licence_url and url per register id)
+    are credited one item each between ``<!--external-->`` and ``<!--/external-->``.
     With ``site_url`` (the public origin, ``https://host``) each page names its own address (``og:url``) and its
     share preview image by full address, as link previews need; else the image stays relative.
 
@@ -387,6 +391,16 @@ def site_pages(
         elif basemap.url != OSM_TILES:
             served = f"served by {basemap.attribution}" if basemap.attribution else "served by another tile provider"
             html = re.sub(r"<!--basemap-->.*?<!--/basemap-->", served, html, flags=re.S)
+        if sources:
+            items = "".join(
+                f'\n    <li><strong>Hiking routes from {html_escape(row["name"])}:</strong> '
+                f'<a href="{html_escape(row["url"])}">{html_escape(row["name"])}</a>, '
+                f'<a href="{html_escape(row["licence_url"])}">{html_escape(row["licence"])}</a>. '
+                "Each of these hikes is its own record with its own line, kept apart from the OpenStreetMap data "
+                "and under its own licence; its panel links the record.</li>"
+                for row in sources.values()
+            )
+            html = re.sub(r"<!--external-->.*?<!--/external-->", items, html, flags=re.S)
         if site_url is not None:
             address = f"{site_url}/" if name == "index" else f"{site_url}/{name}.html"
             html = html.replace('content="social-preview.png"', f'content="{site_url}/social-preview.png"').replace(
@@ -496,6 +510,7 @@ def create_app(
         site_url=site_url,
         dayhikes=data.meta["dayhikes"],
         basemap=basemap,
+        sources=data.meta.get("sources"),
     )
     app = FastAPI(title="HikesAlike", docs_url="/api/docs", openapi_url="/api/openapi.json")
     limiters = {"rank": RateLimiter(rank_rate, RATE_WINDOW_S), "api": RateLimiter(api_rate, RATE_WINDOW_S)}

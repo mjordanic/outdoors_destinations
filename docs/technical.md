@@ -91,7 +91,8 @@ Every real file under `data/` is built by a command. This is the order:
 ```
 1. OSM snapshot          data/osm/*.osm.pbf          fetch-extracts (or curl)
 2. DEM rasters           data/dem/*_FABDEM_V1-2.tif  dayhike fetch-dem
-3. Ingest                data/catalog.sqlite         dayhike ingest --dem data/dem
+2b. Optional external    data/external/<source>/     dayhike fetch-external --source ie-sport-ireland (ADR-0062)
+3. Ingest                data/catalog.sqlite         dayhike ingest --dem data/dem [--external ie-sport-ireland]
                          data/catalog.geometry.sqlite     (always, same ingest)
                          data/catalog.trailgraph.sqlite   (always, same ingest)
 4. Sample heights        updates both SQLite files   dayhike sample-dem
@@ -308,7 +309,7 @@ print(resolve_seed(catalog, "ridge walk"))  # 1001; case-insensitive exact match
 
 | Table | Contents |
 | --- | --- |
-| `dayhikes` | id (the OSM relation id, or a built DayHike's hashed id from 2^40 up), Seed label, `name_origin`, length_m, Difficulty (`sac_scale` or NULL), `kind` (`relation`, `network`, `stage`), `parts` (JSON list of the OSM relations a built DayHike is built from, else NULL), `route` (a built DayHike's Route, else NULL), `source` (a sources register id, `osm` today) and `source_ref` (its record there: `relation/{id}`, or for a NetworkHike `node/{id}` of its start; ADR-0060) |
+| `dayhikes` | id (the OSM relation id, a built DayHike's hashed id from 2^40 up, or an external hike's from 2^39 up), Seed label, `name_origin`, length_m, Difficulty (`sac_scale` or NULL), `kind` (`relation`, `network`, `stage`, `external`), `parts` (JSON list of the OSM relations a built DayHike is built from, else NULL), `route` (a built DayHike's Route, else NULL), `source` (a sources register id, `osm` for every OSM hike), `source_ref` (its record there: `relation/{id}`, for a NetworkHike `node/{id}` of its start, for an external hike its record id; ADR-0060) and `source_url` (an external hike's record page, else NULL; ADR-0062) |
 | `trailheads` | lat/lon used for amenities and DriveTime |
 | `amenity_facts` | per DayHike: hut, parking, restaurant_cafe, drinking_water (count + nearest_m) |
 | `feature_vectors` | length, elevation min/max/gain, Difficulty ordinal, LandCover fractions, regime climate |
@@ -1597,7 +1598,19 @@ Viewpoint or lake, none a Twin of a relation DayHike or of a better chain. Named
 are read for them alone: they name destinations and signposts, and are no
 amenity and not in the GeometryStore.
 
-A hike that is neither a `route=hiking` or `route=foot` relation nor a built DayHike in this Catalog cannot be a Seed.
+Last come the external hikes of each `--external` source (ADR-0062, `dayhike.external`),
+read from the cache `dayhike fetch-external` wrote under `data/external/<source>/`.
+Ingest refuses a source the sources register does not list as `used`. Each is
+its own DayHike of kind `external`, its line the source's own with no OSM way,
+its id hashed from `(source, source_ref)` from 2^39 up to 2^40, and `source_url`
+links its record. One under 1 km is dropped, and so is one that is a Twin of a
+relation DayHike (the OSM hike is listed) or of an external hike kept before
+it; the ingest report counts `external_added`, `dropped_external_twin` and
+`dropped_external_length`. Sport Ireland's adapter (`ie-sport-ireland`) keeps the
+walking trails, starts each at its listed start, and keeps the longest part of a
+multi-part line with the parts that meet it within 50 m.
+
+A hike that is neither a `route=hiking` or `route=foot` relation, a built DayHike nor an external hike in this Catalog cannot be a Seed.
 Unnamed forest paths (`highway=path` without a hiking relation) never appear.
 Filter `name_origin = 'synthetic'` if you want to drop ingest-assigned labels.
 
@@ -2144,7 +2157,7 @@ ElevationProfile at 128 equal steps in metres, the metres it climbs and
 descends in the walking direction (export format 2), and the amenity points the
 Measures count (WaterSources, Huts, restaurants, Shelters and Viewpoints in the
 Corridor, Peaks within 2 km, parking and restaurants within 500 m of the
-Trailhead) with their OSM names, its `source` and `source_ref` (ADR-0060), plus an R*Tree of each simplified line's
+Trailhead) with their OSM names, its `source`, `source_ref` (ADR-0060) and `source_url` (ADR-0062), plus an R*Tree of each simplified line's
 bounding box for the map picker (export format 3), and, when the Catalog has a
 TrailGraph, `trailgraph.sqlite`: its Segments with a simplified line and the
 metres each climbs either way, the Junctions, amenity points and sampled
@@ -2572,6 +2585,13 @@ villages (GeoNames, https://www.geonames.org/, CC BY 4.0) when the
 export has `places.sqlite`, and Nominatim
 (https://operations.osmfoundation.org/policies/nominatim/, under the OSM
 Foundation's usage policy) otherwise.
+
+External hikes (ADR-0062) are separate layers beside the OpenStreetMap data,
+each under its own licence, credited from the sources register
+(`docs/sources.csv`): on the hike panel, on `credits.html`, in `/api/info`
+and in the export's `meta.json`. Sport Ireland Trail Routes
+(https://data.gov.ie/dataset/getirelandactive_trailroutes): CC BY 4.0, credit
+"Sport Ireland".
 
 FABDEM V1-2: Hawker, L., Uhe, P., Paulo, L., Sosa, J., Savage, J., Sampson, C.
 and Neal, J., 2022. A 30 m global map of elevation with forests and buildings
