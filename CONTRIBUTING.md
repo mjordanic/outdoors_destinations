@@ -51,7 +51,7 @@ data you built. Checks on real data are opt-in:
 | `src/dayhike/serving.py` | The serving export the web demo reads, and the text of the score explanations. |
 | `src/dayhike/web/__init__.py`, `web/static/` | The web API and the page (`app.js`, the HTML pages, `style.css`). Start here for a page bug. |
 | `src/dayhike/coverage.py`, `extracts.py`, `parallel.py` | The coverage map, the Geofabrik downloads, worker processes. |
-| `web/` | The container (Dockerfile, compose file, start script) and `smoke.py`. |
+| `web/` | The container (data and web Dockerfiles, Cloud Build config, compose file, start script) and `smoke.py`. |
 | `tests/` | The test suite and its small fixtures. |
 | `notebooks/` | Walkthroughs of ingest, the Catalog, ranking and the Measures. |
 
