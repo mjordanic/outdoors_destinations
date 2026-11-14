@@ -163,8 +163,7 @@ the hut slider to 100. Turn Length down to 30.
   the values you type (a wish, the distance limit, the grouping radius) all
   switch together, and a value you typed keeps its meaning. The page starts in
   miles and feet when your browser's language is US English (or Liberian or
-  Burmese) and its clock is not set to a European time zone; otherwise in km
-  and metres. A shared link keeps the units it was made with.
+  Burmese); otherwise in km and metres. A shared link keeps the units it was made with.
 
 On a phone, "2. What similar means" starts folded away; like Advanced search and
 More options, its title has an arrow and the word "show" while it is closed.

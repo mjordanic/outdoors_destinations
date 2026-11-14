@@ -3143,15 +3143,15 @@ def _elevation_axis(page) -> list[str]:
     return page.locator("#liked .chart.elevation svg text").all_text_contents()
 
 
-def test_the_units_follow_the_browsers_locale_but_not_us_english_in_europe(browser, server) -> None:
+def test_the_units_follow_the_browsers_locale_whatever_its_time_zone(browser, server) -> None:
     us = open_page(browser, server, Api({}), locale="en-US", timezone="America/Denver", hash=f"#hike={RIDGE_WALK_ID}")
     us.get_by_text("Chosen: Ridge Walk").wait_for()
     assert us.locator("#units").input_value() == "imperial"
     assert any(re.fullmatch(r"↑ [\d,]+ ft ↓ [\d,]+ ft with the way back", b) for b in us.locator("#liked .badges li").all_inner_texts())
 
-    for locale, timezone in (("en-US", "Europe/Zagreb"), ("en-GB", "America/Denver"), ("hr-HR", "Europe/Zagreb")):
+    for locale, timezone, units in (("en-US", "Europe/Zagreb", "imperial"), ("en-GB", "America/Denver", "metric"), ("hr-HR", "Europe/Zagreb", "metric")):
         page = open_page(browser, server, Api({}), locale=locale, timezone=timezone)
-        assert page.locator("#units").input_value() == "metric", (locale, timezone)
+        assert page.locator("#units").input_value() == units, (locale, timezone)
 
 
 def test_every_length_and_height_of_a_hike_switches_to_miles_and_feet_and_back(browser, server) -> None:
@@ -3232,6 +3232,25 @@ def test_a_distance_limit_typed_in_miles_is_asked_in_km(browser, server) -> None
     assert page.locator("#results-table tbody tr").first.locator("td").nth(3).inner_text() == "0.0 mi"
     assert page.locator("#results-filters").get_by_text("Within 20 mi of 45.2, 15.1").is_visible()
     page.wait_for_url("**km=32.187**units=imperial")
+
+
+def test_a_distance_limit_at_an_end_of_its_range_in_miles_is_that_end_in_km(browser, server) -> None:
+    api = Api({})
+    page = open_page(browser, server, api, hash=f"#hike={RIDGE_WALK_ID}&from=45.2,15.1&km=200&group=50&units=imperial")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    assert page.get_by_label("Max mi value").input_value() == "124.3"
+    assert page.locator("#group-km").input_value() == "31.1"
+
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+    assert api.ranked[-1]["max_km"] == 200 and api.ranked[-1]["group_km"] == 50
+    page.wait_for_url("**km=200&group=50&units=imperial")
+
+    page.get_by_label("Max mi value").fill("0.6")
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-filters").get_by_text("Within 0.6 mi of 45.2, 15.1").wait_for()
+    page.wait_for_url("**km=1&group=50&units=imperial")
+    assert api.ranked[-1]["max_km"] == 1
 
 
 # ---------- the emergency number where a hike starts ----------

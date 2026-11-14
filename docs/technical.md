@@ -2036,8 +2036,7 @@ length and height in km and metres or in miles and feet; only the page converts:
 values and `&km=`/`&group=` stay in metres and km whatever it shows (ADR-0035), so links and the API
 do not change. The server's own words with a length (a Measure's description, a score note such as
 "both 100 m or less") are converted on the page too. The default comes from the browser: miles
-and feet when its locale's country is the US, Liberia or Myanmar and its time zone is not in
-Europe (many in Europe browse in US English), else km and metres. An address carries
+and feet when its locale's country is the US, Liberia or Myanmar, else km and metres. An address carries
 `&units=imperial` while miles and feet show, and `&units=metric` only where the browser would
 default to miles; an address without it opens in the browser's default. The filters a list was
 found with (its limits and place, month, one way, grouping radius) show as
@@ -2216,7 +2215,9 @@ shape, on a coast, takes the country of the nearest place in `places.sqlite`.
 Both stop, writing nothing, when a Trailhead's country has no row in
 `src/dayhike/data/emergency.csv`: add the country there (its emergency
 numbers, mountain rescue service and website, how to reach it, and an
-official source) and run it again. Without `countries.npy` a hike's country
+official source: the government's, its emergency service's or its mountain
+rescue's site, with gov.uk travel advice or the EU 112 page only as an extra;
+where none is found, `notes` says so) and run it again. Without `countries.npy` a hike's country
 is that of the town nearest its start, so the emergency line shows on an
 export from before it too, with `places.sqlite`. Rerun it
 after any rebuild; `meta.json` is written last, so a half-written export never
@@ -2307,7 +2308,7 @@ one-way `walk_m`; those of search, Landmarks, a Ranking, a detail and compose al
 within 30 km of its start and that town's country ("Igls, AT"; null without `places.sqlite`).
 A detail and compose also have `emergency`, the row of `src/dayhike/data/emergency.csv` for
 the country the hike starts in (`country`, `name`, `numbers`, `rescue`, `rescue_url`, `how`,
-`sources`): the Trailhead's in `countries.npy`, else the nearest town's; null with neither. A Ranking that waits 25 s for its turn answers 503 with
+`sources`, `notes`): the Trailhead's in `countries.npy`, else the nearest town's; null with neither. A Ranking that waits 25 s for its turn answers 503 with
 `Retry-After: 5`. Detail, compose, rank and pair take
 `return_to_start` (default true; `?return_to_start=false` on `GET
 /api/hikes/{id}`): true measures every hike with its way back to its start

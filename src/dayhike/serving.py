@@ -475,7 +475,8 @@ EMERGENCY_PATH = Path(__file__).parent / "data" / "emergency.csv"
 
 @functools.cache
 def emergency_services() -> dict[str, dict]:
-    """``EMERGENCY_PATH`` by country code: country, name, numbers, rescue, rescue_url, how and sources."""
+    """``EMERGENCY_PATH`` by country code: country, name, numbers, rescue, rescue_url, how, sources
+    and notes (why a row has no official national source, else None)."""
     with EMERGENCY_PATH.open(newline="", encoding="utf-8") as file:
         return {
             row["country"]: {
@@ -486,6 +487,7 @@ def emergency_services() -> dict[str, dict]:
                 "rescue_url": row["rescue_url"] or None,
                 "how": row["how"],
                 "sources": row["source"].split(),
+                "notes": row["notes"] or None,
             }
             for row in csv.DictReader(file)
         }

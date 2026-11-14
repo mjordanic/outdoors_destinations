@@ -199,8 +199,7 @@ function niceTicks(low, high, count) {
 
 // Facts, the API and addresses stay in metres and km whatever the page shows (ADR-0035).
 const FOOT_M = 0.3048, MILE_M = 1609.344;
-// Miles and feet by default where the browser's locale is one of these countries, unless its clock is
-// in Europe: many in Europe browse in US English, and the site has been metric for them.
+// Miles and feet by default where the browser's locale is one of these countries.
 const IMPERIAL_REGIONS = ["US", "LR", "MM"];
 const imperial = () => state.units === "imperial";
 const rounded = (value, digits) => Math.round(value * 10 ** digits) / 10 ** digits + 0;
@@ -208,8 +207,7 @@ const rounded = (value, digits) => Math.round(value * 10 ** digits) / 10 ** digi
 function localeUnits() {
   try {
     const region = new Intl.Locale(navigator.language).maximize().region;
-    const inEurope = Intl.DateTimeFormat().resolvedOptions().timeZone?.startsWith("Europe/");
-    return IMPERIAL_REGIONS.includes(region) && !inEurope ? "imperial" : "metric";
+    return IMPERIAL_REGIONS.includes(region) ? "imperial" : "metric";
   } catch {
     return "metric";
   }
@@ -218,16 +216,22 @@ function localeUnits() {
 // A distance limit (the starting place's, the grouping radius) is typed in km or miles; sent in km.
 const limitUnit = () => (imperial() ? "mi" : "km");
 const kmShown = (km) => (imperial() ? rounded((km * 1000) / MILE_M, 1) : km);
-const kmTyped = (shown) => (imperial() ? rounded((shown * MILE_M) / 1000, 3) : shown);
+// The km range of the limit typed into ``id``: the starting place's, or the grouping radius's.
+const kmRange = (id) => (id === "#km" ? [1, state.info?.max_km ?? 200] : [0.1, 50]);
+// The limit typed into ``id``, in km; typed at an end of its range as shown, rounded to miles: that end.
+const kmTyped = (id, shown) => {
+  if (!imperial()) return shown;
+  return kmRange(id).find((km) => kmShown(km) === shown) ?? rounded((shown * MILE_M) / 1000, 3);
+};
 const limitText = (km) => `${kmShown(km)} ${limitUnit()}`;
-// A limit as typed, in km for an address: the text as it is when it is no number.
-const typedKm = (text) => (text.trim() === "" || !Number.isFinite(Number(text)) ? text : String(kmTyped(Number(text))));
+// A limit as typed into ``id``, in km for an address: the text as it is when it is no number.
+const typedKm = (id, text) => (text.trim() === "" || !Number.isFinite(Number(text)) ? text : String(kmTyped(id, Number(text))));
 
 // Shows every length and height in ``units`` ("metric" or "imperial"). A value typed (a wish's, a
 // limit's) keeps what it means, converted; the hikes and the list shown are drawn again.
 function setUnits(units) {
   if (units === state.units) return;
-  const limits = ["#km", "#group-km"].map((id) => typedKm($(id).value)), opened = OPENED["#km"] && typedKm(OPENED["#km"].value);
+  const limits = ["#km", "#group-km"].map((id) => typedKm(id, $(id).value)), opened = OPENED["#km"] && typedKm("#km", OPENED["#km"].value);
   const wishes = [...document.querySelectorAll(".weight input.wish[type=number]")].map((input) => {
     const measure = state.measures.find((m) => m.name === input.closest(".weight").dataset.measure);
     return [input, measure, input.value === "" || !Number.isFinite(Number(input.value)) ? null : toFact(measure, Number(input.value))];
@@ -531,10 +535,10 @@ function modeHash() {
       if (!typed) parts.push(`place=${encodeURIComponent(origin.label)}`);
     }
     if ($("#hours-on").checked && !$("#hours-on").disabled) parts.push(`hours=${encodeURIComponent($("#hours").value)}`);
-    if ($("#km-on").checked) parts.push(`km=${encodeURIComponent(typedKm($("#km").value))}`);
+    if ($("#km-on").checked) parts.push(`km=${encodeURIComponent(typedKm("#km", $("#km").value))}`);
   }
   const group = $("#group-km").value.trim();
-  if (group) parts.push(`group=${encodeURIComponent(typedKm(group))}`);
+  if (group) parts.push(`group=${encodeURIComponent(typedKm("#group-km", group))}`);
   // Miles and feet always; km and m only where the browser's locale would show miles, so a shared
   // link keeps the units and every address from before the switch reads as it did.
   if (state.units !== localeUnits() || imperial()) parts.push(`units=${state.units}`);
@@ -2585,7 +2589,7 @@ function groupDefaultKm() {
   const limits = [];
   if ($("#drive-on").checked) {
     if ($("#hours-on").checked && Number($("#hours").value) > 0) limits.push(Number($("#hours").value) * kmh);
-    if ($("#km-on").checked && Number($("#km").value) > 0) limits.push(kmTyped(Number($("#km").value)));
+    if ($("#km-on").checked && Number($("#km").value) > 0) limits.push(kmTyped("#km", Number($("#km").value)));
   }
   return limits.length ? Math.max(least, share * Math.min(...limits)) : km;
 }
@@ -2722,14 +2726,14 @@ async function findSimilar() {
         query.max_hours = hours;
       }
       if (byKm) {
-        const km = kmTyped(Number($("#km").value));
+        const km = kmTyped("#km", Number($("#km").value));
         if (!(km >= 1 && km <= state.info.max_km)) throw new Error(`Max ${limitUnit()} is from ${kmShown(1)} to ${kmShown(state.info.max_km)}.`);
         query.max_km = km;
       }
     }
     const group = $("#group-km").value.trim();
     if (group !== "") { // empty: the server groups by the limits (ADR-0032)
-      const km = kmTyped(Number(group));
+      const km = kmTyped("#group-km", Number(group));
       if (!(km >= 0.1 && km <= 50)) throw new Error(`Group hikes starting within ${kmShown(0.1)} to ${limitText(50)}.`);
       query.group_km = km;
     }
