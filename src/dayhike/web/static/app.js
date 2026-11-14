@@ -1185,6 +1185,51 @@ function readWish(weights) {
   return wish;
 }
 
+// Why the value typed in a weight row's wish box cannot be asked, or "": no number, or out of its
+// Measure's range. An empty box is not wrong: a weight given asks its shown default.
+function wishProblem(row) {
+  const input = row.querySelector("input.wish");
+  if (!input || input.type === "checkbox") return "";
+  const measure = state.measures.find((m) => m.name === row.dataset.measure), { min, max } = measure.wish;
+  const unit = shownUnit(measure), value = toFact(measure, Number(input.value));
+  const range = `${toShown(measure, min)} to ${toShown(measure, max)}${unit ? ` ${unit}` : ""}`;
+  if (input.validity.badInput) return `${measure.label} takes a number from ${range}.`;
+  if (input.value === "" || (value >= (min ?? -Infinity) && value <= (max ?? Infinity))) return "";
+  return `${measure.label} must be from ${range}.`;
+}
+
+// Each wish value that cannot be asked says why beside its box, and Find waits for it (``wishBlockers``).
+function checkWishes() {
+  for (const row of document.querySelectorAll(".weight")) {
+    const problem = wishProblem(row), input = row.querySelector("input.wish");
+    let note = row.querySelector(".wish-error");
+    if (!problem) {
+      note?.remove();
+      input?.removeAttribute("aria-invalid");
+      input?.removeAttribute("aria-describedby");
+      continue;
+    }
+    if (!note) {
+      note = document.createElement("p");
+      note.className = "hint wish-error";
+      note.id = `wish-error-${row.dataset.measure}`;
+      row.appendChild(note);
+    }
+    note.textContent = problem;
+    input.setAttribute("aria-invalid", "true");
+    input.setAttribute("aria-describedby", note.id);
+  }
+  syncFind();
+}
+
+// What the wish boxes the query asks say is wrong with them: a row left out, folded away or at weight 0 asks nothing.
+function wishBlockers() {
+  return [...document.querySelectorAll(".weight")]
+    .filter((row) => row.querySelector(".wish-error") && !leftOut(row) && !folded(row)
+      && Number(row.querySelector("input:not(.wish)").value) > 0)
+    .map((row) => row.querySelector(".wish-error").textContent);
+}
+
 function wishText(measure, value) {
   if (typeof value === "boolean") return fmt.yes(value);
   if (!measure.wish) return value.toLocaleString("en");
@@ -1239,6 +1284,7 @@ function applyWish(text) {
     askDefault(row);
   }
   syncRoundTrip();
+  checkWishes();
 }
 
 // Each mode keeps its own weights: a wish starts from the default weights, each Measure on asking
@@ -1471,10 +1517,11 @@ let ranking = false; // a Ranking runs: Find waits for it
 // says why: no hike chosen in its own words, a hike loading or a search running in the status line.
 function syncFind() {
   const none = !state.wishing && !state.liked, busy = loading !== 0 && loading === chosen;
-  $("#find").disabled = none || ranking || (busy && held === chosen);
+  const wrong = state.wishing ? wishBlockers() : [];
+  $("#find").disabled = none || ranking || (busy && held === chosen) || wrong.length > 0;
   $("#find-why").textContent = none && !busy && !ranking
     ? `Choose a hike first: search for one by name or select one on the map${$("#wish-on").hidden ? "" : ", or describe the one you want"}.`
-    : "";
+    : wrong.join(" ");
 }
 
 // The liked hike measured again for the Return to start ticked now, Find greyed out until it is; when
@@ -3137,10 +3184,13 @@ async function start() {
   $("#reset-weights").addEventListener("click", () => {
     buildWeights();
     if (state.wishing) applyWish(""); // the default weights, each asking its shown default value
+    checkWishes();
     markStale();
     syncAddress();
   });
   for (const host of [$("#weights"), $("#advanced-weights")]) {
+    host.addEventListener("input", checkWishes);
+    host.addEventListener("change", checkWishes);
     host.addEventListener("input", markStale);
     host.addEventListener("change", markStale);
     // The address keeps the weights (and a wish) as they are set, so a reload or a shared link opens them again.
@@ -3153,6 +3203,7 @@ async function start() {
     );
     if (counts) markStale();
     syncAddress();
+    syncFind(); // a wish box folded away asks nothing
   });
   $("#drive-on").addEventListener("change", (event) => { $("#drive").hidden = !event.target.checked; markStale(); });
   $("#origin").addEventListener("input", () => { placed++; state.origin = null; state.missed = null; $("#origin-found").textContent = ""; markStale(); });

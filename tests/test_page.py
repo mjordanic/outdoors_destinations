@@ -2183,15 +2183,64 @@ def test_the_grouping_radius_takes_its_own_defaults_and_tenths_as_valid(browser,
         assert box.evaluate("box => box.validity.valid"), km
 
 
-def test_a_wish_value_corrected_after_find_said_it_is_out_of_range_is_valid_again(browser, server) -> None:
+LENGTH_WISH = {
+    "kind": "number", "unit": "m", "min": 1000, "max": 2_000_000, "step": 500, "default": 10_000,
+    "display": {"unit": "km", "per": 1000},
+}  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("typed", "says"),
+    [
+        ("-5", "Length must be from 1 to 2000 km."),
+        ("0", "Length must be from 1 to 2000 km."),
+        ("99999", "Length must be from 1 to 2000 km."),
+        ("e", "Length takes a number from 1 to 2000 km."),
+    ],
+)
+def test_a_wish_value_out_of_range_or_no_number_says_so_beside_its_box_and_find_waits(
+    browser, server, typed, says
+) -> None:
+    page = open_page(browser, server, Api({**WISHABLE, "length": LENGTH_WISH}))
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    box = page.get_by_label("Length you want, in km")
+    row = page.locator('.weight[data-measure="length"]')
+
+    box.fill("")  # it shows the default asked
+    box.press_sequentially(typed)
+
+    assert row.locator(".wish-error").inner_text() == says
+    assert row.locator(".wish-error").is_visible()
+    assert box.get_attribute("aria-invalid") == "true"
+    assert page.get_by_role("button", name="Find hikes").is_disabled()
+    assert page.locator("#find-why").inner_text() == says
+
+    box.fill("12")
+    assert row.locator(".wish-error").count() == 0
+    assert page.get_by_role("button", name="Find hikes").is_enabled()
+    assert page.locator("#find-why").inner_text() == ""
+
+
+def test_a_wrong_wish_value_whose_weight_is_0_does_not_hold_find(browser, server) -> None:
+    page = open_page(browser, server, Api({**WISHABLE, "length": LENGTH_WISH}))
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    page.get_by_label("Length you want, in km").fill("-5")
+    assert page.get_by_role("button", name="Find hikes").is_disabled()
+
+    page.get_by_label("Length weight, 0 to 100").fill("0")
+
+    assert page.locator('.weight[data-measure="length"] .wish-error').is_visible()
+    assert page.get_by_role("button", name="Find hikes").is_enabled()
+
+
+def test_a_wish_value_corrected_after_it_was_said_out_of_range_is_valid_again(browser, server) -> None:
     api = Api(WISHABLE)
     page = open_page(browser, server, api)
     page.get_by_role("button", name="No particular hike in mind?").click()
     gain = page.get_by_label("Climbing you want, in m")
 
     gain.fill("9000")
-    page.get_by_role("button", name="Find hikes").click()
-    page.get_by_text("Climbing: you want a value from 0 to 3000 m.").wait_for()
+    page.locator("#wish-error-elevation_gain").get_by_text("Climbing must be from 0 to 3000 m.").wait_for()
     assert not gain.evaluate("box => box.validity.valid")
 
     gain.fill("900")
