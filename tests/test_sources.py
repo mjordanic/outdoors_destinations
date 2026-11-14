@@ -1,4 +1,4 @@
-"""The sources register and the Source of every DayHike (ADR-0059)."""
+"""The sources register and the Source of every DayHike (ADR-0060)."""
 
 import re
 import shutil

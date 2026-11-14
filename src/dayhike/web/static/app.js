@@ -977,7 +977,7 @@ function uncountedLine(query) {
   return `Greyed measures ${reasons.map((r) => r.why).join(" or ")} and are not part of the score.${hows.length ? ` To count them, ${hows.join(" or ")}${hows.length > 1 ? "," : ""} in step 2.` : ""}`;
 }
 
-// Where a hike not from OpenStreetMap comes from (ADR-0059): its sources register id and its record
+// Where a hike not from OpenStreetMap comes from (ADR-0060): its sources register id and its record
 // there; an OSM hike's head already links its relation.
 function sourceLine(hike) {
   const source = hike.source;

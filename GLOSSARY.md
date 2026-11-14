@@ -37,7 +37,7 @@ The local database of DayHikes, Trailheads, AmenityFacts, and FeatureVectors. Bu
 _Avoid_: dataset, index, graph (the routing graph is Valhalla's, not the Catalog)
 
 **Source**:
-Where a DayHike comes from: a row of the sources register (`docs/sources.csv`) and the record's own id there, its `source_ref`. Every DayHike is `osm` today: a relation DayHike points at its relation, a DayStage at its tour, a NetworkHike at the signpost it starts from. Its licence and credit come from the register row, which also lists the sources planned, being checked, watched and rejected, with the reason and the date the licence was read (ADR-0059).
+Where a DayHike comes from: a row of the sources register (`docs/sources.csv`) and the record's own id there, its `source_ref`. Every DayHike is `osm` today: a relation DayHike points at its relation, a DayStage at its tour, a NetworkHike at the signpost it starts from. Its licence and credit come from the register row, which also lists the sources planned, being checked, watched and rejected, with the reason and the date the licence was read (ADR-0060).
 _Avoid_: provider, origin (an Origin is where the Hiker starts), dataset
 
 **DayHikeGeometry**:

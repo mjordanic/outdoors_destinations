@@ -26,7 +26,7 @@ serves OpenStreetMap data.
 
 Every data source the project uses, plans, is checking or rejected is listed,
 with its licence, the reason and the date its licence was last read, in the
-sources register [`docs/sources.csv`](docs/sources.csv) (ADR-0059). Each hike
+sources register [`docs/sources.csv`](docs/sources.csv) (ADR-0060). Each hike
 records its source there.
 
 The full citations and notices are in the technical docs'

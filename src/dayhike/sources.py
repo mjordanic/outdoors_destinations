@@ -1,4 +1,4 @@
-"""The sources register and the Source of each DayHike (ADR-0059).
+"""The sources register and the Source of each DayHike (ADR-0060).
 
 ``docs/sources.csv`` lists every data source the project uses, plans or
 rejected, one row each. A DayHike's Source is a register id (``osm``) and its

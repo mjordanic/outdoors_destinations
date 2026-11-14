@@ -1787,7 +1787,7 @@ def _write_sqlite(path: Path, dayhikes: Iterable[DayHike], report: IngestReport)
     dayhikes = tuple(dayhikes)
     if len({hike.id for hike in dayhikes}) != len(dayhikes):
         raise ValueError("duplicate DayHike ids in catalog ingest")
-    # Every DayHike comes from OpenStreetMap today; its Source is a register id (ADR-0059).
+    # Every DayHike comes from OpenStreetMap today; its Source is a register id (ADR-0060).
     require_used({SOURCE_OSM})
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")

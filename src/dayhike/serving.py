@@ -493,7 +493,7 @@ def export_serving(
         # A Catalog built before built DayHikes (ADR-0038) holds relations only.
         columns = {row[1] for row in catalog.execute("PRAGMA table_info(dayhikes)")}
         built = "d.kind, d.parts, d.route" if "kind" in columns else f"'{KIND_RELATION}', NULL, NULL"
-        # A Catalog built before Sources (ADR-0059) is all OpenStreetMap: its source_ref is derived.
+        # A Catalog built before Sources (ADR-0060) is all OpenStreetMap: its source_ref is derived.
         source = "d.source, d.source_ref" if "source" in columns else "NULL, NULL"
         hikes = [
             (*row[:9], row[9] or SOURCE_OSM, row[10] or osm_source_ref(row[0], row[6], json.loads(row[7] or "[]"), row[8]))
@@ -1491,7 +1491,7 @@ class ServingData:
         row = self.row_of(dayhike_id)
         store = self.store.mode(return_to_start)
         with self._db() as db:
-            # An export made before Sources (ADR-0059) is all OpenStreetMap.
+            # An export made before Sources (ADR-0060) is all OpenStreetMap.
             source = "source, source_ref" if self._has_source else f"'{SOURCE_OSM}', NULL"
             name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points, kind, parts, route, source, source_ref = (
                 db.execute(
@@ -1646,7 +1646,7 @@ class ServingData:
                 **(walk_line(back.walk.lat, back.walk.lon, back.walk.ele) if back.walk is not None else {"line": None, "ele": None}),
             },
             "built": None,
-            # Drawn from OSM trail segments, it is no record of its own (ADR-0059).
+            # Drawn from OSM trail segments, it is no record of its own (ADR-0060).
             "source": {"id": SOURCE_OSM, "ref": None, "url": None},
         }
 
