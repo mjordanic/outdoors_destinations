@@ -178,7 +178,47 @@ values or by other code).
 For a continent PBF (for example `europe-latest.osm.pbf`), ingest is the same
 command. After ingest, widen raster coverage with
 `dayhike fetch-dem --bounds south,west,north,east` (same `--bounds` on
-`fetch-landcover` and `fetch-climate`) then sample again.
+`fetch-landcover` and `fetch-climate`), or `--region europe`, then sample again.
+
+### Regions
+
+What one build covers is a **region file**, not code. The packaged ones are in
+`src/dayhike/data/regions/`: `alps-dinarides` (the eight PRD extracts, the
+default of the fetch commands), `europe` (the continent extract, the default of
+`coverage-map`) and `us-colorado` (one US state, an example outside Europe).
+A region file is TOML:
+
+```toml
+label = "Colorado"                      # the coverage map's name for it ("Map of Colorado")
+extracts = ["https://download.geofabrik.de/north-america/us/colorado-latest.osm.pbf"]
+bounds = { south = 36.9, west = -109.1, north = 41.1, east = -102.0 }   # raster box, WGS84
+
+[map]
+view = { west = -110.0, south = 36.5, east = -101.0, north = 41.5 }     # coverage map frame
+centre = { lon = -105.5, lat = 39.0 }   # Lambert azimuthal equal-area centre
+```
+
+`fetch-extracts`, `fetch-dem`, `fetch-landcover`, `fetch-climate` and
+`coverage-map` take `--region NAME` (a packaged region) or `--region
+path/to/file.toml`, repeatable. Several regions download every region's
+extracts once, and the DEM and WorldCover tiles of each region's `bounds`, so
+two regions build into one Catalog with the commands above (`fetch-climate`
+clips its one file per variable to the box around all the regions' `bounds`). `--bounds` still works on the
+raster commands, instead of `--region`. Without either, every command does
+what it did before regions: the Alps + Dinarides box and extracts, the Europe
+map.
+
+```bash
+uv run dayhike fetch-extracts --region us-colorado --dest data/osm-us
+uv run dayhike fetch-dem --region europe --region us-colorado    # each region's own tiles
+uv run dayhike coverage-map --countries /tmp/countries.geojson --region europe --region us-colorado --out /tmp/m.svg
+```
+
+Every box must run west to east (`west < east`) within ±180°: a region that
+crosses the 180° meridian (Alaska's Aleutians, Fiji, eastern Chukotka) is not
+supported; split it, or leave the far side out. The CHELSA clip of regions
+far apart (Europe plus the US) is the box around both, mostly ocean: large on
+disk, but nothing reads its empty cells.
 
 Nothing is fetched from the network at rank time except that optional Valhalla
 call on your machine.
@@ -2331,6 +2371,10 @@ curl -L -o /tmp/countries.geojson \
   https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_admin_0_countries.geojson
 uv run dayhike coverage-map --catalog data/catalog.sqlite --countries /tmp/countries.geojson
 ```
+
+`--region` draws another region's map view ([Regions](#regions)); several
+regions, or `--world`, are drawn in one Equal Earth projection (equal-area
+like the default Lambert azimuthal one, so the same parts count as covered).
 
 The mark (two mountains and a trail) is drawn by hand for this project.
 

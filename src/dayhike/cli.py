@@ -17,11 +17,21 @@ from dayhike.catalog import (
     build_catalog,
     filter_by_drive_time,
 )
-from dayhike.dem import DEM_SOURCES, Bounds, DEFAULT_DEM_BOUNDS, DEFAULT_DEM_DIR, fetch_dem, sample_dem
+from dayhike.dem import DEM_SOURCES, Bounds, DEFAULT_DEM_DIR, fetch_dem, sample_dem
 from dayhike.landcover import DEFAULT_LANDCOVER_DIR, fetch_worldcover, sample_landcover
 from dayhike.parallel import WORKERS_ENV
 from dayhike.climate import DEFAULT_CLIMATE_DIR, fetch_chelsa, sample_climate
 from dayhike.extracts import fetch_geofabrik_extracts
+from dayhike.regions import (
+    DEFAULT_MAP_REGION,
+    DEFAULT_REGION,
+    RegionError,
+    bounds_around,
+    extracts_of,
+    load_region,
+    region_names,
+    view_around,
+)
 from dayhike.highways import HighwayDriveTimeClient, HighwaySnaps
 from dayhike.similarity import (
     CORE_MEASURES,
@@ -87,6 +97,7 @@ def main(argv: list[str] | None = None) -> int:
         "fetch-extracts",
         help="Download Geofabrik PBFs into data/osm (does not ingest)",
     )
+    _add_regions(fetch, DEFAULT_REGION, "whose extracts to download")
     fetch.add_argument(
         "--dest",
         type=Path,
@@ -95,7 +106,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     fetch_dem = subparsers.add_parser(
         "fetch-dem",
-        help="Download FABDEM (or Copernicus GLO-30) GeoTIFFs covering Alps+Dinarides into data/dem",
+        help="Download FABDEM (or Copernicus GLO-30) GeoTIFFs covering the regions (default Alps+Dinarides) into data/dem",
     )
     fetch_dem.add_argument(
         "--dest",
@@ -103,12 +114,7 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_DEM_DIR,
         help="Directory for GeoTIFFs (default: data/dem)",
     )
-    fetch_dem.add_argument(
-        "--bounds",
-        type=_parse_bounds,
-        default=DEFAULT_DEM_BOUNDS,
-        help="south,west,north,east in WGS84 (default: PRD extract bbox)",
-    )
+    _add_bounds(fetch_dem)
     fetch_dem.add_argument(
         "--source",
         choices=list(DEM_SOURCES),
@@ -118,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     fetch_lc = subparsers.add_parser(
         "fetch-landcover",
-        help="Download ESA WorldCover GeoTIFFs covering Alps+Dinarides into data/landcover",
+        help="Download ESA WorldCover GeoTIFFs covering the regions (default Alps+Dinarides) into data/landcover",
     )
     fetch_lc.add_argument(
         "--dest",
@@ -126,15 +132,10 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_LANDCOVER_DIR,
         help="Directory for GeoTIFFs (default: data/landcover)",
     )
-    fetch_lc.add_argument(
-        "--bounds",
-        type=_parse_bounds,
-        default=DEFAULT_DEM_BOUNDS,
-        help="south,west,north,east in WGS84 (default: PRD extract bbox)",
-    )
+    _add_bounds(fetch_lc)
     fetch_cl = subparsers.add_parser(
         "fetch-climate",
-        help="Download CHELSA monthly GeoTIFFs covering Alps+Dinarides into data/climate",
+        help="Download CHELSA monthly GeoTIFFs covering the regions (default Alps+Dinarides) into data/climate",
     )
     fetch_cl.add_argument(
         "--dest",
@@ -142,12 +143,7 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_CLIMATE_DIR,
         help="Directory for GeoTIFFs (default: data/climate)",
     )
-    fetch_cl.add_argument(
-        "--bounds",
-        type=_parse_bounds,
-        default=DEFAULT_DEM_BOUNDS,
-        help="south,west,north,east in WGS84 (default: PRD extract bbox)",
-    )
+    _add_bounds(fetch_cl)
     sample = subparsers.add_parser(
         "sample-dem",
         help="Sample local FABDEM (or Copernicus GLO-30) onto GeometryStore vertices and Catalog elevation",
@@ -404,8 +400,10 @@ def main(argv: list[str] | None = None) -> int:
         "--site-url", help="The site's public origin (https://host): shared links then get a preview image"
     )
     coverage = subparsers.add_parser(
-        "coverage-map", help="Draw the SVG map of Europe with the covered countries shaded"
+        "coverage-map", help="Draw the SVG map of the regions (default Europe) with the covered countries shaded"
     )
+    _add_regions(coverage, DEFAULT_MAP_REGION, "to draw; several are drawn in one Equal Earth map")
+    coverage.add_argument("--world", action="store_true", help="Draw the whole world instead of the regions")
     coverage.add_argument("--catalog", type=Path, default=Path("data/catalog.sqlite"))
     coverage.add_argument(
         "--countries", type=Path, required=True, help="Natural Earth admin-0 countries GeoJSON"
@@ -414,6 +412,11 @@ def main(argv: list[str] | None = None) -> int:
         "--out", type=Path, default=Path("src/dayhike/web/static/coverage.svg")
     )
     args = parser.parse_args(argv)
+    if hasattr(args, "region_default"):
+        try:
+            args.region = [load_region(name) for name in args.region or [args.region_default]]
+        except RegionError as exc:
+            subparsers.choices[args.command].error(str(exc))
     if getattr(args, "workers", None) is not None:
         os.environ[WORKERS_ENV] = str(args.workers)  # the stage's code reads it (dayhike.parallel)
     if args.command == "export-serving":
@@ -439,9 +442,18 @@ def main(argv: list[str] | None = None) -> int:
             args.site_url,
         )
     if args.command == "coverage-map":
-        from dayhike.coverage import coverage_map
+        from dayhike.coverage import WORLD_VIEW, coverage_map
 
-        for country, count in coverage_map(args.catalog, args.countries, args.out):
+        if args.world:
+            frame = {"view": WORLD_VIEW, "centre": None, "label": "the world"}
+        elif len(args.region) == 1:
+            (region,) = args.region
+            frame = {"view": _wsen(region.view), "centre": region.centre, "label": region.label}
+        else:
+            labels = [region.label for region in args.region]
+            label = ", ".join(labels[:-1]) + " and " + labels[-1]
+            frame = {"view": _wsen(view_around(args.region)), "centre": None, "label": label}
+        for country, count in coverage_map(args.catalog, args.countries, args.out, **frame):
             print(f"{country}\t{count}")
         return 0
     if args.command == "ingest":
@@ -472,13 +484,14 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             compose.error(str(exc))
     if args.command == "fetch-extracts":
-        return _fetch_extracts(args.dest)
+        return _fetch_extracts(args.dest, extracts_of(args.region))
+    # Tiles cover each region's box; CHELSA's one file per variable is clipped to the box around them all.
     if args.command == "fetch-dem":
-        return _fetch_dem(args.dest, args.bounds, args.source)
+        return _fetch_dem(args.dest, [args.bounds] if args.bounds else [r.bounds for r in args.region], args.source)
     if args.command == "fetch-landcover":
-        return _fetch_landcover(args.dest, args.bounds)
+        return _fetch_landcover(args.dest, [args.bounds] if args.bounds else [r.bounds for r in args.region])
     if args.command == "fetch-climate":
-        return _fetch_climate(args.dest, args.bounds)
+        return _fetch_climate(args.dest, args.bounds or bounds_around(args.region))
     if args.command == "sample-dem":
         try:
             return _sample_dem(args.catalog, args.dem, args.landcover)
@@ -543,31 +556,39 @@ def _ingest(
     return 0
 
 
-def _fetch_extracts(dest: Path) -> int:
-    for path in fetch_geofabrik_extracts(dest):
+def _fetch_extracts(dest: Path, urls: list[str]) -> int:
+    for path in fetch_geofabrik_extracts(dest, urls=urls):
         print(path)
     return 0
 
 
-def _fetch_dem(dest: Path, bounds: Bounds, source: str) -> int:
-    paths = fetch_dem(
-        dest,
-        bounds,
-        source=DEM_SOURCES[source],
-        progress=_progress,
-    )
-    for path in paths:
+def _fetch_dem(dest: Path, boxes: list[Bounds], source: str) -> int:
+    paths = [
+        path
+        for bounds in boxes
+        for path in fetch_dem(
+            dest,
+            bounds,
+            source=DEM_SOURCES[source],
+            progress=_progress,
+        )
+    ]
+    for path in dict.fromkeys(paths):
         print(path)
     return 0
 
 
-def _fetch_landcover(dest: Path, bounds: Bounds) -> int:
-    paths = fetch_worldcover(
-        dest,
-        bounds,
-        progress=_progress,
-    )
-    for path in paths:
+def _fetch_landcover(dest: Path, boxes: list[Bounds]) -> int:
+    paths = [
+        path
+        for bounds in boxes
+        for path in fetch_worldcover(
+            dest,
+            bounds,
+            progress=_progress,
+        )
+    ]
+    for path in dict.fromkeys(paths):
         print(path)
     return 0
 
@@ -812,6 +833,35 @@ def _parse_weight(value: str) -> tuple[str, float]:
         return name.strip(), float(weight)
     except ValueError:
         raise argparse.ArgumentTypeError(f"expected MEASURE=WEIGHT, got {value!r}") from None
+
+
+def _add_regions(command: argparse.ArgumentParser, default: str, what: str) -> None:
+    command.add_argument(
+        "--region",
+        action="append",
+        help=f"A region {what}: one of {', '.join(region_names())}, or a region .toml file; "
+        f"repeatable (default: {default})",
+    )
+    command.set_defaults(region_default=default)
+
+
+def _add_bounds(command: argparse.ArgumentParser) -> None:
+    """--region (the box around the regions' bounds) or --bounds; neither is the default region's box."""
+    where = command.add_mutually_exclusive_group()
+    where.add_argument(
+        "--region",
+        action="append",
+        help=f"A region whose bounds to cover: one of {', '.join(region_names())}, or a region .toml file; "
+        f"repeatable (default: {DEFAULT_REGION})",
+    )
+    where.add_argument(
+        "--bounds", type=_parse_bounds, default=None, help="south,west,north,east in WGS84, instead of --region"
+    )
+    command.set_defaults(region_default=DEFAULT_REGION)
+
+
+def _wsen(box: Bounds) -> tuple[float, float, float, float]:
+    return (box.west, box.south, box.east, box.north)
 
 
 def _parse_bounds(value: str) -> Bounds:
