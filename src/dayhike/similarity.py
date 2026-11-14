@@ -249,6 +249,7 @@ _FACTS_VERSION = hashlib.sha256(
             TWIN_STEP_M, TWIN_M, TWIN_SHARE, sorted(_SURFACE_TAG_CLASS.items()), sorted(_ROAD_HIGHWAYS),
             sorted(_TRACKTYPE_CLASS.items()), GAP_JOIN_M, WAY_BACK_KINDS, WAY_BACK_COLUMNS,
             "dry-stretch-every-pass",  # a WaterSource ends a DryStretch at every pass of it (``walk_facts``)
+            "landcover-by-length",  # LandCover shares weigh each vertex by half its two segments (``_landcover_fractions``)
         ]
     ).encode()
 ).hexdigest()[:16]  # fmt: skip
@@ -1153,8 +1154,8 @@ def _add_way_back(
     """Bring the Catalog's own facts of one DayHike (its column of ``facts``)
     to the walk with its way back: ``trip``, whose first ``one_way`` vertices
     are the DayHike's. Length adds the metres back; highest, lowest and
-    Difficulty take the way back's too; LandCover counts every vertex of the
-    trip (when the GeometryStore has its classes); climate averages the
+    Difficulty take the way back's too; LandCover weighs every vertex of the
+    trip by length (when the GeometryStore has its classes); climate averages the
     vertices back with the DayHike's, weighted by the vertex count.
     """
     column = {name: index for index, name in enumerate(FACT_COLUMNS)}
@@ -1166,9 +1167,8 @@ def _add_way_back(
         facts[column["lowest_m"]] = np.fmin(facts[column["lowest_m"]], tail.min())
     if back.walk is not None and back.walk.sac_scale is not None:
         facts[column["difficulty_rank"]] = np.fmax(facts[column["difficulty_rank"]], SAC_SCALE_RANK[back.walk.sac_scale])
-    codes = trip.landcover[trip.landcover > 0]
-    if has_landcover and codes.size:
-        fractions = list(_landcover_fractions(codes.tolist()))
+    if has_landcover and np.any(trip.landcover > 0):
+        fractions = list(_landcover_fractions(trip.landcover, trip.lat, trip.lon))
         fractions.append(max(1.0 - sum(fractions), 0.0))
         facts[[column[name] for name in LANDCOVER_SHARE_COLUMNS]] = fractions
     cells = trip.climate_cell[one_way:]

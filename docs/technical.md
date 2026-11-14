@@ -658,10 +658,12 @@ NetworkHikes and 33,646 DayStages). The README rounds the live one.
   interpolation, no points added between vertices (see **Elevation from
   FABDEM**). Gain, highest point and ProfileShape therefore depend on how densely
   OSM nodes a way.
-- LandCover shares and climate means count each vertex once, so densely noded
-  stretches (switchbacks, carefully mapped parts) weigh more than their length.
-  On 400 hikes this misassigns a mean of 2.7 % of the walk (p95 8.0 %, worst
-  14.4 %) against WorldCover read every 10 m ([future work §9](future-work.md#9-landcover-along-the-line-not-per-vertex)).
+- LandCover shares weigh each vertex by half of its two segments, so densely
+  noded stretches (switchbacks, carefully mapped parts) count for their length
+  (ADR-0059). On three samples of 400 hikes this misassigns a mean of 1.6–1.8 %
+  of the walk (p95 4.5–5.8 %) against WorldCover read every 10 m, against
+  3.5–3.6 % when each vertex counted once ([future work §9](future-work.md#9-landcover-along-the-line-not-per-vertex)).
+  Climate means still count each vertex once.
   WaterSide and Twins sample at even spacing instead.
 - Length is the haversine distance on a sphere of radius 6,371,000 m.
 - Amenities count when within the Corridor of 100 m of the line (flat-plane
@@ -1429,7 +1431,7 @@ Measure (its permanent-water class). CHELSA V2.1 normals are 1981–2010.
    `vertices.landcover` for vertices that fall on a downloaded tile.
    Uncovered vertices stay NULL. It then writes Catalog
    `tree_fraction` / `shrub_fraction` / `grass_fraction` / `bare_fraction` /
-   `snow_fraction` (each GeometryStore vertex counted once; crop, built-up,
+   `snow_fraction` (by length, ADR-0059; crop, built-up,
    water, wetland, and moss stay in the leftover share).
 2. `sample-climate` finds each GeometryStore vertex's climate cell once (the
    36 rasters share one grid), reads each raster once, one at a time, keeps

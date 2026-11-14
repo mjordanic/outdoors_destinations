@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 485" role="img" aria-label="Three places to serve a base-map file from">
+  <title>Where the base-map file can live</title>
+  <style>text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;fill:#1f2a24}.m{fill:#5d6b62}.h{font-weight:700;fill:#245f3c}.w{fill:#fff;font-weight:700}</style>
+  <defs><marker id="a" markerWidth="10" markerHeight="10" refX="7" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#c2410c"/></marker>
+  <marker id="g" markerWidth="10" markerHeight="10" refX="7" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#2f7d4f"/></marker></defs>
+  <rect x="0" y="0" width="900" height="485" fill="#ffffff"/>
+  <text x="20" y="26" class="h" font-size="16">A map view asks for 10–30 small pieces ("range requests") of one big file. Who answers them?</text>
+  <!-- browser -->
+  <rect x="20" y="190" width="120" height="80" rx="8" fill="#f8faf6" stroke="#7a8b80"/>
+  <text x="38" y="222" font-weight="700">Visitor's</text><text x="38" y="240" font-weight="700">browser</text>
+
+  <!-- option A -->
+  <rect x="200" y="45" width="680" height="120" rx="8" fill="#fff4ec" stroke="#f3d3bd"/>
+  <text x="215" y="68" font-weight="700" font-size="14">A · Inside today's Cloud Run image, like Valhalla</text>
+  <rect x="215" y="80" width="260" height="70" rx="6" fill="#fff" stroke="#c2410c"/>
+  <text x="225" y="98" font-size="12">one container: app + Valhalla</text>
+  <text x="225" y="116" font-size="12">+ europe.pmtiles (~35–50 GB)</text>
+  <text x="225" y="134" font-size="12" class="m">image today ≈ 3–7 GB unpacked</text>
+  <text x="490" y="96" font-size="12">✓ works: Starlette already answers range requests</text>
+  <text x="490" y="114" font-size="12">✗ map tiles queue behind hike searches (2 instances)</text>
+  <text x="490" y="132" font-size="12">✗ every image push carries the file</text>
+  <text x="490" y="150" font-size="12">✗ a cold start blanks the map, too</text>
+
+  <!-- option B -->
+  <rect x="200" y="175" width="680" height="120" rx="8" fill="#f8faf6" stroke="#d9dfd6"/>
+  <text x="215" y="198" font-weight="700" font-size="14">B · Cloud Run reads the file from a Cloud Storage bucket</text>
+  <rect x="215" y="210" width="125" height="70" rx="6" fill="#fff" stroke="#7a8b80"/>
+  <text x="225" y="232" font-size="12">Cloud Run</text><text x="225" y="250" font-size="12">(same service)</text>
+  <rect x="350" y="210" width="125" height="70" rx="6" fill="#fff" stroke="#7a8b80"/>
+  <text x="360" y="232" font-size="12">bucket:</text><text x="360" y="250" font-size="12">europe.pmtiles</text>
+  <text x="490" y="226" font-size="12">✓ image stays small; file refreshed on its own</text>
+  <text x="490" y="244" font-size="12">✗ still uses the 2 instances for every tile</text>
+  <text x="490" y="262" font-size="12" class="m">only worth it if tiles must pass through the app</text>
+
+  <!-- option C -->
+  <rect x="200" y="305" width="680" height="120" rx="8" fill="#e8f1eb" stroke="#2f7d4f" stroke-width="2"/>
+  <text x="215" y="328" font-weight="700" font-size="14" fill="#245f3c">C · The browser reads the file from a static host (recommended)</text>
+  <rect x="215" y="340" width="260" height="70" rx="6" fill="#fff" stroke="#2f7d4f"/>
+  <text x="225" y="362" font-size="12">bucket or CDN (e.g. Cloud Storage</text>
+  <text x="225" y="380" font-size="12">in the same cloud project, or R2)</text>
+  <text x="225" y="398" font-size="12" class="m">+ CORS for the site's address</text>
+  <text x="490" y="356" font-size="12">✓ no server code; scales without Cloud Run</text>
+  <text x="490" y="374" font-size="12">✓ map draws even while Cloud Run cold-starts</text>
+  <text x="490" y="392" font-size="12">✓ the image and deploys stay small</text>
+  <text x="490" y="410" font-size="12" class="m">needs CORS and range headers; costs per request</text>
+
+  <path d="M140 215 C 170 160, 180 120, 212 112" fill="none" stroke="#c2410c" stroke-width="2" marker-end="url(#a)"/>
+  <path d="M140 232 L212 245" fill="none" stroke="#c2410c" stroke-width="2" marker-end="url(#a)"/>
+  <path d="M140 250 C 170 310, 180 360, 212 372" fill="none" stroke="#2f7d4f" stroke-width="3" marker-end="url(#g)"/>
+  <text x="20" y="450" font-size="12" class="m">Why not download OSM's own map pictures instead? Their tile policy forbids bulk download.</text><text x="20" y="468" font-size="12" class="m">Bought raster sets for Europe are 38 GB (zoom 14) to 415 GB (zoom 16), and go stale.</text>
+</svg>

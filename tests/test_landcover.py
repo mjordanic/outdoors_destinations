@@ -15,6 +15,7 @@ from dayhike import (
 )
 from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS
 from dayhike.landcover import (
+    _landcover_fractions,
     fetch_worldcover,
     tree_share,
     worldcover_tile_id,
@@ -214,6 +215,34 @@ def test_other_class_codes_count_in_denominator_only(tmp_path: Path) -> None:
     assert valley.feature_vector.snow_fraction == 0.0
     ridge = next(hike for hike in catalog.dayhikes if hike.id == 1001)
     assert ridge.feature_vector.tree_fraction is None
+
+
+def test_fractions_weigh_each_vertex_by_half_its_two_segments() -> None:
+    # Three tree vertices bunched 1 unit apart, then one grass vertex 10
+    # units on, along the equator (metres there are proportional to degrees).
+    # Counted per vertex this is 3/4 tree. By length each vertex holds half of
+    # its two segments: the tree vertices 0.5 + 1 + 5.5 of the 12 units, the
+    # grass vertex the other 5 (half of the last 10-unit segment).
+    lon = np.array([0.0, 0.001, 0.002, 0.012])
+    lat = np.zeros_like(lon)
+    codes = np.array([10, 10, 10, 30])
+
+    tree, shrub, grass, bare, snow = _landcover_fractions(codes, lat, lon)
+
+    assert tree == pytest.approx(7 / 12)
+    assert grass == pytest.approx(5 / 12)
+    assert (shrub, bare, snow) == (0.0, 0.0, 0.0)
+
+
+def test_fractions_leave_out_unsampled_vertices_and_share_the_rest() -> None:
+    lon = np.array([0.0, 0.001, 0.002])
+    lat = np.zeros_like(lon)
+    codes = np.array([10, 0, 30])  # the middle vertex has no class
+
+    tree, _, grass, _, _ = _landcover_fractions(codes, lat, lon)
+
+    assert tree == pytest.approx(0.5)
+    assert grass == pytest.approx(0.5)
 
 
 def test_permanent_snow_code_fills_snow_fraction_not_tree(tmp_path: Path) -> None:
