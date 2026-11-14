@@ -1051,6 +1051,8 @@ def test_with_a_pmtiles_file_set_both_maps_draw_it_as_vectors_and_ask_openstreet
       return gl.length > 0 && gl.every((map) => map.loaded() && map.queryRenderedFeatures().length > 0); }"""
     page.wait_for_function(drawn)
     page.wait_for_function("() => document.querySelectorAll('canvas.maplibregl-canvas').length === 2")
+    # Each map credits its vector source once its own MapLibre map has loaded: the hike map may load after pick.map.
+    page.wait_for_function("() => [...document.querySelectorAll('.leaflet-control-attribution')].every((c) => c.innerText.includes('Protomaps'))")
 
     assert f"{vector_server}/fixtures/basemap.pmtiles" in asked
     assert f"{vector_server}/vendor/maplibre-gl/maplibre-gl.mjs" in asked
