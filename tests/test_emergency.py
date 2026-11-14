@@ -18,6 +18,8 @@ COVERED = set(
     "AL AD AT BY BE BA BG HR CY CZ DK EE FO FI FR GE DE GI GR GG JE HU IS IE IM IT XK LV LI LT LU MK MT MD MC ME "
     "NL NO PL PT RO RU SM RS SK SI ES SE CH TR UA GB AX SJ US".split()
 )
+# Sources that speak for no country's own services: a row with only these says why in its notes.
+THIRD_PARTY = ("https://www.gov.uk/foreign-travel-advice/", "https://digital-strategy.ec.europa.eu/")
 
 
 @pytest.fixture(scope="module")
@@ -61,6 +63,8 @@ def test_every_covered_country_has_a_row_with_numbers_and_a_source() -> None:
         assert row["how"], code
         assert (row["rescue"] is None) == (row["rescue_url"] is None), code
         assert row["rescue_url"] is None or row["rescue_url"].startswith("https://"), code
+        official = [source for source in row["sources"] if not source.startswith(THIRD_PARTY)]
+        assert official or row["notes"], f"{code}: no official national source and no note why"
     assert rows["HR"]["rescue"] == "HGSS" and rows["HR"]["numbers"] == ["112"]
     assert rows["GB"]["numbers"] == ["999", "112"] and rows["GB"]["rescue"] == "Mountain Rescue"
     assert rows["US"]["numbers"] == ["911"]
