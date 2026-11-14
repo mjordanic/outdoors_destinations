@@ -909,6 +909,21 @@ def test_the_export_refuses_a_trailgraph_sampled_before_land_cover_was_read_alon
     with pytest.raises(ServingExportError, match="run `dayhike sample-trailgraph`"):
         export_serving(catalog, tmp_path / "out")
 
+
+def test_the_export_refuses_a_trailgraph_whose_land_cover_was_not_read_along(sampled: Path, tmp_path: Path) -> None:
+    from dayhike.serving import ServingExportError, export_serving
+
+    catalog = tmp_path / "catalog.sqlite"
+    for name in ("catalog.sqlite", "catalog.geometry.sqlite", "catalog.trailgraph.sqlite"):
+        shutil.copyfile(sampled.parent / name, tmp_path / name)
+    shutil.copytree(similarity_dir_for(sampled), similarity_dir_for(catalog))
+    with sqlite3.connect(trailgraph_path_for(catalog)) as db:
+        db.execute("UPDATE segments SET landcover_along = NULL WHERE id = (SELECT MIN(id) FROM segments)")
+    db.close()
+
+    with pytest.raises(ServingExportError, match="run `dayhike sample-trailgraph`"):
+        export_serving(catalog, tmp_path / "out")
+
 # ---------- the way back (ADR-0019) ----------
 
 # Around the Lake Loop from A: back at A; stopping at W, 500 m short of A; and

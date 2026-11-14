@@ -908,7 +908,8 @@ def sample_trailgraph(
     rasters = _climate_rasters(climate_dir) if climate_dir.is_dir() else []
     grid = _climate_grid(rasters) if rasters else None
     db = sqlite3.connect(path)
-    ensure_column(db, "segments", "landcover_along", "BLOB")
+    if has_landcover:
+        ensure_column(db, "segments", "landcover_along", "BLOB")
     sampled = 0
     cells: set[int] = set()
 
@@ -917,7 +918,7 @@ def sample_trailgraph(
             row
             for start in range(0, len(ids), _IDS_PER_QUERY)
             for row in db.execute(
-                "SELECT id, coords, ele, landcover, climate_cell, southness, landcover_along FROM segments "
+                "SELECT id, coords, ele, landcover, climate_cell, southness FROM segments "
                 f"WHERE id IN ({','.join('?' * len(ids[start : start + _IDS_PER_QUERY]))}) ORDER BY id",
                 ids[start : start + _IDS_PER_QUERY],
             )
@@ -937,7 +938,7 @@ def sample_trailgraph(
             heights = dem.sample_elevations(dem_dir, points, landcover_dir)
             ele = np.array([e if h is None else h for e, h in zip(ele.tolist(), heights)], dtype=float)
             southness = slope_southness(dem_dir, lat, lon)
-        along = [row[6] for row in chunk]
+        along: list[bytes] = []
         if has_landcover:
             reads = [along_points(c[:, 0], c[:, 1])[1] for c in coords]
             classes = sample_landcover_classes(landcover_dir, [*points, *(tuple(p) for r in reads for p in r.tolist())])
@@ -954,10 +955,10 @@ def sample_trailgraph(
                 landcover[s:e].astype("u1").tobytes(),
                 climate[s:e].astype("<i4").tobytes(),
                 southness[s:e].astype("<f4").tobytes(),
-                blob,
+                *along[i : i + 1],
                 row[0],
             )
-            for row, s, e, blob in zip(chunk, bounds[:-1], bounds[1:], along)
+            for i, (row, s, e) in enumerate(zip(chunk, bounds[:-1], bounds[1:]))
         ]
         return updates, climate[climate >= 0].tolist(), len(lat)
 
@@ -965,8 +966,8 @@ def sample_trailgraph(
         chunks = (read(ids) for ids in segment_chunks(db, _SEGMENT_CHUNK))
         for updates, chunk_cells, vertices in parallel_iter(sample, chunks):
             db.executemany(
-                "UPDATE segments SET ele = ?, landcover = ?, climate_cell = ?, southness = ?, landcover_along = ? "
-                "WHERE id = ?",
+                "UPDATE segments SET ele = ?, landcover = ?, climate_cell = ?, southness = ?"
+                f"{', landcover_along = ?' if has_landcover else ''} WHERE id = ?",
                 updates,
             )
             cells.update(chunk_cells)
