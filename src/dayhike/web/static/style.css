@@ -91,6 +91,9 @@ button.secondary:hover { border-color: var(--green); }
 .weight.unused .weight-note { display: block; }
 .weight .length-note { grid-column: 1 / -1; margin: 0; display: none; }
 .wishing .weight .length-note { display: block; }
+.weight .wish-error { grid-column: 1 / -1; margin: 0; color: #b42318; display: none; }
+.wishing .weight .wish-error { display: block; }
+.wishing .weight .wish-value input[aria-invalid="true"] { border-color: #b42318; outline: 1px solid #b42318; }
 
 .detail-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; align-items: baseline; }
 .detail-head .role { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); }
@@ -143,6 +146,10 @@ svg text { font-size: 11px; fill: var(--muted); }
 #results-table td.name .hike-name { display: block; overflow: hidden; text-overflow: ellipsis; }
 #results-table td.name .badge-line { display: block; white-space: normal; }
 #results-table tbody tr { cursor: pointer; }
+/* The head of a block "Show 10 more" adds: its words stay in view while the table scrolls sideways. */
+#results-table tbody tr.block-head { cursor: default; }
+#results-table tr.block-head th { background: #f3f6f2; font-weight: 500; text-align: left; white-space: normal; }
+#results-table tr.block-head span { position: sticky; left: 6px; display: inline-block; max-width: min(560px, calc(100vw - 80px)); }
 #results-table tbody tr:hover td, #results-table tbody tr.active td { background: #e8f1ea; }
 #results-table td.cell { text-align: center; min-width: 30px; color: #1f2a24; font-variant-numeric: tabular-nums; }
 #results-table td.cell.none { color: var(--muted); background: #fafafa; }
@@ -279,9 +286,13 @@ button.help:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
   .suggestions li { min-height: 44px; padding: 10px 8px; }
   #results-table tbody td { padding-top: 12px; padding-bottom: 12px; }
   .filter-chips .chip-clear { min-width: 44px; min-height: 44px; }
-  /* The "?" stays small beside its score, but takes a tap 44 px across. */
-  button.help { position: relative; }
-  button.help::after { content: ""; position: absolute; inset: -12px; }
+  /* The "?" is drawn as small a circle as on a computer, but the button is 44 px each way: a wider tap
+     area drawn outside it would be cut off by its cell or covered by the "?" of the next column. */
+  button.help { width: 44px; height: 44px; border: none; border-radius: 0; background: radial-gradient(circle, #fff 9px, var(--green) 9.5px 10px, transparent 10.5px); }
+  #results-table th.measure { height: auto; } /* grows to hold its name and the "?" */
+  /* Its clear edges reach over the gap before it and the cell's padding, so the Score column stays in view. */
+  .facts td.score button.help { margin: 0 -6px 0 -12px; }
+  button.help:hover, button.help[aria-expanded="true"] { background: radial-gradient(circle, var(--green) 10px, transparent 10.5px); }
   .leaflet-touch .leaflet-bar a, .leaflet-bar a { width: 44px; height: 44px; line-height: 44px; font-size: 22px; }
   .compose-tools button.primary { min-height: 44px; }
 }

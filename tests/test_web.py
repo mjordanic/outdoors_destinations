@@ -955,11 +955,36 @@ def test_no_served_static_file_names_the_owner(data: ServingData) -> None:
     served = TestClient(create_app(data, goatcounter="gofindmeahike"))
     for path in paths:
         response = served.get(path)
-        assert response.status_code == 200, path
+        # the not-found page is served for an unknown address, never as a page of its own
+        assert response.status_code == (404 if path == "/not-found.html" else 200), path
         # the repository's GitHub address is public and is how to reach the maintainer
         text = response.text.lower().replace("github.com/mjordanic/", "")
         for personal in ("mislav", "jordanic", "jordanić", "zagreb", "@gmail.com"):
             assert personal not in text, (path, personal)
+
+
+@pytest.mark.parametrize("path", ["/nonexistent-page", "/support.html", "/a/b/c"])
+def test_an_unknown_page_is_a_not_found_page_in_the_site_s_style_linking_home_and_to_the_search(
+    data: ServingData, path: str
+) -> None:
+    response = TestClient(create_app(data)).get(path)
+
+    assert response.status_code == 404
+    assert response.headers["content-type"].startswith("text/html")
+    page = response.text
+    assert "<title>Page not found · HikesAlike</title>" in page
+    # Paths from the root: an unknown address may be any number of folders deep.
+    assert 'href="/style.css"' in page and 'src="/mark.svg"' in page
+    assert 'href="/"' in page and "Search for a hike" in page
+
+
+def test_an_unknown_api_path_stays_a_json_not_found(data: ServingData) -> None:
+    client = TestClient(create_app(data))
+    for path in ("/api/nonexistent", "/api/hikes/999"):
+        response = client.get(path)
+        assert response.status_code == 404, path
+        assert response.headers["content-type"] == "application/json", path
+        assert "detail" in response.json(), path
 
 
 def test_the_site_has_no_support_page_and_no_page_asks_for_tips_or_donations(data: ServingData) -> None:
