@@ -2220,7 +2220,7 @@ country each Trailhead is in, for the hike's emergency number;
 adds it beside an existing export. A Trailhead outside every (simplified)
 shape, on a coast, takes the country of the nearest place in `places.sqlite`;
 without places it has no country. `export-countries` stops writing nothing, and
-`export-serving --countries` stops before `meta.json`, when a Trailhead's country has no row in
+`export-serving --countries` stops before `meta.json`, when a Trailhead has no country or its country has no row in
 `src/dayhike/data/emergency.csv`: add the country there (its emergency
 numbers, mountain rescue service and website, how to reach it, and an
 official source: the government's, its emergency service's or its mountain
