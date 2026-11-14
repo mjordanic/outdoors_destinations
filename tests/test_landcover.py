@@ -430,6 +430,19 @@ def _sample_ridge_as_forest(tmp_path: Path) -> Path:
     return catalog_path
 
 
+def test_build_similarity_refuses_land_cover_sampled_before_reading_along(
+    tmp_path: Path,
+) -> None:
+    catalog_path = _sample_ridge_as_forest(tmp_path)
+    store = sqlite3.connect(geometry_store_path_for(catalog_path))
+    store.execute("ALTER TABLE vertices DROP COLUMN landcover_along")
+    store.commit()
+    store.close()
+
+    with pytest.raises(ValueError, match="sample-landcover"):
+        build_similarity(catalog_path, tmp_path / "dem")
+
+
 def test_forested_seed_ranks_forested_neighbour_ahead_of_barer_match(
     tmp_path: Path,
 ) -> None:

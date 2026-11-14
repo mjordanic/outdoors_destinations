@@ -1042,6 +1042,15 @@ def _build_facts(
         vertex_columns = {row[1] for row in geo.execute("PRAGMA table_info(vertices)")}
         has_landcover = "landcover" in vertex_columns
         has_along = "landcover_along" in vertex_columns
+        if (
+            has_landcover
+            and not has_along
+            and geo.execute("SELECT 1 FROM vertices WHERE landcover IS NOT NULL LIMIT 1").fetchone()
+        ):
+            raise ValueError(
+                f"{geometry_store_path_for(catalog_path)}: land cover was sampled before it was "
+                "read along long steps; run `dayhike sample-landcover`"
+            )
         probes: dict[str, list[np.ndarray]] = {"": [], "_back": []}
         probe_rows: dict[str, list[np.ndarray]] = {"": [], "_back": []}
         water_probes: dict[str, list[np.ndarray]] = {"": [], "_back": []}
