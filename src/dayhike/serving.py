@@ -629,13 +629,17 @@ def _check_trailgraph_sampled(source: Path, store: SimilarityStore) -> None:
         return
     graph = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
     try:
-        read_along = "landcover_along" in {row[1] for row in graph.execute("PRAGMA table_info(segments)")}
-        unsampled = graph.execute(
-            f"SELECT 1 FROM segments WHERE landcover IS NULL{' OR landcover_along IS NULL' if read_along else ''} LIMIT 1"
-        ).fetchone()
+        unsampled = graph.execute("SELECT 1 FROM segments WHERE landcover IS NULL LIMIT 1").fetchone()
+        if unsampled is None and not np.isnan(store.column("tree_share")).all():
+            read_along = "landcover_along" in {row[1] for row in graph.execute("PRAGMA table_info(segments)")}
+            unsampled = (
+                graph.execute("SELECT 1 FROM segments WHERE landcover_along IS NULL LIMIT 1").fetchone()
+                if read_along
+                else (1,)
+            )
     finally:
         graph.close()
-    if unsampled is not None or not read_along:
+    if unsampled is not None:
         raise ServingExportError(
             f"{source}: the TrailGraph has no raster samples but the similarity facts do; "
             "run `dayhike sample-trailgraph`"

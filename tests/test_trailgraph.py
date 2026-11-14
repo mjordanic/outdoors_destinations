@@ -910,6 +910,26 @@ def test_the_export_refuses_a_trailgraph_sampled_before_land_cover_was_read_alon
         export_serving(catalog, tmp_path / "out")
 
 
+def test_the_export_takes_a_trailgraph_sampled_without_worldcover_when_the_facts_have_no_land_cover(
+    tmp_path: Path,
+) -> None:
+    from dayhike.serving import export_serving
+
+    dem, _, climate = _write_rasters(tmp_path)
+    no_landcover = tmp_path / "no_landcover"
+    no_landcover.mkdir()
+    catalog = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, catalog)
+    assert sample_dem(catalog, dem) > 0
+    assert sample_climate(catalog, climate) > 0
+    assert sample_trailgraph(catalog, dem_dir=dem, landcover_dir=no_landcover, climate_dir=climate) > 0
+    build_similarity(catalog, dem, landcover_dir=no_landcover)
+
+    out = export_serving(catalog, tmp_path / "out")
+
+    assert (out / "meta.json").exists()
+
+
 def test_the_export_refuses_a_trailgraph_whose_land_cover_was_not_read_along(sampled: Path, tmp_path: Path) -> None:
     from dayhike.serving import ServingExportError, export_serving
 
