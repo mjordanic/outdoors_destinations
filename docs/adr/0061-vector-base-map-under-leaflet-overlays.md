@@ -18,7 +18,9 @@ stays a Leaflet layer: the hike lines, map picking, the shared-trail popup, hove
 the route designer. They behave the same over both base maps by construction, and the same page tests run
 over both. MapLibre, the binding, the PMTiles reader, the style, its glyphs and sprites are served from
 `static/vendor/` with their licences, and the page loads them only when a PMTiles URL is set. Without one,
-the page is the raster page it was. A browser without WebGL 2 gets the raster tiles.
+the page is the raster page it was. Where the vector map cannot be shown (no WebGL 2, the file or its tiles
+failing to load, for example blocked by CORS, or no answer within a few seconds), the maps fall back to the raster
+tiles for the rest of the page's life.
 
 **Considered Options**
 

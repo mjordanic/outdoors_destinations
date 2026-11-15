@@ -1079,6 +1079,45 @@ def test_with_a_pmtiles_file_set_both_maps_draw_it_as_vectors_and_ask_openstreet
         assert "© OpenStreetMap contributors" in corner.inner_text() and "Protomaps" in corner.inner_text()
     assert "Protomaps basemap" in page.request.get(f"{vector_server}/credits.html").text()
     assert page.evaluate("pick.map.getMaxZoom()") == 19
+    if not phone:  # a vector map that has read its file is not given up for the raster tiles later
+        page.wait_for_timeout(page.evaluate("VECTOR_WAIT_MS") + 1_000)
+        assert page.locator("canvas.maplibregl-canvas").count() == 2
+        assert not [url for url in asked if "openstreetmap.org" in url]
+
+
+@pytest.mark.parametrize("failure", ["unreachable", "forbidden", "tiles fail", "no answer"])
+def test_when_the_vector_map_cannot_be_read_both_maps_fall_back_to_the_raster_tiles(browser, vector_server, failure) -> None:
+    # As on the live site from a host its CORS rule leaves out: the browser blocks the PMTiles file.
+    asked: list[str] = []
+    page = browser.new_page()
+    page.set_default_timeout(30_000)  # MapLibre's first draw is slow on a CI machine's software WebGL
+    page.on("request", lambda request: asked.append(request.url))
+    page.route(lambda url: not url.startswith(vector_server), lambda route: route.abort())  # no tiles
+    reads = itertools.count()
+
+    def pmtiles(route) -> None:
+        if failure == "no answer":
+            return  # left waiting: the page gives up on the vector map after VECTOR_WAIT_MS
+        if failure == "forbidden":
+            route.fulfill(status=403)
+        elif failure == "tiles fail" and next(reads) == 0:
+            route.continue_()  # the header and directory read, then every tile read fails
+        else:
+            route.abort()
+
+    page.route(f"{vector_server}/fixtures/basemap.pmtiles", pmtiles)
+    page.goto(f"{vector_server}/#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.locator("#map-pick-on").check()
+    page.evaluate("pick.map.setView([45.0, 15.05], 11, { animate: false })")
+
+    page.wait_for_function("() => [...document.querySelectorAll('.leaflet-container')].filter((map) => map.querySelector('.leaflet-tile')).length === 2")
+    assert page.locator("canvas.maplibregl-canvas").count() == 0
+    assert any(url.startswith("https://tile.openstreetmap.org/") for url in asked)
+    corners = page.locator(".leaflet-control-attribution")
+    assert corners.count() == 2
+    for corner in corners.all():
+        assert "© OpenStreetMap contributors" in corner.inner_text() and "Protomaps" not in corner.inner_text()
 
 
 def test_with_no_base_map_set_the_page_loads_no_vector_map_script(browser, server) -> None:

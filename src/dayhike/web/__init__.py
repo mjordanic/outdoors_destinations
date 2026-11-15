@@ -178,7 +178,8 @@ class BaseMap:
 
     ``pmtiles``, the URL of a vector PMTiles file in the Protomaps basemap schema (absolute, or relative to the
     page), makes the maps draw it instead (#119), with MapLibre GL JS under the overlays, zoomable to
-    ``max_zoom``; the raster tiles are then only the fallback for a browser that cannot draw it.
+    ``max_zoom``; the raster tiles are then only the fallback where it cannot be shown (no WebGL 2, or the file
+    unreadable).
     """
 
     url: str = OSM_TILES
