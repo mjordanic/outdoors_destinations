@@ -140,6 +140,13 @@ driving polygons are expensive. ADR-0004 keeps DriveTime on the matrix API.
 
 ## 9. LandCover along the line, not per vertex
 
+**Built since:** ADR-0059. The vertices weigh by length (the second row of the
+first table), and steps over 40 m are read every 20 m at most (the row "Segments
+over 40 m, every 20 m" of the second table): on three new samples of 400 hikes
+the walk misassigned falls from 3.5–3.6 % (vertex count) and 1.6–1.8 % (vertices
+by length) to 1.23–1.42 %, for 1.35 times the points read. The rest of this
+section is the study that led there.
+
 ### Why it's parked
 
 LandCover fractions count each GeometryStore vertex once. OSM vertices are dense
@@ -150,7 +157,7 @@ a long segment is never read. Measured on the notebook 05 region (400 of its
 
 | Method | Share of the walk misassigned: mean / p95 / worst | Points read |
 | --- | --- | --- |
-| Vertex count (today) | 2.7% / 8.0% / 14.4% | 1× vertices |
+| Vertex count (before ADR-0059) | 2.7% / 8.0% / 14.4% | 1× vertices |
 | Vertex weighted by half its two segments | 1.3% / 3.9% / 11.7% | 1× (no new reads) |
 | Read every 25 m along segments | 1.2% / 4.0% / 7.9% | 1.3× |
 
@@ -158,6 +165,27 @@ Only 6.4% of the walked length lies in segments over 100 m, so uneven vertex
 density, not long gaps, is most of the error. The `landcover` Measure inherits
 it one to one. That is small next to the gap between real similar
 and dissimilar pairs, so it waits.
+
+Reading along segments, measured again after ADR-0059 on the same three samples
+of 400 (the samples ADR-0059 uses, truth as above, now 5.3–5.6 % of the walked
+length in segments over 100 m). Each read stands for an equal part of its
+segment. Shorter segments keep half to each end vertex:
+
+| Reads added | Mean error (3 samples) | p95 | Worst | Points read |
+| --- | --- | --- | --- | --- |
+| None (ADR-0059) | 1.64 / 1.83 / 1.73 % | 4.6–5.8 % | 24.8 % | 1× |
+| Segments over 100 m, every 25 m | 1.42 / 1.68 / 1.55 % | 3.9–5.4 % | 12.1 % | 1.05–1.06× |
+| Segments over 50 m, every 25 m | 1.28 / 1.50 / 1.34 % | 3.4–4.7 % | 10.9 % | 1.19–1.22× |
+| Segments over 40 m, every 20 m (built, ADR-0059) | 1.23 / 1.42 / 1.25 % | 3.0–4.5 % | 11.2 % | 1.32–1.37× |
+| Segments over 30 m, every 15 m | 1.14 / 1.34 / 1.21 % | 3.1–4.4 % | 11.2 % | 1.61–1.68× |
+| Segments over 20 m, every 10 m | 1.01 / 1.18 / 1.04 % | 2.9–4.2 % | 11.2 % | 2.32–2.44× |
+
+The first row that stays under 1.5 % on every sample is segments over 40 m read
+every 20 m, for about a third more points read. Even 10 m reads leave about 1 %,
+because a vertex and the point the truth reads beside it can fall in
+different 10 m WorldCover cells. No re-weighting of the vertex classes gets
+there. A cap on how much of a long segment each end vertex may claim made the
+error worse at every cap tried (100, 50, 25, 15 and 10 m).
 
 Same pattern, not yet measured: ClimateNormal is a per-vertex mean (1 km grid,
 small effect expected), and elevation gain is read only at vertices, so a climb
@@ -171,8 +199,8 @@ inside a long segment is missed.
   length instead of "each GeometryStore vertex counts once", and `sample-landcover`
   and `build-similarity` are rerun to refresh the Catalog fractions and the
   similarity facts. Ranking changes with it.
-- Reading along segments only if review shows the worst cases matter; it needs
-  a new raster pass and somewhere to keep the extra points.
+- Reading along segments (built: ADR-0059 reads steps over 40 m every 20 m,
+  kept in `vertices.landcover_along` and `segments.landcover_along`).
 - Elevation gain measured the same way before deciding whether it needs the
   same treatment.
 
@@ -240,21 +268,29 @@ more than 5 % (a sample of 1,348). Against
 gains: Ben Nevis Mountain Path 1,357 m (about 1,350 m), BergeSeen Trail D5
 1,693 m (OSM 1,692 m), a 15 km Dutch coast path 28 m (21 m height range).
 
-Routes cut into a cliff side still get far too much: Levada da Ribeira da
-Janela (Madeira, 357 m height range, nearly flat in reality) has 1,557 m. There
-the DEM is wrong by 20–40 m over many vertices in a row, which neither the
-spike filter nor the 10 m dead-band removes; a wider median filter that fixes
-it also cuts real mountain gain by about 10 %. A path along a steep lake shore
-is the same: Rhodannenberg – Vorauen on Klöntalersee (83 m height range) reads
-the lake's flattened surface and the slope above it in turn, 408 m one way
-before the run rule and 248 m after it; a 90 m moving average would give 162 m
-but trims real climbs by about 10 % (7 % where the height range is over 500 m).
+Routes cut into a cliff side got far too much: Levada da Ribeira da Janela
+(Madeira, 357 m height range, nearly flat in reality) had 1,557 m. There the DEM
+is wrong by 20–40 m over many vertices in a row, which neither the spike filter
+nor the 10 m dead-band removes; a wider median filter that fixes it also cuts
+real mountain gain by about 10 %. A path along a steep lake shore is the same:
+Rhodannenberg – Vorauen on Klöntalersee (83 m height range) reads the lake's
+flattened surface and the slope above it in turn, 408 m one way before the run
+rule and 248 m after it.
+
+Since ADR-0062 the gain smooths only the noisy stretches: where the kept heights
+stray 2.5 m or more on average from their 90 m moving average over 200 m either
+side, they are that moving average. On 26 OSM relations along a bisse, Suone,
+canal or steep lake shore the median error against their tags falls from 16 %
+to 10 %; the median random DayHike does not change. Rhodannenberg – Vorauen now
+climbs 177 m and Marlinger Waalweg 314 m (475 m before). Levada da Ribeira da
+Janela still climbs 1,077 m: on long, sparsely noded stretches the DEM is wrong
+by more than a moving average can mend. In Liechtenstein, where FABDEM already
+counts 14 % less than the OSM tags, the median error rises from 15 % to 18 %.
 
 ### What would have to be true to start
 
-- A better DEM in steep valleys (lidar where a country publishes it), or a
-  rule that recognises a canal or cliff-side path (OSM `waterway=canal` along
-  the route, a levada name) and smooths only there.
+- A better DEM in steep valleys and on Madeira: lidar where a country publishes
+  it openly, read for those areas (issue #138's second direction).
 
 ---
 
@@ -273,3 +309,221 @@ usually its retrace, so most would compare like a shorter out-and-back.
   its WayBack as it grows, within the same per-request budget as loops.
 - A rule for which of the near-copies of one line to keep, since a line
   can end at any Junction along its last Segments.
+
+---
+
+## 14. Sharper Lake or sea between barely-wet and dry hikes
+
+### Why it's parked
+
+Since ADR-0058 a dry hike scores about 0.78 on Lake or sea against a hike 20 %
+beside water, so a waterside Seed's top 10 can fill with dry hikes. Measured on
+notebook 05's region (4,581 DayHikes with a trailhead in 42.3–46.9° N,
+13.3–19.5° E, 163 of them beside water, the Calibration re-fitted on random
+pairs of these hikes, the way back, default weights, 100 waterside Seeds,
+40 random Seeds):
+
+| Option | Top 10 beside water (Seeds 0.15–0.25 / 0.25–0.4 / ≥ 0.4) | Seeds with a dry hike in their top 10 | Compared random pairs at raw 0 | Top-10 places kept, 40 random Seeds |
+| --- | --- | --- | --- | --- |
+| ADR-0058 as shipped | 51 % (16 / 56 / 79 %) | 84 | 30 % | 100 % |
+| A waterside-and-dry gap counts 1.5× | 54 % (17 / 54 / 88 %) | 78 | 47 % | 98.8 % |
+| … counts 2× | 60 % (19 / 68 / 90 %) | 72 | 65 % | 97.7 % |
+| … counts 3× | 72 % (39 / 84 / 94 %) | 57 | 88 % | 96.5 % |
+| Such a pair takes the gap of the shares as measured | 47 % (15 / 45 / 78 %) | 87 | 29 % | 99.5 % |
+| As shipped, Lake or sea weighed 2× the other core Measures | 71 % (29 / 87 / 97 %) | 47 | 30 % | — |
+| … weighed 3× | 79 % (43 / 93 / 100 %) | 36 | 30 % | — |
+
+The first dry hike in a top 10 is at a median rank of 2 or 3 in every option.
+The region has few waterside hikes (3.6 %), so its shares are lower than the
+Europe Catalog's 82.6 %; the options are compared with each other.
+
+Most compared random pairs are a dry hike against a waterside one, so the
+Calibration ranks any such pair high whatever its raw score: stretching the gap
+changes the calibrated score only once it reaches raw 0 (a 0.2-and-dry pair
+stays about 0.8 at 1.5× and 2×, and drops to 0 at 3×). That gain comes from
+piling pairs on raw 0, the jump in the curve ADR-0058 removed (88 % of compared
+pairs at raw 0 at 3×). Taking the measured gap makes it worse. Every option
+leaves every other Measure's Calibration byte for byte the same. Raising Lake
+or sea's weight, which a Hiker can already do, gives more than any rule change
+and keeps the curve.
+
+### What would have to be true to start
+
+- Hikers saying waterside Seeds' lists feel too dry, with the weight lever not
+  enough. Then a separate random-pair population for waterside-and-dry pairs,
+  rather than a sharper raw score, would be the place to look.
+
+---
+
+## 15. A popularity signal from open data
+
+### Why it's parked
+
+HikesAlike knows what a hike is like, not whether people know it. Issue #156
+measured candidate signals from open sources only (Wikidata and Wikimedia
+pageviews, CC0; Wikimedia Commons geotags; OpenStreetMap, ODbL) for one region,
+Slovenia, against two hand-made lists: 30 well-known day hikes (Triglav from
+Aljažev dom and Dolič, the Seven Lakes valley from Komarča and Planina Blato,
+Vintgar gorge, Stol, Mangart, Krn, Okrešelj, Velika planina, Jalovec, Golica,
+Snežnik, Nanos, Slavnik, Uršlja gora, Kum, the Pohorje lakes, Storžič,
+Juliana Trail stage 1, Mala Osojnica above Bled, Rakov Škocjan, Škocjan Caves
+and others) and 30 obscure ones (village and forest walks picked by name from a
+seeded random sample of the region's hikes, before any signal was looked at).
+The hikes are the 2,007 that start inside Slovenia in a fresh Slovenia-only
+ingest of the 2026-09-17 Geofabrik extract with today's rules (1,642 relation
+hikes, 365 DayStages).
+
+"Separation" is the chance a well-known hike scores above an obscure one (ties
+count half): 0.5 is no better than a coin, 1.0 is perfect. "Coverage" is the
+share of the region's hikes with a non-zero value.
+
+| Signal | Separation | Well-known / obscure non-zero | Coverage |
+| --- | ---: | ---: | ---: |
+| Commons: distinct uploaders of geotagged files within 150 m of the line | **0.90** | 29 / 15 | not measured region-wide |
+| Commons: the same per km | 0.78 | 29 / 15 | not measured region-wide |
+| OSM: hiking relations sharing each member way (mean) | **0.82** | 30 / 30 | 100 % |
+| Named points' page views, 12 months, sl/en/de/it/hr/hu articles (sum) | 0.70 | 14 / 3 | 23 % (points with an article in those six languages; views were read for the 60 only) |
+| Named points' Wikipedia languages (max sitelinks) | 0.68 | 14 / 4 | 28 % |
+| OSM: guideposts within 50 m, per 10 km | 0.60 | 30 / 22 | 81 % |
+| OSM: route network level (iwn > nwn > rwn > lwn) | 0.48 | 27 / 30 | 96 % |
+| OSM: `osmc:symbol` present | 0.43 | 24 / 28 | 85 % |
+| OSM: `wikidata=*` on the hike's own relation | 0.50 | 0 / 0 | 2 % (DayStages of tagged long routes only) |
+
+- **Commons** separates best. At 3 or more distinct uploaders it picks 23 of
+  the 30 well-known hikes and 3 of the 30 obscure ones; at 5 or more, 13 and
+  none. Part of that is length (the well-known median is 5.4 km, the obscure
+  3.4 km): per km it drops to 0.78. Files on round coordinates (3 decimals or
+  fewer) were dropped as a place, not a photo spot; counting uploaders, not
+  files, removes bulk uploads. Only the count is kept, never a name.
+- **Route sharing** costs nothing (it is in the Catalog's own OSM data) and
+  separates well, but it marks trail hubs near huts and valley bases as much as
+  fame.
+- **Wikipedia** covers a hike only through an OSM point within 150 m that
+  has `wikidata=*` (a named peak, hut, viewpoint, waterfall, gorge or cave): 28
+  % of hikes. Lakes are areas, not nodes, so the Seven Lakes hikes score 0.
+  No Slovenian day-hike relation has `wikidata=*`; only long-distance routes
+  do. The pageviews API throttles anonymous clients hard (HTTP 429 at about one
+  request a second), so page views were read for the 60 listed hikes only.
+- **OSM tags** do not separate here: Slovenia tags nearly every hike `lwn` with
+  the standard red-and-white `osmc:symbol`, famous or not.
+
+**Gap list (Wikidata).** 49 Wikidata items in Slovenia that are trails: the
+subclasses of hiking trail (`Q2143825`) and trail (`Q628179`, `Q1966910`)
+with `P17 = Q215` or a coordinate inside the country, plus the members of
+sl.wikipedia's trail categories (Naravoslovne učne poti v Sloveniji,
+Pohodništvo v Sloveniji, Pohodne poti, Slovenska planinska pot), which find
+items Wikidata gives no class.
+
+| Status | Items |
+| --- | ---: |
+| A hike, by the item's OSM relation (`P402`, or the relation's `wikidata=*`) | 4 |
+| A hike, by name and place, or by hand | 13 |
+| A long route whose sections or DayStages are hikes | 9 |
+| An OSM relation, but no hike starts in Slovenia | 3 |
+| No hike | 20 |
+
+Of the 20 with no hike, 15 are short local trails, most of them educational
+(učne poti), with no OSM relation and no path of that name, which is OSM mapping work; one has 10
+ways named "Pot ob Rakah" (#125); two are Destinations (the Kokra canyon, the
+Pekel gorge at Borovnica, where a hike ends but none walks the gorge) (#124);
+two are multi-day routes with no OSM relation (the Walk of Peace, Via Dinarica
+Blue).
+
+**Gap list (Destinations).** Of the 461 OSM points in Slovenia with
+`wikidata=*` that are a peak, cave, waterfall, saddle, hut or gorge (huts are
+mostly mapped as areas, so only 7 are points), 251 have a hike within 150 m and 123 have none within 500 m: 92 peaks, 14 caves, 12
+waterfalls, 4 saddles and a gorge. Slap Boka (930 m from the nearest hike, 9
+Wikipedia languages) and the Veliki Kozjak waterfall (544 m) are the best
+known; Slap Savica (233 m) and Peričnik (159 m) are just off a hike's line.
+These are #124's Destinations.
+
+**Recommendation: none now; a badge later, if a second region agrees.** No
+signal is good enough to change a score: the only strong one, Commons, is not
+measured beyond the 60 hikes, and ranking by fame would push down the obscure
+hikes HikesAlike is good at finding. A "well-known" badge (3 or more distinct
+Commons uploaders within 150 m) is the candidate, with route sharing as a
+free second opinion. A tie-break or a filter would need the same data and more
+trust in it than one region gives. The Wikidata gap lists are useful today:
+they feed #124 and #125.
+
+### Second region: Colorado (#170)
+
+Colorado was picked over the Écrins because its mapping habits differ most
+from Slovenia's: US mappers draw each trail as a named path and use route
+relations mainly for long trails, and there are no waymark symbols or dense
+networks of local routes. The hikes are the 284 that start inside the state
+box (37° to 41° N, 102.04° to 109.05° W) in a fresh Colorado-only ingest of
+the 2026-11-13 Geofabrik extract with today's rules (157 relation hikes, 127
+DayStages, most of them stages of the American Discovery Trail, the Denver
+Orbital Trail and other long routes). The lists were fixed before any signal
+was computed. The well-known list has 25 hikes, not 30: 12 matches, by name or
+start, from a list of 50 Colorado classics written from general knowledge
+(Emerald Lake, Glacier Gorge, Longs Peak, Wild Basin, Barr Trail, the
+Manitou Incline, Maroon Lake to Crater Lake, Blue Lakes, Lost Lake from
+Hessie, Waterton Canyon), plus 13 Catalog hikes known by name and place
+(Flat Top Mountain, Fern Lake, Mount Sherman, Ouray Perimeter, Jud Wiebe,
+Petrified Forest Loop at Florissant, North Table, Crag Crest and others). The
+12 matches cover 15 of the 50 classics (Glacier Gorge reaches Mills Lake and
+Alberta Falls, Longs Peak Trail the Chasm Lake and Keyhole routes); the other
+35, Hanging Lake and Quandary Peak among them, have no hike, as US trails are
+mostly named paths in no relation (#153). The 30 obscure hikes are the first 30 of a
+seeded random order of the remaining hikes, leaving out Colorado Trail, CDT
+and Collegiate stages and a few middling names. The same method gives this
+table:
+
+| Signal | Separation | Well-known / obscure non-zero | Coverage |
+| --- | ---: | ---: | ---: |
+| Commons: distinct uploaders of geotagged files within 150 m of the line | 0.64 | 19 / 20 | not measured region-wide |
+| Commons: the same per km | 0.73 | 19 / 20 | not measured region-wide |
+| OSM: hiking relations sharing each member way (mean) | 0.49 | 25 / 30 | 100 % |
+| OSM: guideposts within 50 m, per 10 km | 0.69 | 13 / 5 | 28 % |
+| OSM: route network level (iwn > nwn > rwn > lwn) | 0.27 | 15 / 23 | 78 % |
+| OSM: `osmc:symbol` present | 0.50 | 0 / 0 | 0 % |
+| OSM: `wikidata=*` on the hike's own relation | 0.54 | 3 / 1 | 11 % |
+| Named points' Wikipedia languages (max) | 0.48 | 2 / 4 | 12 % |
+| Named points' page views, 12 months, en/es/de/fr articles (sum) | 0.48 | 2 / 4 | 12 % (points with an article in those languages) |
+
+- **Commons does not reach 0.85 here.** Two things pull it down. Long
+  stages that pass through towns and along roads collect photos of those towns:
+  against the 21 obscure stages it separates at 0.56, and 11 of them reach 3
+  uploaders. Against the 9 obscure local trails it separates at 0.82, and only
+  one reaches 3 uploaders. Commons is also sparse in the Colorado mountains:
+  6 well-known hikes have no geotagged file within 150 m (the Crags, Mount
+  Cutler, North Table, Crag Crest, the Telluride Via Ferrata, Lost Lake). At 3
+  or more uploaders it picks 16 of the 25 well-known hikes and 12 of the 30
+  obscure ones. The obscure median is 13.8 km, the well-known 5.4 km, so per km
+  does better (0.73), and among hikes of 12 km or less it is 0.82.
+- **Route sharing fails.** Colorado's relations rarely overlap (the median is
+  1.0 on both lists), so the Slovenian signal came from Europe's dense networks
+  of waymarked routes, not from fame.
+- **Network level is reversed.** The American Discovery Trail is tagged `nwn`,
+  so obscure plains stages outrank every park trail.
+- **Wikipedia** covers 12 % of hikes. Only 25 of the state's 518 Wikidata-linked
+  OSM points (peaks, waterfalls, huts, viewpoints, churches and others) lie
+  within 150 m of a hike.
+
+### Recommendation after two regions
+
+Build the index on Commons alone, and show it as what it is: a count ("N
+Commons contributors photographed near this line"), not a "well-known"
+badge. A fixed threshold of 3 uploaders is a fair claim in Slovenia (23 of 30
+well-known hikes, 3 of 30 obscure), but in Colorado it gives the badge to 11 of
+21 obscure long-route stages and leaves it off 9 of 25 classics. Drop route
+sharing as a second opinion. Ranking stays unchanged. Two changes could lift
+Commons, and neither is measured yet: counting per km, or leaving out files
+inside towns. A US hike population worth testing again needs the
+named-trail hikes of #153 first, since 35 of the 50 Colorado classics are not
+hikes today.
+
+### What would have to be true to start
+
+- Done in #170: the same lists for a second region with different mapping
+  habits. Commons did not stay at 0.85 or better (Colorado 0.64, 0.82 against
+  local trails only), so it ships as a count, not a badge.
+- Commons counts for every hike from the dumps, not the API: the 2026-11
+  `commonswiki-latest-geo_tags.sql.gz` is 0.8 GB, but the uploader is in the
+  18.8 GB `image` table, so a build step that streams both and keeps one count
+  per hike. Calling the API per hike would take about 20 requests a hike,
+  millions for Europe, and the API throttles.
+- An ADR for the index: what it says, how it is shown, what a hike with no
+  data shows, and that it never changes a score or the order of a Ranking.

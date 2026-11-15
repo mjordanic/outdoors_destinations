@@ -2,7 +2,10 @@
 
 The HikesAlike demo is one container: the FastAPI app (`dayhike serve`) and a
 highways-only Valhalla for the drive-time filter, with the serving export baked
-into the image. Nothing is written at run time; Cloud Run scales it to zero
+into the image. The image is built in two parts: a data image (the pinned
+Valhalla base plus the serving export at `/data`, `web/data.Dockerfile`), built
+once per data refresh, and the web image (`web/Dockerfile`), which starts `FROM`
+the data image and adds uv, the venv and the code. Nothing is written at run time; Cloud Run scales it to zero
 when idle and starts it again on the next visit (a cold start of up to about 20 s).
 
 The demo runs on Cloud Run today (the README links it; setup and measurements are in
@@ -42,7 +45,8 @@ never opens.
 
 ## 2. Run it locally
 
-Same image as Cloud Run:
+Same images as Cloud Run (compose builds the data image first, then the web
+image on it):
 
 ```bash
 DAYHIKE_SERVING="$PWD/data/web-serving" docker compose -f web/compose.yaml up --build
@@ -75,11 +79,14 @@ gcloud services enable run.googleapis.com artifactregistry.googleapis.com billin
 gcloud artifacts repositories create dayhike --repository-format=docker --location=europe-west1
 gcloud auth configure-docker europe-west1-docker.pkg.dev   # edits ~/.docker/config.json
 
-# cleanup policy: keep the last 9 versions (3 pushes), delete the rest once older than 30 days
+# cleanup policy: keep the last 9 versions (3 pushes), delete the rest once older than 30 days;
+# never delete a data image (every web image is built on one)
 cat > /tmp/ar-cleanup.json <<'EOF'
 [
   {"name": "keep-recent-releases", "action": {"type": "Keep"},
    "mostRecentVersions": {"keepCount": 9}},
+  {"name": "keep-data-images", "action": {"type": "Keep"},
+   "condition": {"packageNamePrefixes": ["data"]}},
   {"name": "delete-older-than-30d", "action": {"type": "Delete"},
    "condition": {"tagState": "ANY", "olderThan": "30d"}}
 ]
@@ -87,10 +94,16 @@ EOF
 gcloud artifacts repositories set-cleanup-policies dayhike --location=europe-west1 \
   --policy=/tmp/ar-cleanup.json --dry-run      # then again with --no-dry-run
 
-# the image is 1 to 2.4 GB compressed, so the push takes a couple of minutes
-IMAGE=europe-west1-docker.pkg.dev/PROJECT/dayhike/web:$(git rev-parse --short HEAD)
+# the data image, once per data refresh: 1 to 2.4 GB compressed, a push of a couple of minutes
+REPO=europe-west1-docker.pkg.dev/PROJECT/dayhike
+DATA_IMAGE=$REPO/data:$(jq -r .facts_version data/web-serving/meta.json)
+docker buildx build --platform linux/amd64 -f web/data.Dockerfile \
+  --build-context serving=data/web-serving -t "$DATA_IMAGE" --push .
+
+# the web image, on every code change: only the layers above the data image are pushed
+IMAGE=$REPO/web:$(git rev-parse --short HEAD)
 docker buildx build --platform linux/amd64 -f web/Dockerfile \
-  --build-context serving=data/web-serving -t "$IMAGE" --push .
+  --build-arg DATA_IMAGE="$DATA_IMAGE" -t "$IMAGE" --push .
 
 gcloud run deploy dayhike --image "$IMAGE" --region europe-west1 \
   --allow-unauthenticated \
@@ -102,7 +115,10 @@ gcloud run deploy dayhike --image "$IMAGE" --region europe-west1 \
 For the live site, `DAYHIKE_SITE_URL` is `https://hikesalike.com`.
 
 Artifact Registry storage is not covered by the Cloud Run spend cap (section 5),
-and each push adds 1 to 2.4 GB, hence the cleanup policy. `docker buildx` pushes
+and each push of a data image adds 1 to 2.4 GB, hence the cleanup policy. A web
+image shares the data image's layers, so pushing one adds only its code layers
+(section 9 has the sizes). The policy keeps every data image; delete one by hand
+once no kept web image is built on it. `docker buildx` pushes
 three versions per tag: an image index (the tagged one), the `linux/amd64`
 image and an attestation. Cloud Run runs the untagged `linux/amd64` digest.
 Cleanup never deletes an image that a kept index references, but it deletes the
@@ -127,6 +143,10 @@ What the flags do:
 | `DAYHIKE_SITE_URL=https://HOST` (optional) | The site's public address (the live site's is `https://hikesalike.com`; before a custom domain, the Cloud Run URL). Each page then names itself in `og:url` and its preview image by full address, so a shared link shows the preview, and `/robots.txt` and `/sitemap.xml` name pages at it; unset, the image address stays relative and most link previews show none. |
 | `DAYHIKE_GOATCOUNTER=CODE` (optional) | Cookieless visit counts at `https://CODE.goatcounter.com`: every page loads the self-hosted `vendor/goatcounter/count.js`, and "Find" is counted as an event. Unset, no page loads analytics. Not set yet: no GoatCounter account. |
 | `DAYHIKE_CORS_ORIGINS="https://HOST ..."` (optional) | The origins whose pages may call the API (CORS): the loading shell of section 8. Unset, no other origin may. Not set yet: no shell. |
+| `DAYHIKE_TILE_URL=TEMPLATE` (optional) | The raster tile URL template both maps load their base map from, with `{z}`, `{x}` and `{y}` (for example `https://tiles.example.com/{z}/{x}/{y}.png`). Unset, the maps use `tile.openstreetmap.org` (section 6). `/api/info` names it as `basemap`. |
+| `DAYHIKE_TILE_ATTRIBUTION=HTML` (optional) | The tile provider's credit, as its terms ask for it: the map corner shows it beside "© OpenStreetMap contributors", which always stays, and the Data and credits page says the tiles are served by it. |
+| `DAYHIKE_TILE_MAX_ZOOM=N` (optional) | The deepest zoom the provider serves (default 19). |
+| `DAYHIKE_PMTILES_URL=URL` (optional) | A vector base map: a PMTiles file in the [Protomaps basemap](https://docs.protomaps.com/basemaps/downloads) schema, by full address or relative to the page. Both maps then draw it with MapLibre GL JS under their overlays (ADR-0061), credited "© OpenStreetMap contributors · Protomaps", and ask no raster tiles; a browser without WebGL 2 falls back to the raster tiles above. The host must answer range requests and, on another origin, allow the site's origin by CORS with the `range` request header and the `etag` response header exposed ([Protomaps cloud storage guide](https://docs.protomaps.com/pmtiles/cloud-storage)). The live site's file is `https://maps.hikesalike.com/europe.pmtiles` on Cloudflare R2 (section 10); the deploy workflow sets it from the `DAYHIKE_PMTILES_URL` repository variable (section 9). Not set yet (#121). |
 
 The service also carries a service-level `scaling.maxInstanceCount` of 20 in
 the Cloud Run v2 API, next to the revision-level `template.scaling.maxInstanceCount`
@@ -293,16 +313,18 @@ If an alert fires and the traffic is abuse, close the public access at once:
   links the code that builds it. The repository is public, with the code under
   MIT (`LICENSE`) and the data licences in `DATA-LICENSES.md`; keep it public,
   or change that page to offer the export another way (for example a download of `hikes.sqlite`).
-- **Tile and place-search policies.** The map uses `tile.openstreetmap.org`,
-  run by the OSM Foundation for low-volume use under its usage policy; if
-  traffic grows, switch to a paid tile provider. Export with `--geonames` so
+- **Tile and place-search policies.** The map uses `tile.openstreetmap.org`
+  (only as the no-WebGL 2 fallback once the vector map is set, section 10), run by the OSM Foundation for low-volume use under its usage policy; if
+  traffic grows, switch to another tile provider with `DAYHIKE_TILE_URL` and
+  `DAYHIKE_TILE_ATTRIBUTION` (section 3). Export with `--geonames` so
   the origin search reads `places.sqlite`; without it the page falls back to
   Nominatim, which allows at most one request a second over all visitors.
 - **Privacy page.** `privacy.html` names the host (Google Cloud Run,
   `europe-west1`), says the request logs are kept by Google Cloud Logging in
   Google's default storage location (not pinned to the EU), the 30-day log
   retention, the map tile and place-search
-  providers, and GoatCounter once it is set. Change it with any of
+  providers (Cloudflare for the vector map once `DAYHIKE_PMTILES_URL` is set,
+  section 10), and GoatCounter once it is set. Change it with any of
   these: a new host or a CDN in front (the `host-recipient` item), a shorter
   log retention, or a different tile or place-search provider.
 - **FABDEM is non-commercial (CC BY-NC-SA 4.0):** the demo must stay
@@ -316,9 +338,16 @@ If an alert fires and the traffic is abuse, close the public access at once:
 
 ## 7. Update or roll back
 
-Rebuild the export and the image with a new tag, then `gcloud run deploy` again;
+A code change needs only a new web image: build it on the current data image
+(section 3) and `gcloud run deploy` again, or let the deploy workflow do it
+(section 9). A data refresh rebuilds the export, then the data image with the
+new `facts_version` tag, then the web image on it.
 `gcloud run services update-traffic dayhike --region europe-west1 --to-revisions REVISION=100`
-goes back to an earlier revision.
+goes back to an earlier revision (`gcloud run revisions list --service dayhike --region europe-west1`
+lists them); the image it runs must still be kept (section 3). That pins the
+traffic to the revision: a later `gcloud run deploy` by hand gets none until
+`gcloud run services update-traffic dayhike --region europe-west1 --to-latest`
+(the deploy workflow does this itself).
 
 ## 8. A loading shell on a static host (not done yet)
 
@@ -385,3 +414,201 @@ file is in the repository):
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
 ```
+
+## 9. Deploy from GitHub Actions (not set up yet)
+
+**Not set up.** `.github/workflows/deploy.yml` is written, but the cloud identity
+and the repository variables below do not exist yet, so its deploy job is
+skipped. Nothing below has been run.
+
+On a push to `main`, or by hand (`workflow_dispatch` on `main`), the workflow:
+
+1. runs the tests (`ci.yml`, called as a reusable workflow);
+2. authenticates with Workload Identity Federation
+   (`google-github-actions/auth`): the run's GitHub OIDC token is traded for a
+   short-lived Google token, so no key or secret is stored anywhere;
+3. builds the web image in Cloud Build (`web/cloudbuild.yaml`) on top of the
+   current data image, tagged with the commit SHA. Cloud Build pushes one version per image, not the three of
+   `docker buildx` (section 3), so the cleanup policy keeps the last 9 deploys;
+4. deploys it as a new revision with `--no-traffic` and a `c-<sha>` tag, which
+   gives the candidate its own URL while visitors stay on the current revision;
+5. runs `web/smoke.py --url` against that URL. A failure stops the job here:
+   the candidate keeps its tag and no traffic, and the live revision is untouched;
+6. checks that the candidate is still the latest revision, sends all traffic to
+   the latest revision (so a later `gcloud run deploy` by hand, section 7, takes
+   the traffic as usual), then removes the candidate's tag.
+
+The deploy changes only the image and `DAYHIKE_PMTILES_URL`, which it sets from
+the repository variable of that name (empty, the variable is set empty and the
+maps keep the raster tiles): memory, CPU, scaling and the other environment
+variables stay as section 3 set them. A data refresh is still built and pushed by
+hand (section 3), followed by a change of `DAYHIKE_DATA_IMAGE`; the next run
+builds on it. To roll back, move traffic to an earlier revision as in section 7,
+or re-run the workflow on an earlier commit. A failed candidate can be removed
+with `gcloud run services update-traffic dayhike --region europe-west1 --remove-tags c-SHA`.
+
+The workflow never runs on pull requests, and must never be given a
+`pull_request` or `pull_request_target` trigger: the repository is public, and a
+fork's pull request must never reach the deploy credentials. The identity
+provider below accepts only tokens for this repository's `main`.
+
+### Repository variables
+
+Set as repository variables, not environment variables: the job's `if` reads
+`GCP_WORKLOAD_IDENTITY_PROVIDER` before any environment applies. None is a
+secret. The deploy job runs in the `production` environment, which can require a
+reviewer before each deploy.
+
+| Variable | Example form |
+| --- | --- |
+| `GCP_WORKLOAD_IDENTITY_PROVIDER` | `projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github/providers/github` |
+| `GCP_SERVICE_ACCOUNT` | `DEPLOY_SA@PROJECT.iam.gserviceaccount.com` |
+| `GCP_PROJECT` | `PROJECT` |
+| `GCP_REGION` | `europe-west1` |
+| `CLOUD_RUN_SERVICE` | `dayhike` |
+| `DAYHIKE_IMAGE_REPO` | `europe-west1-docker.pkg.dev/PROJECT/dayhike` |
+| `DAYHIKE_DATA_IMAGE` | `europe-west1-docker.pkg.dev/PROJECT/dayhike/data:FACTS_VERSION` |
+| `DAYHIKE_PMTILES_URL` (optional) | `https://maps.hikesalike.com/europe.pmtiles` (section 10); unset or empty, the raster tiles |
+
+### One-time cloud setup (by the maintainer)
+
+`OWNER/REPO` is this repository, `DEPLOY_SA` a new service account for the
+workflow, `RUNTIME_SA` the account the Cloud Run service runs as. Cloud Build
+bills build minutes past its free tier.
+
+```bash
+export CLOUDSDK_CORE_PROJECT=PROJECT
+gcloud services enable cloudbuild.googleapis.com iamcredentials.googleapis.com sts.googleapis.com
+
+gcloud iam workload-identity-pools create github --location=global
+gcloud iam workload-identity-pools providers create-oidc github --location=global \
+  --workload-identity-pool=github --issuer-uri=https://token.actions.githubusercontent.com \
+  --attribute-mapping=google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref \
+  --attribute-condition="assertion.repository == 'OWNER/REPO' && assertion.ref == 'refs/heads/main'"
+
+gcloud iam service-accounts create DEPLOY_SA
+gcloud iam service-accounts add-iam-policy-binding DEPLOY_SA@PROJECT.iam.gserviceaccount.com \
+  --role=roles/iam.workloadIdentityUser \
+  --member="principalSet://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github/attribute.repository/OWNER/REPO"
+```
+
+Then grant `DEPLOY_SA` the least it needs, and check each role against the
+current Google documentation before granting it: submit builds
+(`roles/cloudbuild.builds.editor`), upload the build source to the Cloud Build
+bucket (`roles/storage.objectAdmin` on `gs://PROJECT_cloudbuild`), read the
+build log it streams (`roles/logging.viewer`), deploy revisions and move traffic
+(`roles/run.developer`), and act as the runtime account
+(`roles/iam.serviceAccountUser` on `RUNTIME_SA`). The account Cloud Build runs
+as needs `roles/artifactregistry.writer` on the `dayhike` repository, to pull
+the data image and push the web image.
+
+### What a code-only deploy pushes
+
+The data image is the Valhalla base plus the serving export; the web image adds
+the uv binary, the dependency layer, the code and `start.sh` on top of it. The
+split adds no layer and no file: the image is the same size as before, and the
+container runs the same files, so its memory is unchanged. What changes is the
+order. Before, the export was copied after the code, so every code change made a
+new export layer (6.0 GB unpacked in the image deployed before the split, 1 to
+2.4 GB compressed) that was pushed again. Now a code-only change rebuilds only
+the code layers. Measured on the test-fixture export with a local registry:
+
+| Push | New layers | Compressed |
+| --- | --- | --- |
+| Data image (fixture export, Valhalla base) | 9 | 221 MB |
+| First web image on it (uv, dependencies, code) | 7 | 184 MB |
+| Web image after a code-only change | 3 | 1.4 MB |
+
+With the full export, only the data image's push grows; the two web pushes stay
+the same size. A change to `uv.lock` also pushes the dependency layer again
+(about 180 MB).
+
+## 10. The hosted vector map (not live yet)
+
+**Not live.** The file below is built, but the bucket, its CORS rule and the
+custom domain wait for the maintainer's Cloudflare account, and
+`DAYHIKE_PMTILES_URL` is not set (#121). Until it is, the maps use the raster
+tiles of section 3.
+
+One PMTiles file covers Europe for both maps' vector base map (ADR-0061). It
+lives in a Cloudflare R2 bucket and is served from the custom domain
+`maps.hikesalike.com` (the `hikesalike.com` zone is on Cloudflare DNS, and
+connecting the domain to the bucket adds its DNS record), at
+`https://maps.hikesalike.com/europe.pmtiles`. The privacy page names Cloudflare
+as the map host whenever `DAYHIKE_PMTILES_URL` is set; change that text first if
+the file moves to another host.
+
+### Making the file
+
+The file is a `pmtiles extract` of a Protomaps daily build of the whole planet
+([builds](https://maps.protomaps.com/builds/), basemap schema v4), cut to the
+bbox `-25,34,45,72` (longitude -25 to 45, latitude 34 to 72) at zoom 0 to 14.
+The extract reads only the ranges it needs over HTTP, about 25 GB, so neither
+the planet file (about 140 GB) nor any account is needed. Use the
+[go-pmtiles](https://github.com/protomaps/go-pmtiles/releases) release binary:
+
+```bash
+BUILD=20261115   # a build's date, from https://build-metadata.protomaps.dev/builds.json
+pmtiles extract "https://build.protomaps.com/$BUILD.pmtiles" europe.pmtiles \
+  --bbox=-25,34,45,72 --maxzoom=14 --download-threads=8
+pmtiles show europe.pmtiles   # bounds, zooms 0-14, the build's metadata
+```
+
+The first file is from the build of 2026-11-15 (basemap 4.15.2, OpenStreetMap
+data as of 2026-11-15 04:00 UTC), extracted with go-pmtiles 1.31.2: 25.0 GB
+(23.3 GiB), 13.4 million tiles. Zoom 15 would double it (49 GB) for detail the maps
+barely show; MapLibre overzooms zoom 14 tiles past it.
+
+### The bucket and its CORS rule
+
+The bucket is public only through the custom domain (its `r2.dev` address
+stays off). Upload `europe.pmtiles` as one object with an S3 client against the bucket's
+S3 endpoint, which splits it into a multipart upload (`wrangler r2 object put`
+takes only small objects), for example `rclone copyto europe.pmtiles r2:BUCKET/europe.pmtiles`.
+
+The maps read the file by HTTP range requests from the page's origin, so the
+bucket allows `GET` and `HEAD` with the `range` header from the site and from
+Cloud Run's own addresses (the service URL and each deploy's tagged candidate,
+section 9; `gcloud run services describe dayhike --region europe-west1` prints
+the form), and exposes `etag`, which the PMTiles reader checks between
+requests. In the S3 form of the policy:
+
+```json
+[
+  {
+    "AllowedOrigins": [
+      "https://hikesalike.com",
+      "https://dayhike-PROJECT_NUMBER.europe-west1.run.app",
+      "https://*---dayhike-PROJECT_NUMBER.europe-west1.run.app"
+    ],
+    "AllowedMethods": ["GET", "HEAD"],
+    "AllowedHeaders": ["range"],
+    "ExposeHeaders": ["etag"],
+    "MaxAgeSeconds": 86400
+  }
+]
+```
+
+R2 allows one `*` per origin, which here matches every candidate tag. Check it:
+`curl -sI -H "Range: bytes=0-16383" -H "Origin: https://hikesalike.com" https://maps.hikesalike.com/europe.pmtiles`
+answers `206` with `access-control-allow-origin: https://hikesalike.com`.
+
+### Refreshing it
+
+The map changes slowly, so refresh it when it looks out of date (a few times a
+year at most), never on a schedule. Extract a newer build as above, check it
+with `pmtiles show`, and upload it under a new name (`europe-BUILD.pmtiles`),
+then point `DAYHIKE_PMTILES_URL` at it and deploy. Pages opened before the
+switch keep reading the old file, so delete the old object a day later.
+
+### Cost
+
+R2 bills storage and requests, never egress ([R2 pricing](https://developers.cloudflare.com/r2/pricing/)).
+The free tier covers 10 GB-month of storage, 1 million Class A (writes) and
+10 million Class B (reads) a month. The 25 GB file bills about 15 GB past it
+at $0.015 per GB-month: about $0.23 a month. Opening a hike's map reads about
+ten ranges (measured locally: 15 for the liked and one similar hike's map),
+more as a visitor pans and zooms, so the free reads cover several hundred
+thousand map views a month; past
+them, reads cost $0.36 a million. A refresh keeps two files for a day and
+uploads a few thousand parts, both within the free tier.

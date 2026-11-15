@@ -23,8 +23,9 @@ length and on climbing, out of 100.*
   8 to 25 km.
 - **Where:** Europe, wherever volunteers have mapped hiking routes on
   [OpenStreetMap](https://www.openstreetmap.org/about), the free map of the
-  world that anyone can edit. Many hikes in the Alps and central Europe, fewer
-  in the east and south-east. The shaded countries on the map below have hikes.
+  world that anyone can edit, and where public bodies publish their trail
+  registers as open data (Ireland's, from Sport Ireland). Many hikes in the Alps
+  and central Europe, fewer in the east and south-east. The shaded countries on the map below have hikes.
 - **Finding ideas, not navigating.** Check the trail, the weather and a proper
   map before you go
   ([terms and safety](https://hikesalike.com/terms.html)).

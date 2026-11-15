@@ -44,6 +44,11 @@ _SHRUB = 20
 _GRASS = 30
 _BARE = 60
 _SNOW = 70
+_SHARE_CODES = (_TREE, _SHRUB, _GRASS, _BARE, _SNOW)
+# A step between two vertices longer than ALONG_MIN_M is also read along its
+# length, at the middles of equal pieces at most ALONG_STEP_M long (ADR-0059).
+ALONG_MIN_M = 40.0
+ALONG_STEP_M = 20.0
 
 
 def worldcover_tile_url(tile_id: str) -> str:
@@ -267,7 +272,8 @@ def sample_landcover(
     *,
     progress: Progress | None = None,
 ) -> int:
-    """Write land-cover classes onto covered vertices and Catalog fractions."""
+    """Write land-cover classes onto covered vertices, the classes read along
+    each step over ``ALONG_MIN_M`` onto its first vertex, and Catalog fractions."""
     catalog_path = Path(catalog_path)
     raster_dir = Path(raster_dir)
     workers()  # a bad DAYHIKE_WORKERS fails here, before the GeometryStore is open
@@ -286,46 +292,58 @@ def sample_landcover(
     try:
         write.execute("PRAGMA journal_mode=WAL")
         ensure_column(write, "vertices", "landcover", "INTEGER")
+        ensure_column(write, "vertices", "landcover_along", "BLOB")
         tiles = _Tiles(rasters)
         stack.callback(tiles.close)
         read = sqlite3.connect(store_path)
         try:
             cursor = read.execute(
-                "SELECT dayhike_id, seq, latitude, longitude FROM vertices"
+                "SELECT dayhike_id, seq, latitude, longitude, "
+                "LEAD(latitude) OVER hike, LEAD(longitude) OVER hike FROM vertices "
+                "WINDOW hike AS (PARTITION BY dayhike_id ORDER BY seq)"
             )
             # Each process reads through rasters it opened itself, never another's.
             opened = {os.getpid(): tiles}
 
-            def chunk_updates(rows: list[tuple]) -> list[tuple[int, int, int]]:
-                # A chunk's (code, dayhike_id, seq) updates, sampled in a worker.
+            def chunk_updates(rows: list[tuple]) -> list[tuple]:
+                # A chunk's (code, reads along the step to the next vertex,
+                # dayhike_id, seq) updates, sampled in a worker.
                 if os.getpid() not in opened:
                     opened[os.getpid()] = _Tiles(rasters)
-                coverable = [
-                    (int(dayhike_id), int(seq), float(lat), float(lon))
-                    for dayhike_id, seq, lat, lon in rows
-                ]
+                # The last vertex of a hike has no next one: a step of no length, not read.
+                step = np.array(
+                    [
+                        (lat, lon, lat if nlat is None else nlat, lon if nlon is None else nlon)
+                        for *_, lat, lon, nlat, nlon in rows
+                    ],
+                    dtype=float,
+                ).reshape(-1, 4)
+                counts, points = step_reads(*step.T)
                 classes = _sample_open_datasets(
                     opened[os.getpid()],
-                    [(lat, lon) for _id, _seq, lat, lon in coverable],
+                    [*zip(step[:, 0].tolist(), step[:, 1].tolist()), *map(tuple, points.tolist())],
                 )
-                return [
-                    (code, dayhike_id, seq)
-                    for (dayhike_id, seq, _lat, _lon), code in zip(
-                        coverable, classes, strict=True
-                    )
-                    if code is not None
-                ]
+                vertex, reads = classes[: len(rows)], classes[len(rows) :]
+                ends = np.cumsum(counts).tolist()
+                updates = []
+                for row, code, count, end in zip(rows, vertex, counts.tolist(), ends, strict=True):
+                    along = reads[end - count : end]
+                    blob = bytes(c or 0 for c in along) if any(c is not None for c in along) else None
+                    if code is not None or blob is not None:
+                        updates.append((code, blob, int(row[0]), int(row[1])))
+                return updates
 
             chunks = iter(lambda: cursor.fetchmany(_VERTEX_CHUNK), [])
             for updates in parallel_iter(chunk_updates, chunks):
                 if not updates:
                     continue
                 write.executemany(
-                    "UPDATE vertices SET landcover = ? WHERE dayhike_id = ? AND seq = ?",
+                    "UPDATE vertices SET landcover = COALESCE(?, landcover), landcover_along = ? "
+                    "WHERE dayhike_id = ? AND seq = ?",
                     updates,
                 )
-                sampled += len(updates)
-                touched.update(dayhike_id for _code, dayhike_id, _seq in updates)
+                sampled += sum(code is not None for code, *_ in updates)
+                touched.update(dayhike_id for _code, _along, dayhike_id, _seq in updates)
                 if progress is not None:
                     progress(f"landcover sample: {sampled} vertices")
             if sampled:
@@ -360,24 +378,23 @@ def _refresh_catalog_fractions(
     try:
         for name in LANDCOVER_FEATURE_NAMES:
             ensure_column(catalog, "feature_vectors", name, "REAL")
-        by_hike: dict[int, list[int]] = {dayhike_id: [] for dayhike_id in hike_ids}
+        by_hike: dict[int, list[tuple[int, float, float, bytes | None]]] = {dayhike_id: [] for dayhike_id in hike_ids}
         ids = list(hike_ids)
         for start in range(0, len(ids), _HIKE_IN_CHUNK):
             chunk = ids[start : start + _HIKE_IN_CHUNK]
             placeholders = ",".join("?" * len(chunk))
-            for dayhike_id, code in store.execute(
-                "SELECT dayhike_id, landcover FROM vertices "
+            for dayhike_id, code, lat, lon, along in store.execute(
+                "SELECT dayhike_id, landcover, latitude, longitude, landcover_along FROM vertices "
                 f"WHERE dayhike_id IN ({placeholders}) ORDER BY dayhike_id, seq",
                 chunk,
             ):
-                if code is None:
-                    continue
-                by_hike[int(dayhike_id)].append(int(code))
-        updates = [
-            (*_landcover_fractions(codes), dayhike_id)
-            for dayhike_id, codes in by_hike.items()
-            if codes
-        ]
+                by_hike[int(dayhike_id)].append((code or 0, lat, lon, along))
+        updates = []
+        for dayhike_id, rows in by_hike.items():
+            codes, lat, lon = np.array([row[:3] for row in rows], dtype=float).reshape(-1, 3).T
+            if np.any(codes > 0):
+                along = along_rows_of_vertices([row[3] for row in rows])
+                updates.append((*_landcover_fractions(codes, lat, lon, along), dayhike_id))
         catalog.executemany(
             "UPDATE feature_vectors SET tree_fraction = ?, shrub_fraction = ?, "
             "grass_fraction = ?, bare_fraction = ?, snow_fraction = ? "
@@ -391,13 +408,98 @@ def _refresh_catalog_fractions(
 
 
 def _landcover_fractions(
-    codes: Sequence[int],
+    codes: np.ndarray, lat: np.ndarray, lon: np.ndarray, along: np.ndarray | None = None
 ) -> tuple[float, float, float, float, float]:
-    n = len(codes)
-    return (
-        codes.count(_TREE) / n,
-        codes.count(_SHRUB) / n,
-        codes.count(_GRASS) / n,
-        codes.count(_BARE) / n,
-        codes.count(_SNOW) / n,
+    """Tree, shrub, grass, bare and snow shares of a line by length.
+
+    ``codes`` is the WorldCover class of each vertex of the line (0 where it
+    has none) and ``along`` the classes read along its steps (``along_rows``;
+    None when none were read). A step read along is shared by its reads, each
+    standing for an equal piece of it; every other step goes half to each of
+    its two vertices. Vertices and reads without a class are left out, and
+    the others share the length; a step whose reads all lack a class goes to
+    its vertices. Needs at least one classified vertex.
+
+    The vertex weights are summed exactly (``math.fsum``), so a class's
+    weights never add up to more than all of them and no share is above 1.
+    """
+    codes = np.asarray(codes)
+    steps = step_lengths_m(np.asarray(lat, dtype=float), np.asarray(lon, dtype=float))
+    metres = np.zeros(len(_SHARE_CODES) + 1)
+    read = np.zeros(len(steps), dtype=bool)
+    if along is not None:
+        counts = np.asarray(along, dtype=float)[:-1]
+        read = counts[:, :-1].sum(axis=1) > 0
+        metres = (steps[read, None] * counts[read, :-1] / counts[read, -1:]).sum(axis=0)
+    halves = np.where(read, 0.0, steps / 2)
+    weights = np.zeros(len(codes))
+    weights[:-1] += halves
+    weights[1:] += halves
+    classified = codes > 0
+    codes, weights = codes[classified], weights[classified]
+    total = math.fsum(weights) + metres.sum()
+    if total <= 0:  # every classified vertex on one spot
+        weights, total = np.ones(len(codes)), float(len(codes))
+    return tuple(
+        float((math.fsum(weights[codes == code]) + metres[index]) / total) for index, code in enumerate(_SHARE_CODES)
     )
+
+
+def step_lengths_m(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
+    """Haversine metres of each step between consecutive vertices."""
+    return _haversine_m(lat[:-1], lon[:-1], lat[1:], lon[1:])
+
+
+def _haversine_m(lat0: np.ndarray, lon0: np.ndarray, lat1: np.ndarray, lon1: np.ndarray) -> np.ndarray:
+    phi0, phi1 = np.radians(lat0), np.radians(lat1)
+    a = np.sin((phi1 - phi0) / 2) ** 2 + np.cos(phi0) * np.cos(phi1) * np.sin(np.radians(lon1 - lon0) / 2) ** 2
+    return EARTH_RADIUS_M * 2 * np.arcsin(np.sqrt(a))
+
+
+def along_points(lat: np.ndarray, lon: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Where a line is read along its steps (``step_reads`` of each step
+    between consecutive vertices)."""
+    lat, lon = np.asarray(lat, dtype=float), np.asarray(lon, dtype=float)
+    return step_reads(lat[:-1], lon[:-1], lat[1:], lon[1:])
+
+
+def step_reads(
+    lat0: np.ndarray, lon0: np.ndarray, lat1: np.ndarray, lon1: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """The number of reads on each step from (``lat0``, ``lon0``) to
+    (``lat1``, ``lon1``), 0 on a step of at most ``ALONG_MIN_M``, and the
+    (lat, lon) of the reads, step by step: the middles of equal pieces at
+    most ``ALONG_STEP_M`` long."""
+    lat0, lon0, lat1, lon1 = (np.asarray(v, dtype=float) for v in (lat0, lon0, lat1, lon1))
+    steps = _haversine_m(lat0, lon0, lat1, lon1)
+    counts = np.where(steps > ALONG_MIN_M, np.ceil(steps / ALONG_STEP_M), 0).astype(np.int64)
+    step = np.repeat(np.arange(len(counts)), counts)
+    within = np.arange(len(step)) - np.repeat(np.cumsum(counts) - counts, counts)
+    t = (within + 0.5) / counts[step] if len(step) else np.zeros(0)
+    points = np.column_stack([lat0[step] + t * (lat1[step] - lat0[step]), lon0[step] + t * (lon1[step] - lon0[step])])
+    return counts, points.reshape(-1, 2)
+
+
+def along_rows(counts: np.ndarray, codes: np.ndarray) -> np.ndarray:
+    """The classes read along a line's steps as one row per vertex: the reads
+    on the step to the next vertex that are tree, shrub, grass, bare, snow and
+    any other class, then all its reads (classed or not). The last vertex's
+    row is zero. ``counts`` is the number of reads per step and ``codes``
+    their classes, step by step (0 where none)."""
+    counts, codes = np.asarray(counts, dtype=np.int64), np.asarray(codes, dtype=np.int64)
+    rows = np.zeros((len(counts) + 1, len(_SHARE_CODES) + 2), dtype=np.int64)
+    rows[:-1, -1] = counts
+    step = np.repeat(np.arange(len(counts)), counts)
+    for column, code in enumerate(_SHARE_CODES):
+        np.add.at(rows[:, column], step[codes == code], 1)
+    other = (codes > 0) & ~np.isin(codes, _SHARE_CODES)
+    np.add.at(rows[:, len(_SHARE_CODES)], step[other], 1)
+    return rows
+
+
+def along_rows_of_vertices(blobs: Sequence[bytes | None]) -> np.ndarray:
+    """``along_rows`` from the GeometryStore's ``landcover_along`` of each
+    vertex of a line (the classes read on the step after it, or None)."""
+    reads = [np.frombuffer(blob, dtype="u1") if blob else np.zeros(0, dtype="u1") for blob in blobs[:-1]]
+    codes = np.concatenate(reads) if reads else np.zeros(0, dtype="u1")
+    return along_rows(np.array([len(r) for r in reads], dtype=np.int64), codes)

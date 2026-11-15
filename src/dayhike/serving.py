@@ -33,6 +33,10 @@ similarity directory live. It writes a directory a server memory-maps:
   (``export_landmarks``, ADR-0053), each with its nearest hikes; written by
   every export and by ``export_places``. An export without it still opens
   and searches hike names only.
+- ``countries.npy``: per Trailhead (``trailheads.npy`` order) the ISO 3166 code of the
+  country the hike starts in, for its emergency number (``export_countries``), when
+  a Natural Earth countries file is given. ``export_countries`` writes it beside an
+  existing export too; without it a hike's country is that of the town nearest its start.
 - ``meta.json``: written last, so a directory without it is incomplete.
 
 ``ServingData`` opens such a directory without ``Catalog.open``: name search,
@@ -46,6 +50,7 @@ lists them among them (``dayhike.loops``, ADR-0020).
 
 from __future__ import annotations
 
+import csv
 import functools
 import heapq
 import itertools
@@ -71,6 +76,7 @@ import shapely
 
 from dayhike.catalog import (
     EARTH_RADIUS_M,
+    KIND_EXTERNAL,
     KIND_RELATION,
     MAX_CAR_SPEED_MS,
     NAME_ORIGIN_SYNTHETIC,
@@ -82,9 +88,10 @@ from dayhike.catalog import (
     straight_line_distances_m,
     trailgraph_path_for,
 )
-from dayhike.dem import FABDEM_ATTRIBUTION
+from dayhike.dem import COPERNICUS, DEM_ATTRIBUTION_KEYS, FABDEM_ATTRIBUTION
 from dayhike.extracts import UrlRetrieve
 from dayhike.loops import LOOP_SEEDS, LOOP_TRAILHEADS, LoopTarget, find_loops
+from dayhike.regions import Region
 from dayhike.similarity import (
     ALONG_KINDS,
     CALIBRATION_PAIRS,
@@ -123,6 +130,7 @@ from dayhike.similarity import (
     wish_unmeasured,
     score_rows,
 )
+from dayhike.sources import SOURCE_OSM, osm_record_url, osm_source_ref, read_register
 from dayhike.trailgraph import (
     TRAILHEAD_KINDS,
     WAY_BACK_KINDS,
@@ -141,7 +149,7 @@ Reach = Callable[[list[tuple[float, float]]], list[float | None]]  # drive hours
 Seed = int | Route | Mapping[str, float]  # a DayHike id, a ComposedHike, or a Wish (Measure name to value)
 
 SERVING_FORMAT = 5
-SERVING_ROOT = "/data"  # where the container finds the export (web/Dockerfile)
+SERVING_ROOT = "/data"  # where the container finds the export (web/data.Dockerfile)
 LINE_TOLERANCE_M = 10.0
 LINE_END_M = 2.0  # a served line's end lies this close to the TrailGraph vertex it was (1e-5 degree kept)
 ELEVATION_POINTS = 128
@@ -214,7 +222,7 @@ MEASURE_INFO: dict[str, tuple[str, str, str, str]] = {
     "viewpoint_along": ("scenery", "Viewpoint along", "A Viewpoint within 100 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap viewpoints."),
     "peaks_around": ("scenery", "Peaks around", "Peaks within 2 km of the line; scored by the fewer over the more (floor 1), against random hike pairs. No peak and 1 peak count as the same: so many hikes share that, it says little, and two hikes that match closely on a less common count, like 12 and 13 peaks, are the closer match.", "OpenStreetMap peaks."),
     "temperature": ("basic", "Typical temperature", "Mean temperature (June-August, or the chosen month); scored by the gap against random hike pairs, lowest from 10 °C apart.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
-    "precipitation": ("weather", "Precipitation", "Mean monthly precipitation (or the chosen month's); scored by the smaller over the larger (floor 10 mm), against random hike pairs.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
+    "precipitation": ("weather", "Precipitation", "Mean monthly precipitation over the whole year, not June-August (or the chosen month's); scored by the smaller over the larger (floor 10 mm), against random hike pairs.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
     "solar_radiation": ("weather", "Solar radiation", "Solar radiation (June-August, or the chosen month), kJ/m²/day; scored by the gap against random hike pairs, lowest from 5,000 apart.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
     "southness": ("weather", "Sun-facing slopes", "Which way the slopes face: 1 south, 0 north, 0.5 east or west; a flat walk faces no way and counts 0.5 (from FABDEM); scored by the gap against random hike pairs.", "FABDEM slopes along the line."),
     "water_count": ("water", "Water sources", "WaterSources within 100 m of the line, counted up to 3; scored by the gap against random hike pairs.", "OpenStreetMap drinking water, springs, taps and water points."),
@@ -390,7 +398,7 @@ SCORE_HELP = {
             "start. FABDEM, a 30 m elevation map with forests and buildings removed: heights, climb, "
             "profile shape, steepness and which way the slopes face. ESA WorldCover 2021: land cover and "
             "the share of the walk within 200 m of open water. CHELSA V2.1 climate normals for 1981-2010: "
-            "temperature, precipitation and solar radiation, for June-August or the chosen month. "
+            "temperature and solar radiation for June-August, precipitation for the whole year, or all three for the chosen month. "
             "With Return to start, every hike is measured with its way back to the start. "
             "A measure's ? names the one it uses.",
         },
@@ -411,14 +419,24 @@ def name_dem(text: str, attribution: Mapping[str, str]) -> str:
     """``text`` naming the elevation map an export was sampled from (ADR-0030).
 
     MEASURE_INFO and SCORE_HELP name FABDEM, the default. An export sampled
-    from Copernicus GLO-30 carries its attribution, and the texts name it.
+    from Copernicus GLO-30 carries its attribution, and the texts name it; one
+    with hikes read from USGS 3DEP names it too, or alone (ADR-0063).
     """
-    if "copernicus" not in attribution:
+    fabdem = "FABDEM, a 30 m elevation map with forests and buildings removed"
+    names = []
+    if "copernicus" in attribution:
+        names.append(("Copernicus GLO-30", "Copernicus GLO-30, a 30 m elevation map of the surface, tree tops and roofs included"))
+    elif "fabdem" in attribution or "usgs_3dep" not in attribution:
+        names.append(("FABDEM", fabdem))
+    if "usgs_3dep" in attribution:
+        names.append(("USGS 3DEP", "USGS 3DEP 1″, a 30 m bare-earth elevation map of the United States"))
+    if names == [("FABDEM", fabdem)]:
         return text
-    return text.replace(
-        "FABDEM, a 30 m elevation map with forests and buildings removed",
-        "Copernicus GLO-30, a 30 m elevation map of the surface, tree tops and roofs included",
-    ).replace("FABDEM", "Copernicus GLO-30")
+    return (
+        text.replace(fabdem, "\0")
+        .replace("FABDEM", " or ".join(short for short, _ in names))
+        .replace("\0", ", or ".join(long for _, long in names))
+    )
 
 
 MEASURE_GROUPS: dict[str, str] = {
@@ -463,6 +481,76 @@ class ServingExportError(ValueError):
     """The inputs of a serving export do not fit together."""
 
 
+# Per country (ISO 3166 code) the emergency numbers and mountain rescue service a hike starting
+# there shows, each row with its sources: one small table, edited by hand.
+EMERGENCY_PATH = Path(__file__).parent / "data" / "emergency.csv"
+
+
+@functools.cache
+def emergency_services() -> dict[str, dict]:
+    """``EMERGENCY_PATH`` by country code: country, name, numbers, rescue, rescue_url, how, sources
+    and notes (why a row has no official national source, else None)."""
+    with EMERGENCY_PATH.open(newline="", encoding="utf-8") as file:
+        return {
+            row["country"]: {
+                "country": row["country"],
+                "name": row["name"],
+                "numbers": row["numbers"].split(),
+                "rescue": row["rescue"] or None,
+                "rescue_url": row["rescue_url"] or None,
+                "how": row["how"],
+                "sources": row["source"].split(),
+                "notes": row["notes"] or None,
+            }
+            for row in csv.DictReader(file)
+        }
+
+
+def export_countries(out_dir: Path | str, countries_path: Path | str | None = None) -> Path:
+    """Write ``countries.npy`` into the export ``out_dir``: per Trailhead the ISO 3166 code of the
+    country it is in, from Natural Earth admin-0 country shapes (``countries_path``, the GeoJSON
+    the coverage map reads); for a Trailhead outside every shape (an island or coast the
+    simplified shapes leave out) the country of the nearest place in ``places.sqlite``. Reads
+    only ``trailheads.npy`` and ``places.sqlite``.
+
+    Raises ServingExportError, writing nothing, when a Trailhead has no country, or its country
+    no row in ``EMERGENCY_PATH``: every hike shows its emergency number.
+    """
+    from scipy.spatial import cKDTree
+
+    out = Path(out_dir)
+    trailheads = np.load(out / "trailheads.npy").reshape(-1, 2)
+    codes = np.full(len(trailheads), "", dtype="<U2")
+    if countries_path is not None:
+        shapes, shape_codes = [], []
+        for feature in json.loads(Path(countries_path).read_text())["features"]:
+            properties = feature["properties"]
+            code = next((c for c in (properties.get("ISO_A2_EH"), properties.get("ISO_A2")) if c and c != "-99"), None)
+            if code:
+                shapes.append(shapely.geometry.shape(feature["geometry"]))
+                shape_codes.append(code)
+        points = shapely.points(trailheads[:, 1], trailheads[:, 0])
+        tree, shape_codes = shapely.STRtree(shapes), np.array(shape_codes, dtype="<U2")
+        at, shape = tree.query(points, predicate="within")
+        codes[at] = shape_codes[shape]
+    places = out / "places.sqlite"
+    if (codes == "").any() and places.is_file():
+        with sqlite3.connect(f"file:{places}?mode=ro", uri=True) as db:
+            rows = db.execute("SELECT country, lat, lon FROM places WHERE country != ''").fetchall()
+        if rows:
+            where = np.array([(lat, lon) for _, lat, lon in rows])
+            missing = np.flatnonzero(codes == "")
+            _, nearest = cKDTree(_unit(where[:, 0], where[:, 1])).query(_unit(trailheads[missing, 0], trailheads[missing, 1]))
+            codes[missing] = np.array([country for country, *_ in rows], dtype="<U2")[nearest]
+    known = emergency_services()
+    unknown = {code: int((codes == code).sum()) for code in sorted(set(codes.tolist()) - set(known))}
+    if unknown:
+        listed = ", ".join(f"{code or 'no country'} ({count} Trailheads)" for code, count in unknown.items())
+        raise ServingExportError(f"no emergency number for {listed}: add the country to {EMERGENCY_PATH}")
+    np.save(out / "countries.npy", codes)
+    return out / "countries.npy"
+
+
 def export_serving(
     catalog_path: Path | str,
     out_dir: Path | str,
@@ -471,6 +559,8 @@ def export_serving(
     snaps_path: Path | str | None = None,
     valhalla_url: str | None = None,
     geonames_path: Path | str | None = None,
+    countries_path: Path | str | None = None,
+    regions: Sequence[Region] = (),
     progress: Progress | None = None,
 ) -> Path:
     """Write the serving export of a Catalog into ``out_dir`` (see the module doc).
@@ -481,7 +571,9 @@ def export_serving(
     can be (same disk), else copied. ``snaps_path`` seeds ``snaps.npz`` from an
     existing snap cache; with ``valhalla_url`` every Trailhead not in it is
     snapped now, so a server never has to. ``geonames_path`` is a GeoNames
-    dump (``allCountries``, zip or txt) for ``places.sqlite``.
+    dump (``allCountries``, zip or txt) for ``places.sqlite``; ``countries_path`` the Natural
+    Earth countries GeoJSON for ``countries.npy``. ``regions``, the ones the Catalog was built from, are
+    named in ``meta.json`` (label and continent) for the site's pages; none leaves them saying Europe.
     """
     started = time.monotonic()
     catalog_path, out = Path(catalog_path), Path(out_dir)
@@ -492,13 +584,32 @@ def export_serving(
         # A Catalog built before built DayHikes (ADR-0038) holds relations only.
         columns = {row[1] for row in catalog.execute("PRAGMA table_info(dayhikes)")}
         built = "d.kind, d.parts, d.route" if "kind" in columns else f"'{KIND_RELATION}', NULL, NULL"
-        hikes = catalog.execute(
-            "SELECT d.id, d.name, d.name_origin, d.difficulty, t.latitude, t.longitude, "
-            f"{built} FROM dayhikes d JOIN trailheads t ON t.dayhike_id = d.id ORDER BY d.id"
-        ).fetchall()
+        # A Catalog built before Sources (ADR-0060) is all OpenStreetMap: its source_ref is derived.
+        source = "d.source, d.source_ref" if "source" in columns else "NULL, NULL"
+        # An external hike's record page (ADR-0062); a Catalog from before has none.
+        source_url = "d.source_url" if "source_url" in columns else "NULL"
+        hikes = [
+            (
+                *row[:9],
+                row[9] or SOURCE_OSM,
+                row[10] or osm_source_ref(row[0], row[6], json.loads(row[7] or "[]"), row[8]),
+                row[11],
+            )
+            for row in catalog.execute(
+                "SELECT d.id, d.name, d.name_origin, d.difficulty, t.latitude, t.longitude, "
+                f"{built}, {source}, {source_url} FROM dayhikes d JOIN trailheads t ON t.dayhike_id = d.id ORDER BY d.id"
+            )
+        ]
         attribution = dict(catalog.execute("SELECT key, value FROM catalog_meta"))["attribution"]
+        # The DEMs each DayHike's heights were read from (ADR-0063); a Catalog sampled before has none.
+        dem_of = (
+            {dayhike_id: dem for dayhike_id, dem in catalog.execute("SELECT id, dem_source FROM dayhikes") if dem}
+            if "dem_source" in columns
+            else {}
+        )
     finally:
         catalog.close()
+    dems_used = {register_id for dem in dem_of.values() for register_id in dem.split(",")}
     ids = np.array([row[0] for row in hikes], dtype=np.int64)
     try:
         store = SimilarityStore.open_for(catalog_path, ids)
@@ -511,7 +622,8 @@ def export_serving(
         shutil.copyfile(similarity_dir_for(catalog_path) / name, similarity / name)
     trailheads = np.array([(row[4], row[5]) for row in hikes], dtype=np.float64).reshape(-1, 2)
     np.save(out / "trailheads.npy", trailheads)
-    sources = _write_hikes(catalog_path, out / "hikes.sqlite", hikes, progress)
+    sources = _write_hikes(catalog_path, out / "hikes.sqlite", hikes, progress, dem_of if dems_used else None)
+    external = external_sources({row[9] for row in hikes})
     compose = _write_trailgraph(trailgraph_path_for(catalog_path), out / "trailgraph.sqlite", progress)
     # A rerun without tiles or snaps drops the old ones: they may be for other tiles.
     if valhalla_dir is not None:
@@ -527,19 +639,32 @@ def export_serving(
     else:
         (out / "places.sqlite").unlink(missing_ok=True)
     export_landmarks(out, geonames_path)
-    # The elevation map in use: FABDEM, unless the GeometryStore was sampled from Copernicus GLO-30 (ADR-0030).
-    elevation = {} if "copernicus" in sources else {"fabdem": FABDEM_ATTRIBUTION}
+    if countries_path is not None:
+        export_countries(out, countries_path)
+    else:
+        (out / "countries.npy").unlink(missing_ok=True)
+    # The elevation maps in use: those the DayHikes record (ADR-0063); for a Catalog sampled before,
+    # FABDEM, unless the GeometryStore was sampled from Copernicus GLO-30 (ADR-0030).
+    if dems_used:
+        sources = {key: value for key, value in sources.items() if DEM_ATTRIBUTION_KEYS.get(key) in (None, *dems_used)}
+        elevation = {"fabdem": FABDEM_ATTRIBUTION} if "fabdem" in dems_used else {}
+    else:
+        elevation = {} if "copernicus" in sources else {"fabdem": FABDEM_ATTRIBUTION}
     meta = {
         "format": SERVING_FORMAT,
         "dayhikes": len(ids),
         "facts_version": json.loads((similarity / "meta.json").read_text())["facts_version"],
         "line_tolerance_m": LINE_TOLERANCE_M,
         "elevation_points": ELEVATION_POINTS,
-        "attribution": {"osm": attribution, **elevation, **sources},
+        "attribution": {"osm": attribution, **elevation, **sources, **external_credits(external)},
+        # Each external source's name, licence and page from the sources register (ADR-0062).
+        "sources": external,
         "drive_time": (out / "valhalla" / "valhalla.json").is_file() and (out / "snaps.npz").is_file(),
         "compose": compose,
         "export_seconds": round(time.monotonic() - started, 1),
     }
+    if regions:
+        meta["regions"] = [{"label": region.label, "continent": region.continent} for region in regions]
     (out / "meta.json").write_text(json.dumps(meta, indent=1, ensure_ascii=False))
     return out
 
@@ -549,8 +674,12 @@ def _write_hikes(
     path: Path,
     hikes: list[tuple],
     progress: Progress | None,
+    dem_of: Mapping[int, str] | None = None,
 ) -> dict[str, str]:
-    """Write ``hikes.sqlite``; return the GeometryStore's source attributions."""
+    """Write ``hikes.sqlite``; return the GeometryStore's source attributions.
+
+    With ``dem_of``, each DayHike's ``dem_source`` (ADR-0063), only a hike read
+    from Copernicus GLO-30 has its profile smoothed."""
     path.unlink(missing_ok=True)
     geo = sqlite3.connect(f"file:{geometry_store_path_for(catalog_path)}?mode=ro", uri=True)
     db = sqlite3.connect(path)
@@ -570,7 +699,8 @@ def _write_hikes(
             "CREATE TABLE hikes ("
             " id INTEGER PRIMARY KEY, name TEXT NOT NULL, name_origin TEXT NOT NULL,"
             " sac_scale TEXT, walk_m REAL, line TEXT, elevation BLOB, climb_m REAL, descent_m REAL,"
-            " points BLOB NOT NULL, kind TEXT NOT NULL, parts TEXT, route TEXT);"
+            " points BLOB NOT NULL, kind TEXT NOT NULL, parts TEXT, route TEXT,"
+            " source TEXT NOT NULL, source_ref TEXT NOT NULL, source_url TEXT);"
             "CREATE VIRTUAL TABLE hike_boxes USING rtree(id, south, north, west, east)"
         )
         for start in range(0, len(hikes), _HIKE_CHUNK):
@@ -587,7 +717,12 @@ def _write_hikes(
                     kept_lat, kept_lon = simplify_line(lat, lon, LINE_TOLERANCE_M)
                     line = encode_polyline(kept_lat, kept_lon)
                     boxes.append((dayhike_id, kept_lat.min(), kept_lat.max(), kept_lon.min(), kept_lon.max()))
-                    profile = drawn_profile(lat, lon, ele, smooth="copernicus" in sources)
+                    smooth = (
+                        "copernicus" in sources
+                        if dem_of is None
+                        else COPERNICUS.register_id in dem_of.get(dayhike_id, "").split(",")
+                    )
+                    profile = drawn_profile(lat, lon, ele, smooth=smooth)
                     if profile is not None:
                         elevation = np.round(profile).astype("<i2").tobytes()
                         climb_m, descent_m = (round(v) for v in climb_and_descent(lat, lon, ele))
@@ -598,9 +733,9 @@ def _write_hikes(
                 )
             _name_points(geo, rows)
             db.executemany(
-                "INSERT INTO hikes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO hikes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
-                    (*row[:9], zlib.compress(json.dumps(row[-1], ensure_ascii=False).encode()), *row[9:12])
+                    (*row[:9], zlib.compress(json.dumps(row[-1], ensure_ascii=False).encode()), *row[9:15])
                     for row in rows
                 ],
             )
@@ -614,14 +749,37 @@ def _write_hikes(
     return sources
 
 
+def external_sources(source_ids: set[str]) -> dict[str, dict[str, str]]:
+    """The name, licence and page of each source in ``source_ids`` other than
+    OpenStreetMap, from the sources register (ADR-0062)."""
+    return {
+        row["id"]: {key: row[key] for key in ("name", "licence", "licence_url", "url")}
+        for row in read_register()
+        if row["id"] in source_ids and row["id"] != SOURCE_OSM
+    }
+
+
+def external_credits(external: dict[str, dict[str, str]]) -> dict[str, str]:
+    """The attribution line of each external source."""
+    return {source_id: f"{row['name']} ({row['url']}), {row['licence']}" for source_id, row in external.items()}
+
+
 def _check_trailgraph_sampled(source: Path, store: SimilarityStore) -> None:
     """Refuse a TrailGraph ``sample-trailgraph`` never ran on when the similarity
-    facts read the rasters: its ComposedHikes would lack those facts."""
+    facts read the rasters, or ran on before it read land cover along long
+    steps: its ComposedHikes would lack those facts or measure them otherwise."""
     if not source.is_file() or all(np.isnan(store.column(name)).all() for name in _RASTER_FACTS):
         return
     graph = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
     try:
         unsampled = graph.execute("SELECT 1 FROM segments WHERE landcover IS NULL LIMIT 1").fetchone()
+        if unsampled is None and not np.isnan(store.column("tree_share")).all():
+            read_along = "landcover_along" in {row[1] for row in graph.execute("PRAGMA table_info(segments)")}
+            unsampled = (
+                graph.execute("SELECT 1 FROM segments WHERE landcover_along IS NULL LIMIT 1").fetchone()
+                if read_along
+                else (1,)
+            )
     finally:
         graph.close()
     if unsampled is not None:
@@ -1204,6 +1362,9 @@ class ServingData:
         self._db_uri = f"file:{self.directory / 'hikes.sqlite'}?mode=ro&immutable=1"
         with self._db() as db:
             self._folded = [_fold(name) for (name,) in db.execute("SELECT name FROM hikes ORDER BY id")]
+            columns = {row[1] for row in db.execute("PRAGMA table_info(hikes)")}
+            self._has_source = "source" in columns
+            self._has_source_url = "source_url" in columns
         # One string of every folded name between newlines: str.find walks it in C.
         self._haystack = "\n" + "\n".join(self._folded) + "\n"
         self._starts = np.cumsum([1] + [len(name) + 1 for name in self._folded[:-1]])
@@ -1220,6 +1381,8 @@ class ServingData:
                     self._landmark_names = "l.names"
             threading.Thread(target=lambda: self._landmark_spellings, daemon=True).start()
         self._one_way_m = self.store.mode(False).column("length_m")  # what makes a hike multi-day (ADR-0056)
+        countries = self.directory / "countries.npy"
+        self.countries = np.load(countries) if countries.is_file() else None
 
     def _db(self) -> sqlite3.Connection:
         return sqlite3.connect(self._db_uri, uri=True)
@@ -1400,6 +1563,16 @@ class ServingData:
         near = self._near_town(lat, lon)
         return f"{near[0]}, {near[1]}" if near else None
 
+    def emergency(self, lat: float, lon: float, row: int | None = None) -> dict | None:
+        """The emergency numbers and mountain rescue service of the country a hike starts in
+        (``emergency_services``): its Trailhead's in ``countries.npy`` (``row``), else the country of
+        the town nearest its start, however far; None with neither, or with no row for the country."""
+        code = str(self.countries[row]) if row is not None and self.countries is not None else ""
+        towns, tree = self._towns
+        if not code and tree is not None:
+            code = towns[int(tree.query(_unit(lat, lon)[0])[1])][1]
+        return emergency_services().get(code)
+
     def multi_day(self, row: int) -> bool:
         """Whether a hike is a multi-day route: longer than ``MULTI_DAY_M`` one way (ADR-0056)."""
         return bool(self._one_way_m[row] > MULTI_DAY_M)
@@ -1483,13 +1656,18 @@ class ServingData:
         row = self.row_of(dayhike_id)
         store = self.store.mode(return_to_start)
         with self._db() as db:
-            name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points, kind, parts, route = (
+            # An export made before Sources (ADR-0060) is all OpenStreetMap.
+            source = "source, source_ref" if self._has_source else f"'{SOURCE_OSM}', NULL"
+            source += ", source_url" if self._has_source_url else ", NULL"
+            name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points, kind, parts, route, source, source_ref, source_url = (
                 db.execute(
                     "SELECT name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points, "
-                    "kind, parts, route FROM hikes WHERE id = ?",
+                    f"kind, parts, route, {source} FROM hikes WHERE id = ?",
                     (dayhike_id,),
                 ).fetchone()
             )
+        if source_ref is None:
+            source_ref = osm_source_ref(dayhike_id, kind, json.loads(parts or "[]"), route)
         profile = np.frombuffer(elevation, dtype="<i2").tolist() if elevation else None
         return {
             "id": dayhike_id,
@@ -1500,6 +1678,7 @@ class ServingData:
             "walk_m": walk_m,
             "multi_day": self.multi_day(row),
             "region": self._region(row),
+            "emergency": self.emergency(*map(float, self.trailheads[row]), row),
             **self._climb(row, (climb_m, descent_m), return_to_start),
             "line": line,
             "elevation": None
@@ -1511,8 +1690,20 @@ class ServingData:
             "way_back": _way_back(*store.way_back[[0, 3], row]) if return_to_start else None,
             # A built DayHike (ADR-0038): what kind, the OSM relations it is built from, its Route.
             "built": None
-            if kind == KIND_RELATION
+            if kind in (KIND_RELATION, KIND_EXTERNAL)
             else {"kind": kind, "parts": json.loads(parts), "route": route},
+            # Where the hike comes from: a sources register id, its record there and a link to it;
+            # for an external source (ADR-0062) also its name, licence and licence page.
+            "source": {
+                "id": source,
+                "ref": source_ref,
+                "url": osm_record_url(source_ref) if source == SOURCE_OSM else source_url,
+                **{
+                    key: value
+                    for key, value in self.meta.get("sources", {}).get(source, {}).items()
+                    if key in ("name", "licence", "licence_url")
+                },
+            },
         }
 
     def way_back_walk(self, dayhike_id: int) -> dict:
@@ -1612,6 +1803,7 @@ class ServingData:
             "walk_m": walk_m,
             "multi_day": walk_m > MULTI_DAY_M,
             "region": self._place_near(float(lat[0]), float(lon[0])),
+            "emergency": self.emergency(float(lat[0]), float(lon[0])),
             "climb_m": climb_m,
             "descent_m": descent_m,
             "line": line,
@@ -1628,6 +1820,8 @@ class ServingData:
                 **(walk_line(back.walk.lat, back.walk.lon, back.walk.ele) if back.walk is not None else {"line": None, "ele": None}),
             },
             "built": None,
+            # Drawn from OSM trail segments, it is no record of its own (ADR-0060).
+            "source": {"id": SOURCE_OSM, "ref": None, "url": None},
         }
 
     def _labels(self, relation_ids: list[int]) -> dict[int, str]:

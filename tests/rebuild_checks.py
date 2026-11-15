@@ -52,7 +52,12 @@ CATALOG_SCHEMA = {
     "amenity_facts": ["dayhike_id", "kind", "count", "nearest_m"],
     "catalog_meta": ["key", "value"],
     "climate_months": ["dayhike_id", "month", "temperature_c", "precipitation_mm", "solar_radiation"],
-    "dayhikes": ["id", "name", "name_origin", "length_m", "difficulty", "kind", "parts", "route"],
+    "dayhikes": [
+        "id", "name", "name_origin", "length_m", "difficulty", "kind", "parts", "route", "source",
+        "source_ref",
+        "source_url",
+        "dem_source",
+    ],
     "feature_vectors": [
         "dayhike_id", "length_m", "elevation_min_m", "elevation_max_m", "elevation_gain_m",
         "difficulty_ordinal", "tree_fraction", "shrub_fraction", "grass_fraction",
@@ -68,7 +73,9 @@ GEOMETRY_SCHEMA = {
         "relation_tags",
     ],
     "geometry_meta": ["key", "value"],
-    "vertices": ["dayhike_id", "seq", "node_id", "latitude", "longitude", "ele", "landcover"],
+    "vertices": [
+        "dayhike_id", "seq", "node_id", "latitude", "longitude", "ele", "landcover", "landcover_along",
+    ],
     "ways": [
         "dayhike_id", "seq", "way_id", "node_ids", "tags", "in_chain", "leftover", "walked_m",
         "walk_order",

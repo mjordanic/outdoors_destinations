@@ -17,11 +17,23 @@ from dayhike.catalog import (
     build_catalog,
     filter_by_drive_time,
 )
-from dayhike.dem import DEM_SOURCES, Bounds, DEFAULT_DEM_BOUNDS, DEFAULT_DEM_DIR, fetch_dem, sample_dem
+from dayhike.dem import DEM_SOURCES, Bounds, DEFAULT_DEM_DIR, fetch_dem, sample_dem
 from dayhike.landcover import DEFAULT_LANDCOVER_DIR, fetch_worldcover, sample_landcover
 from dayhike.parallel import WORKERS_ENV
 from dayhike.climate import DEFAULT_CLIMATE_DIR, fetch_chelsa, sample_climate
 from dayhike.extracts import fetch_geofabrik_extracts
+from dayhike.regions import (
+    DEFAULT_MAP_REGION,
+    DEFAULT_REGION,
+    Region,
+    RegionError,
+    bounds_around,
+    extracts_of,
+    labels_text,
+    load_region,
+    region_names,
+    view_around,
+)
 from dayhike.highways import HighwayDriveTimeClient, HighwaySnaps
 from dayhike.similarity import (
     CORE_MEASURES,
@@ -82,11 +94,37 @@ def main(argv: list[str] | None = None) -> int:
         help="Directory of FABDEM (or Copernicus GLO-30) GeoTIFFs: a line whose ends differ by more than "
         "100 m starts at its lower end (ADR-0048). Without it, height orients no line",
     )
+    ingest.add_argument(
+        "--external",
+        action="append",
+        default=[],
+        metavar="SOURCE",
+        help="Add the hikes of an external source cached by fetch-external, e.g. ie-sport-ireland "
+        "(ADR-0062); repeatable",
+    )
+    ingest.add_argument(
+        "--external-dir",
+        type=Path,
+        default=None,
+        help="Directory of the external sources' caches (default: data/external)",
+    )
     _add_workers(ingest)
+    fetch_ext = subparsers.add_parser(
+        "fetch-external",
+        help="Download an external hike source into data/external/<source> (does not ingest)",
+    )
+    fetch_ext.add_argument("--source", required=True, help="Sources register id, e.g. ie-sport-ireland")
+    fetch_ext.add_argument(
+        "--dest",
+        type=Path,
+        default=None,
+        help="Directory of the external sources' caches (default: data/external)",
+    )
     fetch = subparsers.add_parser(
         "fetch-extracts",
         help="Download Geofabrik PBFs into data/osm (does not ingest)",
     )
+    _add_regions(fetch, DEFAULT_REGION, "whose extracts to download")
     fetch.add_argument(
         "--dest",
         type=Path,
@@ -95,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     fetch_dem = subparsers.add_parser(
         "fetch-dem",
-        help="Download FABDEM (or Copernicus GLO-30) GeoTIFFs covering Alps+Dinarides into data/dem",
+        help="Download FABDEM (or Copernicus GLO-30) GeoTIFFs covering the regions (default Alps+Dinarides) into data/dem",
     )
     fetch_dem.add_argument(
         "--dest",
@@ -103,22 +141,19 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_DEM_DIR,
         help="Directory for GeoTIFFs (default: data/dem)",
     )
-    fetch_dem.add_argument(
-        "--bounds",
-        type=_parse_bounds,
-        default=DEFAULT_DEM_BOUNDS,
-        help="south,west,north,east in WGS84 (default: PRD extract bbox)",
-    )
+    _add_bounds(fetch_dem)
     fetch_dem.add_argument(
         "--source",
         choices=list(DEM_SOURCES),
         default="fabdem",
         help="Elevation map: fabdem, bare earth, non-commercial (default); or copernicus, "
-        "GLO-30 with tree tops and roofs, commercial use allowed. Keep one per directory",
+        "GLO-30 with tree tops and roofs, commercial use allowed; or 3dep, USGS 3DEP 1 arc-second, "
+        "bare earth, US only, public domain. Keep one of fabdem and copernicus per directory; "
+        "3dep tiles beside them are read where they are",
     )
     fetch_lc = subparsers.add_parser(
         "fetch-landcover",
-        help="Download ESA WorldCover GeoTIFFs covering Alps+Dinarides into data/landcover",
+        help="Download ESA WorldCover GeoTIFFs covering the regions (default Alps+Dinarides) into data/landcover",
     )
     fetch_lc.add_argument(
         "--dest",
@@ -126,15 +161,10 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_LANDCOVER_DIR,
         help="Directory for GeoTIFFs (default: data/landcover)",
     )
-    fetch_lc.add_argument(
-        "--bounds",
-        type=_parse_bounds,
-        default=DEFAULT_DEM_BOUNDS,
-        help="south,west,north,east in WGS84 (default: PRD extract bbox)",
-    )
+    _add_bounds(fetch_lc)
     fetch_cl = subparsers.add_parser(
         "fetch-climate",
-        help="Download CHELSA monthly GeoTIFFs covering Alps+Dinarides into data/climate",
+        help="Download CHELSA monthly GeoTIFFs covering the regions (default Alps+Dinarides) into data/climate",
     )
     fetch_cl.add_argument(
         "--dest",
@@ -142,12 +172,7 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_CLIMATE_DIR,
         help="Directory for GeoTIFFs (default: data/climate)",
     )
-    fetch_cl.add_argument(
-        "--bounds",
-        type=_parse_bounds,
-        default=DEFAULT_DEM_BOUNDS,
-        help="south,west,north,east in WGS84 (default: PRD extract bbox)",
-    )
+    _add_bounds(fetch_cl)
     sample = subparsers.add_parser(
         "sample-dem",
         help="Sample local FABDEM (or Copernicus GLO-30) onto GeometryStore vertices and Catalog elevation",
@@ -162,7 +187,7 @@ def main(argv: list[str] | None = None) -> int:
         "--dem",
         type=Path,
         default=DEFAULT_DEM_DIR,
-        help="Directory of FABDEM or Copernicus GLO-30 GeoTIFFs (default: data/dem)",
+        help="Directory of FABDEM or Copernicus GLO-30 GeoTIFFs, and USGS 3DEP ones for the US (default: data/dem)",
     )
     sample.add_argument(
         "--landcover",
@@ -367,6 +392,28 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="GeoNames allCountries.zip for the page's place search; downloaded there when missing",
     )
+    export.add_argument(
+        "--countries",
+        type=Path,
+        help="Natural Earth admin-0 countries GeoJSON: the country each hike starts in, for its emergency number",
+    )
+    export.add_argument(
+        "--region",
+        action="append",
+        default=[],
+        help=f"A region the Catalog covers: one of {', '.join(region_names())}, or a region .toml file; "
+        "repeatable. The site's pages name them (without it, or with only regions in Europe, they say Europe)",
+    )
+    countries = subparsers.add_parser(
+        "export-countries",
+        help="Add the country each hike starts in (for its emergency number) beside an existing serving export",
+    )
+    countries.add_argument("--out", type=Path, default=Path("data/web-serving"))
+    countries.add_argument(
+        "--countries",
+        type=Path,
+        help="Natural Earth admin-0 countries GeoJSON; without it, the country of the place nearest each Trailhead",
+    )
     places = subparsers.add_parser(
         "export-places", help="Add GeoNames place search and the hike search's Landmarks beside an existing serving export"
     )
@@ -403,9 +450,23 @@ def main(argv: list[str] | None = None) -> int:
     serve.add_argument(
         "--site-url", help="The site's public origin (https://host): shared links then get a preview image"
     )
-    coverage = subparsers.add_parser(
-        "coverage-map", help="Draw the SVG map of Europe with the covered countries shaded"
+    serve.add_argument(
+        "--tile-url",
+        help="Raster base-map tile URL template with {z}/{x}/{y}; omit for tile.openstreetmap.org",
     )
+    serve.add_argument(
+        "--tile-attribution", help="The tile provider's credit (HTML), shown beside the OpenStreetMap credit"
+    )
+    serve.add_argument("--tile-max-zoom", type=int, help="The deepest zoom the tile provider serves (default 19)")
+    serve.add_argument(
+        "--pmtiles-url",
+        help="A vector PMTiles base map (Protomaps basemap): the maps draw it with MapLibre GL JS, raster tiles the fallback",
+    )
+    coverage = subparsers.add_parser(
+        "coverage-map", help="Draw the SVG map of the regions (default Europe) with the covered countries shaded"
+    )
+    _add_regions(coverage, DEFAULT_MAP_REGION, "to draw; several are drawn in one Equal Earth map")
+    coverage.add_argument("--world", action="store_true", help="Draw the whole world instead of the regions")
     coverage.add_argument("--catalog", type=Path, default=Path("data/catalog.sqlite"))
     coverage.add_argument(
         "--countries", type=Path, required=True, help="Natural Earth admin-0 countries GeoJSON"
@@ -414,12 +475,31 @@ def main(argv: list[str] | None = None) -> int:
         "--out", type=Path, default=Path("src/dayhike/web/static/coverage.svg")
     )
     args = parser.parse_args(argv)
+    if hasattr(args, "region_default"):
+        try:
+            args.region = [load_region(name) for name in args.region or [args.region_default]]
+        except RegionError as exc:
+            subparsers.choices[args.command].error(str(exc))
     if getattr(args, "workers", None) is not None:
         os.environ[WORKERS_ENV] = str(args.workers)  # the stage's code reads it (dayhike.parallel)
     if args.command == "export-serving":
+        try:
+            regions = [load_region(name) for name in args.region]
+        except RegionError as exc:
+            export.error(str(exc))
         return _export_serving(
-            args.catalog, args.out, args.valhalla_tiles, args.snaps, args.valhalla_url, args.geonames
+            args.catalog, args.out, args.valhalla_tiles, args.snaps, args.valhalla_url, args.geonames, args.countries,
+            regions,
         )
+    if args.command == "export-countries":
+        from dayhike.serving import ServingExportError, export_countries
+
+        try:
+            print(export_countries(args.out, args.countries))
+        except ServingExportError as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        return 0
     if args.command == "export-places":
         from dayhike.serving import export_landmarks, export_places, fetch_geonames
 
@@ -437,11 +517,23 @@ def main(argv: list[str] | None = None) -> int:
             args.goatcounter,
             tuple(args.cors_origin),
             args.site_url,
+            args.tile_url,
+            args.tile_attribution,
+            args.tile_max_zoom,
+            args.pmtiles_url,
         )
     if args.command == "coverage-map":
-        from dayhike.coverage import coverage_map
+        from dayhike.coverage import WORLD_VIEW, coverage_map
 
-        for country, count in coverage_map(args.catalog, args.countries, args.out):
+        if args.world:
+            frame = {"view": WORLD_VIEW, "centre": None, "label": "the world"}
+        elif len(args.region) == 1:
+            (region,) = args.region
+            frame = {"view": _wsen(region.view), "centre": region.centre, "label": region.label}
+        else:
+            label = labels_text([region.label for region in args.region])
+            frame = {"view": _wsen(view_around(args.region)), "centre": None, "label": label}
+        for country, count in coverage_map(args.catalog, args.countries, args.out, **frame):
             print(f"{country}\t{count}")
         return 0
     if args.command == "ingest":
@@ -452,6 +544,8 @@ def main(argv: list[str] | None = None) -> int:
             list_dayhikes=args.list_dayhikes,
             snap_tolerance_m=args.snap_tolerance,
             dem_dir=args.dem,
+            external=args.external,
+            external_dir=args.external_dir,
         )
     if args.command == "sample-trailgraph":
         try:
@@ -471,14 +565,23 @@ def main(argv: list[str] | None = None) -> int:
             )
         except ValueError as exc:
             compose.error(str(exc))
+    if args.command == "fetch-external":
+        from dayhike.external import EXTERNAL_DIR, fetch_external
+
+        try:
+            print(fetch_external(args.source, EXTERNAL_DIR if args.dest is None else args.dest))
+        except ValueError as exc:
+            fetch_ext.error(str(exc))
+        return 0
     if args.command == "fetch-extracts":
-        return _fetch_extracts(args.dest)
+        return _fetch_extracts(args.dest, extracts_of(args.region))
+    # Tiles cover each region's box; CHELSA's one file per variable is clipped to the box around them all.
     if args.command == "fetch-dem":
-        return _fetch_dem(args.dest, args.bounds, args.source)
+        return _fetch_dem(args.dest, [args.bounds] if args.bounds else [r.bounds for r in args.region], args.source)
     if args.command == "fetch-landcover":
-        return _fetch_landcover(args.dest, args.bounds)
+        return _fetch_landcover(args.dest, [args.bounds] if args.bounds else [r.bounds for r in args.region])
     if args.command == "fetch-climate":
-        return _fetch_climate(args.dest, args.bounds)
+        return _fetch_climate(args.dest, args.bounds or bounds_around(args.region))
     if args.command == "sample-dem":
         try:
             return _sample_dem(args.catalog, args.dem, args.landcover)
@@ -526,6 +629,8 @@ def _ingest(
     list_dayhikes: bool = False,
     snap_tolerance_m: float = SNAP_TOLERANCE_M,
     dem_dir: Path | None = None,
+    external: list[str] | tuple[str, ...] = (),
+    external_dir: Path | None = None,
 ) -> int:
     catalog = build_catalog(
         osm_paths,
@@ -534,6 +639,8 @@ def _ingest(
         fresh=fresh,
         snap_tolerance_m=snap_tolerance_m,
         dem_dir=dem_dir,
+        external=external,
+        external_dir=external_dir,
     )
     print(catalog.path)
     print(catalog.ingest_report)
@@ -543,31 +650,39 @@ def _ingest(
     return 0
 
 
-def _fetch_extracts(dest: Path) -> int:
-    for path in fetch_geofabrik_extracts(dest):
+def _fetch_extracts(dest: Path, urls: list[str]) -> int:
+    for path in fetch_geofabrik_extracts(dest, urls=urls):
         print(path)
     return 0
 
 
-def _fetch_dem(dest: Path, bounds: Bounds, source: str) -> int:
-    paths = fetch_dem(
-        dest,
-        bounds,
-        source=DEM_SOURCES[source],
-        progress=_progress,
-    )
-    for path in paths:
+def _fetch_dem(dest: Path, boxes: list[Bounds], source: str) -> int:
+    paths = [
+        path
+        for bounds in boxes
+        for path in fetch_dem(
+            dest,
+            bounds,
+            source=DEM_SOURCES[source],
+            progress=_progress,
+        )
+    ]
+    for path in dict.fromkeys(paths):
         print(path)
     return 0
 
 
-def _fetch_landcover(dest: Path, bounds: Bounds) -> int:
-    paths = fetch_worldcover(
-        dest,
-        bounds,
-        progress=_progress,
-    )
-    for path in paths:
+def _fetch_landcover(dest: Path, boxes: list[Bounds]) -> int:
+    paths = [
+        path
+        for bounds in boxes
+        for path in fetch_worldcover(
+            dest,
+            bounds,
+            progress=_progress,
+        )
+    ]
+    for path in dict.fromkeys(paths):
         print(path)
     return 0
 
@@ -699,6 +814,8 @@ def _export_serving(
     snaps: Path | None,
     valhalla_url: str | None,
     geonames: Path | None,
+    countries: Path | None,
+    regions: list[Region],
 ) -> int:
     from dayhike.serving import ServingExportError, export_serving, fetch_geonames
 
@@ -711,6 +828,8 @@ def _export_serving(
                 snaps_path=snaps,
                 valhalla_url=valhalla_url,
                 geonames_path=geonames and fetch_geonames(geonames),
+                countries_path=countries,
+                regions=regions,
                 progress=_progress,
             )
         )
@@ -729,11 +848,15 @@ def _serve(
     goatcounter: str | None,
     cors_origins: tuple[str, ...],
     site_url: str | None = None,
+    tile_url: str | None = None,
+    tile_attribution: str | None = None,
+    tile_max_zoom: int | None = None,
+    pmtiles_url: str | None = None,
 ) -> int:
     try:
         import uvicorn
 
-        from dayhike.web import create_app
+        from dayhike.web import BaseMap, create_app
     except ImportError:
         print("the web demo needs its extra: uv sync --extra web", file=sys.stderr)
         return 1
@@ -751,6 +874,7 @@ def _serve(
         def drive_client(max_hours: float) -> HighwayDriveTimeClient:
             return HighwayDriveTimeClient(max_hours, snaps)
 
+    tiles = {"url": tile_url, "attribution": tile_attribution, "max_zoom": tile_max_zoom, "pmtiles": pmtiles_url}
     try:
         app = create_app(
             serving,
@@ -759,6 +883,7 @@ def _serve(
             goatcounter=goatcounter,
             cors_origins=cors_origins,
             site_url=site_url,
+            basemap=BaseMap(**{key: value for key, value in tiles.items() if value is not None}),
         )
     except ValueError as exc:
         print(exc, file=sys.stderr)
@@ -812,6 +937,35 @@ def _parse_weight(value: str) -> tuple[str, float]:
         return name.strip(), float(weight)
     except ValueError:
         raise argparse.ArgumentTypeError(f"expected MEASURE=WEIGHT, got {value!r}") from None
+
+
+def _add_regions(command: argparse.ArgumentParser, default: str, what: str) -> None:
+    command.add_argument(
+        "--region",
+        action="append",
+        help=f"A region {what}: one of {', '.join(region_names())}, or a region .toml file; "
+        f"repeatable (default: {default})",
+    )
+    command.set_defaults(region_default=default)
+
+
+def _add_bounds(command: argparse.ArgumentParser) -> None:
+    """--region (the box around the regions' bounds) or --bounds; neither is the default region's box."""
+    where = command.add_mutually_exclusive_group()
+    where.add_argument(
+        "--region",
+        action="append",
+        help=f"A region whose bounds to cover: one of {', '.join(region_names())}, or a region .toml file; "
+        f"repeatable (default: {DEFAULT_REGION})",
+    )
+    where.add_argument(
+        "--bounds", type=_parse_bounds, default=None, help="south,west,north,east in WGS84, instead of --region"
+    )
+    command.set_defaults(region_default=DEFAULT_REGION)
+
+
+def _wsen(box: Bounds) -> tuple[float, float, float, float]:
+    return (box.west, box.south, box.east, box.north)
 
 
 def _parse_bounds(value: str) -> Bounds:

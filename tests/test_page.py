@@ -21,6 +21,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 import uvicorn
+from starlette.routing import Mount
+from starlette.staticfiles import StaticFiles
 
 from dayhike import build_catalog, build_similarity, web
 from dayhike.serving import ServingData, decode_polyline, draw_noise, drawn, encode_polyline, export_serving
@@ -67,6 +69,21 @@ def server(data: ServingData) -> Iterator[str]:
 
 
 @pytest.fixture(scope="module")
+def vector_server(data: ServingData) -> Iterator[str]:
+    """The app drawing its maps from a vector PMTiles file: one z10 Protomaps tile over the catalog's hikes,
+    served (with range requests) beside the page."""
+    app = create_app(data, lambda max_hours: Matrix(), rank_rate=1_000, api_rate=100_000, basemap=web.BaseMap(pmtiles="fixtures/basemap.pmtiles"))
+    app.router.routes.insert(0, Mount("/fixtures", StaticFiles(directory=FIXTURE.parent)))
+    yield from serve(app)
+
+
+@pytest.fixture(params=["raster", "vector"])
+def map_server(request) -> str:
+    """The app with each kind of base map: every overlay and click works over both."""
+    return request.getfixturevalue("server" if request.param == "raster" else "vector_server")
+
+
+@pytest.fixture(scope="module")
 def counted_server(data: ServingData) -> Iterator[str]:
     """The app with GoatCounter set, so every page loads the real count.js."""
     yield from serve(create_app(data, goatcounter="gofindmeahike"))
@@ -93,8 +110,22 @@ def browser() -> Iterator["sync_api.Browser"]:
             launched = playwright.chromium.launch()
         except sync_api.Error as error:
             pytest.skip(f"no Chromium for Playwright (uv run playwright install chromium): {error}")
-        yield launched
+        yield Browser(launched)
         launched.close()
+
+
+class Browser:
+    """The browser, its pages in British English unless a test asks for a locale: km and metres (the
+    page's default units come from the locale)."""
+
+    def __init__(self, browser) -> None:
+        self._browser = browser
+
+    def new_page(self, **options):
+        return self._browser.new_page(**{"locale": "en-GB", **options})
+
+    def __getattr__(self, name):
+        return getattr(self._browser, name)
 
 
 class Api:
@@ -137,9 +168,13 @@ def open_page(
     init: str = "",
     draw: int | None = None,
     touch: bool = False,
+    locale: str = "en-GB",
+    timezone: str | None = None,
 ):
-    """``draw``: the draw number each Find takes, in place of a random one; ``touch``: a phone's touch screen."""
-    page = browser.new_page(viewport={"width": width, "height": 900}, has_touch=touch, is_mobile=touch)
+    """``draw``: the draw number each Find takes, in place of a random one; ``touch``: a phone's touch screen;
+    ``locale`` and ``timezone``: the browser's, which choose the units the page opens in."""
+    zone = {"timezone_id": timezone} if timezone else {}
+    page = browser.new_page(viewport={"width": width, "height": 900}, has_touch=touch, is_mobile=touch, locale=locale, **zone)
     if init:
         page.add_init_script(init)
     page.set_default_timeout(5000)
@@ -988,6 +1023,77 @@ def test_the_page_runs_leaflet_1_9_4_from_its_own_server_and_asks_unpkg_for_noth
     assert not [url for url in asked if "unpkg.com" in url]
 
 
+def test_both_maps_load_their_tiles_from_the_tile_provider_set_and_credit_it_beside_openstreetmap(browser, data) -> None:
+    credit = '<a href="https://tiles.example.com/terms">Example Tiles</a>'
+    basemap = web.BaseMap("https://tiles.example.com/{z}/{x}/{y}.png", credit, 17)
+    for server in serve(create_app(data, basemap=basemap)):
+        page = browser.new_page()
+        page.set_default_timeout(5000)
+        tiles: list[str] = []
+
+        def tile(route) -> None:
+            tiles.append(route.request.url)
+            route.fulfill(status=404)
+
+        page.route(lambda url: not url.startswith(server), lambda route: route.abort())
+        page.route("https://tiles.example.com/**", tile)
+        page.goto(f"{server}/#hike={RIDGE_WALK_ID}")
+        page.get_by_text("Chosen: Ridge Walk").wait_for()
+        page.locator("#map-pick-on").check()
+        page.wait_for_function("() => document.querySelectorAll('.leaflet-container').length === 2")
+
+        corners = page.locator(".leaflet-control-attribution")
+        assert corners.count() == 2
+        for corner in corners.all():
+            assert "© OpenStreetMap contributors" in corner.inner_text() and "Example Tiles" in corner.inner_text()
+        page.wait_for_function("() => document.querySelectorAll('.leaflet-tile').length > 0")
+        assert tiles and all(re.fullmatch(r"https://tiles\.example\.com/\d+/\d+/\d+\.png", url) for url in tiles)
+        assert page.evaluate("pick.map.getMaxZoom()") == 17
+        page.close()
+
+
+@pytest.mark.parametrize("phone", [False, True])
+def test_with_a_pmtiles_file_set_both_maps_draw_it_as_vectors_and_ask_openstreetmap_for_no_tile(browser, vector_server, phone) -> None:
+    asked: list[str] = []
+    page = browser.new_page(viewport={"width": 390 if phone else 1280, "height": 900}, has_touch=phone, is_mobile=phone)
+    page.set_default_timeout(30_000)  # MapLibre's first draw is slow on a CI machine's software WebGL
+    page.on("request", lambda request: asked.append(request.url))
+    page.route(lambda url: not url.startswith(vector_server), lambda route: route.abort())
+    page.goto(f"{vector_server}/#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.locator("#map-pick-on").check()
+    # Over the fixture's one tile: MapLibre draws zoom 10 at Leaflet's zoom 11.
+    page.evaluate("pick.map.setView([45.0, 15.05], 11, { animate: false })")
+
+    drawn = """() => { const gl = []; pick.map.eachLayer((layer) => layer.getMaplibreMap && gl.push(layer.getMaplibreMap()));
+      return gl.length > 0 && gl.every((map) => map.loaded() && map.queryRenderedFeatures().length > 0); }"""
+    page.wait_for_function(drawn)
+    page.wait_for_function("() => document.querySelectorAll('canvas.maplibregl-canvas').length === 2")
+    # Each map credits its vector source once its own MapLibre map has loaded: the hike map may load after pick.map.
+    page.wait_for_function("() => [...document.querySelectorAll('.leaflet-control-attribution')].every((c) => c.innerText.includes('Protomaps'))")
+
+    assert f"{vector_server}/fixtures/basemap.pmtiles" in asked
+    assert f"{vector_server}/vendor/maplibre-gl/maplibre-gl.mjs" in asked
+    assert not [url for url in asked if "openstreetmap.org" in url or not url.startswith((vector_server, "blob:", "data:"))]
+    for corner in page.locator(".leaflet-control-attribution").all():
+        assert "© OpenStreetMap contributors" in corner.inner_text() and "Protomaps" in corner.inner_text()
+    assert "Protomaps basemap" in page.request.get(f"{vector_server}/credits.html").text()
+    assert page.evaluate("pick.map.getMaxZoom()") == 19
+
+
+def test_with_no_base_map_set_the_page_loads_no_vector_map_script(browser, server) -> None:
+    asked: list[str] = []
+    page = browser.new_page()
+    page.on("request", lambda request: asked.append(request.url))
+    page.route(lambda url: not url.startswith(server), lambda route: route.abort())  # no tiles
+    page.goto(f"{server}/#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.locator(".leaflet-tile").first.wait_for(state="attached")
+
+    assert not [url for url in asked if "maplibre" in url or "pmtiles" in url or "protomaps" in url]
+    assert any(url.startswith("https://tile.openstreetmap.org/") for url in asked)
+
+
 def test_loops_are_suggested_only_when_the_hiker_asks_for_them(browser, server) -> None:
     api = Api({})
     page = open_page(browser, server, api, hash=f"#hike={RIDGE_WALK_ID}")
@@ -1056,7 +1162,7 @@ def test_show_more_appends_the_next_rows_under_the_table(browser, server, monkey
 
     page.get_by_label("Length weight, 0 to 100").fill("10")  # the shown Ranking's query is the one continued
     more.click()
-    page.locator("#results-table tbody tr").nth(1).wait_for()
+    page.locator("#results-table tbody tr[data-index]").nth(1).wait_for()
 
     lat, lon = page.evaluate("state.results[0].trailhead")
     # Loops are searched for the first rows only (ADR-0054).
@@ -1065,9 +1171,13 @@ def test_show_more_appends_the_next_rows_under_the_table(browser, server, monkey
     assert page.locator("#results-table tbody tr td:first-child").all_inner_texts() == ["1", "2"]
     with page.expect_response(f"{server}/api/rank"):
         more.click()
-    page.locator("#results-table tbody tr").nth(2).wait_for()
+    page.locator("#results-table tbody tr[data-index]").nth(2).wait_for()
     assert len(set(_listed(page))) == 3
     assert page.locator("#results-more").is_hidden()  # the last answer held the last area
+    # In Strict order each block goes on with the ranking, and its head says so.
+    assert page.locator("#results-table tr.block-head").all_inner_texts() == [
+        "#2: the next hikes of the ranking, in order.", "#3: the next hikes of the ranking, in order.",
+    ]  # fmt: skip
 
 
 def _names(page) -> list[str]:
@@ -1213,7 +1323,7 @@ def test_each_next_page_is_drawn_from_the_areas_not_shown_with_the_same_draw_num
     _find(page)
     for shown in (1, 2):
         page.get_by_role("button", name="Show 1 more").click()
-        page.locator("#results-table tbody tr").nth(shown).wait_for()
+        page.locator("#results-table tbody tr[data-index]").nth(shown).wait_for()
 
     names = _names(page)
     starts = page.evaluate("state.results.map(r => ({lat: r.trailhead[0], lon: r.trailhead[1]}))")
@@ -1222,6 +1332,12 @@ def test_each_next_page_is_drawn_from_the_areas_not_shown_with_the_same_draw_num
     assert {asked["draw"] for asked in pool.asked} == {11}
     assert names == [pool.names(pool.drawn(11, 1, answer=k), answer=k)[0] for k in range(3)]
     assert page.locator("#results-more").is_hidden()
+    # Each block is drawn from its own pool: its head says its numbers are not ranks across blocks.
+    heads = page.locator("#results-table tbody tr.block-head").all_inner_texts()
+    assert [head.split(":")[0] for head in heads] == ["#2", "#3"]
+    assert all("in score order among themselves, so one may score above a hike listed higher up" in h for h in heads)
+    rows = page.locator("#results-table tbody tr").evaluate_all("rows => rows.map(r => r.className || r.dataset.index)")
+    assert rows == ["0", "block-head", "1", "block-head", "2"]
 
 
 def test_a_strict_link_opens_in_strict_order_and_the_address_follows_the_tick(browser, server) -> None:
@@ -1802,9 +1918,9 @@ def click_map(page, at: tuple[float, float], east_px: int) -> list[int]:
 
 
 @pytest.mark.parametrize("drawn_first", ["stage 1", "stage 2"])
-def test_a_click_on_a_line_where_two_hikes_meet_chooses_the_line_clicked(browser, server, drawn_first) -> None:
+def test_a_click_on_a_line_where_two_hikes_meet_chooses_the_line_clicked(browser, map_server, drawn_first) -> None:
     one, two = drawn_hike("Stage 1", WEST, START), drawn_hike("Stage 2", START, EAST)
-    page = map_dots(browser, server, [one, two] if drawn_first == "stage 1" else [two, one])
+    page = map_dots(browser, map_server, [one, two] if drawn_first == "stage 1" else [two, one])
 
     assert click_map(page, START, -8) == [one["id"]]  # 8 px west of where they meet: on stage 1
     assert click_map(page, START, 8) == [two["id"]]
@@ -1812,9 +1928,9 @@ def test_a_click_on_a_line_where_two_hikes_meet_chooses_the_line_clicked(browser
     assert click_map(page, (45.0620, 6.5250), 0) == []  # off every line: nothing
 
 
-def test_the_hike_under_the_pointer_is_the_one_a_click_would_choose(browser, server) -> None:
+def test_the_hike_under_the_pointer_is_the_one_a_click_would_choose(browser, map_server) -> None:
     one, two = drawn_hike("Stage 1", WEST, START), drawn_hike("Stage 2", START, EAST)
-    page = map_dots(browser, server, [one, two])
+    page = map_dots(browser, map_server, [one, two])
 
     at = page.evaluate("([lat, lon]) => pick.map.latLngToContainerPoint([lat, lon]).add([-8, 0])", START)
     box = page.locator("#map-pick .pick-map").bounding_box()
@@ -1879,6 +1995,32 @@ def test_a_liked_hike_downloads_as_a_gpx_track_that_credits_openstreetmap_and_li
     assert points == pytest.approx(decode_polyline(hike["line"]), abs=1e-9) and len(points) > 1
     assert heights[0] == hike["elevation"]["metres"][0] and heights[-1] == hike["elevation"]["metres"][-1]
     assert min(heights) >= min(hike["elevation"]["metres"]) and max(heights) <= max(hike["elevation"]["metres"])
+
+
+def test_a_gpx_shorter_than_the_hike_s_length_says_by_how_much_on_the_card_and_in_the_file(browser, server) -> None:
+    with urllib.request.urlopen(f"{server}/api/hikes/{RIDGE_WALK_ID}?return_to_start=false") as response:
+        hike = json.load(response)
+    line = decode_polyline(hike["line"])
+    gpx_m = sum(metres_between(a, b) for a, b in itertools.pairwise(line))
+    assert gpx_m == pytest.approx(hike["walk_m"], rel=0.01)  # the test catalog's lines lose nothing
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}&oneway")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    assert page.locator("#liked .gpx-note").count() == 0
+    # A walk 5 % longer than its simplified line, as a winding trail is.
+    walk_m = gpx_m / 0.95
+    page.route(f"{server}/api/hikes/{RIDGE_WALK_ID}*", lambda route: route.fulfill(json={**route.fetch().json(), "walk_m": walk_m}))
+    page.evaluate("location.hash = '#hike=1002&oneway'")
+    page.get_by_text("Chosen: Valley Path").wait_for()
+    page.evaluate(f"location.hash = '#hike={RIDGE_WALK_ID}&oneway'")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+
+    says = (
+        f"GPS apps measure this GPX about 5 % shorter, {gpx_m / 1000:.1f} km against {walk_m / 1000:.1f} km: "
+        "its line is simplified to within 10 m of the trail, which cuts small bends."
+    )
+    assert page.locator("#liked .gpx-note").inner_text() == says
+    _, gpx = downloaded_gpx(page, "#liked")
+    assert gpx.find(f"{GPX}metadata").findtext(f"{GPX}desc").endswith(says)
 
 
 def test_a_hike_measured_with_its_way_back_downloads_the_way_back_as_a_second_track(browser, server) -> None:
@@ -2173,15 +2315,83 @@ def test_the_grouping_radius_takes_its_own_defaults_and_tenths_as_valid(browser,
         assert box.evaluate("box => box.validity.valid"), km
 
 
-def test_a_wish_value_corrected_after_find_said_it_is_out_of_range_is_valid_again(browser, server) -> None:
+LENGTH_WISH = {
+    "kind": "number", "unit": "m", "min": 1000, "max": 2_000_000, "step": 500, "default": 10_000,
+    "display": {"unit": "km", "per": 1000},
+}  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("typed", "says"),
+    [
+        ("-5", "Length must be from 1 to 2000 km."),
+        ("0", "Length must be from 1 to 2000 km."),
+        ("99999", "Length must be from 1 to 2000 km."),
+        ("e", "Length takes a number from 1 to 2000 km."),
+    ],
+)
+def test_a_wish_value_out_of_range_or_no_number_says_so_beside_its_box_and_find_waits(
+    browser, server, typed, says
+) -> None:
+    page = open_page(browser, server, Api({**WISHABLE, "length": LENGTH_WISH}))
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    box = page.get_by_label("Length you want, in km")
+    row = page.locator('.weight[data-measure="length"]')
+
+    box.fill("")  # it shows the default asked
+    box.press_sequentially(typed)
+
+    assert row.locator(".wish-error").inner_text() == says
+    assert row.locator(".wish-error").is_visible()
+    assert box.get_attribute("aria-invalid") == "true"
+    assert page.get_by_role("button", name="Find hikes").is_disabled()
+    assert page.locator("#find-why").inner_text() == says
+
+    box.fill("12")
+    assert row.locator(".wish-error").count() == 0
+    assert page.get_by_role("button", name="Find hikes").is_enabled()
+    assert page.locator("#find-why").inner_text() == ""
+
+
+def test_an_emptied_wish_box_whose_weight_is_above_0_says_so_and_find_waits(browser, server) -> None:
+    page = open_page(browser, server, Api({**WISHABLE, "length": LENGTH_WISH}))
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    box = page.get_by_label("Length you want, in km")
+    row = page.locator('.weight[data-measure="length"]')
+    says = "Length takes a number from 1 to 2000 km."
+
+    box.fill("")
+
+    assert row.locator(".wish-error").inner_text() == says
+    assert row.locator(".wish-error").is_visible()
+    assert box.get_attribute("aria-invalid") == "true"
+    assert page.get_by_role("button", name="Find hikes").is_disabled()
+    assert page.locator("#find-why").inner_text() == says
+
+    page.get_by_label("Length weight, 0 to 100").fill("0")
+    assert page.get_by_role("button", name="Find hikes").is_enabled()
+
+
+def test_a_wrong_wish_value_whose_weight_is_0_does_not_hold_find(browser, server) -> None:
+    page = open_page(browser, server, Api({**WISHABLE, "length": LENGTH_WISH}))
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    page.get_by_label("Length you want, in km").fill("-5")
+    assert page.get_by_role("button", name="Find hikes").is_disabled()
+
+    page.get_by_label("Length weight, 0 to 100").fill("0")
+
+    assert page.locator('.weight[data-measure="length"] .wish-error').is_visible()
+    assert page.get_by_role("button", name="Find hikes").is_enabled()
+
+
+def test_a_wish_value_corrected_after_it_was_said_out_of_range_is_valid_again(browser, server) -> None:
     api = Api(WISHABLE)
     page = open_page(browser, server, api)
     page.get_by_role("button", name="No particular hike in mind?").click()
     gain = page.get_by_label("Climbing you want, in m")
 
     gain.fill("9000")
-    page.get_by_role("button", name="Find hikes").click()
-    page.get_by_text("Climbing: you want a value from 0 to 3000 m.").wait_for()
+    page.locator("#wish-error-elevation_gain").get_by_text("Climbing must be from 0 to 3000 m.").wait_for()
     assert not gain.evaluate("box => box.validity.valid")
 
     gain.fill("900")
@@ -2538,8 +2748,6 @@ def test_every_control_on_a_phone_takes_a_tap_44_px_across(browser, server) -> N
     assert page.evaluate(TAPPED) == []
     zoom = page.locator(".pick-map .leaflet-control-zoom-in").bounding_box()
     assert zoom["width"] >= 44 and zoom["height"] >= 44
-    # The "?" beside a score stays small but takes a tap 44 px across.
-    assert page.locator("button.help").first.evaluate("b => getComputedStyle(b, '::after').inset") == "-12px"
     assert page.evaluate("document.documentElement.scrollWidth") <= 390
 
 
@@ -3064,6 +3272,27 @@ def test_the_designer_walks_to_a_junction_clicked_and_its_messages_leave_the_map
     assert page.evaluate("compose.route.length") == 0
 
 
+def test_precipitation_without_a_month_says_it_is_the_year_s_average_not_the_summer_s(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.route(f"{server}/api/hikes/*", lambda route: route.fulfill(json=_rained(route.fetch().json())))
+    page.route(f"{server}/api/pair", lambda route: route.fulfill(json=_rained(route.fetch().json())))
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    assert page.locator("#month-hint").inner_text() == "With Summer, precipitation is the average month of the whole year, not of June–August."
+    page.locator("#pair-search").fill("Valley Path")
+    page.locator("#pair-suggestions li", has_text="Valley Path").first.dispatch_event("mousedown")
+    row = page.locator("#selected table.facts tr", has_text="Precipitation")
+
+    row.get_by_text("80 mm / month, averaged over the year").first.wait_for()
+
+
+def _rained(body: dict) -> dict:
+    """Every hike in ``body`` with 80 mm a month over the year."""
+    for hike in (body, body.get("a"), body.get("b")):
+        if isinstance(hike, dict) and "facts" in hike:
+            hike["facts"]["precipitation_mm"] = 80.0
+    return body
+
+
 def test_the_pair_table_shows_its_score_column_on_a_phone(browser, server) -> None:
     page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", width=390, touch=True)
     page.get_by_text("Chosen: Ridge Walk").wait_for()
@@ -3114,3 +3343,242 @@ def test_a_multi_day_route_is_marked_in_the_list_and_panel_and_drawn_only_after_
     page.route(f"{server}/api/hikes/1001*", lambda route: route.fulfill(json={**route.fetch().json(), "multi_day": True, "walk_m": 1_073_000}))
     page.evaluate(f"location.hash = '#hike={RIDGE_WALK_ID}'")
     page.locator("#liked .badges li").first.get_by_text("multi-day, 1,073 km").wait_for()
+
+
+# The points of the 44 px square centred on each visible "?" that a tap there does not reach it.
+HELP_MISSES = """() => [...document.querySelectorAll('button.help')].filter((b) => b.offsetParent).flatMap((b, i) => {
+  b.scrollIntoView({block: 'center', inline: 'center'});
+  const box = b.getBoundingClientRect();
+  const [x, y] = [box.left + box.width / 2, box.top + box.height / 2];
+  return [-21, 0, 21].flatMap((dx) => [-21, 0, 21].map((dy) => [dx, dy]))
+    .filter(([dx, dy]) => document.elementFromPoint(x + dx, y + dy)?.closest('button.help') !== b)
+    .map(([dx, dy]) => `${b.dataset.help}#${i} ${dx},${dy}`);
+})"""
+
+
+def test_every_help_button_on_a_phone_takes_a_tap_anywhere_in_a_44_px_square(browser, server) -> None:
+    page = open_page(browser, server, Api({}), width=390, hash=f"#hike={RIDGE_WALK_ID}", touch=True)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.click()
+    page.locator("#selected table.facts button.help").first.wait_for()
+
+    assert page.locator("#results-table button.help").count() > 3
+    assert page.evaluate(HELP_MISSES) == []
+
+
+# ---------- units: km and metres, or miles and feet ----------
+
+FOOT_M, MILE_M = 0.3048, 1609.344
+
+
+def _elevation_axis(page) -> list[str]:
+    return page.locator("#liked .chart.elevation svg text").all_text_contents()
+
+
+def test_the_units_follow_the_browsers_locale_whatever_its_time_zone(browser, server) -> None:
+    us = open_page(browser, server, Api({}), locale="en-US", timezone="America/Denver", hash=f"#hike={RIDGE_WALK_ID}")
+    us.get_by_text("Chosen: Ridge Walk").wait_for()
+    assert us.locator("#units").input_value() == "imperial"
+    assert any(re.fullmatch(r"↑ [\d,]+ ft ↓ [\d,]+ ft with the way back", b) for b in us.locator("#liked .badges li").all_inner_texts())
+
+    for locale, timezone, units in (("en-US", "Europe/Zagreb", "imperial"), ("en-GB", "America/Denver", "metric"), ("hr-HR", "Europe/Zagreb", "metric")):
+        page = open_page(browser, server, Api({}), locale=locale, timezone=timezone)
+        assert page.locator("#units").input_value() == units, (locale, timezone)
+
+
+def test_every_length_and_height_of_a_hike_switches_to_miles_and_feet_and_back(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    metric = page.locator("#liked .badges li").all_inner_texts()
+    assert any(re.fullmatch(r"[\d.]+ km.*", b) for b in metric), metric
+    assert "Elevation profile (metres above sea level)" in page.locator("#liked .chart.elevation h3").inner_text()
+    assert any(text.endswith(" km") for text in _elevation_axis(page))
+
+    page.locator("#units").select_option("imperial")
+    page.wait_for_url("**&units=imperial")
+    assert re.fullmatch(r"Chosen: Ridge Walk, [\d.]+ mi one way \([\d.]+ mi with the way back\)", page.locator("#liked-name").inner_text())
+    badges = page.locator("#liked .badges li").all_inner_texts()
+    assert any(re.fullmatch(r"[\d.]+ (mi|ft).*", b) for b in badges), badges
+    assert any(re.fullmatch(r"↑ [\d,]+ ft ↓ [\d,]+ ft with the way back", b) for b in badges), badges
+    assert not any(re.search(r"\d (km|m)\b", b) for b in badges), badges
+    assert page.locator("#liked .chart.elevation h3").inner_text() == "Elevation profile (feet above sea level)"
+    axis = _elevation_axis(page)
+    assert any(text.endswith(" mi") for text in axis) and not any(text.endswith(" km") for text in axis), axis
+    facts = page.locator("#liked table.facts")
+    highest = facts.locator("tr", has=page.locator("td", has_text="Highest point")).locator("td").nth(1).inner_text()
+    assert highest.endswith(" ft"), highest
+
+    page.locator("#units").select_option("metric")
+    assert page.locator("#liked .badges li").all_inner_texts() == metric
+    assert "units=" not in page.url  # km and m are the default in British English
+
+
+def test_a_wish_typed_in_miles_and_feet_is_sent_in_metres_and_its_link_keeps_the_units(browser, server) -> None:
+    api = Api({**WISHABLE, "length": KM_LENGTH})
+    page = open_page(browser, server, api)
+    page.locator("#units").select_option("imperial")
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    length, climbing = page.get_by_label("Length you want, in mi"), page.get_by_label("Climbing you want, in ft")
+    assert length.input_value() == "6.21" and climbing.input_value() == "1969"  # the defaults, 10 km and 600 m
+
+    length.fill("10")
+    climbing.fill("2000")
+    page.get_by_label("Highest point weight, 0 to 100").fill("0")
+    page.get_by_role("button", name="Find hikes").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+
+    assert api.ranked[-1]["wish"] == {"length": 10 * MILE_M, "elevation_gain": round(2000 * FOOT_M, 6)}
+    page.wait_for_url("**/#wish=length:16093.44:100,elevation_gain:609.6:100**units=imperial")
+
+    # Typed values convert both ways.
+    page.locator("#units").select_option("metric")
+    assert page.get_by_label("Length you want, in km").input_value() == "16.09344"
+    assert page.get_by_label("Climbing you want, in m").input_value() == "609.6"
+    page.locator("#units").select_option("imperial")
+    assert length.input_value() == "10" and climbing.input_value() == "2000"
+
+    shared = open_page(browser, server, api, hash="#wish=length:16093.44:100&units=imperial")
+    assert shared.get_by_label("Length you want, in mi").input_value() == "10"
+    old = open_page(browser, server, api, hash="#wish=length:12500:100")  # a link from before the switch
+    assert old.get_by_label("Length you want, in km").input_value() == "12.5"
+
+
+def test_values_shown_rounded_in_miles_and_feet_keep_their_metres_and_km(browser, server) -> None:
+    api = Api({**WISHABLE, "length": KM_LENGTH})
+    page = open_page(browser, server, api)
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    assert page.get_by_label("Length you want, in km").input_value() == "10"
+    page.locator("#units").select_option("imperial")
+    assert page.get_by_label("Length you want, in mi").input_value() == "6.21"
+    page.get_by_label("Highest point weight, 0 to 100").fill("0")
+    page.get_by_role("button", name="Find hikes").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+    assert api.ranked[-1]["wish"] == {"length": 10000, "elevation_gain": 600}  # the defaults, not 6.21 mi and 1969 ft
+
+    page.locator("#units").select_option("metric")
+    assert page.get_by_label("Length you want, in km").input_value() == "10"
+    assert page.get_by_label("Climbing you want, in m").input_value() == "600"
+    page.get_by_label("Climbing you want, in m").fill("700")  # typed: what is typed
+    page.locator("#units").select_option("imperial")
+    page.locator("#units").select_option("metric")
+    assert page.get_by_label("Climbing you want, in m").input_value() == "700"
+
+    # Filled in km, cleared, then typed in miles: what is typed, in miles.
+    page.get_by_label("Length you want, in km").fill("")
+    page.locator("#units").select_option("imperial")
+    page.get_by_label("Length you want, in mi").fill("10")
+    page.get_by_role("button", name="Find hikes").click()
+    page.wait_for_url("**/#wish=length:16093.44:**")
+    page.locator("#units").select_option("metric")
+
+    limits = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    limits.get_by_text("Chosen: Ridge Walk").wait_for()
+    limits.get_by_label("Only hikes near a starting place").check()
+    limits.get_by_label("From", exact=True).fill("45.2, 15.1")
+    limits.get_by_label("Max drive hours", exact=True).uncheck()
+    limits.get_by_label("Max km, straight line", exact=True).check()
+    limits.locator("#units").select_option("imperial")
+    assert limits.get_by_label("Max mi value").input_value() == "31.1"
+    limits.locator("#units").select_option("metric")
+    assert limits.get_by_label("Max km value").input_value() == "50"
+    limits.locator("#units").select_option("imperial")
+    limits.get_by_role("button", name="Find similar").click()
+    limits.wait_for_url("**km=50&units=imperial")
+
+    grouping = Api({})
+    grouped = open_page(browser, server, grouping, hash=f"#hike={RIDGE_WALK_ID}&group=5")
+    grouped.get_by_text("Chosen: Ridge Walk").wait_for()
+    grouped.locator("#more-options summary").click()
+    assert grouped.locator("#group-km").input_value() == "5"
+    grouped.locator("#group-km").fill("")
+    grouped.locator("#units").select_option("imperial")
+    grouped.locator("#group-km").fill("5")
+    grouped.get_by_role("button", name="Find similar").click()
+    grouped.locator("#results-table tbody tr").first.wait_for()
+    assert grouping.ranked[-1]["group_km"] == round(5 * MILE_M / 1000, 3)  # 5 mi, not the 5 km it was filled with
+
+
+def test_a_distance_limit_typed_in_miles_is_asked_in_km(browser, server) -> None:
+    api = Api({})
+    page = open_page(browser, server, api, hash=f"#hike={RIDGE_WALK_ID}&units=imperial")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_label("Only hikes near a starting place").check()
+    page.get_by_label("From", exact=True).fill("45.2, 15.1")
+    page.get_by_label("Max drive hours", exact=True).uncheck()
+    page.get_by_label("Max mi, straight line", exact=True).check()
+    assert page.get_by_label("Max mi value").input_value() == "31.1"  # the 50 km it opens with
+    page.get_by_label("Max mi value").fill("20")
+
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+
+    assert api.ranked[-1]["max_km"] == round(20 * MILE_M / 1000, 3)
+    assert page.locator("#results-table tbody tr").first.locator("td").nth(3).inner_text() == "0.0 mi"
+    assert page.locator("#results-filters").get_by_text("Within 20 mi of 45.2, 15.1").is_visible()
+    page.wait_for_url("**km=32.187**units=imperial")
+
+
+def test_a_distance_limit_at_an_end_of_its_range_in_miles_is_that_end_in_km(browser, server) -> None:
+    api = Api({})
+    page = open_page(browser, server, api, hash=f"#hike={RIDGE_WALK_ID}&from=45.2,15.1&km=200&group=50&units=imperial")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    assert page.get_by_label("Max mi value").input_value() == "124.3"
+    assert page.locator("#group-km").input_value() == "31.1"
+
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+    assert api.ranked[-1]["max_km"] == 200 and api.ranked[-1]["group_km"] == 50
+    page.wait_for_url("**km=200&group=50&units=imperial")
+
+    page.get_by_label("Max mi value").fill("0.6")
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-filters").get_by_text("Within 0.6 mi of 45.2, 15.1").wait_for()
+    page.wait_for_url("**km=1&group=50&units=imperial")
+    assert api.ranked[-1]["max_km"] == 1
+
+
+# ---------- the emergency number where a hike starts ----------
+
+
+def test_a_croatian_hike_shows_112_and_the_hgss(browser, server) -> None:
+    from dayhike.serving import emergency_services
+
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    line = page.locator("#liked .emergency")
+    assert line.inner_text().startswith("Emergency: 112 · Mountain rescue: HGSS (Croatia, sources hgss.hr, digital-strategy.ec.europa.eu)"), line.inner_text()
+    assert line.get_by_role("link", name="HGSS", exact=True).get_attribute("href").startswith("https://")
+    cited = [line.get_by_role("link", name=host, exact=True).get_attribute("href") for host in ("hgss.hr", "digital-strategy.ec.europa.eu")]
+    assert cited == emergency_services()["HR"]["sources"]
+
+
+@pytest.mark.parametrize(
+    ("code", "shown"),
+    [
+        ("GB", "Emergency: 999 or 112 · Mountain rescue: Mountain Rescue · Call 999 or 112, ask for Police, then Mountain Rescue."),
+        ("US", "Emergency: 911 · Mountain rescue: Mountain Rescue Association (United States, sources nps.gov, mra.org, gov.uk)"),
+    ],
+)
+def test_a_uk_or_us_hike_shows_its_own_countrys_number(browser, server, code, shown) -> None:
+    from dayhike.serving import emergency_services
+
+    def elsewhere(route) -> None:
+        route.fulfill(json={**route.fetch().json(), "emergency": emergency_services()[code]})
+
+    page = browser.new_page()
+    page.route(lambda url: not url.startswith(server), lambda route: route.abort())
+    page.route(f"{server}/api/hikes/{RIDGE_WALK_ID}*", elsewhere)
+    page.goto(f"{server}/#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    assert page.locator("#liked .emergency").inner_text().startswith(shown)
+    assert "HGSS" not in page.locator("#liked").inner_text()
+
+
+def test_a_hike_with_no_known_country_says_to_call_the_local_number(browser, server) -> None:
+    page = browser.new_page()
+    page.route(lambda url: not url.startswith(server), lambda route: route.abort())
+    page.route(f"{server}/api/hikes/{RIDGE_WALK_ID}*", lambda route: route.fulfill(json={**route.fetch().json(), "emergency": None}))
+    page.goto(f"{server}/#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    assert page.locator("#liked .emergency").inner_text() == "In an emergency, call the local emergency number."

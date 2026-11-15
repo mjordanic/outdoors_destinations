@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from dayhike import build_catalog, build_similarity, serving, web
 from dayhike.serving import ServingData, export_landmarks, export_places, export_serving
 from dayhike.similarity import CORE_MEASURES, FACILITIES_FLAG_COLUMNS, MEASURE_NAMES
-from dayhike.web import RESULTS, create_app
+from dayhike.web import RESULTS, create_app, site_pages
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
 RIDGE_WALK_ID = 1001
@@ -893,6 +893,34 @@ def test_the_about_page_and_the_header_count_the_hikes_of_this_export(data: Serv
     assert b"160" not in client.get("/wordmark.svg").content.split(b"<path")[0]  # the art no longer says a count
 
 
+EUROPE = {"label": "Europe", "continent": "Europe"}
+ALPS = {"label": "the Alps and the Dinarides", "continent": "Europe"}
+COLORADO = {"label": "Colorado", "continent": "North America"}
+
+
+def test_the_pages_name_the_regions_of_the_export_and_a_europe_build_reads_as_before() -> None:
+    before = site_pages(None)
+    for regions in ([EUROPE], [ALPS], [EUROPE, ALPS]):
+        assert site_pages(None, regions=regions) == before  # only Europe: the pages as they were
+
+    assert "hikes across Europe." in before["index"] and "hikes across Europe." in before["about"]
+    assert 'alt="Map of Europe with the covered countries shaded"' in before["index"]
+    assert "thin in much of the east" in before["about"] and "works across the European Union" in before["terms"]
+    for page in before.values():
+        assert "<!--regions-->" not in page and "<!--if-" not in page
+
+    us = site_pages(None, regions=[COLORADO])
+    both = site_pages(None, regions=[EUROPE, COLORADO])
+    for pages, covered in ((us, "Colorado"), (both, "Europe and Colorado")):
+        assert f"find similar ones across {covered}, from" in pages["index"]
+        assert f"hikes across {covered}.</p>" in pages["index"] and f"hikes across {covered}.</p>" in pages["about"]
+        assert 'src="coverage.svg"' not in pages["index"]  # the packaged map is of Europe
+        assert f"It covers {covered} where OpenStreetMap maps hiking routes" in pages["about"]
+        assert "central Europe" not in pages["about"]
+    assert "Europe" not in us["index"] + us["about"]
+    assert "European Union" not in us["terms"] and "European Union" in both["terms"]
+
+
 def test_info_gives_where_most_hikes_are_and_what_a_typical_pair_scores(client: TestClient) -> None:
     info = client.get("/api/info").json()
     south, west, north, east = info["core"]
@@ -955,11 +983,36 @@ def test_no_served_static_file_names_the_owner(data: ServingData) -> None:
     served = TestClient(create_app(data, goatcounter="gofindmeahike"))
     for path in paths:
         response = served.get(path)
-        assert response.status_code == 200, path
+        # the not-found page is served for an unknown address, never as a page of its own
+        assert response.status_code == (404 if path == "/not-found.html" else 200), path
         # the repository's GitHub address is public and is how to reach the maintainer
         text = response.text.lower().replace("github.com/mjordanic/", "")
         for personal in ("mislav", "jordanic", "jordanić", "zagreb", "@gmail.com"):
             assert personal not in text, (path, personal)
+
+
+@pytest.mark.parametrize("path", ["/nonexistent-page", "/support.html", "/a/b/c"])
+def test_an_unknown_page_is_a_not_found_page_in_the_site_s_style_linking_home_and_to_the_search(
+    data: ServingData, path: str
+) -> None:
+    response = TestClient(create_app(data)).get(path)
+
+    assert response.status_code == 404
+    assert response.headers["content-type"].startswith("text/html")
+    page = response.text
+    assert "<title>Page not found · HikesAlike</title>" in page
+    # Paths from the root: an unknown address may be any number of folders deep.
+    assert 'href="/style.css"' in page and 'src="/mark.svg"' in page
+    assert 'href="/"' in page and "Search for a hike" in page
+
+
+def test_an_unknown_api_path_stays_a_json_not_found(data: ServingData) -> None:
+    client = TestClient(create_app(data))
+    for path in ("/api/nonexistent", "/api/hikes/999"):
+        response = client.get(path)
+        assert response.status_code == 404, path
+        assert response.headers["content-type"] == "application/json", path
+        assert "detail" in response.json(), path
 
 
 def test_the_site_has_no_support_page_and_no_page_asks_for_tips_or_donations(data: ServingData) -> None:
@@ -987,6 +1040,51 @@ def test_the_credits_page_credits_every_source_with_the_fabdem_dataset(client: T
         assert credit in credits, credit
     assert 'href="https://doi.org/10.5523/bris.s5hqmjcdj8yo2ibzi9b4ew3sn"' in credits
     assert 'href="https://doi.org/10.1088/1748-9326/ac4d4f"' in credits
+
+
+def test_info_names_the_openstreetmap_tiles_as_the_base_map_by_default(client: TestClient) -> None:
+    assert client.get("/api/info").json()["basemap"] == {
+        "url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png", "attribution": None, "max_zoom": 19, "pmtiles": None,
+    }
+    assert "served by the OpenStreetMap Foundation" in client.get("/credits.html").text
+
+
+def test_another_tile_provider_is_named_in_info_and_credited_beside_openstreetmap(data: ServingData) -> None:
+    credit = '<a href="https://tiles.example.com/terms">Example Tiles</a>'
+    basemap = web.BaseMap("https://tiles.example.com/{z}/{x}/{y}.png", credit, 17)
+    client = TestClient(create_app(data, basemap=basemap))
+
+    info = client.get("/api/info")
+    assert info.json()["basemap"] == {
+        "url": "https://tiles.example.com/{z}/{x}/{y}.png", "attribution": credit, "max_zoom": 17, "pmtiles": None,
+    }
+    assert info.headers["etag"] != TestClient(create_app(data)).get("/api/info").headers["etag"]
+    credits = client.get("/credits.html").text
+    assert f"OpenStreetMap</a> contributors, served by {credit}." in credits
+    assert "OpenStreetMap Foundation" not in credits
+
+
+def test_a_pmtiles_base_map_is_named_in_info_and_credited_with_the_software_that_draws_it(data: ServingData) -> None:
+    client = TestClient(create_app(data, basemap=web.BaseMap(pmtiles="https://maps.example.com/europe.pmtiles")))
+
+    assert client.get("/api/info").json()["basemap"]["pmtiles"] == "https://maps.example.com/europe.pmtiles"
+    credits = client.get("/credits.html").text
+    for credit in ("Protomaps basemap", "MapLibre GL JS", "maplibre-gl-leaflet", "PMTiles", "Noto Sans", "SIL OFL"):
+        assert credit in credits, credit
+    assert "OpenStreetMap Foundation" not in credits
+    for path in (
+        "vendor/maplibre-gl/maplibre-gl.mjs", "vendor/maplibre-gl/maplibre-gl-worker.mjs", "vendor/maplibre-gl/LICENSE.txt",
+        "vendor/maplibre-gl-leaflet/LICENSE", "vendor/pmtiles/LICENSE", "vendor/protomaps-basemaps/LICENSE.md",
+        "vendor/protomaps-basemaps/OFL.txt", "vendor/protomaps-basemaps/sprites/LICENSE.md",
+        "vendor/protomaps-basemaps/fonts/Noto Sans Regular/0-255.pbf", "vendor/protomaps-basemaps/sprites/light@2x.png",
+    ):
+        assert client.get(f"/{path}").status_code == 200, path
+
+
+@pytest.mark.parametrize(("url", "max_zoom"), [("https://tiles.example.com/{z}/{x}.png", 19), (web.OSM_TILES, 23)])
+def test_a_tile_template_without_z_x_y_or_a_max_zoom_past_22_is_refused(url: str, max_zoom: int) -> None:
+    with pytest.raises(ValueError):
+        web.BaseMap(url, max_zoom=max_zoom)
 
 
 def test_the_home_page_footer_is_a_short_credit_line_to_the_full_credits(client: TestClient) -> None:
@@ -1027,11 +1125,27 @@ def test_the_privacy_page_names_goatcounter_only_once_it_is_set(data: ServingDat
     assert "Ko-fi" not in privacy
 
 
+def test_the_privacy_page_names_cloudflare_as_the_map_host_only_with_a_vector_map(data: ServingData) -> None:
+    raster = TestClient(create_app(data)).get("/privacy.html").text
+    assert "Cloudflare" not in raster
+    assert "OpenStreetMap Foundation</strong> (UK) serves the map tiles" in raster
+
+    vector = TestClient(create_app(data, basemap=web.BaseMap(pmtiles="https://maps.hikesalike.com/europe.pmtiles")))
+    privacy = vector.get("/privacy.html").text
+    assert "<strong>Cloudflare</strong>" in privacy and "maps.hikesalike.com" in privacy
+    assert "no WebGL 2" in privacy  # the Foundation's tiles only as the fallback
+    assert "serves the map tiles, so" not in privacy
+    assert "Cloudflare may process map requests outside the EU" in privacy
+    assert "Nominatim" in privacy
+    assert "<!--if-" not in privacy and "<!--if-" not in raster
+
+
 def test_the_terms_page_warns_hikers_and_restricts_no_reuse_beyond_the_data_licences(client: TestClient) -> None:
     terms = client.get("/terms.html").text
 
-    for warning in ("crowd-sourced", "estimates", "closures", "weather", "navigation", "112", "HGSS", "SAC"):
+    for warning in ("crowd-sourced", "estimates", "closures", "weather", "navigation", "112", "emergency number", "SAC"):
         assert warning in terms, warning
+    assert "HGSS" not in terms and "Croatian" not in terms  # each hike's panel names its own country's service
     for licence in ("ODbL", "CC BY-NC-SA 4.0", "MIT licence"):
         assert licence in terms, licence
     assert "no further restriction" in terms

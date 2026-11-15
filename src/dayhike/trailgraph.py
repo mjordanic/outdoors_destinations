@@ -57,6 +57,7 @@ from dayhike.catalog import (
     OSM_ATTRIBUTION,
     SAC_SCALE_RANK,
     SNAP_TOLERANCE_M,
+    ensure_column,
     remove_similarity,
     trailgraph_path_for,
 )
@@ -877,7 +878,8 @@ def sample_trailgraph(
     - ``ele``: the DEM (FABDEM, or Copernicus GLO-30, which needs the
       WorldCover tiles to read the ground under trees) where a tile covers
       the vertex, else its OSM ``ele``;
-    - ``landcover``: the WorldCover class (0 uncovered);
+    - ``landcover``: the WorldCover class (0 uncovered), and
+      ``landcover_along`` the classes read along its steps (``along_points``);
     - ``climate_cell``: the CHELSA cell, when all 36 rasters have a value
       there (-1 otherwise), and ``climate_cells`` its 36 values;
     - ``southness``: the slope southness (NaN flat or uncovered);
@@ -890,22 +892,24 @@ def sample_trailgraph(
     """
     from dayhike import dem
     from dayhike.climate import _climate_rasters
-    from dayhike.dem import COPERNICUS, dem_source_of, require_worldcover
-    from dayhike.landcover import _raster_paths, sample_landcover_classes
+    from dayhike.dem import COPERNICUS, dem_sources_of, require_worldcover
+    from dayhike.landcover import _raster_paths, along_points, sample_landcover_classes
     from dayhike.similarity import slope_southness
 
     path = trailgraph_path_for(catalog_path)
     if not path.is_file():
         raise FileNotFoundError(path)
     dem_dir, landcover_dir, climate_dir = Path(dem_dir), Path(landcover_dir), Path(climate_dir)
-    source = dem_source_of(dem_dir)
-    has_dem = source is not None
-    if source is COPERNICUS:
+    sources = dem_sources_of(dem_dir)
+    has_dem = bool(sources)
+    if COPERNICUS in sources:
         require_worldcover(landcover_dir)
     has_landcover = bool(_raster_paths(landcover_dir)) if landcover_dir.is_dir() else False
     rasters = _climate_rasters(climate_dir) if climate_dir.is_dir() else []
     grid = _climate_grid(rasters) if rasters else None
     db = sqlite3.connect(path)
+    if has_landcover:
+        ensure_column(db, "segments", "landcover_along", "BLOB")
     sampled = 0
     cells: set[int] = set()
 
@@ -934,9 +938,14 @@ def sample_trailgraph(
             heights = dem.sample_elevations(dem_dir, points, landcover_dir)
             ele = np.array([e if h is None else h for e, h in zip(ele.tolist(), heights)], dtype=float)
             southness = slope_southness(dem_dir, lat, lon)
+        along: list[bytes] = []
         if has_landcover:
-            classes = sample_landcover_classes(landcover_dir, points)
-            landcover = np.array([c or 0 for c in classes], dtype=np.uint8)
+            reads = [along_points(c[:, 0], c[:, 1])[1] for c in coords]
+            classes = sample_landcover_classes(landcover_dir, [*points, *(tuple(p) for r in reads for p in r.tolist())])
+            landcover = np.array([c or 0 for c in classes[: len(points)]], dtype=np.uint8)
+            codes = np.array([c or 0 for c in classes[len(points) :]], dtype=np.uint8)
+            ends = np.cumsum([len(r) for r in reads])
+            along = [codes[e - len(r) : e].tobytes() for r, e in zip(reads, ends)]
         if grid is not None:
             climate = _climate_cells(rasters, lat, lon)
         bounds = np.cumsum([0, *sizes])
@@ -946,9 +955,10 @@ def sample_trailgraph(
                 landcover[s:e].astype("u1").tobytes(),
                 climate[s:e].astype("<i4").tobytes(),
                 southness[s:e].astype("<f4").tobytes(),
+                *along[i : i + 1],
                 row[0],
             )
-            for row, s, e in zip(chunk, bounds[:-1], bounds[1:])
+            for i, (row, s, e) in enumerate(zip(chunk, bounds[:-1], bounds[1:]))
         ]
         return updates, climate[climate >= 0].tolist(), len(lat)
 
@@ -956,7 +966,9 @@ def sample_trailgraph(
         chunks = (read(ids) for ids in segment_chunks(db, _SEGMENT_CHUNK))
         for updates, chunk_cells, vertices in parallel_iter(sample, chunks):
             db.executemany(
-                "UPDATE segments SET ele = ?, landcover = ?, climate_cell = ?, southness = ? WHERE id = ?", updates
+                "UPDATE segments SET ele = ?, landcover = ?, climate_cell = ?, southness = ?"
+                f"{', landcover_along = ?' if has_landcover else ''} WHERE id = ?",
+                updates,
             )
             cells.update(chunk_cells)
             sampled += vertices
@@ -1158,6 +1170,7 @@ class ComposedWalk:
     walked: list[tuple[float, str | None]]  # (metres, surface class) per walked way, first walked first
     sac_scale: str | None
     relation_m: dict[int, float]  # metres walked along each OSM relation, first walked first
+    landcover_along: np.ndarray | None = None  # ``along_rows``: classes read on each step to the next vertex
 
 
 class RouteError(ValueError):
@@ -1228,6 +1241,14 @@ def round_trip(walk: ComposedWalk, back: WayBack) -> ComposedWalk:
         walked, scale, relations = walk.walked[::-1], walk.sac_scale, walk.relation_m
     if back.kind != "trail":
         tail["climate_cell"] = np.full(len(tail["lat"]), -1, dtype=walk.climate_cell.dtype)
+    # The rows of the steps back: each row is the step from its vertex to the next.
+    own = _along_or_zeros(walk)
+    if back.kind == "trail":
+        along = np.concatenate([own[:-1], _along_or_zeros(back.walk)])
+    elif back.kind == "step":
+        along = np.concatenate([own, own[-1:]])  # the straight step is not read along
+    else:
+        along = np.concatenate([own[:-1], own[:-1][::-1], own[-1:]])
     scales = [s for s in (walk.sac_scale, scale) if s is not None]
     merged = dict(walk.relation_m)
     for relation, metres in relations.items():
@@ -1238,15 +1259,34 @@ def round_trip(walk: ComposedWalk, back: WayBack) -> ComposedWalk:
         walked=[*walk.walked, *walked],
         sac_scale=max(scales, key=SAC_SCALE_RANK.__getitem__) if scales else None,
         relation_m=merged,
+        landcover_along=along,
     )
 
 
-def _decode(row: tuple) -> tuple[list[np.ndarray], list, np.ndarray, list[int]]:
+def _along_or_zeros(walk: ComposedWalk) -> np.ndarray:
+    """The walk's ``landcover_along``; no reads on any step when it has none."""
+    if walk.landcover_along is not None:
+        return walk.landcover_along
+    from dayhike.landcover import along_rows
+
+    return np.repeat(along_rows(np.zeros(0), np.zeros(0)), len(walk.lat), axis=0)
+
+
+def _decode(row: tuple) -> tuple[list[np.ndarray], list, np.ndarray, list[int], np.ndarray]:
     """A Segment row's per-vertex columns (lat, lon, ele, landcover, climate
-    cell, southness), its runs, the run of each step and its relation ids."""
-    _, _, _, _, relation_ids, parts, _, coords, ele, landcover, climate, southness, _, _ = row
+    cell, southness), its runs, the run of each step, its relation ids and
+    the classes read along its steps (``along_rows``; none read where
+    ``sample-trailgraph`` did not store them for these vertices)."""
+    from dayhike.landcover import along_points, along_rows
+
+    _, _, _, _, relation_ids, parts, _, coords, ele, landcover, climate, southness, _, _, along = row
     points = decode_coords(coords)
     size = len(points)
+    counts, _ = along_points(points[:, 0], points[:, 1])
+    if along is None or len(along) != counts.sum():
+        counts, reads = np.zeros(len(counts), dtype=np.int64), np.zeros(0)
+    else:
+        reads = np.frombuffer(along, dtype="u1")
     runs = json.loads(parts)
     vertices = [
         points[:, 0],
@@ -1256,7 +1296,13 @@ def _decode(row: tuple) -> tuple[list[np.ndarray], list, np.ndarray, list[int]]:
         _blob(climate, "<i4", size, -1).astype(np.int64),
         _blob(southness, "<f4", size, np.nan).astype(float),
     ]
-    return vertices, runs, np.repeat(np.arange(len(runs)), [run[3] for run in runs]), json.loads(relation_ids)
+    return (
+        vertices,
+        runs,
+        np.repeat(np.arange(len(runs)), [run[3] for run in runs]),
+        json.loads(relation_ids),
+        along_rows(counts, reads),
+    )
 
 
 def _describe(key: str) -> str:
@@ -1276,7 +1322,8 @@ def _vertex_keys(node_ids: bytes, coords: bytes) -> list[str]:
 
 
 _SEGMENT_COLUMNS = (
-    "id, kind, a, b, relation_ids, parts, node_ids, coords, ele, landcover, climate_cell, southness, step_ab, step_ba"
+    "id, kind, a, b, relation_ids, parts, node_ids, coords, ele, landcover, climate_cell, southness, step_ab, step_ba, "
+    "{landcover_along}"
 )
 
 
@@ -1300,6 +1347,7 @@ class TrailGraph:
         self._uri = f"file:{self.path}?mode=ro"
         self._graph: tuple | None = None  # what ``trail_back`` searches, read once
         self._graph_lock = threading.Lock()  # one build at a time; the others wait for it
+        self._along_column: str | None = None
 
     def _db(self) -> sqlite3.Connection:
         return sqlite3.connect(self._uri, uri=True)
@@ -1365,7 +1413,11 @@ class TrailGraph:
         return replace(walk, route=Route(key, tuple(",".join(walk.steps).split(","))))
 
     def _load(self, db: sqlite3.Connection, rows: dict[int, tuple], where: str, values: tuple) -> list[tuple]:
-        found = db.execute(f"SELECT {_SEGMENT_COLUMNS} FROM segments s {where}", values).fetchall()
+        if self._along_column is None:  # a TrailGraph sampled before land cover was read along its steps lacks it
+            names = {row[1] for row in db.execute("PRAGMA table_info(segments)")}
+            self._along_column = "landcover_along" if "landcover_along" in names else "NULL"
+        columns = _SEGMENT_COLUMNS.format(landcover_along=self._along_column)
+        found = db.execute(f"SELECT {columns} FROM segments s {where}", values).fetchall()
         for row in found:
             rows.setdefault(row[0], row)
         return found
@@ -1480,6 +1532,7 @@ class TrailGraph:
 
     def _stitch(self, route: Route | None, rows: dict[int, tuple], pieces: list[list[int]]) -> ComposedWalk:
         columns: list[list[np.ndarray]] = [[], [], [], [], [], []]
+        along: list[np.ndarray] = []  # each piece's rows of its steps, walked in that order
         walked: dict[int, list] = {}
         scales: set[str] = set()
         relations: dict[int, float] = {}
@@ -1488,12 +1541,13 @@ class TrailGraph:
         for number, (segment, first, last) in enumerate(pieces):
             if segment not in decoded:
                 decoded[segment] = _decode(rows[segment])
-            vertices, runs, run_of_step, relation_ids = decoded[segment]
+            vertices, runs, run_of_step, relation_ids, segment_along = decoded[segment]
             whole &= {first, last} == {0, len(vertices[0]) - 1}
             low, high = min(first, last), max(first, last)
             values = [v[low : high + 1] if first < last else v[low : high + 1][::-1] for v in vertices]
             for column, value in zip(columns, values):
                 column.append(value if number == 0 else value[1:])
+            along.append(segment_along[low:high] if first < last else segment_along[low:high][::-1])
             step_runs = run_of_step[low:high]
             metres = _haversine(values[0][:-1], values[1][:-1], values[0][1:], values[1][1:])
             walk_m += float(metres.sum())
@@ -1508,7 +1562,11 @@ class TrailGraph:
             for relation in relation_ids:
                 relations[relation] = relations.get(relation, 0.0) + float(metres.sum())
         lat, lon, ele, landcover, climate, southness = (np.concatenate(column) for column in columns)
-        keep = np.concatenate([[True], (np.diff(lat) != 0) | (np.diff(lon) != 0)])
+        moved = (np.diff(lat) != 0) | (np.diff(lon) != 0)
+        keep = np.concatenate([[True], moved])
+        # A dropped vertex's step had no length; the vertex kept before it takes the step after it.
+        steps = np.concatenate([*along, np.zeros((1, decoded[pieces[0][0]][4].shape[1]), dtype=np.int64)])
+        steps = steps[np.concatenate([moved, [True]])]
         first_row = rows[pieces[0][0]]
         return ComposedWalk(
             route=route,
@@ -1524,6 +1582,7 @@ class TrailGraph:
             walked=[(metres, surface) for metres, surface in walked.values()],
             sac_scale=max(scales, key=SAC_SCALE_RANK.__getitem__) if scales else None,
             relation_m=relations,
+            landcover_along=steps,
         )
 
     def trail_back(self, lat: np.ndarray, lon: np.ndarray, limit_m: float) -> ComposedWalk | None:
@@ -1755,11 +1814,10 @@ class TrailGraph:
             facts["highest_m"], facts["lowest_m"] = float(known.max()), float(known.min())
         if walk.sac_scale is not None:
             facts["difficulty_rank"] = float(SAC_SCALE_RANK[walk.sac_scale])
-        codes = walk.landcover[walk.landcover > 0]
-        if codes.size:
+        if np.any(walk.landcover > 0):
             from dayhike.landcover import _landcover_fractions
 
-            shares = list(_landcover_fractions(codes.tolist()))
+            shares = list(_landcover_fractions(walk.landcover, lat, lon, walk.landcover_along))
             shares.append(max(1.0 - sum(shares), 0.0))
             facts.update(zip(LANDCOVER_SHARE_COLUMNS, shares))
         cells = walk.climate_cell[walk.climate_cell >= 0]

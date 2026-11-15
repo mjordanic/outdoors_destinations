@@ -1,13 +1,23 @@
-# Run the demo locally, the same image Cloud Run runs:
+# Run the demo locally, the same two images Cloud Run runs (docs/deploy.md):
 #   DAYHIKE_SERVING=/abs/path/to/web-serving docker compose -f web/compose.yaml up --build
 # then open http://127.0.0.1:8080
 services:
+  # The data image (web/data.Dockerfile); only built, never run.
+  data:
+    build:
+      context: ..
+      dockerfile: web/data.Dockerfile
+      additional_contexts:
+        serving: ${DAYHIKE_SERVING:?set DAYHIKE_SERVING to the export-serving directory}
+    image: dayhike-data
+    scale: 0
   web:
     build:
       context: ..
       dockerfile: web/Dockerfile
       additional_contexts:
-        serving: ${DAYHIKE_SERVING:?set DAYHIKE_SERVING to the export-serving directory}
+        # web/Dockerfile starts FROM dayhike-data: build the data service first and use it.
+        dayhike-data: service:data
     image: dayhike-web
     ports:
       - "127.0.0.1:8080:8080"

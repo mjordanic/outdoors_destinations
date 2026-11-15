@@ -121,6 +121,10 @@ shows "yes", and the click turns it on (a second click asks for no hut). Press
 
 Typing a value in a measure that is off switches it on, at weight 100. Sliding
 its weight up without typing a value asks for the grey example value shown.
+A value the site cannot ask, such as a length of 0 or 99999 km, a box with
+no number, or a box emptied while its weight is above 0, shows a message
+beside its box, for example "Length must be from 1 to 2000 km". **Find
+hikes** stays greyed out, with the same reason under it, until you fix it.
 **Reset weights** brings back the starting values. **Back to a hike you liked**
 takes you back to the normal search.
 
@@ -158,6 +162,12 @@ the hut slider to 100. Turn Length down to 30.
   example "within a 2 h drive of Munich, DE". A fresh page starts with none.
 - **More options.** Under the limits, this sets how close hikes must start to
   be grouped as one area (see "Reading the results" below).
+- **Units** (top of the page). Show every length and height in km and metres,
+  or in miles and feet: the hike panel, the profile, the list, the labels and
+  the values you type (a wish, the distance limit, the grouping radius) all
+  switch together, and a value you typed keeps its meaning. The page starts in
+  miles and feet when your browser's language is US English (or Liberian or
+  Burmese); otherwise in km and metres. A shared link keeps the units it was made with.
 
 On a phone, "2. What similar means" starts folded away; like Advanced search and
 More options, its title has an arrow and the word "show" while it is closed.
@@ -200,7 +210,9 @@ Good to know: the GPX file holds the line of the hike as you see it on the
 map, with a height at every point. With Return to start on, it also holds the
 walk back to the start as a second track, named "…: way back to the start",
 so the file matches the length the page shows. With it off, the file is the
-hike one way. The route data comes from OpenStreetMap and the heights from an
+hike one way. The line is simplified a little, so a GPS app may measure it a
+few percent shorter, as it cuts small bends; when the gap is 1 % or more, a
+line under the buttons says how much. The route data comes from OpenStreetMap and the heights from an
 elevation map, and the file credits both. The first download of a walk back
 along the trails can take a few seconds while the server reads the trails.
 
@@ -333,7 +345,11 @@ whenever the list has one.
 #### "Show 10 more" and the counts
 
 The list shows 10 areas at a time. Press **Show 10 more** for the next 10
-(up to 100 rows), picked the same way from the areas not shown yet. Two counts tell you what is not on the list.
+(up to 100 rows), picked the same way from the areas not shown yet. Each new
+block starts with a line naming its rows, such as "#11–20". Unless Strict
+order is ticked, the rows of a block are in score order among themselves
+only, so a row may score above one listed higher up: a row number is a rank
+only in Strict order. Two counts tell you what is not on the list.
 
 **"12 more good matches start here"**
 

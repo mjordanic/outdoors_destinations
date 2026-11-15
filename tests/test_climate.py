@@ -1069,3 +1069,15 @@ def test_regime_is_june_to_august_temperature_and_radiation_and_all_year_rain() 
     months = [(float(m), 10.0 * m, 100.0 * m) for m in range(1, 13)]
     assert regime(months) == pytest.approx((7.0, 65.0, 700.0))
     assert regime(np.array(months)) == pytest.approx((7.0, 65.0, 700.0))
+
+
+def test_the_regime_s_precipitation_is_a_monthly_mean_of_the_year_so_a_wet_summer_is_above_it() -> None:
+    # A mean of mm per month: never below the driest month or above the wettest of the year. A hike
+    # with rainy summers (Jun-Aug 120-150 mm) has its year below each summer month, which the page
+    # says by labelling the value "averaged over the year" (issue #143).
+    rain = [60.0, 55.0, 70.0, 90.0, 110.0, 130.0, 150.0, 120.0, 100.0, 80.0, 75.0, 65.0]
+    year = regime([(10.0, mm, 1000.0) for mm in rain])[1]
+
+    assert min(rain) <= year <= max(rain)
+    assert year == pytest.approx(sum(rain) / 12)
+    assert year < min(rain[5:8])

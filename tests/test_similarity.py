@@ -1,3 +1,4 @@
+import bisect
 import hashlib
 import json
 import math
@@ -546,6 +547,13 @@ def test_climb_and_descent_follow_the_walking_direction() -> None:
     assert all(math.isnan(v) for v in climb_and_descent(*_north_line([math.nan])))
 
 
+def test_climb_and_descent_on_vertices_at_one_spot_do_not_raise() -> None:
+    for heights in ([100.0, 120.0, 100.0], [100.0, 100.0, 100.0], [100.0, 120.0, 140.0, 100.0]):
+        lats, lons = np.full(len(heights), 46.0), np.full(len(heights), 14.0)
+        climb, descent = climb_and_descent(lats, lons, np.array(heights))
+        assert math.isfinite(climb) and math.isfinite(descent)
+
+
 def test_elevation_gain_ignores_jitter_below_the_hysteresis() -> None:
     flat = [5.0, 8.0, 4.0, 9.0, 3.0, 7.0, 5.0] * 20
     assert elevation_gain(*_north_line(flat)) == 0.0
@@ -566,12 +574,14 @@ def test_elevation_gain_drops_dem_spikes_but_keeps_a_steep_summit() -> None:
     # shore reads the flat lake for 3 vertices 15 m apart, then the slope again.
     shore = [850.0, 851.0, 835.0, 835.0, 835.0, 852.0, 850.0]
     assert elevation_gain(*_north_line(shore, step_m=15.0)) == 0.0  # 16.5 m before the run rule
-    # 4 vertices 25 m apart (75 m) is a real dip in the trail.
+    # 4 vertices 25 m apart (75 m) is no spike: the dip stays. Its 84 % walls make the stretch
+    # noisy, though, so it counts at its 90 m moving average: 12.4 m, not 21.5 m.
     dip = [850.0, 851.0, 830.0, 830.0, 830.0, 830.0, 852.0, 850.0]
-    assert elevation_gain(*_north_line(dip, step_m=25.0)) == pytest.approx(21.5)
+    assert elevation_gain(*_north_line(dip, step_m=25.0)) == pytest.approx(12.37, abs=0.01)
     # The ends are never spikes. Walked down, 60 m down and the last metre up; walked up,
-    # 59 m up from the start's 401 m: the mean of the two.
-    assert climb_and_descent(*_north_line([460.0, 400.0, 401.0], step_m=30.0)) == (0.5, 59.5)
+    # 59 m up from the start's 401 m: the mean of the two. (200 m apart, a 30 % grade, the
+    # stretch is not noisy; 30 m apart it would be, and count at its moving average.)
+    assert climb_and_descent(*_north_line([460.0, 400.0, 401.0], step_m=200.0)) == (0.5, 59.5)
 
 
 def _stepwise_climb_and_descent(along, ele):
@@ -580,8 +590,11 @@ def _stepwise_climb_and_descent(along, ele):
     at most 60 m long (one vertex at any length), whose every vertex is at least
     10 m above (or every one below) the kept vertices on both sides, with at
     least a 25 % grade into it and out of it, is dropped (and the vertices before
-    it are looked at again); then a change counts once it moves 10 m from the
-    last counted elevation, and the last kept vertex counts whatever it moved."""
+    it are looked at again); a kept vertex where the line through the kept
+    vertices strays 2.5 m or more on average, over 200 m either side, from its
+    90 m moving average takes that average (``_smoothed``); then a change
+    counts once it moves 10 m from the last counted elevation, and the last
+    kept vertex counts whatever it moved."""
     kept = []
     for here in ((m, e) for m, e in zip(along, ele) if math.isfinite(e)):
         dropped = True
@@ -603,6 +616,7 @@ def _stepwise_climb_and_descent(along, ele):
         kept.append(here)
     if not kept:
         return math.nan, math.nan
+    kept = list(zip([m for m, _ in kept], _smoothed(kept)))
     climb = descent = 0.0
     last = kept[0][1]
     for _, e in kept[1:]:
@@ -612,6 +626,44 @@ def _stepwise_climb_and_descent(along, ele):
             descent, last = descent + (last - e), e
     end = kept[-1][1]
     return climb + max(end - last, 0.0), descent + max(last - end, 0.0)
+
+
+def _line_mean(xs, ys, start, end):
+    """Mean of the line through (xs, ys) from start to end, one segment at a
+    time; its value at start when the two are equal."""
+    if end <= start:
+        return float(np.interp(start, xs, ys))
+    total = 0.0
+    for i in range(max(bisect.bisect_right(xs, start) - 1, 0), len(xs) - 1):
+        x0, x1, y0, y1 = xs[i], xs[i + 1], ys[i], ys[i + 1]
+        if x0 >= end:
+            break
+        low, high = max(start, x0), min(end, x1)
+        if high > low:
+            total += (high - low) * (y0 + (y1 - y0) * ((low + high) / 2 - x0) / (x1 - x0))
+    return total / (end - start)
+
+
+def _smoothed(kept):
+    """The heights of (metres along, height) vertices with the noisy stretches at
+    their moving average: the line's mean over 90 m centred on a place, less
+    near an end; noisy where the line, read at the vertices and every 10 m,
+    strays 2.5 m or more on average from that over 200 m either side."""
+    xs, ys = [m for m, _ in kept], [e for _, e in kept]
+    if len(kept) < 3:
+        return ys
+    first, last = xs[0], xs[-1]
+
+    def average(x):
+        half = min(45.0, x - first, last - x)
+        return _line_mean(xs, ys, x - half, x + half)
+
+    points = sorted(set(xs) | set(np.arange(first, last, 10.0).tolist()))
+    away = [abs(_line_mean(xs, ys, p, p) - average(p)) for p in points]
+    return [
+        average(x) if _line_mean(points, away, max(x - 200.0, first), min(x + 200.0, last)) >= 2.5 else y
+        for x, y in zip(xs, ys)
+    ]
 
 
 def _both_ways(lat, lon, ele):
@@ -635,7 +687,7 @@ def test_climb_and_descent_match_the_stepwise_rules_on_noisy_spiky_walks() -> No
         ele[spikes] += rng.choice([-1.0, 1.0], spikes.sum()) * rng.uniform(5.0, 80.0, spikes.sum())
         ele[rng.random(count) < rng.uniform(0.0, 0.2)] = math.nan
         expected = _both_ways(lat, lon, ele)
-        assert climb_and_descent(lat, lon, ele) == pytest.approx(expected, rel=0, abs=0, nan_ok=True)
+        assert climb_and_descent(lat, lon, ele) == pytest.approx(expected, rel=0, abs=1e-6, nan_ok=True)
 
 
 def _noisy_spiky_walks(seed: int, count: int = 300):
@@ -663,6 +715,32 @@ def test_a_walk_retraced_climbs_exactly_what_it_descends() -> None:
         climb, descent = climb_and_descent(*(np.concatenate([v, v[::-1][1:]]) for v in (lat, lon, ele)))
 
         assert climb == descent
+
+
+def test_canal_and_steep_shore_paths_climb_about_what_osm_says(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue #138's test set: 26 OSM hiking relations along a bisse, a Suone, a canal or a
+    steep lake shore, with ascent and descent tags. There the DEM reads the cells above and
+    below the path in turn; smoothing those noisy stretches (ADR-0062) halves the median
+    error against the tags, 16 % before, 10 % after."""
+    import dayhike.similarity as similarity_module
+
+    hikes = json.loads((FIXTURE.parent / "cliff_canal_gain.json").read_text())["hikes"]
+
+    def median_error() -> float:
+        errors = []
+        for hike in hikes:
+            lat = np.array([_metres_north(metres) for metres in np.cumsum([0.0, *hike["step_m"]])])
+            tag = max(hike["ascent"], hike["descent"] or 0.0)  # one has no descent tag
+            gain = elevation_gain(lat, np.full(len(lat), 15.0), np.array(hike["ele_m"]))
+            errors.append(abs(gain - tag) / tag)
+        return float(np.median(errors))
+
+    smoothed = median_error()
+    monkeypatch.setattr(similarity_module, "NOISY_MEAN_M", math.inf)  # no stretch is noisy
+
+    assert len(hikes) >= 20
+    assert median_error() == pytest.approx(0.163, abs=0.005)
+    assert smoothed == pytest.approx(0.098, abs=0.005)
 
 
 def test_climb_grade_is_the_gain_over_the_climbing_length() -> None:

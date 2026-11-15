@@ -44,8 +44,15 @@ from dayhike.catalog import (
     similarity_dir_for,
     trailgraph_path_for,
 )
-from dayhike.dem import DEFAULT_DEM_DIR, dem_source_of, fabdem_tile_id, read_grid_cells
-from dayhike.landcover import DEFAULT_LANDCOVER_DIR, _landcover_fractions, worldcover_tile_id
+from dayhike.dem import DEFAULT_DEM_DIR, DemSource, dem_tiles, fabdem_tile_id, read_grid_cells, read_in_order
+from dayhike.landcover import (
+    ALONG_MIN_M,
+    ALONG_STEP_M,
+    DEFAULT_LANDCOVER_DIR,
+    _landcover_fractions,
+    along_rows_of_vertices,
+    worldcover_tile_id,
+)
 from dayhike.parallel import parallel_iter, parallel_map
 from dayhike.trailgraph import WAY_BACK_KINDS, ComposedWalk, TrailGraph, WayBack, round_trip, way_back
 
@@ -57,6 +64,10 @@ GAIN_HYSTERESIS_M = 10.0  # a climb or descent counts once it reaches this; DEM 
 SPIKE_RISE_M = 10.0  # a vertex at least this far above (or below) both neighbours ...
 SPIKE_GRADE = 0.25  # ... and this steep on both sides is a DEM spike, not the trail
 SPIKE_RUN_M = 60.0  # a spike may be a run of vertices this long: two DEM cells (a path along a cliff or shore)
+NOISY_MEAN_M = 2.5  # where heights stray this far on average from their moving average ...
+NOISY_REACH_M = 200.0  # ... this far either side (a path cut into a cliff or along a steep shore) ...
+NOISY_WINDOW_M = 90.0  # ... they are that moving average, over this length: three DEM cells
+NOISY_STEP_M = 10.0  # how far the heights stray is read at the vertices and this often between them
 STEEPNESS_STEP_M = 50.0  # elevation resampled this often along the walk
 STEEPEST_KM_WINDOW_M = 1_000.0
 CORRIDOR_M = 100.0  # amenity along the DayHike (GLOSSARY.md Corridor)
@@ -242,6 +253,7 @@ _FACTS_VERSION = hashlib.sha256(
     json.dumps(
         [
             FACT_COLUMNS, PROFILE_POINTS, PROFILE_RANGE_FLOOR_M, GAIN_HYSTERESIS_M, SPIKE_RISE_M, SPIKE_GRADE, SPIKE_RUN_M,
+            NOISY_MEAN_M, NOISY_REACH_M, NOISY_WINDOW_M, NOISY_STEP_M,
             STEEPNESS_STEP_M, STEEPEST_KM_WINDOW_M, CORRIDOR_M, PEAK_SUMMITED_M, PEAKS_AROUND_M,
             TRAILHEAD_M, SEARCH_STEP_M, WATER_SOURCE_KINDS, SOLAR_ASPECT_POINTS,
             SOLAR_ASPECT_OFFSET_ARCSEC, SOLAR_ASPECT_MIN_SLOPE_DEG, SOLAR_ASPECT_FLAT, WATERSIDE_M,
@@ -249,6 +261,8 @@ _FACTS_VERSION = hashlib.sha256(
             TWIN_STEP_M, TWIN_M, TWIN_SHARE, sorted(_SURFACE_TAG_CLASS.items()), sorted(_ROAD_HIGHWAYS),
             sorted(_TRACKTYPE_CLASS.items()), GAP_JOIN_M, WAY_BACK_KINDS, WAY_BACK_COLUMNS,
             "dry-stretch-every-pass",  # a WaterSource ends a DryStretch at every pass of it (``walk_facts``)
+            "landcover-by-length",  # LandCover shares weigh each vertex by half its two segments (``_landcover_fractions``)
+            "landcover-along-steps", ALONG_MIN_M, ALONG_STEP_M,  # ...and long steps by the classes read along them
         ]
     ).encode()
 ).hexdigest()[:16]  # fmt: skip
@@ -1030,7 +1044,18 @@ def _build_facts(
         back_facts, back_profile = facts.copy(), profile.copy()
         back_rows = np.zeros((len(WAY_BACK_COLUMNS), n), dtype=np.float32)
         back_rows[1:3] = np.nan
-        has_landcover = "landcover" in {row[1] for row in geo.execute("PRAGMA table_info(vertices)")}
+        vertex_columns = {row[1] for row in geo.execute("PRAGMA table_info(vertices)")}
+        has_landcover = "landcover" in vertex_columns
+        has_along = "landcover_along" in vertex_columns
+        if (
+            has_landcover
+            and not has_along
+            and geo.execute("SELECT 1 FROM vertices WHERE landcover IS NOT NULL LIMIT 1").fetchone()
+        ):
+            raise ValueError(
+                f"{geometry_store_path_for(catalog_path)}: land cover was sampled before it was "
+                "read along long steps; run `dayhike sample-landcover`"
+            )
         probes: dict[str, list[np.ndarray]] = {"": [], "_back": []}
         probe_rows: dict[str, list[np.ndarray]] = {"": [], "_back": []}
         water_probes: dict[str, list[np.ndarray]] = {"": [], "_back": []}
@@ -1056,7 +1081,7 @@ def _build_facts(
             part_probe_rows: dict[str, list[np.ndarray]] = {"": [], "_back": []}
             part_water_probes: dict[str, list[np.ndarray]] = {"": [], "_back": []}
             part_water_rows: dict[str, list[np.ndarray]] = {"": [], "_back": []}
-            walks = _walks(opened[os.getpid()], int(chunk[0]), int(chunk[-1]), has_landcover)
+            walks = _walks(opened[os.getpid()], int(chunk[0]), int(chunk[-1]), has_landcover, has_along)
             for local, dayhike_id in enumerate(chunk):
                 row = start + local
                 walk = walks.get(int(dayhike_id))
@@ -1068,10 +1093,10 @@ def _build_facts(
                         for name in FACILITIES_FLAG_COLUMNS[:3]:
                             target[column[name], local] = 0.0
                     continue
-                lat, lon, ele, ways, codes = walk
+                lat, lon, ele, ways, codes, codes_along = walk
                 one_way = ComposedWalk(
                     None, None, None, None, lat, lon, ele, codes,
-                    np.full(len(lat), -1), np.full(len(lat), np.nan), ways, None, {},
+                    np.full(len(lat), -1), np.full(len(lat), np.nan), ways, None, {}, codes_along,
                 )  # fmt: skip
                 back = way_back(lat, lon, graph)
                 trip = round_trip(one_way, back)
@@ -1153,8 +1178,8 @@ def _add_way_back(
     """Bring the Catalog's own facts of one DayHike (its column of ``facts``)
     to the walk with its way back: ``trip``, whose first ``one_way`` vertices
     are the DayHike's. Length adds the metres back; highest, lowest and
-    Difficulty take the way back's too; LandCover counts every vertex of the
-    trip (when the GeometryStore has its classes); climate averages the
+    Difficulty take the way back's too; LandCover weighs every vertex of the
+    trip by length (when the GeometryStore has its classes); climate averages the
     vertices back with the DayHike's, weighted by the vertex count.
     """
     column = {name: index for index, name in enumerate(FACT_COLUMNS)}
@@ -1166,9 +1191,8 @@ def _add_way_back(
         facts[column["lowest_m"]] = np.fmin(facts[column["lowest_m"]], tail.min())
     if back.walk is not None and back.walk.sac_scale is not None:
         facts[column["difficulty_rank"]] = np.fmax(facts[column["difficulty_rank"]], SAC_SCALE_RANK[back.walk.sac_scale])
-    codes = trip.landcover[trip.landcover > 0]
-    if has_landcover and codes.size:
-        fractions = list(_landcover_fractions(codes.tolist()))
+    if has_landcover and np.any(trip.landcover > 0):
+        fractions = list(_landcover_fractions(trip.landcover, trip.lat, trip.lon, trip.landcover_along))
         fractions.append(max(1.0 - sum(fractions), 0.0))
         facts[[column[name] for name in LANDCOVER_SHARE_COLUMNS]] = fractions
     cells = trip.climate_cell[one_way:]
@@ -1246,15 +1270,20 @@ class AmenityPoints:
 
 
 def _walks(
-    geo: sqlite3.Connection, first_id: int, last_id: int, has_landcover: bool = False
-) -> dict[int, tuple[np.ndarray, np.ndarray, np.ndarray, list[tuple[float, str | None]], np.ndarray]]:
-    """DayHikeGeometry (lat, lon, ele), walked ways and per-vertex WorldCover
-    class (0 missing, and without ``has_landcover``) for DayHikes in an id range.
+    geo: sqlite3.Connection, first_id: int, last_id: int, has_landcover: bool = False, has_along: bool = False
+) -> dict[
+    int, tuple[np.ndarray, np.ndarray, np.ndarray, list[tuple[float, str | None]], np.ndarray, np.ndarray | None]
+]:
+    """DayHikeGeometry (lat, lon, ele), walked ways, per-vertex WorldCover
+    class (0 missing, and without ``has_landcover``) and the classes read
+    along its steps (``along_rows``; None without ``has_along``) for DayHikes
+    in an id range.
 
     Ways are (walked metres, surface class) in walk order; Leftovers are out.
     """
     vertices = geo.execute(
-        f"SELECT dayhike_id, latitude, longitude, ele, {'landcover' if has_landcover else 'NULL'} FROM vertices "
+        f"SELECT dayhike_id, latitude, longitude, ele, {'landcover' if has_landcover else 'NULL'}, "
+        f"{'landcover_along' if has_along else 'NULL'} FROM vertices "
         "WHERE dayhike_id BETWEEN ? AND ? ORDER BY dayhike_id, seq",
         (first_id, last_id),
     ).fetchall()
@@ -1270,7 +1299,7 @@ def _walks(
     if not vertices:
         return {}
     table = np.array(
-        [(i, lat, lon, math.nan if ele is None else ele, code or 0) for i, lat, lon, ele, code in vertices],
+        [(i, lat, lon, math.nan if ele is None else ele, code or 0) for i, lat, lon, ele, code, _ in vertices],
         dtype=float,
     )
     hike_ids, starts = np.unique(table[:, 0], return_index=True)
@@ -1282,6 +1311,7 @@ def _walks(
             table[start:end, 3],
             ways.get(int(dayhike_id), []),
             table[start:end, 4].astype(np.int64),
+            along_rows_of_vertices([row[5] for row in vertices[start:end]]) if has_along else None,
         )
         for dayhike_id, start, end in zip(hike_ids, starts, ends)
     }
@@ -1479,11 +1509,12 @@ def _one_way_climb_and_descent(lat: np.ndarray, lon: np.ndarray, ele: np.ndarray
     ``SPIKE_GRADE`` into it and out of it (the ends stay). Each drop tests the
     new last kept vertex again, so several can drop in a row. A path along a
     steep shore or cliff reads cells of the water or the slope beside it that
-    way. Then a change counts only once it moves
-    ``GAIN_HYSTERESIS_M`` from the last counted elevation, so DEM jitter
-    between vertices does not add up on long flat or cross-slope walks; the
-    last vertex counts whatever it moved, so climb less descent is the end's
-    height less the start's.
+    way. Where it reads them for longer, the kept heights are noisy: there
+    each is its moving average (``_smooth_noisy``). Then a change counts only
+    once it moves ``GAIN_HYSTERESIS_M`` from the last counted elevation, so DEM
+    jitter between vertices does not add up on long flat or cross-slope walks;
+    the last vertex counts whatever it moved, so climb less descent is the
+    end's height less the start's (the ends are never smoothed).
     """
     known = np.isfinite(ele)
     along = np.concatenate([[0.0], np.cumsum(_step_m(lat, lon))])
@@ -1515,6 +1546,7 @@ def _one_way_climb_and_descent(lat: np.ndarray, lon: np.ndarray, ele: np.ndarray
             del kept_at[start:], kept[start:]
         kept_at.append(here_at)
         kept.append(here)
+    kept = _smooth_noisy(kept_at, kept)
     climb = descent = 0.0
     last = kept[0]
     step = GAIN_HYSTERESIS_M
@@ -1527,6 +1559,53 @@ def _one_way_climb_and_descent(lat: np.ndarray, lon: np.ndarray, ele: np.ndarray
             last = metres
     end = kept[-1]
     return climb + max(end - last, 0.0), descent + max(last - end, 0.0)
+
+
+def _smooth_noisy(at: Sequence[float], height: Sequence[float]) -> list[float]:
+    """Heights (metres) at ``at`` (metres along the walk) with the noisy stretches smoothed.
+
+    The heights are read as a line between the vertices. Its moving average at
+    a place is its mean over ``NOISY_WINDOW_M`` centred there (less near an
+    end, so the ends keep their heights and a straight slope is its own
+    average). A vertex is noisy where the line strays ``NOISY_MEAN_M`` or more
+    on average from its moving average over ``NOISY_REACH_M`` either side; it
+    takes its moving average, the others keep their heights. A path cut into a
+    cliff, along a levada or a steep lake shore reads the DEM cells above and
+    below it in turn for hundreds of metres; a real climb, even a steep one,
+    seldom strays that far from its own moving average (ADR-0062).
+    """
+    if len(height) < 3 or at[-1] <= at[0]:
+        return list(height)
+    at_m, metres = np.asarray(at, dtype=float), np.asarray(height, dtype=float)
+    first, last = at_m[0], at_m[-1]
+
+    def moving_average(x: np.ndarray) -> np.ndarray:
+        half = np.minimum(NOISY_WINDOW_M / 2, np.minimum(x - first, last - x))
+        return _line_means(at_m, metres, x - half, x + half)
+
+    # How far the line strays, at the vertices and every NOISY_STEP_M between them.
+    points = np.union1d(at_m, np.arange(first, last, NOISY_STEP_M))
+    away = np.abs(_line_means(at_m, metres, points, points) - moving_average(points))
+    stray = _line_means(points, away, np.maximum(at_m - NOISY_REACH_M, first), np.minimum(at_m + NOISY_REACH_M, last))
+    return np.where(stray >= NOISY_MEAN_M, moving_average(at_m), metres).tolist()
+
+
+def _line_means(at: np.ndarray, values: np.ndarray, start: np.ndarray, end: np.ndarray) -> np.ndarray:
+    """Mean of the line through (``at``, ``values``) from each ``start`` to its ``end``
+    (all within ``at``'s range); the line's value where the two are equal."""
+    step = np.diff(at)
+    area = np.concatenate([[0.0], np.cumsum(step * (values[:-1] + values[1:]) / 2)])
+
+    def area_to(x: np.ndarray) -> np.ndarray:
+        i = np.clip(np.searchsorted(at, x, side="right") - 1, 0, len(at) - 2)
+        into = x - at[i]
+        slope = np.divide(values[i + 1] - values[i], step[i], out=np.zeros(len(i)), where=step[i] > 0)
+        return area[i] + into * (values[i] + slope * into / 2)
+
+    width = end - start
+    return np.where(
+        width > 0, (area_to(end) - area_to(start)) / np.where(width > 0, width, 1.0), np.interp(start, at, values)
+    )
 
 
 def profile_shape(
@@ -1914,32 +1993,39 @@ def _share_near_vertices(a: np.ndarray, b: np.ndarray) -> float:
 def dem_heights(dem_dir: Path | str, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
     """DEM height of the cell holding each point; NaN without a tile or data.
 
-    Each covering tile is read once. A point in the half-cell margin outside
-    its tile's grid reads the tile's edge cell.
+    Each covering tile is read once, in ``read_in_order``: a point on a nodata
+    cell of a 3DEP tile reads the world source's. A point in the half-cell
+    margin outside its tile's grid reads the tile's edge cell.
     """
     import rasterio
 
     heights = np.full(len(lat), np.nan)
-    source = dem_source_of(dem_dir)
-    if source is None:
+    files = dem_tiles(dem_dir)
+    if not files:
         return heights
     corners = np.column_stack([np.floor(lat), np.floor(lon)]).astype(int)
     unique, tiles = np.unique(corners, axis=0, return_inverse=True)
     order = np.argsort(tiles.ravel(), kind="stable")
     bounds = np.searchsorted(tiles.ravel()[order], np.arange(len(unique) + 1))
     for tile, (south, west) in enumerate(unique):
-        path = Path(dem_dir) / source.tile_file(fabdem_tile_id(south, west))
-        if not path.is_file():
+        tile_files = files.get(fabdem_tile_id(south, west))
+        if tile_files is None:
             continue
         at = order[bounds[tile] : bounds[tile + 1]]
-        with rasterio.open(path) as dataset:
-            rows, cols = rasterio.transform.rowcol(dataset.transform, lon[at], lat[at])
-            rows = np.clip(np.asarray(rows), 0, dataset.height - 1)
-            cols = np.clip(np.asarray(cols), 0, dataset.width - 1)
-            values = read_grid_cells(dataset, rows, cols).astype(float)
-            if dataset.nodata is not None:
-                values[values == dataset.nodata] = np.nan
-        heights[at] = values
+
+        def read(_source: DemSource, path: Path, k: list[int]) -> list[float | None]:
+            points = at[k]
+            with rasterio.open(path) as dataset:
+                rows, cols = rasterio.transform.rowcol(dataset.transform, lon[points], lat[points])
+                rows = np.clip(np.asarray(rows), 0, dataset.height - 1)
+                cols = np.clip(np.asarray(cols), 0, dataset.width - 1)
+                values = read_grid_cells(dataset, rows, cols).astype(float)
+                if dataset.nodata is not None:
+                    values[values == dataset.nodata] = np.nan
+            return [None if math.isnan(value) else value for value in values.tolist()]
+
+        values, _ = read_in_order(tile_files, len(at), read)
+        heights[at] = [np.nan if value is None else value for value in values]
     return heights
 
 
