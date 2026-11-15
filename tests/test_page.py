@@ -1079,6 +1079,102 @@ def test_with_a_pmtiles_file_set_both_maps_draw_it_as_vectors_and_ask_openstreet
         assert "© OpenStreetMap contributors" in corner.inner_text() and "Protomaps" in corner.inner_text()
     assert "Protomaps basemap" in page.request.get(f"{vector_server}/credits.html").text()
     assert page.evaluate("pick.map.getMaxZoom()") == 19
+    if not phone:  # a vector map that has read its file is not given up for the raster tiles later
+        page.wait_for_timeout(page.evaluate("VECTOR_WAIT_MS") + 1_000)
+        assert page.locator("canvas.maplibregl-canvas").count() == 2
+        assert not [url for url in asked if "openstreetmap.org" in url]
+
+
+@pytest.mark.parametrize("failure", ["unreachable", "forbidden", "tiles fail", "no answer"])
+def test_when_the_vector_map_cannot_be_read_both_maps_fall_back_to_the_raster_tiles(browser, vector_server, failure) -> None:
+    # As on the live site from a host its CORS rule leaves out: the browser blocks the PMTiles file.
+    asked: list[str] = []
+    page = browser.new_page()
+    page.set_default_timeout(30_000)  # MapLibre's first draw is slow on a CI machine's software WebGL
+    page.on("request", lambda request: asked.append(request.url))
+    page.route(lambda url: not url.startswith(vector_server), lambda route: route.abort())  # no tiles
+    reads = itertools.count()
+
+    def pmtiles(route) -> None:
+        if failure == "no answer":
+            return  # left waiting: the page gives up on the vector map after VECTOR_WAIT_MS
+        if failure == "forbidden":
+            route.fulfill(status=403)
+        elif failure == "tiles fail" and next(reads) == 0:
+            route.continue_()  # the header and directory read, then every tile read fails
+        else:
+            route.abort()
+
+    page.route(f"{vector_server}/fixtures/basemap.pmtiles", pmtiles)
+    page.goto(f"{vector_server}/#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.locator("#map-pick-on").check()
+    page.evaluate("pick.map.setView([45.0, 15.05], 11, { animate: false })")
+
+    page.wait_for_function("() => [...document.querySelectorAll('.leaflet-container')].filter((map) => map.querySelector('.leaflet-tile')).length === 2")
+    assert page.locator("canvas.maplibregl-canvas").count() == 0
+    assert any(url.startswith("https://tile.openstreetmap.org/") for url in asked)
+    corners = page.locator(".leaflet-control-attribution")
+    assert corners.count() == 2
+    for corner in corners.all():
+        assert "© OpenStreetMap contributors" in corner.inner_text() and "Protomaps" not in corner.inner_text()
+
+
+def test_a_drawn_vector_map_outlasts_one_failed_read_but_falls_back_when_reads_keep_failing(browser, vector_server) -> None:
+    asked: list[str] = []
+    page = browser.new_page()
+    page.set_default_timeout(30_000)  # MapLibre's first draw is slow on a CI machine's software WebGL
+    page.on("request", lambda request: asked.append(request.url))
+    page.route(lambda url: not url.startswith(vector_server), lambda route: route.abort())  # no tiles
+    page.goto(f"{vector_server}/#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.locator("#map-pick-on").check()
+    page.evaluate("pick.map.setView([45.0, 15.05], 11, { animate: false })")
+    page.wait_for_function("""() => { const gl = []; pick.map.eachLayer((layer) => layer.getMaplibreMap && gl.push(layer.getMaplibreMap()));
+      return gl.length === 1 && gl[0].loaded() && gl[0].queryRenderedFeatures().length > 0; }""")
+    page.wait_for_function("() => document.querySelectorAll('canvas.maplibregl-canvas').length === 2")
+    # One failed read of a PMTiles directory fails every tile waiting on it: in Chrome against the live file, one
+    # 503 gave three tile errors within 7 ms. That is one burst.
+    burst = """() => pick.map.eachLayer((layer) => { const gl = layer.getMaplibreMap && layer.getMaplibreMap();
+      for (let tile = 0; gl && tile < 4; tile++) gl.fire("error", { sourceId: "protomaps", error: new Error("Bad response code: 503") }); })"""
+    gap = page.evaluate("VECTOR_BURST_MS") + 100
+
+    page.evaluate(burst)
+    page.wait_for_timeout(gap)
+    assert page.locator("canvas.maplibregl-canvas").count() == 2
+    assert not [url for url in asked if "openstreetmap.org" in url]
+
+    page.evaluate(burst)
+    page.wait_for_timeout(gap)
+    assert page.locator("canvas.maplibregl-canvas").count() == 2
+    page.evaluate(burst)  # the third burst within VECTOR_ERRORS_MS: the reads keep failing
+    page.wait_for_function("() => pick.map.getContainer().querySelector('.leaflet-tile')")
+    assert page.evaluate("() => { let gl = 0; pick.map.eachLayer((layer) => { gl += !!layer.getMaplibreMap; }); return gl; }") == 0
+
+
+def test_when_maplibre_cannot_start_its_map_the_hike_map_falls_back_and_can_be_drawn_again(browser, vector_server) -> None:
+    # The WebGL 2 check passes, but MapLibre's own canvas is refused a context (as at the browser's context limit).
+    errors: list[str] = []
+    page = browser.new_page()
+    page.set_default_timeout(30_000)
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.add_init_script("""{ const getContext = HTMLCanvasElement.prototype.getContext;
+      HTMLCanvasElement.prototype.getContext = function (type, ...rest) {
+        return this.isConnected && type.startsWith("webgl") ? null : getContext.call(this, type, ...rest); }; }""")
+    page.route(lambda url: not url.startswith(vector_server), lambda route: route.abort())  # no tiles
+    page.goto(f"{vector_server}/#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.locator(".leaflet-tile").first.wait_for(state="attached")
+
+    page.locator("#units").select_option("imperial")  # draws the hike's card, and its map, again
+    page.locator(".leaflet-tile").first.wait_for(state="attached")
+    box = page.locator(".leaflet-container").first.bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.wheel(0, -300)
+    page.wait_for_timeout(500)
+
+    assert errors == []
+    assert page.locator(".leaflet-gl-layer").count() == 0
 
 
 def test_with_no_base_map_set_the_page_loads_no_vector_map_script(browser, server) -> None:

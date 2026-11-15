@@ -985,16 +985,65 @@ function addBaseLayer(map) {
   const { url, attribution, max_zoom: maxZoom, pmtiles: file } = state.info?.basemap ?? { url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", max_zoom: 19 };
   const raster = () => L.tileLayer(url, { maxZoom, attribution: attribution ? `${OSM_CREDIT} · ${attribution}` : OSM_CREDIT });
   map.setMaxZoom(maxZoom);
-  if (!file) {
+  if (!file || vectorFailed) {
     raster().addTo(map);
     return;
   }
-  // The vector layer joins the group once its scripts have loaded.
+  // The vector layer joins the group once its scripts have loaded; the raster tiles take its place for good
+  // when it fails.
   const base = L.layerGroup().addTo(map);
-  vectorScripts().then(
-    () => base.addLayer(L.maplibreGL({ style: vectorStyle(file) })),
-    (error) => { console.warn("the vector base map cannot be drawn here:", error); base.addLayer(raster()); },
-  );
+  let vector = null;
+  let fallen = false;
+  const fallBack = (error) => {
+    if (fallen) return;
+    fallen = vectorFailed = true;
+    console.warn("the vector base map cannot be drawn here:", error);
+    if (vector) {
+      const credit = vector.getAttribution();
+      if (!vector.getMaplibreMap()) vector.onRemove = () => vector.getContainer()?.remove();
+      base.removeLayer(vector);
+      if (credit) map.attributionControl?.removeAttribution(credit);
+    }
+    base.addLayer(raster());
+  };
+  vectorScripts().then(() => {
+    if (vectorFailed) throw new Error("the vector base map failed on another map");
+    vector = L.maplibreGL({ style: vectorStyle(file) });
+    vector.on("add", () => watchVector(vector, fallBack));
+    base.addLayer(vector);
+  }).catch(fallBack);
+}
+
+// Set once a vector base map fails (its file unreadable, its tiles or style failing, or nothing within
+// VECTOR_WAIT_MS): every map shows the raster tiles from then on, for the rest of the page's life.
+let vectorFailed = false;
+const VECTOR_WAIT_MS = 10_000;
+// Once drawn, the vector map is given up only for VECTOR_ERRORS bursts of failed reads within VECTOR_ERRORS_MS. Errors
+// less than VECTOR_BURST_MS apart are one burst: one failed directory read fails every tile waiting on it at once.
+const VECTOR_ERRORS = 3;
+const VECTOR_ERRORS_MS = 30_000;
+const VECTOR_BURST_MS = 1_000;
+
+// Calls ``fallBack`` when the vector layer's MapLibre map cannot read its PMTiles file in time, its file or
+// tiles fail before it has first drawn (or keep failing after), or it loses its WebGL context. Other errors
+// (a missing glyph range) leave it drawing.
+function watchVector(vector, fallBack) {
+  const gl = vector.getMaplibreMap();
+  const timer = setTimeout(() => fallBack(new Error(`the vector base map did not load in ${VECTOR_WAIT_MS / 1000} s`)), VECTOR_WAIT_MS);
+  vector.on("remove", () => clearTimeout(timer));
+  gl.on("sourcedata", (event) => { if (event.sourceId === "protomaps" && event.sourceDataType === "metadata") clearTimeout(timer); });
+  let drawn = false;
+  let bursts = [];
+  let lastError = -Infinity;
+  gl.once("idle", () => { drawn = true; });
+  gl.on("error", (event) => {
+    if (event.sourceId !== "protomaps") return;
+    const now = Date.now();
+    if (now - lastError >= VECTOR_BURST_MS) bursts = [...bursts.filter((at) => now - at < VECTOR_ERRORS_MS), now];
+    lastError = now;
+    if (!drawn || bursts.length >= VECTOR_ERRORS) fallBack(event.error);
+  });
+  gl.on("webglcontextlost", () => fallBack(new Error("the vector base map lost its WebGL context")));
 }
 
 // MapLibre GL JS with the maplibre-gl-leaflet layer, the PMTiles reader and the Protomaps style, all from
