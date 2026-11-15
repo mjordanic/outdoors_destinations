@@ -1000,7 +1000,8 @@ function addBaseLayer(map) {
     console.warn("the vector base map cannot be drawn here:", error);
     if (vector) {
       const credit = vector.getAttribution();
-      try { base.removeLayer(vector); } catch { /* a map that never started has nothing to take down */ }
+      if (!vector.getMaplibreMap()) vector.onRemove = () => vector.getContainer()?.remove();
+      base.removeLayer(vector);
       if (credit) map.attributionControl?.removeAttribution(credit);
     }
     base.addLayer(raster());

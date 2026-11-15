@@ -1120,6 +1120,31 @@ def test_when_the_vector_map_cannot_be_read_both_maps_fall_back_to_the_raster_ti
         assert "© OpenStreetMap contributors" in corner.inner_text() and "Protomaps" not in corner.inner_text()
 
 
+def test_when_maplibre_cannot_start_its_map_the_hike_map_falls_back_and_can_be_drawn_again(browser, vector_server) -> None:
+    # The WebGL 2 check passes, but MapLibre's own canvas is refused a context (as at the browser's context limit).
+    errors: list[str] = []
+    page = browser.new_page()
+    page.set_default_timeout(30_000)
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.add_init_script("""{ const getContext = HTMLCanvasElement.prototype.getContext;
+      HTMLCanvasElement.prototype.getContext = function (type, ...rest) {
+        return this.isConnected && type.startsWith("webgl") ? null : getContext.call(this, type, ...rest); }; }""")
+    page.route(lambda url: not url.startswith(vector_server), lambda route: route.abort())  # no tiles
+    page.goto(f"{vector_server}/#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.locator(".leaflet-tile").first.wait_for(state="attached")
+
+    page.locator("#units").select_option("imperial")  # draws the hike's card, and its map, again
+    page.locator(".leaflet-tile").first.wait_for(state="attached")
+    box = page.locator(".leaflet-container").first.bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.wheel(0, -300)
+    page.wait_for_timeout(500)
+
+    assert errors == []
+    assert page.locator(".leaflet-gl-layer").count() == 0
+
+
 def test_with_no_base_map_set_the_page_loads_no_vector_map_script(browser, server) -> None:
     asked: list[str] = []
     page = browser.new_page()
