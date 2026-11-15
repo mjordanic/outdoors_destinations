@@ -1125,6 +1125,21 @@ def test_the_privacy_page_names_goatcounter_only_once_it_is_set(data: ServingDat
     assert "Ko-fi" not in privacy
 
 
+def test_the_privacy_page_names_cloudflare_as_the_map_host_only_with_a_vector_map(data: ServingData) -> None:
+    raster = TestClient(create_app(data)).get("/privacy.html").text
+    assert "Cloudflare" not in raster
+    assert "OpenStreetMap Foundation</strong> (UK) serves the map tiles" in raster
+
+    vector = TestClient(create_app(data, basemap=web.BaseMap(pmtiles="https://maps.hikesalike.com/europe.pmtiles")))
+    privacy = vector.get("/privacy.html").text
+    assert "<strong>Cloudflare</strong>" in privacy and "maps.hikesalike.com" in privacy
+    assert "no WebGL 2" in privacy  # the Foundation's tiles only as the fallback
+    assert "serves the map tiles, so" not in privacy
+    assert "Cloudflare may process map requests outside the EU" in privacy
+    assert "Nominatim" in privacy
+    assert "<!--if-" not in privacy and "<!--if-" not in raster
+
+
 def test_the_terms_page_warns_hikers_and_restricts_no_reuse_beyond_the_data_licences(client: TestClient) -> None:
     terms = client.get("/terms.html").text
 
