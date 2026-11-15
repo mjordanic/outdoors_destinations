@@ -419,6 +419,9 @@ def _landcover_fractions(
     its two vertices. Vertices and reads without a class are left out, and
     the others share the length; a step whose reads all lack a class goes to
     its vertices. Needs at least one classified vertex.
+
+    The vertex weights are summed exactly (``math.fsum``), so a class's
+    weights never add up to more than all of them and no share is above 1.
     """
     codes = np.asarray(codes)
     steps = step_lengths_m(np.asarray(lat, dtype=float), np.asarray(lon, dtype=float))
@@ -434,11 +437,11 @@ def _landcover_fractions(
     weights[1:] += halves
     classified = codes > 0
     codes, weights = codes[classified], weights[classified]
-    total = weights.sum() + metres.sum()
+    total = math.fsum(weights) + metres.sum()
     if total <= 0:  # every classified vertex on one spot
         weights, total = np.ones(len(codes)), float(len(codes))
     return tuple(
-        float((weights[codes == code].sum() + metres[index]) / total) for index, code in enumerate(_SHARE_CODES)
+        float((math.fsum(weights[codes == code]) + metres[index]) / total) for index, code in enumerate(_SHARE_CODES)
     )
 
 

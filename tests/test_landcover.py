@@ -295,6 +295,27 @@ def test_fractions_mix_read_steps_with_end_halves_of_short_ones() -> None:
     assert bare == pytest.approx(steps[1] / 2 / steps.sum())
 
 
+def test_a_line_that_is_all_tree_by_length_is_exactly_one_tree_not_a_hair_above() -> None:
+    # 30 vertices of short steps, with one grass vertex between two ~67 m
+    # steps that are both read along (every read tree): its length weight is
+    # 0.0 and the line is all tree. Summing the tree weights apart from all of
+    # them used to round the tree share to 1.0000000000000002 (seed 11).
+    rng = np.random.default_rng(11)
+    steps_m = rng.uniform(6, 22, 29)
+    steps_m[17:19] = rng.uniform(65, 69, 2)
+    lon = np.concatenate([[0.0], np.cumsum(steps_m)]) / 111195.0
+    lat = np.zeros_like(lon)
+    codes = np.full(len(lon), 10)
+    codes[18] = 30
+    counts, _ = along_points(lat, lon)
+    assert counts[17] > 0 and counts[18] > 0
+    along = along_rows(counts, np.full(int(counts.sum()), 10))
+
+    shares = _landcover_fractions(codes, lat, lon, along)
+
+    assert shares == (1.0, 0.0, 0.0, 0.0, 0.0)
+
+
 def test_fractions_leave_out_unclassified_reads_and_fall_back_to_the_ends() -> None:
     lon = np.array([0.0, 0.001, 0.002])
     lat = np.zeros_like(lon)
