@@ -1120,6 +1120,33 @@ def test_when_the_vector_map_cannot_be_read_both_maps_fall_back_to_the_raster_ti
         assert "© OpenStreetMap contributors" in corner.inner_text() and "Protomaps" not in corner.inner_text()
 
 
+def test_a_drawn_vector_map_outlasts_one_failed_tile_read_but_falls_back_when_they_keep_failing(browser, vector_server) -> None:
+    asked: list[str] = []
+    page = browser.new_page()
+    page.set_default_timeout(30_000)  # MapLibre's first draw is slow on a CI machine's software WebGL
+    page.on("request", lambda request: asked.append(request.url))
+    page.route(lambda url: not url.startswith(vector_server), lambda route: route.abort())  # no tiles
+    page.goto(f"{vector_server}/#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.locator("#map-pick-on").check()
+    page.evaluate("pick.map.setView([45.0, 15.05], 11, { animate: false })")
+    page.wait_for_function("""() => { const gl = []; pick.map.eachLayer((layer) => layer.getMaplibreMap && gl.push(layer.getMaplibreMap()));
+      return gl.length === 1 && gl[0].loaded() && gl[0].queryRenderedFeatures().length > 0; }""")
+    page.wait_for_function("() => document.querySelectorAll('canvas.maplibregl-canvas').length === 2")
+    fail = """() => pick.map.eachLayer((layer) => layer.getMaplibreMap
+      && layer.getMaplibreMap().fire("error", { sourceId: "protomaps", error: new Error("a failed tile read") }))"""
+
+    page.evaluate(fail)
+    page.wait_for_timeout(500)
+    assert page.locator("canvas.maplibregl-canvas").count() == 2
+    assert not [url for url in asked if "openstreetmap.org" in url]
+
+    page.evaluate(fail)
+    page.evaluate(fail)
+    page.wait_for_function("() => pick.map.getContainer().querySelector('.leaflet-tile')")
+    assert page.evaluate("() => { let gl = 0; pick.map.eachLayer((layer) => { gl += !!layer.getMaplibreMap; }); return gl; }") == 0
+
+
 def test_when_maplibre_cannot_start_its_map_the_hike_map_falls_back_and_can_be_drawn_again(browser, vector_server) -> None:
     # The WebGL 2 check passes, but MapLibre's own canvas is refused a context (as at the browser's context limit).
     errors: list[str] = []

@@ -1018,15 +1018,27 @@ function addBaseLayer(map) {
 // VECTOR_WAIT_MS): every map shows the raster tiles from then on, for the rest of the page's life.
 let vectorFailed = false;
 const VECTOR_WAIT_MS = 10_000;
+// Once drawn, the vector map is given up only for VECTOR_ERRORS failed reads of its file within VECTOR_ERRORS_MS.
+const VECTOR_ERRORS = 3;
+const VECTOR_ERRORS_MS = 30_000;
 
 // Calls ``fallBack`` when the vector layer's MapLibre map cannot read its PMTiles file in time, its file or
-// tiles fail, or it loses its WebGL context. Other errors (a missing glyph range) leave it drawing.
+// tiles fail before it has first drawn (or keep failing after), or it loses its WebGL context. Other errors
+// (a missing glyph range) leave it drawing.
 function watchVector(vector, fallBack) {
   const gl = vector.getMaplibreMap();
   const timer = setTimeout(() => fallBack(new Error(`the vector base map did not load in ${VECTOR_WAIT_MS / 1000} s`)), VECTOR_WAIT_MS);
   vector.on("remove", () => clearTimeout(timer));
   gl.on("sourcedata", (event) => { if (event.sourceId === "protomaps" && event.sourceDataType === "metadata") clearTimeout(timer); });
-  gl.on("error", (event) => { if (event.sourceId === "protomaps") fallBack(event.error); });
+  let drawn = false;
+  let errors = [];
+  gl.once("idle", () => { drawn = true; });
+  gl.on("error", (event) => {
+    if (event.sourceId !== "protomaps") return;
+    const now = Date.now();
+    errors = [...errors.filter((at) => now - at < VECTOR_ERRORS_MS), now];
+    if (!drawn || errors.length >= VECTOR_ERRORS) fallBack(event.error);
+  });
   gl.on("webglcontextlost", () => fallBack(new Error("the vector base map lost its WebGL context")));
 }
 
