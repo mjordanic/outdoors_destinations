@@ -146,7 +146,7 @@ What the flags do:
 | `DAYHIKE_TILE_URL=TEMPLATE` (optional) | The raster tile URL template both maps load their base map from, with `{z}`, `{x}` and `{y}` (for example `https://tiles.example.com/{z}/{x}/{y}.png`). Unset, the maps use `tile.openstreetmap.org` (section 6). `/api/info` names it as `basemap`. |
 | `DAYHIKE_TILE_ATTRIBUTION=HTML` (optional) | The tile provider's credit, as its terms ask for it: the map corner shows it beside "© OpenStreetMap contributors", which always stays, and the Data and credits page says the tiles are served by it. |
 | `DAYHIKE_TILE_MAX_ZOOM=N` (optional) | The deepest zoom the provider serves (default 19). |
-| `DAYHIKE_PMTILES_URL=URL` (optional) | A vector base map: a PMTiles file in the [Protomaps basemap](https://docs.protomaps.com/basemaps/downloads) schema, by full address or relative to the page. Both maps then draw it with MapLibre GL JS under their overlays (ADR-0061), credited "© OpenStreetMap contributors · Protomaps", and ask no raster tiles; a browser without WebGL 2 falls back to the raster tiles above. The host must answer range requests and, on another origin, allow the site's origin by CORS with the `range` request header and the `etag` response header exposed ([Protomaps cloud storage guide](https://docs.protomaps.com/pmtiles/cloud-storage)). The live site's file is `https://maps.hikesalike.com/europe.pmtiles` on Cloudflare R2 (section 10); the deploy workflow sets it from the `DAYHIKE_PMTILES_URL` repository variable (section 9). Not set yet (#121). |
+| `DAYHIKE_PMTILES_URL=URL` (optional) | A vector base map: a PMTiles file in the [Protomaps basemap](https://docs.protomaps.com/basemaps/downloads) schema, by full address or relative to the page. Both maps then draw it with MapLibre GL JS under their overlays (ADR-0061), credited "© OpenStreetMap contributors · Protomaps", and ask no raster tiles; where the vector map cannot be shown (no WebGL 2, or the file or its tiles cannot be read, for example blocked by CORS), each map falls back to the raster tiles above for the rest of the page's life. The host must answer range requests and, on another origin, allow the site's origin by CORS with the `range` request header and the `etag` response header exposed ([Protomaps cloud storage guide](https://docs.protomaps.com/pmtiles/cloud-storage)). The live site's file is `https://maps.hikesalike.com/europe.pmtiles` on Cloudflare R2 (section 10); the deploy workflow sets it from the `DAYHIKE_PMTILES_URL` repository variable (section 9). |
 
 The service also carries a service-level `scaling.maxInstanceCount` of 20 in
 the Cloud Run v2 API, next to the revision-level `template.scaling.maxInstanceCount`
@@ -314,7 +314,7 @@ If an alert fires and the traffic is abuse, close the public access at once:
   MIT (`LICENSE`) and the data licences in `DATA-LICENSES.md`; keep it public,
   or change that page to offer the export another way (for example a download of `hikes.sqlite`).
 - **Tile and place-search policies.** The map uses `tile.openstreetmap.org`
-  (only as the no-WebGL 2 fallback once the vector map is set, section 10), run by the OSM Foundation for low-volume use under its usage policy; if
+  (only as the fallback where the vector map cannot be shown once it is set, section 10), run by the OSM Foundation for low-volume use under its usage policy; if
   traffic grows, switch to another tile provider with `DAYHIKE_TILE_URL` and
   `DAYHIKE_TILE_ATTRIBUTION` (section 3). Export with `--geonames` so
   the origin search reads `places.sqlite`; without it the page falls back to
@@ -523,12 +523,7 @@ With the full export, only the data image's push grows; the two web pushes stay
 the same size. A change to `uv.lock` also pushes the dependency layer again
 (about 180 MB).
 
-## 10. The hosted vector map (not live yet)
-
-**Not live.** The file below is built, but the bucket, its CORS rule and the
-custom domain wait for the maintainer's Cloudflare account, and
-`DAYHIKE_PMTILES_URL` is not set (#121). Until it is, the maps use the raster
-tiles of section 3.
+## 10. The hosted vector map
 
 One PMTiles file covers Europe for both maps' vector base map (ADR-0061). It
 lives in a Cloudflare R2 bucket and is served from the custom domain
@@ -578,6 +573,7 @@ requests. In the S3 form of the policy:
   {
     "AllowedOrigins": [
       "https://hikesalike.com",
+      "https://www.hikesalike.com",
       "https://dayhike-PROJECT_NUMBER.europe-west1.run.app",
       "https://*---dayhike-PROJECT_NUMBER.europe-west1.run.app"
     ],
@@ -592,6 +588,11 @@ requests. In the S3 form of the policy:
 R2 allows one `*` per origin, which here matches every candidate tag. Check it:
 `curl -sI -H "Range: bytes=0-16383" -H "Origin: https://hikesalike.com" https://maps.hikesalike.com/europe.pmtiles`
 answers `206` with `access-control-allow-origin: https://hikesalike.com`.
+
+`www.hikesalike.com` should redirect (`301`) to `https://hikesalike.com`, by a
+Cloudflare redirect rule with the `www` DNS record proxied; its origin stays in
+the rule above in case a page is still served there. A page from an origin the
+rule leaves out still has a map: both maps fall back to the raster tiles (ADR-0061).
 
 ### Refreshing it
 
