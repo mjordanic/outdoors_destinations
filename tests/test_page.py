@@ -1120,7 +1120,7 @@ def test_when_the_vector_map_cannot_be_read_both_maps_fall_back_to_the_raster_ti
         assert "© OpenStreetMap contributors" in corner.inner_text() and "Protomaps" not in corner.inner_text()
 
 
-def test_a_drawn_vector_map_outlasts_one_failed_tile_read_but_falls_back_when_they_keep_failing(browser, vector_server) -> None:
+def test_a_drawn_vector_map_outlasts_one_failed_read_but_falls_back_when_reads_keep_failing(browser, vector_server) -> None:
     asked: list[str] = []
     page = browser.new_page()
     page.set_default_timeout(30_000)  # MapLibre's first draw is slow on a CI machine's software WebGL
@@ -1133,16 +1133,21 @@ def test_a_drawn_vector_map_outlasts_one_failed_tile_read_but_falls_back_when_th
     page.wait_for_function("""() => { const gl = []; pick.map.eachLayer((layer) => layer.getMaplibreMap && gl.push(layer.getMaplibreMap()));
       return gl.length === 1 && gl[0].loaded() && gl[0].queryRenderedFeatures().length > 0; }""")
     page.wait_for_function("() => document.querySelectorAll('canvas.maplibregl-canvas').length === 2")
-    fail = """() => pick.map.eachLayer((layer) => layer.getMaplibreMap
-      && layer.getMaplibreMap().fire("error", { sourceId: "protomaps", error: new Error("a failed tile read") }))"""
+    # One failed read of a PMTiles directory fails every tile waiting on it: in Chrome against the live file, one
+    # 503 gave three tile errors within 7 ms. That is one burst.
+    burst = """() => pick.map.eachLayer((layer) => { const gl = layer.getMaplibreMap && layer.getMaplibreMap();
+      for (let tile = 0; gl && tile < 4; tile++) gl.fire("error", { sourceId: "protomaps", error: new Error("Bad response code: 503") }); })"""
+    gap = page.evaluate("VECTOR_BURST_MS") + 100
 
-    page.evaluate(fail)
-    page.wait_for_timeout(500)
+    page.evaluate(burst)
+    page.wait_for_timeout(gap)
     assert page.locator("canvas.maplibregl-canvas").count() == 2
     assert not [url for url in asked if "openstreetmap.org" in url]
 
-    page.evaluate(fail)
-    page.evaluate(fail)
+    page.evaluate(burst)
+    page.wait_for_timeout(gap)
+    assert page.locator("canvas.maplibregl-canvas").count() == 2
+    page.evaluate(burst)  # the third burst within VECTOR_ERRORS_MS: the reads keep failing
     page.wait_for_function("() => pick.map.getContainer().querySelector('.leaflet-tile')")
     assert page.evaluate("() => { let gl = 0; pick.map.eachLayer((layer) => { gl += !!layer.getMaplibreMap; }); return gl; }") == 0
 
