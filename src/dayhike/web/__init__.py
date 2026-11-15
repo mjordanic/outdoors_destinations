@@ -382,7 +382,8 @@ def site_pages(
     share preview image by full address, as link previews need; else the image stays relative.
 
     Text between ``<!--if-goatcounter-->`` and ``<!--/if-goatcounter-->`` (or ``places``,
-    ``nominatim``, ``europe``, ``elsewhere``, ``eu``) is kept only when that setting is on.
+    ``nominatim``, ``europe``, ``elsewhere``, ``eu``, ``vector`` (a PMTiles base map) and ``raster`` (none))
+    is kept only when that setting is on.
 
     The tag loads the self-hosted ``count.js``, which counts at ``https://<code>.goatcounter.com/count``.
     """
@@ -410,6 +411,8 @@ def site_pages(
             "europe": europe_only,
             "elsewhere": not europe_only,
             "eu": "Europe" in continents,
+            "vector": basemap.pmtiles is not None,
+            "raster": basemap.pmtiles is None,
         }
         for setting, on in settings.items():  # text true only once it is set
             block = rf"<!--if-{setting}-->(.*?)<!--/if-{setting}-->"

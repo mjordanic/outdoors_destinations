@@ -40,6 +40,8 @@ jobs:
       SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
       IMAGE: ${{ vars.DAYHIKE_IMAGE_REPO }}/web:${{ github.sha }}
       DATA_IMAGE: ${{ vars.DAYHIKE_DATA_IMAGE }}
+      # The vector base map (docs/deploy.md, section 10); empty keeps the raster tiles.
+      PMTILES_URL: ${{ vars.DAYHIKE_PMTILES_URL }}
     steps:
       - uses: actions/checkout@v4
 
@@ -61,7 +63,8 @@ jobs:
         run: |
           tag="c-${GITHUB_SHA::12}"
           gcloud run deploy "$SERVICE" --project "$PROJECT" --region "$REGION" \
-            --image "$IMAGE" --no-traffic --tag "$tag"
+            --image "$IMAGE" --no-traffic --tag "$tag" \
+            --update-env-vars "DAYHIKE_PMTILES_URL=$PMTILES_URL"
           described=$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format json)
           revision=$(jq -r --arg tag "$tag" '.status.traffic[] | select(.tag == $tag) | .revisionName' <<<"$described")
           url=$(jq -r --arg tag "$tag" '.status.traffic[] | select(.tag == $tag) | .url' <<<"$described")

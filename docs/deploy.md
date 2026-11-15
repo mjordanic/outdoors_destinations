@@ -146,7 +146,7 @@ What the flags do:
 | `DAYHIKE_TILE_URL=TEMPLATE` (optional) | The raster tile URL template both maps load their base map from, with `{z}`, `{x}` and `{y}` (for example `https://tiles.example.com/{z}/{x}/{y}.png`). Unset, the maps use `tile.openstreetmap.org` (section 6). `/api/info` names it as `basemap`. |
 | `DAYHIKE_TILE_ATTRIBUTION=HTML` (optional) | The tile provider's credit, as its terms ask for it: the map corner shows it beside "© OpenStreetMap contributors", which always stays, and the Data and credits page says the tiles are served by it. |
 | `DAYHIKE_TILE_MAX_ZOOM=N` (optional) | The deepest zoom the provider serves (default 19). |
-| `DAYHIKE_PMTILES_URL=URL` (optional) | A vector base map: a PMTiles file in the [Protomaps basemap](https://docs.protomaps.com/basemaps/downloads) schema, by full address or relative to the page. Both maps then draw it with MapLibre GL JS under their overlays (ADR-0061), credited "© OpenStreetMap contributors · Protomaps", and ask no raster tiles; a browser without WebGL 2 falls back to the raster tiles above. The host must answer range requests and, on another origin, allow the site's origin by CORS with the `range` request header and the `etag` response header exposed ([Protomaps cloud storage guide](https://docs.protomaps.com/pmtiles/cloud-storage)). Not set yet: no file is hosted (#121). |
+| `DAYHIKE_PMTILES_URL=URL` (optional) | A vector base map: a PMTiles file in the [Protomaps basemap](https://docs.protomaps.com/basemaps/downloads) schema, by full address or relative to the page. Both maps then draw it with MapLibre GL JS under their overlays (ADR-0061), credited "© OpenStreetMap contributors · Protomaps", and ask no raster tiles; a browser without WebGL 2 falls back to the raster tiles above. The host must answer range requests and, on another origin, allow the site's origin by CORS with the `range` request header and the `etag` response header exposed ([Protomaps cloud storage guide](https://docs.protomaps.com/pmtiles/cloud-storage)). The live site's file is `https://maps.hikesalike.com/europe.pmtiles` on Cloudflare R2 (section 10); the deploy workflow sets it from the `DAYHIKE_PMTILES_URL` repository variable (section 9). Not set yet (#121). |
 
 The service also carries a service-level `scaling.maxInstanceCount` of 20 in
 the Cloud Run v2 API, next to the revision-level `template.scaling.maxInstanceCount`
@@ -323,7 +323,8 @@ If an alert fires and the traffic is abuse, close the public access at once:
   `europe-west1`), says the request logs are kept by Google Cloud Logging in
   Google's default storage location (not pinned to the EU), the 30-day log
   retention, the map tile and place-search
-  providers, and GoatCounter once it is set. Change it with any of
+  providers (Cloudflare for the vector map once `DAYHIKE_PMTILES_URL` is set,
+  section 10), and GoatCounter once it is set. Change it with any of
   these: a new host or a CDN in front (the `host-recipient` item), a shorter
   log retention, or a different tile or place-search provider.
 - **FABDEM is non-commercial (CC BY-NC-SA 4.0):** the demo must stay
@@ -437,7 +438,9 @@ On a push to `main`, or by hand (`workflow_dispatch` on `main`), the workflow:
    the latest revision (so a later `gcloud run deploy` by hand, section 7, takes
    the traffic as usual), then removes the candidate's tag.
 
-The deploy changes only the image: memory, CPU, scaling and the environment
+The deploy changes only the image and `DAYHIKE_PMTILES_URL`, which it sets from
+the repository variable of that name (empty, the variable is set empty and the
+maps keep the raster tiles): memory, CPU, scaling and the other environment
 variables stay as section 3 set them. A data refresh is still built and pushed by
 hand (section 3), followed by a change of `DAYHIKE_DATA_IMAGE`; the next run
 builds on it. To roll back, move traffic to an earlier revision as in section 7,
@@ -465,6 +468,7 @@ reviewer before each deploy.
 | `CLOUD_RUN_SERVICE` | `dayhike` |
 | `DAYHIKE_IMAGE_REPO` | `europe-west1-docker.pkg.dev/PROJECT/dayhike` |
 | `DAYHIKE_DATA_IMAGE` | `europe-west1-docker.pkg.dev/PROJECT/dayhike/data:FACTS_VERSION` |
+| `DAYHIKE_PMTILES_URL` (optional) | `https://maps.hikesalike.com/europe.pmtiles` (section 10); unset or empty, the raster tiles |
 
 ### One-time cloud setup (by the maintainer)
 
@@ -518,3 +522,90 @@ the code layers. Measured on the test-fixture export with a local registry:
 With the full export, only the data image's push grows; the two web pushes stay
 the same size. A change to `uv.lock` also pushes the dependency layer again
 (about 180 MB).
+
+## 10. The hosted vector map (not live yet)
+
+**Not live.** The file below is built, but the bucket, its CORS rule and the
+custom domain wait for the maintainer's Cloudflare account, and
+`DAYHIKE_PMTILES_URL` is not set (#121). Until it is, the maps use the raster
+tiles of section 3.
+
+One PMTiles file covers Europe for both maps' vector base map (ADR-0061). It
+lives in a Cloudflare R2 bucket and is served from the custom domain
+`maps.hikesalike.com` (the `hikesalike.com` zone is on Cloudflare DNS, and
+connecting the domain to the bucket adds its DNS record), at
+`https://maps.hikesalike.com/europe.pmtiles`. The privacy page names Cloudflare
+as the map host whenever `DAYHIKE_PMTILES_URL` is set; change that text first if
+the file moves to another host.
+
+### Making the file
+
+The file is a `pmtiles extract` of a Protomaps daily build of the whole planet
+([builds](https://maps.protomaps.com/builds/), basemap schema v4), cut to the
+bbox `-25,34,45,72` (longitude -25 to 45, latitude 34 to 72) at zoom 0 to 14.
+The extract reads only the ranges it needs over HTTP, about 25 GB, so neither
+the planet file (about 140 GB) nor any account is needed. Use the
+[go-pmtiles](https://github.com/protomaps/go-pmtiles/releases) release binary:
+
+```bash
+BUILD=20261115   # a build's date, from https://build-metadata.protomaps.dev/builds.json
+pmtiles extract "https://build.protomaps.com/$BUILD.pmtiles" europe.pmtiles \
+  --bbox=-25,34,45,72 --maxzoom=14 --download-threads=8
+pmtiles show europe.pmtiles   # bounds, zooms 0-14, the build's metadata
+```
+
+The first file is from the build of 2026-11-15 (basemap 4.15.2), extracted with
+go-pmtiles 1.31.2: 24 GB. Zoom 15 would double it (49 GB) for detail the maps
+barely show; MapLibre overzooms zoom 14 tiles past it.
+
+### The bucket and its CORS rule
+
+The bucket is public only through the custom domain (its `r2.dev` address
+stays off). Upload `europe.pmtiles` as one object with an S3 client against the bucket's
+S3 endpoint, which splits it into a multipart upload (`wrangler r2 object put`
+takes only small objects), for example `rclone copyto europe.pmtiles r2:BUCKET/europe.pmtiles`.
+
+The maps read the file by HTTP range requests from the page's origin, so the
+bucket allows `GET` and `HEAD` with the `range` header from the site and from
+Cloud Run's own addresses (the service URL and each deploy's tagged candidate,
+section 9; `gcloud run services describe dayhike --region europe-west1` prints
+the form), and exposes `etag`, which the PMTiles reader checks between
+requests. In the S3 form of the policy:
+
+```json
+[
+  {
+    "AllowedOrigins": [
+      "https://hikesalike.com",
+      "https://dayhike-PROJECT_NUMBER.europe-west1.run.app",
+      "https://*---dayhike-PROJECT_NUMBER.europe-west1.run.app"
+    ],
+    "AllowedMethods": ["GET", "HEAD"],
+    "AllowedHeaders": ["range"],
+    "ExposeHeaders": ["etag"],
+    "MaxAgeSeconds": 86400
+  }
+]
+```
+
+R2 allows one `*` per origin, which here matches every candidate tag. Check it:
+`curl -sI -H "Range: bytes=0-16383" -H "Origin: https://hikesalike.com" https://maps.hikesalike.com/europe.pmtiles`
+answers `206` with `access-control-allow-origin: https://hikesalike.com`.
+
+### Refreshing it
+
+The map changes slowly, so refresh it when it looks out of date (a few times a
+year at most), never on a schedule. Extract a newer build as above, check it
+with `pmtiles show`, and upload it under a new name (`europe-BUILD.pmtiles`),
+then point `DAYHIKE_PMTILES_URL` at it and deploy. Pages opened before the
+switch keep reading the old file, so delete the old object a day later.
+
+### Cost
+
+R2 bills storage and requests, never egress ([R2 pricing](https://developers.cloudflare.com/r2/pricing/)).
+The free tier covers 10 GB-month of storage, 1 million Class A (writes) and
+10 million Class B (reads) a month. The 24 GB file bills about 15 GB past it
+at $0.015 per GB-month: about $0.23 a month. A map view reads a few dozen
+ranges, so the free reads cover some hundred thousand views a month; past
+them, reads cost $0.36 a million. A refresh keeps two files for a day and
+uploads a few thousand parts, both within the free tier.
