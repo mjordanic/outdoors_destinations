@@ -554,8 +554,9 @@ pmtiles extract "https://build.protomaps.com/$BUILD.pmtiles" europe.pmtiles \
 pmtiles show europe.pmtiles   # bounds, zooms 0-14, the build's metadata
 ```
 
-The first file is from the build of 2026-11-15 (basemap 4.15.2), extracted with
-go-pmtiles 1.31.2: 24 GB. Zoom 15 would double it (49 GB) for detail the maps
+The first file is from the build of 2026-11-15 (basemap 4.15.2, OpenStreetMap
+data as of 2026-11-15 04:00 UTC), extracted with go-pmtiles 1.31.2: 25.0 GB
+(23.3 GiB), 13.4 million tiles. Zoom 15 would double it (49 GB) for detail the maps
 barely show; MapLibre overzooms zoom 14 tiles past it.
 
 ### The bucket and its CORS rule
@@ -604,8 +605,10 @@ switch keep reading the old file, so delete the old object a day later.
 
 R2 bills storage and requests, never egress ([R2 pricing](https://developers.cloudflare.com/r2/pricing/)).
 The free tier covers 10 GB-month of storage, 1 million Class A (writes) and
-10 million Class B (reads) a month. The 24 GB file bills about 15 GB past it
-at $0.015 per GB-month: about $0.23 a month. A map view reads a few dozen
-ranges, so the free reads cover some hundred thousand views a month; past
+10 million Class B (reads) a month. The 25 GB file bills about 15 GB past it
+at $0.015 per GB-month: about $0.23 a month. Opening a hike's map reads about
+ten ranges (measured locally: 15 for the liked and one similar hike's map),
+more as a visitor pans and zooms, so the free reads cover several hundred
+thousand map views a month; past
 them, reads cost $0.36 a million. A refresh keeps two files for a day and
 uploads a few thousand parts, both within the free tier.
