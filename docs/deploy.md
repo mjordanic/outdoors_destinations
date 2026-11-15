@@ -313,8 +313,8 @@ If an alert fires and the traffic is abuse, close the public access at once:
   links the code that builds it. The repository is public, with the code under
   MIT (`LICENSE`) and the data licences in `DATA-LICENSES.md`; keep it public,
   or change that page to offer the export another way (for example a download of `hikes.sqlite`).
-- **Tile and place-search policies.** The map uses `tile.openstreetmap.org`,
-  run by the OSM Foundation for low-volume use under its usage policy; if
+- **Tile and place-search policies.** The map uses `tile.openstreetmap.org`
+  (only as the no-WebGL 2 fallback once the vector map is set, section 10), run by the OSM Foundation for low-volume use under its usage policy; if
   traffic grows, switch to another tile provider with `DAYHIKE_TILE_URL` and
   `DAYHIKE_TILE_ATTRIBUTION` (section 3). Export with `--geonames` so
   the origin search reads `places.sqlite`; without it the page falls back to
