@@ -446,14 +446,84 @@ free second opinion. A tie-break or a filter would need the same data and more
 trust in it than one region gives. The Wikidata gap lists are useful today:
 they feed #124 and #125.
 
+### Second region: Colorado (#170)
+
+Colorado was picked over the Écrins because its mapping habits differ most
+from Slovenia's: US mappers draw each trail as a named path and use route
+relations mainly for long trails, and there are no waymark symbols or dense
+networks of local routes. The hikes are the 284 that start inside the state
+box (37° to 41° N, 102.04° to 109.05° W) in a fresh Colorado-only ingest of
+the 2026-11-13 Geofabrik extract with today's rules (157 relation hikes, 127
+DayStages, most of them stages of the American Discovery Trail, the Denver
+Orbital Trail and other long routes). The lists were fixed before any signal
+was computed. The well-known list has 25 hikes, not 30: 12 matches, by name or
+start, from a list of 50 Colorado classics written from general knowledge
+(Emerald Lake, Glacier Gorge, Longs Peak, Wild Basin, Barr Trail, the
+Manitou Incline, Maroon Lake to Crater Lake, Blue Lakes, Lost Lake from
+Hessie, Waterton Canyon), plus 13 Catalog hikes known by name and place
+(Flat Top Mountain, Fern Lake, Mount Sherman, Ouray Perimeter, Jud Wiebe,
+Petrified Forest Loop at Florissant, North Table, Crag Crest and others). The
+12 matches cover 15 of the 50 classics (Glacier Gorge reaches Mills Lake and
+Alberta Falls, Longs Peak Trail the Chasm Lake and Keyhole routes); the other
+35, Hanging Lake and Quandary Peak among them, have no hike, as US trails are
+mostly named paths in no relation (#153). The 30 obscure hikes are the first 30 of a
+seeded random order of the remaining hikes, leaving out Colorado Trail, CDT
+and Collegiate stages and a few middling names. The same method gives this
+table:
+
+| Signal | Separation | Well-known / obscure non-zero | Coverage |
+| --- | ---: | ---: | ---: |
+| Commons: distinct uploaders of geotagged files within 150 m of the line | 0.64 | 19 / 20 | not measured region-wide |
+| Commons: the same per km | 0.73 | 19 / 20 | not measured region-wide |
+| OSM: hiking relations sharing each member way (mean) | 0.49 | 25 / 30 | 100 % |
+| OSM: guideposts within 50 m, per 10 km | 0.69 | 13 / 5 | 28 % |
+| OSM: route network level (iwn > nwn > rwn > lwn) | 0.27 | 15 / 23 | 78 % |
+| OSM: `osmc:symbol` present | 0.50 | 0 / 0 | 0 % |
+| OSM: `wikidata=*` on the hike's own relation | 0.54 | 3 / 1 | 11 % |
+| Named points' Wikipedia languages (max) | 0.48 | 2 / 4 | 12 % |
+| Named points' page views, 12 months, en/es/de/fr articles (sum) | 0.48 | 2 / 4 | 12 % (points with an article in those languages) |
+
+- **Commons does not reach 0.85 here.** Two things pull it down. Long
+  stages that pass through towns and along roads collect photos of those towns:
+  against the 21 obscure stages it separates at 0.56, and 11 of them reach 3
+  uploaders. Against the 9 obscure local trails it separates at 0.82, and only
+  one reaches 3 uploaders. Commons is also sparse in the Colorado mountains:
+  6 well-known hikes have no geotagged file within 150 m (the Crags, Mount
+  Cutler, North Table, Crag Crest, the Telluride Via Ferrata, Lost Lake). At 3
+  or more uploaders it picks 16 of the 25 well-known hikes and 12 of the 30
+  obscure ones. The obscure median is 13.8 km, the well-known 5.4 km, so per km
+  does better (0.73), and among hikes of 12 km or less it is 0.82.
+- **Route sharing fails.** Colorado's relations rarely overlap (the median is
+  1.0 on both lists), so the Slovenian signal came from Europe's dense networks
+  of waymarked routes, not from fame.
+- **Network level is reversed.** The American Discovery Trail is tagged `nwn`,
+  so obscure plains stages outrank every park trail.
+- **Wikipedia** covers 12 % of hikes. Only 25 of the state's 518 Wikidata-linked
+  OSM points (peaks, waterfalls, huts, viewpoints, churches and others) lie
+  within 150 m of a hike.
+
+### Recommendation after two regions
+
+Build the index on Commons alone, and show it as what it is: a count ("N
+Commons contributors photographed near this line"), not a "well-known"
+badge. A fixed threshold of 3 uploaders is a fair claim in Slovenia (23 of 30
+well-known hikes, 3 of 30 obscure), but in Colorado it gives the badge to 11 of
+21 obscure long-route stages and leaves it off 9 of 25 classics. Drop route
+sharing as a second opinion. Ranking stays unchanged. Two changes could lift
+Commons, and neither is measured yet: counting per km, or leaving out files
+inside towns. A US hike population worth testing again needs the
+named-trail hikes of #153 first, since 35 of the 50 Colorado classics are not
+hikes today.
+
 ### What would have to be true to start
 
-- The same lists for a second region with different mapping habits (the
-  Écrins, or a US state), with Commons still separating at 0.85 or better.
+- Done in #170: the same lists for a second region with different mapping
+  habits. Commons did not stay at 0.85 or better (Colorado 0.64, 0.82 against
+  local trails only), so it ships as a count, not a badge.
 - Commons counts for every hike from the dumps, not the API: the 2026-11
   `commonswiki-latest-geo_tags.sql.gz` is 0.8 GB, but the uploader is in the
   18.8 GB `image` table, so a build step that streams both and keeps one count
   per hike. Calling the API per hike would take about 20 requests a hike,
   millions for Europe, and the API throttles.
-- An ADR for the badge: what it says, its threshold, and that it never changes
-  a score or the order of a Ranking.
+- An ADR for the index: what it says, how it is shown, what a hike with no
+  data shows, and that it never changes a score or the order of a Ranking.
