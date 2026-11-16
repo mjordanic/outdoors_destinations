@@ -189,6 +189,7 @@ def count_commons(catalog_path: Path | str, dumps_dir: Path | str, progress: Pro
         points = commons_points(
             dumps_dir, Bounds(south - margin, west - margin, north + margin, east + margin), progress
         )
+        tree = _tree(points)
         counts: dict[int, int] = {}
         rows = geo.execute("SELECT dayhike_id, latitude, longitude FROM vertices ORDER BY dayhike_id, seq")
         walks: dict[int, tuple[np.ndarray, np.ndarray]] = {}
@@ -196,11 +197,11 @@ def count_commons(catalog_path: Path | str, dumps_dir: Path | str, progress: Pro
             coords = np.array([(lat, lon) for _, lat, lon in vertices], dtype=np.float64)
             walks[dayhike_id] = (coords[:, 0], coords[:, 1])
             if len(walks) == _HIKE_CHUNK:
-                counts |= contributor_counts(walks, points)
+                counts |= contributor_counts(walks, points, tree=tree)
                 walks = {}
                 if progress is not None:
                     progress(f"commons: {len(counts)} DayHikes counted")
-        counts |= contributor_counts(walks, points)
+        counts |= contributor_counts(walks, points, tree=tree)
     finally:
         geo.close()
     catalog = sqlite3.connect(catalog_path)
@@ -222,14 +223,21 @@ def _unit_xyz(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
     return np.column_stack((np.cos(phi) * np.cos(lam), np.cos(phi) * np.sin(lam), np.sin(phi)))
 
 
+def _tree(points: CommonsPoints) -> cKDTree | None:
+    return cKDTree(_unit_xyz(points.lat, points.lon)) if len(points.lat) else None
+
+
 def contributor_counts(
     walks: Mapping[int, tuple[np.ndarray, np.ndarray]],
     points: CommonsPoints,
     radius_m: float = RADIUS_M,
+    tree: cKDTree | None = None,
 ) -> dict[int, int]:
     """For each DayHike id's line (latitudes, longitudes), the number of
-    distinct uploaders with a point within ``radius_m`` of it."""
-    tree = cKDTree(_unit_xyz(points.lat, points.lon)) if len(points.lat) else None
+    distinct uploaders with a point within ``radius_m`` of it. ``tree`` is
+    ``points``' spatial index when the caller already built it."""
+    if tree is None:
+        tree = _tree(points)
     search = (radius_m + _SAMPLE_M / 2) / EARTH_RADIUS_M
     counts = {}
     for dayhike_id, (lat, lon) in walks.items():
