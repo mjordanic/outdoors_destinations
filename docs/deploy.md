@@ -447,9 +447,10 @@ On a push to `main`, or by hand (`workflow_dispatch` on `main`), the workflow:
    the latest revision (so a later `gcloud run deploy` by hand, section 7, takes
    the traffic as usual), then removes the candidate's tag.
 
-The deploy changes only the image and `DAYHIKE_PMTILES_URL`, which it sets from
-the repository variable of that name (empty, the variable is set empty and the
-maps keep the raster tiles): memory, CPU, scaling and the other environment
+The deploy changes only the image, `DAYHIKE_PMTILES_URL` and `DAYHIKE_DOWNLOAD_URL`,
+which it sets from the repository variables of those names (empty, the variable is
+set empty: the maps keep the raster tiles, and the credits page shows no download
+link): memory, CPU, scaling and the other environment
 variables stay as section 3 set them. A data refresh is still built and pushed by
 hand (section 3), followed by a change of `DAYHIKE_DATA_IMAGE`; the next run
 builds on it. To roll back, move traffic to an earlier revision as in section 7,
