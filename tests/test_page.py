@@ -3671,6 +3671,42 @@ def test_a_uk_or_us_hike_shows_its_own_countrys_number(browser, server, code, sh
     assert "HGSS" not in page.locator("#liked").inner_text()
 
 
+def test_a_hike_panel_loads_a_commons_photo_only_once_that_hike_is_open(browser, server) -> None:
+    thumb = "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Ridge_Peak.jpg/480px-Ridge_Peak.jpg"
+    licence = "https://creativecommons.org/licenses/by-sa/4.0/"
+    seen: list[str] = []
+    page = browser.new_page()
+    page.on("request", lambda request: seen.append(request.url) if "wikimedia.org" in request.url else None)
+    page.route(lambda url: not url.startswith(server), lambda route: route.abort())
+    page.goto(server)
+    page.wait_for_selector(".weight", state="attached")
+    page.goto(f"{server}/#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+
+    assert seen == []
+    assert page.locator(".hike-photo").count() == 0
+
+    def with_photos(route) -> None:
+        body = route.fetch().json()
+        body["photos"] = [
+            {"file": "Ridge Peak.jpg", "author": "Ada Hiker", "licence": "CC BY-SA 4.0", "licence_url": licence, "thumb": thumb},
+            {"file": "nope.jpg", "author": "Eve", "licence": "CC BY 4.0", "licence_url": licence, "thumb": "https://evil.example/nope.jpg"},
+        ]
+        route.fulfill(json=body)
+
+    page.route(f"{server}/api/hikes/{RIDGE_WALK_ID}*", with_photos)
+    page.reload()
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+
+    photo = page.locator("#liked .hike-photo")
+    assert photo.count() == 1
+    assert photo.locator("img").get_attribute("src") == thumb
+    assert photo.locator("figcaption").inner_text() == "Ada Hiker · CC BY-SA 4.0"
+    assert photo.locator("a").get_attribute("href") == licence
+    assert any(url.startswith("https://upload.wikimedia.org/") for url in seen)
+    assert not any("evil.example" in url for url in seen)
+
+
 def test_a_hike_with_no_known_country_says_to_call_the_local_number(browser, server) -> None:
     page = browser.new_page()
     page.route(lambda url: not url.startswith(server), lambda route: route.abort())

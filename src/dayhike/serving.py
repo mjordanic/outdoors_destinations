@@ -1365,6 +1365,8 @@ class ServingData:
             columns = {row[1] for row in db.execute("PRAGMA table_info(hikes)")}
             self._has_source = "source" in columns
             self._has_source_url = "source_url" in columns
+            # An export from before Commons photos has no column: the page shows none.
+            self._has_photos = "photos" in columns
         # One string of every folded name between newlines: str.find walks it in C.
         self._haystack = "\n" + "\n".join(self._folded) + "\n"
         self._starts = np.cumsum([1] + [len(name) + 1 for name in self._folded[:-1]])
@@ -1659,17 +1661,22 @@ class ServingData:
             # An export made before Sources (ADR-0060) is all OpenStreetMap.
             source = "source, source_ref" if self._has_source else f"'{SOURCE_OSM}', NULL"
             source += ", source_url" if self._has_source_url else ", NULL"
-            name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points, kind, parts, route, source, source_ref, source_url = (
-                db.execute(
-                    "SELECT name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points, "
-                    f"kind, parts, route, {source} FROM hikes WHERE id = ?",
-                    (dayhike_id,),
-                ).fetchone()
-            )
+            selected = db.execute(
+                "SELECT name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points, "
+                f"kind, parts, route, {source}{', photos' if self._has_photos else ''} FROM hikes WHERE id = ?",
+                (dayhike_id,),
+            ).fetchone()
+        photos_json = None
+        if self._has_photos:
+            *selected, photos_json = selected
+        (
+            name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m,
+            points, kind, parts, route, source, source_ref, source_url,
+        ) = selected
         if source_ref is None:
             source_ref = osm_source_ref(dayhike_id, kind, json.loads(parts or "[]"), route)
         profile = np.frombuffer(elevation, dtype="<i2").tolist() if elevation else None
-        return {
+        detail = {
             "id": dayhike_id,
             "name": _shown_name(dayhike_id, name, name_origin),
             "name_origin": name_origin,
@@ -1705,6 +1712,9 @@ class ServingData:
                 },
             },
         }
+        if photos_json:
+            detail["photos"] = json.loads(photos_json)
+        return detail
 
     def way_back_walk(self, dayhike_id: int) -> dict:
         """A DayHike's way back to its start as walked (ADR-0019), for its GPX:

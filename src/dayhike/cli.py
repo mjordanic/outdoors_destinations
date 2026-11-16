@@ -424,6 +424,18 @@ def main(argv: list[str] | None = None) -> int:
         help="GeoNames allCountries.zip; downloaded there when missing",
     )
     places.add_argument("--out", type=Path, default=Path("data/web-serving"))
+    photos = subparsers.add_parser(
+        "export-photos",
+        help="Add up to two free Wikimedia Commons photos of each hike's named POIs to a serving export",
+    )
+    photos.add_argument("--catalog", type=Path, default=Path("data/catalog.sqlite"))
+    photos.add_argument("--out", type=Path, default=Path("data/web-serving"))
+    photos.add_argument(
+        "--cache",
+        type=Path,
+        default=Path("data/commons-cache.sqlite"),
+        help="Wikimedia API responses; a later run fetches only what this lacks",
+    )
     serve = subparsers.add_parser("serve", help="Serve the web demo from a serving export")
     serve.add_argument("--data", type=Path, default=Path("data/web-serving"))
     serve.add_argument("--host", default="127.0.0.1")
@@ -506,6 +518,18 @@ def main(argv: list[str] | None = None) -> int:
         geonames = fetch_geonames(args.geonames)
         print(export_places(geonames, args.out))
         print(export_landmarks(args.out, geonames))
+        return 0
+    if args.command == "export-photos":
+        from dayhike.photos import export_photos
+
+        try:
+            count = export_photos(
+                args.catalog, args.out, args.cache, progress=lambda line: print(line, flush=True)
+            )
+        except FileNotFoundError as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        print(f"{count} DayHikes with a photo")
         return 0
     if args.command == "serve":
         return _serve(
