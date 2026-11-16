@@ -14,8 +14,11 @@ relation id.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import math
+import xml.etree.ElementTree as ET
+import zipfile
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,8 +67,8 @@ def cache_path(source_id: str, root: Path | str = EXTERNAL_DIR) -> Path:
     return Path(root) / source_id / f"{source_id}.geojson"
 
 
-# `fi` is the fetch name of the Finland register id (`fetch-external --source fi`).
-_SOURCE_ALIASES = {"fi": "fi-lipas"}
+# `fi` and `no` are the fetch names of those register ids (`fetch-external --source fi`).
+_SOURCE_ALIASES = {"fi": "fi-lipas", "no": "no-turrutebasen"}
 
 
 def fetch_external(source_id: str, root: Path | str = EXTERNAL_DIR) -> Path:
@@ -387,9 +390,156 @@ def _joined_components(parts: Sequence[Sequence[Point]]) -> list[list[Point]]:
     return lines
 
 
+# Turrutebasen (register id no-turrutebasen), CC BY 4.0. Credit Kartverket.
+# Foot routes only. A national GPX `<rte>` is one segment: `<name>` is the
+# route number, `<desc>` the route name, `<src>` the maintainer, `<type>` the
+# kind. Segments of one route number join as Lipas parts do. "Ukjent" is an
+# empty name. A long route stays one hike (ADR-0062); the 1 km floor is ingest's.
+_MISSING_ROUTE_NAME = "ukjent"
+TURRUTE_UUID = "d1422d17-6d95-4ef1-96ab-8af31744dd63"
+TURRUTE_ORDER = "https://nedlasting.geonorge.no/api/order"
+
+
+def read_turrutebasen(path: Path) -> Iterator[ExternalHike]:
+    """Foot routes of a cached Turrutebasen file, segments of one ``rutenummer``
+    chained.
+
+    Parts whose ends meet within ``GAP_JOIN_M`` are one walk, and ``source_ref``
+    is the route number. Parts that do not join it, branches included, are
+    separate pieces of the same name: ``source_ref`` is ``{rutenummer}/{n}``,
+    numbered from 1 by each piece's start (latitude, then longitude). The name
+    is ``rutenavn`` (``Ukjent`` counts as none), else the maintainer and the
+    route number, else the route number. Ski, bike and other route types are
+    left out. There is no per-route page.
+    """
+    grouped: dict[str, list[list[Point]]] = {}
+    route_names: dict[str, list[str]] = {}
+    maintainers: dict[str, list[str]] = {}
+    for feature in json.loads(Path(path).read_text())["features"]:
+        properties = feature.get("properties") or {}
+        if properties.get("type") != "Fotrute":
+            continue
+        number = str(properties.get("rutenummer") or "").strip()
+        if not number:
+            continue
+        parts = _geometry_parts(feature.get("geometry"))
+        if not parts:
+            continue
+        grouped.setdefault(number, []).extend(parts)
+        route_names.setdefault(number, []).append(str(properties.get("rutenavn") or "").strip())
+        maintainers.setdefault(number, []).append(str(properties.get("maintainer") or "").strip())
+    for number, parts in grouped.items():
+        lines = [line for line in _joined_components(parts) if len(line) >= 2]
+        if not lines:
+            continue
+        name = _turrute_name(route_names[number], maintainers[number], number)
+        if len(lines) == 1:
+            yield ExternalHike(ref=number, name=name, points=tuple(lines[0]))
+            continue
+        ordered = sorted(lines, key=lambda line: (line[0][0], line[0][1]))
+        for index, line in enumerate(ordered, start=1):
+            yield ExternalHike(ref=f"{number}/{index}", name=name, points=tuple(line))
+
+
+def _turrute_name(route_names: Sequence[str], maintainers: Sequence[str], number: str) -> str:
+    """``rutenavn`` when one is set, else ``{maintainer} {rutenummer}``, else the number."""
+    names = [name for name in route_names if name and name.casefold() != _MISSING_ROUTE_NAME]
+    if names:
+        counts: dict[str, int] = {}
+        for name in names:
+            counts[name] = counts.get(name, 0) + 1
+        return sorted(counts, key=lambda name: (-counts[name], name))[0]
+    kept = [maintainer for maintainer in maintainers if maintainer]
+    if not kept:
+        return number
+    counts = {}
+    for maintainer in kept:
+        counts[maintainer] = counts.get(maintainer, 0) + 1
+    maintainer = sorted(counts, key=lambda name: (-counts[name], name))[0]
+    return f"{maintainer} {number}"
+
+
+def fetch_turrutebasen(directory: Path) -> Path:
+    """National Turrutebasen foot routes as one GeoJSON FeatureCollection.
+
+    Geonorge's download order for the whole country, GPX in WGS84. Each foot
+    ``rte`` becomes one feature: route number, route name, maintainer.
+    """
+    payload = {
+        "orderLines": [
+            {
+                "metadataUuid": TURRUTE_UUID,
+                "areas": [{"code": "0000", "name": "Hele landet", "type": "landsdekkende"}],
+                "formats": [{"name": "GPX "}],
+                "projections": [
+                    {
+                        "code": "4326",
+                        "name": "WGS84 Geografisk",
+                        "codespace": "http://www.opengis.net/def/crs/EPSG/0/4326",
+                    }
+                ],
+            }
+        ]
+    }
+    request = Request(
+        TURRUTE_ORDER,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json", "User-Agent": "dayhike"},
+        method="POST",
+    )
+    with urlopen(request, timeout=120) as response:
+        order = json.load(response)
+    files = [item for item in order.get("files") or [] if item.get("downloadUrl")]
+    if not files:
+        raise OSError(f"{TURRUTE_ORDER}: no file to download")
+    download = Request(files[0]["downloadUrl"], headers={"User-Agent": "dayhike"})
+    with urlopen(download, timeout=600) as response:
+        blob = response.read()
+    features = list(_gpx_foot_features(blob))
+    path = directory / "no-turrutebasen.geojson"
+    tmp = path.with_name(path.name + ".part")
+    tmp.write_text(json.dumps({"type": "FeatureCollection", "features": features}))
+    tmp.replace(path)
+    return path
+
+
+_GPX = "{http://www.topografix.com/GPX/1/1}"
+
+
+def _gpx_foot_features(blob: bytes) -> Iterator[dict]:
+    """Foot ``rte`` elements of a zipped GPX, as GeoJSON features in lon/lat."""
+    with zipfile.ZipFile(io.BytesIO(blob)) as archive:
+        gpx_name = next(name for name in archive.namelist() if name.lower().endswith(".gpx"))
+        with archive.open(gpx_name) as handle:
+            for _, element in ET.iterparse(handle, events=("end",)):
+                if element.tag != f"{_GPX}rte":
+                    continue
+                kind = (element.findtext(f"{_GPX}type") or "").strip()
+                number = (element.findtext(f"{_GPX}name") or "").strip()
+                if kind == "Fotrute" and number:
+                    line = [
+                        [float(point.get("lon")), float(point.get("lat"))]
+                        for point in element.findall(f"{_GPX}rtept")
+                        if point.get("lat") is not None and point.get("lon") is not None
+                    ]
+                    if len(line) >= 2:
+                        yield {
+                            "type": "Feature",
+                            "properties": {
+                                "rutenummer": number,
+                                "rutenavn": (element.findtext(f"{_GPX}desc") or "").strip(),
+                                "maintainer": (element.findtext(f"{_GPX}src") or "").strip(),
+                                "type": "Fotrute",
+                            },
+                            "geometry": {"type": "LineString", "coordinates": line},
+                        }
+                element.clear()
+
+
 EXTERNAL_SOURCES = {
     "ie-sport-ireland": ExternalSource("ie-sport-ireland", fetch_sport_ireland, read_sport_ireland),
     "fi-lipas": ExternalSource("fi-lipas", fetch_lipas, read_lipas),
+    "no-turrutebasen": ExternalSource("no-turrutebasen", fetch_turrutebasen, read_turrutebasen),
 }
 
 

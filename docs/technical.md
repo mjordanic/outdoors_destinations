@@ -1752,7 +1752,7 @@ multi-part line with the parts that meet it within 50 m. Lipas (`fi-lipas`,
 `fetch-external --source fi`) keeps active hiking routes (type 4405) and nature
 trails (type 4404) under that same 1 km floor. Parts that meet end to end within 50 m are
 one walk under the Lipas id; parts that do not join it, branches included, are
-pieces `{id}/{n}`.
+pieces `{id}/{n}`. Turrutebasen (`no-turrutebasen`, `fetch-external --source no`) keeps foot routes (`Fotrute`) from the national Geonorge GPX and chains segments of one `rutenummer` the same way; a long route is not cut into DayStages.
 
 A hike that is neither a `route=hiking` or `route=foot` relation, a built DayHike nor an external hike in this Catalog cannot be a Seed.
 Unnamed forest paths (`highway=path` without a hiking relation) never appear.
@@ -2781,7 +2781,9 @@ and in the export's `meta.json`. Sport Ireland Trail Routes
 (https://data.gov.ie/dataset/getirelandactive_trailroutes): CC BY 4.0, credit
 "Sport Ireland". Lipas
 (https://www.jyu.fi/fi/avoimet-rajapinnat-ja-ladattavat-lipas-aineistot): CC BY 4.0, credit
-"Jyväskylän yliopisto, Lipas Liikuntapaikat.fi".
+"Jyväskylän yliopisto, Lipas Liikuntapaikat.fi". Turrutebasen
+(https://kartkatalog.geonorge.no/metadata/d1422d17-6d95-4ef1-96ab-8af31744dd63): CC BY 4.0, credit
+"Kartverket".
 
 FABDEM V1-2: Hawker, L., Uhe, P., Paulo, L., Sosa, J., Savage, J., Sampson, C.
 and Neal, J., 2022. A 30 m global map of elevation with forests and buildings
