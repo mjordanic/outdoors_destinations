@@ -596,16 +596,19 @@ def export_serving(
         source = "d.source, d.source_ref" if "source" in columns else "NULL, NULL"
         # An external hike's record page (ADR-0062); a Catalog from before has none.
         source_url = "d.source_url" if "source_url" in columns else "NULL"
+        # Commons contributors near the line (#170); a Catalog never counted has none.
+        commons = "d.commons_contributors" if "commons_contributors" in columns else "NULL"
         hikes = [
             (
                 *row[:9],
                 row[9] or SOURCE_OSM,
                 row[10] or osm_source_ref(row[0], row[6], json.loads(row[7] or "[]"), row[8]),
                 row[11],
+                row[12],
             )
             for row in catalog.execute(
                 "SELECT d.id, d.name, d.name_origin, d.difficulty, t.latitude, t.longitude, "
-                f"{built}, {source}, {source_url} FROM dayhikes d JOIN trailheads t ON t.dayhike_id = d.id ORDER BY d.id"
+                f"{built}, {source}, {source_url}, {commons} FROM dayhikes d JOIN trailheads t ON t.dayhike_id = d.id ORDER BY d.id"
             )
         ]
         attribution = dict(catalog.execute("SELECT key, value FROM catalog_meta"))["attribution"]
@@ -750,7 +753,7 @@ def _write_hikes(
             " id INTEGER PRIMARY KEY, name TEXT NOT NULL, name_origin TEXT NOT NULL,"
             " sac_scale TEXT, walk_m REAL, line TEXT, elevation BLOB, climb_m REAL, descent_m REAL,"
             " points BLOB NOT NULL, kind TEXT NOT NULL, parts TEXT, route TEXT,"
-            " source TEXT NOT NULL, source_ref TEXT NOT NULL, source_url TEXT);"
+            " source TEXT NOT NULL, source_ref TEXT NOT NULL, source_url TEXT, commons_contributors INTEGER);"
             "CREATE VIRTUAL TABLE hike_boxes USING rtree(id, south, north, west, east)"
         )
         for start in range(0, len(hikes), _HIKE_CHUNK):
@@ -783,9 +786,9 @@ def _write_hikes(
                 )
             _name_points(geo, rows)
             db.executemany(
-                "INSERT INTO hikes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO hikes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
-                    (*row[:9], zlib.compress(json.dumps(row[-1], ensure_ascii=False).encode()), *row[9:15])
+                    (*row[:9], zlib.compress(json.dumps(row[-1], ensure_ascii=False).encode()), *row[9:16])
                     for row in rows
                 ],
             )
@@ -1417,6 +1420,7 @@ class ServingData:
             self._has_source_url = "source_url" in columns
             # An export from before Commons photos has no column: the page shows none.
             self._has_photos = "photos" in columns
+            self._has_commons = "commons_contributors" in columns
         # One string of every folded name between newlines: str.find walks it in C.
         self._haystack = "\n" + "\n".join(self._folded) + "\n"
         self._starts = np.cumsum([1] + [len(name) + 1 for name in self._folded[:-1]])
@@ -1711,6 +1715,7 @@ class ServingData:
             # An export made before Sources (ADR-0060) is all OpenStreetMap.
             source = "source, source_ref" if self._has_source else f"'{SOURCE_OSM}', NULL"
             source += ", source_url" if self._has_source_url else ", NULL"
+            source += ", commons_contributors" if self._has_commons else ", NULL"
             selected = db.execute(
                 "SELECT name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points, "
                 f"kind, parts, route, {source}{', photos' if self._has_photos else ''} FROM hikes WHERE id = ?",
@@ -1721,7 +1726,7 @@ class ServingData:
             *selected, photos_json = selected
         (
             name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m,
-            points, kind, parts, route, source, source_ref, source_url,
+            points, kind, parts, route, source, source_ref, source_url, commons,
         ) = selected
         if source_ref is None:
             source_ref = osm_source_ref(dayhike_id, kind, json.loads(parts or "[]"), route)
@@ -1735,6 +1740,8 @@ class ServingData:
             "walk_m": walk_m,
             "multi_day": self.multi_day(row),
             "region": self._region(row),
+            # Distinct Commons uploaders near the line (#170): shown, never scored; None if never counted.
+            "commons_contributors": commons,
             "emergency": self.emergency(*map(float, self.trailheads[row]), row),
             **self._climb(row, (climb_m, descent_m), return_to_start),
             "line": line,
@@ -1863,6 +1870,7 @@ class ServingData:
             "walk_m": walk_m,
             "multi_day": walk_m > MULTI_DAY_M,
             "region": self._place_near(float(lat[0]), float(lon[0])),
+            "commons_contributors": None,  # counted for Catalog DayHikes only (ADR-0064)
             "emergency": self.emergency(float(lat[0]), float(lon[0])),
             "climb_m": climb_m,
             "descent_m": descent_m,

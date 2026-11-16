@@ -3714,3 +3714,18 @@ def test_a_hike_with_no_known_country_says_to_call_the_local_number(browser, ser
     page.goto(f"{server}/#hike={RIDGE_WALK_ID}")
     page.get_by_text("Chosen: Ridge Walk").wait_for()
     assert page.locator("#liked .emergency").inner_text() == "In an emergency, call the local emergency number."
+
+
+def test_a_hike_counted_on_commons_says_how_many_contributors_photographed_near_it(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash="#hike=1002")
+    page.get_by_text("Chosen: Valley Path").wait_for()
+    # The fixture export was never counted: no Commons badge.
+    assert page.locator("#liked .badges").get_by_text("Commons").count() == 0
+
+    page.route(f"{server}/api/hikes/1001*", lambda route: route.fulfill(json={**route.fetch().json(), "commons_contributors": 7}))
+    page.evaluate(f"location.hash = '#hike={RIDGE_WALK_ID}'")
+    badge = page.locator("#liked .badges li").get_by_text("7 Commons contributors")
+    badge.wait_for()
+
+    assert "photos on Wikimedia Commons within 150 m" in badge.get_attribute("title")
+    assert "not" in badge.get_attribute("title") and "score" in badge.get_attribute("title")

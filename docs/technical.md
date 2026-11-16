@@ -162,6 +162,8 @@ What each step **does not** do:
 | `sample-landcover` | `vertices.landcover`, `vertices.landcover_along` + Catalog fractions | download rasters; rewrite hike list |
 | `fetch-climate` | GeoTIFFs in `data/climate/` | touch SQLite; sample climate |
 | `sample-climate` | Catalog monthly means (drops an old `vertex_climate`) | download rasters; rewrite hike list |
+| `fetch-commons` | Commons `geo_tags`, `page` and `image` dumps in `data/commons/` (about 27 GB) | touch SQLite; count |
+| `count-commons` | Catalog `dayhikes.commons_contributors` (ADR-0064; shown, never scored) | download dumps; keep any uploader; touch facts or Rankings |
 | `sample-trailgraph` | per-vertex height, LandCover, climate cell, southness, LandCover along long steps and water cells in the TrailGraph | touch the Catalog or GeometryStore; download rasters |
 | `build-similarity` | `data/catalog.similarity/` (facts + Calibration, one way and with the way back) | touch any SQLite file; download anything |
 | `rank` | nothing on disk | fetch OSM or rasters; rebuild facts |
@@ -290,6 +292,7 @@ call on your machine.
 | `data/dem/` | FABDEM (or Copernicus GLO-30) 1° GeoTIFFs for elevation, and USGS 3DEP ones for the US | **gitignored** |
 | `data/landcover/` | ESA WorldCover 2021 map GeoTIFFs | **gitignored** |
 | `data/climate/` | CHELSA V2.1 monthly GeoTIFFs | **gitignored** |
+| `data/commons/` | Wikimedia Commons `geo_tags`, `page` and `image` dumps for `count-commons` (about 27 GB, November 2026) | **gitignored** |
 
 `uv sync` does **not** download OSM and does **not** install Valhalla. Tests
 never start Docker. They rebuild a Catalog in a temp directory from the
@@ -2639,6 +2642,8 @@ at the rebuild.
    uv run dayhike sample-dem                    # 20 min
    uv run dayhike sample-landcover              # 21 min
    uv run dayhike sample-climate                # 5 min, peak 4.4 GB; no per-vertex climate
+   uv run dayhike fetch-commons                 # beside ingest: 3 dumps, 27 GB; 1.5 to 2 h at the dump server's 2-5 MB/s
+   uv run dayhike count-commons                 # after ingest (ADR-0064): Slovenia 18 min, 1.8 GB; Europe about 50 min, about 3 GB (estimated)
    uv run dayhike sample-trailgraph             # not yet timed on Europe
    uv run dayhike build-similarity              # 19 min
    uv run dayhike export-serving --valhalla-tiles data/valhalla/highways-eu --valhalla-url http://127.0.0.1:8003  # 22 min

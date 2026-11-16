@@ -21,6 +21,7 @@ from dayhike.dem import DEM_SOURCES, Bounds, DEFAULT_DEM_DIR, fetch_dem, sample_
 from dayhike.landcover import DEFAULT_LANDCOVER_DIR, fetch_worldcover, sample_landcover
 from dayhike.parallel import WORKERS_ENV
 from dayhike.climate import DEFAULT_CLIMATE_DIR, fetch_chelsa, sample_climate
+from dayhike.commons import DEFAULT_COMMONS_DIR, count_commons, fetch_commons
 from dayhike.extracts import fetch_geofabrik_extracts
 from dayhike.regions import (
     DEFAULT_MAP_REGION,
@@ -217,6 +218,26 @@ def main(argv: list[str] | None = None) -> int:
         help="Directory of LandCover GeoTIFFs (default: data/landcover)",
     )
     _add_workers(sample_lc)
+    fetch_cm = subparsers.add_parser(
+        "fetch-commons",
+        help="Download the Wikimedia Commons geo_tags, page and image dumps (about 27 GB) into data/commons",
+    )
+    fetch_cm.add_argument(
+        "--dest", type=Path, default=DEFAULT_COMMONS_DIR, help="Directory for the dumps (default: data/commons)"
+    )
+    count_cm = subparsers.add_parser(
+        "count-commons",
+        help="Count distinct Commons uploaders within 150 m of each DayHike into the Catalog (shown, never scored)",
+    )
+    count_cm.add_argument(
+        "--catalog",
+        type=Path,
+        default=Path("data/catalog.sqlite"),
+        help="SQLite Catalog path (default: data/catalog.sqlite)",
+    )
+    count_cm.add_argument(
+        "--commons", type=Path, default=DEFAULT_COMMONS_DIR, help="Directory of the Commons dumps (default: data/commons)"
+    )
     sample_cl = subparsers.add_parser(
         "sample-climate",
         help="Sample local climate rasters into Catalog hike-level monthly means",
@@ -637,6 +658,13 @@ def main(argv: list[str] | None = None) -> int:
             sample.error(str(exc))
     if args.command == "sample-landcover":
         return _sample_landcover(args.catalog, args.landcover)
+    if args.command == "fetch-commons":
+        for path in fetch_commons(args.dest, progress=_progress):
+            print(path)
+        return 0
+    if args.command == "count-commons":
+        print(count_commons(args.catalog, args.commons, progress=_progress))
+        return 0
     if args.command == "sample-climate":
         return _sample_climate(args.catalog, args.climate)
     if args.command == "build-similarity":

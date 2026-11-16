@@ -1139,6 +1139,10 @@ function drawMap(node, hike) {
 }
 
 // ``query``: the weights and month the compare scores were made with (a Ranking's, or a pair's).
+// How well known a hike is, never how alike (#170).
+const commonsHint = () => `People who put geotagged photos on Wikimedia Commons within ${fmt.short(150)} of this hike's line: `
+  + "a hint of how well known it is. It is not a measure: it changes no similarity score or ranking.";
+
 function renderDetail(card, hike, { role, compare = null, result = null, query = state.query }) {
   if (card._map) card._map.remove();
   card._shown = [hike, { role, compare, result, query }]; // drawn again in the other units (setUnits)
@@ -1157,6 +1161,10 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     f.difficulty_rank != null && SAC[Math.round(f.difficulty_rank)],
     hike.way_back ? wayBackText(hike.way_back)
       : f.round_trip != null && (f.round_trip ? "round trip" : "one way / lollipop"),
+    hike.commons_contributors != null && {
+      text: `${hike.commons_contributors.toLocaleString("en")} Commons contributor${hike.commons_contributors === 1 ? "" : "s"}`,
+      title: commonsHint(),
+    },
   ].filter(Boolean);
   const scoreLine = result
     ? `<p class="hint">Similarity score ${result.score == null ? "– (no weighted measure has data for both)" : result.score.toFixed(3)} ${helpButton("overall")}${result.drive_hours != null ? ` · about ${result.drive_hours.toFixed(1)} h drive` : ""}</p>
@@ -1177,7 +1185,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     ${sourceLine(hike)}
     ${hike.route ? `<p class="hint">Drawn from trail segments${hike.routes?.length ? ` along ${escapeHtml(hike.routes.slice(0, 5).join(", "))}${hike.routes.length > 5 ? " and more" : ""}` : ""}; measured as drawn${hike.way_back ? ", with its way back" : ""}.</p>` : ""}
     ${hike.way_back && hike.way_back.kind !== "none" ? `<p class="hint">Length, climb, descent and every measure include the way back to the start (${escapeHtml(wayBackText(hike.way_back))}); the map and profile show the hike itself.</p>` : ""}
-    <ul class="badges">${badges.map((b) => `<li>${escapeHtml(b)}</li>`).join("")}</ul>
+    <ul class="badges">${badges.map((b) => (b.text ? `<li title="${escapeHtml(b.title)}">${escapeHtml(b.text)}</li>` : `<li>${escapeHtml(b)}</li>`)).join("")}</ul>
     ${emergencyLine(hike.emergency)}
     <div class="map"></div>
     <div class="legend">${LEGEND.map(([label, color]) => `<span style="--c:${color}">${label}</span>`).join("")}</div>
