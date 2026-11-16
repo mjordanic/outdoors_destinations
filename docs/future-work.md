@@ -111,6 +111,11 @@ January snowpack.
 
 ## 7. Photos and prose
 
+**Built since (photos only):** a hike shows up to two free Wikimedia Commons
+photos (CC0, CC BY, CC BY-SA) with author and licence, added by
+`dayhike export-photos`; see [DATA-LICENSES.md](../DATA-LICENSES.md). Prose is
+still parked. What follows is the original reasoning.
+
 ### Why it's parked
 
 AllTrails/Komoot/Wikiloc reviews are not a legal source. LLM blurbs of the same
