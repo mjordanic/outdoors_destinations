@@ -440,6 +440,16 @@ def main(argv: list[str] | None = None) -> int:
         default=Path("data/commons-cache.sqlite"),
         help="Wikimedia API responses; a later run fetches only what this lacks",
     )
+    osm_download = subparsers.add_parser(
+        "export-osm-download",
+        help="Write the ODbL download of the OpenStreetMap part of a serving export's hikes (hikes-osm.sqlite and a README)",
+    )
+    osm_download.add_argument("--data", type=Path, default=Path("data/web-serving"), help="Serving export directory")
+    osm_download.add_argument("--out", type=Path, default=Path("data/osm-download"))
+    osm_download.add_argument(
+        "--data-date",
+        help="Date (YYYY-MM-DD) of the OpenStreetMap data the export was built from; default: the day the export was written",
+    )
     serve = subparsers.add_parser("serve", help="Serve the web demo from a serving export")
     serve.add_argument("--data", type=Path, default=Path("data/web-serving"))
     serve.add_argument("--host", default="127.0.0.1")
@@ -477,6 +487,10 @@ def main(argv: list[str] | None = None) -> int:
     serve.add_argument(
         "--pmtiles-url",
         help="A vector PMTiles base map (Protomaps basemap): the maps draw it with MapLibre GL JS, raster tiles the fallback",
+    )
+    serve.add_argument(
+        "--download-url",
+        help="Where the ODbL download (hikes-osm.sqlite, `dayhike export-osm-download`) is hosted: the credits page links it; empty or unset, no link",
     )
     coverage = subparsers.add_parser(
         "coverage-map", help="Draw the SVG map of the regions (default Europe) with the covered countries shaded"
@@ -535,6 +549,11 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(f"{count} DayHikes with a photo")
         return 0
+    if args.command == "export-osm-download":
+        from dayhike.osm_download import export_osm_download
+
+        print(export_osm_download(args.data, args.out, args.data_date) / "hikes-osm.sqlite")
+        return 0
     if args.command == "serve":
         return _serve(
             args.data,
@@ -549,6 +568,7 @@ def main(argv: list[str] | None = None) -> int:
             args.tile_attribution,
             args.tile_max_zoom,
             args.pmtiles_url,
+            args.download_url,
         )
     if args.command == "coverage-map":
         from dayhike.coverage import WORLD_VIEW, coverage_map
@@ -880,6 +900,7 @@ def _serve(
     tile_attribution: str | None = None,
     tile_max_zoom: int | None = None,
     pmtiles_url: str | None = None,
+    download_url: str | None = None,
 ) -> int:
     try:
         import uvicorn
@@ -912,6 +933,7 @@ def _serve(
             cors_origins=cors_origins,
             site_url=site_url,
             basemap=BaseMap(**{key: value for key, value in tiles.items() if value is not None}),
+            download_url=download_url,
         )
     except ValueError as exc:
         print(exc, file=sys.stderr)
