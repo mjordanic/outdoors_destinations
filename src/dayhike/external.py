@@ -64,8 +64,13 @@ def cache_path(source_id: str, root: Path | str = EXTERNAL_DIR) -> Path:
     return Path(root) / source_id / f"{source_id}.geojson"
 
 
+# `fi` is the fetch name of the Finland register id (`fetch-external --source fi`).
+_SOURCE_ALIASES = {"fi": "fi-lipas"}
+
+
 def fetch_external(source_id: str, root: Path | str = EXTERNAL_DIR) -> Path:
     """Cache the data of the external source ``source_id`` under ``root``."""
+    source_id = _SOURCE_ALIASES.get(source_id, source_id)
     source = _source(source_id)
     directory = cache_path(source_id, root).parent
     directory.mkdir(parents=True, exist_ok=True)
@@ -203,8 +208,180 @@ def _number(value) -> bool:
     return isinstance(value, (int, float)) and math.isfinite(value)
 
 
+# Lipas (register id fi-lipas), CC BY 4.0. The licence page's example credit is
+# "Jyväskylän yliopisto, Lipas Liikuntapaikat.fi" (the register name).
+# Hiking routes are type 4405 and nature trails type 4404, status active.
+# Both use the 1 km floor at ingest (ADR-0033, ADR-0062). A 2–3 km floor for
+# nature trails was not taken: many are real walks of 1–3 km, and dropping them
+# here would hide them from the ingest too-short count.
+LIPAS_API = "https://api.lipas.fi/v2/sports-sites"
+LIPAS_PAGE = 100
+LIPAS_TYPES = (4405, 4404)
+LIPAS_RECORD = "https://www.lipas.fi/liikuntapaikka/{}"
+
+
+def fetch_lipas(directory: Path) -> Path:
+    """Active Lipas hiking routes and nature trails as one GeoJSON
+    FeatureCollection, fetched 100 records per page."""
+    items: list[dict] = []
+    page = 1
+    while True:
+        query = urlencode(
+            (
+                ("type-codes", LIPAS_TYPES[0]),
+                ("type-codes", LIPAS_TYPES[1]),
+                ("statuses", "active"),
+                ("page", page),
+                ("page-size", LIPAS_PAGE),
+            )
+        )
+        request = Request(f"{LIPAS_API}?{query}", headers={"User-Agent": "dayhike"})
+        with urlopen(request, timeout=120) as response:
+            payload = json.load(response)
+        batch = payload.get("items") or []
+        items.extend(batch)
+        total_pages = int((payload.get("pagination") or {}).get("total-pages") or 1)
+        if not batch or page >= total_pages:
+            break
+        page += 1
+    features = []
+    for item in items:
+        feature = _lipas_feature(item)
+        if feature is not None:
+            features.append(feature)
+    path = directory / "fi-lipas.geojson"
+    tmp = path.with_name(path.name + ".part")
+    tmp.write_text(json.dumps({"type": "FeatureCollection", "features": features}))
+    tmp.replace(path)
+    return path
+
+
+def read_lipas(path: Path) -> Iterator[ExternalHike]:
+    """Active hiking routes and nature trails of a cached Lipas file.
+
+    A record's parts whose ends lie within ``GAP_JOIN_M`` are one walk, and
+    ``source_ref`` is the Lipas id. Parts that do not meet are separate pieces
+    of the same name: ``source_ref`` is ``{id}/{n}``, numbered from 1 in order
+    of each piece's start (latitude, then longitude). The page is the Lipas
+    record, ``https://www.lipas.fi/liikuntapaikka/{id}``.
+    """
+    for feature in json.loads(Path(path).read_text())["features"]:
+        properties = feature.get("properties") or {}
+        name = str(properties.get("name") or "").strip()
+        lipas_id = properties.get("lipas-id")
+        if (
+            properties.get("status") != "active"
+            or properties.get("type-code") not in LIPAS_TYPES
+            or not name
+            or lipas_id is None
+        ):
+            continue
+        lines = _joined_components(_geometry_parts(feature.get("geometry")))
+        if not lines:
+            continue
+        url = LIPAS_RECORD.format(lipas_id)
+        if len(lines) == 1:
+            yield ExternalHike(ref=str(lipas_id), name=name, points=tuple(lines[0]), url=url)
+            continue
+        ordered = sorted(lines, key=lambda line: (line[0][0], line[0][1]))
+        for index, line in enumerate(ordered, start=1):
+            yield ExternalHike(ref=f"{lipas_id}/{index}", name=name, points=tuple(line), url=url)
+
+
+def _lipas_feature(item: dict) -> dict | None:
+    """One Lipas API record as a GeoJSON feature, or none when it is not a walk."""
+    type_code = (item.get("type") or {}).get("type-code")
+    name = str(item.get("name") or "").strip()
+    lipas_id = item.get("lipas-id")
+    if item.get("status") != "active" or type_code not in LIPAS_TYPES or not name or lipas_id is None:
+        return None
+    parts = _api_lines(item)
+    if not parts:
+        return None
+    geometry = (
+        {"type": "LineString", "coordinates": parts[0]}
+        if len(parts) == 1
+        else {"type": "MultiLineString", "coordinates": parts}
+    )
+    return {
+        "type": "Feature",
+        "properties": {"lipas-id": lipas_id, "name": name, "status": "active", "type-code": type_code},
+        "geometry": geometry,
+    }
+
+
+def _api_lines(item: dict) -> list[list[list[float]]]:
+    """The record's lines as ``[lon, lat]`` parts, elevation dropped."""
+    features = ((item.get("location") or {}).get("geometries") or {}).get("features") or []
+    parts: list[list[list[float]]] = []
+    for feature in features:
+        geometry = feature.get("geometry") or {}
+        if geometry.get("type") != "LineString":
+            continue
+        line = [
+            [point[0], point[1]]
+            for point in geometry.get("coordinates") or []
+            if isinstance(point, (list, tuple)) and len(point) >= 2 and _number(point[0]) and _number(point[1])
+        ]
+        if len(line) >= 2:
+            parts.append(line)
+    return parts
+
+
+def _geometry_parts(geometry: dict | None) -> list[list[Point]]:
+    """Line parts of a cached geometry as ``(lat, lon)``."""
+    if not geometry:
+        return []
+    if geometry.get("type") == "LineString":
+        raw_parts = [geometry.get("coordinates") or []]
+    elif geometry.get("type") == "MultiLineString":
+        raw_parts = geometry.get("coordinates") or []
+    else:
+        return []
+    parts: list[list[Point]] = []
+    for part in raw_parts:
+        line = [
+            (point[1], point[0])
+            for point in part
+            if isinstance(point, (list, tuple)) and len(point) >= 2 and _number(point[0]) and _number(point[1])
+        ]
+        if len(line) >= 2:
+            parts.append(line)
+    return parts
+
+
+def _joined_components(parts: Sequence[Sequence[Point]]) -> list[list[Point]]:
+    """One line per group of parts whose ends meet within ``GAP_JOIN_M``."""
+    pieces = [list(part) for part in parts if len(part) >= 2]
+    parent = list(range(len(pieces)))
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    def ends_meet(left: Sequence[Point], right: Sequence[Point]) -> bool:
+        return any(_haversine_m(*left[end], *right[other]) <= GAP_JOIN_M for end in (0, -1) for other in (0, -1))
+
+    for i, left in enumerate(pieces):
+        for j in range(i + 1, len(pieces)):
+            if ends_meet(left, pieces[j]):
+                parent[find(j)] = find(i)
+    groups: dict[int, list[list[Point]]] = {}
+    for index, piece in enumerate(pieces):
+        groups.setdefault(find(index), []).append(piece)
+    lines = []
+    for group in groups.values():
+        line = joined_line(group)
+        if len(line) >= 2:
+            lines.append(line)
+    return lines
+
+
 EXTERNAL_SOURCES = {
     "ie-sport-ireland": ExternalSource("ie-sport-ireland", fetch_sport_ireland, read_sport_ireland),
+    "fi-lipas": ExternalSource("fi-lipas", fetch_lipas, read_lipas),
 }
 
 

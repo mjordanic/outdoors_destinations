@@ -100,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         metavar="SOURCE",
         help="Add the hikes of an external source cached by fetch-external, e.g. ie-sport-ireland "
-        "(ADR-0062); repeatable",
+        "or fi-lipas (ADR-0062); repeatable",
     )
     ingest.add_argument(
         "--external-dir",
@@ -113,7 +113,11 @@ def main(argv: list[str] | None = None) -> int:
         "fetch-external",
         help="Download an external hike source into data/external/<source> (does not ingest)",
     )
-    fetch_ext.add_argument("--source", required=True, help="Sources register id, e.g. ie-sport-ireland")
+    fetch_ext.add_argument(
+        "--source",
+        required=True,
+        help="Sources register id, e.g. ie-sport-ireland or fi-lipas (fi is that Finland source)",
+    )
     fetch_ext.add_argument(
         "--dest",
         type=Path,

@@ -37,7 +37,7 @@ The local database of DayHikes, Trailheads, AmenityFacts, and FeatureVectors. Bu
 _Avoid_: dataset, index, graph (the routing graph is Valhalla's, not the Catalog)
 
 **External hike**:
-A DayHike from an open official trail register rather than OpenStreetMap, such as Sport Ireland's: its own record with its own line, name and Source, never merged into an OSM hike, so it keeps its source's licence. Its kind is `external`; its id is a hash of its Source and record id, from 2^39 up to 2^40. One that is a Twin of a relation DayHike is dropped: the OSM hike is listed. One that is a Twin of an external hike kept before it is dropped too, and counted apart as a duplicate, so the same walk is not listed twice (ADR-0062).
+A DayHike from an open official trail register rather than OpenStreetMap, such as Sport Ireland's or Lipas: its own record with its own line, name and Source, never merged into an OSM hike, so it keeps its source's licence. Its kind is `external`; its id is a hash of its Source and record id, from 2^39 up to 2^40. One that is a Twin of a relation DayHike is dropped: the OSM hike is listed. One that is a Twin of an external hike kept before it is dropped too, and counted apart as a duplicate, so the same walk is not listed twice (ADR-0062).
 _Avoid_: imported hike, official hike, third-party hike
 
 **Source**:

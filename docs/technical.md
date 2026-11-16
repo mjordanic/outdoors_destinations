@@ -1724,7 +1724,10 @@ it; the ingest report counts `external_added`, `dropped_external_twin` (Twins
 of relation DayHikes), `dropped_external_duplicate` (Twins of an external hike
 kept before) and `dropped_external_length`. Sport Ireland's adapter (`ie-sport-ireland`) keeps the
 walking trails, starts each at its listed start, and keeps the longest part of a
-multi-part line with the parts that meet it within 50 m.
+multi-part line with the parts that meet it within 50 m. Lipas (`fi-lipas`,
+`fetch-external --source fi`) keeps active hiking routes (type 4405) and nature
+trails (type 4404) under that same 1 km floor. Parts that meet within 50 m are
+one walk under the Lipas id; parts that do not meet are pieces `{id}/{n}`.
 
 A hike that is neither a `route=hiking` or `route=foot` relation, a built DayHike nor an external hike in this Catalog cannot be a Seed.
 Unnamed forest paths (`highway=path` without a hiking relation) never appear.
@@ -2744,7 +2747,9 @@ each under its own licence, credited from the sources register
 (`docs/sources.csv`): on the hike panel, on `credits.html`, in `/api/info`
 and in the export's `meta.json`. Sport Ireland Trail Routes
 (https://data.gov.ie/dataset/getirelandactive_trailroutes): CC BY 4.0, credit
-"Sport Ireland".
+"Sport Ireland". Lipas
+(https://www.jyu.fi/fi/avoimet-rajapinnat-ja-ladattavat-lipas-aineistot): CC BY 4.0, credit
+"Jyväskylän yliopisto, Lipas Liikuntapaikat.fi".
 
 FABDEM V1-2: Hawker, L., Uhe, P., Paulo, L., Sosa, J., Savage, J., Sampson, C.
 and Neal, J., 2022. A 30 m global map of elevation with forests and buildings
