@@ -2709,7 +2709,8 @@ The same seams the CLI wraps:
 
 CLI: `dayhike ingest`, `dayhike fetch-extracts`, `dayhike fetch-dem`,
 `dayhike sample-dem`, `dayhike fetch-landcover`, `dayhike sample-landcover`,
-`dayhike fetch-climate`, `dayhike sample-climate`, `dayhike sample-trailgraph`,
+`dayhike fetch-climate`, `dayhike sample-climate`, `dayhike fetch-commons`,
+`dayhike count-commons`, `dayhike sample-trailgraph`,
 `dayhike build-similarity` (`--calibrate-only`), `dayhike rank` (`--weight`,
 `--month`, `--limit`, `--one-way`), `dayhike compose` (the Route text of a shared link,
 `--name`, `--weight`, `--month`, `--limit`, `--one-way`; reads a serving export; a SuggestedLoop is listed by its link text, and each row's versions indented under it), `dayhike nearby`, `dayhike export-serving`, `dayhike export-places`, `dayhike export-countries`, `dayhike export-photos`, `dayhike export-osm-download`, `dayhike serve`, `dayhike coverage-map`.
