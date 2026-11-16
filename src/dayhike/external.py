@@ -32,6 +32,7 @@ from dayhike.sources import require_used
 EXTERNAL_ID_MIN = 2**39  # every external id is at least this; OSM relation ids are about 2.2e7
 EXTERNAL_ID_MAX = 2**40  # and below every built id (BUILT_ID_MIN)
 EXTERNAL_DIR = Path("data/external")
+NAME_ORIGIN_STAGE = "stage"  # as a built DayStage's (ADR-0038)
 
 Point = tuple[float, float]  # (lat, lon)
 
@@ -39,12 +40,17 @@ Point = tuple[float, float]  # (lat, lon)
 @dataclass(frozen=True)
 class ExternalHike:
     """One record of an external source: its id there (``source_ref``), its
-    name, its line from its start and the record's page."""
+    own name (None when the record has none), its line from its start and the
+    record's page. ``fallback`` names a record with no name of its own and no
+    place near it (ADR-0062). A DayStage of a long record (``stages.py``) has
+    ``stage`` too: where it starts and ends along the record's line."""
 
     ref: str
-    name: str
+    name: str | None
     points: tuple[Point, ...]
     url: str | None = None
+    fallback: str | None = None
+    stage: str | None = None
 
 
 @dataclass(frozen=True)
@@ -57,9 +63,12 @@ class ExternalSource:
     read: Callable[[Path], Iterator[ExternalHike]]
 
 
-def external_id(source: str, ref: str) -> int:
-    """The Catalog id of the external hike ``ref`` of ``source``."""
-    digest = int.from_bytes(hashlib.sha256(f"{source}\n{ref}".encode()).digest()[:8], "big")
+def external_id(source: str, ref: str, stage: str | None = None) -> int:
+    """The Catalog id of the external hike ``ref`` of ``source``, or of its
+    DayStage ``stage`` (the stage's start and end along the record's line, so
+    the same walk keeps its id whatever the other stages and records are)."""
+    key = f"{source}\n{ref}" if stage is None else f"{source}\n{ref}\nstage {stage}"
+    digest = int.from_bytes(hashlib.sha256(key.encode()).digest()[:8], "big")
     return EXTERNAL_ID_MIN + digest % (EXTERNAL_ID_MAX - EXTERNAL_ID_MIN)
 
 
@@ -91,13 +100,26 @@ def read_external(source_id: str, root: Path | str = EXTERNAL_DIR) -> list[Exter
     return list(_source(source_id).read(path))
 
 
+def external_label(hike: ExternalHike, place: str | None, source_id: str) -> str:
+    """The label of an external hike: its own name, else "Hike near {place}"
+    (the nearest place, as for an OSM relation, ADR-0017), else the source's
+    ``fallback``, else the record as ``{source}:{ref}``."""
+    if hike.name:
+        return hike.name
+    if place:
+        return f"Hike near {place}"
+    return hike.fallback or f"{source_id}:{hike.ref}"
+
+
 def external_dayhike(source_id: str, hike: ExternalHike, snapshot, amenity_index) -> DayHike:
-    """The DayHike of an external hike: its own line, no OSM way, no difficulty
-    (the source's grading is not SAC), amenity facts from OpenStreetMap at its start."""
+    """The DayHike of an external hike (its ``name`` is its label, see
+    ``external_label``): its own line, no OSM way, no difficulty (the source's
+    grading is not SAC), amenity facts from OpenStreetMap at its start. A
+    DayStage of one has NameOrigin ``stage``, and the record of its route."""
     return _dayhike(
-        external_id(source_id, hike.ref),
+        external_id(source_id, hike.ref, hike.stage),
         hike.name,
-        KIND_EXTERNAL,
+        NAME_ORIGIN_STAGE if hike.stage else KIND_EXTERNAL,
         [(0, point) for point in hike.points],
         None,
         snapshot,
@@ -198,7 +220,7 @@ def read_sport_ireland(path: Path) -> Iterator[ExternalHike]:
     start (``Latitude``, ``Longitude``) when it has one."""
     for feature in json.loads(Path(path).read_text())["features"]:
         properties, geometry = feature["properties"], feature.get("geometry")
-        if properties.get("Activity") != "Walking" or not geometry or not properties.get("Name"):
+        if properties.get("Activity") != "Walking" or not geometry:
             continue
         if geometry["type"] == "LineString":
             parts = [geometry["coordinates"]]
@@ -212,7 +234,7 @@ def read_sport_ireland(path: Path) -> Iterator[ExternalHike]:
         if len(line) >= 2:
             yield ExternalHike(
                 ref=f"trail/{properties['TrailID']}",
-                name=properties["Name"].strip(),
+                name=(properties.get("Name") or "").strip() or None,
                 points=tuple(line),
                 url=properties.get("Website") or None,
             )
@@ -284,23 +306,18 @@ def read_lipas(path: Path) -> Iterator[ExternalHike]:
         properties = feature.get("properties") or {}
         name = str(properties.get("name") or "").strip()
         lipas_id = properties.get("lipas-id")
-        if (
-            properties.get("status") != "active"
-            or properties.get("type-code") not in LIPAS_TYPES
-            or not name
-            or lipas_id is None
-        ):
+        if properties.get("status") != "active" or properties.get("type-code") not in LIPAS_TYPES or lipas_id is None:
             continue
         lines = _joined_components(_geometry_parts(feature.get("geometry")))
         if not lines:
             continue
         url = LIPAS_RECORD.format(lipas_id)
         if len(lines) == 1:
-            yield ExternalHike(ref=str(lipas_id), name=name, points=tuple(lines[0]), url=url)
+            yield ExternalHike(ref=str(lipas_id), name=name or None, points=tuple(lines[0]), url=url)
             continue
         ordered = sorted(lines, key=lambda line: (line[0][0], line[0][1]))
         for index, line in enumerate(ordered, start=1):
-            yield ExternalHike(ref=f"{lipas_id}/{index}", name=name, points=tuple(line), url=url)
+            yield ExternalHike(ref=f"{lipas_id}/{index}", name=name or None, points=tuple(line), url=url)
 
 
 def _lipas_feature(item: dict) -> dict | None:
@@ -308,7 +325,7 @@ def _lipas_feature(item: dict) -> dict | None:
     type_code = (item.get("type") or {}).get("type-code")
     name = str(item.get("name") or "").strip()
     lipas_id = item.get("lipas-id")
-    if item.get("status") != "active" or type_code not in LIPAS_TYPES or not name or lipas_id is None:
+    if item.get("status") != "active" or type_code not in LIPAS_TYPES or lipas_id is None:
         return None
     parts = _api_lines(item)
     if not parts:
@@ -405,8 +422,8 @@ def _joined_component_parts(parts: Sequence[Sequence[Point]]) -> list[tuple[list
 # Foot routes only. A national GPX `<rte>` is one segment: `<name>` is the
 # route number, `<desc>` the route name, `<src>` the maintainer, `<type>` the
 # kind. Segments of one maintainer and route number join as Lipas parts do.
-# "Ukjent" is an empty name. A long route stays one hike (ADR-0062); the 1 km
-# floor is ingest's.
+# "Ukjent" is an empty name. The 1 km floor and the DayStages of a long route are
+# ingest's (ADR-0062).
 _MISSING_ROUTE_NAME = "ukjent"
 TURRUTE_UUID = "d1422d17-6d95-4ef1-96ab-8af31744dd63"
 TURRUTE_ORDER = "https://nedlasting.geonorge.no/api/order"
@@ -421,9 +438,10 @@ def read_turrutebasen(path: Path) -> Iterator[ExternalHike]:
     separate pieces: ``source_ref`` is ``{rutenummer}/{n}``, numbered from 1 by
     each piece's start (latitude, then longitude). A route number used by more
     than one maintainer is ``{maintainer}/{rutenummer}`` (and ``/{n}``) for each
-    maintainer, the bare number for a blank one. Each piece is named from its
-    own segments: ``rutenavn`` (``Ukjent`` counts as none), else the maintainer
-    and the route number, else the route number. Ski, bike and other route
+    maintainer, the bare number for a blank one. Each piece's name is its own
+    segments' ``rutenavn`` (``Ukjent`` counts as none), else None, and ingest
+    names it after the nearest place; its ``fallback`` is the maintainer and the
+    route number, else the route number. Ski, bike and other route
     types are left out. There is no per-route page.
     """
     grouped: dict[tuple[str, str], list[tuple[list[Point], int]]] = {}
@@ -451,25 +469,23 @@ def read_turrutebasen(path: Path) -> Iterator[ExternalHike]:
             if len(line) < 2:
                 continue
             owners = {tagged[index][1] for index in indices}
-            pieces.append((line, _turrute_name([segments[owner] for owner in sorted(owners)], number)))
+            pieces.append((line, *_turrute_names([segments[owner] for owner in sorted(owners)], number)))
         if len(pieces) == 1:
-            line, name = pieces[0]
-            yield ExternalHike(ref=base, name=name, points=tuple(line))
+            line, name, fallback = pieces[0]
+            yield ExternalHike(ref=base, name=name, points=tuple(line), fallback=fallback)
             continue
         ordered = sorted(pieces, key=lambda piece: (piece[0][0][0], piece[0][0][1]))
-        for index, (line, name) in enumerate(ordered, start=1):
-            yield ExternalHike(ref=f"{base}/{index}", name=name, points=tuple(line))
+        for index, (line, name, fallback) in enumerate(ordered, start=1):
+            yield ExternalHike(ref=f"{base}/{index}", name=name, points=tuple(line), fallback=fallback)
 
 
-def _turrute_name(segments: Sequence[tuple[str, str]], number: str) -> str:
-    """``rutenavn`` when one is set, else ``{maintainer} {rutenummer}``, else the number."""
+def _turrute_names(segments: Sequence[tuple[str, str]], number: str) -> tuple[str | None, str]:
+    """The route's own name (``rutenavn``, None when it has none) and its
+    fallback label: ``{maintainer} {rutenummer}``, else the number."""
     names = [name for name, _ in segments if name and name.casefold() != _MISSING_ROUTE_NAME]
-    if names:
-        return _most_common(names)
     maintainers = [maintainer for _, maintainer in segments if maintainer]
-    if not maintainers:
-        return number
-    return f"{_most_common(maintainers)} {number}"
+    fallback = f"{_most_common(maintainers)} {number}" if maintainers else number
+    return (_most_common(names) if names else None), fallback
 
 
 def _most_common(values: Sequence[str]) -> str:

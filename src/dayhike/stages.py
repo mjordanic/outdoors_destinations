@@ -16,7 +16,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from dayhike.built import BuildContext, BuiltWalk
-from dayhike.catalog import EARTH_RADIUS_M, named_points
+from dayhike.catalog import EARTH_RADIUS_M, _linestring_length_m, named_points
+from dayhike.external import ExternalHike
 from dayhike.similarity import TWIN_SHARE, TWIN_STEP_M, _even_points, _step_m, twin_groups
 
 Point = tuple[float, float]  # (lat, lon)
@@ -67,24 +68,15 @@ def day_stages(context: BuildContext) -> list[BuiltWalk]:
     if not tours:
         return []
     relations = {relation.id: relation for relation in snapshot.relations}
-    names = {(lat, lon): name for lat, lon, name in snapshot.named_points}
-    points = [
-        CutPoint(kind, lat, lon, names.get((lat, lon)))
-        for kind, at in snapshot.amenities
-        if kind in CUT_RADIUS_M
-        for lat, lon in at
-    ] + [CutPoint("place", lat, lon, name) for lat, lon, name in snapshot.places]
-    if not points:
+    cuts = _CutIndex.of(snapshot)
+    if cuts is None:
         return []
-    from sklearn.neighbors import BallTree
-    tree = BallTree(np.radians([(point.lat, point.lon) for point in points]), metric="haversine")
     places = named_points(snapshot.places)
     walks: list[BuiltWalk] = []
     for tour in tours:
         relation = relations[tour.id]
         walk = context.main_walk(relation).vertices
-        near = tree.query_radius(np.radians([point for _, point in walk]), r=max(CUT_RADIUS_M.values()) / EARTH_RADIUS_M)
-        stages = split(walk, [points[index] for index in sorted(set(np.concatenate(near).tolist()))])
+        stages = cuts.stages(walk)
         ways_at: dict[int, list[int]] = {}
         for kind, way_id in relation.members:
             if kind == "way" and way_id in snapshot.ways:
@@ -96,20 +88,82 @@ def day_stages(context: BuildContext) -> list[BuiltWalk]:
             first, last = stage.vertices[0][1], stage.vertices[-1][1]
             if lower is not None and first != last and lower(first, last) == last:
                 stage = DayStage(stage.vertices[::-1], stage.length_m, stage.end, stage.start)
-            ends = [
-                name or (places and places.nearest(*stage.vertices[at][1], CUT_RADIUS_M["place"]))
-                for name, at in ((stage.start, 0), (stage.end, -1))
-            ]
             walks.append(
                 BuiltWalk(
                     kind="stage",
-                    name=_stage_name(tour.name, k, *ends),
+                    name=_stage_name(tour.name, k, *_end_names(stage, places)),
                     vertices=stage.vertices,
                     way_ids=tuple(dict.fromkeys(way for node_id, _ in stage.vertices for way in ways_at.get(node_id, ()))),
                     parts=(tour.id,),
                 )
             )
     return _without_twins(walks, context)
+
+
+class _CutIndex:
+    """The cut points of a snapshot (huts, places, parking) with a BallTree, to
+    find the ones near a tour."""
+
+    def __init__(self, points: list[CutPoint]) -> None:
+        from sklearn.neighbors import BallTree
+
+        self.points = points
+        self.tree = BallTree(np.radians([(point.lat, point.lon) for point in points]), metric="haversine")
+
+    @classmethod
+    def of(cls, snapshot) -> _CutIndex | None:
+        names = {(lat, lon): name for lat, lon, name in snapshot.named_points}
+        points = [
+            CutPoint(kind, lat, lon, names.get((lat, lon)))
+            for kind, at in snapshot.amenities
+            if kind in CUT_RADIUS_M
+            for lat, lon in at
+        ] + [CutPoint("place", lat, lon, name) for lat, lon, name in snapshot.places]
+        return cls(points) if points else None
+
+    def stages(self, walk: Sequence[tuple[int, Point]]) -> list[DayStage]:
+        """``split`` of ``walk`` at the cut points near it."""
+        near = self.tree.query_radius(
+            np.radians([point for _, point in walk]), r=max(CUT_RADIUS_M.values()) / EARTH_RADIUS_M
+        )
+        return split(walk, [self.points[index] for index in sorted(set(np.concatenate(near).tolist()))])
+
+
+def _end_names(stage: DayStage, places) -> list[str | None]:
+    # The names of a stage's ends: its cut point's, else the nearest place within CUT_RADIUS_M.
+    return [
+        name or (places and places.nearest(*stage.vertices[at][1], CUT_RADIUS_M["place"]))
+        for name, at in ((stage.start, 0), (stage.end, -1))
+    ]
+
+
+def external_stages(hikes: Sequence[ExternalHike], snapshot) -> list[ExternalHike]:
+    """The DayStages of the external hikes longer than ``STAGE_SPLIT_M`` (ADR-0062),
+    cut by the rules of ``split`` at the snapshot's huts, places and parking and
+    named "{hike}, stage k: {from} – {to}" (``hike.name`` is its label). A stage is
+    an ``ExternalHike`` of the hike's record, with ``stage`` its start and end
+    along the line. They are walked as the line is: there is no height rule.
+    """
+    long = [hike for hike in hikes if _linestring_length_m(hike.points) > STAGE_SPLIT_M]
+    cuts = _CutIndex.of(snapshot) if long else None
+    if cuts is None:
+        return []
+    places = named_points(snapshot.places)
+    stages: list[ExternalHike] = []
+    for hike in long:
+        for k, stage in enumerate(cuts.stages([(0, point) for point in hike.points]), start=1):
+            points = tuple(point for _, point in stage.vertices)
+            (first_lat, first_lon), (last_lat, last_lon) = points[0], points[-1]
+            stages.append(
+                ExternalHike(
+                    ref=hike.ref,
+                    name=_stage_name(hike.name, k, *_end_names(stage, places)),
+                    points=points,
+                    url=hike.url,
+                    stage=f"{first_lat:.6f},{first_lon:.6f}-{last_lat:.6f},{last_lon:.6f}",
+                )
+            )
+    return stages
 
 
 def _stage_name(tour: str, k: int, start: str | None, end: str | None) -> str:

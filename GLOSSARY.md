@@ -13,7 +13,7 @@ A DayHike that ingest builds from OSM data rather than reads as one relation: a 
 _Avoid_: composed DayHike, generated hike, virtual relation, synthetic hike
 
 **DayStage**:
-A built DayHike that is one day of a long tour: a piece of 8–25 km of a relation DayHike over 25 km, cut where a day can end, at a hut, else a place, else parking near the line, as near 16 km as those allow. It is named "{tour}, stage k: {from} – {to}" and the tour stays listed too. Tours that share a stretch cut it at the same points; a DayStage that is a Twin of a relation DayHike, such as a stage relation, is left out (ADR-0040).
+A built DayHike that is one day of a long tour: a piece of 8–25 km of a relation DayHike over 25 km, cut where a day can end, at a hut, else a place, else parking near the line, as near 16 km as those allow. It is named "{tour}, stage k: {from} – {to}" and the tour stays listed too. Tours that share a stretch cut it at the same points; a DayStage that is a Twin of a relation DayHike, such as a stage relation, is left out (ADR-0040). An external hike over 25 km is cut the same way, but its stages stay external hikes (ADR-0062).
 _Avoid_: stage (a stage is a relation), section, leg, day stage relation
 
 **Multi-day route**:
@@ -37,7 +37,7 @@ The local database of DayHikes, Trailheads, AmenityFacts, and FeatureVectors. Bu
 _Avoid_: dataset, index, graph (the routing graph is Valhalla's, not the Catalog)
 
 **External hike**:
-A DayHike from an open official trail register rather than OpenStreetMap, such as Sport Ireland's or Lipas: its own record with its own line, name and Source, never merged into an OSM hike, so it keeps its source's licence. Its kind is `external`; its id is a hash of its Source and record id, from 2^39 up to 2^40. One that is a Twin of a relation DayHike is dropped: the OSM hike is listed. One that is a Twin of an external hike kept before it is dropped too, and counted apart as a duplicate, so the same walk is not listed twice (ADR-0062).
+A DayHike from an open official trail register rather than OpenStreetMap, such as Sport Ireland's or Lipas: its own record with its own line, name and Source, never merged into an OSM hike, so it keeps its source's licence. Its kind is `external`; its id is a hash of its Source and record id, from 2^39 up to 2^40. One that is a Twin of a relation DayHike is dropped: the OSM hike is listed. One that is a Twin of an external hike kept before it is dropped too, and counted apart as a duplicate, so the same walk is not listed twice. One longer than 25 km is cut into DayStages as a relation DayHike is, and one with no name of its own is named after the nearest place (ADR-0062).
 _Avoid_: imported hike, official hike, third-party hike
 
 **Source**:

@@ -1750,15 +1750,20 @@ its own DayHike of kind `external`, its line the source's own with no OSM way,
 its id hashed from `(source, source_ref)` from 2^39 up to 2^40, and `source_url`
 links its record. One under 1 km is dropped, and so is one that is a Twin of a
 relation DayHike (the OSM hike is listed) or of an external hike kept before
-it; the ingest report counts `external_added`, `dropped_external_twin` (Twins
-of relation DayHikes), `dropped_external_duplicate` (Twins of an external hike
-kept before) and `dropped_external_length`. Sport Ireland's adapter (`ie-sport-ireland`) keeps the
+it; the ingest report counts `external_added`, `external_stages` (of them
+DayStages), `dropped_external_twin` (Twins of relation DayHikes and built
+DayStages), `dropped_external_duplicate` (Twins of an external hike kept
+before) and `dropped_external_length`. A record with no name of its own is
+named "Hike near {place}" after the nearest place within 5 km, else the
+adapter's fallback (ADR-0017, ADR-0062). A kept external hike over 25 km is also
+cut into DayStages by `dayhike.stages` as a relation DayHike is (ADR-0040): each is an
+external hike of NameOrigin `stage` with its route's `source_ref`. Sport Ireland's adapter (`ie-sport-ireland`) keeps the
 walking trails, starts each at its listed start, and keeps the longest part of a
 multi-part line with the parts that meet it within 50 m. Lipas (`fi-lipas`,
 `fetch-external --source fi`) keeps active hiking routes (type 4405) and nature
 trails (type 4404) under that same 1 km floor. Parts that meet end to end within 50 m are
 one walk under the Lipas id; parts that do not join it, branches included, are
-pieces `{id}/{n}`. Turrutebasen (`no-turrutebasen`, `fetch-external --source no`) keeps foot routes (`Fotrute`) from the national Geonorge GPX and chains segments of one maintainer and `rutenummer` the same way (ADR-0062 has the naming and `source_ref` rules); a long route is not cut into DayStages.
+pieces `{id}/{n}`. Turrutebasen (`no-turrutebasen`, `fetch-external --source no`) keeps foot routes (`Fotrute`) from the national Geonorge GPX and chains segments of one maintainer and `rutenummer` the same way (ADR-0062 has the naming and `source_ref` rules).
 
 A hike that is neither a `route=hiking` or `route=foot` relation, a built DayHike nor an external hike in this Catalog cannot be a Seed.
 Unnamed forest paths (`highway=path` without a hiking relation) never appear.
