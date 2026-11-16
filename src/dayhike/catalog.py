@@ -552,6 +552,7 @@ def build_catalog(
     previous: Path | str | None = None,
     external: Sequence[str] = (),
     external_dir: Path | str | None = None,
+    paths: str = "graded",
 ) -> Catalog:
     """Ingest OSM XML or PBF snapshot(s) into a Catalog of DayHikes.
 
@@ -582,14 +583,24 @@ def build_catalog(
     ``external`` names external sources (ADR-0062) whose hikes, cached under
     ``external_dir`` (default ``data/external``) by ``dayhike fetch-external``,
     are added as DayHikes of kind ``external``; a source the register does not
-    list as used is refused.
+    list as used is refused. ``paths`` is the level of paths in no hiking
+    relation read into the TrailGraph, one of ``PATH_LEVELS`` (ADR-0065).
     """
     from dayhike.dem import dem_read_by, point_heights
     from dayhike.external import EXTERNAL_DIR, read_external
-    from dayhike.ingest import BUILT_HIKE_SOURCES, _connect_work, emit_progress, remove_work, run_ingest, write_geometry_store
+    from dayhike.ingest import (
+        BUILT_HIKE_SOURCES,
+        _connect_work,
+        check_paths,
+        emit_progress,
+        remove_work,
+        run_ingest,
+        write_geometry_store,
+    )
     from dayhike.trailgraph import check_snap_tolerance, write_trailgraph
 
     check_snap_tolerance(snap_tolerance_m)
+    check_paths(paths)
     catalog_path = Path(catalog_path)
     if dem_dir is not None and not Path(dem_dir).is_dir():
         raise FileNotFoundError(f"No DEM directory {dem_dir}")
@@ -610,6 +621,7 @@ def build_catalog(
         heights=heights,
         external=external_hikes,
         previous=before,
+        paths=paths,
     )
     emit_progress(progress, "write", str(catalog_path))
     # Each file is written under a staging name and all are renamed together once

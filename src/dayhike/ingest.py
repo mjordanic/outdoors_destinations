@@ -57,7 +57,7 @@ from dayhike.parallel import parallel_iter, parallel_map
 from dayhike.similarity import TWIN_SHARE, TWIN_STEP_M, _even_points, _step_m, twin_groups
 from dayhike.stages import day_stages
 
-INGEST_WORK_SCHEMA = 9
+INGEST_WORK_SCHEMA = 10
 INGEST_CHECKPOINT_OBJECTS = 50_000
 INGEST_PROGRESS_EVERY_OBJECTS = 100_000
 WORK_CACHE_KIB = 262_144  # the work file's page cache while ingest runs
@@ -73,6 +73,13 @@ CATALOG_TAG_FILTERS = (
     "nwr/man_made=water_tap",
     "n/place=city,town,village,hamlet",
 )
+# What ingest reads of the paths no hiking relation lists, each level adding to the one
+# before (ADR-0065): graded paths (ADR-0037), then named paths, tracks, footways and
+# bridleways, then unnamed paths too. Beyond ``graded`` they also enter the snapshot.
+PATH_LEVELS = ("graded", "named", "unnamed")
+NAMED_PATH_HIGHWAYS = ("path", "footway", "bridleway", "track")
+NOT_A_PATH_FOOTWAYS = ("sidewalk", "crossing")
+PATH_TAG_FILTER = "w/highway=" + ",".join(NAMED_PATH_HIGHWAYS)
 LAKE_WATER = ("lake", "reservoir", "pond")  # a named natural=water of these is a lake a NetworkHike may go to
 DESTINATION_KINDS = ("peak", "hut", "viewpoint", "lake")  # named, a NetworkHike's destinations (ADR-0039)
 # Point kinds read only for NetworkHikes: no amenity, no named point, not in the GeometryStore.
@@ -81,6 +88,12 @@ NETWORK_ONLY_KINDS = ("lake", "guidepost")
 BUILT_HIKE_SOURCES: tuple[BuiltHikeSource, ...] = (day_stages, network_source)
 
 Progress = Callable[[str], None]
+
+
+def check_paths(paths: str) -> None:
+    """Refuse a paths level that is not one of ``PATH_LEVELS``."""
+    if paths not in PATH_LEVELS:
+        raise ValueError(f"paths must be one of {', '.join(PATH_LEVELS)}, got {paths!r}")
 
 
 def work_path_for(catalog_path: Path) -> Path:
@@ -102,17 +115,19 @@ def run_ingest(
     heights: Heights | None = None,
     external: Sequence[tuple[str, Sequence[ExternalHike]]] = (),
     previous: PreviousStarts | None = None,
+    paths: str = "graded",
 ) -> tuple[list[DayHike], IngestReport, Path, OsmSnapshot]:
+    check_paths(paths)
     catalog_path = Path(catalog_path)
     catalog_path.parent.mkdir(parents=True, exist_ok=True)
     work_path = work_path_for(catalog_path)
-    fingerprint = _fingerprint(source_paths)
+    fingerprint = _fingerprint(source_paths, paths)
     resume = not fresh and _work_is_resumable(work_path, fingerprint)
     if not resume:
         remove_work(work_path)
 
     emit_progress(progress, "filter", "starting")
-    scan_paths = _scan_paths(source_paths, progress) if not resume else _stored_scan_paths(
+    scan_paths = _scan_paths(source_paths, progress, paths) if not resume else _stored_scan_paths(
         work_path, source_paths
     )
 
@@ -121,10 +136,10 @@ def run_ingest(
         if not resume:
             _init_work(conn, fingerprint, source_paths, scan_paths)
         _pass_relations(conn, scan_paths, progress)
-        _pass_ways(conn, scan_paths, progress)
+        _pass_ways(conn, scan_paths, progress, paths)
         _pass_nodes(conn, scan_paths, progress)
         emit_progress(progress, "assemble", "loading work file")
-        snapshot = _load_hiking_snapshot(conn, progress)
+        snapshot = _load_hiking_snapshot(conn, progress, with_paths=paths != "graded")
         emit_progress(
             progress,
             "assemble",
@@ -250,8 +265,8 @@ def _sorted_ids(conn: sqlite3.Connection, table: str) -> np.ndarray:
     return np.fromiter((row[0] for row in conn.execute(f"SELECT id FROM {table} ORDER BY id")), dtype=np.int64)
 
 
-def _fingerprint(paths: Sequence[Path]) -> str:
-    rows = []
+def _fingerprint(paths: Sequence[Path], path_level: str) -> str:
+    rows: list[dict] = [{"paths": path_level}]
     for path in paths:
         stat = path.stat()
         rows.append(
@@ -324,7 +339,7 @@ def _init_work(
             node_ids TEXT NOT NULL,
             tags TEXT NOT NULL
         );
-        CREATE TABLE IF NOT EXISTS graded_ways (
+        CREATE TABLE IF NOT EXISTS path_ways (
             id INTEGER PRIMARY KEY,
             node_ids TEXT NOT NULL,
             tags TEXT NOT NULL
@@ -332,7 +347,7 @@ def _init_work(
         CREATE TABLE IF NOT EXISTS needed_nodes (
             id INTEGER PRIMARY KEY
         );
-        CREATE TABLE IF NOT EXISTS graded_needed_nodes (
+        CREATE TABLE IF NOT EXISTS path_needed_nodes (
             id INTEGER PRIMARY KEY
         );
         CREATE TABLE IF NOT EXISTS nodes (
@@ -341,7 +356,7 @@ def _init_work(
             lon REAL NOT NULL,
             ele REAL
         );
-        CREATE TABLE IF NOT EXISTS graded_nodes (
+        CREATE TABLE IF NOT EXISTS path_nodes (
             id INTEGER PRIMARY KEY,
             lat REAL NOT NULL,
             lon REAL NOT NULL,
@@ -380,7 +395,7 @@ def _init_work(
     conn.commit()
 
 
-def _scan_paths(source_paths: Sequence[Path], progress: Progress | None) -> list[Path]:
+def _scan_paths(source_paths: Sequence[Path], progress: Progress | None, paths: str) -> list[Path]:
     osmium_bin = shutil.which("osmium")
     scan: list[Path] = []
     for path in source_paths:
@@ -392,13 +407,13 @@ def _scan_paths(source_paths: Sequence[Path], progress: Progress | None) -> list
             cache.is_file()
             and cache.stat().st_mtime_ns >= path.stat().st_mtime_ns
             and _catalog_filters_path(cache).is_file()
-            and _catalog_filters_path(cache).read_text() == _catalog_filters_text()
+            and _catalog_filters_path(cache).read_text() == _catalog_filters_text(paths)
         ):
             emit_progress(progress, "filter", f"cached {cache}")
             scan.append(cache)
             continue
         emit_progress(progress, "filter", f"{path.name} -> {cache.name}")
-        _run_osmium_tags_filter(osmium_bin, path, cache)
+        _run_osmium_tags_filter(osmium_bin, path, cache, paths)
         scan.append(cache)
     if osmium_bin is None:
         emit_progress(progress, "filter", "osmium-tool not on PATH, reading source files")
@@ -432,11 +447,16 @@ def _catalog_filters_path(cache: Path) -> Path:
     return cache.with_name(cache.name + ".filters")
 
 
-def _catalog_filters_text() -> str:
-    return "\n".join(CATALOG_TAG_FILTERS) + "\n"
+def _catalog_filters(paths: str) -> tuple[str, ...]:
+    # osmium cannot ask for a name too: the extract keeps every such way, the ways pass picks.
+    return CATALOG_TAG_FILTERS if paths == "graded" else (*CATALOG_TAG_FILTERS, PATH_TAG_FILTER)
 
 
-def _run_osmium_tags_filter(osmium_bin: str, source: Path, dest: Path) -> None:
+def _catalog_filters_text(paths: str) -> str:
+    return "\n".join(_catalog_filters(paths)) + "\n"
+
+
+def _run_osmium_tags_filter(osmium_bin: str, source: Path, dest: Path, paths: str) -> None:
     if dest.name.endswith(".osm.pbf"):
         tmp = dest.with_name(dest.name[: -len(".osm.pbf")] + ".writing.osm.pbf")
     else:
@@ -445,7 +465,7 @@ def _run_osmium_tags_filter(osmium_bin: str, source: Path, dest: Path) -> None:
         osmium_bin,
         "tags-filter",
         str(source.resolve()),
-        *CATALOG_TAG_FILTERS,
+        *_catalog_filters(paths),
         "-o",
         str(tmp),
         "--overwrite",
@@ -454,7 +474,7 @@ def _run_osmium_tags_filter(osmium_bin: str, source: Path, dest: Path) -> None:
     try:
         subprocess.run(cmd, check=True)
         tmp.replace(dest)
-        _catalog_filters_path(dest).write_text(_catalog_filters_text())
+        _catalog_filters_path(dest).write_text(_catalog_filters_text(paths))
     finally:
         if tmp.exists():
             tmp.unlink()
@@ -565,7 +585,7 @@ def _pass_relations(
 
 
 def _pass_ways(
-    conn: sqlite3.Connection, paths: Sequence[Path], progress: Progress | None
+    conn: sqlite3.Connection, paths: Sequence[Path], progress: Progress | None, path_level: str
 ) -> None:
     emit_progress(progress, "ways", "starting")
     if _pass_done(conn, "ways", paths):
@@ -575,7 +595,7 @@ def _pass_ways(
     amenity_ways = _sorted_ids(conn, "amenity_ways")
     seen = 0
     kept = 0
-    graded = 0
+    extra = 0
     pending = _Pending(conn)
     for path in paths:
         last_id, done = _file_state(conn, "ways", path)
@@ -596,13 +616,13 @@ def _pass_ways(
                 )
                 pending.add_ids("needed_nodes", node_ids)
                 kept += 1
-            elif _is_graded_path(tags):
+            elif _is_extra_path(tags, path_level):
                 pending.add(
-                    "INSERT OR REPLACE INTO graded_ways (id, node_ids, tags) VALUES (?, ?, ?)",
+                    "INSERT OR REPLACE INTO path_ways (id, node_ids, tags) VALUES (?, ?, ?)",
                     osm_id, json.dumps(node_ids), json.dumps(tags),
                 )
-                pending.add_ids("graded_needed_nodes", node_ids)
-                graded += 1
+                pending.add_ids("path_needed_nodes", node_ids)
+                extra += 1
             if node_ids and (kind is not None or _sorted_has(amenity_ways, osm_id)):
                 pending.add(
                     "INSERT OR REPLACE INTO pending_amenity_ways (id, kind, node_id, tags) VALUES (?, ?, ?, ?)",
@@ -620,7 +640,7 @@ def _pass_ways(
                 )
         pending.write()
         _mark_progress(conn, "ways", path, file_last, done=True)
-    emit_progress(progress, "ways", f"{kept} hiking ways, {graded} graded paths")
+    emit_progress(progress, "ways", f"{kept} hiking ways, {extra} paths in no relation ({path_level})")
 
 
 def _point_kind(tags: dict[str, str]) -> str | None:
@@ -641,6 +661,16 @@ def _is_graded_path(tags: dict[str, str]) -> bool:
     return tags.get("highway") == "path" and tags.get("sac_scale") in SAC_SCALE_RANK
 
 
+def _is_extra_path(tags: dict[str, str], level: str) -> bool:
+    """A way no hiking relation lists that joins the TrailGraph at this ``PATH_LEVELS`` level (ADR-0065)."""
+    if _is_graded_path(tags):
+        return True
+    if level == "graded" or tags.get("footway") in NOT_A_PATH_FOOTWAYS:
+        return False
+    highway = tags.get("highway")
+    return (bool(tags.get("name")) and highway in NAMED_PATH_HIGHWAYS) or (level == "unnamed" and highway == "path")
+
+
 def _pass_nodes(
     conn: sqlite3.Connection, paths: Sequence[Path], progress: Progress | None
 ) -> None:
@@ -652,7 +682,7 @@ def _pass_nodes(
         _resolve_pending_amenities(conn)
         return
     needed_nodes = _sorted_ids(conn, "needed_nodes")
-    graded_nodes = _sorted_ids(conn, "graded_needed_nodes")
+    path_nodes = _sorted_ids(conn, "path_needed_nodes")
     seen = 0
     kept = 0
     pending = _Pending(conn)
@@ -669,8 +699,8 @@ def _pass_nodes(
             tags = dict(obj.tags)
             kind = _point_kind(tags)
             needed = _sorted_has(needed_nodes, osm_id)
-            graded = not needed and _sorted_has(graded_nodes, osm_id)
-            if location.valid() and (needed or graded or kind is not None):
+            on_path = not needed and _sorted_has(path_nodes, osm_id)
+            if location.valid() and (needed or on_path or kind is not None):
                 point = (float(location.lat), float(location.lon))
                 if needed:
                     pending.add(
@@ -678,9 +708,9 @@ def _pass_nodes(
                         osm_id, point[0], point[1], _parse_ele_m(tags.get("ele")),
                     )
                     kept += 1
-                elif graded:
+                elif on_path:
                     pending.add(
-                        "INSERT OR REPLACE INTO graded_nodes (id, lat, lon, ele) VALUES (?, ?, ?, ?)",
+                        "INSERT OR REPLACE INTO path_nodes (id, lat, lon, ele) VALUES (?, ?, ?, ?)",
                         osm_id, point[0], point[1], _parse_ele_m(tags.get("ele")),
                     )
                 if kind is not None:
@@ -756,16 +786,21 @@ def _resolve_pending_amenities(conn: sqlite3.Connection) -> None:
 
 
 def _load_hiking_snapshot(
-    conn: sqlite3.Connection, progress: Progress | None = None
+    conn: sqlite3.Connection, progress: Progress | None = None, with_paths: bool = False
 ) -> OsmSnapshot:
+    """The snapshot of the hiking tables; ``with_paths``, also of the paths in no
+    hiking relation (``path_ways``) and the nodes only they use."""
     snapshot = OsmSnapshot()
     emit_progress(progress, "assemble", "loading nodes")
-    store = NodeStore.from_rows(conn.execute("SELECT id, lat, lon, ele FROM nodes ORDER BY id"))
+    nodes_sql = "SELECT id, lat, lon, ele FROM nodes"
+    ways_sql = "SELECT id, node_ids, tags FROM ways"
+    if with_paths:
+        nodes_sql += " UNION ALL SELECT id, lat, lon, ele FROM path_nodes"
+        ways_sql += " UNION ALL SELECT id, node_ids, tags FROM path_ways"
+    store = NodeStore.from_rows(conn.execute(nodes_sql + " ORDER BY id"))
     snapshot.nodes, snapshot.node_elevations = store.points, store.elevations
     loaded = 0
-    for way_id, node_ids_json, tags_json in conn.execute(
-        "SELECT id, node_ids, tags FROM ways"
-    ):
+    for way_id, node_ids_json, tags_json in conn.execute(ways_sql):
         snapshot.ways[way_id] = OsmWay(tuple(json.loads(node_ids_json)), json.loads(tags_json))
         loaded += 1
         if loaded % INGEST_PROGRESS_EVERY_OBJECTS == 0:
