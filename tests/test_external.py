@@ -200,6 +200,31 @@ def test_the_lipas_adapter_names_active_routes_and_splits_parts_that_do_not_meet
     assert hikes["600"].name == "Pieni luontopolku"
 
 
+def test_the_lipas_adapter_keeps_a_branch_as_a_piece_of_its_own(tmp_path: Path) -> None:
+    feature = {
+        "type": "Feature",
+        "properties": {"lipas-id": 800, "name": "Haara walk", "status": "active", "type-code": 4405},
+        "geometry": {
+            "type": "MultiLineString",
+            "coordinates": [
+                [[24.0, 60.0], [24.0, 60.01]],
+                [[24.0, 60.01], [24.0, 60.02]],
+                [[24.0, 60.01], [24.01, 60.01]],
+            ],
+        },
+    }
+    cache = tmp_path / LIPAS / f"{LIPAS}.geojson"
+    cache.parent.mkdir()
+    cache.write_text(json.dumps({"type": "FeatureCollection", "features": [feature]}))
+
+    hikes = {hike.ref: hike for hike in read_external(LIPAS, tmp_path)}
+
+    assert sorted(hikes) == ["800/1", "800/2"]
+    assert hikes["800/1"].points == ((60.0, 24.0), (60.01, 24.0), (60.02, 24.0))
+    # The spur meets the walk mid-way, not at its ends, so it is its own piece.
+    assert hikes["800/2"].points == ((60.01, 24.0), (60.01, 24.01))
+
+
 def test_fetch_external_caches_every_lipas_page(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     first = json.loads(LIPAS_PAGE.read_text())
     second = {

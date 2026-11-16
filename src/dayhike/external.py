@@ -109,9 +109,17 @@ def joined_line(parts: Sequence[Sequence[Point]], start: Point | None = None) ->
     """One line from the parts of a (multi)line: the longest part, extended by
     every part whose end lies within ``GAP_JOIN_M`` of its ends; the parts left
     over are left out. It starts at the end nearer ``start`` when given."""
+    line, _ = _joined_and_rest(parts)
+    if line and start is not None and _haversine_m(*start, *line[-1]) < _haversine_m(*start, *line[0]):
+        line.reverse()
+    return line
+
+
+def _joined_and_rest(parts: Sequence[Sequence[Point]]) -> tuple[list[Point], list[list[Point]]]:
+    """The line ``joined_line`` builds, and the parts it leaves over."""
     pieces = [list(part) for part in parts if len(part) >= 2]
     if not pieces:
-        return []
+        return [], []
     pieces.sort(key=_linestring_length_m, reverse=True)
     line, rest = pieces[0], pieces[1:]
     joined = True
@@ -130,9 +138,7 @@ def joined_line(parts: Sequence[Sequence[Point]], start: Point | None = None) ->
                 break
             if joined:
                 break
-    if start is not None and _haversine_m(*start, *line[-1]) < _haversine_m(*start, *line[0]):
-        line.reverse()
-    return line
+    return line, rest
 
 
 def long_enough(hike: ExternalHike) -> bool:
@@ -351,7 +357,8 @@ def _geometry_parts(geometry: dict | None) -> list[list[Point]]:
 
 
 def _joined_components(parts: Sequence[Sequence[Point]]) -> list[list[Point]]:
-    """One line per group of parts whose ends meet within ``GAP_JOIN_M``."""
+    """One line per group of parts whose ends meet within ``GAP_JOIN_M``, and
+    each part a group's line leaves over (a branch) as a line of its own."""
     pieces = [list(part) for part in parts if len(part) >= 2]
     parent = list(range(len(pieces)))
 
@@ -373,9 +380,9 @@ def _joined_components(parts: Sequence[Sequence[Point]]) -> list[list[Point]]:
         groups.setdefault(find(index), []).append(piece)
     lines = []
     for group in groups.values():
-        line = joined_line(group)
-        if len(line) >= 2:
-            lines.append(line)
+        line, rest = _joined_and_rest(group)
+        lines.append(line)
+        lines.extend(rest)
     return lines
 
 
