@@ -154,7 +154,7 @@ def _load_network(conn: sqlite3.Connection) -> _Network:
     node_chunks = []
     cursor = conn.execute(
         "SELECT id, lat, lon, ifnull(ele, 'nan') FROM nodes "
-        "UNION ALL SELECT id, lat, lon, ifnull(ele, 'nan') FROM graded_nodes ORDER BY id"
+        "UNION ALL SELECT id, lat, lon, ifnull(ele, 'nan') FROM path_nodes ORDER BY id"
     )
     while rows := cursor.fetchmany(1_000_000):
         node_chunks.append(np.array(rows, dtype=float))
@@ -162,7 +162,7 @@ def _load_network(conn: sqlite3.Connection) -> _Network:
     node_id = nodes[:, 0].astype(np.int64)  # OSM ids are far below 2**53
     way_ids, refs, lengths, level, sac, surface = [], [], [], [], [], []
     for way_id, node_ids_json, tags_json in conn.execute(
-        "SELECT id, node_ids, tags FROM ways UNION ALL SELECT id, node_ids, tags FROM graded_ways ORDER BY id"
+        "SELECT id, node_ids, tags FROM ways UNION ALL SELECT id, node_ids, tags FROM path_ways ORDER BY id"
     ):
         node_ids = json.loads(node_ids_json)
         tags = json.loads(tags_json)

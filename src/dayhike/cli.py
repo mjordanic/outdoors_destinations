@@ -36,6 +36,7 @@ from dayhike.regions import (
     view_around,
 )
 from dayhike.highways import HighwayDriveTimeClient, HighwaySnaps
+from dayhike.ingest import PATH_LEVELS
 from dayhike.similarity import (
     CORE_MEASURES,
     MEASURE_NAMES,
@@ -115,6 +116,14 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=None,
         help="Directory of the external sources' caches (default: data/external)",
+    )
+    ingest.add_argument(
+        "--paths",
+        choices=PATH_LEVELS,
+        default="graded",
+        help="Paths in no hiking relation read into the TrailGraph and the snapshot: graded (sac_scale) "
+        "paths only; also named paths, tracks, footways and bridleways; or also unnamed paths "
+        "(ADR-0065, default: graded)",
     )
     _add_workers(ingest)
     fetch_ext = subparsers.add_parser(
@@ -623,6 +632,7 @@ def main(argv: list[str] | None = None) -> int:
             previous=args.previous,
             external=args.external,
             external_dir=args.external_dir,
+            paths=args.paths,
         )
     if args.command == "sample-trailgraph":
         try:
@@ -716,6 +726,7 @@ def _ingest(
     previous: Path | None = None,
     external: list[str] | tuple[str, ...] = (),
     external_dir: Path | None = None,
+    paths: str = "graded",
 ) -> int:
     catalog = build_catalog(
         osm_paths,
@@ -727,6 +738,7 @@ def _ingest(
         previous=previous,
         external=external,
         external_dir=external_dir,
+        paths=paths,
     )
     print(catalog.path)
     print(catalog.ingest_report)

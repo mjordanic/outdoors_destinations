@@ -61,7 +61,7 @@ The sidecar SQLite written at ingest next to a Catalog. It holds DayHikeGeometry
 _Avoid_: experimental database, work file, Catalog, lab
 
 **TrailGraph**:
-The sidecar SQLite written at ingest next to a Catalog (`{catalog}.trailgraph.sqlite`): every member way of every `route=hiking` or `route=foot` relation ingest read, including relations dropped as too short or as node-network legs, and every graded path (`highway=path` with a `sac_scale`) although no relation lists it, split into Segments that meet at Junctions (ADR-0018, ADR-0037). Other unmarked paths are not in it. A ComposedHike is drawn on it; Ranking of Catalog DayHikes does not read it.
+The sidecar SQLite written at ingest next to a Catalog (`{catalog}.trailgraph.sqlite`): every member way of every `route=hiking` or `route=foot` relation ingest read, including relations dropped as too short or as node-network legs, and every graded path (`highway=path` with a `sac_scale`) although no relation lists it, split into Segments that meet at Junctions (ADR-0018, ADR-0037). Other unmarked paths are not in it, unless ingest is asked to read named paths, tracks, footways and bridleways, or every path (`--paths`, ADR-0065). A ComposedHike is drawn on it; Ranking of Catalog DayHikes does not read it.
 _Avoid_: routing graph (that is Valhalla's), network, member-way graph (the per-DayHike graph of ADR-0012)
 
 **Junction**:

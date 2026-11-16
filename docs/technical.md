@@ -506,7 +506,13 @@ pass. It holds the marked hiking network and graded paths: every member way of e
 it dropped (too short, node-network legs), and every graded path
 (`highway=path` with a `sac_scale`) that no such relation lists, with no
 relation id ([ADR-0037](adr/0037-graded-paths-join-the-trailgraph.md)).
-Other unmarked paths are not in it. Ways split into Segments that meet at Junctions: a node two ways share,
+Other unmarked paths are not in it by default. `dayhike ingest --paths named`
+also reads every named `highway=path|footway|bridleway|track` way that no such
+relation lists (not a `footway=sidewalk|crossing`), and `--paths unnamed` every
+`highway=path` too: they join the TrailGraph like graded paths and, with the
+graded paths, also enter the ingest snapshot the built-hike sources read,
+though NetworkHikes still reach parking only over the hiking tables' ways
+([ADR-0065](adr/0065-paths-beyond-route-members-at-ingest.md)). Ways split into Segments that meet at Junctions: a node two ways share,
 a dead end, a node where the relations along the trail change (a stage
 boundary), or a crossing of two same-layer ways with no node. A dead-end tip
 within `--snap-tolerance` (20 m by default, at most 50 m) of a node more than

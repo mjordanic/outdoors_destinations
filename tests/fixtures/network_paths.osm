@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="dayhike-fixture">
+  <!-- A NetworkHike the paths option (ADR-0065) must leave unchanged.
+       Comments give each node's (east, north) km from S at 44.90, 6.60.
+
+       Le Pinet (S): legs 11 S - A (Belvoir), 12 A - B (Serre Lan) and
+         13 B - S close a 6.8 km loop. A parking 300 m south of S reaches it
+         only over way 240, a named highway=track (Forest Road) in no
+         relation, P - S. -->
+  <node id="1" lat="44.9000000000" lon="6.6000000000" version="1"/><!-- S (0, 0) -->
+  <node id="2" lat="44.9000000000" lon="6.6253923769" version="1"/><!-- A (2, 0) -->
+  <node id="3" lat="44.9179864321" lon="6.6254003241" version="1"/><!-- B (2, 2) -->
+  <node id="40" lat="44.8973020352" lon="6.6000000000" version="1"/><!-- P (0, -0.3) -->
+  <node id="90" lat="44.8973020352" lon="6.6000000000" version="1"><!-- parking at P -->
+    <tag k="amenity" v="parking"/>
+  </node>
+  <way id="101" version="1">
+    <nd ref="1"/>
+    <nd ref="2"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="102" version="1">
+    <nd ref="2"/>
+    <nd ref="3"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="103" version="1">
+    <nd ref="3"/>
+    <nd ref="1"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="240" version="1">
+    <nd ref="40"/>
+    <nd ref="1"/>
+    <tag k="highway" v="track"/>
+    <tag k="name" v="Forest Road"/>
+  </way>
+  <relation id="11" version="1">
+    <member type="way" ref="101" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="network" v="lwn"/>
+    <tag k="network:type" v="node_network"/>
+    <tag k="name" v="Le Pinet - Belvoir"/>
+  </relation>
+  <relation id="12" version="1">
+    <member type="way" ref="102" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="network" v="lwn"/>
+    <tag k="network:type" v="node_network"/>
+    <tag k="name" v="Belvoir - Serre Lan"/>
+  </relation>
+  <relation id="13" version="1">
+    <member type="way" ref="103" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="network" v="lwn"/>
+    <tag k="network:type" v="node_network"/>
+    <tag k="name" v="Serre Lan - Le Pinet"/>
+  </relation>
+</osm>

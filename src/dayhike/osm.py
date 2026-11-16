@@ -164,6 +164,9 @@ class OsmSnapshot:
     destinations: list[tuple[float, float, str]] = field(default_factory=list)
     # (lat, lon, name) of named guideposts: they name signposts (ADR-0039).
     guideposts: list[tuple[float, float, str]] = field(default_factory=list)
+    # Ids of the ways in ``ways`` no hiking relation lists, read with the paths option (ADR-0065):
+    # only the TrailGraph walks them, no DayHike does.
+    path_ways: frozenset[int] = frozenset()
 
 
 def amenity_kind(tags: dict[str, str]) -> str | None:
