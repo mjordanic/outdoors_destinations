@@ -96,6 +96,13 @@ def main(argv: list[str] | None = None) -> int:
         "100 m starts at its lower end (ADR-0048). Without it, height orients no line",
     )
     ingest.add_argument(
+        "--previous",
+        type=Path,
+        default=None,
+        help="Catalog of an earlier build (its GeometryStore beside it): a line whose ends differ by "
+        "80 to 120 m starts where that build started it, so a few metres of height cannot turn it round (ADR-0048)",
+    )
+    ingest.add_argument(
         "--external",
         action="append",
         default=[],
@@ -613,6 +620,7 @@ def main(argv: list[str] | None = None) -> int:
             list_dayhikes=args.list_dayhikes,
             snap_tolerance_m=args.snap_tolerance,
             dem_dir=args.dem,
+            previous=args.previous,
             external=args.external,
             external_dir=args.external_dir,
         )
@@ -705,6 +713,7 @@ def _ingest(
     list_dayhikes: bool = False,
     snap_tolerance_m: float = SNAP_TOLERANCE_M,
     dem_dir: Path | None = None,
+    previous: Path | None = None,
     external: list[str] | tuple[str, ...] = (),
     external_dir: Path | None = None,
 ) -> int:
@@ -715,6 +724,7 @@ def _ingest(
         fresh=fresh,
         snap_tolerance_m=snap_tolerance_m,
         dem_dir=dem_dir,
+        previous=previous,
         external=external,
         external_dir=external_dir,
     )
