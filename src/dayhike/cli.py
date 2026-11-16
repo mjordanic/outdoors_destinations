@@ -548,7 +548,7 @@ def main(argv: list[str] | None = None) -> int:
             print(exc, file=sys.stderr)
             return 1
         print(f"{count} DayHikes with a photo")
-
+        return 0
     if args.command == "export-osm-download":
         from dayhike.osm_download import export_osm_download
 

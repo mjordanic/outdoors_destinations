@@ -325,3 +325,14 @@ def test_an_export_without_photo_data_has_none_and_export_photos_adds_the_free_o
 
     assert detail["photos"] == [{**TRIGLAV, "file": "Ridge Peak.jpg"}]
     assert "photos" not in ServingData(out).detail(VALLEY_PATH_ID)
+
+
+def test_the_export_photos_command_succeeds_after_adding_photos(tmp_path: Path, monkeypatch, capsys) -> None:
+    from dayhike.cli import main
+
+    monkeypatch.setattr("dayhike.photos.export_photos", lambda catalog, out, cache, progress: 3)
+
+    code = main(["export-photos", "--catalog", str(tmp_path / "c.sqlite"), "--out", str(tmp_path / "out")])
+
+    assert code == 0
+    assert "3 DayHikes with a photo" in capsys.readouterr().out
