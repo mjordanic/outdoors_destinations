@@ -4,7 +4,7 @@ import math
 import os
 import re
 import sqlite3
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -633,6 +633,10 @@ def sample_dem(
                     touched.setdefault(dayhike_id, set()).add(register_id)
                 if progress is not None:
                     progress(f"dem sample: {sampled} vertices")
+            write.execute(
+                "INSERT OR REPLACE INTO geometry_meta (key, value) VALUES (?, ?)",
+                (DEM_READ_KEY["sample-dem"], dem_read_by(raster_dir)),
+            )
             for source, key, text in _ATTRIBUTIONS:
                 if source in sources:
                     write.execute(
@@ -673,6 +677,37 @@ def dem_source_value(register_ids: set[str]) -> str:
     were read from, in ``DEM_SOURCES`` order, comma-separated (one, but for a
     hike that crosses the edge of a regional source)."""
     return ",".join(source.register_id for source in DEM_SOURCES.values() if source.register_id in register_ids)
+
+
+# Each step that reads the DEM records ``dem_read_by`` of its ``--dem`` directory, and ``export-serving``
+# refuses when they differ: ingest and sample-dem under these GeometryStore keys, sample-trailgraph in
+# the TrailGraph's ``trailgraph_meta`` and build-similarity in the similarity directory's ``meta.json``
+# (both as ``dem_read``).
+DEM_READ_KEY = {"ingest": "dem_read_ingest", "sample-dem": "dem_read_sample_dem"}
+
+
+def dem_read_by(raster_dir: Path | str | None) -> str:
+    """The register ids of the sources whose tiles ``raster_dir`` holds, as
+    ``dem_source_value`` writes them; empty when it holds none (the step reads no DEM)."""
+    if raster_dir is None or not Path(raster_dir).is_dir():
+        return ""
+    return dem_source_value({source.register_id for source in dem_sources_of(raster_dir)})
+
+
+class DemSourceMismatch(ValueError):
+    """DEM steps of one build read different elevation sources."""
+
+
+def check_one_dem_source(read: Mapping[str, str]) -> None:
+    """Refuse DEM steps that read different sources: heights of one source would
+    be credited, and licensed, as another's (ADR-0030). ``read`` is each step's
+    ``dem_read_by``; a step that read none is not in it."""
+    if len(set(read.values())) > 1:
+        steps = ", ".join(f"{step}={source}" for step, source in read.items())
+        raise DemSourceMismatch(
+            f"the steps read different elevation sources ({steps}); "
+            "run every DEM step on the same --dem directory, then export again"
+        )
 
 
 def _record_dem_sources(catalog_path: Path, by_hike: dict[int, set[str]]) -> None:

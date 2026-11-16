@@ -125,17 +125,27 @@ def test_export_has_no_raster_and_no_per_vertex_climate(data: ServingData) -> No
     assert data.store.facts.shape[1] == len(data.store.ids)
 
 
-def test_export_attribution_lists_osm_worldcover_chelsa_fabdem_valhalla(data: ServingData) -> None:
+def test_export_attribution_lists_osm_worldcover_chelsa_and_the_dem_of_the_build(data: ServingData) -> None:
     from dayhike.climate import CHELSA_ATTRIBUTION
-    from dayhike.dem import FABDEM_ATTRIBUTION
     from dayhike.landcover import WORLDCOVER_ATTRIBUTION
 
     assert data.meta["attribution"] == {
         "osm": "© OpenStreetMap contributors",
-        "fabdem": FABDEM_ATTRIBUTION,
+        **rc.dem_attribution(rc.world_dem_source(rc.DATA_DIR / "dem")),
         "worldcover": WORLDCOVER_ATTRIBUTION,
         "chelsa": CHELSA_ATTRIBUTION,
     }
+
+
+def test_every_dem_step_read_the_dem_of_the_build(data: ServingData) -> None:
+    read = data.meta.get("dem_read")
+    if not read:
+        pytest.skip("exported before the DEM steps recorded their source")
+    source = rc.world_dem_source(rc.DATA_DIR / "dem")
+
+    assert {"sample-dem", "sample-trailgraph", "build-similarity"} <= set(read)
+    assert all(source.register_id in value.split(",") for value in read.values()), read
+    assert data.meta["data_tag"].endswith(f"-{source.register_id}") or "_" in data.meta["data_tag"]
 
 
 @rc.needs_reference

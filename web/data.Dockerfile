@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1
 # The data image: the pinned Valhalla base plus the serving export at /data, nothing else.
-# Built once per data refresh, tagged with the export's facts_version (meta.json):
+# Built once per data refresh, tagged with the export's data_tag (meta.json; facts_version and the DEM):
 #
 #   docker build -f web/data.Dockerfile --build-context serving=data/web-serving \
-#     -t dayhike-data:"$(jq -r .facts_version data/web-serving/meta.json)" .
+#     -t dayhike-data:"$(jq -r .data_tag data/web-serving/meta.json)" .
 #
 # The web image (web/Dockerfile) starts FROM it, so its layers sit at the bottom and a
 # code-only change pushes only the code layers above them. The base is the Valhalla

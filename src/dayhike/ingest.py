@@ -41,6 +41,7 @@ from dayhike.catalog import (
     named_points,
     tagged_ends,
 )
+from dayhike.dem import DEM_READ_KEY
 from dayhike.network_hikes import network_source
 from dayhike.osm import (
     NodeStore,
@@ -1024,12 +1025,15 @@ def write_geometry_store(
     conn: sqlite3.Connection,
     snapshot: OsmSnapshot | None = None,
     heights: Heights | None = None,
+    dem_read: str = "",
 ) -> None:
     """Write DayHikeGeometry, member ways, and raw amenity points beside the Catalog.
 
     Access points, named points and ``heights`` are those of ``run_ingest``,
     so each main walk starts at the same Trailhead as in the Catalog;
     ``snapshot`` is the one ``run_ingest`` loaded from it, else it is loaded again.
+    ``dem_read`` names the DEM sources ``heights`` read (``dem_read_by``); it is recorded
+    in ``geometry_meta`` unless empty.
     """
     from dayhike.catalog import OSM_ATTRIBUTION
 
@@ -1096,6 +1100,8 @@ def write_geometry_store(
             "INSERT INTO geometry_meta (key, value) VALUES (?, ?)",
             ("attribution", OSM_ATTRIBUTION),
         )
+        if dem_read:
+            out.execute("INSERT INTO geometry_meta (key, value) VALUES (?, ?)", (DEM_READ_KEY["ingest"], dem_read))
         relation_hikes = [hike for hike in dayhikes if hike.kind == KIND_RELATION]
         # The main walks are assembled again in the workers; the rows are written here, in hike order.
         relation_rows = parallel_iter(

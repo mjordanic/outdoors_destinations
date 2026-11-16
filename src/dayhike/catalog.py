@@ -580,7 +580,7 @@ def build_catalog(
     are added as DayHikes of kind ``external``; a source the register does not
     list as used is refused.
     """
-    from dayhike.dem import point_heights
+    from dayhike.dem import dem_read_by, point_heights
     from dayhike.external import EXTERNAL_DIR, read_external
     from dayhike.ingest import BUILT_HIKE_SOURCES, _connect_work, emit_progress, remove_work, run_ingest, write_geometry_store
     from dayhike.trailgraph import check_snap_tolerance, write_trailgraph
@@ -619,7 +619,9 @@ def build_catalog(
     if work_path.exists():
         work_conn = _connect_work(work_path)
         try:
-            write_geometry_store(stage(geometry_store_path_for(catalog_path)), kept, work_conn, snapshot, heights)
+            write_geometry_store(
+                stage(geometry_store_path_for(catalog_path)), kept, work_conn, snapshot, heights, dem_read_by(dem_dir)
+            )
             del snapshot  # the TrailGraph reads the work file on its own
             write_trailgraph(
                 stage(trailgraph_path_for(catalog_path)),

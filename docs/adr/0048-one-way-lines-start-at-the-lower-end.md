@@ -28,8 +28,11 @@ and a raster read per end, and a suburb such as Borčec is reached by its street
 whose low end is a forest junction starting at its parked top: *Medvednica 15* stays at Sljeme (973 m, parking), its
 low end at 610 m having no road, place or parking within 300 m.
 
-**Heights.** Ingest reads FABDEM at the two ends (`dem.PointHeights`, the cell `sample-dem` reads), from the tiles
-`dayhike ingest --dem DIR` names. Without `--dem`, or where a tile is missing, height orients no line and the old
+**Heights.** Ingest reads the DEM at the two ends (`dem.PointHeights`, the cell `sample-dem` reads), from the tiles
+`dayhike ingest --dem DIR` names: FABDEM, or Copernicus GLO-30 (raw cells, no canopy floor). It must read the same
+source as `sample-dem`, `sample-trailgraph` and `build-similarity`: the orientation is a height-derived value too, so a
+build on Copernicus runs ingest on the Copernicus directory, and `export-serving` refuses a build whose steps read
+different sources (ADR-0030). Without `--dem`, or where a tile is missing, height orients no line and the old
 rules decide. The heights are the same whenever a walk is assembled again, so the Catalog and the GeometryStore agree.
 
 **DayStages and NetworkHikes** follow the same height rule on their own two ends; the tour's or the legs' `from`/`to`

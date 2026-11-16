@@ -11,10 +11,13 @@ from rebuild_checks import (
     compare_tables,
     coverage_by_country,
     departures,
+    dem_attribution,
     europe_countries,
+    known_dem_gaps,
     manifest_diff,
     raw_manifest,
     same_snapshot_as,
+    world_dem_source,
     write_manifest,
 )
 
@@ -138,3 +141,28 @@ def test_a_reference_is_from_the_same_snapshot_only_when_its_pbf_has_the_same_si
 
     assert same_snapshot_as(reference, reference)
     assert not same_snapshot_as(reference, data)
+
+
+def test_the_dem_source_of_a_build_is_the_world_source_of_its_tiles(tmp_path: Path) -> None:
+    from dayhike.dem import COPERNICUS, FABDEM, USGS_3DEP
+
+    (tmp_path / "fabdem").mkdir()
+    (tmp_path / "fabdem" / "N45E015_FABDEM_V1-2.tif").touch()
+    (tmp_path / "copernicus").mkdir()
+    (tmp_path / "copernicus" / "Copernicus_DSM_COG_10_N45_00_E015_00_DEM.tif").touch()
+    (tmp_path / "copernicus" / "USGS_1_n41w106.tif").touch()  # 3DEP beside it is not the world source
+
+    assert world_dem_source(tmp_path / "fabdem") is FABDEM
+    assert world_dem_source(tmp_path / "copernicus") is COPERNICUS
+    assert USGS_3DEP.has_tiles_in(tmp_path / "copernicus")
+
+
+def test_the_credit_and_the_known_tile_gaps_follow_the_dem_source() -> None:
+    from dayhike.dem import COPERNICUS, COPERNICUS_ATTRIBUTION, FABDEM, FABDEM_ATTRIBUTION
+
+    assert dem_attribution(FABDEM) == {"fabdem": FABDEM_ATTRIBUTION}
+    assert dem_attribution(COPERNICUS) == {"copernicus": COPERNICUS_ATTRIBUTION}
+    assert known_dem_gaps(FABDEM) == {"N41E043", "N41E044", "N41E046", "N49W004", "N49W005", "N52E002", "N52E003"}
+    # Copernicus leaves out Armenia, Azerbaijan and their borders by licence, and has no tile over open sea.
+    assert {"N41E043", "N40E045", "N49W004"} <= known_dem_gaps(COPERNICUS)
+    assert "N45E015" not in known_dem_gaps(COPERNICUS)

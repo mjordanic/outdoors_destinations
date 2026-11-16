@@ -44,7 +44,7 @@ from dayhike.catalog import (
     similarity_dir_for,
     trailgraph_path_for,
 )
-from dayhike.dem import DEFAULT_DEM_DIR, DemSource, dem_tiles, fabdem_tile_id, read_grid_cells, read_in_order
+from dayhike.dem import DEFAULT_DEM_DIR, DemSource, dem_read_by, dem_tiles, fabdem_tile_id, read_grid_cells, read_in_order
 from dayhike.landcover import (
     ALONG_MIN_M,
     ALONG_STEP_M,
@@ -873,6 +873,7 @@ def build_similarity(
                 "fact_columns": FACT_COLUMNS,
                 "dayhikes": len(ids),
                 "facts_seconds": round(time.monotonic() - started, 1),
+                "dem_read": dem_read_by(dem_dir),
             },
             indent=1,
         )
