@@ -7,6 +7,7 @@ osmium catalog extract as a real snapshot does.
 """
 
 import json
+import shutil
 import sqlite3
 from pathlib import Path
 
@@ -21,6 +22,8 @@ FIXTURE = Path(__file__).parent / "fixtures" / "named_paths.osm"
 NETWORK_FIXTURE = Path(__file__).parent / "fixtures" / "network_paths.osm"
 LAKE_PATH, FOREST_ROAD, SIDEWALK, UNNAMED_PATH = 230, 231, 232, 233
 N1, N2 = 4, 5  # nodes only the Lake Path uses
+
+pytestmark = pytest.mark.skipif(shutil.which("osmium") is None, reason="osmium-tool")
 
 
 @pytest.fixture(scope="module")
