@@ -149,6 +149,7 @@ What the flags do:
 | `DAYHIKE_TILE_ATTRIBUTION=HTML` (optional) | The tile provider's credit, as its terms ask for it: the map corner shows it beside "© OpenStreetMap contributors", which always stays, and the Data and credits page says the tiles are served by it. |
 | `DAYHIKE_TILE_MAX_ZOOM=N` (optional) | The deepest zoom the provider serves (default 19). |
 | `DAYHIKE_PMTILES_URL=URL` (optional) | A vector base map: a PMTiles file in the [Protomaps basemap](https://docs.protomaps.com/basemaps/downloads) schema, by full address or relative to the page. Both maps then draw it with MapLibre GL JS under their overlays (ADR-0061), credited "© OpenStreetMap contributors · Protomaps", and ask no raster tiles; where the vector map cannot be shown (no WebGL 2, or the file or its tiles cannot be read, for example blocked by CORS), each map falls back to the raster tiles above for the rest of the page's life. The host must answer range requests and, on another origin, allow the site's origin by CORS with the `range` request header and the `etag` response header exposed ([Protomaps cloud storage guide](https://docs.protomaps.com/pmtiles/cloud-storage)). The live site's file is `https://maps.hikesalike.com/europe.pmtiles` on Cloudflare R2 (section 10); the deploy workflow sets it from the `DAYHIKE_PMTILES_URL` repository variable (section 9). |
+| `DAYHIKE_DOWNLOAD_URL=URL` (optional) | Where the ODbL download of the OpenStreetMap part of the hikes is hosted (section 11). The Data and credits page then shows a "Download the data" link to it, saying what the file holds and leaves out; unset or empty, no link. The live site's file is `https://maps.hikesalike.com/hikes-osm.sqlite`; the deploy workflow sets it from the `DAYHIKE_DOWNLOAD_URL` repository variable (section 9). |
 
 The service also carries a service-level `scaling.maxInstanceCount` of 20 in
 the Cloud Run v2 API, next to the revision-level `template.scaling.maxInstanceCount`
@@ -347,7 +348,9 @@ A code change needs only a new web image: build it on the current data image
 (section 9). A data refresh rebuilds the export, then the data image with the
 new `data_tag` (`facts_version` and the DEM: a Copernicus data image never takes
 the tag of the FABDEM one), then the web image on it. Keep the previous data
-image when the DEM changes: a rollback is one traffic change.
+image when the DEM changes: a rollback is one traffic change. Every data refresh
+also rebuilds and uploads the ODbL download (section 11), so it matches the data
+the site serves.
 `gcloud run services update-traffic dayhike --region europe-west1 --to-revisions REVISION=100`
 goes back to an earlier revision (`gcloud run revisions list --service dayhike --region europe-west1`
 lists them); the image it runs must still be kept (section 3). That pins the
@@ -475,6 +478,7 @@ reviewer before each deploy.
 | `DAYHIKE_IMAGE_REPO` | `europe-west1-docker.pkg.dev/PROJECT/dayhike` |
 | `DAYHIKE_DATA_IMAGE` | `europe-west1-docker.pkg.dev/PROJECT/dayhike/data:DATA_TAG` |
 | `DAYHIKE_PMTILES_URL` (optional) | `https://maps.hikesalike.com/europe.pmtiles` (section 10); unset or empty, the raster tiles |
+| `DAYHIKE_DOWNLOAD_URL` (optional) | `https://maps.hikesalike.com/hikes-osm.sqlite` (section 11); unset or empty, no download link |
 
 ### One-time cloud setup (by the maintainer)
 
@@ -619,3 +623,50 @@ more as a visitor pans and zooms, so the free reads cover several hundred
 thousand map views a month; past
 them, reads cost $0.36 a million. A refresh keeps two files for a day and
 uploads a few thousand parts, both within the free tier.
+
+## 11. The ODbL download
+
+The hike database is a derivative database of OpenStreetMap, offered free under
+the ODbL ([ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/) §4.6). Only the
+part made from OpenStreetMap is offered (the OSMF
+[Collective Database guideline](https://osmfoundation.org/wiki/Licence/Community_Guidelines/Collective_Database_Guideline_Guideline):
+heights, land cover, climate and places come from other sources with their own licences,
+`DATA-LICENSES.md`). It is two small files, served beside the map file from the same R2 bucket
+(section 10), so the elevation source (FABDEM or Copernicus GLO-30) does not touch it:
+
+- `hikes-osm.sqlite`: the hikes whose source is OpenStreetMap (never an external source's), with
+  their names, kind, route, line (WKT) and length, `sac_scale`, Trailhead, and in `hike_points` the OpenStreetMap
+  points along them with their names; a `licence` table holds the ODbL notice, "© OpenStreetMap contributors",
+  the data date and what is left out. No heights (a peak's `ele` tag too), land cover, climate, GeoNames
+  places or Landmarks.
+- `README.txt`: the same notice, and the tables explained.
+
+### Building it
+
+From the serving export of section 1 (read-only), once per data refresh, after `export-serving`:
+
+```bash
+uv run dayhike export-osm-download --data data/web-serving --out data/osm-download --data-date YYYY-MM-DD
+```
+
+`--data-date` is the date of the OpenStreetMap extracts the export was built from (the Geofabrik
+file date); without it the day the export was written is used, which is later than the data. It is
+a small file next to the 25 GB map: check the row counts with
+`sqlite3 data/osm-download/hikes-osm.sqlite 'select count(*) from hikes; select count(*) from hike_points;'`
+against `meta.json`'s `dayhikes` (the difference is the external hikes, which stay out).
+
+### Publishing it
+
+Upload both files to the bucket of section 10 beside `europe.pmtiles`, replacing the last ones. They are small, so
+`wrangler` takes them (an S3 client such as `rclone` does too):
+
+```bash
+wrangler r2 object put BUCKET/hikes-osm.sqlite --file data/osm-download/hikes-osm.sqlite --content-type application/vnd.sqlite3 --remote
+wrangler r2 object put BUCKET/hikes-osm-README.txt --file data/osm-download/README.txt --content-type "text/plain; charset=utf-8" --remote
+```
+
+Then set the repository variable `DAYHIKE_DOWNLOAD_URL` to `https://maps.hikesalike.com/hikes-osm.sqlite` once
+(section 9) and deploy; the credits page then shows the "Download the data" link. The same address is
+used on every refresh (the file is replaced in place), so later refreshes need no deploy for the link. A file
+that is replaced keeps its address, but a browser may serve a cached one for a short while; that is acceptable
+for a download. Check: `curl -sI https://maps.hikesalike.com/hikes-osm.sqlite` answers `200` with a `content-length`.

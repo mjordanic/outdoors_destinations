@@ -360,6 +360,7 @@ def site_pages(
     basemap: BaseMap = BaseMap(),
     sources: Mapping[str, Mapping[str, str]] | None = None,
     regions: Sequence[Mapping[str, str | None]] | None = None,
+    download_url: str | None = None,
 ) -> dict[str, str]:
     """Each page's HTML with the GoatCounter tag where a code is set.
 
@@ -370,6 +371,8 @@ def site_pages(
     With ``copernicus`` (an export sampled from Copernicus GLO-30), the pages credit it instead of FABDEM.
     With ``usgs_3dep`` (hikes read from USGS 3DEP) they credit it too, or alone when neither ``copernicus``
     nor ``fabdem`` (an export none of whose hikes was read from FABDEM).
+    With a ``download_url`` (where the ODbL download of the OpenStreetMap part of the hikes is hosted,
+    ``dayhike export-osm-download``) the credits page links it and says what it holds; without, no link.
     A ``basemap`` from another provider than the OpenStreetMap Foundation's tiles is credited, between
     ``<!--basemap-->`` and ``<!--/basemap-->``, by its attribution in place of the Foundation's tile policy;
     a vector one by the Protomaps basemap and the software that draws it.
@@ -414,10 +417,13 @@ def site_pages(
             "eu": "Europe" in continents,
             "vector": basemap.pmtiles is not None,
             "raster": basemap.pmtiles is None,
+            "download": bool(download_url),
         }
         for setting, on in settings.items():  # text true only once it is set
             block = rf"<!--if-{setting}-->(.*?)<!--/if-{setting}-->"
             html = re.sub(block, (lambda m: m[1]) if on else "", html, flags=re.S)
+        if download_url:
+            html = html.replace("<!--download-url-->", html_escape(download_url))
         if place_search:
             credit = (
                 '<span id="place-credit">Place search: towns and villages from <a href="https://www.geonames.org/">GeoNames</a>'
@@ -538,6 +544,7 @@ def create_app(
     cors_origins: tuple[str, ...] = (),
     site_url: str | None = None,
     basemap: BaseMap = BaseMap(),
+    download_url: str | None = None,
 ) -> FastAPI:
     """The app over one serving export.
 
@@ -549,7 +556,8 @@ def create_app(
     is not a plain name is a ValueError, and so is ``site_url``, the public origin
     (``https://host``) the pages' share previews name. ``cors_origins`` are the other origins
     (``https://host``) whose pages may call the API. ``basemap`` is where the page's maps load their
-    base tiles (``/api/info`` names it; the credits page credits it).
+    base tiles (``/api/info`` names it; the credits page credits it). ``download_url`` is where the ODbL download
+    is hosted: the credits page links it (``site_pages``).
     """
     pages = site_pages(
         goatcounter,
@@ -562,6 +570,7 @@ def create_app(
         basemap=basemap,
         sources=data.meta.get("sources"),
         regions=data.meta.get("regions"),
+        download_url=download_url,
     )
     app = FastAPI(title="HikesAlike", docs_url="/api/docs", openapi_url="/api/openapi.json")
     limiters = {"rank": RateLimiter(rank_rate, RATE_WINDOW_S), "api": RateLimiter(api_rate, RATE_WINDOW_S)}
