@@ -793,18 +793,19 @@ def _load_hiking_snapshot(
     snapshot = OsmSnapshot()
     emit_progress(progress, "assemble", "loading nodes")
     nodes_sql = "SELECT id, lat, lon, ele FROM nodes"
-    ways_sql = "SELECT id, node_ids, tags FROM ways"
     if with_paths:
         nodes_sql += " UNION ALL SELECT id, lat, lon, ele FROM path_nodes"
-        ways_sql += " UNION ALL SELECT id, node_ids, tags FROM path_ways"
     store = NodeStore.from_rows(conn.execute(nodes_sql + " ORDER BY id"))
     snapshot.nodes, snapshot.node_elevations = store.points, store.elevations
     loaded = 0
-    for way_id, node_ids_json, tags_json in conn.execute(ways_sql):
-        snapshot.ways[way_id] = OsmWay(tuple(json.loads(node_ids_json)), json.loads(tags_json))
-        loaded += 1
-        if loaded % INGEST_PROGRESS_EVERY_OBJECTS == 0:
-            emit_progress(progress, "assemble", f"loading ways {loaded}")
+    for table in ("ways", "path_ways") if with_paths else ("ways",):
+        for way_id, node_ids_json, tags_json in conn.execute(f"SELECT id, node_ids, tags FROM {table}"):
+            snapshot.ways[way_id] = OsmWay(tuple(json.loads(node_ids_json)), json.loads(tags_json))
+            loaded += 1
+            if loaded % INGEST_PROGRESS_EVERY_OBJECTS == 0:
+                emit_progress(progress, "assemble", f"loading ways {loaded}")
+    if with_paths:
+        snapshot.path_ways = frozenset(way_id for (way_id,) in conn.execute("SELECT id FROM path_ways"))
     loaded = 0
     for rel_id, members_json, roles_json, tags_json in conn.execute(
         "SELECT id, members, roles, tags FROM relations"

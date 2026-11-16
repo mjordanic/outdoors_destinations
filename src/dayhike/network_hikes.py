@@ -151,9 +151,12 @@ def network_source(context: BuildContext) -> list[BuiltWalk]:
     ``TWIN_REACH_M`` of a leg."""
     snapshot = context.snapshot
     legs = [relation for relation in snapshot.relations if relation.tags.get("network:type") == "node_network"]
+    ways = snapshot.ways
+    if snapshot.path_ways:
+        ways = {way_id: way for way_id, way in ways.items() if way_id not in snapshot.path_ways}
     hikes = network_hikes(
         legs,
-        snapshot.ways,
+        ways,
         snapshot.nodes,
         snapshot.access_points,
         snapshot.places,

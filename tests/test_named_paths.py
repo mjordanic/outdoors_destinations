@@ -18,6 +18,7 @@ from dayhike.catalog import trailgraph_path_for
 from dayhike.ingest import run_ingest
 
 FIXTURE = Path(__file__).parent / "fixtures" / "named_paths.osm"
+NETWORK_FIXTURE = Path(__file__).parent / "fixtures" / "network_paths.osm"
 LAKE_PATH, FOREST_ROAD, SIDEWALK, UNNAMED_PATH = 230, 231, 232, 233
 N1, N2 = 4, 5  # nodes only the Lake Path uses
 
@@ -87,6 +88,26 @@ def test_the_paths_option_leaves_the_catalog_dayhikes_unchanged(pbf: Path, tmp_p
         (h.id, h.name, h.length_m) for h in default.dayhikes
     ]
     assert len(default.dayhikes) == 1
+
+
+def test_a_network_hike_does_not_walk_a_path_in_no_relation_to_its_parking(tmp_path: Path) -> None:
+    # tests/fixtures/network_paths.osm: a node-network loop whose signpost
+    # reaches its parking only over a named track in no relation (way 240).
+    pbf = _sorted_pbf(NETWORK_FIXTURE, tmp_path / "network.osm.pbf")
+    default = build_catalog(pbf, tmp_path / "default" / "catalog.sqlite")
+    named_path = tmp_path / "named" / "catalog.sqlite"
+    named = build_catalog(pbf, named_path, paths="named")
+
+    def network(catalog):
+        return [
+            (h.id, h.name, h.parts, h.length_m, h.trailhead.latitude, h.trailhead.longitude)
+            for h in catalog.dayhikes
+            if h.kind == "network"
+        ]
+
+    assert len(network(default)) == 1
+    assert network(named) == network(default)
+    assert 240 in _trail_way_ids(named_path)
 
 
 def test_a_work_file_of_another_paths_level_is_not_resumed(pbf: Path, tmp_path: Path) -> None:
