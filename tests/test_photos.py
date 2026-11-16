@@ -148,6 +148,43 @@ def test_imageinfo_drops_a_non_free_file_and_a_rebuild_does_not_ask_again(tmp_pa
     assert len(opener.calls) == 1
 
 
+def test_a_title_commons_normalizes_or_redirects_is_found_and_not_cached_missing(tmp_path: Path) -> None:
+    calls: list = []
+
+    def opener(request) -> bytes:
+        calls.append(request)
+        return json.dumps(
+            {
+                "query": {
+                    "normalized": [{"from": "File:triglav_north_face.jpg", "to": "File:Triglav north face.jpg"}],
+                    "redirects": [{"from": "File:Old Triglav.jpg", "to": "File:Triglav.jpg"}],
+                    "pages": {
+                        "1": _page("File:Triglav north face.jpg", "CC BY-SA 4.0"),
+                        "2": _page("File:Triglav.jpg", "CC BY-SA 4.0"),
+                    },
+                }
+            }
+        ).encode()
+
+    cache = tmp_path / "commons.sqlite"
+    found = CommonsClient(cache, opener, pause_s=0).files(["File:triglav_north_face.jpg", "File:Old Triglav.jpg"])
+
+    assert found["File:triglav_north_face.jpg"] == {**TRIGLAV, "file": "Triglav north face.jpg"}
+    assert found["File:Old Triglav.jpg"] == TRIGLAV
+    again = CommonsClient(cache, opener, pause_s=0).files(["File:triglav_north_face.jpg"])
+    assert again["File:triglav_north_face.jpg"] == {**TRIGLAV, "file": "Triglav north face.jpg"}
+    assert len(calls) == 1
+
+
+def test_a_file_with_only_a_source_credit_and_no_author_is_dropped() -> None:
+    page = _page("File:Triglav.jpg", "CC BY-SA 4.0")
+    meta = page["imageinfo"][0]["extmetadata"]
+    del meta["Artist"]
+    meta["Credit"] = {"value": "Own work"}
+
+    assert photo_from_page(page) is None
+
+
 def test_a_second_uncached_batch_waits(tmp_path: Path, monkeypatch) -> None:
     slept: list[float] = []
     monkeypatch.setattr("dayhike.photos.time.sleep", lambda seconds: slept.append(seconds))

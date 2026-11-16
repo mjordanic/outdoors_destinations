@@ -148,7 +148,7 @@ def photo_from_page(page: dict | None) -> dict | None:
     file_name = title.split(":", 1)[1] if ":" in title else title
     return kept_photo(
         file=file_name.replace("_", " "),
-        author=value("Artist") or value("Credit"),
+        author=value("Artist"),
         licence=value("LicenseShortName") or value("License"),
         licence_url=value("LicenseUrl"),
         thumb=upload_thumb(str(info.get("thumburl") or "")),
@@ -220,7 +220,7 @@ class CommonsClient:
         raise RuntimeError(f"Wikimedia request failed: {url}") from error
 
     def files(self, titles: Sequence[str]) -> dict[str, dict | None]:
-        """Image info for each file title. A non-free file, or one with no credit, is None."""
+        """Image info for each file title. A non-free file, or one with no author, is None."""
         wanted = list(dict.fromkeys(titles))
         if not wanted:
             return {}
@@ -234,14 +234,20 @@ class CommonsClient:
                     "iiprop": "url|extmetadata",
                     "iiurlwidth": str(THUMB_PX),
                     "maxlag": "5",
+                    "redirects": "1",
                     "titles": "|".join(batch),
                 }
             )
+            data = self._fetch(url)
+            query = data.get("query", {})
+            normalized = _title_map(query.get("normalized"))
+            redirects = _title_map(query.get("redirects"))
             found: dict[str, dict] = {}
-            for page in _image_pages(self._fetch(url)):
+            for page in _image_pages(data):
                 found[_norm_title(str(page.get("title") or ""))] = page
             for title in batch:
-                page = found.get(_norm_title(title))
+                name = normalized.get(_norm_title(title), _norm_title(title))
+                page = found.get(redirects.get(name, name))
                 self._put(f"file:{_norm_title(title)}", page if page is not None else {"title": title, "missing": True})
         return {title: photo_from_page(self._get(f"file:{_norm_title(title)}")) for title in wanted}
 
@@ -349,6 +355,13 @@ def _already_free(tags: dict, known: dict[str, dict | None], client: CommonsClie
         return False
     title = client._entity_file(qid)
     return bool(title and known.get(title))
+
+
+def _title_map(items: list[dict] | None) -> dict[str, str]:
+    return {
+        _norm_title(str(item.get("from") or "")): _norm_title(str(item.get("to") or ""))
+        for item in items or []
+    }
 
 
 def _image_pages(data: dict) -> list[dict]:
