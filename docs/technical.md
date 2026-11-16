@@ -510,7 +510,8 @@ Other unmarked paths are not in it by default. `dayhike ingest --paths named`
 also reads every named `highway=path|footway|bridleway|track` way that no such
 relation lists (not a `footway=sidewalk|crossing`), and `--paths unnamed` every
 `highway=path` too: they join the TrailGraph like graded paths and, with the
-graded paths, also enter the ingest snapshot the built-hike sources read
+graded paths, also enter the ingest snapshot the built-hike sources read,
+though NetworkHikes still reach parking only over the hiking tables' ways
 ([ADR-0065](adr/0065-paths-beyond-route-members-at-ingest.md)). Ways split into Segments that meet at Junctions: a node two ways share,
 a dead end, a node where the relations along the trail change (a stage
 boundary), or a crossing of two same-layer ways with no node. A dead-end tip
