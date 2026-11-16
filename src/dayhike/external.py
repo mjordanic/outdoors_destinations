@@ -265,9 +265,10 @@ def fetch_lipas(directory: Path) -> Path:
 def read_lipas(path: Path) -> Iterator[ExternalHike]:
     """Active hiking routes and nature trails of a cached Lipas file.
 
-    A record's parts whose ends lie within ``GAP_JOIN_M`` are one walk, and
-    ``source_ref`` is the Lipas id. Parts that do not meet are separate pieces
-    of the same name: ``source_ref`` is ``{id}/{n}``, numbered from 1 in order
+    A record's parts whose ends lie within ``GAP_JOIN_M`` are one walk (as
+    ``joined_line`` joins them), and ``source_ref`` is the Lipas id. Parts that
+    do not join it, branches included, are separate pieces of the same name:
+    ``source_ref`` is ``{id}/{n}``, numbered from 1 in order
     of each piece's start (latitude, then longitude). The page is the Lipas
     record, ``https://www.lipas.fi/liikuntapaikka/{id}``.
     """

@@ -1726,8 +1726,9 @@ kept before) and `dropped_external_length`. Sport Ireland's adapter (`ie-sport-i
 walking trails, starts each at its listed start, and keeps the longest part of a
 multi-part line with the parts that meet it within 50 m. Lipas (`fi-lipas`,
 `fetch-external --source fi`) keeps active hiking routes (type 4405) and nature
-trails (type 4404) under that same 1 km floor. Parts that meet within 50 m are
-one walk under the Lipas id; parts that do not meet are pieces `{id}/{n}`.
+trails (type 4404) under that same 1 km floor. Parts that meet end to end within 50 m are
+one walk under the Lipas id; parts that do not join it, branches included, are
+pieces `{id}/{n}`.
 
 A hike that is neither a `route=hiking` or `route=foot` relation, a built DayHike nor an external hike in this Catalog cannot be a Seed.
 Unnamed forest paths (`highway=path` without a hiking relation) never appear.
