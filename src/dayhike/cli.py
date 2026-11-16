@@ -108,8 +108,8 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         default=[],
         metavar="SOURCE",
-        help="Add the hikes of an external source cached by fetch-external, e.g. ie-sport-ireland "
-        "or fi-lipas (ADR-0062); repeatable",
+        help="Add the hikes of an external source cached by fetch-external, e.g. ie-sport-ireland, "
+        "fi-lipas or no-turrutebasen (ADR-0062); repeatable",
     )
     ingest.add_argument(
         "--external-dir",
@@ -133,7 +133,8 @@ def main(argv: list[str] | None = None) -> int:
     fetch_ext.add_argument(
         "--source",
         required=True,
-        help="Sources register id, e.g. ie-sport-ireland or fi-lipas (fi is that Finland source)",
+        help="Sources register id, e.g. ie-sport-ireland, fi-lipas (fi is that Finland source) "
+        "or no-turrutebasen (no is that Norway source)",
     )
     fetch_ext.add_argument(
         "--dest",

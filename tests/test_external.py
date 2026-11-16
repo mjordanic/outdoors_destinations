@@ -3,6 +3,7 @@
 import io
 import json
 import sqlite3
+import zipfile
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -29,8 +30,10 @@ from test_built_hikes import FIXTURE, RIDGE_WALK_ID
 EXTERNAL_DIR = Path(__file__).parent / "fixtures" / "external"
 SOURCE = "ie-sport-ireland"
 LIPAS = "fi-lipas"
+TURRUTE = "no-turrutebasen"
 LOUGH_URL = "https://www.sportireland.ie/outdoors/walking/trails/lough-fixture-way"
 LIPAS_PAGE = Path(__file__).parent / "fixtures" / "external" / "fi-lipas-api-page.json"
+TURRUTE_PAGE = Path(__file__).parent / "fixtures" / "external" / "no-turrutebasen-page.gpx"
 KORPI_URL = "https://www.lipas.fi/liikuntapaikka/100"
 
 
@@ -59,8 +62,8 @@ def test_joined_line_extends_the_longest_part_by_the_parts_that_meet_its_ends() 
 
 
 def test_a_source_the_register_does_not_list_as_used_is_refused() -> None:
-    with pytest.raises(ValueError, match="no-turrutebasen"):
-        read_external("no-turrutebasen", EXTERNAL_DIR)
+    with pytest.raises(ValueError, match="fr-ecrins-randonnees"):
+        read_external("fr-ecrins-randonnees", EXTERNAL_DIR)
     with pytest.raises(ValueError, match="no external source"):
         fetch_external("osm", EXTERNAL_DIR)
 
@@ -198,6 +201,133 @@ def test_the_lipas_adapter_names_active_routes_and_splits_parts_that_do_not_meet
     assert hikes["300/1"].name == hikes["300/2"].name == "Split walk"
     # A nature trail under 1 km is still read; ingest applies the floor.
     assert hikes["600"].name == "Pieni luontopolku"
+
+
+def test_the_turrutebasen_adapter_chains_foot_segments_by_route_number() -> None:
+    hikes = {hike.ref: hike for hike in read_external(TURRUTE, EXTERNAL_DIR)}
+
+    assert sorted(hikes) == ["F_2/1", "F_2/2", "F_3/1", "F_3/2", "F_9", "bare1", "kort1", "osl30"]
+    # Two segments of one route number that meet are one walk. "Ukjent" is not a name.
+    osl = hikes["osl30"]
+    assert (osl.name, osl.url) == ("Blåmerket sti", None)
+    assert osl.points == ((60.0, 10.0), (60.02, 10.0), (60.03, 10.0))
+    # Parts that stay apart are pieces, numbered from the southern start.
+    assert hikes["F_2/1"].points == ((60.0, 10.5), (60.01, 10.5))
+    assert hikes["F_2/2"].points == ((61.0, 10.5), (61.01, 10.5))
+    assert hikes["F_2/1"].name == hikes["F_2/2"].name == "Split route"
+    # A spur that meets the walk mid-way is its own piece of the same name.
+    assert hikes["F_3/1"].points == ((60.10, 11.0), (60.12, 11.0), (60.13, 11.0))
+    assert hikes["F_3/2"].points == ((60.12, 11.0), (60.12, 11.01))
+    assert hikes["F_3/1"].name == "Spur route"
+    # No route name: the maintainer and the route number. A short walk is still read.
+    assert hikes["F_9"].name == "DNT Oslo F_9"
+    assert hikes["kort1"].name == "Kort sti"
+    assert hikes["bare1"].name == "bare1"
+
+
+def _write_turrute(directory: Path, segments: list[tuple[str, str, str, list[list[float]]]]) -> Path:
+    features = [
+        {
+            "type": "Feature",
+            "properties": {"rutenummer": number, "rutenavn": name, "maintainer": maintainer, "type": "Fotrute"},
+            "geometry": {"type": "LineString", "coordinates": coordinates},
+        }
+        for number, name, maintainer, coordinates in segments
+    ]
+    folder = directory / TURRUTE
+    folder.mkdir()
+    (folder / f"{TURRUTE}.geojson").write_text(json.dumps({"type": "FeatureCollection", "features": features}))
+    return directory
+
+
+def test_the_turrutebasen_adapter_keeps_one_route_number_of_two_maintainers_apart(tmp_path: Path) -> None:
+    directory = _write_turrute(
+        tmp_path,
+        [
+            ("5", "Toppturen", "Bergen Turlag", [[5.3, 60.4], [5.3, 60.41]]),
+            ("5", "Fjellstien", "Tromsø kommune", [[18.9, 69.6], [18.9, 69.61]]),
+            ("5", "Bysti", "", [[10.7, 59.9], [10.7, 59.91]]),
+        ],
+    )
+    hikes = {hike.ref: hike for hike in read_external(TURRUTE, directory)}
+
+    assert sorted(hikes) == ["5", "Bergen Turlag/5", "Tromsø kommune/5"]
+    assert hikes["Bergen Turlag/5"].name == "Toppturen"
+    assert hikes["Bergen Turlag/5"].points == ((60.4, 5.3), (60.41, 5.3))
+    assert hikes["Tromsø kommune/5"].name == "Fjellstien"
+    assert hikes["Tromsø kommune/5"].points == ((69.6, 18.9), (69.61, 18.9))
+    assert (hikes["5"].name, hikes["5"].points) == ("Bysti", ((59.9, 10.7), (59.91, 10.7)))
+
+
+def test_the_turrutebasen_adapter_names_each_piece_from_its_own_segments(tmp_path: Path) -> None:
+    directory = _write_turrute(
+        tmp_path,
+        [
+            ("1", "Toppturen", "DNT", [[10.0, 60.0], [10.0, 60.01]]),
+            ("1", "Toppturen", "DNT", [[10.0, 60.01], [10.0, 60.02]]),
+            ("1", "Fjellstien", "DNT", [[10.0, 61.0], [10.0, 61.01]]),
+        ],
+    )
+    hikes = {hike.ref: hike for hike in read_external(TURRUTE, directory)}
+
+    assert sorted(hikes) == ["1/1", "1/2"]
+    assert hikes["1/1"].name == "Toppturen"
+    assert hikes["1/1"].points == ((60.0, 10.0), (60.01, 10.0), (60.02, 10.0))
+    assert hikes["1/2"].name == "Fjellstien"
+    assert hikes["1/2"].points == ((61.0, 10.0), (61.01, 10.0))
+
+
+def test_fetch_external_names_a_download_without_a_gpx_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.writestr("readme.txt", "no routes")
+    download = "https://nedlasting.geonorge.no/api/download/order/fixture/file"
+    order = {"files": [{"downloadUrl": download}]}
+
+    def urlopen(request, timeout):
+        if request.full_url == external_module.TURRUTE_ORDER:
+            return io.BytesIO(json.dumps(order).encode())
+        return io.BytesIO(archive.getvalue())
+
+    monkeypatch.setattr(external_module, "urlopen", urlopen)
+    with pytest.raises(OSError, match=download):
+        fetch_external(TURRUTE, tmp_path)
+
+
+def test_fetch_external_caches_the_national_foot_routes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.writestr("turrute.gpx", TURRUTE_PAGE.read_bytes())
+    download = "https://nedlasting.geonorge.no/api/download/order/fixture/file"
+    order = {"files": [{"downloadUrl": download, "status": "ReadyForDownload"}]}
+    asked = []
+
+    def urlopen(request, timeout):
+        asked.append(request)
+        if request.full_url == external_module.TURRUTE_ORDER:
+            return io.BytesIO(json.dumps(order).encode())
+        return io.BytesIO(archive.getvalue())
+
+    monkeypatch.setattr(external_module, "urlopen", urlopen)
+    assert main(["fetch-external", "--source", "no", "--dest", str(tmp_path)]) == 0
+
+    body = json.loads(asked[0].data.decode())
+    line = body["orderLines"][0]
+    assert line["metadataUuid"] == external_module.TURRUTE_UUID
+    assert line["areas"] == [{"code": "0000", "name": "Hele landet", "type": "landsdekkende"}]
+    assert line["formats"] == [{"name": "GPX "}]
+    assert line["projections"][0]["code"] == "4326"
+    assert asked[1].full_url == download
+    cached = json.loads((tmp_path / TURRUTE / f"{TURRUTE}.geojson").read_text())
+    assert len(cached["features"]) == 1
+    props = cached["features"][0]["properties"]
+    assert (props["rutenummer"], props["rutenavn"], props["maintainer"], props["type"]) == (
+        "osl30",
+        "Blåmerket sti",
+        "DNT",
+        "Fotrute",
+    )
+    assert cached["features"][0]["geometry"]["coordinates"] == [[10.0, 60.0], [10.0, 60.01]]
 
 
 def test_the_lipas_adapter_keeps_a_branch_as_a_piece_of_its_own(tmp_path: Path) -> None:
