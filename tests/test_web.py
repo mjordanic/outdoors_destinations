@@ -1035,7 +1035,7 @@ def test_the_credits_page_credits_every_source_with_the_fabdem_dataset(client: T
 
     for credit in (
         "OpenStreetMap", "ODbL", "Geofabrik", "Nominatim", "ESA WorldCover", "CHELSA", "FABDEM", "Copernicus",
-        "Natural Earth", "Valhalla", "Leaflet",
+        "Natural Earth", "Valhalla", "Leaflet", "Wikimedia Commons",
     ):
         assert credit in credits, credit
     assert 'href="https://doi.org/10.5523/bris.s5hqmjcdj8yo2ibzi9b4ew3sn"' in credits

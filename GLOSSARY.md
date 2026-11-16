@@ -108,6 +108,10 @@ _Avoid_: spot, POI, place (that is the Origin's "Find place")
 An OSM alpine or mountain hut near a Trailhead or along the DayHike geometry.
 _Avoid_: hotel, shelter (unless tagged as such and counted separately)
 
+**Commons contributors**:
+How many distinct people put geotagged photos on Wikimedia Commons within 150 m of a DayHike's line (ADR-0064). Shown beside the hike as a hint of how well known it is; never a Measure, never scored or ranked.
+_Avoid_: popularity score, fame, well-known badge
+
 **Difficulty**:
 The technical grade of a DayHike, derived from OSM `sac_scale` on member ways (the strictest grade present).
 _Avoid_: hardness, danger, exposure (those are not this field; alpine fall hazard stays inside Difficulty)

@@ -532,3 +532,8 @@ hikes today.
   millions for Europe, and the API throttles.
 - An ADR for the index: what it says, how it is shown, what a hike with no
   data shows, and that it never changes a score or the order of a Ranking.
+
+**Built in #170 (ADR-0064):** `dayhike count-commons` counts Commons
+contributors for every DayHike from the `geo_tags`, `page` and `image` dumps
+and the panel shows "N Commons contributors". What stays open here: the count
+per km or without files inside towns, and a sort or filter by the count.
