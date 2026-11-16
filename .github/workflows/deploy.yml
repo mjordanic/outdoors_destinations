@@ -42,6 +42,8 @@ jobs:
       DATA_IMAGE: ${{ vars.DAYHIKE_DATA_IMAGE }}
       # The vector base map (docs/deploy.md, section 10); empty keeps the raster tiles.
       PMTILES_URL: ${{ vars.DAYHIKE_PMTILES_URL }}
+      # The ODbL download the credits page links (docs/deploy.md, section 11); empty, no link.
+      DOWNLOAD_URL: ${{ vars.DAYHIKE_DOWNLOAD_URL }}
     steps:
       - uses: actions/checkout@v4
 
@@ -64,7 +66,7 @@ jobs:
           tag="c-${GITHUB_SHA::12}"
           gcloud run deploy "$SERVICE" --project "$PROJECT" --region "$REGION" \
             --image "$IMAGE" --no-traffic --tag "$tag" \
-            --update-env-vars "DAYHIKE_PMTILES_URL=$PMTILES_URL"
+            --update-env-vars "DAYHIKE_PMTILES_URL=$PMTILES_URL,DAYHIKE_DOWNLOAD_URL=$DOWNLOAD_URL"
           described=$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format json)
           revision=$(jq -r --arg tag "$tag" '.status.traffic[] | select(.tag == $tag) | .revisionName' <<<"$described")
           url=$(jq -r --arg tag "$tag" '.status.traffic[] | select(.tag == $tag) | .url' <<<"$described")
