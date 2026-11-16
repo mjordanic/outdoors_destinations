@@ -1944,6 +1944,26 @@ def test_a_built_hike_links_the_relations_it_is_built_from_and_itself(browser, b
     assert shared.locator("#liked .role").text_content() == "Liked hike"
 
 
+def test_a_named_trail_links_the_osm_ways_it_walks(browser, tmp_path_factory) -> None:
+    # tests/fixtures/named_trails.osm built at the trails paths level (ADR-0066): the Ridge Trail walks ways 302 then 301.
+    from test_streaming_ingest import _sorted_pbf
+
+    directory = tmp_path_factory.mktemp("trail-page")
+    pbf = _sorted_pbf(Path(__file__).parent / "fixtures" / "named_trails.osm", directory / "trails.osm.pbf")
+    path = directory / "catalog.sqlite"
+    build_catalog(pbf, path, paths="trails")
+    build_similarity(path, directory / "dem")
+    data = ServingData(export_serving(path, directory / "web-serving"))
+    (trail,) = data.search("Ridge Trail")
+    for url in serve(create_app(data, lambda max_hours: Matrix(), rank_rate=1_000)):
+        page = open_page(browser, url, Api({}), hash=f"#hike={trail['id']}")
+        page.get_by_text("Chosen: Ridge Trail").wait_for()
+        head = page.locator("#liked .detail-head")
+
+        assert "Built from OSM ways 302, 301" in head.inner_text()
+        assert head.get_by_role("link", name="302").get_attribute("href") == "https://www.openstreetmap.org/way/302"
+
+
 def test_a_built_hike_found_similar_can_be_edited_on_the_map(browser, built_server) -> None:
     page = open_page(browser, built_server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
     page.get_by_text("Chosen: Ridge Walk").wait_for()

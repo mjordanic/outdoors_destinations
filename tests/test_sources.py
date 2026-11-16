@@ -93,6 +93,8 @@ def test_an_osm_hike_points_at_its_relation_or_where_it_was_built_from() -> None
     # A DayStage is cut from one tour; a NetworkHike chains legs from its start node.
     assert osm_source_ref(2**40 + 5, "stage", (1001,), "2:102.3") == "relation/1001"
     assert osm_source_ref(2**40 + 6, "network", (7, 8), "42:-9.43,10.44") == "node/42"
+    # A named trail is in no relation: the first way it walks.
+    assert osm_source_ref(2**40 + 7, "trail", (), "13:-302.12,-301.11") == "way/302"
 
 
 @pytest.fixture(scope="module")

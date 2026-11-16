@@ -122,8 +122,8 @@ def main(argv: list[str] | None = None) -> int:
         choices=PATH_LEVELS,
         default="graded",
         help="Paths in no hiking relation read into the TrailGraph and the snapshot: graded (sac_scale) "
-        "paths only; also named paths, tracks, footways and bridleways; or also unnamed paths "
-        "(ADR-0065, default: graded)",
+        "paths only; also named paths, footways and bridleways, which become named-trail hikes (trails, "
+        "a US build, ADR-0066); also named tracks; or also unnamed paths (ADR-0065, default: graded)",
     )
     _add_workers(ingest)
     fetch_ext = subparsers.add_parser(

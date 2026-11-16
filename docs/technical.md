@@ -221,6 +221,10 @@ uv run dayhike fetch-dem --region europe --region us-colorado    # each region's
 uv run dayhike coverage-map --countries /tmp/countries.geojson --region europe --region us-colorado --out /tmp/m.svg
 ```
 
+Named-trail hikes are on per build, not per region file: a US build ingests
+with `--paths trails` ([ADR-0066](adr/0066-named-trail-hikes.md)), and the
+Europe build keeps the default `graded`, which builds none.
+
 Every box must run west to east (`west < east`) within ±180°: a region that
 crosses the 180° meridian (Alaska's Aleutians, Fiji, eastern Chukotka) is not
 supported; split it, or leave the far side out. The CHELSA clip of regions
@@ -243,7 +247,7 @@ of its own (`US`):
 curl -L -o $US/osm/rhode-island-latest.osm.pbf https://download.geofabrik.de/north-america/us/rhode-island-latest.osm.pbf
 B=41.1,-71.95,42.05,-71.1     # the region's bounds
 uv run dayhike fetch-dem --bounds $B --dest $US/dem
-uv run dayhike ingest $US/osm/rhode-island-latest.osm.pbf --catalog $US/catalog.sqlite --dem $US/dem
+uv run dayhike ingest $US/osm/rhode-island-latest.osm.pbf --catalog $US/catalog.sqlite --dem $US/dem --paths trails
 uv run dayhike sample-dem --catalog $US/catalog.sqlite --dem $US/dem
 uv run dayhike fetch-landcover --bounds $B --dest $US/landcover
 uv run dayhike sample-landcover --catalog $US/catalog.sqlite --landcover $US/landcover
@@ -396,7 +400,7 @@ print(resolve_seed(catalog, "ridge walk"))  # 1001; case-insensitive exact match
 
 | Table | Contents |
 | --- | --- |
-| `dayhikes` | id (the OSM relation id, a built DayHike's hashed id from 2^40 up, or an external hike's from 2^39 up), Seed label, `name_origin`, length_m, Difficulty (`sac_scale` or NULL), `kind` (`relation`, `network`, `stage`, `external`), `parts` (JSON list of the OSM relations a built DayHike is built from, else NULL), `route` (a built DayHike's Route, else NULL), `source` (a sources register id, `osm` for every OSM hike), `source_ref` (its record there: `relation/{id}`, for a NetworkHike `node/{id}` of its start, for an external hike its record id; ADR-0060), `source_url` (an external hike's record page, else NULL; ADR-0062) and `dem_source` (the register ids of the DEMs `sample-dem` read its heights from, comma-separated, NULL before; ADR-0063) |
+| `dayhikes` | id (the OSM relation id, a built DayHike's hashed id from 2^40 up, or an external hike's from 2^39 up), Seed label, `name_origin`, length_m, Difficulty (`sac_scale` or NULL), `kind` (`relation`, `network`, `stage`, `trail`, `external`), `parts` (JSON list of the OSM relations a built DayHike is built from, else NULL), `route` (a built DayHike's Route, else NULL), `source` (a sources register id, `osm` for every OSM hike), `source_ref` (its record there: `relation/{id}`, for a NetworkHike `node/{id}` of its start, for a named-trail hike `way/{id}` of the first way it walks, for an external hike its record id; ADR-0060), `source_url` (an external hike's record page, else NULL; ADR-0062) and `dem_source` (the register ids of the DEMs `sample-dem` read its heights from, comma-separated, NULL before; ADR-0063) |
 | `trailheads` | lat/lon used for amenities and DriveTime |
 | `amenity_facts` | per DayHike: hut, parking, restaurant_cafe, drinking_water (count + nearest_m) |
 | `feature_vectors` | length, elevation min/max/gain, Difficulty ordinal, LandCover fractions, regime climate |
@@ -506,9 +510,11 @@ pass. It holds the marked hiking network and graded paths: every member way of e
 it dropped (too short, node-network legs), and every graded path
 (`highway=path` with a `sac_scale`) that no such relation lists, with no
 relation id ([ADR-0037](adr/0037-graded-paths-join-the-trailgraph.md)).
-Other unmarked paths are not in it by default. `dayhike ingest --paths named`
-also reads every named `highway=path|footway|bridleway|track` way that no such
-relation lists (not a `footway=sidewalk|crossing`), and `--paths unnamed` every
+Other unmarked paths are not in it by default. `dayhike ingest --paths trails`
+also reads every named `highway=path|footway|bridleway` way that no such
+relation lists (not a `footway=sidewalk|crossing`) and `highway=trailhead`
+nodes, for named-trail hikes ([ADR-0066](adr/0066-named-trail-hikes.md));
+`--paths named` named tracks too, and `--paths unnamed` every
 `highway=path` too: they join the TrailGraph like graded paths and, with the
 graded paths, also enter the ingest snapshot the built-hike sources read,
 though NetworkHikes still reach parking only over the hiking tables' ways
@@ -1742,6 +1748,22 @@ Viewpoint or lake, none a Twin of a relation DayHike or of a better chain. Named
 (`water=lake,reservoir,pond`) and named guideposts (`information=guidepost`)
 are read for them alone: they name destinations and signposts, and are no
 amenity and not in the GeometryStore.
+
+`named_trails` (`dayhike.named_trails`, ADR-0066) is registered last. It
+builds named-trail hikes, kind `trail`, from the named
+`highway=path|footway|bridleway` ways in no hiking relation, so only from a
+snapshot read with `--paths trails` or above: a US build. At the default
+`graded` (the Europe build) it has no way to read and builds nothing. Ways of
+one name (case ignored) that share a node or whose ends lie within 50 m are one
+piece; each piece is walked as a relation's member ways are, from the end with
+a `highway=trailhead` node within 100 m when only one has one, else by the
+height rule, else from the end nearer a trailhead node or parking, and kept from
+1 km. A walk more than half paved or lit, a snowmobile corridor not signed for
+walkers, open to motor vehicles, bike-first or a ski piste is dropped, and so
+is a Twin of a relation DayHike or of a named trail kept before it. A name
+another hike has, or a colour or "Trail" only, gets " near {place}" (the
+nearest place within 5 km of its start). Its `source_ref` is `way/{id}` of
+the first way it walks, and the page links the ways its Route walks.
 
 Last come the external hikes of each `--external` source (ADR-0062, `dayhike.external`),
 read from the cache `dayhike fetch-external` wrote under `data/external/<source>/`.

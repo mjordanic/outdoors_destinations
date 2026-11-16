@@ -43,6 +43,7 @@ from dayhike.catalog import (
     tagged_ends,
 )
 from dayhike.dem import DEM_READ_KEY
+from dayhike.named_trails import named_trails
 from dayhike.network_hikes import network_source
 from dayhike.osm import (
     NodeStore,
@@ -57,7 +58,7 @@ from dayhike.parallel import parallel_iter, parallel_map
 from dayhike.similarity import TWIN_SHARE, TWIN_STEP_M, _even_points, _step_m, twin_groups
 from dayhike.stages import day_stages
 
-INGEST_WORK_SCHEMA = 10
+INGEST_WORK_SCHEMA = 11
 INGEST_CHECKPOINT_OBJECTS = 50_000
 INGEST_PROGRESS_EVERY_OBJECTS = 100_000
 WORK_CACHE_KIB = 262_144  # the work file's page cache while ingest runs
@@ -74,18 +75,22 @@ CATALOG_TAG_FILTERS = (
     "n/place=city,town,village,hamlet",
 )
 # What ingest reads of the paths no hiking relation lists, each level adding to the one
-# before (ADR-0065): graded paths (ADR-0037), then named paths, tracks, footways and
-# bridleways, then unnamed paths too. Beyond ``graded`` they also enter the snapshot.
-PATH_LEVELS = ("graded", "named", "unnamed")
-NAMED_PATH_HIGHWAYS = ("path", "footway", "bridleway", "track")
+# before (ADR-0065, ADR-0066): graded paths (ADR-0037), then named paths, footways and
+# bridleways (the ways of named trails), then named tracks too, then unnamed paths too.
+# Beyond ``graded`` they also enter the snapshot, with highway=trailhead nodes.
+PATH_LEVELS = ("graded", "trails", "named", "unnamed")
+TRAIL_PATH_HIGHWAYS = ("path", "footway", "bridleway")
+NAMED_PATH_HIGHWAYS = (*TRAIL_PATH_HIGHWAYS, "track")
 NOT_A_PATH_FOOTWAYS = ("sidewalk", "crossing")
-PATH_TAG_FILTER = "w/highway=" + ",".join(NAMED_PATH_HIGHWAYS)
+TRAILHEAD_TAG_FILTER = "n/highway=trailhead"
 LAKE_WATER = ("lake", "reservoir", "pond")  # a named natural=water of these is a lake a NetworkHike may go to
 DESTINATION_KINDS = ("peak", "hut", "viewpoint", "lake")  # named, a NetworkHike's destinations (ADR-0039)
-# Point kinds read only for NetworkHikes: no amenity, no named point, not in the GeometryStore.
-NETWORK_ONLY_KINDS = ("lake", "guidepost")
+# Point kinds read only for built hikes, NetworkHikes and named trails (trailhead nodes, ADR-0066):
+# no amenity, no named point, not in the GeometryStore.
+NETWORK_ONLY_KINDS = ("lake", "guidepost", "trailhead")
 # Sources of DayHikes that are not one relation (ADR-0038), run after the relations are kept.
-BUILT_HIKE_SOURCES: tuple[BuiltHikeSource, ...] = (day_stages, network_source)
+# named_trails builds only from the trail ways a ``paths`` level beyond ``graded`` reads (ADR-0066).
+BUILT_HIKE_SOURCES: tuple[BuiltHikeSource, ...] = (day_stages, network_source, named_trails)
 
 Progress = Callable[[str], None]
 
@@ -448,8 +453,11 @@ def _catalog_filters_path(cache: Path) -> Path:
 
 
 def _catalog_filters(paths: str) -> tuple[str, ...]:
+    if paths == "graded":
+        return CATALOG_TAG_FILTERS
     # osmium cannot ask for a name too: the extract keeps every such way, the ways pass picks.
-    return CATALOG_TAG_FILTERS if paths == "graded" else (*CATALOG_TAG_FILTERS, PATH_TAG_FILTER)
+    highways = TRAIL_PATH_HIGHWAYS if paths == "trails" else NAMED_PATH_HIGHWAYS
+    return (*CATALOG_TAG_FILTERS, "w/highway=" + ",".join(highways), TRAILHEAD_TAG_FILTER)
 
 
 def _catalog_filters_text(paths: str) -> str:
@@ -644,9 +652,12 @@ def _pass_ways(
 
 
 def _point_kind(tags: dict[str, str]) -> str | None:
-    """The amenity kind of an OSM object, else ``lake`` for a named lake
-    (``LAKE_WATER``) or ``guidepost`` for a named guidepost."""
+    """The amenity kind of an OSM object, else ``trailhead`` for a
+    ``highway=trailhead``, ``lake`` for a named lake (``LAKE_WATER``) or
+    ``guidepost`` for a named guidepost."""
     kind = amenity_kind(tags)
+    if kind is None and tags.get("highway") == "trailhead":
+        return "trailhead"
     if kind is not None or not tags.get("name"):
         return kind
     if tags.get("natural") == "water" and tags.get("water") in LAKE_WATER:
@@ -668,7 +679,8 @@ def _is_extra_path(tags: dict[str, str], level: str) -> bool:
     if level == "graded" or tags.get("footway") in NOT_A_PATH_FOOTWAYS:
         return False
     highway = tags.get("highway")
-    return (bool(tags.get("name")) and highway in NAMED_PATH_HIGHWAYS) or (level == "unnamed" and highway == "path")
+    named = TRAIL_PATH_HIGHWAYS if level == "trails" else NAMED_PATH_HIGHWAYS
+    return (bool(tags.get("name")) and highway in named) or (level == "unnamed" and highway == "path")
 
 
 def _pass_nodes(
@@ -826,6 +838,8 @@ def _load_hiking_snapshot(
             snapshot.destinations.append((lat, lon, name))
         if name and kind == "guidepost":
             snapshot.guideposts.append((lat, lon, name))
+        if kind == "trailhead":
+            snapshot.trailheads.append((lat, lon))
         if kind in NETWORK_ONLY_KINDS:
             continue
         if kind == "place":

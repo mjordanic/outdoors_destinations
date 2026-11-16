@@ -83,14 +83,16 @@ def test_a_named_path_in_no_relation_enters_the_snapshot(pbf: Path, tmp_path: Pa
     assert SIDEWALK not in named.ways
 
 
-def test_the_paths_option_leaves_the_catalog_dayhikes_unchanged(pbf: Path, tmp_path: Path) -> None:
+def test_the_paths_option_leaves_the_catalog_dayhikes_unchanged_but_adds_named_trails(pbf: Path, tmp_path: Path) -> None:
     default = build_catalog(pbf, tmp_path / "default" / "catalog.sqlite")
     named = build_catalog(pbf, tmp_path / "named" / "catalog.sqlite", paths="named")
 
-    assert [(h.id, h.name, h.length_m) for h in named.dayhikes] == [
+    assert [(h.id, h.name, h.length_m) for h in named.dayhikes if h.kind != "trail"] == [
         (h.id, h.name, h.length_m) for h in default.dayhikes
     ]
     assert len(default.dayhikes) == 1
+    # The Lake Path is a named trail (ADR-0066).
+    assert [h.name for h in named.dayhikes if h.kind == "trail"] == ["Lake Path"]
 
 
 def test_a_network_hike_does_not_walk_a_path_in_no_relation_to_its_parking(tmp_path: Path) -> None:

@@ -1,5 +1,5 @@
 ---
-status: accepted (amends ADR-0037)
+status: accepted (amends ADR-0037; the `trails` level and named-trail hikes since ADR-0066)
 ---
 
 # Paths beyond route members at ingest
