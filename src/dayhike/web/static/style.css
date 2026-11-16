@@ -115,6 +115,10 @@ button.secondary:hover { border-color: var(--green); }
 .compose-readout.over { color: #b42318; font-weight: 600; }
 .compose-links { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
 .compose-links button { border-color: #8e44ad; color: #6b2fa3; border-style: dashed; }
+.photos { display: flex; flex-wrap: wrap; gap: 12px; margin: 8px 0 12px; }
+.hike-photo { margin: 0; flex: 1 1 200px; max-width: 320px; }
+.hike-photo img { width: 100%; height: auto; border-radius: 6px; border: 1px solid var(--line); background: #eef3ee; }
+.hike-photo figcaption { font-size: 0.78rem; color: var(--muted); margin-top: 4px; }
 .legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 0.8rem; color: var(--muted); margin: 6px 0; }
 .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; background: var(--c); vertical-align: -1px; }
 .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }

@@ -1181,6 +1181,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     ${emergencyLine(hike.emergency)}
     <div class="map"></div>
     <div class="legend">${LEGEND.map(([label, color]) => `<span style="--c:${color}">${label}</span>`).join("")}</div>
+    ${photoBlock(hike)}
     <div class="slot-elevation"></div>
     <div class="charts"></div>
     <h3>${compare ? `Every measure: this hike against the ${compare.wish ? "one you want" : "liked one"}` : "The facts behind every measure"}</h3>
@@ -1251,6 +1252,20 @@ function uncountedLine(query) {
   if (!reasons.length) return "";
   const hows = reasons.map((r) => r.how).filter(Boolean);
   return `Greyed measures ${reasons.map((r) => r.why).join(" or ")} and are not part of the score.${hows.length ? ` To count them, ${hows.join(" or ")}${hows.length > 1 ? "," : ""} in step 2.` : ""}`;
+}
+
+// Commons photos of a hike's named places. The thumbnail is requested only once this panel is built,
+// which is when the hike is opened, and only from upload.wikimedia.org.
+function photoBlock(hike) {
+  if (!hike.photos || !hike.photos.length) return "";
+  const figures = hike.photos.map((photo) => {
+    const thumb = String(photo.thumb || "");
+    const licenceUrl = String(photo.licence_url || "");
+    if (!thumb.startsWith("https://upload.wikimedia.org/") || !licenceUrl.startsWith("https://")) return "";
+    const caption = `${escapeHtml(photo.author)} · <a href="${escapeHtml(licenceUrl)}" target="_blank" rel="noopener">${escapeHtml(photo.licence)}</a>`;
+    return `<figure class="hike-photo"><img src="${escapeHtml(thumb)}" alt="${escapeHtml(photo.file || "Photo")}" width="480"><figcaption>${caption}</figcaption></figure>`;
+  }).filter(Boolean);
+  return figures.length ? `<div class="photos">${figures.join("")}</div>` : "";
 }
 
 // Where a hike not from OpenStreetMap comes from (ADR-0060): its source, credited with its licence

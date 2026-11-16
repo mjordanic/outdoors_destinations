@@ -2638,6 +2638,10 @@ at the rebuild.
    uv run dayhike sample-trailgraph             # not yet timed on Europe
    uv run dayhike build-similarity              # 19 min
    uv run dayhike export-serving --valhalla-tiles data/valhalla/highways-eu --valhalla-url http://127.0.0.1:8003  # 22 min
+   uv run dayhike export-photos   # after export-serving; cache data/commons-cache.sqlite, so a rerun fetches only new titles
+   # Liechtenstein (172 hikes, 65 linked POIs) is the scale check: about 1.8 s per Wikimedia request.
+   # Europe (~162,000 hikes), if linked like that: about 1 hour for Wikidata images, plus about 9 hours
+   # for Commons categories that have no free Wikidata image (one request each). The cache makes a rerun skip those.
    ```
 
    `ingest`, `sample-dem`, `sample-landcover`, `sample-trailgraph` and
@@ -2699,7 +2703,7 @@ CLI: `dayhike ingest`, `dayhike fetch-extracts`, `dayhike fetch-dem`,
 `dayhike fetch-climate`, `dayhike sample-climate`, `dayhike sample-trailgraph`,
 `dayhike build-similarity` (`--calibrate-only`), `dayhike rank` (`--weight`,
 `--month`, `--limit`, `--one-way`), `dayhike compose` (the Route text of a shared link,
-`--name`, `--weight`, `--month`, `--limit`, `--one-way`; reads a serving export; a SuggestedLoop is listed by its link text, and each row's versions indented under it), `dayhike nearby`, `dayhike export-serving`, `dayhike export-places`, `dayhike export-countries`, `dayhike serve`, `dayhike coverage-map`.
+`--name`, `--weight`, `--month`, `--limit`, `--one-way`; reads a serving export; a SuggestedLoop is listed by its link text, and each row's versions indented under it), `dayhike nearby`, `dayhike export-serving`, `dayhike export-places`, `dayhike export-countries`, `dayhike export-photos`, `dayhike serve`, `dayhike coverage-map`.
 
 Docstrings on those functions use the glossary in `GLOSSARY.md`.
 Examples: [`01`](../notebooks/01_raw_data_and_ingestion.ipynb) ingest,

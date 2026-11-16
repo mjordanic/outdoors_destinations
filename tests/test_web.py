@@ -1114,6 +1114,15 @@ def test_the_privacy_page_says_who_runs_the_site_what_is_kept_who_gets_it_and_wh
     assert "no cookies" in privacy and "no consent banner" in privacy
 
 
+def test_the_privacy_page_names_wikimedia_when_a_hike_photo_would_load(client: TestClient) -> None:
+    privacy = client.get("/privacy.html").text
+
+    assert "Wikimedia Foundation" in privacy
+    assert "upload.wikimedia.org" in privacy
+    assert "when you open a hike that has photos" in privacy
+    assert "Wikimedia Commons" in client.get("/credits.html").text
+
+
 def test_the_privacy_page_names_goatcounter_only_once_it_is_set(data: ServingData) -> None:
     unset = TestClient(create_app(data)).get("/privacy.html").text
     assert "GoatCounter" not in unset
