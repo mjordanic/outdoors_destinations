@@ -1752,7 +1752,7 @@ multi-part line with the parts that meet it within 50 m. Lipas (`fi-lipas`,
 `fetch-external --source fi`) keeps active hiking routes (type 4405) and nature
 trails (type 4404) under that same 1 km floor. Parts that meet end to end within 50 m are
 one walk under the Lipas id; parts that do not join it, branches included, are
-pieces `{id}/{n}`. Turrutebasen (`no-turrutebasen`, `fetch-external --source no`) keeps foot routes (`Fotrute`) from the national Geonorge GPX and chains segments of one `rutenummer` the same way; a long route is not cut into DayStages.
+pieces `{id}/{n}`. Turrutebasen (`no-turrutebasen`, `fetch-external --source no`) keeps foot routes (`Fotrute`) from the national Geonorge GPX and chains segments of one maintainer and `rutenummer` the same way (ADR-0062 has the naming and `source_ref` rules); a long route is not cut into DayStages.
 
 A hike that is neither a `route=hiking` or `route=foot` relation, a built DayHike nor an external hike in this Catalog cannot be a Seed.
 Unnamed forest paths (`highway=path` without a hiking relation) never appear.

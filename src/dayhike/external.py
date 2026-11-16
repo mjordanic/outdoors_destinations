@@ -404,8 +404,9 @@ def _joined_component_parts(parts: Sequence[Sequence[Point]]) -> list[tuple[list
 # Turrutebasen (register id no-turrutebasen), CC BY 4.0. Credit Kartverket.
 # Foot routes only. A national GPX `<rte>` is one segment: `<name>` is the
 # route number, `<desc>` the route name, `<src>` the maintainer, `<type>` the
-# kind. Segments of one route number join as Lipas parts do. "Ukjent" is an
-# empty name. A long route stays one hike (ADR-0062); the 1 km floor is ingest's.
+# kind. Segments of one maintainer and route number join as Lipas parts do.
+# "Ukjent" is an empty name. A long route stays one hike (ADR-0062); the 1 km
+# floor is ingest's.
 _MISSING_ROUTE_NAME = "ukjent"
 TURRUTE_UUID = "d1422d17-6d95-4ef1-96ab-8af31744dd63"
 TURRUTE_ORDER = "https://nedlasting.geonorge.no/api/order"
