@@ -19,6 +19,7 @@ import json
 import math
 import xml.etree.ElementTree as ET
 import zipfile
+from collections import Counter
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -118,17 +119,21 @@ def joined_line(parts: Sequence[Sequence[Point]], start: Point | None = None) ->
     return line
 
 
-def _joined_and_rest(parts: Sequence[Sequence[Point]]) -> tuple[list[Point], list[list[Point]]]:
-    """The line ``joined_line`` builds, and the parts it leaves over."""
-    pieces = [list(part) for part in parts if len(part) >= 2]
-    if not pieces:
+def _joined_and_rest(parts: Sequence[Sequence[Point]]) -> tuple[list[Point], list[int]]:
+    """The line ``joined_line`` builds, and the indices of the parts it leaves over."""
+    order = sorted(
+        (index for index, part in enumerate(parts) if len(part) >= 2),
+        key=lambda index: _linestring_length_m(parts[index]),
+        reverse=True,
+    )
+    if not order:
         return [], []
-    pieces.sort(key=_linestring_length_m, reverse=True)
-    line, rest = pieces[0], pieces[1:]
+    line, rest = list(parts[order[0]]), order[1:]
     joined = True
     while joined and rest:
         joined = False
-        for piece in rest:
+        for index in rest:
+            piece = list(parts[index])
             for candidate in (piece, piece[::-1]):
                 if _haversine_m(*line[-1], *candidate[0]) <= GAP_JOIN_M:
                     line = line + candidate[1:]
@@ -136,7 +141,7 @@ def _joined_and_rest(parts: Sequence[Sequence[Point]]) -> tuple[list[Point], lis
                     line = candidate[:-1] + line
                 else:
                     continue
-                rest.remove(piece)
+                rest.remove(index)
                 joined = True
                 break
             if joined:
@@ -363,8 +368,13 @@ def _geometry_parts(geometry: dict | None) -> list[list[Point]]:
 def _joined_components(parts: Sequence[Sequence[Point]]) -> list[list[Point]]:
     """One line per group of parts whose ends meet within ``GAP_JOIN_M``, and
     each part a group's line leaves over (a branch) as a line of its own."""
-    pieces = [list(part) for part in parts if len(part) >= 2]
-    parent = list(range(len(pieces)))
+    return [line for line, _ in _joined_component_parts(parts)]
+
+
+def _joined_component_parts(parts: Sequence[Sequence[Point]]) -> list[tuple[list[Point], list[int]]]:
+    """The lines of ``_joined_components``, each with the indices of the parts in it."""
+    pieces = [index for index, part in enumerate(parts) if len(part) >= 2]
+    parent = {index: index for index in pieces}
 
     def find(index: int) -> int:
         while parent[index] != index:
@@ -375,18 +385,19 @@ def _joined_components(parts: Sequence[Sequence[Point]]) -> list[list[Point]]:
     def ends_meet(left: Sequence[Point], right: Sequence[Point]) -> bool:
         return any(_haversine_m(*left[end], *right[other]) <= GAP_JOIN_M for end in (0, -1) for other in (0, -1))
 
-    for i, left in enumerate(pieces):
-        for j in range(i + 1, len(pieces)):
-            if ends_meet(left, pieces[j]):
+    for position, i in enumerate(pieces):
+        for j in pieces[position + 1 :]:
+            if ends_meet(parts[i], parts[j]):
                 parent[find(j)] = find(i)
-    groups: dict[int, list[list[Point]]] = {}
-    for index, piece in enumerate(pieces):
-        groups.setdefault(find(index), []).append(piece)
+    groups: dict[int, list[int]] = {}
+    for index in pieces:
+        groups.setdefault(find(index), []).append(index)
     lines = []
     for group in groups.values():
-        line, rest = _joined_and_rest(group)
-        lines.append(line)
-        lines.extend(rest)
+        line, rest = _joined_and_rest([parts[index] for index in group])
+        left_over = {group[position] for position in rest}
+        lines.append((line, [index for index in group if index not in left_over]))
+        lines.extend((list(parts[index]), [index]) for index in sorted(left_over))
     return lines
 
 
@@ -401,20 +412,21 @@ TURRUTE_ORDER = "https://nedlasting.geonorge.no/api/order"
 
 
 def read_turrutebasen(path: Path) -> Iterator[ExternalHike]:
-    """Foot routes of a cached Turrutebasen file, segments of one ``rutenummer``
-    chained.
+    """Foot routes of a cached Turrutebasen file, segments of one maintainer and
+    ``rutenummer`` chained.
 
     Parts whose ends meet within ``GAP_JOIN_M`` are one walk, and ``source_ref``
     is the route number. Parts that do not join it, branches included, are
-    separate pieces of the same name: ``source_ref`` is ``{rutenummer}/{n}``,
-    numbered from 1 by each piece's start (latitude, then longitude). The name
-    is ``rutenavn`` (``Ukjent`` counts as none), else the maintainer and the
-    route number, else the route number. Ski, bike and other route types are
-    left out. There is no per-route page.
+    separate pieces: ``source_ref`` is ``{rutenummer}/{n}``, numbered from 1 by
+    each piece's start (latitude, then longitude). A route number used by more
+    than one maintainer is ``{maintainer}/{rutenummer}`` (and ``/{n}``) for each
+    maintainer, the bare number for a blank one. Each piece is named from its
+    own segments: ``rutenavn`` (``Ukjent`` counts as none), else the maintainer
+    and the route number, else the route number. Ski, bike and other route
+    types are left out. There is no per-route page.
     """
-    grouped: dict[str, list[list[Point]]] = {}
-    route_names: dict[str, list[str]] = {}
-    maintainers: dict[str, list[str]] = {}
+    grouped: dict[tuple[str, str], list[tuple[list[Point], int]]] = {}
+    segments: list[tuple[str, str]] = []
     for feature in json.loads(Path(path).read_text())["features"]:
         properties = feature.get("properties") or {}
         if properties.get("type") != "Fotrute":
@@ -425,38 +437,43 @@ def read_turrutebasen(path: Path) -> Iterator[ExternalHike]:
         parts = _geometry_parts(feature.get("geometry"))
         if not parts:
             continue
-        grouped.setdefault(number, []).extend(parts)
-        route_names.setdefault(number, []).append(str(properties.get("rutenavn") or "").strip())
-        maintainers.setdefault(number, []).append(str(properties.get("maintainer") or "").strip())
-    for number, parts in grouped.items():
-        lines = [line for line in _joined_components(parts) if len(line) >= 2]
-        if not lines:
+        maintainer = str(properties.get("maintainer") or "").strip()
+        grouped.setdefault((maintainer, number), []).extend((part, len(segments)) for part in parts)
+        segments.append((str(properties.get("rutenavn") or "").strip(), maintainer))
+    maintainers_of: dict[str, int] = {}
+    for _, number in grouped:
+        maintainers_of[number] = maintainers_of.get(number, 0) + 1
+    for (maintainer, number), tagged in grouped.items():
+        base = f"{maintainer}/{number}" if maintainers_of[number] > 1 and maintainer else number
+        pieces = []
+        for line, indices in _joined_component_parts([part for part, _ in tagged]):
+            if len(line) < 2:
+                continue
+            owners = {tagged[index][1] for index in indices}
+            pieces.append((line, _turrute_name([segments[owner] for owner in sorted(owners)], number)))
+        if len(pieces) == 1:
+            line, name = pieces[0]
+            yield ExternalHike(ref=base, name=name, points=tuple(line))
             continue
-        name = _turrute_name(route_names[number], maintainers[number], number)
-        if len(lines) == 1:
-            yield ExternalHike(ref=number, name=name, points=tuple(lines[0]))
-            continue
-        ordered = sorted(lines, key=lambda line: (line[0][0], line[0][1]))
-        for index, line in enumerate(ordered, start=1):
-            yield ExternalHike(ref=f"{number}/{index}", name=name, points=tuple(line))
+        ordered = sorted(pieces, key=lambda piece: (piece[0][0][0], piece[0][0][1]))
+        for index, (line, name) in enumerate(ordered, start=1):
+            yield ExternalHike(ref=f"{base}/{index}", name=name, points=tuple(line))
 
 
-def _turrute_name(route_names: Sequence[str], maintainers: Sequence[str], number: str) -> str:
+def _turrute_name(segments: Sequence[tuple[str, str]], number: str) -> str:
     """``rutenavn`` when one is set, else ``{maintainer} {rutenummer}``, else the number."""
-    names = [name for name in route_names if name and name.casefold() != _MISSING_ROUTE_NAME]
+    names = [name for name, _ in segments if name and name.casefold() != _MISSING_ROUTE_NAME]
     if names:
-        counts: dict[str, int] = {}
-        for name in names:
-            counts[name] = counts.get(name, 0) + 1
-        return sorted(counts, key=lambda name: (-counts[name], name))[0]
-    kept = [maintainer for maintainer in maintainers if maintainer]
-    if not kept:
+        return _most_common(names)
+    maintainers = [maintainer for _, maintainer in segments if maintainer]
+    if not maintainers:
         return number
-    counts = {}
-    for maintainer in kept:
-        counts[maintainer] = counts.get(maintainer, 0) + 1
-    maintainer = sorted(counts, key=lambda name: (-counts[name], name))[0]
-    return f"{maintainer} {number}"
+    return f"{_most_common(maintainers)} {number}"
+
+
+def _most_common(values: Sequence[str]) -> str:
+    """The most frequent value, ties going to the alphabetical one."""
+    return min(Counter(values).items(), key=lambda item: (-item[1], item[0]))[0]
 
 
 def fetch_turrutebasen(directory: Path) -> Path:
@@ -495,7 +512,7 @@ def fetch_turrutebasen(directory: Path) -> Path:
     download = Request(files[0]["downloadUrl"], headers={"User-Agent": "dayhike"})
     with urlopen(download, timeout=600) as response:
         blob = response.read()
-    features = list(_gpx_foot_features(blob))
+    features = list(_gpx_foot_features(blob, files[0]["downloadUrl"]))
     path = directory / "no-turrutebasen.geojson"
     tmp = path.with_name(path.name + ".part")
     tmp.write_text(json.dumps({"type": "FeatureCollection", "features": features}))
@@ -506,10 +523,12 @@ def fetch_turrutebasen(directory: Path) -> Path:
 _GPX = "{http://www.topografix.com/GPX/1/1}"
 
 
-def _gpx_foot_features(blob: bytes) -> Iterator[dict]:
+def _gpx_foot_features(blob: bytes, url: str) -> Iterator[dict]:
     """Foot ``rte`` elements of a zipped GPX, as GeoJSON features in lon/lat."""
     with zipfile.ZipFile(io.BytesIO(blob)) as archive:
-        gpx_name = next(name for name in archive.namelist() if name.lower().endswith(".gpx"))
+        gpx_name = next((name for name in archive.namelist() if name.lower().endswith(".gpx")), None)
+        if gpx_name is None:
+            raise OSError(f"{url}: no .gpx file in the archive")
         with archive.open(gpx_name) as handle:
             for _, element in ET.iterparse(handle, events=("end",)):
                 if element.tag != f"{_GPX}rte":

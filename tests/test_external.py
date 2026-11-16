@@ -225,6 +225,75 @@ def test_the_turrutebasen_adapter_chains_foot_segments_by_route_number() -> None
     assert hikes["bare1"].name == "bare1"
 
 
+def _write_turrute(directory: Path, segments: list[tuple[str, str, str, list[list[float]]]]) -> Path:
+    features = [
+        {
+            "type": "Feature",
+            "properties": {"rutenummer": number, "rutenavn": name, "maintainer": maintainer, "type": "Fotrute"},
+            "geometry": {"type": "LineString", "coordinates": coordinates},
+        }
+        for number, name, maintainer, coordinates in segments
+    ]
+    folder = directory / TURRUTE
+    folder.mkdir()
+    (folder / f"{TURRUTE}.geojson").write_text(json.dumps({"type": "FeatureCollection", "features": features}))
+    return directory
+
+
+def test_the_turrutebasen_adapter_keeps_one_route_number_of_two_maintainers_apart(tmp_path: Path) -> None:
+    directory = _write_turrute(
+        tmp_path,
+        [
+            ("5", "Toppturen", "Bergen Turlag", [[5.3, 60.4], [5.3, 60.41]]),
+            ("5", "Fjellstien", "Tromsø kommune", [[18.9, 69.6], [18.9, 69.61]]),
+            ("5", "Bysti", "", [[10.7, 59.9], [10.7, 59.91]]),
+        ],
+    )
+    hikes = {hike.ref: hike for hike in read_external(TURRUTE, directory)}
+
+    assert sorted(hikes) == ["5", "Bergen Turlag/5", "Tromsø kommune/5"]
+    assert hikes["Bergen Turlag/5"].name == "Toppturen"
+    assert hikes["Bergen Turlag/5"].points == ((60.4, 5.3), (60.41, 5.3))
+    assert hikes["Tromsø kommune/5"].name == "Fjellstien"
+    assert hikes["Tromsø kommune/5"].points == ((69.6, 18.9), (69.61, 18.9))
+    assert (hikes["5"].name, hikes["5"].points) == ("Bysti", ((59.9, 10.7), (59.91, 10.7)))
+
+
+def test_the_turrutebasen_adapter_names_each_piece_from_its_own_segments(tmp_path: Path) -> None:
+    directory = _write_turrute(
+        tmp_path,
+        [
+            ("1", "Toppturen", "DNT", [[10.0, 60.0], [10.0, 60.01]]),
+            ("1", "Toppturen", "DNT", [[10.0, 60.01], [10.0, 60.02]]),
+            ("1", "Fjellstien", "DNT", [[10.0, 61.0], [10.0, 61.01]]),
+        ],
+    )
+    hikes = {hike.ref: hike for hike in read_external(TURRUTE, directory)}
+
+    assert sorted(hikes) == ["1/1", "1/2"]
+    assert hikes["1/1"].name == "Toppturen"
+    assert hikes["1/1"].points == ((60.0, 10.0), (60.01, 10.0), (60.02, 10.0))
+    assert hikes["1/2"].name == "Fjellstien"
+    assert hikes["1/2"].points == ((61.0, 10.0), (61.01, 10.0))
+
+
+def test_fetch_external_names_a_download_without_a_gpx_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.writestr("readme.txt", "no routes")
+    download = "https://nedlasting.geonorge.no/api/download/order/fixture/file"
+    order = {"files": [{"downloadUrl": download}]}
+
+    def urlopen(request, timeout):
+        if request.full_url == external_module.TURRUTE_ORDER:
+            return io.BytesIO(json.dumps(order).encode())
+        return io.BytesIO(archive.getvalue())
+
+    monkeypatch.setattr(external_module, "urlopen", urlopen)
+    with pytest.raises(OSError, match=download):
+        fetch_external(TURRUTE, tmp_path)
+
+
 def test_fetch_external_caches_the_national_foot_routes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, "w") as handle:
