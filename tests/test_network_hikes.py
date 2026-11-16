@@ -907,6 +907,25 @@ def test_a_network_line_whose_ends_differ_by_over_100_m_starts_at_its_lower_end_
     assert network_hikes(net.legs, net.ways, net.nodes, parking, places, lower=flat)[0].name == "Alpha – Charlie"
 
 
+def test_a_network_line_within_the_band_around_100_m_keeps_the_start_of_the_last_build():
+    net = _alpha_bravo_charlie()
+    places = [(*_lat_lon(0.1, 0.1), "Alpha"), (*_lat_lon(4.4, 0), "Charlie")]
+    parking = [net.point("A")]
+    access = [*parking, *((lat, lon) for lat, lon, _ in places)]
+
+    def point(end: str) -> tuple[float, float]:
+        return tuple(round(x, 6) for x in net.point(end))
+
+    def name_after(rise_m: float, start: str) -> str:
+        before = {frozenset((point("A"), point("C"))): point(start)}
+        lower = LowerStart(_down_to_charlie(rise_m), access, before)
+        (hike,) = network_hikes(net.legs, net.ways, net.nodes, parking, places, lower=lower)
+        return hike.name
+
+    assert name_after(110.0, "A") == "Alpha – Charlie"  # 110 m would start low, the last build started high
+    assert name_after(95.0, "C") == "Charlie – Alpha"  # 95 m would start high, the last build started low
+
+
 def test_a_chain_the_crossings_take_over_the_maximum_is_left_out():
     # Legs A-P1 (12.47 km) and P3-D (12.5 km) sum to 24.97 km, under 25 km;
     # stepping P1, P2, P3 across their wide signpost adds 60 m and takes the

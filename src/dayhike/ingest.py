@@ -27,6 +27,7 @@ from dayhike.catalog import (
     IngestReport,
     LowerStart,
     MainWalk,
+    PreviousStarts,
     SAC_SCALE_RANK,
     NamedPoints,
     _access_tree,
@@ -100,6 +101,7 @@ def run_ingest(
     sources: Sequence[BuiltHikeSource] = BUILT_HIKE_SOURCES,
     heights: Heights | None = None,
     external: Sequence[tuple[str, Sequence[ExternalHike]]] = (),
+    previous: PreviousStarts | None = None,
 ) -> tuple[list[DayHike], IngestReport, Path, OsmSnapshot]:
     catalog_path = Path(catalog_path)
     catalog_path.parent.mkdir(parents=True, exist_ok=True)
@@ -135,7 +137,7 @@ def run_ingest(
         access_tree = _access_tree(snapshot.access_points)
         amenity_index = _amenity_index(snapshot.amenities)
         named = named_points(snapshot.named_points)
-        lower = _lower_start(snapshot, heights)
+        lower = _lower_start(snapshot, heights, previous)
         walks: dict[int, _StoredWalk] = {}
         kept, report_counts = _keep_dayhikes(
             snapshot,
@@ -991,11 +993,14 @@ def _stored_walk(stored: _StoredWalk, nodes) -> MainWalk:
     )
 
 
-def _lower_start(snapshot: OsmSnapshot, heights: Heights | None) -> LowerStart | None:
+def _lower_start(
+    snapshot: OsmSnapshot, heights: Heights | None, previous: PreviousStarts | None = None
+) -> LowerStart | None:
     """The height rule of ingest's lines (ADR-0048): parking and places reach an end."""
     if heights is None:
         return None
-    return LowerStart(heights, [*snapshot.access_points, *((lat, lon) for lat, lon, _ in snapshot.places)])
+    access = [*snapshot.access_points, *((lat, lon) for lat, lon, _ in snapshot.places)]
+    return LowerStart(heights, access, previous)
 
 
 def _main_walk(
@@ -1026,6 +1031,7 @@ def write_geometry_store(
     snapshot: OsmSnapshot | None = None,
     heights: Heights | None = None,
     dem_read: str = "",
+    previous: PreviousStarts | None = None,
 ) -> None:
     """Write DayHikeGeometry, member ways, and raw amenity points beside the Catalog.
 
@@ -1042,7 +1048,7 @@ def write_geometry_store(
     relations = {relation.id: relation for relation in snapshot.relations}
     access_tree = _access_tree(snapshot.access_points)
     named = named_points(snapshot.named_points)
-    lower = _lower_start(snapshot, heights)
+    lower = _lower_start(snapshot, heights, previous)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     if tmp.exists():

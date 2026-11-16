@@ -36,6 +36,7 @@ STEM_ACCESS_RADIUS_M = 200  # a loop's dead end ending this close to parking is 
 STEM_MIN_LENGTH_M = 1_000  # else a loop's only dead end at least this long is its stem
 END_NAME_RADIUS_M = 1_000  # a named point this close to a line end can name that end
 LOWER_START_M = 100.0  # a line whose ends differ by more than this starts at the lower one (ADR-0048) ...
+LOWER_START_BAND_M = 20.0  # ... but within this of it the last build's start stays, if there is one (ADR-0048)
 END_ACCESS_M = 300.0  # ... unless no parking or place this close, nor a road, reaches it while one reaches the top
 ACCESS_ROADS = frozenset(
     ("trunk", "primary", "secondary", "tertiary", "unclassified", "residential", "service", "living_street",
@@ -548,6 +549,7 @@ def build_catalog(
     snap_tolerance_m: float = SNAP_TOLERANCE_M,
     sources: Sequence[BuiltHikeSource] | None = None,
     dem_dir: Path | str | None = None,
+    previous: Path | str | None = None,
     external: Sequence[str] = (),
     external_dir: Path | str | None = None,
 ) -> Catalog:
@@ -593,6 +595,7 @@ def build_catalog(
         (source_id, read_external(source_id, EXTERNAL_DIR if external_dir is None else external_dir))
         for source_id in dict.fromkeys(external)
     ]
+    before = None if previous is None else previous_starts(previous)
     heights = None if dem_dir is None else point_heights(dem_dir)
     if dem_dir is not None and heights is None:
         emit_progress(progress, "assemble", f"no DEM tiles in {dem_dir}: height orients no line")
@@ -604,6 +607,7 @@ def build_catalog(
         sources=BUILT_HIKE_SOURCES if sources is None else sources,
         heights=heights,
         external=external_hikes,
+        previous=before,
     )
     emit_progress(progress, "write", str(catalog_path))
     # Each file is written under a staging name and all are renamed together once
@@ -620,7 +624,13 @@ def build_catalog(
         work_conn = _connect_work(work_path)
         try:
             write_geometry_store(
-                stage(geometry_store_path_for(catalog_path)), kept, work_conn, snapshot, heights, dem_read_by(dem_dir)
+                stage(geometry_store_path_for(catalog_path)),
+                kept,
+                work_conn,
+                snapshot,
+                heights,
+                dem_read_by(dem_dir),
+                before,
             )
             del snapshot  # the TrailGraph reads the work file on its own
             write_trailgraph(
@@ -856,6 +866,42 @@ def declared_start(ends: tuple[str, str] | None, named: NamedPoints | None) -> E
 Heights = Callable[[Sequence[tuple[float, float]]], Sequence["float | None"]]
 
 
+PreviousStarts = Mapping[frozenset[tuple[float, float]], tuple[float, float]]
+
+
+def _end_point(point: tuple[float, float]) -> tuple[float, float]:
+    return round(point[0], 6), round(point[1], 6)
+
+
+def previous_starts(catalog_path: Path | str) -> PreviousStarts:
+    """Where each one-way line of an earlier build started, by its two ends.
+
+    Read from the GeometryStore next to ``catalog_path``: a hike's first and
+    last vertex. A pair of ends two earlier hikes walked from different ends
+    is left out, and so is every loop.
+    """
+    store = geometry_store_path_for(catalog_path)
+    if not store.is_file():
+        raise FileNotFoundError(f"No GeometryStore {store} for the previous build {catalog_path}")
+    connection = sqlite3.connect(f"file:{store}?mode=ro", uri=True)
+    try:
+        rows = connection.execute(
+            "SELECT v.dayhike_id, v.latitude, v.longitude FROM vertices v JOIN "
+            "(SELECT dayhike_id, MAX(seq) AS last FROM vertices GROUP BY dayhike_id) m ON m.dayhike_id = v.dayhike_id "
+            "WHERE v.seq = 0 OR v.seq = m.last ORDER BY v.dayhike_id, v.seq"
+        ).fetchall()
+    finally:
+        connection.close()
+    ends_of: dict[int, list[tuple[float, float]]] = {}
+    for dayhike_id, lat, lon in rows:
+        ends_of.setdefault(dayhike_id, []).append(_end_point((lat, lon)))
+    starts: dict[frozenset[tuple[float, float]], set[tuple[float, float]]] = {}
+    for start, *_, end in (ends for ends in ends_of.values() if len(ends) > 1):
+        if start != end:
+            starts.setdefault(frozenset((start, end)), set()).add(start)
+    return {ends: next(iter(found)) for ends, found in starts.items() if len(found) == 1}
+
+
 class LowerStart:
     """Where height starts a one-way line (ADR-0048): at its lower end when its
     two ends differ by more than ``LOWER_START_M``, unless nothing reaches the
@@ -864,10 +910,22 @@ class LowerStart:
     a road (``ACCESS_ROADS``) of the line's ways passes through it.
     ``heights`` gives the height of each point, None where unknown; with an
     end's height unknown, height chooses nothing.
+
+    ``previous`` says where an earlier build started the lines it held (see
+    ``previous_starts``). A line whose ends differ by within ``LOWER_START_BAND_M``
+    of ``LOWER_START_M`` starts there again, so a few metres of height between
+    two builds cannot turn it round; only a difference that crosses the whole
+    band lets height decide anew.
     """
 
-    def __init__(self, heights: Heights, access: Sequence[tuple[float, float]]) -> None:
+    def __init__(
+        self,
+        heights: Heights,
+        access: Sequence[tuple[float, float]],
+        previous: PreviousStarts | None = None,
+    ) -> None:
         self.heights = heights
+        self.previous = previous or {}
         self.tree = _access_tree(access)
 
     def choice(self, ways: Sequence[OsmWay], nodes: Mapping[int, tuple[float, float]]) -> EndChoice:
@@ -875,7 +933,13 @@ class LowerStart:
 
         def choose(a: tuple[float, float], b: tuple[float, float]) -> tuple[float, float] | None:
             height_a, height_b = self.heights([a, b])
-            if height_a is None or height_b is None or abs(height_a - height_b) <= LOWER_START_M:
+            if height_a is None or height_b is None:
+                return None
+            if abs(abs(height_a - height_b) - LOWER_START_M) < LOWER_START_BAND_M:
+                before = self.previous.get(frozenset((_end_point(a), _end_point(b))))
+                if before is not None:
+                    return a if _end_point(a) == before else b
+            if abs(height_a - height_b) <= LOWER_START_M:
                 return None
             low, high = (a, b) if height_a < height_b else (b, a)
             roads = {

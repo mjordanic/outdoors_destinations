@@ -20,6 +20,28 @@ one-way lines (12.9 %) started more than 100 m higher than they ended (od-hike-d
 So a height difference over 100 m now outranks the dashed name, the nearer parking and member order. Dashed names
 are weaker than tags: "Gaflei - Planken" often lists two places, not a direction.
 
+**Stable across rebuilds.** A line whose ends differ by about 100 m flips when another DEM or a newer tile moves its
+heights by a few metres. The Copernicus against FABDEM comparison reversed 46 of 19,550 hikes (0.24 %), among them every
+stage of "Jakobova pot – Prekmursko-Štajerska veja", with nothing but the elevation source changed. A wider threshold or
+a band where height does not decide only moves the line: a hike near its edge flips just the same. Any rule that reads
+this build's heights alone has an edge. So `dayhike ingest --previous CATALOG` names the build before (its GeometryStore
+beside it; `previous_starts`), and a line whose end difference lies within **20 m** of the threshold
+(`LOWER_START_BAND_M`: 80 to 120 m) starts where that build started it. The line is found by its two end points, so
+relation lines, stages and NetworkHikes all keep their start, and a line the earlier build did not hold, or held at two
+different starts, is decided as before. Beyond the band height decides again, so a line flips only when its difference
+crosses the whole 40 m. Without `--previous` nothing changes: 100 m decides, as above.
+
+*Slovenia* (one extract, 2,143 one-way lines): 152 (7.1 %) have ends 80 to 120 m apart. Between FABDEM and Copernicus the
+end difference moves by a median 2.7 m, 90 % under 11 m, 99 % under 19 m, at most 39 m; for the 152, at most 25 m. Without
+`--previous` 6 lines (0.28 %, all relations, all with differences crossing 100 m between the sources, 88 to 102 m
+and the like) start at the other end. With `--previous` set to the FABDEM build, none do: all 2,143 starts equal the
+FABDEM build's, and the 6 are the only lines that differ from the plain Copernicus build.
+
+The build before is kept, not recomputed, so a rebuild from scratch (no `--previous`) can differ from a rebuild that
+keeps an earlier orientation. A kept start also outranks a dashed name or a tag edit made since, for a line inside the
+band; the next rebuild without `--previous` picks those up. Run the Europe rebuild with `--previous` set to the
+last published Catalog.
+
 **Reached.** An end is reached when parking or an OSM place node (city, town, village, hamlet) lies within **300 m**
 of it (`END_ACCESS_M`), or a road of the line's own ways passes through it (`ACCESS_ROADS`: trunk to unclassified,
 residential, service, living_street, pedestrian, road). This is what ingest already holds: the parking and place
@@ -53,6 +75,8 @@ descends. `elevation_gain`, the larger of the two, is direction-free, so the not
 **Considered Options**: start low whatever the tags say (it overrides 5,053 genuine OSM directions, e.g. "Vom
 Gletscher zum Wein" from the Dachstein cable car); start at the end with a settlement or road first, height as a
 tie-break (38,132 flips, 3,541 of them to a higher start, noisy for flat hikes); trust member order (ADR-0017 found
-it no direction); a smaller parking radius (Medvednica 5 has parking within 700 m at both ends). Rejected. Not done
+it no direction); a smaller parking radius (Medvednica 5 has parking within 700 m at both ends); a band around 100 m,
+say 80 to 120 m, inside which height decides nothing and the other rules apply (the edge moves to 120 m, where a hike
+whose other rules disagree with its height flips just the same); a wider threshold (the same). Rejected. Not done
 here: aerialway stations as access points (a lift-top descent is flipped to start in the valley unless tagged), a
 "reorient" pass on an existing Catalog (a full rebuild picks the rule up), and loops' start rule.

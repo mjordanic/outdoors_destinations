@@ -93,13 +93,14 @@ def _osm(
 class Walk:
     def __init__(
         self, tmp_path: Path, nodes, ways, members, parking=(), road=None, roles={},
-        tags={"name": "Shape"}, points=(), way_tags={}, dem=None,
+        tags={"name": "Shape"}, points=(), way_tags={}, dem=None, previous=None,
     ) -> None:
         tmp_path.mkdir(exist_ok=True)
         osm = tmp_path / "shape.osm"
         osm.write_text(_osm(nodes, ways, members, parking, road, roles, tags, points, way_tags))
         catalog_path = tmp_path / "catalog.sqlite"
-        catalog = build_catalog(osm, catalog_path, dem_dir=dem)
+        self.catalog_path = catalog_path
+        catalog = build_catalog(osm, catalog_path, dem_dir=dem, previous=previous)
         self.hike = next((hike for hike in catalog.dayhikes if hike.id == RELATION_ID), None)
         if self.hike is None:
             return
@@ -769,6 +770,49 @@ def test_a_line_whose_ends_differ_by_100_m_or_less_starts_where_parking_says(tmp
     )  # fmt: skip
 
     assert walk.vertices == "dcba"
+
+
+def _parked_line(tmp_path: Path, rise_m: float, previous: Walk | None = None) -> Walk:
+    # LINE parked at both ends, the nearer car park at the top d, a village by the bottom a (Medvednica 5).
+    return Walk(
+        tmp_path, LINE, LINE_WAYS, [1, 2, 3], parking=[(0, 6.1), (0, -0.6)], points=[BORCEC_BY_A],
+        dem=_dem_rising_to_d(tmp_path, rise_m=rise_m), previous=previous.catalog_path if previous else None,
+    )  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("before_m", "after_m", "start"),
+    [
+        (90.0, 110.0, "dcba"),  # a few metres across 100 m: the start the last build chose stays the top
+        (130.0, 92.0, "abcd"),  # ... and the bottom stays the bottom
+        (95.0, 105.0, "dcba"),
+        (105.0, 95.0, "abcd"),
+        (60.0, 130.0, "abcd"),  # a rise over the band decides again
+        (130.0, 60.0, "dcba"),  # ... and so does a fall under it
+    ],
+)
+def test_a_line_whose_ends_stay_within_the_band_around_100_m_keeps_the_start_of_the_last_build(
+    tmp_path: Path, before_m: float, after_m: float, start: str
+) -> None:
+    before = _parked_line(tmp_path / "before", before_m)
+
+    after = _parked_line(tmp_path / "after", after_m, previous=before)
+
+    assert after.vertices == start
+
+
+def test_without_a_last_build_the_ends_decide_at_100_m(tmp_path: Path) -> None:
+    assert _parked_line(tmp_path / "up", 105.0).vertices == "abcd"
+    assert _parked_line(tmp_path / "down", 95.0).vertices == "dcba"
+
+
+def test_a_last_build_that_never_held_the_line_decides_nothing(tmp_path: Path) -> None:
+    other = Walk(
+        tmp_path / "other", {"p": (3, 0), "q": (3, 2)}, {1: "pq"}, [1], parking=[(3, 2.1)],
+        dem=_dem_rising_to_d(tmp_path),
+    )  # fmt: skip
+
+    assert _parked_line(tmp_path / "after", 105.0, previous=other).vertices == "abcd"
 
 
 def test_a_descent_its_from_and_to_tags_declare_keeps_their_direction(tmp_path: Path) -> None:
