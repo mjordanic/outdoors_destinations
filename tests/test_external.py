@@ -28,7 +28,10 @@ from test_built_hikes import FIXTURE, RIDGE_WALK_ID
 
 EXTERNAL_DIR = Path(__file__).parent / "fixtures" / "external"
 SOURCE = "ie-sport-ireland"
+LIPAS = "fi-lipas"
 LOUGH_URL = "https://www.sportireland.ie/outdoors/walking/trails/lough-fixture-way"
+LIPAS_PAGE = Path(__file__).parent / "fixtures" / "external" / "fi-lipas-api-page.json"
+KORPI_URL = "https://www.lipas.fi/liikuntapaikka/100"
 
 
 def test_the_sport_ireland_adapter_reads_walking_trails_from_their_start() -> None:
@@ -56,8 +59,8 @@ def test_joined_line_extends_the_longest_part_by_the_parts_that_meet_its_ends() 
 
 
 def test_a_source_the_register_does_not_list_as_used_is_refused() -> None:
-    with pytest.raises(ValueError, match="fi-lipas"):
-        read_external("fi-lipas", EXTERNAL_DIR)
+    with pytest.raises(ValueError, match="no-turrutebasen"):
+        read_external("no-turrutebasen", EXTERNAL_DIR)
     with pytest.raises(ValueError, match="no external source"):
         fetch_external("osm", EXTERNAL_DIR)
 
@@ -178,3 +181,94 @@ def test_fetch_external_caches_every_page_of_the_walking_trails(tmp_path: Path, 
     assert [query["resultOffset"] for query in asked] == [["0"], ["2"]]
     assert asked[0]["where"] == ["Activity='Walking'"]
     assert asked[0]["outSR"] == ["4326"]
+
+
+def test_the_lipas_adapter_names_active_routes_and_splits_parts_that_do_not_meet() -> None:
+    hikes = {hike.ref: hike for hike in read_external(LIPAS, EXTERNAL_DIR)}
+
+    assert sorted(hikes) == ["100", "200", "300/1", "300/2", "600"]
+    korpi = hikes["100"]
+    assert (korpi.name, korpi.url) == ("Korpi trail", KORPI_URL)
+    assert korpi.points == ((60.0, 24.0), (60.01, 24.0), (60.02, 24.01))
+    # Two parts that meet within 50 m are one walk, under the Lipas id.
+    assert hikes["200"].points == ((60.0, 25.0), (60.01, 25.0), (60.02, 25.0))
+    # Parts that do not meet are pieces, numbered from the southern start.
+    assert hikes["300/1"].points == ((60.0, 24.0), (60.01, 24.0))
+    assert hikes["300/2"].points == ((61.0, 24.0), (61.01, 24.0))
+    assert hikes["300/1"].name == hikes["300/2"].name == "Split walk"
+    # A nature trail under 1 km is still read; ingest applies the floor.
+    assert hikes["600"].name == "Pieni luontopolku"
+
+
+def test_the_lipas_adapter_keeps_a_branch_as_a_piece_of_its_own(tmp_path: Path) -> None:
+    feature = {
+        "type": "Feature",
+        "properties": {"lipas-id": 800, "name": "Haara walk", "status": "active", "type-code": 4405},
+        "geometry": {
+            "type": "MultiLineString",
+            "coordinates": [
+                [[24.0, 60.0], [24.0, 60.01]],
+                [[24.0, 60.01], [24.0, 60.02]],
+                [[24.0, 60.01], [24.01, 60.01]],
+            ],
+        },
+    }
+    cache = tmp_path / LIPAS / f"{LIPAS}.geojson"
+    cache.parent.mkdir()
+    cache.write_text(json.dumps({"type": "FeatureCollection", "features": [feature]}))
+
+    hikes = {hike.ref: hike for hike in read_external(LIPAS, tmp_path)}
+
+    assert sorted(hikes) == ["800/1", "800/2"]
+    assert hikes["800/1"].points == ((60.0, 24.0), (60.01, 24.0), (60.02, 24.0))
+    # The spur meets the walk mid-way, not at its ends, so it is its own piece.
+    assert hikes["800/2"].points == ((60.01, 24.0), (60.01, 24.01))
+
+
+def test_fetch_external_caches_every_lipas_page(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    first = json.loads(LIPAS_PAGE.read_text())
+    second = {
+        "items": [
+            {
+                "lipas-id": 600,
+                "name": "Pieni luontopolku",
+                "status": "active",
+                "type": {"type-code": 4404},
+                "location": {
+                    "geometries": {
+                        "type": "FeatureCollection",
+                        "features": [
+                            {
+                                "type": "Feature",
+                                "geometry": {"type": "LineString", "coordinates": [[26.0, 62.0], [26.02, 62.0]]},
+                            }
+                        ],
+                    }
+                },
+            }
+        ],
+        "pagination": {"current-page": 2, "page-size": 100, "total-items": 2, "total-pages": 2},
+    }
+    asked = []
+
+    def urlopen(request, timeout):
+        query = parse_qs(urlparse(request.full_url).query)
+        asked.append(query)
+        page = first if query["page"] == ["1"] else second
+        return io.BytesIO(json.dumps(page).encode())
+
+    monkeypatch.setattr(external_module, "urlopen", urlopen)
+    assert main(["fetch-external", "--source", "fi", "--dest", str(tmp_path)]) == 0
+
+    cached = json.loads((tmp_path / LIPAS / f"{LIPAS}.geojson").read_text())
+    assert [feature["properties"]["lipas-id"] for feature in cached["features"]] == [100, 600]
+    assert [query["page"] for query in asked] == [["1"], ["2"]]
+    assert asked[0]["page-size"] == ["100"]
+    assert asked[0]["statuses"] == ["active"]
+    assert set(asked[0]["type-codes"]) == {"4405", "4404"}
+    hikes = {hike.ref: hike for hike in read_external(LIPAS, tmp_path)}
+    assert hikes["100"].points == ((60.0, 25.0), (60.01, 25.0))
+    assert (hikes["600"].name, hikes["600"].url) == (
+        "Pieni luontopolku",
+        "https://www.lipas.fi/liikuntapaikka/600",
+    )
