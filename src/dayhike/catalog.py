@@ -577,6 +577,8 @@ def build_catalog(
     give the heights of line ends that orient lines (``LowerStart``); without
     tiles there, height orients none. A ``dem_dir`` that is not a directory
     is refused, so a mistyped path does not build a Catalog without heights.
+    ``previous`` names an earlier build's Catalog: a line whose ends differ by
+    about ``LOWER_START_M`` starts where that build started it (``previous_starts``).
     ``external`` names external sources (ADR-0062) whose hikes, cached under
     ``external_dir`` (default ``data/external``) by ``dayhike fetch-external``,
     are added as DayHikes of kind ``external``; a source the register does not

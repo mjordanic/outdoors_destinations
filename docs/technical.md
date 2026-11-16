@@ -1403,7 +1403,7 @@ directory: every DEM step reads the source from the tile names in its
 ```bash
 uv run dayhike fetch-dem --source copernicus --dest data/dem-copernicus
 uv run dayhike fetch-landcover
-uv run dayhike ingest <pbf> --catalog data/catalog.sqlite --fresh --dem data/dem-copernicus
+uv run dayhike ingest <pbf> --catalog data/catalog.sqlite --fresh --dem data/dem-copernicus --previous data/catalog.sqlite
 uv run dayhike sample-dem --dem data/dem-copernicus
 uv run dayhike sample-landcover
 uv run dayhike sample-climate
@@ -1412,7 +1412,8 @@ uv run dayhike build-similarity --dem data/dem-copernicus
 ```
 
 (`ingest` reads the DEM too: it orients one-way lines, DayStages and NetworkHikes by the heights of their ends,
-ADR-0048. Left out of the recipe, it would keep the orientation FABDEM gave.)
+ADR-0048. Left out of the recipe, it would keep the orientation FABDEM gave. `--previous` names the FABDEM
+build, read before it is replaced, so a line whose ends differ by 80 to 120 m keeps its start.)
 
 A Copernicus `sample-dem` writes its attribution into GeometryStore
 `geometry_meta` (`copernicus_attribution`; a FABDEM run removes it). The
