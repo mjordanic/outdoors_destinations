@@ -1398,20 +1398,38 @@ directory: every DEM step reads the source from the tile names in its
 ```bash
 uv run dayhike fetch-dem --source copernicus --dest data/dem-copernicus
 uv run dayhike fetch-landcover
+uv run dayhike ingest <pbf> --catalog data/catalog.sqlite --fresh --dem data/dem-copernicus
 uv run dayhike sample-dem --dem data/dem-copernicus
+uv run dayhike sample-landcover
+uv run dayhike sample-climate
 uv run dayhike sample-trailgraph --dem data/dem-copernicus
 uv run dayhike build-similarity --dem data/dem-copernicus
 ```
+
+(`ingest` reads the DEM too: it orients one-way lines, DayStages and NetworkHikes by the heights of their ends,
+ADR-0048. Left out of the recipe, it would keep the orientation FABDEM gave.)
 
 A Copernicus `sample-dem` writes its attribution into GeometryStore
 `geometry_meta` (`copernicus_attribution`; a FABDEM run removes it). The
 serving export carries it in place of FABDEM's attribution, and the site then
 names Copernicus GLO-30 instead of FABDEM in the Measure sources, the score
-help, the credits page and the home page footer line. That credit
-follows the last `sample-dem` alone: the export is free of FABDEM's
-non-commercial limit only when all three DEM steps above ran with the same
+help, the credits page and the home page footer line. The export is free of
+FABDEM's non-commercial limit only when all four DEM steps above (`ingest`,
+`sample-dem`, `sample-trailgraph`, `build-similarity`) ran with the same
 Copernicus `--dem` over tiles covering every DayHike. Otherwise some values are
 still FABDEM, and its credit and the non-commercial limit still apply.
+
+Each of the four steps records the sources whose tiles its `--dem` directory
+holds (`dem.dem_read_by`): `ingest` and `sample-dem` in GeometryStore
+`geometry_meta` (`dem_read_ingest`, `dem_read_sample_dem`), `sample-trailgraph`
+in the TrailGraph's `trailgraph_meta` (`dem_read`), `build-similarity` in the
+similarity directory's `meta.json` (`dem_read`). `export-serving` refuses
+(`ServingExportError`, naming each step and its source) when the recorded
+sources differ, and writes them by step into its `meta.json` as `dem_read`. A
+step that read no DEM (ingest without `--dem`) records nothing and is left out;
+a Catalog built before the steps recorded their source exports as before.
+Re-run the step that differs on the build's `--dem` directory, and every step
+after it, to clear the refusal.
 
 **USGS 3DEP for the United States (ADR-0063):** `--source 3dep` downloads the
 USGS 3DEP 1 arc-second GeoTIFFs of a box from the USGS staged-products bucket
@@ -2545,7 +2563,7 @@ DAYHIKE_REAL_DATA=1 uv run pytest -m real_data
 
 | File | Checks |
 | --- | --- |
-| `test_raw_inputs.py` | the Europe PBF is the recorded snapshot (size, sha256); every 1° vertex cell has a FABDEM tile except the three known 404 tiles in Georgia; every 3° vertex cell has a WorldCover tile; 36 climate rasters on one 30″ grid cover the vertex extent; the hiking extract was cut with today's filter list |
+| `test_raw_inputs.py` | the Europe PBF is the recorded snapshot (size, sha256); every 1° vertex cell has a tile of the DEM source the build read (FABDEM, or Copernicus GLO-30) except the known gaps (FABDEM: three 404 tiles in Georgia and open sea; Copernicus: the tiles GLO-30 Public leaves out and open sea); every 3° vertex cell has a WorldCover tile; 36 climate rasters on one 30″ grid cover the vertex extent; the hiking extract was cut with today's filter list |
 | `test_catalog_invariants.py` | exact schema and no work files; the ingest report adds up (and equals the recorded one on the same snapshot); one row per DayHike in every table; values in range; NULL budgets; every Trailhead is vertex 0 |
 | `test_geometry_invariants.py` | GeometryStore DayHikes equal the Catalog's; dense `seq`; the attributions (CHELSA, not WorldClim) |
 | `test_coverage_by_country.py` | DayHikes per Geofabrik country within ±0.5% of the recorded counts (±15% on another snapshot); LandCover, climate and elevation on ≥ 99% of the DayHikes of every country with ≥ 50 (Georgia's elevation 79%). Needs `data/osm/geofabrik-index-v1.json` from https://download.geofabrik.de/index-v1.json |
@@ -2601,7 +2619,7 @@ at the rebuild.
    ```bash
    mkdir -p $NEW/osm $NEW/dem $NEW/landcover $NEW/climate
    ln -s $REF/osm/europe-latest.osm.pbf $NEW/osm/
-   ln -s $REF/dem/*_FABDEM_V1-2.tif $NEW/dem/
+   ln -s $REF/dem/*_FABDEM_V1-2.tif $NEW/dem/   # a Copernicus build: `*_COG_10_*_DEM.tif` instead (never both)
    ln -s $REF/landcover/*_Map.tif $NEW/landcover/
    curl -L --fail -o $NEW/osm/geofabrik-index-v1.json https://download.geofabrik.de/index-v1.json
    ```

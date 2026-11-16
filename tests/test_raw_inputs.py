@@ -40,10 +40,13 @@ def test_europe_pbf_is_the_recorded_snapshot() -> None:
 
 
 def test_every_vertex_tile_has_a_dem_tile_or_is_a_known_upstream_gap(tiles: dict) -> None:
-    present = {path.name.split("_FABDEM", 1)[0] for path in (rc.DATA_DIR / "dem").glob("*_FABDEM_V1-2.tif")}
+    source = rc.world_dem_source(rc.DATA_DIR / "dem")  # FABDEM or Copernicus GLO-30, whichever the build read
+    present = set(source.tiles_in(rc.DATA_DIR / "dem"))
     needed = {rc.corner_id(south, west) for south, west in tiles}
+    missing, allowed = needed - present, rc.known_dem_gaps(source)
 
-    assert needed - present == rc.KNOWN_DEM_GAPS
+    # FABDEM's gaps are pinned; Copernicus may lack any tile it leaves out, and sea.
+    assert missing == allowed if source.name == "fabdem" else missing <= allowed
 
 
 def test_every_vertex_tile_has_a_worldcover_tile(tiles: dict) -> None:

@@ -977,6 +977,10 @@ def sample_trailgraph(
             _write_climate_cells(db, rasters, grid, sorted(cells))
         if has_landcover:
             _write_water(db, landcover_dir, progress)
+        if has_dem:
+            db.execute(
+                "INSERT OR REPLACE INTO trailgraph_meta (key, value) VALUES ('dem_read', ?)", (dem.dem_read_by(dem_dir),)
+            )
         db.commit()
     finally:
         db.close()

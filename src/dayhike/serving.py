@@ -88,7 +88,15 @@ from dayhike.catalog import (
     straight_line_distances_m,
     trailgraph_path_for,
 )
-from dayhike.dem import COPERNICUS, DEM_ATTRIBUTION_KEYS, FABDEM_ATTRIBUTION
+from dayhike.dem import (
+    COPERNICUS,
+    DEM_ATTRIBUTION_KEYS,
+    DEM_READ_KEY,
+    DEM_SOURCES,
+    FABDEM_ATTRIBUTION,
+    DemSourceMismatch,
+    check_one_dem_source,
+)
 from dayhike.extracts import UrlRetrieve
 from dayhike.loops import LOOP_SEEDS, LOOP_TRAILHEADS, LoopTarget, find_loops
 from dayhike.regions import Region
@@ -616,6 +624,12 @@ def export_serving(
     except StaleSimilarity as exc:
         raise ServingExportError(str(exc)) from exc
     _check_trailgraph_sampled(trailgraph_path_for(catalog_path), store)
+    similarity_meta = json.loads((similarity_dir_for(catalog_path) / "meta.json").read_text())
+    dem_read = _dem_read_by_step(catalog_path, similarity_meta)
+    try:
+        check_one_dem_source(dem_read)
+    except DemSourceMismatch as exc:
+        raise ServingExportError(str(exc)) from exc
     similarity = out / "similarity"
     similarity.mkdir(exist_ok=True)
     for name in _SIMILARITY_FILES:
@@ -650,10 +664,15 @@ def export_serving(
         elevation = {"fabdem": FABDEM_ATTRIBUTION} if "fabdem" in dems_used else {}
     else:
         elevation = {} if "copernicus" in sources else {"fabdem": FABDEM_ATTRIBUTION}
+    facts_version = json.loads((similarity / "meta.json").read_text())["facts_version"]
     meta = {
         "format": SERVING_FORMAT,
         "dayhikes": len(ids),
-        "facts_version": json.loads((similarity / "meta.json").read_text())["facts_version"],
+        "facts_version": facts_version,
+        # The tag of the data image: the same code on another elevation map is other data (docs/deploy.md §3).
+        "data_tag": f"{facts_version}-{'_'.join(_credited_dems(dems_used, sources))}",
+        # The DEM each step read, by step (a step that read none, or ran before it was recorded, is left out).
+        "dem_read": dem_read,
         "line_tolerance_m": LINE_TOLERANCE_M,
         "elevation_points": ELEVATION_POINTS,
         "attribution": {"osm": attribution, **elevation, **sources, **external_credits(external)},
@@ -667,6 +686,37 @@ def export_serving(
         meta["regions"] = [{"label": region.label, "continent": region.continent} for region in regions]
     (out / "meta.json").write_text(json.dumps(meta, indent=1, ensure_ascii=False))
     return out
+
+
+def _credited_dems(dems_used: set[str], sources: Mapping[str, str]) -> list[str]:
+    """The register ids of the elevation maps the export credits, in ``DEM_SOURCES`` order: those the
+    DayHikes record, else (a Catalog sampled before) FABDEM or Copernicus GLO-30 by the GeometryStore."""
+    if not dems_used:
+        dems_used = {COPERNICUS.register_id if "copernicus" in sources else "fabdem"}
+    return [source.register_id for source in DEM_SOURCES.values() if source.register_id in dems_used]
+
+
+def _dem_read_by_step(catalog_path: Path, similarity_meta: Mapping[str, str]) -> dict[str, str]:
+    """The DEM each step read (``dem_read_by``), by step in build order, as recorded in the GeometryStore
+    (ingest, sample-dem), the TrailGraph (sample-trailgraph) and the similarity ``meta.json``."""
+    def meta_of(path: Path, table: str) -> dict[str, str]:
+        if not path.is_file():  # an export without a TrailGraph does not compose (ADR-0018)
+            return {}
+        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            return dict(db.execute(f"SELECT key, value FROM {table}"))
+        finally:
+            db.close()
+
+    in_geometry = meta_of(geometry_store_path_for(catalog_path), "geometry_meta")
+    in_trailgraph = meta_of(trailgraph_path_for(catalog_path), "trailgraph_meta")
+    read = {
+        "ingest": in_geometry.get(DEM_READ_KEY["ingest"]),
+        "sample-dem": in_geometry.get(DEM_READ_KEY["sample-dem"]),
+        "sample-trailgraph": in_trailgraph.get("dem_read"),
+        "build-similarity": similarity_meta.get("dem_read"),
+    }
+    return {step: source for step, source in read.items() if source}
 
 
 def _write_hikes(

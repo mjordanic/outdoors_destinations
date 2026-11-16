@@ -96,7 +96,9 @@ gcloud artifacts repositories set-cleanup-policies dayhike --location=europe-wes
 
 # the data image, once per data refresh: 1 to 2.4 GB compressed, a push of a couple of minutes
 REPO=europe-west1-docker.pkg.dev/PROJECT/dayhike
-DATA_IMAGE=$REPO/data:$(jq -r .facts_version data/web-serving/meta.json)
+# data_tag is the export's facts_version and its elevation map(s), e.g. 3fa9…-fabdem or 3fa9…-copernicus-glo30, so the
+# same code on another DEM is another tag and the live image is kept for a rollback
+DATA_IMAGE=$REPO/data:$(jq -r .data_tag data/web-serving/meta.json)
 docker buildx build --platform linux/amd64 -f web/data.Dockerfile \
   --build-context serving=data/web-serving -t "$DATA_IMAGE" --push .
 
@@ -330,18 +332,22 @@ If an alert fires and the traffic is abuse, close the public access at once:
 - **FABDEM is non-commercial (CC BY-NC-SA 4.0):** the demo must stay
   non-commercial (no ads, no paid tier).
   An export sampled from Copernicus GLO-30 instead (ADR-0030) lifts this
-  limit for elevation only when every DEM step (`sample-dem`,
+  limit for elevation only when every DEM step (`ingest`, `sample-dem`,
   `sample-trailgraph`, `build-similarity`) ran with the same Copernicus
-  `--dem` over tiles covering every DayHike. Otherwise some values are still
-  FABDEM: its credit and the non-commercial limit still apply, even though the
-  page credits only Copernicus (it follows the last `sample-dem`).
+  `--dem` over tiles covering every DayHike. `export-serving` refuses a build
+  whose steps recorded different sources, and its `meta.json` lists the one
+  each read (`dem_read`). The credit follows each hike's `dem_source`, which
+  only `sample-dem` records: a Catalog built before the steps recorded their
+  source is not checked, so rebuild it before relying on the credit.
 
 ## 7. Update or roll back
 
 A code change needs only a new web image: build it on the current data image
 (section 3) and `gcloud run deploy` again, or let the deploy workflow do it
 (section 9). A data refresh rebuilds the export, then the data image with the
-new `facts_version` tag, then the web image on it.
+new `data_tag` (`facts_version` and the DEM: a Copernicus data image never takes
+the tag of the FABDEM one), then the web image on it. Keep the previous data
+image when the DEM changes: a rollback is one traffic change.
 `gcloud run services update-traffic dayhike --region europe-west1 --to-revisions REVISION=100`
 goes back to an earlier revision (`gcloud run revisions list --service dayhike --region europe-west1`
 lists them); the image it runs must still be kept (section 3). That pins the
@@ -467,7 +473,7 @@ reviewer before each deploy.
 | `GCP_REGION` | `europe-west1` |
 | `CLOUD_RUN_SERVICE` | `dayhike` |
 | `DAYHIKE_IMAGE_REPO` | `europe-west1-docker.pkg.dev/PROJECT/dayhike` |
-| `DAYHIKE_DATA_IMAGE` | `europe-west1-docker.pkg.dev/PROJECT/dayhike/data:FACTS_VERSION` |
+| `DAYHIKE_DATA_IMAGE` | `europe-west1-docker.pkg.dev/PROJECT/dayhike/data:DATA_TAG` |
 | `DAYHIKE_PMTILES_URL` (optional) | `https://maps.hikesalike.com/europe.pmtiles` (section 10); unset or empty, the raster tiles |
 
 ### One-time cloud setup (by the maintainer)
