@@ -631,7 +631,7 @@ the ODbL ([ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/) §4.6). Onl
 part made from OpenStreetMap is offered (the OSMF
 [Collective Database guideline](https://osmfoundation.org/wiki/Licence/Community_Guidelines/Collective_Database_Guideline_Guideline):
 heights, land cover, climate and places come from other sources with their own licences,
-`DATA-LICENSES.md`). It is two small files, served beside the map file from the same R2 bucket
+`DATA-LICENSES.md`). It is two files, served beside the map file from the same R2 bucket
 (section 10), so the elevation source (FABDEM or Copernicus GLO-30) does not touch it:
 
 - `hikes-osm.sqlite`: the hikes whose source is OpenStreetMap (never an external source's), with
@@ -650,18 +650,19 @@ uv run dayhike export-osm-download --data data/web-serving --out data/osm-downlo
 ```
 
 `--data-date` is the date of the OpenStreetMap extracts the export was built from (the Geofabrik
-file date); without it the day the export was written is used, which is later than the data. It is
-a small file next to the 25 GB map: check the row counts with
+file date); without it the day the export was written is used, which is later than the data. Built
+from the Europe export of 2026-11-15 it is 1.13 GB (258,211 hikes, 4,660,146 points). Check the row counts with
 `sqlite3 data/osm-download/hikes-osm.sqlite 'select count(*) from hikes; select count(*) from hike_points;'`
 against `meta.json`'s `dayhikes` (the difference is the external hikes, which stay out).
 
 ### Publishing it
 
-Upload both files to the bucket of section 10 beside `europe.pmtiles`, replacing the last ones. They are small, so
-`wrangler` takes them (an S3 client such as `rclone` does too):
+Upload both files to the bucket of section 10 beside `europe.pmtiles`, replacing the last ones.
+`hikes-osm.sqlite` (about 1.1 GB) is far past what `wrangler r2 object put` takes (about 300 MiB), so
+upload it with an S3 client, as section 10 does for the map; the README is tiny, so `wrangler` takes it:
 
 ```bash
-wrangler r2 object put BUCKET/hikes-osm.sqlite --file data/osm-download/hikes-osm.sqlite --content-type application/vnd.sqlite3 --remote
+rclone copyto data/osm-download/hikes-osm.sqlite r2:BUCKET/hikes-osm.sqlite --header-upload "Content-Type: application/vnd.sqlite3"
 wrangler r2 object put BUCKET/hikes-osm-README.txt --file data/osm-download/README.txt --content-type "text/plain; charset=utf-8" --remote
 ```
 
