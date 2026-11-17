@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, urlparse
 
 from dayhike import build_catalog, build_similarity
 from dayhike.catalog import geometry_store_path_for
-from dayhike.photos import CommonsClient, export_photos, kept_photo, photo_from_page, photos_for_hike
+from dayhike.photos import MAX_URL, CommonsClient, export_photos, kept_photo, photo_from_page, photos_for_hike
 from dayhike.serving import ServingData, export_serving
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
@@ -183,6 +183,61 @@ def test_a_file_with_only_a_source_credit_and_no_author_is_dropped() -> None:
     meta["Credit"] = {"value": "Own work"}
 
     assert photo_from_page(page) is None
+
+
+def _cyrillic(n: int, length: int = 60) -> list[str]:
+    return [f"File:{'Ж' * length}{i}.jpg" for i in range(n)]
+
+
+def test_a_batch_of_long_non_ascii_titles_is_split_so_no_url_is_too_long(tmp_path: Path) -> None:
+    titles = _cyrillic(50)
+    opener = _opener({title: _page(title, "CC0") for title in titles})
+    client = CommonsClient(tmp_path / "commons.sqlite", opener, pause_s=0)
+
+    found = client.files(titles)
+
+    assert len(opener.calls) > 1
+    assert all(len(request.full_url) <= MAX_URL for request in opener.calls)
+    assert all(found[title] is not None for title in titles)
+    asked = [t for request in opener.calls for t in parse_qs(urlparse(request.full_url).query)["titles"][0].split("|")]
+    assert asked == titles
+
+
+def test_a_single_title_longer_than_the_cap_is_sent_alone(tmp_path: Path) -> None:
+    long = _cyrillic(1, length=MAX_URL)[0]
+    short = "File:Short.jpg"
+    opener = _opener({long: _page(long, "CC0"), short: _page(short, "CC0")})
+    client = CommonsClient(tmp_path / "commons.sqlite", opener, pause_s=0)
+
+    client.files([short, long])
+
+    sent = [parse_qs(urlparse(request.full_url).query)["titles"][0].split("|") for request in opener.calls]
+    assert [long] in sent
+
+
+def test_warm_reports_progress_while_the_cache_fills(tmp_path: Path) -> None:
+    pages = {
+        "Q1": {"claims": {"P18": [{"mainsnak": {"datavalue": {"value": "One.jpg"}}}]}},
+        "File:One.jpg": _page("File:One.jpg", "CC BY 2.0", "Ann"),
+        "File:Direct.jpg": _page("File:Direct.jpg", "CC0"),
+        "Category:Ridge": ["File:Cat.jpg"],
+        "File:Cat.jpg": _page("File:Cat.jpg", "CC0"),
+    }
+    lines: list[str] = []
+    client = CommonsClient(tmp_path / "commons.sqlite", _opener(pages), pause_s=0, progress=lines.append)
+
+    client.warm(
+        [
+            {"name": "A", "wikidata": "Q1"},
+            {"name": "B", "wikimedia_commons": "File:Direct.jpg"},
+            {"name": "C", "wikimedia_commons": "Category:Ridge"},
+        ]
+    )
+
+    assert "photos: entities 1/1" in lines
+    assert "photos: files 2/2" in lines
+    assert "photos: categories 1/1" in lines
+    assert "photos: category files 1/1" in lines
 
 
 def test_a_second_uncached_batch_waits(tmp_path: Path, monkeypatch) -> None:
