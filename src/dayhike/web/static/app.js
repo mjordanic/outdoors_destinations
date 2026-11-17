@@ -1290,12 +1290,21 @@ function sourceLine(hike) {
   return `<p class="hint source-line">Source: ${escapeHtml(source.name ?? source.id)}${licence || ""}, record ${ref}</p>`;
 }
 
-// A built hike's head (ADR-0038): the OSM relations it is built from, a link to it,
-// and, beside a liked hike when the server can compose, its Route to edit on the map.
+// A built hike's head (ADR-0038): the OSM relations it is built from (for a named trail,
+// ADR-0066, the OSM ways its Route walks), a link to it, and, beside a liked hike when
+// the server can compose, its Route to edit on the map.
+function routeWays(route) {
+  // The ways of a Route ("start:way.node,..."; a negative way is walked against its nodes, "g" a gap), each once.
+  const steps = route.split(":")[1].split(",").map((step) => step.split(".")[0]).filter((way) => way !== "g");
+  return [...new Set(steps.map((way) => Math.abs(Number(way))))];
+}
+
 function builtLinks(hike, compare) {
-  const parts = hike.built.parts.map((id) => `<a href="https://www.openstreetmap.org/relation/${id}" target="_blank" rel="noopener">${id}</a>`);
+  const type = hike.built.kind === "trail" ? "way" : "relation";
+  const ids = type === "way" ? routeWays(hike.built.route) : hike.built.parts;
+  const parts = ids.map((id) => `<a href="https://www.openstreetmap.org/${type}/${id}" target="_blank" rel="noopener">${id}</a>`);
   const edit = compare && state.info.compose ? ' <button type="button" class="secondary edit-composed">Edit on the map</button>' : "";
-  return `<span>Built from OSM relation${parts.length === 1 ? "" : "s"} ${parts.join(", ")} · <a class="hike-link" href="${likedHash(hike)}" title="This address opens this hike">Link to this hike</a>${edit}</span>`;
+  return `<span>Built from OSM ${type}${parts.length === 1 ? "" : "s"} ${parts.join(", ")} · <a class="hike-link" href="${likedHash(hike)}" title="This address opens this hike">Link to this hike</a>${edit}</span>`;
 }
 
 // The Measures a comparison shows: with the way back every hike is a round trip, so not Round trip.

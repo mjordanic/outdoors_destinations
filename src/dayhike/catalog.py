@@ -129,8 +129,8 @@ class DayHike:
     feature_vector: FeatureVector
     name_origin: str = NAME_ORIGIN_OSM_NAME
     climate_months: tuple[tuple[float, float, float] | None, ...] = (None,) * 12
-    # A built DayHike (ADR-0038) is a "network" or "stage" walk, built from
-    # the OSM relations in ``parts``, that walks its Route ``route``.
+    # A built DayHike (ADR-0038) is a "network", "stage" or "trail" (ADR-0066) walk,
+    # built from the OSM relations in ``parts`` (none for a trail), that walks its Route ``route``.
     kind: str = KIND_RELATION
     parts: tuple[int, ...] = ()
     route: str | None = None
@@ -584,7 +584,8 @@ def build_catalog(
     ``external_dir`` (default ``data/external``) by ``dayhike fetch-external``,
     are added as DayHikes of kind ``external``; a source the register does not
     list as used is refused. ``paths`` is the level of paths in no hiking
-    relation read into the TrailGraph, one of ``PATH_LEVELS`` (ADR-0065).
+    relation read into the TrailGraph, one of ``PATH_LEVELS`` (ADR-0065); from
+    ``trails`` up the named-trail hikes are built from them too (ADR-0066).
     """
     from dayhike.dem import dem_read_by, point_heights
     from dayhike.external import EXTERNAL_DIR, read_external
