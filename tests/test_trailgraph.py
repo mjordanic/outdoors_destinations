@@ -9,6 +9,7 @@ from another way, a crossing with no node, a bridge, and two ways passing
 import hashlib
 import json
 import math
+import mmap
 import re
 import shutil
 import sqlite3
@@ -1302,7 +1303,7 @@ def test_the_export_saves_the_way_back_network_for_a_server_to_memory_map(data, 
     saved = data.trailgraph._network()
 
     assert data.trailgraph.network_dir == data.directory / "trailgraph.network"
-    assert all(isinstance(array, np.memmap) for array in saved)
+    assert all(isinstance(array.base, mmap.mmap) for array in saved)
     for array, expected in zip(saved, built, strict=True):
         assert array.dtype == expected.dtype
         np.testing.assert_array_equal(array, expected)

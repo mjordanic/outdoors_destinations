@@ -22,6 +22,7 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 
 from dayhike.catalog import geometry_store_path_for
+from dayhike.db import scoped
 
 USER_AGENT = "HikesAlike (https://hikesalike.com)"
 COMMONS_API = "https://commons.wikimedia.org/w/api.php"
@@ -220,7 +221,7 @@ class CommonsClient:
         self.pause_s = pause_s
         self._next = 0.0
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self._db() as db:
+        with scoped(self._db()) as db:
             db.execute("CREATE TABLE IF NOT EXISTS response (key TEXT PRIMARY KEY, body TEXT NOT NULL)")
 
     def _report(self, line: str) -> None:
@@ -231,12 +232,12 @@ class CommonsClient:
         return sqlite3.connect(self.path)
 
     def _get(self, key: str):
-        with self._db() as db:
+        with scoped(self._db()) as db:
             row = db.execute("SELECT body FROM response WHERE key = ?", (key,)).fetchone()
         return None if row is None else json.loads(row[0])
 
     def _put(self, key: str, value: object) -> None:
-        with self._db() as db:
+        with scoped(self._db()) as db:
             db.execute(
                 "INSERT OR REPLACE INTO response (key, body) VALUES (?, ?)",
                 (key, json.dumps(value, ensure_ascii=False)),

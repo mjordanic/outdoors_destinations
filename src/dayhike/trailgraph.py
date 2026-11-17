@@ -61,6 +61,8 @@ from dayhike.catalog import (
     remove_similarity,
     trailgraph_path_for,
 )
+from dayhike.db import scoped
+from dayhike.npy import map_npy
 from dayhike.parallel import parallel_iter
 
 Progress = Callable[[str], None]
@@ -1379,7 +1381,7 @@ class TrailGraph:
         keys: dict[int, list[str]] = {}
         pieces: list[list[int]] = []  # [segment id, first vertex, last vertex], walked in that order
         here, total = route.start, 0
-        with self._db() as db:
+        with scoped(self._db()) as db:
             for number, step in enumerate(route.steps, start=1):
                 way, _, end = step.partition(".")
                 where = f"step {number} of this hike"
@@ -1408,7 +1410,7 @@ class TrailGraph:
         ``start``, each from the end the walk so far reached, with the Route
         a shared link names it by (what ``walk`` of that Route stitches)."""
         rows: dict[int, tuple] = {}
-        with self._db() as db:
+        with scoped(self._db()) as db:
             self._load(db, rows, f"WHERE id IN ({','.join('?' * len(segments))})", tuple(segments))
             (key,) = db.execute("SELECT key FROM junctions WHERE id = ?", (start,)).fetchone()
         pieces, here = [], start
@@ -1600,7 +1602,7 @@ class TrailGraph:
         the best way found, so its work grows with the ground within that
         distance, not with the TrailGraph."""
         rows: dict[int, tuple] = {}
-        with self._db() as db:
+        with scoped(self._db()) as db:
             end = self._locate(db, rows, lat[-1], lon[-1])
             start = self._locate(db, rows, lat[0], lon[0])
             if end is None or start is None:
@@ -1632,7 +1634,7 @@ class TrailGraph:
         they were."""
         margin = within_m / 111_000 / max(math.cos(math.radians(lat)), 0.01)
         best, at = within_m, None
-        with self._db() as db:
+        with scoped(self._db()) as db:
             for (coords,) in db.execute(
                 "SELECT s.coords FROM segment_boxes b JOIN segments s ON s.id = b.id WHERE s.kind != 'link' "
                 "AND b.south <= ? AND b.north >= ? AND b.west <= ? AND b.east >= ?",
@@ -1729,7 +1731,7 @@ class TrailGraph:
         if self._graph is None:
             with self._graph_lock:  # a request arriving during a build waits for it, not a build of its own
                 if self._graph is None and self.network_dir.is_dir():
-                    self._graph = tuple(np.load(self.network_dir / f"{name}.npy", mmap_mode="r") for name in NETWORK_ARRAYS)
+                    self._graph = tuple(map_npy(self.network_dir / f"{name}.npy") for name in NETWORK_ARRAYS)
                 elif self._graph is None:
                     self._graph = self._build_network()
         return self._graph
@@ -1745,7 +1747,7 @@ class TrailGraph:
 
     def _build_network(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         chunks = []
-        with self._db() as db:
+        with scoped(self._db()) as db:
             cursor = db.execute("SELECT id, a, b, length_m FROM segments WHERE kind != 'link'")
             while rows := cursor.fetchmany(100_000):  # arrays chunk by chunk, not a million tuples at once
                 chunks.append(np.array(rows, dtype=float))
@@ -1773,7 +1775,7 @@ class TrailGraph:
         box grown by ``radius_m`` (a superset of those within it)."""
         grow_lat = math.degrees(radius_m / EARTH_RADIUS_M)
         grow_lon = grow_lat / max(math.cos(math.radians(max(abs(lat.min()), abs(lat.max())))), 1e-6)
-        with self._db() as db:
+        with scoped(self._db()) as db:
             return db.execute(
                 "SELECT a.id, a.kind, a.latitude, a.longitude, a.name, a.ele FROM amenity_boxes b "
                 "JOIN amenities a ON a.id = b.id WHERE b.north >= ? AND b.south <= ? AND b.east >= ? "
@@ -1861,7 +1863,7 @@ class TrailGraph:
     def _climate(self, cells: np.ndarray) -> np.ndarray:
         """(len(cells), 12, 3) climate of each cell, in the CHELSA variable order."""
         unique, inverse = np.unique(cells, return_inverse=True)
-        with self._db() as db:
+        with scoped(self._db()) as db:
             months = {
                 cell: np.frombuffer(blob, dtype="<f4").reshape(12, 3)
                 for start in range(0, len(unique), 900)
@@ -1881,7 +1883,7 @@ class TrailGraph:
         beside = np.full(len(points), np.nan)
         lat, lon = points[:, 0], points[:, 1]
         corners = np.column_stack([np.floor(lat / 3), np.floor(lon / 3)]).astype(int) * 3
-        with self._db() as db:
+        with scoped(self._db()) as db:
             if db.execute("SELECT 1 FROM sqlite_master WHERE name = 'water_tiles'").fetchone() is None:
                 return beside
             for south, west in {tuple(corner) for corner in corners.tolist()}:
