@@ -183,9 +183,8 @@ def walks(
     graph.contract(set(start_at) | set(reached), set(start_at))
     found: list[DestinationHike] = []
     for node, here in reached.items():
-        longest = max(destination.one_way_max_m for destination in here)
-        candidates = graph.search(node, SEARCH_COST_MAX * longest)
         for destination in here:
+            candidates = graph.search(node, SEARCH_COST_MAX * destination.one_way_max_m)
             found += _chosen_walks(graph, destination, candidates, start_at)
     return found
 
@@ -440,6 +439,7 @@ class _Graph:
         self.node_of = junctions.tolist()
         sink = {node: len(junctions) + i for i, node in enumerate(sorted(starts))}
         self.start_of_sink = {index: node for node, index in sink.items()}
+        self.sinks = np.array(sorted(self.start_of_sink), dtype=np.int64)
         size = len(junctions) + len(sink)
         u = np.array([self.junction_of[s] for s, _ in ends] + [self.junction_of[t] for _, t in ends], dtype=np.int64)
         v_nodes = [t for _, t in ends] + [s for s, _ in ends]
@@ -457,33 +457,35 @@ class _Graph:
         self.search_graph = csr_matrix((cost, v, self.arc_ptr), shape=(size, size))
 
     def search(self, node: int, limit: float):
-        """From the destination at ``node``, each car park reached: (cost, its
-        node, the nodes from it to the destination, the edges), cheapest first."""
+        """From the destination at ``node``, each car park reached, cheapest first:
+        (cost, its node, the nodes from it to the destination, the edges), each
+        walk traced back only when it is asked for."""
         from scipy.sparse.csgraph import dijkstra
 
         source = self.junction_of[node]
         cost, before = dijkstra(self.search_graph, indices=source, return_predecessors=True, limit=limit)
-        found = []
-        for sink, start in self.start_of_sink.items():
-            if start == node or not np.isfinite(cost[sink]):
-                continue
-            path, edges = [], []
-            here = sink
-            while here != source:
-                back = int(before[here])
-                arc = int(np.searchsorted(self.arc_to[self.arc_ptr[back] : self.arc_ptr[back + 1]], here))
-                arc += int(self.arc_ptr[back])
-                nodes, steps = self.segments[int(self.arc_segment[arc])]
-                if not self.arc_forward[arc]:
-                    nodes, steps = nodes[::-1], steps[::-1]
-                path = nodes[:-1] + path if path else list(nodes)
-                edges = steps + edges
-                here = back
-            path.reverse()
-            edges.reverse()
-            found.append((float(cost[sink]), start, path, np.array(edges, dtype=np.int64)))
-        found.sort(key=lambda walk: walk[0])
-        return found
+        sinks = self.sinks[np.isfinite(cost[self.sinks])]
+        for sink in sinks[np.argsort(cost[sinks], kind="stable")].tolist():
+            start = self.start_of_sink[sink]
+            if start != node:
+                yield (float(cost[sink]), start, *self._traced(source, sink, before))
+
+    def _traced(self, source: int, sink: int, before: np.ndarray) -> tuple[list[int], np.ndarray]:
+        """The nodes and edges of the walk from the car park at ``sink`` to ``source``."""
+        nodes: list[list[int]] = []
+        edges: list[list[int]] = []
+        here = sink
+        while here != source:  # back from the car park, arc by arc, each walked away from the destination
+            back = int(before[here])
+            arc = int(self.arc_ptr[back]) + int(np.searchsorted(self.arc_to[self.arc_ptr[back] : self.arc_ptr[back + 1]], here))
+            on, steps = self.segments[int(self.arc_segment[arc])]
+            if self.arc_forward[arc]:
+                on, steps = on[::-1], steps[::-1]
+            nodes.append(on[:-1])
+            edges.append(steps)
+            here = back
+        path = [node for piece in nodes for node in piece] + [self.node_of[source]]
+        return path, np.array([edge for piece in edges for edge in piece], dtype=np.int64)
 
     def climb(self, path: Sequence[int]) -> tuple[float, float]:
         """Metres up and down along ``path``, the Catalog's count (spikes dropped,
@@ -574,7 +576,12 @@ def destination_source(context: BuildContext) -> list[BuiltWalk]:
         for destination in destinations:
             lat, lon = destination.points[0]
             tiles.setdefault((math.floor(lat / TILE_DEG), math.floor(lon / TILE_DEG)), []).append(destination)
-        task = _TileTask(store, starts, marked, context.dem_dir)
+        if context.progress is not None:
+            context.progress(
+                f"assemble: destination hikes: {len(destinations)} destinations and {len(starts)} car parks read; "
+                f"searching {len(tiles)} tiles"
+            )
+        task = _TileTask(store, starts, marked, context.dem_dir, context.progress)
         hikes = [hike for found_here in parallel_map(task, sorted(tiles.items())) for hike in found_here]
         hikes = choose(hikes, *_copied(context, hikes))
         kept = [hike for hike in hikes if hike.twin is None]
@@ -596,8 +603,8 @@ class _TileTask:
     """One tile's walks, in a worker of its own: the ways within reach of its
     destinations from the store, their heights from the DEM, and the search."""
 
-    def __init__(self, store: Path, starts: Sequence[Start], marked, dem_dir: Path | None) -> None:
-        self.store, self.starts, self.marked, self.dem_dir = store, starts, marked, dem_dir
+    def __init__(self, store: Path, starts: Sequence[Start], marked, dem_dir: Path | None, progress=None) -> None:
+        self.store, self.starts, self.marked, self.dem_dir, self.progress = store, starts, marked, dem_dir, progress
 
     def __call__(self, item: tuple[tuple[int, int], list[Destination]]) -> list[DestinationHike]:
         (row, col), destinations = item
@@ -624,7 +631,13 @@ class _TileTask:
 
             ids = list(nodes)
             heights = {node: h for node, h in zip(ids, sample_elevations(self.dem_dir, [nodes[n] for n in ids])) if h is not None}
-        return walks(ways, nodes, destinations, starts, heights, self.marked)
+        found = walks(ways, nodes, destinations, starts, heights, self.marked)
+        if self.progress is not None:
+            self.progress(
+                f"assemble: destination hikes: tile {row} N {col} E: {len(found)} walks to {len(destinations)} "
+                f"destinations on {len(ways)} ways"
+            )
+        return found
 
 
 def _copied(context: BuildContext, hikes: Sequence[DestinationHike]) -> tuple[list[RelationWalk], list[np.ndarray]]:
