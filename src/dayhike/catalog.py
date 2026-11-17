@@ -184,9 +184,11 @@ class IngestReport:
     dropped_node_network: int = 0
     named_from_to: int = 0
     named_place: int = 0
-    # External hikes (ADR-0062): added, and dropped as a Twin of a relation DayHike,
-    # as a Twin of an external hike kept before it, or under 1 km.
+    # External hikes (ADR-0062): added (``external_stages`` of them DayStages of a long
+    # one), and dropped as a Twin of a relation DayHike or DayStage, as a Twin of an
+    # external hike kept before it, or under 1 km.
     external_added: int = 0
+    external_stages: int = 0
     dropped_external_twin: int = 0
     dropped_external_duplicate: int = 0
     dropped_external_length: int = 0
@@ -363,6 +365,7 @@ class Catalog:
                     named_from_to=report_data.get("named_from_to", 0),
                     named_place=report_data.get("named_place", 0),
                     external_added=report_data.get("external_added", 0),
+                    external_stages=report_data.get("external_stages", 0),
                     dropped_external_twin=report_data.get("dropped_external_twin", 0),
                     dropped_external_duplicate=report_data.get("dropped_external_duplicate", 0),
                     dropped_external_length=report_data.get("dropped_external_length", 0),
@@ -1996,6 +1999,7 @@ def _write_sqlite(path: Path, dayhikes: Iterable[DayHike], report: IngestReport)
                         "named_from_to": report.named_from_to,
                         "named_place": report.named_place,
                         "external_added": report.external_added,
+                        "external_stages": report.external_stages,
                         "dropped_external_twin": report.dropped_external_twin,
                         "dropped_external_duplicate": report.dropped_external_duplicate,
                         "dropped_external_length": report.dropped_external_length,

@@ -189,7 +189,7 @@ def test_fetch_external_caches_every_page_of_the_walking_trails(tmp_path: Path, 
 def test_the_lipas_adapter_names_active_routes_and_splits_parts_that_do_not_meet() -> None:
     hikes = {hike.ref: hike for hike in read_external(LIPAS, EXTERNAL_DIR)}
 
-    assert sorted(hikes) == ["100", "200", "300/1", "300/2", "600"]
+    assert sorted(hikes) == ["100", "200", "300/1", "300/2", "600", "700"]
     korpi = hikes["100"]
     assert (korpi.name, korpi.url) == ("Korpi trail", KORPI_URL)
     assert korpi.points == ((60.0, 24.0), (60.01, 24.0), (60.02, 24.01))
@@ -201,6 +201,8 @@ def test_the_lipas_adapter_names_active_routes_and_splits_parts_that_do_not_meet
     assert hikes["300/1"].name == hikes["300/2"].name == "Split walk"
     # A nature trail under 1 km is still read; ingest applies the floor.
     assert hikes["600"].name == "Pieni luontopolku"
+    # A record with no name is read too: ingest names it after the nearest place.
+    assert hikes["700"].name is None
 
 
 def test_the_turrutebasen_adapter_chains_foot_segments_by_route_number() -> None:
@@ -219,10 +221,11 @@ def test_the_turrutebasen_adapter_chains_foot_segments_by_route_number() -> None
     assert hikes["F_3/1"].points == ((60.10, 11.0), (60.12, 11.0), (60.13, 11.0))
     assert hikes["F_3/2"].points == ((60.12, 11.0), (60.12, 11.01))
     assert hikes["F_3/1"].name == "Spur route"
-    # No route name: the maintainer and the route number. A short walk is still read.
-    assert hikes["F_9"].name == "DNT Oslo F_9"
+    # No route name: ingest names it after the nearest place, else the maintainer and the route number,
+    # else the number. A short walk is still read.
+    assert (hikes["F_9"].name, hikes["F_9"].fallback) == (None, "DNT Oslo F_9")
     assert hikes["kort1"].name == "Kort sti"
-    assert hikes["bare1"].name == "bare1"
+    assert (hikes["bare1"].name, hikes["bare1"].fallback) == (None, "bare1")
 
 
 def _write_turrute(directory: Path, segments: list[tuple[str, str, str, list[list[float]]]]) -> Path:
