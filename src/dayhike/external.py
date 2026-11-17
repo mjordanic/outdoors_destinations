@@ -26,7 +26,16 @@ from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from dayhike.catalog import GAP_JOIN_M, KIND_EXTERNAL, MIN_LENGTH_M, DayHike, _dayhike, _haversine_m, _linestring_length_m
+from dayhike.catalog import (
+    GAP_JOIN_M,
+    KIND_EXTERNAL,
+    MIN_LENGTH_M,
+    NAME_ORIGIN_SYNTHETIC,
+    DayHike,
+    _dayhike,
+    _haversine_m,
+    _linestring_length_m,
+)
 from dayhike.sources import require_used
 
 EXTERNAL_ID_MIN = 2**39  # every external id is at least this; OSM relation ids are about 2.2e7
@@ -42,8 +51,9 @@ class ExternalHike:
     """One record of an external source: its id there (``source_ref``), its
     own name (None when the record has none), its line from its start and the
     record's page. ``fallback`` names a record with no name of its own and no
-    place near it (ADR-0062). A DayStage of a long record (``stages.py``) has
-    ``stage`` too: where it starts and ends along the record's line."""
+    place near it (ADR-0062); ``name_origin`` is how ``name`` was found. A
+    DayStage of a long record (``stages.py``) has ``stage`` too: where it
+    starts and ends along the record's line."""
 
     ref: str
     name: str | None
@@ -51,14 +61,17 @@ class ExternalHike:
     url: str | None = None
     fallback: str | None = None
     stage: str | None = None
+    name_origin: str = KIND_EXTERNAL
 
 
 @dataclass(frozen=True)
 class ExternalSource:
-    """A sources register id, how to cache its data in a directory (returns the
-    file) and how to read the cached file."""
+    """A sources register id, the short name an unnamed record is shown with,
+    how to cache its data in a directory (returns the file) and how to read the
+    cached file."""
 
     id: str
+    short_name: str
     fetch: Callable[[Path], Path]
     read: Callable[[Path], Iterator[ExternalHike]]
 
@@ -100,15 +113,18 @@ def read_external(source_id: str, root: Path | str = EXTERNAL_DIR) -> list[Exter
     return list(_source(source_id).read(path))
 
 
-def external_label(hike: ExternalHike, place: str | None, source_id: str) -> str:
-    """The label of an external hike: its own name, else "Hike near {place}"
-    (the nearest place, as for an OSM relation, ADR-0017), else the source's
-    ``fallback``, else the record as ``{source}:{ref}``."""
+def external_label(hike: ExternalHike, place: str | None, source_id: str) -> tuple[str, str]:
+    """The label of an external hike and its NameOrigin: its own name, else
+    "Hike near {place}" (the nearest place, as for an OSM relation, ADR-0017),
+    else the source's ``fallback``, else, synthetic as an unnamed OSM
+    relation's, "Unnamed hike ({source short name} {ref})"."""
     if hike.name:
-        return hike.name
+        return hike.name, KIND_EXTERNAL
     if place:
-        return f"Hike near {place}"
-    return hike.fallback or f"{source_id}:{hike.ref}"
+        return f"Hike near {place}", KIND_EXTERNAL
+    if hike.fallback:
+        return hike.fallback, KIND_EXTERNAL
+    return f"Unnamed hike ({_source(source_id).short_name} {hike.ref})", NAME_ORIGIN_SYNTHETIC
 
 
 def external_dayhike(source_id: str, hike: ExternalHike, snapshot, amenity_index) -> DayHike:
@@ -119,7 +135,7 @@ def external_dayhike(source_id: str, hike: ExternalHike, snapshot, amenity_index
     return _dayhike(
         external_id(source_id, hike.ref, hike.stage),
         hike.name,
-        NAME_ORIGIN_STAGE if hike.stage else KIND_EXTERNAL,
+        NAME_ORIGIN_STAGE if hike.stage else hike.name_origin,
         [(0, point) for point in hike.points],
         None,
         snapshot,
@@ -573,9 +589,9 @@ def _gpx_foot_features(blob: bytes, url: str) -> Iterator[dict]:
 
 
 EXTERNAL_SOURCES = {
-    "ie-sport-ireland": ExternalSource("ie-sport-ireland", fetch_sport_ireland, read_sport_ireland),
-    "fi-lipas": ExternalSource("fi-lipas", fetch_lipas, read_lipas),
-    "no-turrutebasen": ExternalSource("no-turrutebasen", fetch_turrutebasen, read_turrutebasen),
+    "ie-sport-ireland": ExternalSource("ie-sport-ireland", "Sport Ireland", fetch_sport_ireland, read_sport_ireland),
+    "fi-lipas": ExternalSource("fi-lipas", "Lipas", fetch_lipas, read_lipas),
+    "no-turrutebasen": ExternalSource("no-turrutebasen", "Turrutebasen", fetch_turrutebasen, read_turrutebasen),
 }
 
 

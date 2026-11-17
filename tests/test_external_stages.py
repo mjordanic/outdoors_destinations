@@ -11,9 +11,13 @@ from pathlib import Path
 
 import pytest
 
-from dayhike import build_catalog
+from fastapi.testclient import TestClient
+
+from dayhike import build_catalog, build_similarity
 from dayhike.external import EXTERNAL_ID_MAX, EXTERNAL_ID_MIN, read_external
+from dayhike.serving import ServingData, export_serving
 from dayhike.stages import day_stages
+from dayhike.web import create_app
 
 LONG_TOUR = Path(__file__).parent / "fixtures" / "long_tour.osm"
 TURRUTE = "no-turrutebasen"
@@ -101,6 +105,55 @@ def test_a_finland_and_an_ireland_record_without_a_name_are_named_after_the_near
 
     for catalog in (finland, ireland_catalog):
         assert [hike.name for hike in catalog.dayhikes if hike.kind == "external"] == ["Hike near Saint-Départ"]
+
+
+def test_a_finland_and_an_ireland_record_with_no_name_and_no_place_are_shown_as_unnamed_hikes(tmp_path: Path) -> None:
+    # Lipas 123 starts 6 km south of Saint-Départ, so no place lies within 5 km of its start; 66 km long, it is cut
+    # at the huts. Sport Ireland trail 5 lies at 17 E, far from any place.
+    lipas = write_cache(
+        tmp_path / "fi",
+        LIPAS,
+        [
+            {
+                "type": "Feature",
+                "properties": {"lipas-id": 123, "name": "", "status": "active", "type-code": 4405},
+                "geometry": {"type": "LineString", "coordinates": column(0, from_km=-6, to_km=60)},
+            }
+        ],
+    )
+    ireland = write_cache(
+        tmp_path / "ie",
+        SPORT_IRELAND,
+        [
+            {
+                "type": "Feature",
+                "properties": {"TrailID": 5, "Name": None, "Activity": "Walking", "Website": None},
+                "geometry": {"type": "LineString", "coordinates": column(3, lon=17.0)},
+            }
+        ],
+    )
+
+    shown = {}
+    for directory, source, out in ((lipas, LIPAS, tmp_path / "fi-out"), (ireland, SPORT_IRELAND, tmp_path / "ie-out")):
+        catalog = ingest(directory, source, out, sources=[])
+        hikes = [hike for hike in catalog.dayhikes if hike.kind == "external"]
+        build_similarity(out / "catalog.sqlite", out / "dem")
+        client = TestClient(create_app(ServingData(export_serving(out / "catalog.sqlite", out / "serving")), None))
+        for hike in hikes:
+            shown[hike.name] = (hike.name_origin, client.get(f"/api/hikes/{hike.id}").json()["name"])
+
+    assert shown == {
+        "Unnamed hike (Lipas 123)": ("synthetic", "Unnamed hike (Lipas 123)"),
+        "Unnamed hike (Lipas 123), stage 1: to Refuge du Lac": (
+            "stage",
+            "Unnamed hike (Lipas 123), stage 1: to Refuge du Lac",
+        ),
+        "Unnamed hike (Lipas 123), stage 2: Refuge du Lac – Refuge du Col": (
+            "stage",
+            "Unnamed hike (Lipas 123), stage 2: Refuge du Lac – Refuge du Col",
+        ),
+        "Unnamed hike (Sport Ireland trail/5)": ("synthetic", "Unnamed hike (Sport Ireland trail/5)"),
+    }
 
 
 def test_a_long_norway_route_is_cut_into_daystages_beside_the_route(tmp_path: Path) -> None:
@@ -205,7 +258,7 @@ def test_a_stage_that_is_a_twin_of_a_kept_route_is_left_out(tmp_path: Path) -> N
     assert "Første dag" in names
 
 
-def test_every_adapter_reads_a_record_without_a_name(tmp_path: Path) -> None:
+def test_the_ireland_adapter_reads_a_record_with_a_blank_name(tmp_path: Path) -> None:
     ireland = write_cache(
         tmp_path / "ie",
         SPORT_IRELAND,

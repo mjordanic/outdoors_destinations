@@ -1755,7 +1755,8 @@ DayStages), `dropped_external_twin` (Twins of relation DayHikes and built
 DayStages), `dropped_external_duplicate` (Twins of an external hike kept
 before) and `dropped_external_length`. A record with no name of its own is
 named "Hike near {place}" after the nearest place within 5 km, else the
-adapter's fallback (ADR-0017, ADR-0062). A kept external hike over 25 km is also
+adapter's fallback, else "Unnamed hike ({source short name} {source_ref})" with
+NameOrigin `synthetic` (ADR-0017, ADR-0062). A kept external hike over 25 km is also
 cut into DayStages by `dayhike.stages` as a relation DayHike is (ADR-0040): each is an
 external hike of NameOrigin `stage` with its route's `source_ref`. Sport Ireland's adapter (`ie-sport-ireland`) keeps the
 walking trails, starts each at its listed start, and keeps the longest part of a

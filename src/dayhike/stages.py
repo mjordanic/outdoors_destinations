@@ -137,30 +137,35 @@ def _end_names(stage: DayStage, places) -> list[str | None]:
     ]
 
 
-def external_stages(hikes: Sequence[ExternalHike], snapshot) -> list[ExternalHike]:
+def external_stages(
+    hikes: Sequence[tuple[str, ExternalHike]], snapshot, places
+) -> list[tuple[str, ExternalHike]]:
     """The DayStages of the external hikes longer than ``STAGE_SPLIT_M`` (ADR-0062),
-    cut by the rules of ``split`` at the snapshot's huts, places and parking and
-    named "{hike}, stage k: {from} – {to}" (``hike.name`` is its label). A stage is
+    each with its source id, cut by the rules of ``split`` at the snapshot's huts,
+    places and parking and named "{hike}, stage k: {from} – {to}" (``hike.name`` is
+    its label; ``places`` is ``named_points`` of the snapshot's places). A stage is
     an ``ExternalHike`` of the hike's record, with ``stage`` its start and end
     along the line. They are walked as the line is: there is no height rule.
     """
-    long = [hike for hike in hikes if _linestring_length_m(hike.points) > STAGE_SPLIT_M]
+    long = [(source_id, hike) for source_id, hike in hikes if _linestring_length_m(hike.points) > STAGE_SPLIT_M]
     cuts = _CutIndex.of(snapshot) if long else None
     if cuts is None:
         return []
-    places = named_points(snapshot.places)
-    stages: list[ExternalHike] = []
-    for hike in long:
+    stages: list[tuple[str, ExternalHike]] = []
+    for source_id, hike in long:
         for k, stage in enumerate(cuts.stages([(0, point) for point in hike.points]), start=1):
             points = tuple(point for _, point in stage.vertices)
             (first_lat, first_lon), (last_lat, last_lon) = points[0], points[-1]
             stages.append(
-                ExternalHike(
-                    ref=hike.ref,
-                    name=_stage_name(hike.name, k, *_end_names(stage, places)),
-                    points=points,
-                    url=hike.url,
-                    stage=f"{first_lat:.6f},{first_lon:.6f}-{last_lat:.6f},{last_lon:.6f}",
+                (
+                    source_id,
+                    ExternalHike(
+                        ref=hike.ref,
+                        name=_stage_name(hike.name, k, *_end_names(stage, places)),
+                        points=points,
+                        url=hike.url,
+                        stage=f"{first_lat:.6f},{first_lon:.6f}-{last_lat:.6f},{last_lon:.6f}",
+                    ),
                 )
             )
     return stages

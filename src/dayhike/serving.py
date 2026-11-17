@@ -2620,8 +2620,11 @@ def _in_chunks(db: sqlite3.Connection, query: str, values: list) -> list[tuple]:
 
 def _shown_name(dayhike_id: int, name: str, origin: str) -> str:
     """A DayHike's name as the page shows it: a synthetic ``relation:{id}``
-    label (no name, ref or place in OSM) reads as an unnamed hike."""
-    return f"Unnamed hike (OSM relation {dayhike_id})" if origin == NAME_ORIGIN_SYNTHETIC else name
+    label (no name, ref or place in OSM) reads as an unnamed hike. A synthetic
+    external label is already shown as one (ADR-0062)."""
+    if origin == NAME_ORIGIN_SYNTHETIC and name == f"relation:{dayhike_id}":
+        return f"Unnamed hike (OSM relation {dayhike_id})"
+    return name
 
 
 def _value(value: float) -> float | None:

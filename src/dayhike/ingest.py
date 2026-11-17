@@ -960,7 +960,8 @@ def _add_external(
         for hike in hikes:
             if long_enough(hike):
                 place = None if places is None else places.nearest(*hike.points[0], PLACE_RADIUS_M)
-                candidates.append((source_id, replace(hike, name=external_label(hike, place, source_id))))
+                name, name_origin = external_label(hike, place, source_id)
+                candidates.append((source_id, replace(hike, name=name, name_origin=name_origin)))
             else:
                 counts["length"] += 1
     conn.execute(
@@ -990,11 +991,7 @@ def _add_external(
     # DayStages of the kept hikes. Each is compared with the relation DayHikes and built DayStages near
     # it and with the hikes kept above, in front of every stage, so a stage is dropped as a Twin of one of them
     # and of a stage kept before it.
-    stages = [
-        (source_id, stage)
-        for source_id in dict.fromkeys(source for source, _ in kept)
-        for stage in external_stages([hike for source, hike in kept if source == source_id], snapshot)
-    ]
+    stages = external_stages(kept, snapshot, places)
     added = list(kept)
     if stages:
         stage_routes = [_twin_route(stage.points) for _, stage in stages]
