@@ -65,7 +65,7 @@ HARD_SAC = frozenset({"demanding_alpine_hiking", "difficult_alpine_hiking"})  # 
 class Destination:
     """A named Peak, Hut, Viewpoint or lake: ``points`` is its point, or a lake's
     outline; ``ele`` its height, ``wikidata`` and ``wikipedia`` whether it has such a
-    tag; ``others`` the points of the destinations merged into it."""
+    tag; ``others`` the points of the destinations merged into it, ``other_names`` their names."""
 
     name: str
     kind: str
@@ -74,6 +74,7 @@ class Destination:
     wikidata: bool = False
     wikipedia: bool = False
     others: tuple[Point, ...] = ()
+    other_names: tuple[str, ...] = ()
 
     @property
     def notability(self) -> tuple[int, float]:
@@ -185,8 +186,10 @@ def merged(destinations: Sequence[Destination]) -> list[Destination]:
     result = []
     for group in groups.values():
         best = max(group, key=lambda destination: destination.notability)
-        others = tuple(point for destination in group if destination is not best for point in destination.points)
-        result.append(replace(best, others=others) if others else best)
+        rest = [destination for destination in group if destination is not best]
+        others = tuple(point for destination in rest for point in destination.points)
+        names = tuple(destination.name for destination in rest)
+        result.append(replace(best, others=others, other_names=names) if rest else best)
     return result
 
 
@@ -234,7 +237,7 @@ def _chosen_walks(graph: _Graph, destination: Destination, candidates, start_at)
         if len(kept) == WALKS_PER_DESTINATION:
             break
         start = start_at[start_node]
-        if start.hut is not None and start.hut == destination.name:
+        if start.hut in (destination.name, *destination.other_names):
             start = replace(start, name=start.fallback, hut=None)
         metres = float(graph.metres[edges].sum())
         if start.name is None or not ONE_WAY_MIN_M <= metres <= destination.one_way_max_m:
@@ -617,15 +620,15 @@ def destination_source(context: BuildContext) -> list[BuiltWalk]:
                     marked.setdefault(way_id, []).append(relation.id)
         tiles: dict[tuple[int, int], list[Destination]] = {}
         for destination in destinations:
-            lat, lon = destination.points[0]
-            tiles.setdefault((math.floor(lat / TILE_DEG), math.floor(lon / TILE_DEG)), []).append(destination)
+            tiles.setdefault(_tile(destination.points[0]), []).append(destination)
         if context.progress is not None:
             context.progress(
                 f"assemble: destination hikes: {len(destinations)} destinations and {len(starts)} car parks read; "
                 f"searching {len(tiles)} tiles"
             )
         task = _TileTask(store, starts, marked, context.dem_dir, context.progress)
-        hikes = [hike for found_here in parallel_map(task, sorted(tiles.items())) for hike in found_here]
+        items = [(key, [*here, *_near_edge(tiles, key)]) for key, here in sorted(tiles.items())]
+        hikes = [hike for found_here in parallel_map(task, items) for hike in found_here]
         hikes = choose(hikes, *_copied(context, hikes))
         kept = [hike for hike in hikes if hike.twin is None]
         if context.progress is not None:
@@ -643,15 +646,17 @@ def destination_source(context: BuildContext) -> list[BuiltWalk]:
 
 
 class _TileTask:
-    """One tile's walks, in a worker of its own: its destinations merged, the ways
-    within reach of them from the store, their heights from the DEM, and the search."""
+    """One tile's walks, in a worker of its own: its destinations merged (with those
+    of the tiles beside it near its edge, keeping the merged ones whose best-known
+    destination is its own), the ways within reach of them from the store, their
+    heights from the DEM, and the search."""
 
     def __init__(self, store: Path, starts: Sequence[Start], marked, dem_dir: Path | None, progress=None) -> None:
         self.store, self.starts, self.marked, self.dem_dir, self.progress = store, starts, marked, dem_dir, progress
 
     def __call__(self, item: tuple[tuple[int, int], list[Destination]]) -> list[DestinationHike]:
         (row, col), destinations = item
-        destinations = merged(destinations)
+        destinations = [destination for destination in merged(destinations) if _tile(destination.points[0]) == (row, col)]
         south, west, north, east = _with_margin(row * TILE_DEG, col * TILE_DEG, (row + 1) * TILE_DEG, (col + 1) * TILE_DEG)
         with sqlite3.connect(self.store) as conn:
             cells = [_cell(lat, lon) for lat in _steps(south, north) for lon in _steps(west, east)]
@@ -728,8 +733,27 @@ def _steps(low: float, high: float) -> list[float]:
     return [(i + 0.5) * CELL_DEG for i in range(first, math.floor(high / CELL_DEG) + 1)]
 
 
-def _with_margin(south: float, west: float, north: float, east: float) -> tuple[float, float, float, float]:
-    lat_margin = MARGIN_M / 111_195.0
+def _tile(point: Point) -> tuple[int, int]:
+    return math.floor(point[0] / TILE_DEG), math.floor(point[1] / TILE_DEG)
+
+
+def _near_edge(tiles: Mapping[tuple[int, int], Sequence[Destination]], key: tuple[int, int]) -> list[Destination]:
+    """The destinations of the tiles beside ``key`` with a point within ``MERGE_M`` of it."""
+    row, col = key
+    south, west, north, east = _with_margin(row * TILE_DEG, col * TILE_DEG, (row + 1) * TILE_DEG, (col + 1) * TILE_DEG, MERGE_M)
+    return [
+        destination
+        for beside in ((row + dr, col + dc) for dr in (-1, 0, 1) for dc in (-1, 0, 1))
+        if beside != key
+        for destination in tiles.get(beside, ())
+        if any(south <= lat <= north and west <= lon <= east for lat, lon in destination.points)
+    ]
+
+
+def _with_margin(
+    south: float, west: float, north: float, east: float, margin_m: float = MARGIN_M
+) -> tuple[float, float, float, float]:
+    lat_margin = margin_m / 111_195.0
     lon_margin = lat_margin / max(0.05, math.cos(math.radians(min(89.0, max(abs(south), abs(north))))))
     return south - lat_margin, west - lon_margin, north + lat_margin, east + lon_margin
 

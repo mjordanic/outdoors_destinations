@@ -312,3 +312,13 @@ def test_a_car_park_named_after_a_hut_takes_its_other_name_for_a_walk_to_that_hu
 
     assert names(Start("Koča", (at(0, 0),), hut="Koča", fallback="Vas")) == ["Koča from Vas", "Vrh from Koča"]
     assert names(Start("Koča", (at(0, 0),), hut="Koča")) == ["Vrh from Koča"]
+
+
+def test_a_car_park_named_after_a_hut_merged_into_a_peak_takes_its_other_name() -> None:
+    net = Net()
+    net.line((0, 0), (4, 0), (4.1, 0))
+    peak = Destination("Vrh", "peak", (at(4.1, 0),), ele=2_100, wikidata=True)  # 100 m past the hut
+
+    hikes = kept(net.hikes([HUT, peak], [Start("Koča", (at(0, 0),), hut="Koča", fallback="Vas")]))
+
+    assert [hike.name for hike in hikes] == ["Vrh from Vas"]

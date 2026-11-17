@@ -190,3 +190,23 @@ def test_a_closed_hut_far_from_what_the_catalog_reads_gets_a_walk(tmp_path: Path
     catalog = build_catalog(osm, tmp_path / "catalog.sqlite", sources=[destination_source])
 
     assert [hike.name for hike in _destination_hikes(catalog)] == ["Stara koča from Razpotje"]
+
+
+def test_destinations_either_side_of_a_tile_edge_are_merged(tmp_path: Path) -> None:
+    # A hut at the end of a path 50 m south of 46 N and a viewpoint with a Wikidata tag
+    # 110 m north of it, past the path's end, in the next 1-degree tile: one destination,
+    # the viewpoint, reached at the hut.
+    nodes = {
+        1: ((45.99955, LON), {"tourism": "alpine_hut", "name": "Koča"}),
+        2: ((45.985, LON), {"amenity": "parking", "name": "Dolina"}),
+        3: ((46.00055, LON), {"tourism": "viewpoint", "name": "Razgled", "wikidata": "Q1"}),
+    }
+    ids = []
+    for i in range(9):
+        ids.append(10 + i)
+        nodes[ids[-1]] = ((round(45.985 + (45.99955 - 45.985) * i / 8, 7), LON), {})
+    osm = _write_osm(tmp_path / "edge.osm", nodes, [(1000, ids, {"highway": "path"})])
+
+    catalog = build_catalog(osm, tmp_path / "catalog.sqlite", sources=[destination_source])
+
+    assert [hike.name for hike in _destination_hikes(catalog)] == ["Razgled from Dolina"]
