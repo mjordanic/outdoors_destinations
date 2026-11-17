@@ -1,4 +1,4 @@
-"""DestinationHikes through ingest (#124, ADR-0066): the source reads its own
+"""DestinationHikes through ingest (#124, ADR-0067): the source reads its own
 walkable graph from the OSM file, so a walk may take a track no hiking relation
 lists, and the Catalog, the GeometryStore and the TrailGraph all hold it.
 
@@ -34,7 +34,7 @@ def _at(north_km: float, east_km: float) -> tuple[float, float]:
     return (round(LAT + north_km * KM_LAT, 7), round(LON + east_km * KM_LON, 7))
 
 
-def _fixture(path: Path) -> Path:
+def _fixture(path: Path, lake: bool = False) -> Path:
     nodes: dict[int, tuple[tuple[float, float], dict[str, str]]] = {}
     ways: list[tuple[int, list[int], dict[str, str]]] = []
 
@@ -58,7 +58,19 @@ def _fixture(path: Path) -> Path:
     for node, (north, east) in zip(corners, [(9.0, 0.03), (9.05, 0.03), (9.05, 0.08), (9.0, 0.08)]):
         nodes[node] = (_at(north, east), {})
     ways.append((2001, [*corners, corners[0]], {"amenity": "parking"}))
-    # The path is a piece of a marked tour, 17 km on past the hut: no copy of the walk.
+    relations = [  # the path is a piece of a marked tour, 17 km on past the hut: no copy of the walk
+        (5000, [1000, 1002], {"type": "route", "route": "hiking", "name": "Dolina – Planina – Vzhod"}),
+    ]
+    if lake:  # Jezero, 70 m off the path 5 km east of the hut, a multipolygon whose outline has no tags
+        outline = [600, 601, 602, 603]
+        for node, (north, east) in zip(outline, [(4.05, 4.95), (4.2, 4.95), (4.2, 5.05), (4.05, 5.05)]):
+            nodes[node] = (_at(HUT_KM + north - 4, east), {})
+        ways.append((3001, [*outline, outline[0]], {}))
+        relations.append((6000, [3001], {"type": "multipolygon", "natural": "water", "water": "lake", "name": "Jezero"}))
+    return _write_osm(path, nodes, ways, relations)
+
+
+def _write_osm(path: Path, nodes, ways, relations=()) -> Path:
     lines = ['<?xml version="1.0" encoding="UTF-8"?>', '<osm version="0.6" generator="test">']
     for node, ((lat, lon), tags) in sorted(nodes.items()):
         tag_xml = "".join(f'<tag k="{k}" v="{v}"/>' for k, v in tags.items())
@@ -66,10 +78,10 @@ def _fixture(path: Path) -> Path:
     for way, refs, tags in ways:
         body = "".join(f'<nd ref="{ref}"/>' for ref in refs) + "".join(f'<tag k="{k}" v="{v}"/>' for k, v in tags.items())
         lines.append(f'<way id="{way}" version="1">{body}</way>')
-    lines.append(
-        '<relation id="5000" version="1"><member type="way" ref="1000" role=""/>'
-        '<member type="way" ref="1002" role=""/><tag k="type" v="route"/><tag k="route" v="hiking"/><tag k="name" v="Dolina – Planina – Vzhod"/></relation>'
-    )
+    for relation, members, tags in relations:
+        body = "".join(f'<member type="way" ref="{ref}" role="outer"/>' for ref in members)
+        body += "".join(f'<tag k="{k}" v="{v}"/>' for k, v in tags.items())
+        lines.append(f'<relation id="{relation}" version="1">{body}</relation>')
     lines.append("</osm>")
     path.write_text("\n".join(lines))
     return path
@@ -139,3 +151,31 @@ def test_the_export_serves_a_destination_hike_as_built_from_no_relation(tmp_path
 
     for hike in _destination_hikes(catalog):
         assert data.detail(hike.id)["built"] == {"kind": "destination", "parts": [], "route": hike.route}
+
+
+def test_a_lake_mapped_as_a_multipolygon_of_untagged_ways_is_a_destination(tmp_path: Path) -> None:
+    osm = _fixture(tmp_path / "planina.osm", lake=True)
+
+    catalog = build_catalog(osm, tmp_path / "catalog.sqlite", sources=[destination_source])
+
+    assert "Jezero from Dom v Severu" in {hike.name for hike in _destination_hikes(catalog)}
+
+
+def test_a_closed_hut_far_from_what_the_catalog_reads_gets_a_walk(tmp_path: Path) -> None:
+    # A disused hut the catalog does not read, and a car park with no name it names:
+    # nothing else here is a destination or a hut.
+    nodes = {
+        1: (_at(0.6, 0), {"disused:tourism": "alpine_hut", "name": "Stara koča"}),
+        2: (_at(0, 0), {"amenity": "parking"}),
+    }
+    corners = [_at(0, 0), _at(0, 0.6), _at(0.6, 0.6), _at(0.6, 0)]
+    ids = []
+    for leg, (a, b) in enumerate(zip(corners, corners[1:])):
+        for i in range(0 if leg == 0 else 1, 7):
+            ids.append(10 + len(ids))
+            nodes[ids[-1]] = ((a[0] + (b[0] - a[0]) * i / 6, a[1] + (b[1] - a[1]) * i / 6), {})
+    osm = _write_osm(tmp_path / "stara.osm", nodes, [(1000, ids, {"highway": "path"})])
+
+    catalog = build_catalog(osm, tmp_path / "catalog.sqlite", sources=[destination_source])
+
+    assert [hike.name for hike in _destination_hikes(catalog)] == ["Stara koča from Stara koča"]

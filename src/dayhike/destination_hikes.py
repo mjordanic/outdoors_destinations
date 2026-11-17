@@ -1,4 +1,4 @@
-"""DestinationHikes (#124, ADR-0066): "{Destination} from {start}".
+"""DestinationHikes (#124, ADR-0067): "{Destination} from {start}".
 
 A walk from a car park to a named Peak, Hut, Viewpoint or lake along every way
 a hiker may walk (the walkable graph), stored one way, start to destination; a
@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import math
-import re
 import shutil
 import sqlite3
 import subprocess
@@ -36,12 +35,13 @@ Point = tuple[float, float]  # (lat, lon)
 KIND = "destination"  # the built DayHike's kind and NameOrigin
 ONE_WAY_MIN_M = 1_500.0  # there and back at least 3 km ...
 ONE_WAY_MAX_M = 12_500.0  # ... and at most 25 km,
-BIG_ONE_WAY_MAX_M = 16_000.0  # or 32 km to a destination this high or with a Wikidata/Wikipedia tag
+BIG_ONE_WAY_MAX_M = 16_000.0  # or 32 km to a destination this high or with a Wikidata tag
 BIG_ELE_M = 2_500.0
 WALKS_PER_DESTINATION = 8  # at most; the rules below do the cutting (the Écrins check)
 WALKS_PER_START = 8  # a car park starts at most this many, best-known destinations first
 START_GAP_M = 2_000.0  # a further walk to a destination starts this far from every kept start ...
 SHARED_MAX = 0.5  # ... and shares at most this much of its length with any one of them
+MERGE_M = 150.0  # destinations this close are one, the best-known of them
 DESTINATION_SNAP_M = 100.0  # a destination this close to a node of the graph is reached there
 START_SNAP_M = 100.0  # a car park this close to a node of the graph starts walks there
 ROAD_COST = 3.0  # a metre of road counts this many in the search ...
@@ -59,28 +59,26 @@ VIA_M = 150.0  # a dropped Twin's destination this close to a kept walk, and far
 FLAT_M = 10.0  # a segment whose heights stay within this counts only its ends' difference
 ROAD_HIGHWAYS = frozenset({"residential", "unclassified", "tertiary", "service", "living_street"})
 HARD_SAC = frozenset({"demanding_alpine_hiking", "difficult_alpine_hiking"})  # T5, T6
-WINTER_ROOM = re.compile(r"winter|hiver|zimsk|invernal", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
 class Destination:
     """A named Peak, Hut, Viewpoint or lake: ``points`` is its point, or a lake's
-    outline; ``ele`` its height, ``wiki`` whether it has a Wikidata or Wikipedia tag."""
+    outline; ``ele`` its height, ``wikidata`` and ``wikipedia`` whether it has such a tag."""
 
     name: str
     kind: str
     points: tuple[Point, ...]
     ele: float | None = None
-    wiki: bool = False
+    wikidata: bool = False
+    wikipedia: bool = False
 
     @property
     def notability(self) -> tuple[int, float]:
-        """Of two walks that are Twins, the one to the higher stays: a Wikidata or
-        Wikipedia tag, then a hut, then a lake, a viewpoint or a peak of 2,000 m,
-        then the rest; a winter room lowest; height breaks ties."""
-        if self.kind == "hut" and WINTER_ROOM.search(self.name):
-            tier = -1
-        elif self.wiki:
+        """Of two walks that are Twins, the one to the higher stays: a Wikidata
+        tag, then a hut, then a lake, a viewpoint or a peak of 2,000 m, then the
+        rest; height breaks ties."""
+        if self.wikidata:
             tier = 3
         elif self.kind == "hut":
             tier = 2
@@ -92,7 +90,7 @@ class Destination:
 
     @property
     def one_way_max_m(self) -> float:
-        return BIG_ONE_WAY_MAX_M if self.wiki or (self.ele or 0.0) >= BIG_ELE_M else ONE_WAY_MAX_M
+        return BIG_ONE_WAY_MAX_M if self.wikidata or (self.ele or 0.0) >= BIG_ELE_M else ONE_WAY_MAX_M
 
 
 @dataclass(frozen=True)
@@ -150,7 +148,40 @@ def destination_hikes(
     """Every destination's walks on the graph of ``ways``, those not kept with
     their ``twin`` reason. ``marked`` gives the hiking relations each way is in;
     ``relations`` and ``built`` are the Catalog hikes a walk may copy."""
-    return choose(walks(ways, nodes, destinations, starts, heights, marked), relations, built)
+    return choose(walks(ways, nodes, merged(destinations), starts, heights, marked), relations, built)
+
+
+def merged(destinations: Sequence[Destination]) -> list[Destination]:
+    """``destinations`` with those whose points lie within ``MERGE_M`` of each
+    other as one: named and ranked as the best-known of them, with all their
+    points, so it is reached where any of them meets the graph."""
+    if len(destinations) < 2:
+        return list(destinations)
+    from sklearn.neighbors import BallTree
+
+    owner = np.concatenate([np.full(len(destination.points), i) for i, destination in enumerate(destinations)])
+    points = np.radians(np.concatenate([np.asarray(destination.points, dtype=float) for destination in destinations]))
+    parent = list(range(len(destinations)))
+
+    def root(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    near = BallTree(points, metric="haversine").query_radius(points, r=MERGE_M / EARTH_RADIUS_M)
+    for i, hits in zip(owner.tolist(), near):
+        for j in set(owner[hits].tolist()):
+            parent[root(j)] = root(i)
+    groups: dict[int, list[Destination]] = {}
+    for i, destination in enumerate(destinations):
+        groups.setdefault(root(i), []).append(destination)
+    result = []
+    for group in groups.values():
+        best = max(group, key=lambda destination: destination.notability)
+        others = tuple(point for destination in group if destination is not best for point in destination.points)
+        result.append(replace(best, points=best.points + others) if others else best)
+    return result
 
 
 def walks(
@@ -534,7 +565,6 @@ LAKE_WATER = ("lake", "reservoir", "pond")
 WALK_TAG_FILTERS = (
     "w/highway=" + ",".join(WALK_HIGHWAYS),
     "nw/amenity=parking",
-    "n/highway=trailhead",
     "n/natural=peak,saddle",
     "nw/tourism=alpine_hut,wilderness_hut,viewpoint",
     "nw/disused:tourism=alpine_hut,wilderness_hut",
@@ -567,7 +597,7 @@ def destination_source(context: BuildContext) -> list[BuiltWalk]:
         found = _Read()
         for path in context.source_paths:
             _read_walkable(_walk_extract(path, context.progress), store, cells, found, Path(work))
-        destinations = found.destinations(context.dem_dir)
+        destinations = merged(found.destinations(context.dem_dir))
         starts = found.starts()
         marked: dict[int, list[int]] = {}
         for relation in context.snapshot.relations:
@@ -694,9 +724,14 @@ def _with_margin(south: float, west: float, north: float, east: float) -> tuple[
 
 def _wanted_cells(snapshot) -> set[int]:
     """The cells within reach of a destination ingest read: only their ways are stored."""
-    cells: set[int] = set()
     points = [(lat, lon) for lat, lon, _ in snapshot.destinations]
     points += [point for kind, found in snapshot.amenities if kind == "hut" for point in found]
+    return _cells_near(points)
+
+
+def _cells_near(points) -> set[int]:
+    """The cells within ``MARGIN_M`` of any of ``points``."""
+    cells: set[int] = set()
     for lat, lon in points:
         south, west, north, east = _with_margin(lat, lon, lat, lon)
         cells.update(_cell(a, b) for a in _steps(south, north) for b in _steps(west, east))
@@ -762,7 +797,7 @@ class _Read:
             self.found.append(("lake", tags["name"], points, tags))
 
     def _point(self, tags: dict[str, str], points: tuple[Point, ...]) -> None:
-        if (tags.get("amenity") == "parking" or tags.get("highway") == "trailhead") and tags.get("access") not in (
+        if tags.get("amenity") == "parking" and tags.get("access") not in (
             "private", "no", "customers",
         ):  # fmt: skip
             self.parking.append((points, tags))
@@ -790,12 +825,12 @@ class _Read:
                 heights[i] = height
         destinations = []
         for (kind, name, points, tags), ele in zip(found, heights):
-            wiki = bool(tags.get("wikidata") or tags.get("wikipedia"))
-            if kind == "peak" and not wiki and (ele is None or ele < PEAK_MIN_ELE_M):
+            wikidata, wikipedia = bool(tags.get("wikidata")), bool(tags.get("wikipedia"))
+            if kind == "peak" and not (wikidata or wikipedia) and (ele is None or ele < PEAK_MIN_ELE_M):
                 continue
             if kind == "lake" and len(points) > 256:
                 points = points[:: math.ceil(len(points) / 256)]
-            destinations.append(Destination(name, kind, tuple(points), ele, wiki))
+            destinations.append(Destination(name, kind, tuple(points), ele, wikidata, wikipedia))
         return destinations
 
     def starts(self) -> list[Start]:
@@ -840,8 +875,9 @@ def _ele(tags: dict[str, str]) -> float | None:
 
 
 def _read_walkable(path: Path, store: Path, cells: set[int], found: _Read, work: Path) -> None:
-    """Store the walkable ways of ``path`` that touch ``cells`` (with their nodes'
-    points, by cell) and gather its points into ``found``."""
+    """Store the walkable ways of ``path`` that touch ``cells``, or are within reach
+    of a destination node it holds (with their nodes' points, by cell), and gather
+    its points into ``found``."""
     import osmium
 
     for relation in osmium.FileProcessor(str(path), osmium.osm.RELATION).with_filter(osmium.filter.KeyFilter("water")):
@@ -860,10 +896,14 @@ def _read_walkable(path: Path, store: Path, cells: set[int], found: _Read, work:
     conn.execute("CREATE TABLE IF NOT EXISTS way_cells (cell INTEGER, way INTEGER)")
     rows, cell_rows = [], []
     processor = osmium.FileProcessor(str(path), osmium.osm.NODE | osmium.osm.WAY).with_locations(storage)
-    for obj in processor.with_filter(osmium.filter.EmptyTagFilter()):
+    read_nodes = len(found.found)
+    for obj in processor.with_filter(osmium.filter.EmptyTagFilter().enable_for(osmium.osm.NODE)):
         if obj.is_node():
             found.node(dict(obj.tags), (obj.location.lat, obj.location.lon))
             continue
+        if read_nodes is not None:  # the file's nodes come first: their destinations are known
+            cells = cells | _cells_near(points[0] for _, _, points, _ in found.found[read_nodes:])
+            read_nodes = None
         tags = dict(obj.tags)
         located = [(node.ref, node.location.lat, node.location.lon) for node in obj.nodes if node.location.valid()]
         if len(located) < 2:

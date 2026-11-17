@@ -1291,7 +1291,7 @@ function sourceLine(hike) {
 }
 
 // A built hike's head (ADR-0038): the OSM relations it is built from (for a named trail,
-// ADR-0066, the OSM ways its Route walks; for a DestinationHike none, so "OSM paths"), a link to it, and, beside a liked hike when
+// ADR-0066, the OSM ways its Route walks; for a DestinationHike, ADR-0067, none, so "OSM paths"), a link to it, and, beside a liked hike when
 // the server can compose, its Route to edit on the map.
 function routeWays(route) {
   // The ways of a Route ("start:way.node,..."; a negative way is walked against its nodes, "g" a gap), each once.

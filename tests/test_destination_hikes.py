@@ -1,4 +1,4 @@
-"""DestinationHikes (#124, ADR-0066): "{Destination} from {start}", a walk from
+"""DestinationHikes (#124, ADR-0067): "{Destination} from {start}", a walk from
 a car park to a named Peak, Hut, Viewpoint or lake.
 
 Each test draws a tiny network on a grid: ``KM`` degrees of latitude is 1 km,
@@ -85,16 +85,17 @@ def test_a_hut_at_the_end_of_a_path_from_a_car_park_is_one_walk_named_after_both
 
 
 def test_a_walk_is_1_5_to_12_5_km_one_way_and_up_to_16_km_to_a_big_destination() -> None:
-    def walks(km: float, ele: float, wiki: bool = False) -> int:
+    def walks(km: float, ele: float, **tags: bool) -> int:
         net = Net()
         net.line((0, 0), (km, 0))
-        return len(kept(net.hikes([Destination("Vrh", "peak", (at(km, 0),), ele=ele, wiki=wiki)], [DOLINA])))
+        return len(kept(net.hikes([Destination("Vrh", "peak", (at(km, 0),), ele=ele, **tags)], [DOLINA])))
 
     assert walks(1, 1_400) == 0
     assert walks(12, 1_400) == 1
     assert walks(13.5, 1_400) == 0
     assert walks(13.5, 2_864) == 1
-    assert walks(13.5, 669, wiki=True) == 1
+    assert walks(13.5, 669, wikidata=True) == 1
+    assert walks(13.5, 669, wikipedia=True) == 0
     assert walks(17, 2_864) == 0
 
 
@@ -231,22 +232,25 @@ def test_of_twin_walks_to_two_destinations_the_better_known_stays_named_via_the_
     net = Net()
     net.line((0, 0), (4, 0), (4.3, 0))
     hut = Destination("Dom", "hut", (at(4, 0.05),), ele=2_500)  # 50 m beside the path
-    peak = Destination("Triglav", "peak", (at(4.3, 0),), ele=2_864, wiki=True)
+    peak = Destination("Triglav", "peak", (at(4.3, 0),), ele=2_864, wikidata=True)
 
     (hike,) = kept(net.hikes([hut, peak], [DOLINA]))
 
     assert hike.name == "Triglav via Dom from Dolina"
 
 
-def test_a_winter_room_loses_to_its_hut_and_a_place_by_the_end_is_no_via() -> None:
+def test_destinations_within_150_m_are_one_named_after_the_better_known() -> None:
     net = Net()
-    net.line((0, 0), (4, 0), (4.12, 0))
-    winter = Destination("Winterraum Koča", "hut", (at(4, 0),))
-    view = Destination("Razgled", "viewpoint", (at(4.12, 0),), wiki=True)
+    net.line((0, 0), (4, 0), (4.1, 0))
+    view = Destination("Razgled", "viewpoint", (at(4.1, 0),), wikidata=True)  # 100 m past the hut
 
-    assert [hike.name for hike in kept(net.hikes([winter, HUT], [DOLINA]))] == ["Koča from Dolina"]
-    # Not "Razgled via Koča": the hut 120 m before it is the same place.
-    assert [hike.name for hike in kept(net.hikes([HUT, view], [DOLINA]))] == ["Razgled from Dolina"]
+    assert [hike.name for hike in net.hikes([HUT, view], [DOLINA])] == ["Razgled from Dolina"]
+    # Reached where either meets the graph: a peak 120 m off the path's end, beside the hut.
+    peak = Destination("Vrh", "peak", (at(4.12, 0),), ele=2_100)
+    short = Net()
+    short.line((0, 0), (4, 0))
+    assert [hike.name for hike in short.hikes([HUT, peak], [DOLINA])] == ["Koča from Dolina"]
+    assert [hike.name for hike in short.hikes([peak], [DOLINA])] == []
 
 
 def test_a_lake_is_reached_where_a_path_meets_its_shore() -> None:

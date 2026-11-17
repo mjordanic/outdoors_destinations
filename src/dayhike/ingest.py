@@ -956,7 +956,7 @@ def _build_hikes(
 
 
 def _add_read_ways(conn: sqlite3.Connection, snapshot: OsmSnapshot, walks: Sequence[BuiltWalk]) -> None:
-    """The ways built walks read beyond the snapshot (DestinationHikes, ADR-0066):
+    """The ways built walks read beyond the snapshot (DestinationHikes, ADR-0067):
     into the snapshot, so they are built and stored like any other, and into the
     work file's path tables, so the TrailGraph holds them for "Edit on the map"."""
     ways = {way_id: way for walk in walks for way_id, way in walk.ways.items() if way_id not in snapshot.ways}

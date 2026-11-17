@@ -1765,7 +1765,7 @@ another hike has, or a colour or "Trail" only, gets " near {place}" (the
 nearest place within 5 km of its start). Its `source_ref` is `way/{id}` of
 the first way it walks, and the page links the ways its Route walks.
 
-`destination_source` (`dayhike.destination_hikes`, ADR-0066) is registered last: it
+`destination_source` (`dayhike.destination_hikes`, ADR-0067) is registered last: it
 builds DestinationHikes, "{destination} from {start}" walks from a car park to
 a named hut, viewpoint, lake or notable peak, up to 8 per destination and 8 per
 car park. It cuts its own extract beside the source (`*.walk.osm.pbf`, every
