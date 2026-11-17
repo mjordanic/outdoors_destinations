@@ -23,6 +23,7 @@ from dayhike.external import (
     read_external,
 )
 from dayhike.serving import ServingData, export_serving
+from dayhike.sources import read_register
 from dayhike.web import create_app
 
 from test_built_hikes import FIXTURE, RIDGE_WALK_ID
@@ -31,10 +32,12 @@ EXTERNAL_DIR = Path(__file__).parent / "fixtures" / "external"
 SOURCE = "ie-sport-ireland"
 LIPAS = "fi-lipas"
 TURRUTE = "no-turrutebasen"
+SUEDTIROL = "it-odh-suedtirol"
 LOUGH_URL = "https://www.sportireland.ie/outdoors/walking/trails/lough-fixture-way"
 LIPAS_PAGE = Path(__file__).parent / "fixtures" / "external" / "fi-lipas-api-page.json"
 TURRUTE_PAGE = Path(__file__).parent / "fixtures" / "external" / "no-turrutebasen-page.gpx"
 KORPI_URL = "https://www.lipas.fi/liikuntapaikka/100"
+SUEDTIROL_URL = "https://data.civis.bz.it/dataset/percorsi-escursionistici"
 
 
 def test_the_sport_ireland_adapter_reads_walking_trails_from_their_start() -> None:
@@ -405,3 +408,109 @@ def test_fetch_external_caches_every_lipas_page(tmp_path: Path, monkeypatch: pyt
         "Pieni luontopolku",
         "https://www.lipas.fi/liikuntapaikka/600",
     )
+
+
+def test_the_south_tyrol_adapter_chains_trail_segments_of_one_code_and_name() -> None:
+    hikes = {hike.ref: hike for hike in read_external(SUEDTIROL, EXTERNAL_DIR)}
+
+    assert sorted(hikes) == ["12162001", "12162002", "12162004", "12162005", "12162006", "12162007", "12162008"]
+    # One segment, named: the name is trimmed and the page is the dataset's.
+    kastanien = hikes["12162001"]
+    assert (kastanien.name, kastanien.fallback, kastanien.url) == ("Kastanienweg", None, SUEDTIROL_URL)
+    assert kastanien.points == ((46.5, 11.0), (46.51, 11.0), (46.52, 11.01))
+    # Two segments of trail 7 that meet are one walk, under the lowest segment id; no name of its own.
+    seven = hikes["12162002"]
+    assert (seven.name, seven.fallback) == (None, "Trail 7")
+    assert seven.points == ((46.5, 11.5), (46.51, 11.5), (46.52, 11.5))
+    # Trail 7 elsewhere is another walk.
+    assert hikes["12162004"].points == ((46.8, 12.0), (46.81, 12.0))
+    # A multi-part segment joins like Lipas parts do.
+    brand = hikes["12162005"]
+    assert (brand.name, brand.fallback) == ("Brandsteig", "Trail 32")
+    assert brand.points == ((46.3, 10.5), (46.31, 10.5), (46.32, 10.5))
+    # "." is the province's blank: neither a name nor a code. Nothing to label it with.
+    assert (hikes["12162006"].name, hikes["12162006"].fallback) == (None, None)
+    assert (hikes["12162007"].name, hikes["12162007"].fallback) == (None, None)
+    # A walk under 1 km is still read; ingest applies the floor. A record with no line is not.
+    assert hikes["12162008"].name == "Kurzer Weg"
+
+
+def test_south_tyrol_segments_with_no_code_and_no_name_never_chain(tmp_path: Path) -> None:
+    folder = tmp_path / SUEDTIROL
+    folder.mkdir()
+    features = [
+        {
+            "type": "Feature",
+            "properties": {"ID": segment, "CODE": code, "NAME": name},
+            "geometry": {"type": "LineString", "coordinates": line},
+        }
+        for segment, code, name, line in [
+            (1, None, None, [[11.0, 46.5], [11.0, 46.51]]),
+            (2, ".", ".", [[11.0, 46.51], [11.0, 46.52]]),  # meets segment 1's end
+        ]
+    ]
+    (folder / f"{SUEDTIROL}.geojson").write_text(json.dumps({"type": "FeatureCollection", "features": features}))
+
+    hikes = {hike.ref: hike for hike in read_external(SUEDTIROL, tmp_path)}
+
+    assert sorted(hikes) == ["1", "2"]
+    assert hikes["1"].points == ((46.5, 11.0), (46.51, 11.0))
+    assert hikes["2"].points == ((46.51, 11.0), (46.52, 11.0))
+
+
+def test_the_south_tyrol_source_is_a_used_cc0_register_row() -> None:
+    row = next(row for row in read_register() if row["id"] == SUEDTIROL)
+
+    assert (row["status"], row["odbl_compatible"], row["commercial_ok"]) == ("used", "yes", "yes")
+    assert row["licence"].startswith("CC0")
+
+
+def _south_tyrol_urlopen(licence: str, pages: list[dict], asked: list):
+    def urlopen(request, timeout):
+        url = request.full_url if hasattr(request, "full_url") else request
+        asked.append(url)
+        query = parse_qs(urlparse(url).query)
+        if "package_show" in url:
+            return io.BytesIO(json.dumps({"success": True, "result": {"license_id": licence}}).encode())
+        index = int(query["startIndex"][0]) // int(query["count"][0])
+        return io.BytesIO(json.dumps(pages[index] if index < len(pages) else {"features": []}).encode())
+
+    return urlopen
+
+
+def test_fetch_external_caches_every_south_tyrol_page_of_a_cc0_dataset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    features = json.loads((EXTERNAL_DIR / SUEDTIROL / f"{SUEDTIROL}.geojson").read_text())["features"]
+    page_size = external_module.SUEDTIROL_PAGE
+    # Two full pages (the same feature repeated under other ids) and a short one: the short page ends it.
+    full = [{**features[0], "properties": {**features[0]["properties"], "ID": 1000 + n}} for n in range(page_size)]
+    pages = [{"features": full}, {"features": full[:1]}]
+    asked: list = []
+    monkeypatch.setattr(external_module, "urlopen", _south_tyrol_urlopen("cc-zero", pages, asked))
+
+    assert main(["fetch-external", "--source", SUEDTIROL, "--dest", str(tmp_path)]) == 0
+
+    cached = json.loads((tmp_path / SUEDTIROL / f"{SUEDTIROL}.geojson").read_text())
+    assert len(cached["features"]) == page_size + 1
+    wfs = [parse_qs(urlparse(url).query) for url in asked if "package_show" not in url]
+    assert [query["startIndex"] for query in wfs] == [["0"], [str(page_size)]]
+    assert wfs[0]["outputFormat"] == ["application/json"]
+    assert wfs[0]["srsName"] == ["EPSG:4326"]
+    assert wfs[0]["sortBy"] == ["ID"]
+    assert wfs[0]["typeNames"] == ["p_bz-TransportNetwork:Routes-HikingTrails"]
+    # The licence is read from the portal before any hike is fetched.
+    assert "package_show" in asked[0]
+
+
+def test_fetch_external_refuses_a_south_tyrol_dataset_that_is_no_longer_cc0(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asked: list = []
+    monkeypatch.setattr(external_module, "urlopen", _south_tyrol_urlopen("other-closed", [], asked))
+
+    with pytest.raises(OSError, match="other-closed"):
+        fetch_external(SUEDTIROL, tmp_path)
+
+    assert not (tmp_path / SUEDTIROL / f"{SUEDTIROL}.geojson").exists()
+    assert len(asked) == 1  # no hike was fetched

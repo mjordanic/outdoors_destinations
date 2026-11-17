@@ -686,6 +686,69 @@ def fetch_schema_randonnee(dataset: FrenchDataset, directory: Path) -> Path:
     return path
 
 
+# South Tyrol hiking trails (register id it-odh-suedtirol). The Open Data Hub tourism
+# API carries these trails as `civis.geoserver` records with licence "Closed", and
+# its CC0 hiking records have no track, so the data is read from its owner, the
+# Autonomous Province of Bolzano's open data portal: the dataset
+# `percorsi-escursionistici` (layer Routes-HikingTrails, WFS), licence cc-zero. The
+# portal states one licence per dataset and none per record, so the licence gate is
+# the dataset's: `fetch_suedtirol` refuses a dataset the portal no longer lists as
+# cc-zero. A feature is one trail segment: `ID`, `CODE` (trail number, repeated all
+# over the province), `NAME` (the trail's name, often missing; "." is the province's
+# blank). WFS JSON keeps four decimals (about 10 m).
+SUEDTIROL_PORTAL = "https://data.civis.bz.it/api/3/action/package_show?id=percorsi-escursionistici"
+SUEDTIROL_PAGE_URL = "https://data.civis.bz.it/dataset/percorsi-escursionistici"
+SUEDTIROL_WFS = "https://geoservices1.civis.bz.it/geoserver/p_bz-TransportNetwork/ows"
+SUEDTIROL_LAYER = "p_bz-TransportNetwork:Routes-HikingTrails"
+SUEDTIROL_LICENCE = "cc-zero"
+SUEDTIROL_PAGE = 200  # features per request; the server is slow with big ones
+_SUEDTIROL_BLANK = "."
+
+
+def fetch_suedtirol(directory: Path) -> Path:
+    """The hiking trail segments of the province's open dataset as one GeoJSON
+    FeatureCollection in WGS84, fetched page by page, once the portal lists the
+    dataset as cc-zero."""
+    request = Request(SUEDTIROL_PORTAL, headers={"User-Agent": "dayhike"})
+    with urlopen(request, timeout=120) as response:
+        licence = (json.load(response).get("result") or {}).get("license_id")
+    if licence != SUEDTIROL_LICENCE:
+        raise OSError(f"{SUEDTIROL_PORTAL}: licence is {licence!r}, not {SUEDTIROL_LICENCE}; nothing was fetched")
+    features: list[dict] = []
+    while True:
+        query = urlencode(
+            {
+                "service": "WFS",
+                "version": "2.0.0",
+                "request": "GetFeature",
+                "typeNames": SUEDTIROL_LAYER,
+                "outputFormat": "application/json",
+                "srsName": "EPSG:4326",
+                "sortBy": "ID",
+                "count": SUEDTIROL_PAGE,
+                "startIndex": len(features),
+            }
+        )
+        request = Request(f"{SUEDTIROL_WFS}?{query}", headers={"User-Agent": "dayhike"})
+        with urlopen(request, timeout=120) as response:
+            batch = json.load(response)["features"]
+        features += [
+            {
+                "type": "Feature",
+                "properties": {key: (feature.get("properties") or {}).get(key) for key in ("ID", "CODE", "NAME")},
+                "geometry": feature.get("geometry"),
+            }
+            for feature in batch
+        ]
+        if len(batch) < SUEDTIROL_PAGE:
+            break
+    path = directory / "it-odh-suedtirol.geojson"
+    tmp = path.with_name(path.name + ".part")
+    tmp.write_text(json.dumps({"type": "FeatureCollection", "features": features}))
+    tmp.replace(path)
+    return path
+
+
 def fetch_french_datasets(root: Path | str = EXTERNAL_DIR) -> tuple[list[Path], list[str]]:
     """Cache every French dataset the gate accepts (``fetch-external --source fr``):
     the files written, and the reason for each dataset skipped (it names the dataset)."""
@@ -721,6 +784,47 @@ def read_schema_randonnee(path: Path) -> Iterator[ExternalHike]:
             )
 
 
+def read_suedtirol(path: Path) -> Iterator[ExternalHike]:
+    """The trails of a cached South Tyrol file, segments of one trail number and
+    name chained; a segment with neither is a walk of its own.
+
+    Parts whose ends meet within ``GAP_JOIN_M`` are one walk, as for Lipas and
+    Turrutebasen. ``source_ref`` is the lowest segment ``ID`` of a walk (the
+    segment ``ID`` when it is one segment); a segment's parts that do not join
+    give ``{ID}/{n}``, numbered from 1 by each piece's start (latitude, then
+    longitude). A piece's name is its segments' ``NAME`` (the most common one),
+    else None, and ingest names it after the nearest place; its ``fallback`` is
+    "Trail {CODE}", else none. The page is the dataset's. Segments with no line
+    are left out.
+    """
+    grouped: dict[tuple[str, str, int | None], list[tuple[list[Point], int]]] = {}
+    for feature in json.loads(Path(path).read_text())["features"]:
+        properties = feature.get("properties") or {}
+        segment = properties.get("ID")
+        parts = _geometry_parts(feature.get("geometry"))
+        if segment is None or not parts:
+            continue
+        code, name = _suedtirol_text(properties.get("CODE")), _suedtirol_text(properties.get("NAME"))
+        key = (code, name, None if code or name else int(segment))
+        grouped.setdefault(key, []).extend((part, int(segment)) for part in parts)
+    pieces: list[tuple[int, list[Point], str | None, str | None]] = []
+    for (code, name, _), tagged in grouped.items():
+        for line, indices in _joined_component_parts([part for part, _ in tagged]):
+            if len(line) >= 2:
+                lowest = min(tagged[index][1] for index in indices)
+                pieces.append((lowest, line, name or None, f"Trail {code}" if code else None))
+    for lowest, line, name, fallback in sorted(pieces, key=lambda piece: (piece[0], piece[1][0])):
+        same = [piece for piece in pieces if piece[0] == lowest]
+        ref = str(lowest) if len(same) == 1 else f"{lowest}/{sorted(p[1][0] for p in same).index(line[0]) + 1}"
+        yield ExternalHike(ref=ref, name=name, points=tuple(line), url=SUEDTIROL_PAGE_URL, fallback=fallback)
+
+
+def _suedtirol_text(value) -> str:
+    """A ``CODE`` or ``NAME`` trimmed; the province's blank "." is empty."""
+    text = str(value or "").strip()
+    return "" if text == _SUEDTIROL_BLANK else text
+
+
 EXTERNAL_SOURCES = {
     "ie-sport-ireland": ExternalSource("ie-sport-ireland", "Sport Ireland", fetch_sport_ireland, read_sport_ireland),
     "fi-lipas": ExternalSource("fi-lipas", "Lipas", fetch_lipas, read_lipas),
@@ -729,6 +833,7 @@ EXTERNAL_SOURCES = {
         dataset.id: ExternalSource(dataset.id, dataset.short, partial(fetch_schema_randonnee, dataset), read_schema_randonnee)
         for dataset in french_datasets()
     },
+    "it-odh-suedtirol": ExternalSource("it-odh-suedtirol", "South Tyrol", fetch_suedtirol, read_suedtirol),
 }
 
 
