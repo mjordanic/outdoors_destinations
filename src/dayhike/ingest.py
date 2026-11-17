@@ -652,18 +652,19 @@ def _pass_ways(
 
 
 def _point_kind(tags: dict[str, str]) -> str | None:
-    """The amenity kind of an OSM object, else ``trailhead`` for a
-    ``highway=trailhead``, ``lake`` for a named lake (``LAKE_WATER``) or
-    ``guidepost`` for a named guidepost."""
+    """The amenity kind of an OSM object, else ``lake`` for a named lake
+    (``LAKE_WATER``), ``guidepost`` for a named guidepost or ``trailhead``
+    for a ``highway=trailhead``."""
     kind = amenity_kind(tags)
-    if kind is None and tags.get("highway") == "trailhead":
-        return "trailhead"
-    if kind is not None or not tags.get("name"):
+    if kind is not None:
         return kind
-    if tags.get("natural") == "water" and tags.get("water") in LAKE_WATER:
-        return "lake"
-    if tags.get("information") == "guidepost":
-        return "guidepost"
+    if tags.get("name"):
+        if tags.get("natural") == "water" and tags.get("water") in LAKE_WATER:
+            return "lake"
+        if tags.get("information") == "guidepost":
+            return "guidepost"
+    if tags.get("highway") == "trailhead":
+        return "trailhead"
     return None
 
 

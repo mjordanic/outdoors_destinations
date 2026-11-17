@@ -59,3 +59,17 @@ def test_ingest_reports_the_straight_jumps_network_hikes_leave(tmp_path: Path) -
     build_catalog(FIXTURE, tmp_path / "catalog.sqlite", progress=lines.append)
 
     assert "assemble: network hikes: 0 straight jumps over 50 m left" in lines
+
+
+def test_a_named_guidepost_also_tagged_trailhead_still_names_a_start(tmp_path: Path) -> None:
+    fixture = tmp_path / "node_network.osm"
+    fixture.write_text(
+        FIXTURE.read_text().replace(
+            '<tag k="name" v="Col de Granon"/>',
+            '<tag k="name" v="Col de Granon"/>\n    <tag k="highway" v="trailhead"/>',
+        )
+    )
+
+    catalog = build_catalog(fixture, tmp_path / "catalog.sqlite")
+
+    assert "Loop from Col de Granon via Les Granges" in _network(catalog)
