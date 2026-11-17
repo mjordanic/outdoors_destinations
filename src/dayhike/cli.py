@@ -109,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         metavar="SOURCE",
         help="Add the hikes of an external source cached by fetch-external, e.g. ie-sport-ireland, "
-        "fi-lipas, no-turrutebasen or fr-ecrins-randonnees (ADR-0062); repeatable",
+        "fi-lipas, no-turrutebasen, fr-ecrins-randonnees or it-odh-suedtirol (ADR-0062); repeatable",
     )
     ingest.add_argument(
         "--external-dir",
