@@ -19,6 +19,7 @@ from dayhike.built import BuildContext, built_dayhike, built_id
 from dayhike.catalog import assemble_main_walk, geometry_store_path_for
 from dayhike.ingest import run_ingest
 from dayhike.named_trails import named_trails
+from dayhike.names import unique_names
 from dayhike.osm import OsmRelation, OsmSnapshot, OsmWay
 
 KM_LAT = 1_000.0 / 6_371_000 * 180 / math.pi
@@ -68,6 +69,12 @@ class Trails:
         made = [built_dayhike(walk, self.snapshot, None)[0] for walk in self.built()]
         return sorted((hike.name, round(hike.length_m, -1)) for hike in made)
 
+    def labelled(self) -> list[tuple[str, int]]:
+        """``hikes`` as the build names them, every name unique (ADR-0068), the relation DayHikes left out."""
+        made = [built_dayhike(walk, self.snapshot, None)[0] for walk in self.built()]
+        named = unique_names([*self.dayhikes, *made], self.snapshot.places, self.snapshot.destinations)
+        return sorted((hike.name, round(hike.length_m, -1)) for hike in named[len(self.dayhikes) :])
+
 
 def test_same_name_paths_that_share_a_node_are_one_hike():
     trails = Trails()
@@ -103,6 +110,18 @@ def test_a_trail_under_1_km_is_left_out():
     trails.way(2, (0, 0.5), (0, 0.9), name="Short Trail")
 
     assert trails.hikes() == []
+
+
+def test_one_constant_sets_the_shortest_named_trail_at_1_km(monkeypatch):
+    import dayhike.named_trails
+
+    assert dayhike.named_trails.MIN_TRAIL_LENGTH_M == 1_000
+    trails = Trails()
+    trails.way(1, (0, 0), (0, 1.5), name="Ridge Trail")
+    trails.way(2, (5, 0), (5, 2.5), name="Lake Trail")
+    monkeypatch.setattr(dayhike.named_trails, "MIN_TRAIL_LENGTH_M", 2_000)
+
+    assert trails.hikes() == [("Lake Trail", 2_500)]
 
 
 def test_tracks_unnamed_paths_and_relation_members_are_not_joined():
@@ -197,7 +216,7 @@ def test_a_short_motor_stretch_does_not_drop_a_trail():
     assert trails.hikes() == [("Creek Trail", 2_000)]
 
 
-def test_a_name_two_trails_share_adds_the_nearest_place():
+def test_a_name_two_trails_share_adds_the_nearest_place_in_the_build():
     trails = Trails()
     trails.way(1, (0, 0), (0, 2), name="Ridge Trail")
     trails.way(2, (20, 0), (20, 2), name="Ridge Trail")
@@ -206,14 +225,15 @@ def test_a_name_two_trails_share_adds_the_nearest_place():
     trails.place(21, 0, "Dover")
     trails.place(41, 0, "Keene")
 
-    assert trails.hikes() == [
+    assert trails.hikes() == [("Lake Trail", 2_000), ("Ridge Trail", 2_000), ("Ridge Trail", 2_000)]
+    assert trails.labelled() == [
         ("Lake Trail", 2_000),
         ("Ridge Trail near Concord", 2_000),
         ("Ridge Trail near Dover", 2_000),
     ]
 
 
-def test_a_bare_colour_or_trail_name_adds_the_nearest_place():
+def test_a_colour_name_adds_the_nearest_place_and_a_bare_trail_is_a_hike_near_it():
     trails = Trails()
     trails.way(1, (0, 0), (0, 2), name="Red Trail")
     trails.way(2, (20, 0), (20, 2), name="Blue")
@@ -223,18 +243,19 @@ def test_a_bare_colour_or_trail_name_adds_the_nearest_place():
     trails.place(21, 0, "Dover")
     trails.place(41, 0, "Keene")
 
-    assert trails.hikes() == [
+    assert trails.labelled() == [
         ("Blue near Dover", 2_000),
+        ("Hike near Keene", 2_000),
         ("Red Trail near Concord", 2_000),
-        ("Trail near Keene", 2_000),
         ("Yellow Trail", 2_000),
     ]
 
 
-def test_a_name_a_relation_hike_has_adds_the_nearest_place():
+def test_a_name_a_relation_hike_has_adds_the_nearest_place_in_the_build():
     trails = Trails()
     trails.way(1, (0, 0), (0, 2), name="Lake Trail", member=True)
     trails.way(2, (20, 0), (20, 2), name="Lake Trail")
+    trails.place(1, 0, "Concord")
     trails.place(21, 0, "Dover")
     relation = OsmRelation(900, (("way", 1),), {"route": "hiking", "name": "Lake Trail"}, ("",))
     trails.snapshot.relations.append(relation)
@@ -243,7 +264,7 @@ def test_a_name_a_relation_hike_has_adds_the_nearest_place():
 
     trails.dayhikes.append(_dayhike(900, "Lake Trail", "osm_name", walk.vertices, None, trails.snapshot, None))
 
-    assert trails.hikes() == [("Lake Trail near Dover", 2_000)]
+    assert trails.labelled() == [("Lake Trail near Dover", 2_000)]
 
 
 # The build: tests/fixtures/named_trails.osm ingested as a PBF, through the osmium

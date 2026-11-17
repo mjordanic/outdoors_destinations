@@ -1,5 +1,5 @@
 ---
-status: accepted (amends ADR-0038 and ADR-0065)
+status: accepted (amends ADR-0038 and ADR-0065; names and the 1 km constant amended by ADR-0068, the paths level per input by ADR-0069)
 ---
 
 # Named-trail hikes
@@ -10,10 +10,10 @@ Most US trails are not hiking relations. They are `highway=path|footway|bridlewa
 
 - **Trail ways.** A named `highway=path|footway|bridleway` in no hiking relation, open to walkers (not `foot=no|private`; not `access=no|private` unless `foot=yes|designated|permissive`), with no `footway=*` sub-tag (sidewalk, crossing, ...), not `indoor`, not `golf=*`, not `tunnel=building_passage`. No tracks.
 - **Pieces.** Trail ways of one name (case ignored) join where they share a node, or where two of their ends lie within 50 m (`GAP_JOIN_M`, the gap a main walk joins). Ways of the same name that a relation lists are not joined in: that made walks of up to 77 km that repeat relation trails.
-- **Walk.** Each piece is walked as a relation's member ways are (`assemble_main_walk`, ADR-0012), so loops, stems and gaps need no new code. The walk starts at the end within 100 m of a `highway=trailhead` node when only one end has one, else by the height rule (ADR-0048), else at the end nearer a trailhead node or parking. Kept when at least 1 km (`MIN_LENGTH_M`).
+- **Walk.** Each piece is walked as a relation's member ways are (`assemble_main_walk`, ADR-0012), so loops, stems and gaps need no new code. The walk starts at the end within 100 m of a `highway=trailhead` node when only one end has one, else by the height rule (ADR-0048), else at the end nearer a trailhead node or parking. Kept when at least 1 km (`MIN_TRAIL_LENGTH_M` since ADR-0068).
 - **Not a walkers' trail.** Dropped when more than half its walked metres are paved (`surface` asphalt, concrete, paving stones, ...) or `lit=yes` (a park or city walk); a `snowmobile=designated` corridor not signed for walkers; open to motor vehicles (`motorcycle|atv|ohv|motor_vehicle=yes|designated`); bike-first (`bicycle=designated` or `mtb:scale`, with neither `foot=designated` nor a `sac_scale`); or a ski piste (`piste:type`, same exception). Counted over the whole walk, so a paved bridge does not drop a mountain trail. The motor, bike and piste rules are the stricter filter: 10.8 % of US hikes.
 - **Twins.** A walk that is a Twin of a relation DayHike is dropped (the relation hike is listed); of two Twins the one with the lower way id is kept.
-- **Label.** The ways' `name`. When another named trail or a relation DayHike has the same name, or the name is a colour or "Trail" only ("Red Trail", "Blue", "Trail": a park's blazes), the nearest place within 5 km of its start is added: "Red Trail near Concord". 27 % of US hikes share a name with another in their region. The NameOrigin is `trail`.
+- **Label.** The ways' `name`. When another named trail or a relation DayHike has the same name, or the name is a colour or "Trail" only ("Red Trail", "Blue", "Trail": a park's blazes), the nearest place within 5 km of its start is added: "Red Trail near Concord". 27 % of US hikes share a name with another in their region. The NameOrigin is `trail`. (Since ADR-0068 only the colour rule stays here; shared names and "Trail" alone are handled for every hike of the build.)
 - **Id.** `built_id(route)` as for any built DayHike: a hike of one way is `start:way.end`, stable until a mapper splits or extends the way or the start flips (the previous starts of ADR-0048 guard the flip).
 - **Source.** `osm_source_ref` gives `way/{first way walked}`: a named trail has no relation, and its start node is a weaker record than its way.
 - **Page.** The detail of a named trail links the OSM ways its Route walks in place of relations ("Built from OSM ways 302, 301"). Export format unchanged: `built.parts` is empty and `built.route` holds the ways.

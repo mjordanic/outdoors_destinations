@@ -119,11 +119,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     ingest.add_argument(
         "--paths",
-        choices=PATH_LEVELS,
-        default="graded",
+        action="append",
+        default=[],
+        metavar="[INPUT=]LEVEL",
         help="Paths in no hiking relation read into the TrailGraph and the snapshot: graded (sac_scale) "
         "paths only; also named paths, footways and bridleways, which become named-trail hikes (trails, "
-        "a US build, ADR-0066); also named tracks; or also unnamed paths (ADR-0065, default: graded)",
+        "a US build, ADR-0066); also named tracks (named); or also unnamed paths (unnamed) (ADR-0065, "
+        "default: graded). INPUT=LEVEL sets one input file or directory's level, repeatable: "
+        "a Europe and US build reads data/osm/us=trails (ADR-0069)",
     )
     _add_workers(ingest)
     fetch_ext = subparsers.add_parser(
@@ -623,6 +626,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{country}\t{count}")
         return 0
     if args.command == "ingest":
+        paths, paths_of = "graded", {}
+        for value in args.paths:
+            given, _, level = value.rpartition("=")
+            if level not in PATH_LEVELS:
+                ingest.error(f"--paths {value}: the level must be one of {', '.join(PATH_LEVELS)}")
+            if given:
+                paths_of[Path(given)] = level
+            else:
+                paths = level
         return _ingest(
             args.osm,
             args.catalog,
@@ -633,7 +645,8 @@ def main(argv: list[str] | None = None) -> int:
             previous=args.previous,
             external=args.external,
             external_dir=args.external_dir,
-            paths=args.paths,
+            paths=paths,
+            paths_of=paths_of,
         )
     if args.command == "sample-trailgraph":
         try:
@@ -728,6 +741,7 @@ def _ingest(
     external: list[str] | tuple[str, ...] = (),
     external_dir: Path | None = None,
     paths: str = "graded",
+    paths_of: dict[Path, str] | None = None,
 ) -> int:
     catalog = build_catalog(
         osm_paths,
@@ -740,6 +754,7 @@ def _ingest(
         external=external,
         external_dir=external_dir,
         paths=paths,
+        paths_of=paths_of,
     )
     print(catalog.path)
     print(catalog.ingest_report)
