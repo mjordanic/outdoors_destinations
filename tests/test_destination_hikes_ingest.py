@@ -3,8 +3,8 @@ walkable graph from the OSM file, so a walk may take a track no hiking relation
 lists, and the Catalog, the GeometryStore and the TrailGraph all hold it.
 
 The fixture: Koča na Planini, a hut 4 km up a marked path from the car park in
-Dolina and 5 km up an unmarked track from the car park area of Sever, in the
-next valley north.
+Dolina and 5 km up an unmarked track from a car park area with no name beside
+Dom v Severu, a hut in the next valley north.
 """
 
 import math
@@ -53,10 +53,11 @@ def _fixture(path: Path) -> Path:
     ways.append((1002, line(500, (HUT_KM, 0), (HUT_KM, 13))[::-1][:-1] + [path_ids[-1]], {"highway": "path"}))
     nodes[1] = (_at(HUT_KM, 0.02), {"tourism": "alpine_hut", "name": "Koča na Planini", "ele": "1800"})
     nodes[2] = (_at(-0.03, 0), {"amenity": "parking", "name": "Dolina"})
+    nodes[3] = (_at(9.5, 0.03), {"tourism": "alpine_hut", "name": "Dom v Severu"})  # names the car park beside it
     corners = [400, 401, 402, 403]
     for node, (north, east) in zip(corners, [(9.0, 0.03), (9.05, 0.03), (9.05, 0.08), (9.0, 0.08)]):
         nodes[node] = (_at(north, east), {})
-    ways.append((2001, [*corners, corners[0]], {"amenity": "parking", "name": "Sever"}))
+    ways.append((2001, [*corners, corners[0]], {"amenity": "parking"}))
     # The path is a piece of a marked tour, 17 km on past the hut: no copy of the walk.
     lines = ['<?xml version="1.0" encoding="UTF-8"?>', '<osm version="0.6" generator="test">']
     for node, ((lat, lon), tags) in sorted(nodes.items()):
@@ -101,7 +102,7 @@ def test_a_hut_reachable_from_two_valleys_gets_a_walk_from_each(tmp_path: Path) 
     catalog = build_catalog(osm, path, sources=[destination_source], dem_dir=_dem(tmp_path / "dem"))
 
     dolina, sever = _destination_hikes(catalog)
-    assert (dolina.name, sever.name) == ("Koča na Planini from Dolina", "Koča na Planini from Sever")
+    assert (dolina.name, sever.name) == ("Koča na Planini from Dolina", "Koča na Planini from Dom v Severu")
     assert {dolina.name_origin, sever.name_origin} == {"destination"}
     assert dolina.parts == () and sever.parts == ()
     assert BUILT_ID_MIN <= min(dolina.id, sever.id) and max(dolina.id, sever.id) < 2**53

@@ -549,7 +549,7 @@ CELL_DEG = 0.25  # the way store finds ways by cells of this many degrees ...
 TILE_DEG = 1.0  # ... and the search runs on tiles of this many, with a margin of the longest walk
 MARGIN_M = BIG_ONE_WAY_MAX_M + 1_000.0
 TOWN_M = 1_000.0  # a car park without a name takes a town or village this close ...
-HAMLET_M = 1_000.0  # ... else a hamlet or locality this close ...
+HAMLET_M = 1_000.0  # ... else a hamlet or locality, else a hut, this close ...
 FAR_TOWN_M = 3_000.0  # ... else a town or village this close ...
 LANDMARK_M = 300.0  # ... else a named guidepost, saddle or pass this close; else it starts no walk
 TOWNS = ("city", "town", "village")
@@ -799,12 +799,13 @@ class _Read:
         return destinations
 
     def starts(self) -> list[Start]:
-        """The car parks, each named by its own name, else by a place or landmark near it."""
+        """The car parks, each named by its own name, else by a place, hut or landmark near it."""
         from sklearn.neighbors import BallTree
 
         trees = {}
-        for kinds in (TOWNS, ("hamlet", "locality"), ("landmark",)):
-            named = [(point, name) for kind, point, name in self.names if kind in kinds]
+        huts = [("hut", points[0], name) for kind, name, points, _ in self.found if kind == "hut"]
+        for kinds in (TOWNS, ("hamlet", "locality"), ("hut",), ("landmark",)):
+            named = [(point, name) for kind, point, name in [*self.names, *huts] if kind in kinds]
             if named:
                 trees[kinds] = (BallTree(np.radians([point for point, _ in named]), metric="haversine"), named)
 
@@ -823,6 +824,7 @@ class _Read:
                 name = (
                     nearest(TOWNS, centre, TOWN_M)
                     or nearest(("hamlet", "locality"), centre, HAMLET_M)
+                    or nearest(("hut",), centre, HAMLET_M)
                     or nearest(TOWNS, centre, FAR_TOWN_M)
                     or nearest(("landmark",), centre, LANDMARK_M)
                 )
