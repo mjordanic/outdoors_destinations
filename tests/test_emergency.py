@@ -13,10 +13,11 @@ from dayhike.serving import ServingData, ServingExportError, emergency_services,
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
 CITIES = Path(__file__).parent / "fixtures" / "geonames.txt"
 RIDGE_WALK_ID = 1001
-# Every country a Geofabrik Europe extract has hikes in (the Catalog's coverage today), and the US.
+# Every country a Geofabrik Europe extract has hikes in (the Catalog's coverage today), the US, and the
+# Canada and Mexico trailheads a US extract takes in across the border.
 COVERED = set(
     "AL AD AT BY BE BA BG HR CY CZ DK EE FO FI FR GE DE GI GR GG JE HU IS IE IM IT XK LV LI LT LU MK MT MD MC ME "
-    "NL NO PL PT RO RU SM RS SK SI ES SE CH TR UA GB AX SJ US".split()
+    "NL NO PL PT RO RU SM RS SK SI ES SE CH TR UA GB AX SJ US CA MX".split()
 )
 # Sources that speak for no country's own services: a row with only these says why in its notes.
 THIRD_PARTY = ("https://www.gov.uk/foreign-travel-advice/", "https://digital-strategy.ec.europa.eu/")
@@ -68,6 +69,7 @@ def test_every_covered_country_has_a_row_with_numbers_and_a_source() -> None:
     assert rows["HR"]["rescue"] == "HGSS" and rows["HR"]["numbers"] == ["112"]
     assert rows["GB"]["numbers"] == ["999", "112"] and rows["GB"]["rescue"] == "Mountain Rescue"
     assert rows["US"]["numbers"] == ["911"]
+    assert rows["CA"]["numbers"] == ["911"] and rows["MX"]["numbers"] == ["911"]
 
 
 def test_a_hike_shows_the_emergency_services_of_the_country_its_trailhead_is_in(export: Path, tmp_path: Path) -> None:
@@ -106,8 +108,8 @@ def test_a_hike_in_a_country_with_no_row_fails_the_export(export: Path, catalog_
     assert ServingData(bare).detail(RIDGE_WALK_ID)["emergency"] is None
 
 
-@pytest.mark.parametrize("code", ["GB", "US"])
-def test_a_hike_in_the_uk_or_the_us_shows_their_numbers(export: Path, tmp_path: Path, code: str) -> None:
+@pytest.mark.parametrize("code", ["GB", "US", "CA", "MX"])
+def test_a_hike_in_the_uk_the_us_canada_or_mexico_shows_their_numbers(export: Path, tmp_path: Path, code: str) -> None:
     out = _copy(export, tmp_path / "out")
     trailheads = np.load(out / "trailheads.npy")
     np.save(out / "countries.npy", np.full(len(trailheads), code, dtype="<U2"))
