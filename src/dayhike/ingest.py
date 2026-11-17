@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 import osmium
 
-from dayhike.built import BuildContext, BuiltHikeSource, built_dayhike
+from dayhike.built import BuildContext, BuiltHikeSource, BuiltWalk, built_dayhike
 from dayhike.external import (
     EXTERNAL_ID_MAX,
     EXTERNAL_ID_MIN,
@@ -52,6 +52,7 @@ from dayhike.catalog import (
     tagged_ends,
 )
 from dayhike.dem import DEM_READ_KEY
+from dayhike.destination_hikes import destination_source
 from dayhike.named_trails import named_trails
 from dayhike.network_hikes import network_source
 from dayhike.osm import (
@@ -99,7 +100,7 @@ DESTINATION_KINDS = ("peak", "hut", "viewpoint", "lake")  # named, a NetworkHike
 NETWORK_ONLY_KINDS = ("lake", "guidepost", "trailhead")
 # Sources of DayHikes that are not one relation (ADR-0038), run after the relations are kept.
 # named_trails builds only from the trail ways a ``paths`` level beyond ``graded`` reads (ADR-0066).
-BUILT_HIKE_SOURCES: tuple[BuiltHikeSource, ...] = (day_stages, network_source, named_trails)
+BUILT_HIKE_SOURCES: tuple[BuiltHikeSource, ...] = (day_stages, network_source, named_trails, destination_source)
 
 Progress = Callable[[str], None]
 
@@ -190,6 +191,8 @@ def run_ingest(
                 else _main_walk(relation, snapshot, access_tree, named, lower),
                 progress,
                 lower,
+                tuple(Path(path) for path in source_paths),
+                getattr(heights, "raster_dir", None),
             )
             kept += _build_hikes(conn, sources, context, amenity_index)
         external_counts = {"added": 0, "stages": 0, "twin": 0, "duplicate": 0, "length": 0}
@@ -933,6 +936,8 @@ def _build_hikes(
     built: dict[int, DayHike] = {}
     for source in sources:
         walks = list(source(context))
+        _add_read_ways(conn, context.snapshot, walks)
+        context = replace(context, built=(*context.built, *walks))
         made = parallel_map(lambda walk: built_dayhike(walk, context.snapshot, amenity_index), walks)
         for walk, (hike, walked) in zip(walks, made):
             if hike.id in built:
@@ -948,6 +953,25 @@ def _build_hikes(
             )
     conn.commit()
     return sorted(built.values(), key=lambda hike: hike.id)
+
+
+def _add_read_ways(conn: sqlite3.Connection, snapshot: OsmSnapshot, walks: Sequence[BuiltWalk]) -> None:
+    """The ways built walks read beyond the snapshot (DestinationHikes, ADR-0066):
+    into the snapshot, so they are built and stored like any other, and into the
+    work file's path tables, so the TrailGraph holds them for "Edit on the map"."""
+    ways = {way_id: way for walk in walks for way_id, way in walk.ways.items() if way_id not in snapshot.ways}
+    if not ways:
+        return
+    nodes = {node: point for walk in walks for node, point in walk.nodes.items() if node not in snapshot.nodes}
+    snapshot.ways.update(ways)
+    conn.executemany(
+        "INSERT OR IGNORE INTO path_ways (id, node_ids, tags) VALUES (?, ?, ?)",
+        [(way_id, json.dumps(list(way.node_ids)), json.dumps(way.tags)) for way_id, way in ways.items()],
+    )
+    conn.executemany(
+        "INSERT OR IGNORE INTO path_nodes (id, lat, lon, ele) VALUES (?, ?, ?, NULL)",
+        [(node, lat, lon) for node, (lat, lon) in nodes.items()],
+    )
 
 
 def _add_external(

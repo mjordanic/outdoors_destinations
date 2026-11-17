@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 
 from dayhike.catalog import (
     DayHike,
@@ -35,14 +36,18 @@ Point = tuple[float, float]  # (lat, lon)
 @dataclass(frozen=True)
 class BuiltWalk:
     """One walk a source builds: ``kind`` (``network``, ``stage`` or
-    ``trail``, also its NameOrigin), its label, ordered (node id, point) vertices from its
-    Trailhead, the OSM ways it walks, and the OSM relations it is built from."""
+    ``trail`` or ``destination``, also its NameOrigin), its label, ordered (node id,
+    point) vertices from its Trailhead, the OSM ways it walks, and the OSM relations
+    it is built from. A source that read ways ingest did not (DestinationHikes)
+    gives them in ``ways``, with their nodes' points in ``nodes``."""
 
     kind: str
     name: str
     vertices: tuple[tuple[int, Point], ...]
     way_ids: tuple[int, ...]
     parts: tuple[int, ...]
+    ways: Mapping[int, OsmWay] = field(default_factory=dict, compare=False)
+    nodes: Mapping[int, Point] = field(default_factory=dict, compare=False)
 
 
 @dataclass(frozen=True)
@@ -50,13 +55,18 @@ class BuildContext:
     """What a source may build from: the snapshot ingest read, the relation
     DayHikes it kept, the main walk of any relation, where a source reports
     what it built (one line, like ingest's ``progress``) and the height rule
-    that starts a line at its lower end (ADR-0048), None without heights."""
+    that starts a line at its lower end (ADR-0048), None without heights; the
+    OSM files ingest read and the DEM folder, for a source that reads more of
+    them (DestinationHikes), and the walks the sources before it built."""
 
     snapshot: OsmSnapshot
     dayhikes: Sequence[DayHike]
     main_walk: Callable[[OsmRelation], MainWalk]
     progress: Callable[[str], None] | None = None
     lower: LowerStart | None = None
+    source_paths: tuple[Path, ...] = ()
+    dem_dir: Path | None = None
+    built: tuple[BuiltWalk, ...] = ()
 
 
 BuiltHikeSource = Callable[[BuildContext], Iterable[BuiltWalk]]
