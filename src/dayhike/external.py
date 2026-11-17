@@ -105,7 +105,7 @@ def fetch_external(source_id: str, root: Path | str = EXTERNAL_DIR) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     try:
         return source.fetch(directory)
-    except ValueError:  # a source skipped for a reason (France): leave no empty directory
+    except (ValueError, OSError):  # a source skipped for a reason (France) or not downloaded: leave no empty directory
         with contextlib.suppress(OSError):
             directory.rmdir()
         raise
@@ -696,6 +696,8 @@ def fetch_french_datasets(root: Path | str = EXTERNAL_DIR) -> tuple[list[Path], 
             paths.append(fetch_external(dataset.id, root))
         except ValueError as exc:
             skipped.append(str(exc))
+        except OSError as exc:
+            skipped.append(f"{dataset.id}: download failed: {exc}")
     return paths, skipped
 
 

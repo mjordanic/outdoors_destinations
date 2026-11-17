@@ -3,6 +3,7 @@
 import io
 import json
 from pathlib import Path
+from urllib.error import HTTPError
 
 import pytest
 from fastapi.testclient import TestClient
@@ -182,3 +183,28 @@ def test_fetching_france_caches_the_datasets_that_pass_and_says_why_it_skips_the
     skipped = [dataset.id for dataset in french_datasets() if dataset.licence not in FR_LICENCES]
     for id in skipped:
         assert f"skipped {id}:" in out.err
+
+
+def test_a_failed_download_skips_that_dataset_and_fetches_the_rest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    accepted = [dataset for dataset in french_datasets() if dataset.licence in FR_LICENCES]
+    failing = accepted[0]
+    body = json.dumps({"type": "FeatureCollection", "features": [_feature("1")]}).encode()
+
+    def urlopen(request, timeout):
+        if request.full_url == failing.file:
+            raise HTTPError(request.full_url, 404, "Not Found", {}, None)
+        return io.BytesIO(body)
+
+    monkeypatch.setattr(external_module, "urlopen", urlopen)
+
+    assert main(["fetch-external", "--source", "fr", "--dest", str(tmp_path)]) == 0
+
+    out = capsys.readouterr()
+    assert f"skipped {failing.id}: download failed:" in out.err
+    for dataset in french_datasets():
+        if dataset.licence not in FR_LICENCES:
+            assert f"skipped {dataset.id}:" in out.err
+    assert not (tmp_path / failing.id).exists()
+    assert sorted(path.name for path in tmp_path.rglob("*.geojson")) == sorted(f"{d.id}.geojson" for d in accepted[1:])
