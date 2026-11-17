@@ -343,7 +343,9 @@ class _Graph:
         self.names: dict[int, str] = {}
         for way_id, way in ways.items():
             tags = way.tags
-            if tags.get("sac_scale") in HARD_SAC or "via_ferrata_scale" in tags or tags.get("highway") == "via_ferrata":
+            # A via ferrata is its own highway; a T4 path with a few cables (``via_ferrata_scale``,
+            # Triglav's summit ridge) is walked like any T4 path.
+            if tags.get("sac_scale") in HARD_SAC or tags.get("highway") == "via_ferrata":
                 continue
             is_road = tags.get("highway") in ROAD_HIGHWAYS
             cost = ROAD_COST if is_road else GRADE_COST.get(tags.get("sac_scale", ""), 1.0)

@@ -178,11 +178,15 @@ def test_roads_cost_triple_and_a_walk_mostly_on_road_is_not_built() -> None:
     assert kept(road.hikes([HUT], [DOLINA])) == []
 
 
-def test_t5_ways_and_via_ferratas_are_not_walked() -> None:
-    for tags in ({"sac_scale": "demanding_alpine_hiking"}, {"via_ferrata_scale": "3"}):
+def test_t5_ways_and_via_ferratas_are_not_walked_but_a_t4_path_with_cables_is() -> None:
+    for tags in ({"sac_scale": "demanding_alpine_hiking"}, {"highway": "via_ferrata"}):
         net = Net()
         net.line((0, 0), (4, 0), **tags)
         assert kept(net.hikes([HUT], [DOLINA])) == []
+    # A T4 path with cables, such as the last metres to Triglav, is walked.
+    net = Net()
+    net.line((0, 0), (4, 0), sac_scale="alpine_hiking", via_ferrata_scale="1+")
+    assert len(kept(net.hikes([HUT], [DOLINA]))) == 1
 
 
 def test_the_search_weighs_climb_and_marked_routes() -> None:
