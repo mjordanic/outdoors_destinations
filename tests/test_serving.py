@@ -966,3 +966,20 @@ def test_every_ratio_measure_says_its_floor_in_words() -> None:
     assert set(FLOOR_TEXT) == set(ratio)
     assert FLOOR_TEXT["elevation_gain"] == "both 100 m or less"
     assert FLOOR_TEXT["climb_grade"] == "both 3 % or less"
+
+
+def test_an_open_similarity_store_holds_no_file_descriptor_for_its_arrays(export: Path) -> None:
+    import gc
+    import os
+
+    from dayhike.similarity import SimilarityStore
+
+    def open_files() -> int:
+        gc.collect()  # what the export's build left to collect is not the arrays'
+        return len(os.listdir("/dev/fd"))
+
+    before = open_files()
+    opened = [SimilarityStore.open_dir(export / "similarity") for _ in range(5)]
+
+    assert open_files() == before
+    assert all(len(held.ids) == 4 for held in opened)

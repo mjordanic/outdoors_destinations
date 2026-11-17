@@ -9,6 +9,7 @@ from another way, a crossing with no node, a bridge, and two ways passing
 import hashlib
 import json
 import math
+import mmap
 import re
 import shutil
 import sqlite3
@@ -1302,7 +1303,21 @@ def test_the_export_saves_the_way_back_network_for_a_server_to_memory_map(data, 
     saved = data.trailgraph._network()
 
     assert data.trailgraph.network_dir == data.directory / "trailgraph.network"
-    assert all(isinstance(array, np.memmap) for array in saved)
+    assert all(isinstance(array.base, mmap.mmap) for array in saved)
     for array, expected in zip(saved, built, strict=True):
         assert array.dtype == expected.dtype
         np.testing.assert_array_equal(array, expected)
+
+
+def test_sample_trailgraph_accepts_climate_rasters_whose_origins_differ_by_float_noise(tmp_path: Path) -> None:
+    from dayhike.trailgraph import _climate_grid
+
+    first = tmp_path / "chelsa_pr_01.tif"
+    second = tmp_path / "chelsa_tas_01.tif"
+    data = np.full((8, 8), 5.0, dtype="float32")
+    _write_tif(first, data, **BOX)
+    _write_tif(second, data, **{**BOX, "west": BOX["west"] + 4e-14, "north": BOX["north"] - 4e-14})
+
+    grid = _climate_grid([("pr", 1, first), ("tas", 1, second)])
+
+    assert grid[1:] == (8, 8)

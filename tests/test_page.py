@@ -114,15 +114,40 @@ def browser() -> Iterator["sync_api.Browser"]:
         launched.close()
 
 
+@pytest.fixture(autouse=True)
+def _close_what_a_test_opened(request: pytest.FixtureRequest) -> Iterator[None]:
+    yield
+    if "browser" in request.fixturenames:
+        request.getfixturevalue("browser").close_opened()
+
+
 class Browser:
     """The browser, its pages in British English unless a test asks for a locale: km and metres (the
     page's default units come from the locale)."""
 
     def __init__(self, browser) -> None:
         self._browser = browser
+        self._opened: list = []
 
     def new_page(self, **options):
-        return self._browser.new_page(**{"locale": "en-GB", **options})
+        page = self._browser.new_page(**{"locale": "en-GB", **options})
+        self._opened.append(page)
+        return page
+
+    def new_context(self, **options):
+        context = self._browser.new_context(**options)
+        self._opened.append(context)
+        return context
+
+    def close_opened(self) -> None:
+        """Close what a test opened: an open page keeps its connections to the app, a descriptor each."""
+        for opened in self._opened:
+            try:
+                opened.unroute_all(behavior="ignoreErrors")  # a handler still fetching is no failure of the test
+                opened.close()
+            except sync_api.Error:
+                pass  # the test closed it already
+        self._opened.clear()
 
     def __getattr__(self, name):
         return getattr(self._browser, name)

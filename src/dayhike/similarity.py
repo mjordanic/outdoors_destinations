@@ -53,6 +53,7 @@ from dayhike.landcover import (
     along_rows_of_vertices,
     worldcover_tile_id,
 )
+from dayhike.npy import map_npy
 from dayhike.parallel import parallel_iter, parallel_map
 from dayhike.trailgraph import WAY_BACK_KINDS, ComposedWalk, TrailGraph, WayBack, round_trip, way_back
 
@@ -358,7 +359,7 @@ class SimilarityStore:
             )
 
         def load(name: str) -> np.ndarray:
-            return np.load(directory / f"{name}.npy", mmap_mode="r")
+            return map_npy(directory / f"{name}.npy")
 
         ids, twins, digest = load("ids"), load("twins"), meta.get("catalog_digest")
         return cls(

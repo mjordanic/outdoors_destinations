@@ -88,6 +88,7 @@ from dayhike.catalog import (
     straight_line_distances_m,
     trailgraph_path_for,
 )
+from dayhike.db import scoped
 from dayhike.dem import (
     COPERNICUS,
     DEM_ATTRIBUTION_KEYS,
@@ -99,6 +100,7 @@ from dayhike.dem import (
 )
 from dayhike.extracts import UrlRetrieve
 from dayhike.loops import LOOP_SEEDS, LOOP_TRAILHEADS, LoopTarget, find_loops
+from dayhike.npy import map_npy
 from dayhike.regions import Region
 from dayhike.similarity import (
     ALONG_KINDS,
@@ -543,7 +545,7 @@ def export_countries(out_dir: Path | str, countries_path: Path | str | None = No
         codes[at] = shape_codes[shape]
     places = out / "places.sqlite"
     if (codes == "").any() and places.is_file():
-        with sqlite3.connect(f"file:{places}?mode=ro", uri=True) as db:
+        with scoped(sqlite3.connect(f"file:{places}?mode=ro", uri=True)) as db:
             rows = db.execute("SELECT country, lat, lon FROM places WHERE country != ''").fetchall()
         if rows:
             where = np.array([(lat, lon) for _, lat, lon in rows])
@@ -1222,7 +1224,7 @@ def export_landmarks(out_dir: Path | str, geonames_path: Path | str | None = Non
     found: dict[tuple, dict[int, float]] = {}  # (kind, name, lat, lon) -> hike id -> metres off
     names: dict[tuple, set[str]] = {}
     heights: dict[tuple, float] = {}  # a Peak's ele tag
-    with sqlite3.connect(f"file:{out / 'hikes.sqlite'}?mode=ro&immutable=1", uri=True) as db:
+    with scoped(sqlite3.connect(f"file:{out / 'hikes.sqlite'}?mode=ro&immutable=1", uri=True)) as db:
         for dayhike_id, blob in db.execute("SELECT id, points FROM hikes"):
             for kind, where, lat, lon, _, off_m, name, ele in json.loads(zlib.decompress(blob)):
                 if kind in LANDMARK_KINDS and where == "line" and name:
@@ -1241,7 +1243,7 @@ def export_landmarks(out_dir: Path | str, geonames_path: Path | str | None = Non
         ids = np.load(out / "similarity" / "ids.npy")
         near = cKDTree(_unit(trailheads[:, 0], trailheads[:, 1]))
         chord = 2 * math.sin(VILLAGE_M / (2 * EARTH_RADIUS_M))
-        with sqlite3.connect(f"file:{places}?mode=ro&immutable=1", uri=True) as db:
+        with scoped(sqlite3.connect(f"file:{places}?mode=ro&immutable=1", uri=True)) as db:
             kept = db.execute("SELECT id, name, population, lat, lon FROM places").fetchall()
             spelled: dict[int, set[str]] = {}
             for name, place in db.execute("SELECT name, place FROM place_names"):
@@ -1411,9 +1413,9 @@ class ServingData:
         self.store = SimilarityStore.open_dir(self.directory / "similarity")
         graph = self.directory / "trailgraph.sqlite"
         self.trailgraph = TrailGraph(graph) if self.meta.get("compose") and graph.is_file() else None
-        self.trailheads = np.load(self.directory / "trailheads.npy", mmap_mode="r")
+        self.trailheads = map_npy(self.directory / "trailheads.npy")
         self._db_uri = f"file:{self.directory / 'hikes.sqlite'}?mode=ro&immutable=1"
-        with self._db() as db:
+        with scoped(self._db()) as db:
             self._folded = [_fold(name) for (name,) in db.execute("SELECT name FROM hikes ORDER BY id")]
             columns = {row[1] for row in db.execute("PRAGMA table_info(hikes)")}
             self._has_source = "source" in columns
@@ -1432,7 +1434,7 @@ class ServingData:
         self.landmarks = f"file:{landmarks}?mode=ro&immutable=1" if landmarks.is_file() else None
         self._landmark_names = "NULL"  # how many names a Landmark has: none in a file from before ADR-0055
         if self.landmarks is not None:  # about 2 s for Europe: read beside the first requests, not in one of them
-            with sqlite3.connect(self.landmarks, uri=True) as db:
+            with scoped(sqlite3.connect(self.landmarks, uri=True)) as db:
                 if "names" in {row[1] for row in db.execute("PRAGMA table_info(landmarks)")}:
                     self._landmark_names = "l.names"
             threading.Thread(target=lambda: self._landmark_spellings, daemon=True).start()
@@ -1513,7 +1515,7 @@ class ServingData:
         needle = _fold(query).strip()
         if self.places is None or not needle:
             return []
-        with sqlite3.connect(self.places, uri=True) as db:
+        with scoped(sqlite3.connect(self.places, uri=True)) as db:
             rows = db.execute(
                 "SELECT p.name, p.country, p.lat, p.lon, p.population FROM place_names n "
                 "JOIN places p ON p.id = n.place WHERE n.name >= ? AND n.name < ? "
@@ -1542,7 +1544,7 @@ class ServingData:
         needle = _fold(query).strip()
         if self.landmarks is None or len(needle) < 2:
             return []
-        with sqlite3.connect(self.landmarks, uri=True) as db:
+        with scoped(sqlite3.connect(self.landmarks, uri=True)) as db:
             found, match = self._landmarks_named(db, needle, limit, self._landmark_names), "words"
             if not found:
                 for spelled in self._landmark_spellings.respelled(needle.split()):
@@ -1593,7 +1595,7 @@ class ServingData:
 
         if self.places is None:
             return [], None
-        with sqlite3.connect(self.places, uri=True) as db:
+        with scoped(sqlite3.connect(self.places, uri=True)) as db:
             rows = db.execute(
                 "SELECT name, country, lat, lon FROM places WHERE population >= ? ORDER BY id", (TOWN_POPULATION,)
             ).fetchall()
@@ -1636,7 +1638,7 @@ class ServingData:
     @functools.cached_property
     def _landmark_spellings(self) -> _Spellings:
         """The words of the Landmarks' names, read at the first query that needs them."""
-        with sqlite3.connect(self.landmarks, uri=True) as db:
+        with scoped(sqlite3.connect(self.landmarks, uri=True)) as db:
             return _Spellings([name for (name,) in db.execute("SELECT name FROM landmark_names WHERE whole")])
 
     def _rows_containing(self, word: str) -> list[int]:
@@ -1680,7 +1682,7 @@ class ServingData:
         name, walk length and line, and whether there are more than ``limit``;
         then none are listed.
         """
-        with self._db() as db:
+        with scoped(self._db()) as db:
             found = db.execute(
                 "SELECT h.id, h.name, h.name_origin, h.walk_m, h.line FROM hike_boxes b JOIN hikes h ON h.id = b.id "
                 "WHERE b.north >= ? AND b.south <= ? AND b.east >= ? AND b.west <= ? LIMIT ?",
@@ -1695,7 +1697,7 @@ class ServingData:
 
     def _names(self, ids: list[int]) -> dict[int, tuple[str, float | None, float | None]]:
         """Name, climb and descent (metres, walking direction) per DayHike id."""
-        with self._db() as db:
+        with scoped(self._db()) as db:
             return {
                 dayhike_id: (_shown_name(dayhike_id, name, origin), climb_m, descent_m)
                 for dayhike_id, name, origin, climb_m, descent_m in db.execute(
@@ -1711,7 +1713,7 @@ class ServingData:
         the line and ElevationProfile stay the DayHike's own."""
         row = self.row_of(dayhike_id)
         store = self.store.mode(return_to_start)
-        with self._db() as db:
+        with scoped(self._db()) as db:
             # An export made before Sources (ADR-0060) is all OpenStreetMap.
             source = "source, source_ref" if self._has_source else f"'{SOURCE_OSM}', NULL"
             source += ", source_url" if self._has_source_url else ", NULL"
@@ -1785,7 +1787,7 @@ class ServingData:
         back = {**_way_back(metres, kind), "line": None, "ele": None}
         if back["kind"] != "trail" or self.trailgraph is None:
             return back
-        with self._db() as db:
+        with scoped(self._db()) as db:
             (line,) = db.execute("SELECT line FROM hikes WHERE id = ?", (dayhike_id,)).fetchone()
         points = decode_polyline(line)
         ends = [self.trailgraph.vertex_near(lat, lon, LINE_END_M) for lat, lon in (points[0], points[-1])]
@@ -1807,7 +1809,7 @@ class ServingData:
         from b; a Junction is ``[id, lat, lon, degree, key]``.
         """
         empty = {"junctions": [], "segments": []}
-        with sqlite3.connect(f"file:{self.trailgraph.path}?mode=ro", uri=True) as db:
+        with scoped(sqlite3.connect(f"file:{self.trailgraph.path}?mode=ro", uri=True)) as db:
             # The R*Tree alone first: a box over more than ``limit`` reads no Segment row and sorts nothing.
             ids = [
                 row[0]
@@ -1895,7 +1897,7 @@ class ServingData:
 
     def _labels(self, relation_ids: list[int]) -> dict[int, str]:
         """The name, else ref, of each OSM relation of the TrailGraph that has one."""
-        with sqlite3.connect(f"file:{self.trailgraph.path}?mode=ro", uri=True) as db:
+        with scoped(sqlite3.connect(f"file:{self.trailgraph.path}?mode=ro", uri=True)) as db:
             return dict(_in_chunks(db, "SELECT id, coalesce(name, ref) FROM relations WHERE id IN ({})", relation_ids))
 
     def _trip(self, walk: ComposedWalk, return_to_start: bool) -> tuple[ComposedWalk, WayBack | None]:
@@ -1976,7 +1978,7 @@ class ServingData:
             return []
         walk = _even_points(lat, lon, TWIN_STEP_M)
         length = _path_length_m(walk[:, 0], walk[:, 1])
-        with self._db() as db:
+        with scoped(self._db()) as db:
             found = db.execute(
                 "SELECT h.id, h.line FROM hike_boxes b JOIN hikes h ON h.id = b.id "
                 "WHERE b.north >= ? AND b.south <= ? AND b.east >= ? AND b.west <= ?",
@@ -2308,7 +2310,7 @@ class ServingData:
 
     def _served_lines(self, ids: list[int]) -> dict[int, str]:
         """DayHikes' served lines, encoded, what their Twins are found on, by id."""
-        with self._db() as db:
+        with scoped(self._db()) as db:
             return dict(_in_chunks(db, "SELECT id, line FROM hikes WHERE id IN ({})", ids))
 
     def _loop_name(self, walk: ComposedWalk) -> str:
