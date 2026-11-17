@@ -15,6 +15,59 @@ only once the deployment is approved.
 
 ## 1. Build the serving export (on the machine with the data)
 
+### Europe only, or Europe and the US
+
+The site serves one export, so it shows the hikes of one Catalog. Two builds
+are supported (ADR-0069); pick one before the steps below:
+
+| Build | Ingest | `export-serving` | Cloud Run memory |
+| --- | --- | --- | --- |
+| **Europe only** (the default, today's site) | `dayhike ingest data/osm/europe-latest.osm.pbf` (paths level `graded`) | no `--region`, or `--region europe` | **2Gi** (section 3) |
+| **Europe and the US** | `dayhike ingest data/osm/europe data/osm/us --paths data/osm/us=trails` | `--region europe --region us-48` | **4Gi** |
+
+A US-only build is the same with only `data/osm/us` and `--paths trails`, and
+`--region us-48`; it fits 2Gi.
+
+- **Europe only** is every command in this file and in
+  [technical.md](technical.md#clean-rebuild) as written. Nothing of the US is read or needed.
+- **Europe and the US** is one Catalog of both. Keep each region's extracts in a
+  directory of its own, so `--paths data/osm/us=trails` reads the US at the
+  `trails` level, which builds its named-trail hikes, while Europe stays at
+  `graded` and gets the same hikes as a Europe build; only names they share
+  gain a place (ADR-0068). The raster steps take both regions, each covering
+  its own box (CHELSA is clipped to the box around both):
+
+  ```bash
+  uv run dayhike fetch-extracts --region europe --dest data/osm/europe
+  uv run dayhike fetch-extracts --region us-48 --dest data/osm/us      # 4 Geofabrik groups, the 48 states and DC
+  uv run dayhike fetch-dem --region europe --region us-48 --source copernicus
+  uv run dayhike fetch-landcover --region europe --region us-48
+  uv run dayhike fetch-climate --region europe --region us-48
+  uv run dayhike ingest data/osm/europe data/osm/us --paths data/osm/us=trails --dem data/dem --fresh
+  # then sample-dem, sample-landcover, sample-climate, sample-trailgraph and build-similarity as for Europe
+  ```
+
+  Both regions must be read from one elevation map (export-serving refuses a
+  mix), so a combined build is a Copernicus GLO-30 build. The highway tiles
+  cover both: cut each region's highways, merge them, and build the tiles from the
+  one file, as in [Highway tiles](technical.md#highway-tiles-all-of-europe-small-server):
+
+  ```bash
+  ./data/valhalla/prepare-highways.sh data/osm/europe/europe-latest.osm.pbf /tmp/highways/europe
+  for f in data/osm/us/*-latest.osm.pbf; do
+    ./data/valhalla/prepare-highways.sh "$f" "/tmp/highways/$(basename "$f" -latest.osm.pbf)"
+  done
+  mkdir -p data/valhalla/highways-eu-us
+  osmium merge /tmp/highways/*/*.osm.pbf -o data/valhalla/highways-eu-us/europe-us-highways.osm.pbf
+  # build the tiles in data/valhalla/highways-eu-us, then export with --region europe --region us-48
+  ```
+
+  The pages then say "across Europe and the contiguous United States". The
+  preview's estimate for this build (2026-11-17, not yet built in one piece):
+  an export of about 7.4 GB, a data image of about 4.2 GB compressed, and
+  2.3–2.8 GB of app plus Valhalla at run time, hence 4Gi. Go back to Europe
+  alone by deploying a Europe data image and setting the memory back to 2Gi.
+
 The export needs the Catalog, its GeometryStore, its similarity directory
 (`dayhike build-similarity`), and the highways-only Valhalla tiles ([technical docs](technical.md#highway-tiles-all-of-europe-small-server),
 **Highway tiles**). Start Valhalla on those tiles first, so every Trailhead is
@@ -136,7 +189,7 @@ What the flags do:
 
 | Flag | Why |
 | --- | --- |
-| `--memory 2Gi` | Measured peak of app plus Valhalla in the technical docs table, **Web demo measurements** ([technical.md](technical.md#web-demo-measurements)). The trail network for the way back is memory-mapped from the export's `trailgraph.network/` (an export without it builds it once per instance, a request arriving during the build waiting for it), and the image sets `MALLOC_ARENA_MAX=2`; with both, 8 visitors on 1 vCPU peak near 1.1 GB. Raise to 4Gi if the logs show out-of-memory restarts. |
+| `--memory 2Gi` | For a Europe-only export; a Europe and US export (section 1) needs `--memory 4Gi`, the most Cloud Run gives 1 vCPU: set it with `gcloud run services update dayhike --region europe-west1 --memory 4Gi` when its data image goes live, and back to `2Gi` with a Europe-only one. Measured peak of app plus Valhalla in the technical docs table, **Web demo measurements** ([technical.md](technical.md#web-demo-measurements)). The trail network for the way back is memory-mapped from the export's `trailgraph.network/` (an export without it builds it once per instance, a request arriving during the build waiting for it), and the image sets `MALLOC_ARENA_MAX=2`; with both, 8 visitors on 1 vCPU peak near 1.1 GB. Raise to 4Gi if the logs show out-of-memory restarts. |
 | `--min-instances 0` | Scale to zero; the captain accepted the cold start. |
 | `--max-instances 2` | The instance cap: at most two containers ever bill at once. |
 | `--concurrency 8` | Searches and hike pages run side by side; Rankings queue one at a time per instance (in the app). |

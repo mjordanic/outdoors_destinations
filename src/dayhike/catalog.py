@@ -557,6 +557,7 @@ def build_catalog(
     external: Sequence[str] = (),
     external_dir: Path | str | None = None,
     paths: str = "graded",
+    paths_of: Mapping[Path | str, str] | None = None,
 ) -> Catalog:
     """Ingest OSM XML or PBF snapshot(s) into a Catalog of DayHikes.
 
@@ -590,6 +591,9 @@ def build_catalog(
     list as used is refused. ``paths`` is the level of paths in no hiking
     relation read into the TrailGraph, one of ``PATH_LEVELS`` (ADR-0065); from
     ``trails`` up the named-trail hikes are built from them too (ADR-0066).
+    ``paths_of`` gives an input (a file or directory of ``osm_path``) a level
+    of its own: a Europe and US build reads Europe at ``graded`` and the US at
+    ``trails``, each as a build of it alone would (ADR-0069).
     """
     from dayhike.dem import dem_read_by, point_heights
     from dayhike.external import EXTERNAL_DIR, read_external
@@ -605,7 +609,9 @@ def build_catalog(
     from dayhike.trailgraph import check_snap_tolerance, write_trailgraph
 
     check_snap_tolerance(snap_tolerance_m)
-    check_paths(paths)
+    osm_files, levels = _osm_paths_and_levels(osm_path, paths, paths_of or {})
+    for level in dict.fromkeys(levels):
+        check_paths(level)
     catalog_path = Path(catalog_path)
     if dem_dir is not None and not Path(dem_dir).is_dir():
         raise FileNotFoundError(f"No DEM directory {dem_dir}")
@@ -618,7 +624,7 @@ def build_catalog(
     if dem_dir is not None and heights is None:
         emit_progress(progress, "assemble", f"no DEM tiles in {dem_dir}: height orients no line")
     kept, report, work_path, snapshot = run_ingest(
-        _osm_paths(osm_path),
+        osm_files,
         catalog_path,
         progress=progress,
         fresh=fresh,
@@ -626,7 +632,7 @@ def build_catalog(
         heights=heights,
         external=external_hikes,
         previous=before,
-        paths=paths,
+        paths=levels,
     )
     emit_progress(progress, "write", str(catalog_path))
     # Each file is written under a staging name and all are renamed together once
@@ -667,12 +673,24 @@ def build_catalog(
     return Catalog.open(catalog_path)
 
 
-def _osm_paths(osm_path: Path | str | Sequence[Path | str]) -> list[Path]:
-    """The snapshot files to ingest: each path given, a directory as the OSM
-    files in it."""
-    if isinstance(osm_path, (str, Path)):
-        osm_path = [osm_path]
-    return [file for path in osm_path for file in _osm_files(Path(path))]
+def _osm_paths_and_levels(
+    osm_path: Path | str | Sequence[Path | str], paths: str, paths_of: Mapping[Path | str, str]
+) -> tuple[list[Path], list[str]]:
+    """The snapshot files to ingest (each path given, a directory as the OSM
+    files in it) and each file's paths level: its input's in ``paths_of``, else
+    ``paths``. A ``paths_of`` key that is none of the inputs is refused, so a
+    mistyped one does not quietly build without its trails."""
+    inputs = [osm_path] if isinstance(osm_path, (str, Path)) else list(osm_path)
+    given = {Path(path).resolve(): level for path, level in paths_of.items()}
+    unknown = set(given) - {Path(path).resolve() for path in inputs}
+    if unknown:
+        raise ValueError(f"paths levels for {', '.join(sorted(map(str, unknown)))}, which are not inputs")
+    files, levels = [], []
+    for path in inputs:
+        for file in _osm_files(Path(path)):
+            files.append(file)
+            levels.append(given.get(Path(path).resolve(), paths))
+    return files, levels
 
 
 def _osm_files(path: Path) -> list[Path]:

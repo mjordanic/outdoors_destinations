@@ -1,0 +1,16 @@
+# The 48 contiguous states and DC: Geofabrik's four US groups that hold them
+# (us-pacific, Alaska and Hawaii, is left out). Read its extracts at the
+# trails paths level (dayhike ingest --paths <dir>=trails, ADR-0066, ADR-0069).
+label = "the contiguous United States"
+continent = "North America"
+extracts = [
+    "https://download.geofabrik.de/north-america/us-midwest-latest.osm.pbf",
+    "https://download.geofabrik.de/north-america/us-northeast-latest.osm.pbf",
+    "https://download.geofabrik.de/north-america/us-south-latest.osm.pbf",
+    "https://download.geofabrik.de/north-america/us-west-latest.osm.pbf",
+]
+bounds = { south = 24.3, west = -125.0, north = 49.5, east = -66.8 }
+
+[map]
+view = { west = -126.0, south = 24.0, east = -66.0, north = 50.0 }
+centre = { lon = -96.0, lat = 38.0 }

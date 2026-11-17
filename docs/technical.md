@@ -190,8 +190,9 @@ command. After ingest, widen raster coverage with
 What one build covers is a **region file**, not code. The packaged ones are in
 `src/dayhike/data/regions/`: `alps-dinarides` (the eight PRD extracts, the
 default of the fetch commands), `europe` (the continent extract, the default of
-`coverage-map`), `us-colorado` (one US state, an example outside Europe) and
-`us-rhode-island` (the smallest state, the [US test build](#a-us-build)).
+`coverage-map`), `us-48` (the 48 states and DC), `us-colorado` (one US state,
+an example outside Europe) and `us-rhode-island` (the smallest state, the
+[US test build](#a-us-build)).
 A region file is TOML:
 
 ```toml
@@ -221,9 +222,15 @@ uv run dayhike fetch-dem --region europe --region us-colorado    # each region's
 uv run dayhike coverage-map --countries /tmp/countries.geojson --region europe --region us-colorado --out /tmp/m.svg
 ```
 
-Named-trail hikes are on per build, not per region file: a US build ingests
+Named-trail hikes are on per ingest input, not per region file: a US build ingests
 with `--paths trails` ([ADR-0066](adr/0066-named-trail-hikes.md)), and the
-Europe build keeps the default `graded`, which builds none.
+Europe build keeps the default `graded`, which builds none. A Europe and US
+build reads each region's extracts from a directory of its own and gives the
+US its level: `dayhike ingest data/osm/europe data/osm/us --paths data/osm/us=trails`
+([ADR-0069](adr/0069-europe-and-us-in-one-build.md)); Europe then gets the
+hikes a Europe build gives it. The packaged `us-48` region is the 48 states and
+DC. [deploy.md](deploy.md#europe-only-or-europe-and-the-us) has both builds and
+the memory each needs.
 
 Every box must run west to east (`west < east`) within ±180°: a region that
 crosses the 180° meridian (Alaska's Aleutians, Fiji, eastern Chukotka) is not
@@ -518,7 +525,9 @@ nodes, for named-trail hikes ([ADR-0066](adr/0066-named-trail-hikes.md));
 `highway=path` too: they join the TrailGraph like graded paths and, with the
 graded paths, also enter the ingest snapshot the built-hike sources read,
 though NetworkHikes still reach parking only over the hiking tables' ways
-([ADR-0065](adr/0065-paths-beyond-route-members-at-ingest.md)). Ways split into Segments that meet at Junctions: a node two ways share,
+([ADR-0065](adr/0065-paths-beyond-route-members-at-ingest.md)). `--paths INPUT=LEVEL`
+sets one input's level (a file or a directory; repeatable), so only that
+input's paths enter the snapshot ([ADR-0069](adr/0069-europe-and-us-in-one-build.md)). Ways split into Segments that meet at Junctions: a node two ways share,
 a dead end, a node where the relations along the trail change (a stage
 boundary), or a crossing of two same-layer ways with no node. A dead-end tip
 within `--snap-tolerance` (20 m by default, at most 50 m) of a node more than
@@ -1238,7 +1247,14 @@ sections are kept (ADR-0033). A missing OSM `name` is kept: the Seed label is `n
 else `ref` with `from – to` or "near" the nearest place, else `from – to`, else
 "Hike near" the nearest place (a named city, town, village or hamlet within
 5 km of the Trailhead), else `relation:{id}`, with `name_origin` recording
-which (ADR-0017). A line starts at the end its `from`/`to` tags point to when
+which (ADR-0017). Last, every label of the build is made unique, whatever its
+hike's kind (`dayhike.names`, [ADR-0068](adr/0068-every-hike-name-is-unique.md)):
+a placeholder name ("Road", "Trail", "Forest Route 2165", "392") becomes "Hike
+near {place}" with a numbered name kept in brackets, a shared name adds "near
+{place}" to each hike that has it, the place being the nearest town within
+5 km, else the nearest named peak, hut, viewpoint or lake within 5 km, else the
+nearest town; a label still shared is numbered "(1)", "(2)" in id order. A
+unique name that is no placeholder is kept, and `name_origin` is unchanged. A line starts at the end its `from`/`to` tags point to when
 they name one end; else, with `--dem`, at its lower end when its ends differ by
 more than 100 m and something reaches it (ADR-0048, lower end); else, when it lacks a
 `from` or `to` tag, at the end its dashed name points to; else parking
@@ -1758,11 +1774,12 @@ one name (case ignored) that share a node or whose ends lie within 50 m are one
 piece; each piece is walked as a relation's member ways are, from the end with
 a `highway=trailhead` node within 100 m when only one has one, else by the
 height rule, else from the end nearer a trailhead node or parking, and kept from
-1 km. A walk more than half paved or lit, a snowmobile corridor not signed for
+1 km (`MIN_TRAIL_LENGTH_M`; relation hikes and DayStages keep their own rules). A walk more than half paved or lit, a snowmobile corridor not signed for
 walkers, open to motor vehicles, bike-first or a ski piste is dropped, and so
-is a Twin of a relation DayHike or of a named trail kept before it. A name
-another hike has, or a colour or "Trail" only, gets " near {place}" (the
-nearest place within 5 km of its start). Its `source_ref` is `way/{id}` of
+is a Twin of a relation DayHike or of a named trail kept before it. A colour
+name ("Red Trail", "Blue") gets " near {place}" (the nearest place within 5 km
+of its start); a shared name or a placeholder such as "Trail" or "Road" is then
+renamed with every other label of the build (ADR-0068). Its `source_ref` is `way/{id}` of
 the first way it walks, and the page links the ways its Route walks.
 
 `destination_source` (`dayhike.destination_hikes`, ADR-0067) is registered last: it
