@@ -190,8 +190,9 @@ command. After ingest, widen raster coverage with
 What one build covers is a **region file**, not code. The packaged ones are in
 `src/dayhike/data/regions/`: `alps-dinarides` (the eight PRD extracts, the
 default of the fetch commands), `europe` (the continent extract, the default of
-`coverage-map`), `us-colorado` (one US state, an example outside Europe) and
-`us-rhode-island` (the smallest state, the [US test build](#a-us-build)).
+`coverage-map`), `us-48` (the 48 states and DC), `us-colorado` (one US state,
+an example outside Europe) and `us-rhode-island` (the smallest state, the
+[US test build](#a-us-build)).
 A region file is TOML:
 
 ```toml
