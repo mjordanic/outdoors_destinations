@@ -1753,10 +1753,10 @@ class ServingData:
             "profile_shape": [_value(v) for v in store.profile[row]],
             "way_back": _way_back(*store.way_back[[0, 3], row]) if return_to_start else None,
             # A built DayHike (ADR-0038): what kind, the OSM relations it is built from (none for a
-            # named trail, ADR-0066), its Route.
+            # named trail, ADR-0066, or a DestinationHike, ADR-0067), its Route.
             "built": None
             if kind in (KIND_RELATION, KIND_EXTERNAL)
-            else {"kind": kind, "parts": json.loads(parts or "[]"), "route": route},
+            else {"kind": kind, "parts": json.loads(parts) if parts else [], "route": route},
             # Where the hike comes from: a sources register id, its record there and a link to it;
             # for an external source (ADR-0062) also its name, licence and licence page.
             "source": {

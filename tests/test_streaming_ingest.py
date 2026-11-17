@@ -135,7 +135,8 @@ def test_a_pbf_ingest_runs_osmium_only_for_the_hiking_filter(
     monkeypatch.setattr("dayhike.ingest.subprocess.run", record)
     catalog = build_catalog(source, tmp_path / "catalog.sqlite")
 
-    assert osmium_commands == ["tags-filter"]
+    # The catalog extract, and the walk extract DestinationHikes read (ADR-0067).
+    assert osmium_commands == ["tags-filter", "tags-filter"]
     assert catalog.ingest_report.kept == 4
     assert list(tmp_path.glob("catalog.sqlite.access*")) == []
 

@@ -1749,7 +1749,7 @@ Viewpoint or lake, none a Twin of a relation DayHike or of a better chain. Named
 are read for them alone: they name destinations and signposts, and are no
 amenity and not in the GeometryStore.
 
-`named_trails` (`dayhike.named_trails`, ADR-0066) is registered last. It
+`named_trails` (`dayhike.named_trails`, ADR-0066) is the third. It
 builds named-trail hikes, kind `trail`, from the named
 `highway=path|footway|bridleway` ways in no hiking relation, so only from a
 snapshot read with `--paths trails` or above: a US build. At the default
@@ -1764,6 +1764,16 @@ is a Twin of a relation DayHike or of a named trail kept before it. A name
 another hike has, or a colour or "Trail" only, gets " near {place}" (the
 nearest place within 5 km of its start). Its `source_ref` is `way/{id}` of
 the first way it walks, and the page links the ways its Route walks.
+
+`destination_source` (`dayhike.destination_hikes`, ADR-0067) is registered last: it
+builds DestinationHikes, "{destination} from {start}" walks from a car park to
+a named hut, viewpoint, lake or notable peak, up to 8 per destination and 8 per
+car park. It cuts its own extract beside the source (`*.walk.osm.pbf`, every
+walkable way, car parks and destinations with their tags), keeps the ways near
+destinations in a temporary SQLite store and searches 1° tiles in
+`parallel_map` workers. The ways a kept walk takes that the snapshot lacks go
+into the snapshot and the work file's path tables, so the GeometryStore and
+the TrailGraph hold them.
 
 Last come the external hikes of each `--external` source (ADR-0062, `dayhike.external`),
 read from the cache `dayhike fetch-external` wrote under `data/external/<source>/`.

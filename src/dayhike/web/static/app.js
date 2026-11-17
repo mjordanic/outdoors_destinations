@@ -1291,7 +1291,7 @@ function sourceLine(hike) {
 }
 
 // A built hike's head (ADR-0038): the OSM relations it is built from (for a named trail,
-// ADR-0066, the OSM ways its Route walks), a link to it, and, beside a liked hike when
+// ADR-0066, the OSM ways its Route walks; for a DestinationHike, ADR-0067, none, so "OSM paths"), a link to it, and, beside a liked hike when
 // the server can compose, its Route to edit on the map.
 function routeWays(route) {
   // The ways of a Route ("start:way.node,..."; a negative way is walked against its nodes, "g" a gap), each once.
@@ -1304,7 +1304,8 @@ function builtLinks(hike, compare) {
   const ids = type === "way" ? routeWays(hike.built.route) : hike.built.parts;
   const parts = ids.map((id) => `<a href="https://www.openstreetmap.org/${type}/${id}" target="_blank" rel="noopener">${id}</a>`);
   const edit = compare && state.info.compose ? ' <button type="button" class="secondary edit-composed">Edit on the map</button>' : "";
-  return `<span>Built from OSM ${type}${parts.length === 1 ? "" : "s"} ${parts.join(", ")} · <a class="hike-link" href="${likedHash(hike)}" title="This address opens this hike">Link to this hike</a>${edit}</span>`;
+  const from = parts.length ? `OSM ${type}${parts.length === 1 ? "" : "s"} ${parts.join(", ")}` : "OSM paths";
+  return `<span>Built from ${from} · <a class="hike-link" href="${likedHash(hike)}" title="This address opens this hike">Link to this hike</a>${edit}</span>`;
 }
 
 // The Measures a comparison shows: with the way back every hike is a round trip, so not Round trip.
