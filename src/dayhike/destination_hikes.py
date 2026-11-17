@@ -64,7 +64,8 @@ HARD_SAC = frozenset({"demanding_alpine_hiking", "difficult_alpine_hiking"})  # 
 @dataclass(frozen=True)
 class Destination:
     """A named Peak, Hut, Viewpoint or lake: ``points`` is its point, or a lake's
-    outline; ``ele`` its height, ``wikidata`` and ``wikipedia`` whether it has such a tag."""
+    outline; ``ele`` its height, ``wikidata`` and ``wikipedia`` whether it has such a
+    tag; ``others`` the points of the destinations merged into it."""
 
     name: str
     kind: str
@@ -72,6 +73,7 @@ class Destination:
     ele: float | None = None
     wikidata: bool = False
     wikipedia: bool = False
+    others: tuple[Point, ...] = ()
 
     @property
     def notability(self) -> tuple[int, float]:
@@ -96,10 +98,13 @@ class Destination:
 @dataclass(frozen=True)
 class Start:
     """A car park: its name for the walk's label (None: it starts no walk, but
-    no walk passes it either) and its point, or its area's outline."""
+    no walk passes it either) and its point, or its area's outline; ``hut`` the
+    hut it is named after, and ``fallback`` its name for a walk to that hut."""
 
     name: str | None
     points: tuple[Point, ...]
+    hut: str | None = None
+    fallback: str | None = None
 
 
 @dataclass(frozen=True)
@@ -153,8 +158,9 @@ def destination_hikes(
 
 def merged(destinations: Sequence[Destination]) -> list[Destination]:
     """``destinations`` with those whose points lie within ``MERGE_M`` of each
-    other as one: named and ranked as the best-known of them, with all their
-    points, so it is reached where any of them meets the graph."""
+    other as one: named and ranked as the best-known of them, with the others'
+    points as its ``others``, so it is reached at its own point, else where any
+    of them meets the graph."""
     if len(destinations) < 2:
         return list(destinations)
     from sklearn.neighbors import BallTree
@@ -180,7 +186,7 @@ def merged(destinations: Sequence[Destination]) -> list[Destination]:
     for group in groups.values():
         best = max(group, key=lambda destination: destination.notability)
         others = tuple(point for destination in group if destination is not best for point in destination.points)
-        result.append(replace(best, points=best.points + others) if others else best)
+        result.append(replace(best, others=others) if others else best)
     return result
 
 
@@ -207,6 +213,8 @@ def walks(
     reached: dict[int, list[Destination]] = {}
     for destination in destinations:
         node = graph.snap(destination.points, DESTINATION_SNAP_M)
+        if node is None and destination.others:
+            node = graph.snap(destination.others, DESTINATION_SNAP_M)
         if node is not None:
             reached.setdefault(node, []).append(destination)
     if not start_at or not reached:
@@ -226,6 +234,8 @@ def _chosen_walks(graph: _Graph, destination: Destination, candidates, start_at)
         if len(kept) == WALKS_PER_DESTINATION:
             break
         start = start_at[start_node]
+        if start.hut is not None and start.hut == destination.name:
+            start = replace(start, name=start.fallback, hut=None)
         metres = float(graph.metres[edges].sum())
         if start.name is None or not ONE_WAY_MIN_M <= metres <= destination.one_way_max_m:
             continue
@@ -559,6 +569,7 @@ WALK_HIGHWAYS = (
     "unclassified", "residential", "service", "tertiary", "living_street",
 )  # fmt: skip
 HUT_TOURISM = ("alpine_hut", "wilderness_hut")
+CLOSED_HUT_KEYS = ("disused:tourism", "abandoned:tourism")
 LAKE_WATER = ("lake", "reservoir", "pond")
 # The extract this source reads, beside the catalog extract: every walkable way, the car
 # parks, the destinations with their tags (closed huts too), lakes and what names a start.
@@ -597,7 +608,7 @@ def destination_source(context: BuildContext) -> list[BuiltWalk]:
         found = _Read()
         for path in context.source_paths:
             _read_walkable(_walk_extract(path, context.progress), store, cells, found, Path(work))
-        destinations = merged(found.destinations(context.dem_dir))
+        destinations = found.destinations(context.dem_dir)
         starts = found.starts()
         marked: dict[int, list[int]] = {}
         for relation in context.snapshot.relations:
@@ -632,14 +643,15 @@ def destination_source(context: BuildContext) -> list[BuiltWalk]:
 
 
 class _TileTask:
-    """One tile's walks, in a worker of its own: the ways within reach of its
-    destinations from the store, their heights from the DEM, and the search."""
+    """One tile's walks, in a worker of its own: its destinations merged, the ways
+    within reach of them from the store, their heights from the DEM, and the search."""
 
     def __init__(self, store: Path, starts: Sequence[Start], marked, dem_dir: Path | None, progress=None) -> None:
         self.store, self.starts, self.marked, self.dem_dir, self.progress = store, starts, marked, dem_dir, progress
 
     def __call__(self, item: tuple[tuple[int, int], list[Destination]]) -> list[DestinationHike]:
         (row, col), destinations = item
+        destinations = merged(destinations)
         south, west, north, east = _with_margin(row * TILE_DEG, col * TILE_DEG, (row + 1) * TILE_DEG, (col + 1) * TILE_DEG)
         with sqlite3.connect(self.store) as conn:
             cells = [_cell(lat, lon) for lat in _steps(south, north) for lon in _steps(west, east)]
@@ -806,7 +818,7 @@ class _Read:
             return
         if tags.get("natural") == "peak":
             self.found.append(("peak", name, points, tags))
-        elif any(tags.get(key) in HUT_TOURISM for key in ("tourism", "disused:tourism", "abandoned:tourism")):
+        elif any(tags.get(key) in HUT_TOURISM for key in ("tourism", *CLOSED_HUT_KEYS)):
             self.found.append(("hut", name, points, tags))
         elif tags.get("tourism") == "viewpoint":
             self.found.append(("viewpoint", name, points, tags))
@@ -853,17 +865,15 @@ class _Read:
 
         starts = []
         for points, tags in self.parking:
-            name = tags.get("name")
+            name, hut, fallback = tags.get("name"), None, None
             if not name or name.strip().lower() in GENERIC_PARKING:
                 centre = tuple(np.mean(points, axis=0).tolist())
-                name = (
-                    nearest(TOWNS, centre, TOWN_M)
-                    or nearest(("hamlet", "locality"), centre, HAMLET_M)
-                    or nearest(("hut",), centre, HAMLET_M)
-                    or nearest(TOWNS, centre, FAR_TOWN_M)
-                    or nearest(("landmark",), centre, LANDMARK_M)
-                )
-            starts.append(Start(name, points))
+                name = nearest(TOWNS, centre, TOWN_M) or nearest(("hamlet", "locality"), centre, HAMLET_M)
+                if name is None:
+                    hut = nearest(("hut",), centre, HAMLET_M)
+                    fallback = nearest(TOWNS, centre, FAR_TOWN_M) or nearest(("landmark",), centre, LANDMARK_M)
+                    name = hut or fallback
+            starts.append(Start(name, points, hut, fallback if hut else None))
         return starts
 
 
@@ -876,17 +886,23 @@ def _ele(tags: dict[str, str]) -> float | None:
 
 def _read_walkable(path: Path, store: Path, cells: set[int], found: _Read, work: Path) -> None:
     """Store the walkable ways of ``path`` that touch ``cells``, or are within reach
-    of a destination node it holds (with their nodes' points, by cell), and gather
-    its points into ``found``."""
+    of a destination node or closed hut it holds (with their nodes' points, by cell),
+    and gather its points into ``found``."""
     import osmium
 
-    for relation in osmium.FileProcessor(str(path), osmium.osm.RELATION).with_filter(osmium.filter.KeyFilter("water")):
-        tags = dict(relation.tags)
+    hut_nodes = []  # a node of each closed hut drawn as a way, which the catalog does not read
+    first_pass = osmium.FileProcessor(str(path), osmium.osm.RELATION | osmium.osm.WAY)
+    for obj in first_pass.with_filter(osmium.filter.KeyFilter("water", *CLOSED_HUT_KEYS)):
+        tags = dict(obj.tags)
+        if obj.is_way():
+            if tags.get("name") and len(obj.nodes) and any(tags.get(key) in HUT_TOURISM for key in CLOSED_HUT_KEYS):
+                hut_nodes.append(obj.nodes[0].ref)
+            continue
         if tags.get("name") and tags.get("natural") == "water" and tags.get("water") in LAKE_WATER:
-            found.lakes[relation.id] = (tags["name"], [])
-            for member in relation.members:
+            found.lakes[obj.id] = (tags["name"], [])
+            for member in obj.members:
                 if member.type == "w" and member.role != "inner":
-                    found.lake_ways[member.ref] = relation.id
+                    found.lake_ways[member.ref] = obj.id
     big = path.stat().st_size > LARGE_EXTRACT_BYTES
     storage = f"sparse_file_array,{work / 'locations.bin'}" if big else "flex_mem"
     conn = sqlite3.connect(store)
@@ -902,7 +918,14 @@ def _read_walkable(path: Path, store: Path, cells: set[int], found: _Read, work:
             found.node(dict(obj.tags), (obj.location.lat, obj.location.lon))
             continue
         if read_nodes is not None:  # the file's nodes come first: their destinations are known
-            cells = cells | _cells_near(points[0] for _, _, points, _ in found.found[read_nodes:])
+            near = [points[0] for _, _, points, _ in found.found[read_nodes:]]
+            for node in hut_nodes:
+                try:
+                    location = processor.node_location_storage.get(node)
+                except KeyError:
+                    continue
+                near.append((location.lat, location.lon))
+            cells = cells | _cells_near(near)
             read_nodes = None
         tags = dict(obj.tags)
         located = [(node.ref, node.location.lat, node.location.lon) for node in obj.nodes if node.location.valid()]

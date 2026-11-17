@@ -161,12 +161,15 @@ def test_a_lake_mapped_as_a_multipolygon_of_untagged_ways_is_a_destination(tmp_p
     assert "Jezero from Dom v Severu" in {hike.name for hike in _destination_hikes(catalog)}
 
 
-def test_a_closed_hut_far_from_what_the_catalog_reads_gets_a_walk(tmp_path: Path) -> None:
-    # A disused hut the catalog does not read, and a car park with no name it names:
-    # nothing else here is a destination or a hut.
+@pytest.mark.parametrize("as_way", [False, True])
+def test_a_closed_hut_far_from_what_the_catalog_reads_gets_a_walk(tmp_path: Path, as_way: bool) -> None:
+    # A disused hut the catalog does not read, as a node or drawn as a way after the path,
+    # and a car park with no name beside it: for a walk to the hut the car park is named
+    # after the guidepost by it, not the hut. Nothing else here is a destination or a hut.
+    hut = {"disused:tourism": "alpine_hut", "name": "Stara koča"}
     nodes = {
-        1: (_at(0.6, 0), {"disused:tourism": "alpine_hut", "name": "Stara koča"}),
         2: (_at(0, 0), {"amenity": "parking"}),
+        3: (_at(-0.2, 0), {"information": "guidepost", "name": "Razpotje"}),
     }
     corners = [_at(0, 0), _at(0, 0.6), _at(0.6, 0.6), _at(0.6, 0)]
     ids = []
@@ -174,8 +177,16 @@ def test_a_closed_hut_far_from_what_the_catalog_reads_gets_a_walk(tmp_path: Path
         for i in range(0 if leg == 0 else 1, 7):
             ids.append(10 + len(ids))
             nodes[ids[-1]] = ((a[0] + (b[0] - a[0]) * i / 6, a[1] + (b[1] - a[1]) * i / 6), {})
-    osm = _write_osm(tmp_path / "stara.osm", nodes, [(1000, ids, {"highway": "path"})])
+    ways = [(1000, ids, {"highway": "path"})]
+    if as_way:
+        outline = [50, 51, 52, 53]
+        for node, (north, east) in zip(outline, [(0.6, -0.03), (0.62, -0.03), (0.62, -0.01), (0.6, -0.01)]):
+            nodes[node] = (_at(north, east), {})
+        ways.append((2000, [*outline, outline[0]], {"building": "hut", **hut}))
+    else:
+        nodes[1] = (_at(0.6, 0), hut)
+    osm = _write_osm(tmp_path / "stara.osm", nodes, ways)
 
     catalog = build_catalog(osm, tmp_path / "catalog.sqlite", sources=[destination_source])
 
-    assert [hike.name for hike in _destination_hikes(catalog)] == ["Stara koča from Stara koča"]
+    assert [hike.name for hike in _destination_hikes(catalog)] == ["Stara koča from Razpotje"]

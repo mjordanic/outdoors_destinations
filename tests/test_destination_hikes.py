@@ -286,3 +286,29 @@ def test_one_name_twice_gets_the_way_it_takes() -> None:
     hikes = kept(net.hikes([HUT], [DOLINA, Start("Dolina", (at(0, 3),))]))
 
     assert sorted(hike.name for hike in hikes) == ["Koča from Dolina via Spodnja pot", "Koča from Dolina via Zgornja pot"]
+
+
+def test_a_hut_merged_with_a_lake_beside_it_is_reached_at_the_hut_not_the_far_shore() -> None:
+    net = Net()
+    net.line((0, 0), (4, 0))  # to the hut, 15 m off the path's end
+    net.line((0, 0), (0, 2), (4.06, 2))  # to the lake's far shore
+    hut = Destination("Koča", "hut", (at(4, 0.015),))
+    lake = Destination("Jezero", "lake", tuple(at(4.06, east / 4) for east in range(9)))  # 60 m north of the hut, 2 km long
+
+    (hike,) = kept(net.hikes([hut, lake], [DOLINA]))
+
+    assert hike.name == "Koča from Dolina"
+    assert hike.vertices[-1][1] == at(4, 0)
+
+
+def test_a_car_park_named_after_a_hut_takes_its_other_name_for_a_walk_to_that_hut() -> None:
+    net = Net()
+    net.line((0, 0), (4, 0))
+    net.line((0, 0), (-3, 0))
+    peak = Destination("Vrh", "peak", (at(-3, 0),), ele=1_500)
+
+    def names(start: Start) -> list[str]:
+        return sorted(hike.name for hike in kept(net.hikes([HUT, peak], [start])))
+
+    assert names(Start("Koča", (at(0, 0),), hut="Koča", fallback="Vas")) == ["Koča from Vas", "Vrh from Koča"]
+    assert names(Start("Koča", (at(0, 0),), hut="Koča")) == ["Vrh from Koča"]
