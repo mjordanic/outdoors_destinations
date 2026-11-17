@@ -129,8 +129,9 @@ class DayHike:
     feature_vector: FeatureVector
     name_origin: str = NAME_ORIGIN_OSM_NAME
     climate_months: tuple[tuple[float, float, float] | None, ...] = (None,) * 12
-    # A built DayHike (ADR-0038) is a "network", "stage" or "trail" (ADR-0066) walk,
-    # built from the OSM relations in ``parts`` (none for a trail), that walks its Route ``route``.
+    # A built DayHike (ADR-0038) is a "network", "stage", "trail" (ADR-0066) or "destination"
+    # (ADR-0067) walk, built from the OSM relations in ``parts`` (none for a trail or a
+    # destination), that walks its Route ``route``.
     kind: str = KIND_RELATION
     parts: tuple[int, ...] = ()
     route: str | None = None
