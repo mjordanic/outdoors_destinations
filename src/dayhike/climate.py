@@ -30,6 +30,12 @@ CHELSA_ATTRIBUTION = (
 _UNITS = {"tas": (1.0, -273.15), "pr": (1.0, 0.0), "rsds": (86.4, 0.0)}
 _PLAUSIBLE = {"tas": (-70.0, 50.0), "pr": (0.0, 3000.0), "rsds": (0.0, 45000.0)}
 _VERTEX_CHUNK = 1_000_000
+# Clips of one source grid agree on origin only to float noise (~1e-14 degrees);
+# CHELSA cells are ~8e-3. Origins are snapped to _GRID_SNAP when written and
+# grids compare equal within _GRID_TOLERANCE when read, so clips fetched
+# before the snap still count as one grid.
+_GRID_SNAP = 9
+_GRID_TOLERANCE = 1e-9
 _CLIMATE_FILE = re.compile(r"^chelsa_(tas|pr|rsds)_(\d{2})\.tif$", re.IGNORECASE)
 
 
@@ -195,6 +201,13 @@ def _raster_values(
     return values
 
 
+def _same_grid(first: tuple, second: tuple) -> bool:
+    """Whether two (transform, height, width) grids match, the transforms to float noise."""
+    from rasterio import Affine
+
+    return first[1:] == second[1:] and Affine(*first[0]).almost_equals(Affine(*second[0]), _GRID_TOLERANCE)
+
+
 def _raster_cells(
     path: Path, latitudes: np.ndarray, longitudes: np.ndarray, grids: dict[tuple, tuple[np.ndarray, np.ndarray]]
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -202,14 +215,17 @@ def _raster_cells(
 
     Returns the value per distinct cell (float64; NaN off the raster or on
     nodata) and, per point, the index of its cell in it. The raster is read
-    once. Rasters on one grid share the cells: ``grids`` keeps them by grid.
+    once. Rasters on one grid (to float noise) share the cells: ``grids`` keeps them by grid.
     """
     import rasterio
     from rasterio.windows import Window
 
     with rasterio.open(path) as dataset:
         grid = (tuple(dataset.transform)[:6], dataset.height, dataset.width)
-        if grid not in grids:
+        known = next((key for key in grids if _same_grid(key, grid)), None)
+        if known is not None:
+            grid = known
+        else:
             cols, rows = ~dataset.transform @ (longitudes, latitudes)
             rows = np.floor(rows).astype(np.int64)
             cols = np.floor(cols).astype(np.int64)
@@ -338,6 +354,13 @@ def _covers(path: Path, bounds: Bounds) -> bool:
     )
 
 
+def _snapped(transform):
+    """transform with its origin rounded, so every clip of one source grid gets the same one."""
+    from rasterio import Affine
+
+    return Affine(transform.a, transform.b, round(transform.c, _GRID_SNAP), transform.d, transform.e, round(transform.f, _GRID_SNAP))
+
+
 def _clip_and_convert(source: Path, out: Path, variable: str, bounds: Bounds) -> None:
     """Write source clipped to bounds as float32 in Measure units, NaN for nodata."""
     import rasterio
@@ -372,7 +395,7 @@ def _clip_and_convert(source: Path, out: Path, variable: str, bounds: Bounds) ->
             "count": 1,
             "dtype": "float32",
             "crs": dataset.crs,
-            "transform": dataset.window_transform(window),
+            "transform": _snapped(dataset.window_transform(window)),
             "nodata": np.nan,
             "compress": "deflate",
             "predictor": 3,

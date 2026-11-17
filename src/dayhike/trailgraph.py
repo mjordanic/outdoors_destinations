@@ -1015,13 +1015,17 @@ def _climate_grid(rasters: Sequence[tuple[str, int, Path]]) -> tuple:
     """The one grid (transform, height, width) every climate raster shares."""
     import rasterio
 
-    grids = set()
+    from dayhike.climate import _same_grid
+
+    grids: list[tuple] = []
     for _, _, raster in rasters:
         with rasterio.open(raster) as dataset:
-            grids.add((tuple(dataset.transform)[:6], dataset.height, dataset.width))
+            grid = (tuple(dataset.transform)[:6], dataset.height, dataset.width)
+        if not any(_same_grid(grid, known) for known in grids):
+            grids.append(grid)
     if len(grids) != 1:
         raise ValueError("the climate rasters are not on one grid; refetch them with `dayhike fetch-climate`")
-    return grids.pop()
+    return grids[0]
 
 
 def _climate_cells(rasters, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
