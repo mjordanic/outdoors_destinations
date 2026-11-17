@@ -137,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
         "--source",
         required=True,
         help="Sources register id, e.g. ie-sport-ireland, fi-lipas (fi is that Finland source), "
-        "no-turrutebasen (no is that Norway source) or fr-ecrins-randonnees; fr is every French "
+        "no-turrutebasen (no is that Norway source), fr-ecrins-randonnees or it-odh-suedtirol; fr is every French "
         "dataset whose licence and file pass the gate (ADR-0062)",
     )
     fetch_ext.add_argument(
