@@ -468,7 +468,7 @@ def read_turrutebasen(path: Path) -> Iterator[ExternalHike]:
     route number, else the route number. Ski, bike and other route
     types are left out. There is no per-route page.
     """
-    grouped: dict[tuple[str, str, int | None], list[tuple[list[Point], int]]] = {}
+    grouped: dict[tuple[str, str], list[tuple[list[Point], int]]] = {}
     segments: list[tuple[str, str]] = []
     for feature in json.loads(Path(path).read_text())["features"]:
         properties = feature.get("properties") or {}
