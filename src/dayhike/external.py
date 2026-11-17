@@ -13,15 +13,18 @@ relation id.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import io
 import json
 import math
+import tomllib
 import xml.etree.ElementTree as ET
 import zipfile
 from collections import Counter
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -100,7 +103,12 @@ def fetch_external(source_id: str, root: Path | str = EXTERNAL_DIR) -> Path:
     source = _source(source_id)
     directory = cache_path(source_id, root).parent
     directory.mkdir(parents=True, exist_ok=True)
-    return source.fetch(directory)
+    try:
+        return source.fetch(directory)
+    except ValueError:  # a source skipped for a reason (France): leave no empty directory
+        with contextlib.suppress(OSError):
+            directory.rmdir()
+        raise
 
 
 def read_external(source_id: str, root: Path | str = EXTERNAL_DIR) -> list[ExternalHike]:
@@ -588,10 +596,137 @@ def _gpx_foot_features(blob: bytes, url: str) -> Iterator[dict]:
                 element.clear()
 
 
+# France: the schema_randonnee datasets of data.gouv.fr (https://github.com/PnX-SI/schema_randonnee,
+# which Geotrek exports follow), one register id each, listed in data/fr_randonnee.toml. A
+# dataset is used only when its published licence passes the gate (FR_LICENCES: Licence Ouverte
+# 2.0 and ODbL, which the project already offers) and its file follows the schema. Credit
+# the producer by the register name.
+FR_DATASETS_PATH = Path(__file__).parent / "data" / "fr_randonnee.toml"
+FR_LICENCES = {"lov2": "Licence Ouverte 2.0", "odc-odbl": "ODbL 1.0"}  # data.gouv.fr licence code: register licence
+FR_SCHEMA_KEYS = ("id_local", "nom_itineraire", "pratique")
+_ON_FOOT = {"a pied", "pédestre", "pedestre"}  # `pratique` values that are walks
+
+
+@dataclass(frozen=True)
+class FrenchDataset:
+    """A schema_randonnee dataset: its register id, the short name an unnamed
+    record is shown with, its data.gouv.fr page, its GeoJSON file and the
+    licence code data.gouv.fr publishes for it."""
+
+    id: str
+    short: str
+    page: str
+    file: str
+    licence: str
+
+
+def french_datasets() -> list[FrenchDataset]:
+    """The datasets of ``data/fr_randonnee.toml``, in file order."""
+    tables = tomllib.loads(FR_DATASETS_PATH.read_text(encoding="utf-8"))["dataset"]
+    return [FrenchDataset(**table) for table in tables]
+
+
+def schema_problem(features: Sequence[dict]) -> str | None:
+    """Why a file's records do not follow schema_randonnee, or None: it needs
+    records that all carry ``id_local`` (distinct, as it is the record's id),
+    ``nom_itineraire`` and ``pratique``."""
+    if not features:
+        return "not schema_randonnee: no records"
+    properties = [feature.get("properties") or {} for feature in features]
+    missing = [key for key in FR_SCHEMA_KEYS if any(key not in record for record in properties)]
+    if missing:
+        return f"not schema_randonnee: records lack {', '.join(missing)}"
+    ids = [str(record["id_local"] or "").strip() for record in properties]
+    if not all(ids) or len(set(ids)) != len(ids):
+        return f"not schema_randonnee: id_local repeats or is blank ({len(ids)} records, {len(set(ids))} distinct ids)"
+    return None
+
+
+def fetch_schema_randonnee(dataset: FrenchDataset, directory: Path) -> Path:
+    """One French dataset as a slim GeoJSON FeatureCollection: only the
+    properties the adapter reads, lines without heights. A dataset whose
+    licence the gate does not accept is not downloaded, and one whose file does
+    not follow the schema is not cached; both raise ``ValueError`` with the reason."""
+    if dataset.licence not in FR_LICENCES:
+        raise ValueError(
+            f"{dataset.id}: published under licence {dataset.licence}, not one of {', '.join(sorted(FR_LICENCES))}"
+        )
+    request = Request(dataset.file, headers={"User-Agent": "dayhike"})
+    with urlopen(request, timeout=600) as response:
+        features = json.load(response).get("features") or []
+    problem = schema_problem(features)
+    if problem:
+        raise ValueError(f"{dataset.id}: {problem}")
+    slim = []
+    for feature in features:
+        parts = _geometry_parts(feature.get("geometry"))
+        if not parts:
+            continue
+        properties = feature["properties"]
+        slim.append(
+            {
+                "type": "Feature",
+                "properties": {
+                    "id_local": str(properties["id_local"]).strip(),
+                    "nom_itineraire": properties["nom_itineraire"],
+                    "pratique": properties["pratique"],
+                    "url": properties.get("url"),
+                },
+                "geometry": (
+                    {"type": "LineString", "coordinates": [[lon, lat] for lat, lon in parts[0]]}
+                    if len(parts) == 1
+                    else {"type": "MultiLineString", "coordinates": [[[lon, lat] for lat, lon in part] for part in parts]}
+                ),
+            }
+        )
+    path = directory / f"{dataset.id}.geojson"
+    tmp = path.with_name(path.name + ".part")
+    tmp.write_text(json.dumps({"type": "FeatureCollection", "features": slim}))
+    tmp.replace(path)
+    return path
+
+
+def fetch_french_datasets(root: Path | str = EXTERNAL_DIR) -> tuple[list[Path], list[str]]:
+    """Cache every French dataset the gate accepts (``fetch-external --source fr``):
+    the files written, and the reason for each dataset skipped (it names the dataset)."""
+    paths: list[Path] = []
+    skipped: list[str] = []
+    for dataset in french_datasets():
+        try:
+            paths.append(fetch_external(dataset.id, root))
+        except ValueError as exc:
+            skipped.append(str(exc))
+    return paths, skipped
+
+
+def read_schema_randonnee(path: Path) -> Iterator[ExternalHike]:
+    """The walks (``pratique`` on foot) of a cached French dataset: the record
+    ``id_local`` is the ``source_ref``, ``nom_itineraire`` the name (None when
+    blank), ``url`` the record's page. Parts that meet within ``GAP_JOIN_M``
+    are one line, the rest left out. A twin of an OSM relation is ingest's to drop
+    (the Twin rule): ``id_osm`` is not read."""
+    for feature in json.loads(Path(path).read_text())["features"]:
+        properties = feature.get("properties") or {}
+        if str(properties.get("pratique") or "").strip().casefold() not in _ON_FOOT:
+            continue
+        line = joined_line(_geometry_parts(feature.get("geometry")))
+        if len(line) >= 2:
+            yield ExternalHike(
+                ref=str(properties["id_local"]),
+                name=str(properties.get("nom_itineraire") or "").strip() or None,
+                points=tuple(line),
+                url=properties.get("url") or None,
+            )
+
+
 EXTERNAL_SOURCES = {
     "ie-sport-ireland": ExternalSource("ie-sport-ireland", "Sport Ireland", fetch_sport_ireland, read_sport_ireland),
     "fi-lipas": ExternalSource("fi-lipas", "Lipas", fetch_lipas, read_lipas),
     "no-turrutebasen": ExternalSource("no-turrutebasen", "Turrutebasen", fetch_turrutebasen, read_turrutebasen),
+    **{
+        dataset.id: ExternalSource(dataset.id, dataset.short, partial(fetch_schema_randonnee, dataset), read_schema_randonnee)
+        for dataset in french_datasets()
+    },
 }
 
 

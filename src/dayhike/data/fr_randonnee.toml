@@ -1,0 +1,44 @@
+# The French schema_randonnee datasets of data.gouv.fr examined for ADR-0062, one
+# table each. `id` is the sources register id (docs/sources.csv, where the used
+# ones carry their licence and the rest their reason); `short` the name an
+# unnamed record is shown with; `page` the dataset's page; `file` its
+# schema_randonnee GeoJSON (the schema is https://github.com/PnX-SI/schema_randonnee);
+# `licence` the licence code data.gouv.fr publishes for it. `dayhike
+# fetch-external --source fr` caches each dataset whose licence the gate accepts
+# (FR_LICENCES in external.py) and whose file follows the schema, and says why it
+# skips the others.
+
+[[dataset]]
+id = "fr-ecrins-randonnees"
+short = "Écrins"
+page = "https://www.data.gouv.fr/fr/datasets/5bf88cf28b4c4151e7a136d2/"
+file = "https://data.ecrins-parcnational.fr/files/randos_pne_schema.geojson"
+licence = "lov2"
+
+[[dataset]]
+id = "fr-dordogne-pdipr"
+short = "Dordogne"
+page = "https://www.data.gouv.fr/fr/datasets/62ac8931c76809b8f9f93798/"
+file = "https://static.data.gouv.fr/resources/boucles-de-randonnee-inscrites-au-plan-departemental-des-itineraires-de-petite-randonnee-du-departement-de-la-dordogne/20220617-160319/boucles-pdipr-cd24.json"
+licence = "lov2"
+
+[[dataset]]
+id = "fr-vandoeuvre-parcours"
+short = "Vandœuvre"
+page = "https://www.data.gouv.fr/fr/datasets/654a5f9f509faac296f97e9a/"
+file = "https://static.data.gouv.fr/resources/parcours-pedestres-communaux/20231107-160248/parcours-pedestres-vandoeuvre.geojson"
+licence = "odc-odbl"
+
+[[dataset]]
+id = "fr-cevennes-randonnees"
+short = "Cévennes"
+page = "https://www.data.gouv.fr/fr/datasets/610bf2a1d6fecd30e6cdfdb9/"
+file = "https://static.data.gouv.fr/resources/itineraires-de-randonnee-du-parc-national-des-cevennes/20260529-132416/itineraires-rando-export.json"
+licence = "fr-lo"
+
+[[dataset]]
+id = "fr-pas-de-calais-pdipr"
+short = "Pas-de-Calais"
+page = "https://www.data.gouv.fr/fr/datasets/616d8beeb2c0d299aa11e606/"
+file = "https://static.data.gouv.fr/resources/plan-departemental-des-itineraires-de-promenades-et-de-randonnees-du-departement-du-pas-de-calais/20211018-170030/pdiprpasdecalais.zip"
+licence = "fr-lo"

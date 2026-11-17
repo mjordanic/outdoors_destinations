@@ -109,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         metavar="SOURCE",
         help="Add the hikes of an external source cached by fetch-external, e.g. ie-sport-ireland, "
-        "fi-lipas or no-turrutebasen (ADR-0062); repeatable",
+        "fi-lipas, no-turrutebasen or fr-ecrins-randonnees (ADR-0062); repeatable",
     )
     ingest.add_argument(
         "--external-dir",
@@ -136,8 +136,9 @@ def main(argv: list[str] | None = None) -> int:
     fetch_ext.add_argument(
         "--source",
         required=True,
-        help="Sources register id, e.g. ie-sport-ireland, fi-lipas (fi is that Finland source) "
-        "or no-turrutebasen (no is that Norway source)",
+        help="Sources register id, e.g. ie-sport-ireland, fi-lipas (fi is that Finland source), "
+        "no-turrutebasen (no is that Norway source) or fr-ecrins-randonnees; fr is every French "
+        "dataset whose licence and file pass the gate (ADR-0062)",
     )
     fetch_ext.add_argument(
         "--dest",
@@ -667,10 +668,18 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             compose.error(str(exc))
     if args.command == "fetch-external":
-        from dayhike.external import EXTERNAL_DIR, fetch_external
+        from dayhike.external import EXTERNAL_DIR, fetch_external, fetch_french_datasets
 
+        root = EXTERNAL_DIR if args.dest is None else args.dest
+        if args.source == "fr":
+            paths, skipped = fetch_french_datasets(root)
+            for path in paths:
+                print(path)
+            for reason in skipped:
+                print(f"skipped {reason}", file=sys.stderr)
+            return 0
         try:
-            print(fetch_external(args.source, EXTERNAL_DIR if args.dest is None else args.dest))
+            print(fetch_external(args.source, root))
         except ValueError as exc:
             fetch_ext.error(str(exc))
         return 0

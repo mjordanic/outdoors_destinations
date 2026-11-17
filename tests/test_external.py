@@ -62,8 +62,8 @@ def test_joined_line_extends_the_longest_part_by_the_parts_that_meet_its_ends() 
 
 
 def test_a_source_the_register_does_not_list_as_used_is_refused() -> None:
-    with pytest.raises(ValueError, match="fr-ecrins-randonnees"):
-        read_external("fr-ecrins-randonnees", EXTERNAL_DIR)
+    with pytest.raises(ValueError, match="fr-cevennes-randonnees"):
+        read_external("fr-cevennes-randonnees", EXTERNAL_DIR)
     with pytest.raises(ValueError, match="no external source"):
         fetch_external("osm", EXTERNAL_DIR)
 
