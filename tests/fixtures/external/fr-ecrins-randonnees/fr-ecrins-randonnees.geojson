@@ -1,0 +1,23 @@
+{"type": "FeatureCollection", "features": [
+ {"type": "Feature",
+  "properties": {"id_local": "100", "nom_itineraire": "Le circuit du Jumeau", "pratique": "A pied", "url": "https://rando.example.fr/trek/100-Le-circuit-du-Jumeau"},
+  "geometry": {"type": "LineString", "coordinates": [[15.0002, 45.0], [15.0002, 45.0449660803], [15.0002, 45.0899321606]]}},
+ {"type": "Feature",
+  "properties": {"id_local": "200", "nom_itineraire": " Le lac Fixture ", "pratique": "A pied", "url": "https://rando.example.fr/trek/200-Le-lac-Fixture"},
+  "geometry": {"type": "MultiLineString", "coordinates": [
+   [[15.3, 45.4], [15.31, 45.41]],
+   [[15.31, 45.41], [15.3, 45.42]],
+   [[15.4, 45.5], [15.41, 45.5]]]}},
+ {"type": "Feature",
+  "properties": {"id_local": "300", "nom_itineraire": "L'arete fixture", "pratique": "Alpinisme", "url": null},
+  "geometry": {"type": "LineString", "coordinates": [[15.5, 45.5], [15.51, 45.51]]}},
+ {"type": "Feature",
+  "properties": {"id_local": "400", "nom_itineraire": "Fixture en VTT", "pratique": "VTT", "url": null},
+  "geometry": {"type": "LineString", "coordinates": [[15.6, 45.5], [15.61, 45.51]]}},
+ {"type": "Feature",
+  "properties": {"id_local": "500", "nom_itineraire": "", "pratique": "pédestre", "url": null},
+  "geometry": {"type": "LineString", "coordinates": [[16.0, 46.0], [16.01, 46.01]]}},
+ {"type": "Feature",
+  "properties": {"id_local": "600", "nom_itineraire": "La boucle courte", "pratique": "A pied", "url": null},
+  "geometry": {"type": "LineString", "coordinates": [[15.6, 45.7], [15.6, 45.704496608]]}}
+]}

@@ -1813,7 +1813,7 @@ multi-part line with the parts that meet it within 50 m. Lipas (`fi-lipas`,
 `fetch-external --source fi`) keeps active hiking routes (type 4405) and nature
 trails (type 4404) under that same 1 km floor. Parts that meet end to end within 50 m are
 one walk under the Lipas id; parts that do not join it, branches included, are
-pieces `{id}/{n}`. Turrutebasen (`no-turrutebasen`, `fetch-external --source no`) keeps foot routes (`Fotrute`) from the national Geonorge GPX and chains segments of one maintainer and `rutenummer` the same way (ADR-0062 has the naming and `source_ref` rules).
+pieces `{id}/{n}`. Turrutebasen (`no-turrutebasen`, `fetch-external --source no`) keeps foot routes (`Fotrute`) from the national Geonorge GPX and chains segments of one maintainer and `rutenummer` the same way (ADR-0062 has the naming and `source_ref` rules). France (`fr-ecrins-randonnees`, `fetch-external --source fr`) reads schema_randonnee GeoJSON (`read_schema_randonnee`): each dataset listed in `data/fr_randonnee.toml` is cached only when its published licence is Licence Ouverte 2.0 or ODbL and its records carry a distinct `id_local`, `nom_itineraire` and `pratique`; walks (`pratique` "A pied" or "pédestre") are read under the record's `id_local`, name and `url` (ADR-0062 has the datasets skipped and why).
 
 A hike that is neither a `route=hiking` or `route=foot` relation, a built DayHike nor an external hike in this Catalog cannot be a Seed.
 Unnamed forest paths (`highway=path` without a hiking relation) never appear.
@@ -2844,7 +2844,9 @@ and in the export's `meta.json`. Sport Ireland Trail Routes
 (https://www.jyu.fi/fi/avoimet-rajapinnat-ja-ladattavat-lipas-aineistot): CC BY 4.0, credit
 "Jyväskylän yliopisto, Lipas Liikuntapaikat.fi". Turrutebasen
 (https://kartkatalog.geonorge.no/metadata/d1422d17-6d95-4ef1-96ab-8af31744dd63): CC BY 4.0, credit
-"Kartverket".
+"Kartverket". Randonnées du Parc national des Écrins
+(https://www.data.gouv.fr/fr/datasets/5bf88cf28b4c4151e7a136d2/): Licence Ouverte 2.0, credit
+"Parc national des Écrins".
 
 FABDEM V1-2: Hawker, L., Uhe, P., Paulo, L., Sosa, J., Savage, J., Sampson, C.
 and Neal, J., 2022. A 30 m global map of elevation with forests and buildings
