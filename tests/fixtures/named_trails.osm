@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="dayhike-fixture">
+  <!-- Named trails in no relation (ADR-0066), read only with the paths option
+       trails or above. Comments give each node's (east, north) metres from A
+       at 46.05, 14.05.
+
+       Valley Trail (3001): A - B - C, 2 km, parking by A.
+       Way 304: "Old Valley Path", a named path 10 m north of the Valley Trail,
+         A2 - B2 - C2: a Twin of the relation hike.
+       Ways 301, 302: "Ridge Trail", D - E then E - F, 2.5 km, a trailhead
+         node 20 m from F, parking by D.
+       Way 303: "River Greenway", an asphalt path G - H, 2 km.
+       Way 305: "Forest Road", a named track J - K, 2 km. -->
+  <node id="1" lat="46.0500000000" lon="14.0500000000" version="1"/><!-- A (0, 0) -->
+  <node id="2" lat="46.0500000000" lon="14.0629579576" version="1"/><!-- B (1000, 0) -->
+  <node id="3" lat="46.0500000000" lon="14.0759159152" version="1"/><!-- C (2000, 0) -->
+  <node id="41" lat="46.0500899322" lon="14.0500000000" version="1"/><!-- A2 (0, 10) -->
+  <node id="42" lat="46.0500899322" lon="14.0629579576" version="1"/><!-- B2 (1000, 10) -->
+  <node id="43" lat="46.0500899322" lon="14.0759159152" version="1"/><!-- C2 (2000, 10) -->
+  <node id="11" lat="46.0769796483" lon="14.0500000000" version="1"/><!-- D (0, 3000) -->
+  <node id="12" lat="46.0769796483" lon="14.0629579576" version="1"/><!-- E (1000, 3000) -->
+  <node id="13" lat="46.0769796483" lon="14.0823948940" version="1"/><!-- F (2500, 3000) -->
+  <node id="21" lat="46.1039592966" lon="14.0500000000" version="1"/><!-- G (0, 6000) -->
+  <node id="22" lat="46.1039592966" lon="14.0759159152" version="1"/><!-- H (2000, 6000) -->
+  <node id="31" lat="46.1309389449" lon="14.0500000000" version="1"/><!-- J (0, 9000) -->
+  <node id="32" lat="46.1309389449" lon="14.0759159152" version="1"/><!-- K (2000, 9000) -->
+  <node id="90" lat="46.0502697965" lon="14.0500000000" version="1"><!-- parking by A (0, 30) -->
+    <tag k="amenity" v="parking"/>
+  </node>
+  <node id="91" lat="46.0772494448" lon="14.0500000000" version="1"><!-- parking by D (0, 3030) -->
+    <tag k="amenity" v="parking"/>
+  </node>
+  <node id="95" lat="46.0771595126" lon="14.0823948940" version="1"><!-- trailhead by F (2500, 3020) -->
+    <tag k="highway" v="trailhead"/>
+    <tag k="name" v="Ridge Trailhead"/>
+  </node>
+  <way id="201" version="1">
+    <nd ref="1"/>
+    <nd ref="2"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="202" version="1">
+    <nd ref="2"/>
+    <nd ref="3"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="301" version="1">
+    <nd ref="11"/>
+    <nd ref="12"/>
+    <tag k="highway" v="path"/>
+    <tag k="name" v="Ridge Trail"/>
+  </way>
+  <way id="302" version="1">
+    <nd ref="12"/>
+    <nd ref="13"/>
+    <tag k="highway" v="footway"/>
+    <tag k="name" v="Ridge Trail"/>
+  </way>
+  <way id="303" version="1">
+    <nd ref="21"/>
+    <nd ref="22"/>
+    <tag k="highway" v="path"/>
+    <tag k="name" v="River Greenway"/>
+    <tag k="surface" v="asphalt"/>
+  </way>
+  <way id="304" version="1">
+    <nd ref="41"/>
+    <nd ref="42"/>
+    <nd ref="43"/>
+    <tag k="highway" v="path"/>
+    <tag k="name" v="Old Valley Path"/>
+  </way>
+  <way id="305" version="1">
+    <nd ref="31"/>
+    <nd ref="32"/>
+    <tag k="highway" v="track"/>
+    <tag k="name" v="Forest Road"/>
+  </way>
+  <relation id="3001" version="1">
+    <member type="way" ref="201" role=""/>
+    <member type="way" ref="202" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Valley Trail"/>
+  </relation>
+</osm>

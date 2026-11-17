@@ -2,7 +2,8 @@
 
 A built-hike source (``BuiltHikeSource``) gets what ingest read and the
 relation DayHikes it kept (``BuildContext``) and returns ``BuiltWalk``s:
-NetworkHikes chained from node-network legs, DayStages cut from long tours.
+NetworkHikes chained from node-network legs, DayStages cut from long tours,
+named-trail hikes joined from same-name paths in no relation (ADR-0066).
 ``built_dayhike`` makes each one a DayHike like any other. Its id is a hash of
 its Route, the OSM way/node steps it walks (ADR-0018), in a range above every
 OSM relation id, so it is the same after a rebuild that leaves the walk as it
@@ -33,8 +34,8 @@ Point = tuple[float, float]  # (lat, lon)
 
 @dataclass(frozen=True)
 class BuiltWalk:
-    """One walk a source builds: ``kind`` (``network`` or ``stage``, also its
-    NameOrigin), its label, ordered (node id, point) vertices from its
+    """One walk a source builds: ``kind`` (``network``, ``stage`` or
+    ``trail``, also its NameOrigin), its label, ordered (node id, point) vertices from its
     Trailhead, the OSM ways it walks, and the OSM relations it is built from."""
 
     kind: str

@@ -57,12 +57,15 @@ def require_used(source_ids: Sequence[str] | set[str], path: Path | str = REGIST
 
 def osm_source_ref(dayhike_id: int, kind: str, parts: Sequence[int], route: str | None) -> str:
     """The OSM record an OSM DayHike comes from: its relation, or for a built
-    DayHike (ADR-0038) the one relation it is built from, else the node its
-    Route starts at."""
+    DayHike (ADR-0038) the one relation it is built from, for a named trail
+    (ADR-0066) the first way its Route walks, else the node its Route starts at."""
     if kind == "relation":
         return f"relation/{dayhike_id}"
     if len(parts) == 1:
         return f"relation/{parts[0]}"
+    if kind == "trail" and route:
+        first = next(step.split(".", 1)[0] for step in route.split(":", 1)[1].split(",") if not step.startswith("g."))
+        return f"way/{abs(int(first))}"
     if route:
         return f"node/{route.split(':', 1)[0]}"
     raise ValueError(f"DayHike {dayhike_id}: a built hike with no single relation and no Route")

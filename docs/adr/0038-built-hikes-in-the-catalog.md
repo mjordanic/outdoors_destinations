@@ -1,5 +1,5 @@
 ---
-status: accepted (amends ADR-0002, ADR-0006 and ADR-0014; a gap step opens over the trail between its ends since ADR-0049)
+status: accepted (amends ADR-0002, ADR-0006 and ADR-0014; a gap step opens over the trail between its ends since ADR-0049; kind `trail` since ADR-0066)
 ---
 
 # Built DayHikes in the Catalog
@@ -9,9 +9,9 @@ Around Briançon most hikes are mapped as node-network legs, one relation per si
 **A built DayHike is a Catalog DayHike built from OSM data rather than read as one relation.** Ingest keeps the relation DayHikes first. Then each *built-hike source* in `BUILT_HIKE_SOURCES` gets the snapshot, the relation DayHikes and the main walk of any relation (`BuildContext`), and returns walks (`BuiltWalk`): ordered vertices from the Trailhead, the OSM ways walked, a label, a kind and the relations it is built from. From then on it is a DayHike like any other: GeometryStore, sampling, similarity, Twins, export, map, search, Ranking and the page take it with no special case.
 
 - **Id.** A hash of the walk's Route (ADR-0018: start node, then each OSM way walked and the node where the walk leaves it), mapped into [2^40, 2^53). OSM relation ids are about 2.2 × 10^7, so the two never meet, and every id is a JavaScript-safe integer. A rebuild that leaves the walk unchanged gives the same id, so a `#hike=` link to it survives the rebuild. Two sources that build the same walk give one DayHike.
-- **New fields** on every DayHike, Catalog `dayhikes` and export `hikes`: `kind` (`relation`, `network` or `stage`), `parts` (the OSM relation ids it is built from; empty for a relation) and `route` (its Route text; NULL for a relation). The NameOrigin of a built DayHike is its kind.
+- **New fields** on every DayHike, Catalog `dayhikes` and export `hikes`: `kind` (`relation`, `network` or `stage`; `trail` since ADR-0066), `parts` (the OSM relation ids it is built from; empty for a relation) and `route` (its Route text; NULL for a relation). The NameOrigin of a built DayHike is its kind.
 - **GeometryStore.** A built DayHike's rows are its walk as the source gave it: each way it walks once, in walk order, with the metres walked on it; no Leftover and no relation tags.
-- **Page.** The detail of a built DayHike links the OSM relations it is built from in place of the single relation link, links to itself (`#hike=id`), and beside a liked hike offers "Edit on the map": its Route opens as a ComposedHike to change. `/api/hikes/{id}` and `/api/compose` both carry `built` (null unless built). Export format 5.
+- **Page.** The detail of a built DayHike links the OSM relations it is built from (a named trail, ADR-0066: the OSM ways it walks) in place of the single relation link, links to itself (`#hike=id`), and beside a liked hike offers "Edit on the map": its Route opens as a ComposedHike to change. `/api/hikes/{id}` and `/api/compose` both carry `built` (null unless built). Export format 5.
 
 **Consequences.** The Catalog and export schemas gain three columns; a Catalog from before still opens and exports, as relations only. `kept` in the ingest report counts built DayHikes too. With no source registered the Catalog is the same, row for row, as before. Each source owns its own rules: its length band, its Twin check against the relation DayHikes (with the Twin rule of `similarity`), its cap per start. "Edit on the map" opens the Route on the TrailGraph, so it fails, and the page says why, for a walk over the composer's 100 km or one across a gap the TrailGraph does not join (a main walk joins gaps up to 50 m, the TrailGraph only up to its 20 m snap tolerance). On the Briançon cut, halves of the 20 relation DayHikes over 25 km opened for 32 of 40: 7 were over 100 km, 1 crossed such a gap.
 
