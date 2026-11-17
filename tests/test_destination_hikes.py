@@ -9,6 +9,7 @@ import math
 
 from dayhike.destination_hikes import (
     Destination,
+    merged,
     RelationWalk,
     Start,
     destination_hikes,
@@ -322,3 +323,10 @@ def test_a_car_park_named_after_a_hut_merged_into_a_peak_takes_its_other_name() 
     hikes = kept(net.hikes([HUT, peak], [Start("Koča", (at(0, 0),), hut="Koča", fallback="Vas")]))
 
     assert [hike.name for hike in hikes] == ["Vrh from Vas"]
+
+
+def test_of_two_equally_known_destinations_within_150_m_the_same_one_stays_in_any_order() -> None:
+    a = Destination("Koča A", "hut", (at(4, 0),))
+    b = Destination("Koča B", "hut", (at(4.1, 0),))
+
+    assert [d.name for d in merged([a, b])] == [d.name for d in merged([b, a])] == ["Koča B"]

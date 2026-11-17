@@ -185,7 +185,7 @@ def merged(destinations: Sequence[Destination]) -> list[Destination]:
         groups.setdefault(root(i), []).append(destination)
     result = []
     for group in groups.values():
-        best = max(group, key=lambda destination: destination.notability)
+        best = max(group, key=lambda destination: (destination.notability, destination.name, destination.points[0]))
         rest = [destination for destination in group if destination is not best]
         others = tuple(point for destination in rest for point in destination.points)
         names = tuple(destination.name for destination in rest)
