@@ -435,6 +435,29 @@ def test_the_south_tyrol_adapter_chains_trail_segments_of_one_code_and_name() ->
     assert hikes["12162008"].name == "Kurzer Weg"
 
 
+def test_south_tyrol_segments_with_no_code_and_no_name_never_chain(tmp_path: Path) -> None:
+    folder = tmp_path / SUEDTIROL
+    folder.mkdir()
+    features = [
+        {
+            "type": "Feature",
+            "properties": {"ID": segment, "CODE": code, "NAME": name},
+            "geometry": {"type": "LineString", "coordinates": line},
+        }
+        for segment, code, name, line in [
+            (1, None, None, [[11.0, 46.5], [11.0, 46.51]]),
+            (2, ".", ".", [[11.0, 46.51], [11.0, 46.52]]),  # meets segment 1's end
+        ]
+    ]
+    (folder / f"{SUEDTIROL}.geojson").write_text(json.dumps({"type": "FeatureCollection", "features": features}))
+
+    hikes = {hike.ref: hike for hike in read_external(SUEDTIROL, tmp_path)}
+
+    assert sorted(hikes) == ["1", "2"]
+    assert hikes["1"].points == ((46.5, 11.0), (46.51, 11.0))
+    assert hikes["2"].points == ((46.51, 11.0), (46.52, 11.0))
+
+
 def test_the_south_tyrol_source_is_a_used_cc0_register_row() -> None:
     row = next(row for row in read_register() if row["id"] == SUEDTIROL)
 

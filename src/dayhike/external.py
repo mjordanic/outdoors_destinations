@@ -468,7 +468,7 @@ def read_turrutebasen(path: Path) -> Iterator[ExternalHike]:
     route number, else the route number. Ski, bike and other route
     types are left out. There is no per-route page.
     """
-    grouped: dict[tuple[str, str], list[tuple[list[Point], int]]] = {}
+    grouped: dict[tuple[str, str, int | None], list[tuple[list[Point], int]]] = {}
     segments: list[tuple[str, str]] = []
     for feature in json.loads(Path(path).read_text())["features"]:
         properties = feature.get("properties") or {}
@@ -786,7 +786,7 @@ def read_schema_randonnee(path: Path) -> Iterator[ExternalHike]:
 
 def read_suedtirol(path: Path) -> Iterator[ExternalHike]:
     """The trails of a cached South Tyrol file, segments of one trail number and
-    name chained.
+    name chained; a segment with neither is a walk of its own.
 
     Parts whose ends meet within ``GAP_JOIN_M`` are one walk, as for Lipas and
     Turrutebasen. ``source_ref`` is the lowest segment ``ID`` of a walk (the
@@ -797,17 +797,18 @@ def read_suedtirol(path: Path) -> Iterator[ExternalHike]:
     "Trail {CODE}", else none. The page is the dataset's. Segments with no line
     are left out.
     """
-    grouped: dict[tuple[str, str], list[tuple[list[Point], int]]] = {}
+    grouped: dict[tuple[str, str, int | None], list[tuple[list[Point], int]]] = {}
     for feature in json.loads(Path(path).read_text())["features"]:
         properties = feature.get("properties") or {}
         segment = properties.get("ID")
         parts = _geometry_parts(feature.get("geometry"))
         if segment is None or not parts:
             continue
-        key = (_suedtirol_text(properties.get("CODE")), _suedtirol_text(properties.get("NAME")))
+        code, name = _suedtirol_text(properties.get("CODE")), _suedtirol_text(properties.get("NAME"))
+        key = (code, name, None if code or name else int(segment))
         grouped.setdefault(key, []).extend((part, int(segment)) for part in parts)
     pieces: list[tuple[int, list[Point], str | None, str | None]] = []
-    for (code, name), tagged in grouped.items():
+    for (code, name, _), tagged in grouped.items():
         for line, indices in _joined_component_parts([part for part, _ in tagged]):
             if len(line) >= 2:
                 lowest = min(tagged[index][1] for index in indices)
