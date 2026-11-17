@@ -8,6 +8,7 @@ Dom v Severu, a hut in the next valley north.
 """
 
 import math
+import os
 import shutil
 import sqlite3
 from pathlib import Path
@@ -126,6 +127,18 @@ def test_a_hut_reachable_from_two_valleys_gets_a_walk_from_each(tmp_path: Path) 
     for hike in (dolina, sever):  # "Edit on the map" walks its Route on the TrailGraph
         walked = graph.walk(Route.parse(hike.route))
         assert abs(_step_m(walked.lat, walked.lon).sum() - hike.length_m) < 50
+
+
+def test_a_build_leaves_no_file_open(tmp_path: Path) -> None:
+    """Many builds in one process (a test worker) must not run out of file handles."""
+    osm, dem = _fixture(tmp_path / "planina.osm"), _dem(tmp_path / "dem")
+    build_catalog(osm, tmp_path / "first.sqlite", sources=[destination_source], dem_dir=dem)
+    before = len(os.listdir("/dev/fd"))
+
+    for index in range(3):
+        build_catalog(osm, tmp_path / f"again-{index}.sqlite", sources=[destination_source], dem_dir=dem)
+
+    assert len(os.listdir("/dev/fd")) == before
 
 
 def test_a_destination_hike_keeps_its_id_across_rebuilds_from_xml_or_pbf(tmp_path: Path) -> None:

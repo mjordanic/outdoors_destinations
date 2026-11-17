@@ -19,6 +19,7 @@ import subprocess
 import tempfile
 from collections import Counter
 from collections.abc import Mapping, Sequence
+from contextlib import closing
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -658,7 +659,7 @@ class _TileTask:
         (row, col), destinations = item
         destinations = [destination for destination in merged(destinations) if _tile(destination.points[0]) == (row, col)]
         south, west, north, east = _with_margin(row * TILE_DEG, col * TILE_DEG, (row + 1) * TILE_DEG, (col + 1) * TILE_DEG)
-        with sqlite3.connect(self.store) as conn:
+        with closing(sqlite3.connect(self.store)) as conn:
             cells = [_cell(lat, lon) for lat in _steps(south, north) for lon in _steps(west, east)]
             ways, nodes = {}, {}
             for chunk in range(0, len(cells), 500):
@@ -711,7 +712,7 @@ def _ways(store: Path, way_ids: set[int]) -> dict[int, tuple[OsmWay, dict[int, P
     """The stored ways of ``way_ids``, each with its nodes' points."""
     found = {}
     ids = sorted(way_ids)
-    with sqlite3.connect(store) as conn:
+    with closing(sqlite3.connect(store)) as conn:
         for chunk in range(0, len(ids), 500):
             part = ids[chunk : chunk + 500]
             for way_id, node_ids, lats, lons, tags in conn.execute(
