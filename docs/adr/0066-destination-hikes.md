@@ -1,0 +1,50 @@
+---
+status: accepted (builds on ADR-0038; reads its own ways beside ADR-0065's levels)
+---
+
+# DestinationHikes
+
+Most outings people do are not one relation: "the hut from the car park", "the peak from the valley". The Catalog had them only where a relation happens to run from a car park to the top, and in the Écrins, where relations are few, not at all (#124). A prototype on Slovenia and a check on the Écrins and the Julian Alps (2026-11-16 and 17) settled the rules below; the captain took them with one change: closed huts are destinations too.
+
+**Ingest builds DestinationHikes**, built DayHikes (ADR-0038) of kind and NameOrigin `destination`, from `destination_source`, the third entry in `BUILT_HIKE_SOURCES`. Each is "{destination} from {start}", stored one way from the car park to the destination like any line; the page offers the way back (ADR-0019). Its `parts` are empty: it is built from ways, not relations, so the page says "Built from OSM paths" and its source record is the node it starts at.
+
+- **Destinations.** Every named hut (`tourism=alpine_hut|wilderness_hut`, also under `disused:` or `abandoned:`), viewpoint and lake (`natural=water` with `water=lake|reservoir|pond`, by its outline), and every named peak with a Wikidata or Wikipedia tag or at least 1,000 m high (its `ele`, else the DEM). A destination is reached at the graph's node nearest it within 100 m.
+- **Starts.** Car parks (`amenity=parking`, not `access=private|no|customers`, a node or an area) and `highway=trailhead`, at the node nearest them within 100 m. A car park is named by its own name (not a generic "Parking"), else a town or village within 1 km, a hamlet or locality within 1 km, a named hut within 1 km, a town or village within 3 km, a named guidepost, saddle or pass within 300 m. A car park none of these name starts no walk: no hike is "from parking".
+- **The walkable graph.** Every `highway=path|footway|track|bridleway|steps|pedestrian|unclassified|residential|service|tertiary|living_street` way (no driveways, no `access=private|no` without `foot=yes`), joined at shared nodes. ADR-0065's default level (route members and graded paths) loses the classics where relations are few: in the Écrins the first 1.6 km to Refuge du Glacier Blanc is an unnamed track and two ungraded bridges, so no car park reached the hut. These ways reach only this source; nothing else in ingest or the TrailGraph grows, except the ways a kept walk takes (below).
+- **Strict rules.** A metre of road (`residential`, `unclassified`, `tertiary`, `service`, `living_street`) counts three in the search, and a walk more than 30 % on roads is not built. T5 and T6 ways (`sac_scale=demanding_alpine_hiking|difficult_alpine_hiking`) and via ferratas (`highway=via_ferrata`) are not walked; a T4 path with a few cables is. A walk never passes another car park: in the search every car park is a dead end, so a destination with a car park beside it gets walks only from another side, and a start beyond a car park finds a way round it or none.
+- **Cost.** Walking effort, not metres: metres times the way's factor (roads 3, T3 1.25, T4 1.6, and 0.7 on a way of a hiking relation), plus 10 for each metre up or down (the Catalog's `climb_and_descent` per segment between junctions, so spikes and jitter do not count). Climb alone took valley walks over marked col routes (Muzelle from La Danchère); the marked factor brings the classic back.
+- **Walks per destination.** From each destination the search runs out to every car park; each car park's cheapest walk is a candidate, cheapest first. Up to **8** are kept, each 1.5–12.5 km one way (16 km to a destination of at least 2,500 m or with a Wikidata or Wikipedia tag: Triglav from Kot and from Bohinj are 13–13.5 km), at most 30 % road, starting at least 2 km from every kept start, sharing at most half its length with any one kept walk, and not descending more than 200 m and more than a quarter of its climb on the way out unless 60 % of it lies on one marked route (a col crossing into the next valley).
+- **Copies.** A walk that is a Twin of a relation DayHike or of a walk an earlier source built (a DayStage, a NetworkHike) is dropped, and so is a near-copy: a relation DayHike of at most twice the walk's there-and-back length that passes within 150 m of both its ends already goes there. Of Twin walks to two destinations the better-known destination keeps its walk (a Wikidata or Wikipedia tag, then a hut, then a lake, a viewpoint or a peak of 2,000 m, then the rest, a winter room last; height breaks ties), and the kept walk is named "{destination} via {other} from {start}" when the other lies on its way, more than 150 m from its end.
+- **Per car park.** A car park starts at most 8, best-known destinations first. A name used twice gets the named way the walk follows longest: "… from Dolina via Spodnja pot".
+
+**Tile by tile.** The source cuts its own extract with osmium (`*.walk.osm.pbf`, `WALK_TAG_FILTERS`, cached beside the source like the catalog extract), reads it once with node locations (in a file for an extract over 2 GB), and keeps the walkable ways within 17 km of a destination ingest read in a temporary SQLite store by 0.25° cell. It then searches 1° tiles, each with the ways within 17 km of it, in `parallel_map` workers: a contracted graph in arrays, Dijkstra from scipy, a car park a sink of its own. Only the walks come back; the Twin rules run once over all of them. The ways a kept walk takes that the snapshot lacks travel with its `BuiltWalk` (`ways`, `nodes`); ingest adds them to the snapshot and to the work file's path tables, so the GeometryStore stores them and the TrailGraph holds them for "Edit on the map".
+
+**Measured** (one at a time on the 16 GB Mac, `dayhike ingest --fresh --dem` with FABDEM, one worker):
+
+| Region | Walks found | Kept | Peaks / huts / lakes / viewpoints | Destinations / car parks kept | Twin of a walk | Twin of a relation / built hike | Near-copy | Past a car park's 8 | Wall | Peak RSS |
+|---|---:|---:|---|---|---:|---:|---:|---:|---:|---:|
+| Slovenia (Geofabrik, 7 tiles) | 8,018 | **4,282** | 2,442 / 522 / 823 / 495 | 1,325 / 1,693 | 2,778 | 390 / 2 | 281 | 285 | 497 s | 3.6 GB |
+| Écrins box (5.85–6.75 E, 44.55–45.15 N, 4 tiles) | 2,566 | **1,704** | 908 / 298 / 352 / 146 | 536 / 614 | 689 | 8 / 88 | 31 | 46 | 161 s | 1.75 GB |
+
+Slovenia's Catalog holds 1,868 relation DayHikes and 372 DayStages beside them; the Écrins box 172 relation DayHikes, 776 NetworkHikes and 79 DayStages. The source read 3,421 destinations and 13,472 car parks in Slovenia, 1,527 and 2,767 in the Écrins box. In Slovenia the search took about 380 s of the 497 (7 tiles, 20–123 s each), the walk extract and its read about 20 s.
+
+- **Triglav** gets a walk from each of its classic valleys: Krma ("from Pri lesi", 8.7 km one way), Vrata ("from Šlajmerjev dom v Vratih", 9.9 km), Bohinj ("from Planina Blato", 13.0 km) and Kot ("from Pri Rosu", from the foot of the valley, 15.8 km), all named "via Dom Planika pod Triglavom". Its walks from Pokljuka (12.7 km) and Trenta (13.4 km) are Twins of relation DayHikes already in the Catalog.
+- **The Écrins classics**: Refuge du Glacier Blanc from Pré de Madame Carle; Refuge de la Muzelle from Venosc (Bourg d'Arud) and from Valsenestre over the Col de la Muzelle; Lac Lauvitel from La Danchère and three more; Sélé from Ailefroide; Pigeonnier from Le Bourg (from Gioberney it is a near-copy of a relation); Chabournéou from the Crépon car park and Le Bourg. The three walks to Refuge de l'Alpe de Villar-d'Arène (from Les Voutes below the Col, the Col du Lautaret and Le Casset) are kept, to the Chalet-Refuge de Chamoissière beside it, which has a Wikidata tag.
+- **Not found**: Glacier Blanc from Ailefroide (its walk passes the Pré de Madame Carle car park, and the strict rule ends it there) and Muzelle from La Danchère over the Col du Vallon (from each La Danchère car park the cheapest walk goes down by Bourg d'Arud and shares more than half the Venosc walk; the search keeps one walk per car park).
+- Two mapping cases made rules here: a car park with no name beside a hut (Vrata) is named after the hut, and a T4 path with a few cables (`via_ferrata_scale` without `highway=via_ferrata`, Triglav's last metres) is walked.
+
+**Considered Options.**
+
+- The default path level (rejected: in the Écrins it gave 536 walks to 282 destinations against 1,903 to 588 on the walkable graph, and none to Glacier Blanc, Sélé or Chabournéou).
+- Joining only the short connector ways the default level lacks (not measured; the walkable graph is simpler to state and costs this source alone).
+- One walk per destination, or two (rejected by the captain: a big peak has several classic approaches; Triglav's Kot and Vrata are its 4th and 5th walks).
+- Distance as the cost (the Écrins check: 30 % of walks crossed a point 100 m above the destination, against 18 % with climb and the marked factor).
+- Merging destinations within 150 m before the search (the Écrins report's rule 8). With notability deciding Twins, a hut's walks already beat its winter room's, and merging would lose a lake's walk from the far side when the hut beside it is reached from the near side.
+- Place nodes as starts (rejected in the prototype: mountain pastures tagged as hamlets, with no public road).
+- Unnamed paths of ADR-0065's `unnamed` level for the snapshot (not needed: this source reads its own ways), and bus or shuttle stops as starts (La Bérarde), left for later.
+
+**Consequences.**
+
+- The Catalog grows: Slovenia from 2,240 to 6,522 hikes, the Écrins box from 1,027 to 2,731. Europe is estimated at 130k–250k DestinationHikes (the Écrins check, uncertain by a factor of 2), beside 55k NetworkHikes; it rides the next full rebuild.
+- An ingest reads the source once more (the walk extract) and stores its walkable ways near destinations on disk for the run. Europe's walk extract holds most of its minor road network; that pass and the store are the cost to watch at the first Europe build.
+- Built ids follow ADR-0038: a walk keeps its id until its start node or a way it walks changes.
