@@ -28,6 +28,8 @@ COMMONS_API = "https://commons.wikimedia.org/w/api.php"
 WIKIDATA_API = "https://www.wikidata.org/w/api.php"
 PAUSE_S = 1.0
 BATCH = 50
+MAX_URL = 4000
+PROGRESS_EVERY = 20
 CATEGORY_FILES = 10
 THUMB_PX = 480
 _FREE = re.compile(r"cc by( sa)?( \d+(?:\.\d+)?)?")
@@ -160,6 +162,37 @@ def _chunks(items: Sequence[str], size: int) -> Iterable[Sequence[str]]:
         yield items[start : start + size]
 
 
+def _files_url(titles: Sequence[str]) -> str:
+    return COMMONS_API + "?" + urllib.parse.urlencode(
+        {
+            "action": "query",
+            "format": "json",
+            "prop": "imageinfo",
+            "iiprop": "url|extmetadata",
+            "iiurlwidth": str(THUMB_PX),
+            "maxlag": "5",
+            "redirects": "1",
+            "titles": "|".join(titles),
+        }
+    )
+
+
+def _file_batches(titles: Sequence[str]) -> Iterable[list[str]]:
+    """Up to ``BATCH`` titles per batch, each batch's request URL at most ``MAX_URL`` long.
+
+    Non-ASCII titles grow ~6x when percent-encoded, so a count cap alone can
+    exceed the server's URL limit (HTTP 414). A title too long on its own goes alone.
+    """
+    batch: list[str] = []
+    for title in titles:
+        if batch and (len(batch) >= BATCH or len(_files_url([*batch, title])) > MAX_URL):
+            yield batch
+            batch = []
+        batch.append(title)
+    if batch:
+        yield batch
+
+
 def _urlopen_bytes(request: Request) -> bytes:
     with urlopen(request, timeout=60) as response:
         return response.read()
@@ -173,14 +206,26 @@ class CommonsClient:
     wait ``pause_s`` after the one before, and name the project in the User-Agent.
     """
 
-    def __init__(self, path: Path | str, opener: Opener | None = None, *, pause_s: float = PAUSE_S) -> None:
+    def __init__(
+        self,
+        path: Path | str,
+        opener: Opener | None = None,
+        *,
+        pause_s: float = PAUSE_S,
+        progress: Progress | None = None,
+    ) -> None:
         self.path = Path(path)
+        self.progress = progress
         self.opener = opener or _urlopen_bytes
         self.pause_s = pause_s
         self._next = 0.0
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._db() as db:
             db.execute("CREATE TABLE IF NOT EXISTS response (key TEXT PRIMARY KEY, body TEXT NOT NULL)")
+
+    def _report(self, line: str) -> None:
+        if self.progress is not None:
+            self.progress(line)
 
     def _db(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path)
@@ -219,26 +264,15 @@ class CommonsClient:
             return data
         raise RuntimeError(f"Wikimedia request failed: {url}") from error
 
-    def files(self, titles: Sequence[str]) -> dict[str, dict | None]:
+    def files(self, titles: Sequence[str], label: str = "files") -> dict[str, dict | None]:
         """Image info for each file title. A non-free file, or one with no author, is None."""
         wanted = list(dict.fromkeys(titles))
         if not wanted:
             return {}
         missing = [title for title in wanted if self._get(f"file:{_norm_title(title)}") is None]
-        for batch in _chunks(missing, BATCH):
-            url = COMMONS_API + "?" + urllib.parse.urlencode(
-                {
-                    "action": "query",
-                    "format": "json",
-                    "prop": "imageinfo",
-                    "iiprop": "url|extmetadata",
-                    "iiurlwidth": str(THUMB_PX),
-                    "maxlag": "5",
-                    "redirects": "1",
-                    "titles": "|".join(batch),
-                }
-            )
-            data = self._fetch(url)
+        done = 0
+        for number, batch in enumerate(_file_batches(missing), start=1):
+            data = self._fetch(_files_url(batch))
             query = data.get("query", {})
             normalized = _title_map(query.get("normalized"))
             redirects = _title_map(query.get("redirects"))
@@ -249,17 +283,24 @@ class CommonsClient:
                 name = normalized.get(_norm_title(title), _norm_title(title))
                 page = found.get(redirects.get(name, name))
                 self._put(f"file:{_norm_title(title)}", page if page is not None else {"title": title, "missing": True})
+            done += len(batch)
+            if number % PROGRESS_EVERY == 0 or done == len(missing):
+                self._report(f"photos: {label} {done}/{len(missing)}")
         return {title: photo_from_page(self._get(f"file:{_norm_title(title)}")) for title in wanted}
 
     def _load_entities(self, qids: Sequence[str]) -> None:
         missing = [qid for qid in qids if self._get(f"entity:{qid}") is None]
-        for batch in _chunks(missing, BATCH):
+        done = 0
+        for number, batch in enumerate(_chunks(missing, BATCH), start=1):
             url = WIKIDATA_API + "?" + urllib.parse.urlencode(
                 {"action": "wbgetentities", "format": "json", "props": "claims", "ids": "|".join(batch)}
             )
             entities = self._fetch(url).get("entities") or {}
             for qid in batch:
                 self._put(f"entity:{qid}", _p18(entities.get(qid) or {}))
+            done += len(batch)
+            if number % PROGRESS_EVERY == 0 or done == len(missing):
+                self._report(f"photos: entities {done}/{len(missing)}")
 
     def _entity_file(self, qid: str) -> str:
         cached = self._get(f"entity:{qid}")
@@ -319,9 +360,12 @@ class CommonsClient:
             if target is not None and target[0] == "category":
                 categories.append(target[1])
         extra: list[str] = []
-        for category in dict.fromkeys(categories):
+        listed = list(dict.fromkeys(categories))
+        for number, category in enumerate(listed, start=1):
             extra.extend(self._category_files(category))
-        self.files([title for title in dict.fromkeys(extra) if title not in known])
+            if number % (PROGRESS_EVERY * BATCH) == 0 or number == len(listed):
+                self._report(f"photos: categories {number}/{len(listed)}")
+        self.files([title for title in dict.fromkeys(extra) if title not in known], "category files")
 
     def one(self, tags: dict) -> dict | None:
         """One photo for a POI: its Commons file, else its Wikidata image, else the first free file in its category."""
@@ -436,7 +480,7 @@ def export_photos(
         index = _poi_index(geo)
     finally:
         geo.close()
-    client = CommonsClient(cache_path, opener, pause_s=pause_s)
+    client = CommonsClient(cache_path, opener, pause_s=pause_s, progress=progress)
     client.warm(index.values())
     db = sqlite3.connect(hikes_path)
     try:
