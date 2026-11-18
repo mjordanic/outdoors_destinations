@@ -3096,6 +3096,8 @@ Bulky local files stay out of git:
 - `data/catalog.trailgraph.sqlite` — TrailGraph (the marked hiking network and graded paths)
 - `data/catalog.similarity/` — similarity facts and Calibration (`build-similarity`)
 - `data/catalog.sqlite.work` (and its `-wal` / `-shm` side files) — in-progress ingest (resume handle)
+- `data/catalog.sqlite.work.phases/` — ingest phase checkpoints (pickles beside the work file)
+- `data/catalog.sqlite.steps/` — step markers (`STEP.json`) read by `--resume`
 - `data/osm/` — Geofabrik / osmium extracts
 - `data/dem/` — FABDEM GeoTIFFs
 - `data/landcover/` — ESA WorldCover GeoTIFFs

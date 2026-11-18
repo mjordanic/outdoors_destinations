@@ -35,10 +35,12 @@ data/geonames/
 *.sqlite.work-journal
 *.sqlite.work-wal
 *.sqlite.work-shm
+*.sqlite.work.phases/
 *.sqlite.tmp
 *.sqlite.new
 *.sqlite.new.tmp
 *.similarity/
+*.sqlite.steps/
 
 # env / secrets
 .env
