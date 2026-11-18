@@ -72,6 +72,7 @@ from dayhike.stages import day_stages, external_stages
 INGEST_WORK_SCHEMA = 12
 INGEST_CHECKPOINT_OBJECTS = 50_000
 INGEST_PROGRESS_EVERY_OBJECTS = 100_000
+ID_FILTER_CHUNK = 1_000_000  # ids handed to an osmium IdFilter per numpy slice
 WORK_CACHE_KIB = 262_144  # the work file's page cache while ingest runs
 HIKING_ROUTES = ("hiking", "foot")  # route=foot is read as hiking (ADR-0034)
 CATALOG_TAG_FILTERS = (
@@ -90,6 +91,13 @@ CATALOG_TAG_FILTERS = (
 # bridleways (the ways of named trails), then named tracks too, then unnamed paths too.
 # Beyond ``graded`` they also enter the snapshot, with highway=trailhead nodes.
 PATH_LEVELS = ("graded", "trails", "named", "unnamed")
+# The tag keys ``_point_kind`` reads, ``highway`` also for ``_is_extra_path``: an object with none of them
+# is no point and no path, so the passes' KeyFilter drops it in C++.
+POINT_KEYS = ("tourism", "natural", "amenity", "man_made", "place", "information", "highway")
+# What a way needs for ``_is_extra_path`` at each level (the ways pass keeps it only if it has one of these keys),
+# and for ``_point_kind`` beside ``highway=trailhead``.
+PATH_KEYS = {"graded": ("sac_scale",), "trails": ("sac_scale", "name"), "named": ("sac_scale", "name"), "unnamed": ("highway",)}
+WAY_POINT_KEYS = tuple(key for key in POINT_KEYS if key != "highway")
 TRAIL_PATH_HIGHWAYS = ("path", "footway", "bridleway")
 NAMED_PATH_HIGHWAYS = (*TRAIL_PATH_HIGHWAYS, "track")
 NOT_A_PATH_FOOTWAYS = ("sidewalk", "crossing")
@@ -564,8 +572,66 @@ def _mark_progress(
     conn.commit()
 
 
-def _iter_file(path: Path, entities: osmium.osm.osm_entity_bits):
-    yield from osmium.FileProcessor(str(path), entities)
+def _iter_file(path: Path, entities: osmium.osm.osm_entity_bits, filters: Sequence = ()):
+    processor = osmium.FileProcessor(str(path), entities)
+    for osm_filter in filters:
+        processor.with_filter(osm_filter)
+    yield from processor
+
+
+def _chunked_ids(*arrays: np.ndarray):
+    # The ids of sorted arrays for an osmium IdFilter, a numpy slice at a time (not one list of every id).
+    for ids in arrays:
+        for start in range(0, len(ids), ID_FILTER_CHUNK):
+            yield from ids[start : start + ID_FILTER_CHUNK].tolist()
+
+
+def _id_filters(*arrays: np.ndarray) -> list:
+    """An osmium IdFilter of these ids, none for a file of negative ids (a JOSM
+    file of new objects): IdFilter takes positive ids only, so every object
+    reaches the handler, which tests the ids itself."""
+    if any(len(ids) and ids[0] < 0 for ids in arrays):
+        return []
+    return [osmium.filter.IdFilter(_chunked_ids(*arrays))]
+
+
+def _scan(
+    conn: sqlite3.Connection,
+    pass_name: str,
+    paths: Sequence[Path],
+    entities: osmium.osm.osm_entity_bits,
+    filters_for: Callable[[int], Sequence],
+    handle: Callable[[osmium.osm.OSMObject, int, _Pending, int], None],
+    progress: Progress | None,
+    stage: str,
+    detail: Callable[[], str],
+) -> None:
+    """One scan of each file ``pass_name`` has not finished, through the osmium
+    filters (``filters_for(file_index)``, in C++): ``handle(obj, id, pending, file_index)`` runs only for
+    the objects that pass, and rows and progress are written at checkpoints."""
+    if _pass_done(conn, pass_name, paths):
+        return
+    seen = 0
+    pending = _Pending(conn)
+    for index, path in enumerate(paths):
+        last_id, done = _file_state(conn, pass_name, path)
+        if done:
+            continue
+        file_last = last_id
+        for obj in _iter_file(path, entities, filters_for(index)):
+            osm_id = int(obj.id)
+            if not _after(osm_id, last_id):
+                continue
+            handle(obj, osm_id, pending, index)
+            seen += 1
+            file_last = osm_id
+            if seen % INGEST_CHECKPOINT_OBJECTS == 0:
+                pending.write()
+                _mark_progress(conn, pass_name, path, file_last)
+            if seen % INGEST_PROGRESS_EVERY_OBJECTS == 0:
+                emit_progress(progress, stage, f"{seen} scanned, {detail()}, last_id={osm_id}")
+        pending.write()
+        _mark_progress(conn, pass_name, path, file_last, done=True)
 
 
 def _pass_relations(
@@ -629,63 +695,73 @@ def _pass_ways(
     ``levels`` entry, the paths in no relation. Those of a file read beyond
     ``graded`` are also marked to enter the snapshot (``snapshot_path_ways``),
     so a ``graded`` file of a mixed build (Europe beside the US) gives the
-    snapshot what a build of it alone would."""
+    snapshot what a build of it alone would.
+
+    Filtering in C++, the passes scan the ways that can be a point or an extra
+    path (``ways_points``, ``ways_trailheads``, ``ways_paths``; the listed ways
+    are left to the last scan) then the listed ways, by id (``ways``, whose end
+    marks the pass done). A way both a point and a path is read twice: the rows
+    it gives are the same."""
     emit_progress(progress, "ways", "starting")
     if _pass_done(conn, "ways", paths):
         emit_progress(progress, "ways", "resumed, already complete")
         return
     needed_ways = _sorted_ids(conn, "needed_ways")
     amenity_ways = _sorted_ids(conn, "amenity_ways")
-    seen = 0
     kept = 0
-    extra = 0
-    pending = _Pending(conn)
-    for path, path_level in zip(paths, levels):
-        last_id, done = _file_state(conn, "ways", path)
-        if done:
-            continue
-        file_last = last_id
-        for obj in _iter_file(path, osmium.osm.WAY):
-            if not obj.is_way() or not _after(int(obj.id), last_id):
-                continue
-            osm_id = int(obj.id)
-            node_ids = [int(node.ref) for node in obj.nodes]
-            tags = dict(obj.tags)
-            kind = _point_kind(tags)
-            if _sorted_has(needed_ways, osm_id):
-                pending.add(
-                    "INSERT OR REPLACE INTO ways (id, node_ids, tags) VALUES (?, ?, ?)",
-                    osm_id, json.dumps(node_ids), json.dumps(tags),
-                )
-                pending.add_ids("needed_nodes", node_ids)
-                kept += 1
-            elif _is_extra_path(tags, path_level):
-                pending.add(
-                    "INSERT OR REPLACE INTO path_ways (id, node_ids, tags) VALUES (?, ?, ?)",
-                    osm_id, json.dumps(node_ids), json.dumps(tags),
-                )
-                pending.add_ids("path_needed_nodes", node_ids)
-                if path_level != "graded":
-                    pending.add_ids("snapshot_path_ways", [osm_id])
-                    pending.add_ids("snapshot_path_nodes", node_ids)
-                extra += 1
-            if node_ids and (kind is not None or _sorted_has(amenity_ways, osm_id)):
-                pending.add(
-                    "INSERT OR REPLACE INTO pending_amenity_ways (id, kind, node_id, tags) VALUES (?, ?, ?, ?)",
-                    osm_id, kind or "", node_ids[0], json.dumps(tags),
-                )
-                pending.add_ids("needed_nodes", node_ids[:1])
-            seen += 1
-            file_last = osm_id
-            if seen % INGEST_CHECKPOINT_OBJECTS == 0:
-                pending.write()
-                _mark_progress(conn, "ways", path, file_last)
-            if seen % INGEST_PROGRESS_EVERY_OBJECTS == 0:
-                emit_progress(
-                    progress, "ways", f"{seen} scanned, {kept} hiking ways, last_id={osm_id}"
-                )
-        pending.write()
-        _mark_progress(conn, "ways", path, file_last, done=True)
+
+    def handle(obj: osmium.osm.Way, osm_id: int, pending: _Pending, index: int) -> None:
+        nonlocal kept
+        node_ids = [int(node.ref) for node in obj.nodes]
+        tags = dict(obj.tags)
+        kind = _point_kind(tags)
+        if _sorted_has(needed_ways, osm_id):
+            pending.add(
+                "INSERT OR REPLACE INTO ways (id, node_ids, tags) VALUES (?, ?, ?)",
+                osm_id, json.dumps(node_ids), json.dumps(tags),
+            )  # fmt: skip
+            pending.add_ids("needed_nodes", node_ids)
+            kept += 1
+        elif _is_extra_path(tags, levels[index]):
+            pending.add(
+                "INSERT OR REPLACE INTO path_ways (id, node_ids, tags) VALUES (?, ?, ?)",
+                osm_id, json.dumps(node_ids), json.dumps(tags),
+            )  # fmt: skip
+            pending.add_ids("path_needed_nodes", node_ids)
+            if levels[index] != "graded":
+                pending.add_ids("snapshot_path_ways", [osm_id])
+                pending.add_ids("snapshot_path_nodes", node_ids)
+        if node_ids and (kind is not None or _sorted_has(amenity_ways, osm_id)):
+            pending.add(
+                "INSERT OR REPLACE INTO pending_amenity_ways (id, kind, node_id, tags) VALUES (?, ?, ?, ?)",
+                osm_id, kind or "", node_ids[0], json.dumps(tags),
+            )  # fmt: skip
+            pending.add_ids("needed_nodes", node_ids[:1])
+
+    def listed(osm_id: int) -> bool:
+        return _sorted_has(needed_ways, osm_id) or _sorted_has(amenity_ways, osm_id)
+
+    def handle_listed(obj: osmium.osm.Way, osm_id: int, pending: _Pending, index: int) -> None:
+        if listed(osm_id):
+            handle(obj, osm_id, pending, index)
+
+    def handle_unlisted(obj: osmium.osm.Way, osm_id: int, pending: _Pending, index: int) -> None:
+        if not listed(osm_id):
+            handle(obj, osm_id, pending, index)
+
+    def detail() -> str:
+        return f"{kept} hiking ways"
+
+    scans = (
+        ("ways_points", lambda index: [osmium.filter.KeyFilter(*WAY_POINT_KEYS)]),
+        ("ways_trailheads", lambda index: [osmium.filter.TagFilter(("highway", "trailhead"))]),
+        ("ways_paths", lambda index: [osmium.filter.KeyFilter(*PATH_KEYS[levels[index]])]),
+    )
+    for pass_name, filters_for in scans:
+        _scan(conn, pass_name, paths, osmium.osm.WAY, filters_for, handle_unlisted, progress, "ways", detail)
+    id_filters = _id_filters(needed_ways, amenity_ways)
+    _scan(conn, "ways", paths, osmium.osm.WAY, lambda index: id_filters, handle_listed, progress, "ways", detail)
+    extra = conn.execute("SELECT count(*) FROM path_ways").fetchone()[0]
     read = ", ".join(dict.fromkeys(levels))
     emit_progress(progress, "ways", f"{kept} hiking ways, {extra} paths in no relation ({read})")
 
@@ -726,6 +802,9 @@ def _is_extra_path(tags: dict[str, str], level: str) -> bool:
 def _pass_nodes(
     conn: sqlite3.Connection, paths: Sequence[Path], progress: Progress | None
 ) -> None:
+    """The geometry nodes, by id, and the point-kind nodes, by ``POINT_KEYS``: two
+    scans that filter in C++ (``nodes_points``, then ``nodes``, whose end marks
+    the pass done). Only the point scan writes ``amenities``, in file order."""
     emit_progress(progress, "nodes", "starting")
     if _pass_done(conn, "nodes", paths):
         emit_progress(progress, "nodes", "resumed, already complete")
@@ -735,52 +814,41 @@ def _pass_nodes(
         return
     needed_nodes = _sorted_ids(conn, "needed_nodes")
     path_nodes = _sorted_ids(conn, "path_needed_nodes")
-    seen = 0
     kept = 0
-    pending = _Pending(conn)
-    for path in paths:
-        last_id, done = _file_state(conn, "nodes", path)
-        if done:
-            continue
-        file_last = last_id
-        for obj in _iter_file(path, osmium.osm.NODE):
-            if not obj.is_node() or not _after(int(obj.id), last_id):
-                continue
-            osm_id = int(obj.id)
-            location = obj.location
-            tags = dict(obj.tags)
-            kind = _point_kind(tags)
-            needed = _sorted_has(needed_nodes, osm_id)
-            on_path = not needed and _sorted_has(path_nodes, osm_id)
-            if location.valid() and (needed or on_path or kind is not None):
-                point = (float(location.lat), float(location.lon))
-                if needed:
-                    pending.add(
-                        "INSERT OR REPLACE INTO nodes (id, lat, lon, ele) VALUES (?, ?, ?, ?)",
-                        osm_id, point[0], point[1], _parse_ele_m(tags.get("ele")),
-                    )
-                    kept += 1
-                elif on_path:
-                    pending.add(
-                        "INSERT OR REPLACE INTO path_nodes (id, lat, lon, ele) VALUES (?, ?, ?, ?)",
-                        osm_id, point[0], point[1], _parse_ele_m(tags.get("ele")),
-                    )
-                if kind is not None:
-                    pending.add(
-                        "INSERT OR REPLACE INTO amenities (osm_key, kind, lat, lon, tags) VALUES (?, ?, ?, ?, ?)",
-                        f"n{osm_id}", kind, point[0], point[1], json.dumps(tags),
-                    )
-            seen += 1
-            file_last = osm_id
-            if seen % INGEST_CHECKPOINT_OBJECTS == 0:
-                pending.write()
-                _mark_progress(conn, "nodes", path, file_last)
-            if seen % INGEST_PROGRESS_EVERY_OBJECTS == 0:
-                emit_progress(
-                    progress, "nodes", f"{seen} scanned, {kept} kept, last_id={osm_id}"
-                )
-        pending.write()
-        _mark_progress(conn, "nodes", path, file_last, done=True)
+    insert_node = "INSERT OR REPLACE INTO nodes (id, lat, lon, ele) VALUES (?, ?, ?, ?)"
+    insert_path_node = "INSERT OR REPLACE INTO path_nodes (id, lat, lon, ele) VALUES (?, ?, ?, ?)"
+
+    def handle_point(obj: osmium.osm.Node, osm_id: int, pending: _Pending, index: int) -> None:
+        tags = dict(obj.tags)
+        kind = _point_kind(tags)
+        location = obj.location
+        if kind is not None and location.valid():
+            pending.add(
+                "INSERT OR REPLACE INTO amenities (osm_key, kind, lat, lon, tags) VALUES (?, ?, ?, ?, ?)",
+                f"n{osm_id}", kind, float(location.lat), float(location.lon), json.dumps(tags),
+            )  # fmt: skip
+
+    def handle_geometry(obj: osmium.osm.Node, osm_id: int, pending: _Pending, index: int) -> None:
+        nonlocal kept
+        location = obj.location
+        if not location.valid():
+            return
+        needed = _sorted_has(needed_nodes, osm_id)
+        if not needed and not _sorted_has(path_nodes, osm_id):
+            return
+        pending.add(
+            insert_node if needed else insert_path_node,
+            osm_id, float(location.lat), float(location.lon), _parse_ele_m(obj.tags.get("ele")),
+        )  # fmt: skip
+        kept += needed
+
+    def detail() -> str:
+        return f"{kept} kept"
+
+    point_filters = [osmium.filter.KeyFilter(*POINT_KEYS)]
+    _scan(conn, "nodes_points", paths, osmium.osm.NODE, lambda index: point_filters, handle_point, progress, "nodes", detail)
+    id_filters = _id_filters(needed_nodes, path_nodes)
+    _scan(conn, "nodes", paths, osmium.osm.NODE, lambda index: id_filters, handle_geometry, progress, "nodes", detail)
     _resolve_pending_amenities(conn)
     emit_progress(progress, "nodes", f"{kept} geometry nodes")
 
