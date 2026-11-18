@@ -311,7 +311,7 @@ def test_the_trails_level_builds_a_named_trail_into_the_catalog(pbf: Path, tmp_p
 
 @needs_osmium
 def test_the_trails_level_reads_trail_ways_and_trailheads_but_no_tracks(pbf: Path, tmp_path: Path) -> None:
-    _, _, _, snapshot = run_ingest([pbf], tmp_path / "catalog.sqlite", paths="trails")
+    _, _, _, snapshot, _ = run_ingest([pbf], tmp_path / "catalog.sqlite", paths="trails")
 
     assert {RIDGE_D_E, RIDGE_E_F, RIVER_GREENWAY, OLD_VALLEY_PATH} <= snapshot.path_ways
     assert FOREST_ROAD not in snapshot.ways

@@ -623,7 +623,7 @@ def build_catalog(
     heights = None if dem_dir is None else point_heights(dem_dir)
     if dem_dir is not None and heights is None:
         emit_progress(progress, "assemble", f"no DEM tiles in {dem_dir}: height orients no line")
-    kept, report, work_path, snapshot = run_ingest(
+    kept, report, work_path, snapshot, walks = run_ingest(
         osm_files,
         catalog_path,
         progress=progress,
@@ -656,8 +656,9 @@ def build_catalog(
                 heights,
                 dem_read_by(dem_dir),
                 before,
+                walks,
             )
-            del snapshot  # the TrailGraph reads the work file on its own
+            del snapshot, walks  # the TrailGraph reads the work file on its own
             write_trailgraph(
                 stage(trailgraph_path_for(catalog_path)),
                 work_conn,
