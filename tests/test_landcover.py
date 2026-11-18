@@ -861,3 +861,78 @@ def test_sample_landcover_removes_similarity_facts(tmp_path: Path) -> None:
     )
     with pytest.raises(StaleSimilarity, match="build-similarity"):
         rank_dayhikes(Catalog.open(catalog_path), ["Ridge Walk"])
+
+
+def _scatter_shared_walks(store_path: Path) -> int:
+    """Every hike walks the same points in two 1° cells either side of 45°N, in an order that jumps between them,
+    with one long step so reads go along it."""
+    walk = [(45.01, 15.01), (44.995, 15.01), (45.01, 15.01), (45.03, 15.01), (44.995, 15.01), (44.995, 15.03)]
+    connection = sqlite3.connect(store_path)
+    try:
+        hikes = [row[0] for row in connection.execute("SELECT DISTINCT dayhike_id FROM vertices ORDER BY 1")]
+        connection.execute("DELETE FROM vertices")
+        connection.executemany(
+            "INSERT INTO vertices (dayhike_id, seq, node_id, latitude, longitude) VALUES (?, ?, ?, ?, ?)",
+            [(hike, seq, 1000 + seq, lat, lon) for hike in hikes for seq, (lat, lon) in enumerate(walk)],
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    return len(hikes) * len(walk)
+
+
+def _point_by_point_landcover(raster_dir: Path, walk: list[tuple[float, float]]) -> list[tuple[int | None, bytes | None]]:
+    """What each vertex of a walk gets read on its own: its class and the classes along the step after it."""
+    from dayhike.landcover import sample_landcover_classes, step_reads
+
+    out = []
+    for index, (lat, lon) in enumerate(walk):
+        nlat, nlon = walk[index + 1] if index + 1 < len(walk) else (lat, lon)
+        counts, points = step_reads([lat], [lon], [nlat], [nlon])
+        (code,) = sample_landcover_classes(raster_dir, [(lat, lon)])
+        along = sample_landcover_classes(raster_dir, [tuple(point) for point in points.tolist()])
+        blob = bytes(c or 0 for c in along) if any(c is not None for c in along) else None
+        out.append((code, blob))
+    return out
+
+
+def test_sample_landcover_reads_each_distinct_point_once_grouped_by_tile_and_matches_point_by_point(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dayhike import landcover
+
+    catalog_path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, catalog_path)
+    store_path = geometry_store_path_for(catalog_path)
+    vertex_count = _scatter_shared_walks(store_path)
+    rasters = tmp_path / "rasters"
+    rasters.mkdir()
+    grass_over_trees = np.array([[10, 30], [30, 10]], dtype="uint8")
+    _write_class_tif(rasters / "a.tif", west=14.99, south=44.99, east=15.05, north=45.05, codes=grass_over_trees)
+    sampled_points: list[tuple[float, float]] = []
+    real = landcover._sample_open_datasets
+
+    def recording(tiles, points):
+        sampled_points.extend(points)
+        return real(tiles, points)
+
+    monkeypatch.setattr(landcover, "_sample_open_datasets", recording)
+
+    sample_landcover(catalog_path, rasters)
+
+    assert len(sampled_points) == len(set(sampled_points))
+    store = sqlite3.connect(store_path)
+    try:
+        hikes = [row[0] for row in store.execute("SELECT DISTINCT dayhike_id FROM vertices ORDER BY 1")]
+        for hike in hikes:
+            walk = store.execute(
+                "SELECT latitude, longitude FROM vertices WHERE dayhike_id = ? ORDER BY seq", (hike,)
+            ).fetchall()
+            got = store.execute(
+                "SELECT landcover, landcover_along FROM vertices WHERE dayhike_id = ? ORDER BY seq", (hike,)
+            ).fetchall()
+            assert got == _point_by_point_landcover(rasters, walk)
+        assert any(blob for _code, blob in got)
+    finally:
+        store.close()
+    assert vertex_count == len(hikes) * 6
