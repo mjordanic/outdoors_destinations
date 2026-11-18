@@ -168,7 +168,7 @@ def run_ingest(
     work_path = work_path_for(catalog_path)
     fingerprint = _fingerprint(source_paths, levels)
     resume = not fresh and _work_is_resumable(work_path, fingerprint)
-    cached = None if pass_cache is None or resume else _pass_cache_path(pass_cache, fingerprint, levels)
+    cached = None if pass_cache is None else _pass_cache_path(pass_cache, fingerprint, levels)
     if not resume:
         remove_work(work_path)
         if cached is not None and not fresh and _work_is_resumable(cached, fingerprint):
@@ -186,10 +186,11 @@ def run_ingest(
     try:
         if not resume:
             _init_work(conn, fingerprint, source_paths, scan_paths)
+        passes_done = resume and _pass_done(conn, "nodes", scan_paths)
         _pass_relations(conn, scan_paths, progress)
         _pass_ways(conn, scan_paths, progress, levels)
         _pass_nodes(conn, scan_paths, progress)
-        if cached is not None:
+        if cached is not None and not passes_done:
             _save_pass_cache(conn, cached, progress)
         if destination_source in sources:
             # Before the snapshot loads: the tile search forks its workers from a small process (ADR-0067).

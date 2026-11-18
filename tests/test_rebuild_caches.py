@@ -107,6 +107,31 @@ def test_a_resumed_build_does_not_overwrite_the_pass_cache(
     assert _files(catalog) == _files(_plain(tmp_path, source))
 
 
+def test_a_build_resumed_during_the_passes_saves_the_pass_cache(
+    tmp_path: Path, source: Path, monkeypatch: pytest.MonkeyPatch, passes_read: list[Path]
+) -> None:
+    cache = tmp_path / "pass-cache"
+    catalog = tmp_path / "a" / "catalog.sqlite"
+
+    def stopped(*args, **kwargs):
+        raise RuntimeError("stopped in the nodes pass")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ingest, "_pass_nodes", stopped)
+        with pytest.raises(RuntimeError):
+            build_catalog(source, catalog, pass_cache=cache)
+    assert not cache.exists() or not any(cache.iterdir())
+
+    build_catalog(source, catalog, pass_cache=cache)
+    assert len(list(cache.iterdir())) == 1
+    passes_read.clear()
+
+    build_catalog(source, tmp_path / "b" / "catalog.sqlite", pass_cache=cache)
+
+    assert passes_read == []
+    assert _files(tmp_path / "b" / "catalog.sqlite") == _files(_plain(tmp_path, source))
+
+
 def _plain(tmp_path: Path, source: Path) -> Path:
     catalog = tmp_path / "plain" / "catalog.sqlite"
     build_catalog(source, catalog)
