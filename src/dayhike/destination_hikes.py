@@ -206,12 +206,14 @@ def walks(
     starts: Sequence[Start],
     heights: Mapping[int, float] | None = None,
     marked: Mapping[int, Sequence[int]] | None = None,
+    in_reach: Sequence[bool] | None = None,
 ) -> list[DestinationHike]:
     """Each destination's walks, best first, before Twins: from each destination
     the search goes out to the car parks, never past one, weighing metres by the
     way (roads, grade, marked route) and climb; a car park's cheapest walk is kept
     when it passes the rules of length, roads, another side and descent."""
-    in_reach = _in_reach(destinations, starts)
+    if in_reach is None:
+        in_reach = _in_reach(destinations, starts)
     if not any(in_reach):
         return []
     graph = _Graph(ways, nodes, heights or {}, marked or {})
@@ -637,6 +639,7 @@ LARGE_EXTRACT_BYTES = 2 * 1024**3  # a larger extract keeps node locations in a 
 DEST_WORKERS_ENV = "DAYHIKE_DEST_WORKERS"  # the tile search's workers; DAYHIKE_WORKERS's count when unset
 
 
+READ_CHUNK = 50_000  # the destinations and car parks read are kept in rows of this many, far below SQLite's BLOB limit
 SEARCH_VERSION = 1  # part of the search's key: change it when a change of code changes what the search stores
 
 
@@ -645,14 +648,15 @@ def search_destinations(work_path: Path, source_paths: Sequence[Path], dem_dir: 
     ingest's work file ``work_path`` for ``destination_source``. Ingest runs it after its
     passes, before the snapshot loads, so the tile search's ``DAYHIKE_DEST_WORKERS`` workers
     fork from a small process. What it reads (``walkable_ways``, ``walkable_cells`` and the
-    destinations and car parks, ``destination_search``) and each tile's walks as the tile
+    destinations and car parks, ``destination_read``) and each tile's walks as the tile
     is done (``destination_tiles``) stay in the work file, so a run stopped part way and
     resumed reads nothing again and searches only the tiles not done, while its key (the
     walk extracts, the cells read, the DEM folder, ``SEARCH_VERSION``) is unchanged."""
     with closing(sqlite3.connect(work_path)) as conn:
         conn.executescript(
             """
-            CREATE TABLE IF NOT EXISTS destination_search (key TEXT NOT NULL, destinations BLOB NOT NULL, starts BLOB NOT NULL);
+            CREATE TABLE IF NOT EXISTS destination_key (key TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS destination_read (kind TEXT NOT NULL, seq INTEGER NOT NULL, items BLOB NOT NULL, PRIMARY KEY (kind, seq));
             CREATE TABLE IF NOT EXISTS destination_tiles (row INTEGER, col INTEGER, walks BLOB NOT NULL, PRIMARY KEY (row, col));
             """
         )
@@ -664,13 +668,14 @@ def search_destinations(work_path: Path, source_paths: Sequence[Path], dem_dir: 
             "cells": hashlib.sha256(np.array(sorted(cells), dtype=np.int64).tobytes()).hexdigest(),
             "dem": str(dem_dir),
         })  # fmt: skip
-        stored = conn.execute("SELECT key, destinations, starts FROM destination_search").fetchone()
+        stored = conn.execute("SELECT key FROM destination_key").fetchone()
         if stored is not None and stored[0] == search_key:
-            destinations, starts = pickle.loads(stored[1]), pickle.loads(stored[2])
+            destinations, starts = _load_read(conn, "destinations"), _load_read(conn, "starts")
         else:
             conn.executescript(
                 """
-                DELETE FROM destination_search;
+                DELETE FROM destination_key;
+                DELETE FROM destination_read;
                 DELETE FROM destination_tiles;
                 DROP TABLE IF EXISTS walkable_ways;
                 DROP TABLE IF EXISTS walkable_cells;
@@ -683,9 +688,9 @@ def search_destinations(work_path: Path, source_paths: Sequence[Path], dem_dir: 
             destinations = found.destinations(dem_dir)
             starts = found.starts()
             del found  # the car parks' tags: not for the workers to inherit
-            conn.execute(
-                "INSERT INTO destination_search VALUES (?, ?, ?)", (search_key, pickle.dumps(destinations), pickle.dumps(starts))
-            )
+            _store_read(conn, "destinations", destinations)
+            _store_read(conn, "starts", starts)
+            conn.execute("INSERT INTO destination_key VALUES (?)", (search_key,))
             conn.commit()
         tiles: dict[tuple[int, int], list[Destination]] = {}
         for destination in destinations:
@@ -708,6 +713,18 @@ def search_destinations(work_path: Path, source_paths: Sequence[Path], dem_dir: 
             count += len(found_here)
     if progress is not None:
         progress(f"destinations: {count} walks found on {len(left)} tiles")
+
+
+def _store_read(conn: sqlite3.Connection, kind: str, items: Sequence) -> None:
+    """``items`` into ``destination_read`` in rows of ``READ_CHUNK``, in order."""
+    rows = ((kind, seq, pickle.dumps(items[at : at + READ_CHUNK])) for seq, at in enumerate(range(0, len(items), READ_CHUNK)))
+    conn.executemany("INSERT INTO destination_read VALUES (?, ?, ?)", rows)
+
+
+def _load_read(conn: sqlite3.Connection, kind: str) -> list:
+    """The ``items`` ``_store_read`` kept as ``kind``, in order."""
+    rows = conn.execute("SELECT items FROM destination_read WHERE kind = ? ORDER BY seq", (kind,))
+    return [item for (items,) in rows for item in pickle.loads(items)]
 
 
 def destination_source(context: BuildContext) -> list[BuiltWalk]:
@@ -747,7 +764,8 @@ class _TileTask:
     def __call__(self, item: tuple[tuple[int, int], list[Destination], list[Start]]) -> list[DestinationHike]:
         (row, col), destinations, starts = item
         destinations = [destination for destination in merged(destinations) if _tile(destination.points[0]) == (row, col)]
-        far = len(destinations) - sum(_in_reach(destinations, starts))
+        in_reach = _in_reach(destinations, starts)
+        far = len(destinations) - sum(in_reach)
         if far == len(destinations):
             if self.progress is not None:
                 self.progress(
@@ -777,7 +795,7 @@ class _TileTask:
 
             ids = list(nodes)
             heights = {node: h for node, h in zip(ids, sample_elevations(self.dem_dir, [nodes[n] for n in ids])) if h is not None}
-        found = walks(ways, nodes, destinations, starts, heights, self.marked)
+        found = walks(ways, nodes, destinations, starts, heights, self.marked, in_reach)
         if self.progress is not None:
             self.progress(
                 f"destinations: tile {row} N {col} E: {len(found)} walks to {len(destinations)} "

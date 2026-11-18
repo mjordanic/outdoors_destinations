@@ -331,7 +331,11 @@ def _two_tiles(path: Path) -> Path:
     return _write_osm(path, nodes, ways)
 
 
-def test_a_build_stopped_part_way_through_the_tiles_resumes_with_the_tiles_done(tmp_path: Path) -> None:
+@pytest.mark.parametrize("chunk", [1, destination_hikes.READ_CHUNK])
+def test_a_build_stopped_part_way_through_the_tiles_resumes_with_the_tiles_done(
+    tmp_path: Path, monkeypatch, chunk: int
+) -> None:
+    monkeypatch.setattr(destination_hikes, "READ_CHUNK", chunk)  # 1: what was read is kept over several rows
     osm = _two_tiles(tmp_path / "two.osm")
     clean = build_catalog(osm, tmp_path / "clean.sqlite", sources=[destination_source])
     assert len(_destination_hikes(clean)) == 2
