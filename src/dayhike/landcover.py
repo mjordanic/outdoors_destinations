@@ -18,7 +18,7 @@ from dayhike.catalog import (
     geometry_store_path_for,
     remove_similarity,
 )
-from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS, format_corner
+from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS, format_corner, raster_order_sql
 from dayhike.download import download as _download
 from dayhike.parallel import parallel_iter, workers
 
@@ -266,6 +266,15 @@ def _sample_open_datasets(
     return out
 
 
+# Each vertex with the next vertex of its hike; the last one has itself.
+_STEPS_SQL = (
+    "SELECT dayhike_id, seq, latitude, longitude, "
+    "COALESCE(LEAD(latitude) OVER hike, latitude) AS next_latitude, "
+    "COALESCE(LEAD(longitude) OVER hike, longitude) AS next_longitude FROM vertices "
+    "WINDOW hike AS (PARTITION BY dayhike_id ORDER BY seq)"
+)
+
+
 def sample_landcover(
     catalog_path: Path | str,
     raster_dir: Path | str,
@@ -295,34 +304,35 @@ def sample_landcover(
         ensure_column(write, "vertices", "landcover_along", "BLOB")
         tiles = _Tiles(rasters)
         stack.callback(tiles.close)
+        # Hikes share vertices and steps, so each distinct step (a vertex and the
+        # next one, the last vertex of a hike being a step to itself) is sampled
+        # once, in raster order, into ``steps``; the vertices then take their step's.
+        write.execute(
+            "CREATE TEMP TABLE steps (latitude REAL NOT NULL, longitude REAL NOT NULL, "
+            "next_latitude REAL NOT NULL, next_longitude REAL NOT NULL, code INTEGER, along BLOB)"
+        )
         read = sqlite3.connect(store_path)
         try:
             cursor = read.execute(
-                "SELECT dayhike_id, seq, latitude, longitude, "
-                "LEAD(latitude) OVER hike, LEAD(longitude) OVER hike FROM vertices "
-                "WINDOW hike AS (PARTITION BY dayhike_id ORDER BY seq)"
+                "SELECT DISTINCT latitude, longitude, next_latitude, next_longitude FROM "
+                f"({_STEPS_SQL}) ORDER BY {raster_order_sql('latitude', 'longitude')}, next_latitude, next_longitude"
             )
             # Each process reads through rasters it opened itself, never another's.
             opened = {os.getpid(): tiles}
 
             def chunk_updates(rows: list[tuple]) -> list[tuple]:
-                # A chunk's (code, reads along the step to the next vertex,
-                # dayhike_id, seq) updates, sampled in a worker.
+                # A chunk's (latitude, longitude, next latitude, next longitude, code,
+                # reads along the step) of steps with a class or reads, sampled in a worker.
                 if os.getpid() not in opened:
                     opened[os.getpid()] = _Tiles(rasters)
                 # The last vertex of a hike has no next one: a step of no length, not read.
-                step = np.array(
-                    [
-                        (lat, lon, lat if nlat is None else nlat, lon if nlon is None else nlon)
-                        for *_, lat, lon, nlat, nlon in rows
-                    ],
-                    dtype=float,
-                ).reshape(-1, 4)
+                step = np.array(rows, dtype=float).reshape(-1, 4)
                 counts, points = step_reads(*step.T)
-                classes = _sample_open_datasets(
-                    opened[os.getpid()],
-                    [*zip(step[:, 0].tolist(), step[:, 1].tolist()), *map(tuple, points.tolist())],
-                )
+                wanted = [*zip(step[:, 0].tolist(), step[:, 1].tolist()), *map(tuple, points.tolist())]
+                # A point that begins several steps, or lies along several, is read once.
+                distinct = list(dict.fromkeys(wanted))
+                found = dict(zip(distinct, _sample_open_datasets(opened[os.getpid()], distinct), strict=True))
+                classes = [found[point] for point in wanted]
                 vertex, reads = classes[: len(rows)], classes[len(rows) :]
                 ends = np.cumsum(counts).tolist()
                 updates = []
@@ -330,35 +340,49 @@ def sample_landcover(
                     along = reads[end - count : end]
                     blob = bytes(c or 0 for c in along) if any(c is not None for c in along) else None
                     if code is not None or blob is not None:
-                        updates.append((code, blob, int(row[0]), int(row[1])))
+                        updates.append((*row, code, blob))
                 return updates
 
+            steps = 0
             chunks = iter(lambda: cursor.fetchmany(_VERTEX_CHUNK), [])
             for updates in parallel_iter(chunk_updates, chunks):
-                if not updates:
-                    continue
-                write.executemany(
-                    "UPDATE vertices SET landcover = COALESCE(?, landcover), landcover_along = ? "
-                    "WHERE dayhike_id = ? AND seq = ?",
-                    updates,
-                )
-                sampled += sum(code is not None for code, *_ in updates)
-                touched.update(dayhike_id for _code, _along, dayhike_id, _seq in updates)
+                write.executemany("INSERT INTO steps VALUES (?, ?, ?, ?, ?, ?)", updates)
+                steps += len(updates)
                 if progress is not None:
-                    progress(f"landcover sample: {sampled} vertices")
-            if sampled:
-                write.execute(
-                    "INSERT OR REPLACE INTO geometry_meta (key, value) VALUES (?, ?)",
-                    ("worldcover_attribution", WORLDCOVER_ATTRIBUTION),
-                )
-            write.commit()
+                    progress(f"landcover sample: {steps} steps")
         finally:
             read.close()
-            if write.in_transaction:
-                write.rollback()
-            write.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            write.execute("PRAGMA journal_mode=DELETE")
+        write.execute("CREATE INDEX steps_at ON steps (latitude, longitude, next_latitude, next_longitude)")
+        write.execute(
+            "CREATE TEMP TABLE vertex_update (dayhike_id INTEGER NOT NULL, seq INTEGER NOT NULL, "
+            "code INTEGER, along BLOB, PRIMARY KEY (dayhike_id, seq)) WITHOUT ROWID"
+        )
+        # CROSS JOIN keeps the vertices as the outer loop and the index as the lookup.
+        write.execute(
+            "INSERT INTO vertex_update SELECT v.dayhike_id, v.seq, steps.code, steps.along "
+            f"FROM ({_STEPS_SQL}) AS v CROSS JOIN steps ON steps.latitude = v.latitude "
+            "AND steps.longitude = v.longitude AND steps.next_latitude = v.next_latitude "
+            "AND steps.next_longitude = v.next_longitude"
+        )
+        write.execute(
+            "UPDATE vertices SET landcover = COALESCE(u.code, vertices.landcover), landcover_along = u.along "
+            "FROM vertex_update AS u WHERE vertices.dayhike_id = u.dayhike_id AND vertices.seq = u.seq"
+        )
+        sampled = write.execute("SELECT COUNT(code) FROM vertex_update").fetchone()[0]
+        touched.update(row[0] for row in write.execute("SELECT DISTINCT dayhike_id FROM vertex_update"))
+        if progress is not None:
+            progress(f"landcover sample: {sampled} vertices")
+        if sampled:
+            write.execute(
+                "INSERT OR REPLACE INTO geometry_meta (key, value) VALUES (?, ?)",
+                ("worldcover_attribution", WORLDCOVER_ATTRIBUTION),
+            )
+        write.commit()
     finally:
+        if write.in_transaction:
+            write.rollback()
+        write.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        write.execute("PRAGMA journal_mode=DELETE")
         stack.close()
         write.close()
     if not touched:

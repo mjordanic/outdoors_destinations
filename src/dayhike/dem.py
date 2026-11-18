@@ -49,6 +49,24 @@ CANOPY_RADIUS_M = 75.0
 CANOPY_PERCENTILE = 35.0  # ... this percentile of the cells' heights above their plane
 _CANOPY_BLOCK = 512  # GLO-30 cells per side of the blocks ``_canopy_floor`` reads at a time
 _METRES_PER_DEGREE = EARTH_RADIUS_M * math.pi / 180
+_BLOCKS_PER_DEGREE = 7  # about the size of the blocks ``_canopy_floor`` and ``tree_share`` read at a time
+
+
+def raster_order_sql(lat: str, lon: str) -> str:
+    """SQLite ``ORDER BY`` terms that put points in raster order: by 1° cell, then
+    by block of a 1/7° cell, then by position. A chunk of points in this order
+    falls on few rasters and few blocks of them, so each is read once, not once
+    per chunk. Only the order of the reads depends on it, never a height."""
+
+    def cell(column: str, origin: int) -> str:
+        return f"CAST({column} + {origin} AS INTEGER)"
+
+    def block(column: str, origin: int) -> str:
+        return f"CAST(({column} + {origin} - {cell(column, origin)}) * {_BLOCKS_PER_DEGREE} AS INTEGER)"
+
+    return ", ".join(
+        (cell(lat, 90), cell(lon, 180), block(lat, 90), block(lon, 180), lat, lon)
+    )
 
 
 def fabdem_tile_id(lat: float, lon: float) -> str:
@@ -590,68 +608,74 @@ def sample_dem(
     write = sqlite3.connect(store_path)
     try:
         write.execute("PRAGMA journal_mode=WAL")
+        # Hikes share vertices, so each distinct point is sampled once, in raster
+        # order, into ``points``; the vertices then take their point's height.
+        write.execute(
+            "CREATE TEMP TABLE points (latitude REAL NOT NULL, longitude REAL NOT NULL, "
+            "ele REAL NOT NULL, register_id TEXT NOT NULL)"
+        )
         read = sqlite3.connect(store_path)
         try:
             cursor = read.execute(
-                "SELECT dayhike_id, seq, latitude, longitude FROM vertices "
-                "WHERE latitude >= ? AND latitude < ? AND longitude >= ? AND longitude < ?",
+                "SELECT DISTINCT latitude, longitude FROM vertices "
+                "WHERE latitude >= ? AND latitude < ? AND longitude >= ? AND longitude < ? "
+                f"ORDER BY {raster_order_sql('latitude', 'longitude')}",
                 (south, north, west, east),
             )
 
-            def chunk_updates(rows: list[tuple]) -> list[tuple[float, int, int, str]]:
-                # A chunk's (elevation, dayhike_id, seq, register id) updates, sampled in a worker.
+            def chunk_updates(rows: list[tuple]) -> list[tuple[float, float, float, str]]:
+                # A chunk's (latitude, longitude, elevation, register id) of points, sampled in a worker.
                 coverable = [
-                    (int(dayhike_id), int(seq), float(lat), float(lon))
-                    for dayhike_id, seq, lat, lon in rows
-                    if fabdem_tile_id(float(lat), float(lon)) in available
+                    (float(lat), float(lon)) for lat, lon in rows if fabdem_tile_id(float(lat), float(lon)) in available
                 ]
                 if not coverable:
                     return []
-                elevations, read_from = sample_elevations_and_sources(
-                    raster_dir,
-                    [(lat, lon) for _id, _seq, lat, lon in coverable],
-                    landcover_dir,
-                )
+                elevations, read_from = sample_elevations_and_sources(raster_dir, coverable, landcover_dir)
                 return [
-                    (elevation, dayhike_id, seq, source.register_id)
-                    for (dayhike_id, seq, _lat, _lon), elevation, source in zip(
-                        coverable, elevations, read_from, strict=True
-                    )
+                    (lat, lon, elevation, source.register_id)
+                    for (lat, lon), elevation, source in zip(coverable, elevations, read_from, strict=True)
                     if elevation is not None and source is not None
                 ]
 
+            points = 0
             chunks = iter(lambda: cursor.fetchmany(_VERTEX_CHUNK), [])
             for updates in parallel_iter(chunk_updates, chunks):
-                if not updates:
-                    continue
-                write.executemany(
-                    "UPDATE vertices SET ele = ? WHERE dayhike_id = ? AND seq = ?",
-                    [update[:3] for update in updates],
-                )
-                sampled += len(updates)
-                for _elevation, dayhike_id, _seq, register_id in updates:
-                    touched.setdefault(dayhike_id, set()).add(register_id)
+                write.executemany("INSERT INTO points VALUES (?, ?, ?, ?)", updates)
+                points += len(updates)
                 if progress is not None:
-                    progress(f"dem sample: {sampled} vertices")
-            write.execute(
-                "INSERT OR REPLACE INTO geometry_meta (key, value) VALUES (?, ?)",
-                (DEM_READ_KEY["sample-dem"], dem_read_by(raster_dir)),
-            )
-            for source, key, text in _ATTRIBUTIONS:
-                if source in sources:
-                    write.execute(
-                        "INSERT OR REPLACE INTO geometry_meta (key, value) VALUES (?, ?)", (key, text)
-                    )
-                else:
-                    write.execute("DELETE FROM geometry_meta WHERE key = ?", (key,))
-            write.commit()
+                    progress(f"dem sample: {points} points")
         finally:
             read.close()
-            if write.in_transaction:
-                write.rollback()
-            write.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            write.execute("PRAGMA journal_mode=DELETE")
+        write.execute("CREATE INDEX points_at ON points (latitude, longitude)")
+        # CROSS JOIN keeps the vertices as the outer loop and the index as the lookup.
+        for dayhike_id, register_id in write.execute(
+            "SELECT DISTINCT vertices.dayhike_id, points.register_id FROM vertices "
+            "CROSS JOIN points ON points.latitude = vertices.latitude AND points.longitude = vertices.longitude"
+        ).fetchall():
+            touched.setdefault(dayhike_id, set()).add(register_id)
+        sampled = write.execute(
+            "UPDATE vertices SET ele = (SELECT ele FROM points WHERE points.latitude = vertices.latitude "
+            "AND points.longitude = vertices.longitude) "
+            "WHERE EXISTS (SELECT 1 FROM points WHERE points.latitude = vertices.latitude "
+            "AND points.longitude = vertices.longitude)"
+        ).rowcount
+        if progress is not None:
+            progress(f"dem sample: {sampled} vertices")
+        write.execute(
+            "INSERT OR REPLACE INTO geometry_meta (key, value) VALUES (?, ?)",
+            (DEM_READ_KEY["sample-dem"], dem_read_by(raster_dir)),
+        )
+        for source, key, text in _ATTRIBUTIONS:
+            if source in sources:
+                write.execute("INSERT OR REPLACE INTO geometry_meta (key, value) VALUES (?, ?)", (key, text))
+            else:
+                write.execute("DELETE FROM geometry_meta WHERE key = ?", (key,))
+        write.commit()
     finally:
+        if write.in_transaction:
+            write.rollback()
+        write.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        write.execute("PRAGMA journal_mode=DELETE")
         write.close()
     if not touched:
         return 0
