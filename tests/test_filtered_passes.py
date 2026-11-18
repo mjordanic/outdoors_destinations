@@ -4,7 +4,6 @@ file the rows the per-object Python passes gave (the reference passes below)."""
 import json
 import shutil
 import sqlite3
-import time
 from contextlib import closing
 from pathlib import Path
 
@@ -266,8 +265,10 @@ def test_a_pass_resumed_inside_its_second_scan_keeps_the_first_scans_rows(
     assert len(killed_in) >= 2
 
 
-def test_the_node_pass_is_faster_than_the_per_object_reference(tmp_path: Path) -> None:
-    # A file of many nodes of which few are wanted: the C++ filters skip the rest.
+def test_the_node_pass_handles_only_the_nodes_its_filters_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A file of many nodes of which few are wanted: the C++ filters skip the rest before Python sees them.
     osm = tmp_path / "many.osm"
     lines = ['<?xml version="1.0"?>', '<osm version="0.6">']
     for node_id in range(1, 60_001):
@@ -277,21 +278,28 @@ def test_the_node_pass_is_faster_than_the_per_object_reference(tmp_path: Path) -
     lines.append("</osm>")
     osm.write_text("\n".join(lines))
     pbf = _write_pbf(osm, tmp_path / "many.osm.pbf")
+    handled: dict[str, list[int]] = {}
+    scan = ingest._scan
+
+    def counting_scan(conn, pass_name, paths, entities, filters_for, handle, *rest):  # type: ignore[no-untyped-def]
+        def counting_handle(obj, osm_id, pending, index):  # type: ignore[no-untyped-def]
+            handled.setdefault(pass_name, []).append(osm_id)
+            handle(obj, osm_id, pending, index)
+
+        scan(conn, pass_name, paths, entities, filters_for, counting_handle, *rest)
+
     with closing(_work(tmp_path, "reference", [pbf])) as reference, closing(_work(tmp_path, "filtered", [pbf])) as filtered:
         for conn in (reference, filtered):
             _pass_relations(conn, [pbf], None)
         _reference_pass_ways(reference, [pbf], ["graded"])
         _pass_ways(filtered, [pbf], None, ["graded"])
-        start = time.perf_counter()
         _reference_pass_nodes(reference, [pbf])
-        reference_s = time.perf_counter() - start
-        start = time.perf_counter()
+        monkeypatch.setattr(ingest, "_scan", counting_scan)
         _pass_nodes(filtered, [pbf], None)
-        filtered_s = time.perf_counter() - start
         assert _tables(filtered) == _tables(reference)
         assert filtered.execute("SELECT count(*) FROM path_nodes").fetchone() == (2,)
         assert filtered.execute("SELECT count(*) FROM amenities").fetchone() == (1,)
-    assert filtered_s < reference_s / 2, (filtered_s, reference_s)
+    assert handled == {"nodes_points": [60001], "nodes": [5, 6]}
 
 
 @pytest.mark.skipif(shutil.which("osmium") is None, reason="needs osmium-tool")
