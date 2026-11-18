@@ -22,7 +22,6 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 
 from dayhike.catalog import geometry_store_path_for
-from dayhike.db import scoped
 
 USER_AGENT = "HikesAlike (https://hikesalike.com)"
 COMMONS_API = "https://commons.wikimedia.org/w/api.php"
@@ -221,27 +220,31 @@ class CommonsClient:
         self.pause_s = pause_s
         self._next = 0.0
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with scoped(self._db()) as db:
-            db.execute("CREATE TABLE IF NOT EXISTS response (key TEXT PRIMARY KEY, body TEXT NOT NULL)")
+        self._db = sqlite3.connect(self.path)
+        self._db.execute("CREATE TABLE IF NOT EXISTS response (key TEXT PRIMARY KEY, body TEXT NOT NULL)")
+        self._db.commit()
 
     def _report(self, line: str) -> None:
         if self.progress is not None:
             self.progress(line)
 
-    def _db(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.path)
-
     def _get(self, key: str):
-        with scoped(self._db()) as db:
-            row = db.execute("SELECT body FROM response WHERE key = ?", (key,)).fetchone()
+        row = self._db.execute("SELECT body FROM response WHERE key = ?", (key,)).fetchone()
         return None if row is None else json.loads(row[0])
 
     def _put(self, key: str, value: object) -> None:
-        with scoped(self._db()) as db:
-            db.execute(
-                "INSERT OR REPLACE INTO response (key, body) VALUES (?, ?)",
-                (key, json.dumps(value, ensure_ascii=False)),
-            )
+        self._db.execute(
+            "INSERT OR REPLACE INTO response (key, body) VALUES (?, ?)",
+            (key, json.dumps(value, ensure_ascii=False)),
+        )
+
+    def commit(self) -> None:
+        """Write the answers held so far; a batch of API answers is one commit, not one per answer."""
+        self._db.commit()
+
+    def close(self) -> None:
+        self.commit()
+        self._db.close()
 
     def _fetch(self, url: str) -> dict:
         error: Exception | None = None
@@ -250,9 +253,11 @@ class CommonsClient:
             if wait > 0:
                 time.sleep(wait)
             request = Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
+            # One request at a time, each starting at least ``pause_s`` after the one before started:
+            # a slow answer already was the wait, so the period is the longer of pause and latency.
+            self._next = time.monotonic() + self.pause_s
             try:
                 payload = self.opener(request)
-                self._next = time.monotonic() + self.pause_s
                 data = json.loads(payload)
             except (OSError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
                 error = exc
@@ -284,6 +289,7 @@ class CommonsClient:
                 name = normalized.get(_norm_title(title), _norm_title(title))
                 page = found.get(redirects.get(name, name))
                 self._put(f"file:{_norm_title(title)}", page if page is not None else {"title": title, "missing": True})
+            self.commit()
             done += len(batch)
             if number % PROGRESS_EVERY == 0 or done == len(missing):
                 self._report(f"photos: {label} {done}/{len(missing)}")
@@ -299,6 +305,7 @@ class CommonsClient:
             entities = self._fetch(url).get("entities") or {}
             for qid in batch:
                 self._put(f"entity:{qid}", _p18(entities.get(qid) or {}))
+            self.commit()
             done += len(batch)
             if number % PROGRESS_EVERY == 0 or done == len(missing):
                 self._report(f"photos: entities {done}/{len(missing)}")
@@ -327,6 +334,7 @@ class CommonsClient:
             members = self._fetch(url).get("query", {}).get("categorymembers") or []
             cached = [_norm_title(str(member.get("title") or "")) for member in members if member.get("title")]
             self._put(f"category:{title}", cached)
+            self.commit()
         return list(cached)
 
     def warm(self, tags_list: Iterable[dict]) -> None:
@@ -424,36 +432,138 @@ def _p18(entity: dict) -> str:
     return _as_file(value) if isinstance(value, str) and value else ""
 
 
-def _poi_index(geo: sqlite3.Connection) -> dict[tuple, dict]:
-    index: dict[tuple, dict] = {}
-    rows = geo.execute(
+def _poi_rows(geo: sqlite3.Connection) -> list[tuple[tuple, float, float, dict]]:
+    """Each named amenity with a Commons or Wikidata link: its index key, position and tags."""
+    rows = []
+    cursor = geo.execute(
         "SELECT latitude, longitude, kind, tags FROM amenities "
         "WHERE tags LIKE '%\"wikimedia_commons\"%' OR tags LIKE '%\"wikidata\"%'"
     )
-    for lat, lon, kind, text in rows:
+    for lat, lon, kind, text in cursor:
         tags = json.loads(text)
         name = tags.get("name")
         if not name or not (tags.get("wikimedia_commons") or tags.get("wikidata")):
             continue
-        index[(kind, round(float(lat), 5), round(float(lon), 5), name)] = tags
-    return index
+        rows.append(((kind, round(float(lat), 5), round(float(lon), 5), name), float(lat), float(lon), tags))
+    return rows
 
 
-def _photos_on_hike(blob: bytes, index: dict[tuple, dict], client: CommonsClient) -> list[dict]:
-    pois = []
+def _poi_index(geo: sqlite3.Connection) -> dict[tuple, dict]:
+    return {key: tags for key, _lat, _lon, tags in _poi_rows(geo)}
+
+
+def _hike_poi_keys(blob: bytes) -> list[tuple]:
+    """The keys of the named POIs on one hike's ``points``, each once, in walk order."""
+    keys = []
     seen: set[tuple] = set()
     for point in json.loads(zlib.decompress(blob)):
         if len(point) < 7 or not point[6]:
             continue
         key = (point[0], round(float(point[2]), 5), round(float(point[3]), 5), point[6])
-        if key in seen:
-            continue
-        tags = index.get(key)
-        if tags is None:
-            continue
-        seen.add(key)
-        pois.append(tags)
-    return photos_for_hike(pois, client.one)
+        if key not in seen:
+            seen.add(key)
+            keys.append(key)
+    return keys
+
+
+def _photos_on_hike(keys: Iterable[tuple], index: dict[tuple, dict], client: CommonsClient) -> list[dict]:
+    return photos_for_hike([index[key] for key in keys if key in index], client.one)
+
+
+def _pois_near_hikes(catalog_path: Path | str, geo_path: Path, rows: list) -> set[tuple]:
+    """Keys of the POIs that can be on a hike: a superset of what ``export_serving`` lists.
+
+    It asks the serving export's own questions (a Corridor of 100 m, 2 km for a
+    Peak, the Trailhead's surroundings) but of the linked POIs alone, so a
+    hundred-thousand-hike Catalog costs minutes, not the export. The Trailhead
+    keeps the nearest few of all parking, so here it keeps every linked one
+    near it: a superset is all a warm cache needs.
+
+    The GeometryStore is opened for one chunk of hikes at a time and closed
+    again before the chunk is computed on: ``warm_photos`` runs beside
+    sample-dem and sample-landcover, which switch that file's journal mode and
+    need it unlocked, and holds no connection to it while it works or waits.
+    """
+    import numpy as np
+
+    from dayhike.serving import (
+        _HIKE_CHUNK,
+        _Kinds,
+        _line_points,
+        _vertices,
+    )
+    from dayhike.similarity import ALONG_KINDS, CORRIDOR_M, PEAKS_AROUND_M, TRAILHEAD_M, AmenityPoints
+    from dayhike.trailgraph import TRAILHEAD_KINDS
+
+    def kinds_of(wanted: tuple[str, ...]) -> _Kinds:
+        chosen = [(number, row) for number, row in enumerate(rows) if row[0][0] in wanted]
+        return _Kinds(
+            points=AmenityPoints([(row[1], row[2]) for _, row in chosen], [row[0][0] for _, row in chosen]),
+            rowids=np.array([number for number, _ in chosen], dtype=np.int64),
+        )
+
+    along = ((kinds_of(tuple(k for k in ALONG_KINDS if k != "peak")), CORRIDOR_M), (kinds_of(("peak",)), PEAKS_AROUND_M))
+    trailhead = kinds_of(TRAILHEAD_KINDS)
+    catalog = sqlite3.connect(f"file:{catalog_path}?mode=ro", uri=True)
+    try:
+        hikes = catalog.execute(
+            "SELECT d.id, t.latitude, t.longitude FROM dayhikes d JOIN trailheads t ON t.dayhike_id = d.id ORDER BY d.id"
+        ).fetchall()
+    finally:
+        catalog.close()
+    found: set[int] = set()
+    for start in range(0, len(hikes), _HIKE_CHUNK):
+        chunk = hikes[start : start + _HIKE_CHUNK]
+        geo = sqlite3.connect(f"file:{geo_path}?mode=ro", uri=True)
+        try:
+            walks = _vertices(geo, chunk[0][0], chunk[-1][0])
+        finally:
+            geo.close()
+        for dayhike_id, th_lat, th_lon in chunk:
+            walk = walks.get(dayhike_id)
+            if walk is not None and len(walk[0]) >= 2:
+                lat, lon, _ele = walk
+                found.update(point[6] for kinds, radius in along for point in _line_points(kinds, lat, lon, radius))
+            if len(trailhead.rowids):
+                (hits,) = trailhead.points.tree.query_radius(
+                    np.radians([[th_lat, th_lon]]), r=TRAILHEAD_M / 6_371_008.8
+                )
+                found.update(int(trailhead.rowids[hit]) for hit in hits if hit < len(trailhead.rowids))
+    return {rows[number][0] for number in found}
+
+
+def warm_photos(
+    catalog_path: Path | str,
+    cache_path: Path | str,
+    *,
+    opener: Opener | None = None,
+    pause_s: float = PAUSE_S,
+    progress: Progress | None = None,
+) -> int:
+    """Fill the cache with the Commons answers for POIs on a hike. Returns how many POIs it warmed.
+
+    Reads the Catalog and its GeometryStore only, so it runs right after
+    ingest, beside the CPU steps. ``export_photos`` on the same cache then
+    needs no request.
+    """
+    geo_path = geometry_store_path_for(catalog_path)
+    if not geo_path.is_file():
+        raise FileNotFoundError(geo_path)
+    geo = sqlite3.connect(f"file:{geo_path}?mode=ro", uri=True)
+    try:
+        rows = _poi_rows(geo)
+    finally:
+        geo.close()
+    keys = _pois_near_hikes(catalog_path, geo_path, rows)
+    tags = [row[3] for row in rows if row[0] in keys]
+    if progress is not None:
+        progress(f"photos: warming {len(tags)} of {len(rows)} POIs, the ones on a hike")
+    client = CommonsClient(cache_path, opener, pause_s=pause_s, progress=progress)
+    try:
+        client.warm(tags)
+    finally:
+        client.close()
+    return len(tags)
 
 
 def export_photos(
@@ -467,8 +577,9 @@ def export_photos(
 ) -> int:
     """Write each hike's photos into ``out_dir/hikes.sqlite``. Returns how many hikes got one.
 
-    ``cache_path`` holds the API answers. An export with no ``photos`` column
-    gains one; a hike with nothing free stores NULL, which the page ignores.
+    ``cache_path`` holds the API answers; ``warm_photos`` may have filled it.
+    An export with no ``photos`` column gains one; a hike with nothing free
+    stores NULL, which the page ignores. Only POIs a hike lists are asked for.
     """
     geo_path = geometry_store_path_for(catalog_path)
     hikes_path = Path(out_dir) / "hikes.sqlite"
@@ -481,18 +592,21 @@ def export_photos(
         index = _poi_index(geo)
     finally:
         geo.close()
-    client = CommonsClient(cache_path, opener, pause_s=pause_s, progress=progress)
-    client.warm(index.values())
     db = sqlite3.connect(hikes_path)
+    client = CommonsClient(cache_path, opener, pause_s=pause_s, progress=progress)
     try:
         columns = {row[1] for row in db.execute("PRAGMA table_info(hikes)")}
         if "photos" not in columns:
             db.execute("ALTER TABLE hikes ADD COLUMN photos TEXT")
-        rows = db.execute("SELECT id, points FROM hikes").fetchall()
+        rows = [(hike_id, _hike_poi_keys(blob)) for hike_id, blob in db.execute("SELECT id, points FROM hikes")]
+        used = dict.fromkeys(key for _id, keys in rows for key in keys if key in index)
+        if progress is not None:
+            progress(f"photos: {len(used)} of {len(index)} POIs are on a hike")
+        client.warm(index[key] for key in used)
         updates = []
         count = 0
-        for done, (hike_id, blob) in enumerate(rows, start=1):
-            photos = _photos_on_hike(blob, index, client)
+        for done, (hike_id, keys) in enumerate(rows, start=1):
+            photos = _photos_on_hike(keys, index, client)
             updates.append((json.dumps(photos, ensure_ascii=False) if photos else None, hike_id))
             count += bool(photos)
             if progress is not None and done % 2000 == 0:
@@ -500,6 +614,7 @@ def export_photos(
         db.executemany("UPDATE hikes SET photos = ? WHERE id = ?", updates)
         db.commit()
     finally:
+        client.close()
         db.close()
     if progress is not None:
         progress(f"photos: {count} DayHikes with a photo")

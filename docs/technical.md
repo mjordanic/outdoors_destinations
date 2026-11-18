@@ -2719,7 +2719,8 @@ at the rebuild.
    uv run dayhike sample-trailgraph             # not yet timed on Europe
    uv run dayhike build-similarity              # 19 min
    uv run dayhike export-serving --valhalla-tiles data/valhalla/highways-eu --valhalla-url http://127.0.0.1:8003  # 22 min
-   uv run dayhike export-photos   # after export-serving; cache data/commons-cache.sqlite, so a rerun fetches only new titles
+   uv run dayhike export-photos --warm-only   # optional, right after ingest, beside the CPU steps: fills the cache for the POIs on a hike (about 5-30% of the linked ones); needs the Catalog only
+   uv run dayhike export-photos   # after export-serving; cache data/commons-cache.sqlite, so a rerun fetches only new titles (none after --warm-only)
    # Liechtenstein (172 hikes, 65 linked POIs) is the scale check: about 1.8 s per Wikimedia request.
    # Europe (~162,000 hikes), if linked like that: about 1 hour for Wikidata images, plus about 9 hours
    # for Commons categories that have no free Wikidata image (one request each). The cache makes a rerun skip those.

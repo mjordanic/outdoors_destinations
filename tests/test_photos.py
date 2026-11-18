@@ -10,7 +10,7 @@ import json
 import sqlite3
 import zlib
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote_plus, urlparse
 
 from dayhike import build_catalog, build_similarity
 from dayhike.catalog import geometry_store_path_for
@@ -391,3 +391,241 @@ def test_the_export_photos_command_succeeds_after_adding_photos(tmp_path: Path, 
 
     assert code == 0
     assert "3 DayHikes with a photo" in capsys.readouterr().out
+
+
+def _fixture_export(tmp_path: Path, extra_far_poi: bool = True) -> tuple[Path, Path, dict[str, dict]]:
+    """A built fixture Catalog and its serving export, two on-hike POIs and one far from every hike tagged."""
+    path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, path)
+    build_similarity(path, tmp_path / "dem")
+    out = export_serving(path, tmp_path / "web")
+    geo = sqlite3.connect(geometry_store_path_for(path))
+    for key, text in geo.execute("SELECT osm_key, tags FROM amenities").fetchall():
+        tags = json.loads(text)
+        if tags.get("name") == "Ridge Peak":
+            tags["wikimedia_commons"] = "File:Ridge Peak.jpg"
+        elif tags.get("name") == "Ridge View":
+            tags["wikidata"] = "Q42"
+        else:
+            continue
+        geo.execute("UPDATE amenities SET tags = ? WHERE osm_key = ?", (json.dumps(tags), key))
+    pages = {
+        "File:Ridge Peak.jpg": _page("File:Ridge Peak.jpg", "CC BY-SA 4.0"),
+        "Q42": {"claims": {"P18": [{"mainsnak": {"datavalue": {"value": "Ridge View.jpg"}}}]}},
+        "File:Ridge View.jpg": _page("File:Ridge View.jpg", "CC0"),
+    }
+    if extra_far_poi:
+        geo.execute(
+            "INSERT INTO amenities (osm_key, kind, latitude, longitude, tags) VALUES (?, ?, ?, ?, ?)",
+            ("n999", "peak", 10.0, 10.0, json.dumps({"name": "Far Peak", "wikimedia_commons": "File:Far Peak.jpg"})),
+        )
+        pages["File:Far Peak.jpg"] = _page("File:Far Peak.jpg", "CC0")
+    geo.commit()
+    geo.close()
+    return path, out, pages
+
+
+def _asked(opener) -> str:
+    return " ".join(unquote_plus(request.full_url) for request in opener.calls)
+
+
+def _no_network(request) -> bytes:
+    raise AssertionError(f"network used: {request.full_url}")
+
+
+def _photos_column(out: Path) -> list[tuple]:
+    db = sqlite3.connect(out / "hikes.sqlite")
+    try:
+        return db.execute("SELECT id, photos FROM hikes ORDER BY id").fetchall()
+    finally:
+        db.close()
+
+
+def test_warm_only_asks_for_pois_on_a_hike_and_the_export_then_needs_no_network(tmp_path: Path) -> None:
+    from dayhike.photos import warm_photos
+
+    path, out, pages = _fixture_export(tmp_path)
+    cache = tmp_path / "cache.sqlite"
+    opener = _opener(pages)
+
+    warmed = warm_photos(path, cache, opener=opener, pause_s=0)
+
+    assert warmed == 2
+    assert "Ridge Peak.jpg" in _asked(opener)
+    assert "Far" not in _asked(opener)
+    export_photos(path, out, cache, opener=_no_network, pause_s=0)
+    assert any(photos for _id, photos in _photos_column(out))
+
+
+def test_export_after_warm_only_equals_a_full_warm_on_the_same_cache(tmp_path: Path) -> None:
+    from dayhike.photos import _poi_index, warm_photos
+
+    path, out, pages = _fixture_export(tmp_path)
+    full_cache = tmp_path / "full.sqlite"
+    geo = sqlite3.connect(geometry_store_path_for(path))
+    CommonsClient(full_cache, _opener(pages), pause_s=0).warm(_poi_index(geo).values())  # the old: warm every POI
+    geo.close()
+    export_photos(path, out, full_cache, opener=_no_network, pause_s=0)
+    full = _photos_column(out)
+    assert any(photos for _id, photos in full)
+
+    warm_photos(path, tmp_path / "new.sqlite", opener=_opener(pages), pause_s=0)
+    export_photos(path, out, tmp_path / "new.sqlite", opener=_no_network, pause_s=0)
+
+    assert _photos_column(out) == full
+
+
+def test_export_photos_warms_only_the_pois_its_hikes_show(tmp_path: Path) -> None:
+    path, out, pages = _fixture_export(tmp_path)
+    opener = _opener(pages)
+
+    export_photos(path, out, tmp_path / "cache.sqlite", opener=opener, pause_s=0)
+
+    asked = _asked(opener)
+    assert "Ridge Peak.jpg" in asked
+    assert "Far Peak" not in asked
+
+
+def test_warm_only_reports_progress(tmp_path: Path) -> None:
+    from dayhike.photos import warm_photos
+
+    path, _out, pages = _fixture_export(tmp_path)
+    lines: list[str] = []
+
+    warm_photos(path, tmp_path / "cache.sqlite", opener=_opener(pages), pause_s=0, progress=lines.append)
+
+    assert any(line.startswith("photos: warming 2 of 3 POIs") for line in lines)
+    assert "photos: files 2/2" in lines
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 100.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def test_the_pause_counts_from_request_start_so_the_period_is_the_longer_of_pause_and_latency(
+    tmp_path: Path, monkeypatch
+) -> None:
+    clock = _Clock()
+    monkeypatch.setattr("dayhike.photos.time", clock)
+    starts: list[float] = []
+    pages = {f"File:{n}.jpg": _page(f"File:{n}.jpg", "CC0") for n in range(4)}
+    inner = _opener(pages)
+
+    def slow(request) -> bytes:
+        starts.append(clock.now)
+        clock.now += 1.5  # latency
+        return inner(request)
+
+    client = CommonsClient(tmp_path / "cache.sqlite", slow, pause_s=1.0)
+    for n in range(4):
+        client.files([f"File:{n}.jpg"])
+
+    assert [round(b - a, 3) for a, b in zip(starts, starts[1:])] == [1.5, 1.5, 1.5]  # was 2.5: latency + pause
+    fast_starts: list[float] = []
+
+    def quick(request) -> bytes:
+        fast_starts.append(clock.now)
+        clock.now += 0.2
+        return inner(request)
+
+    client = CommonsClient(tmp_path / "cache2.sqlite", quick, pause_s=1.0)
+    for n in range(3):
+        client.files([f"File:{n}.jpg"])
+
+    assert [round(b - a, 3) for a, b in zip(fast_starts, fast_starts[1:])] == [1.0, 1.0]
+
+
+def test_one_cache_connection_serves_every_read_and_write(tmp_path: Path, monkeypatch) -> None:
+    opened: list[object] = []
+    real = sqlite3.connect
+
+    def counting(*args, **kwargs):
+        opened.append(args)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr("dayhike.photos.sqlite3.connect", counting)
+    pages = {f"File:{n}.jpg": _page(f"File:{n}.jpg", "CC0") for n in range(3)}
+    client = CommonsClient(tmp_path / "cache.sqlite", _opener(pages), pause_s=0)
+
+    client.warm([{"wikimedia_commons": f"File:{n}.jpg"} for n in range(3)])
+    client.one({"wikimedia_commons": "File:0.jpg"})
+    client.close()
+
+    assert len(opened) == 1
+    again = CommonsClient(tmp_path / "cache.sqlite", _no_network, pause_s=0)  # the batch was committed
+    assert again.one({"wikimedia_commons": "File:2.jpg"}) is not None
+
+
+def test_the_warm_only_command_runs_without_a_serving_export(tmp_path: Path, monkeypatch, capsys) -> None:
+    from dayhike.cli import main
+
+    seen: dict = {}
+
+    def fake(catalog, cache, progress):
+        seen.update(catalog=catalog, cache=cache)
+        return 5
+
+    monkeypatch.setattr("dayhike.photos.warm_photos", fake)
+
+    code = main(["export-photos", "--warm-only", "--catalog", str(tmp_path / "c.sqlite"), "--cache", str(tmp_path / "k.sqlite")])
+
+    assert code == 0
+    assert seen == {"catalog": tmp_path / "c.sqlite", "cache": tmp_path / "k.sqlite"}
+    assert "5 POIs warmed" in capsys.readouterr().out
+
+
+def test_warm_only_never_holds_the_geometry_store_open_while_it_computes_or_asks(tmp_path: Path, monkeypatch) -> None:
+    """sample-dem and sample-landcover switch the store's journal mode beside warm-only, which needs it unlocked."""
+    from dayhike import serving
+    from dayhike.photos import warm_photos
+
+    path, _out, pages = _fixture_export(tmp_path)
+    geo_file = str(geometry_store_path_for(path))
+    open_now: list[sqlite3.Connection] = []
+    opened = 0
+
+    class Tracked(sqlite3.Connection):
+        def close(self) -> None:
+            if self in open_now:
+                open_now.remove(self)
+            super().close()
+
+    real = sqlite3.connect
+
+    def tracking(database, *args, **kwargs):
+        nonlocal opened
+        connection = real(database, *args, factory=Tracked, **kwargs)
+        if geo_file in str(database):
+            opened += 1
+            open_now.append(connection)
+        return connection
+
+    monkeypatch.setattr("dayhike.photos.sqlite3.connect", tracking)
+    monkeypatch.setattr(serving, "_HIKE_CHUNK", 1)  # several chunks, so a connection kept between them shows
+    held_while_computing: list[int] = []
+    real_points = serving._line_points
+
+    def watching(*args, **kwargs):
+        held_while_computing.append(len(open_now))
+        return real_points(*args, **kwargs)
+
+    monkeypatch.setattr(serving, "_line_points", watching)
+    inner = _opener(pages)
+    held_while_asking: list[int] = []
+
+    def opener(request) -> bytes:
+        held_while_asking.append(len(open_now))
+        return inner(request)
+
+    warm_photos(path, tmp_path / "cache.sqlite", opener=opener, pause_s=0)
+
+    assert held_while_computing and set(held_while_computing) == {0}
+    assert held_while_asking and set(held_while_asking) == {0}
+    assert opened > 2  # one short read per chunk, not one connection across the whole pass
