@@ -188,9 +188,9 @@ class StepLedger:
     ``done(step, inputs)`` is true when the step's marker holds the same inputs
     (its arguments and the raster or dump files it reads), the same code version
     and the same markers of the steps it reads from (``STEP_READS``). The marker
-    is removed by ``clear`` before the step runs and written by ``mark`` after it succeeds; ``ingest`` clears every other
-    marker, since it replaces the files they describe. Files changed by anything
-    but these steps are not noticed."""
+    is removed by ``clear`` before the step runs and written by ``mark`` after it
+    succeeds; ``ingest`` clears every other marker, since it replaces the files
+    they describe. Files changed by anything but these steps are not noticed."""
 
     def __init__(self, catalog_path: Path | str) -> None:
         catalog_path = Path(catalog_path)
