@@ -1126,6 +1126,7 @@ def _run_step(args: argparse.Namespace, argv: list[str] | None) -> int:
     if args.resume and ledger.done(args.command, _step_inputs(args)):
         _progress(f"{args.command}: finished before with the same inputs, skipped (--resume)")
         return 0
+    ledger.clear(args.command)
     _STEP_RUNNING.append(args.command)
     try:
         code = main(argv)

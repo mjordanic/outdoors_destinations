@@ -188,7 +188,7 @@ class StepLedger:
     ``done(step, inputs)`` is true when the step's marker holds the same inputs
     (its arguments and the raster or dump files it reads), the same code version
     and the same markers of the steps it reads from (``STEP_READS``). The marker
-    is written by ``mark`` after the step succeeds; ``ingest`` clears every other
+    is removed by ``clear`` before the step runs and written by ``mark`` after it succeeds; ``ingest`` clears every other
     marker, since it replaces the files they describe. Files changed by anything
     but these steps are not noticed."""
 
@@ -212,6 +212,9 @@ class StepLedger:
     def done(self, step: str, inputs: Mapping) -> bool:
         marker = self._read(step)
         return marker is not None and marker.get("key") == self._key(step, inputs)
+
+    def clear(self, step: str) -> None:
+        self._marker(step).unlink(missing_ok=True)
 
     def mark(self, step: str, inputs: Mapping) -> None:
         if step == "ingest":

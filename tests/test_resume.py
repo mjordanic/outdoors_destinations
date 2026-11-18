@@ -264,6 +264,37 @@ def test_export_serving_resume_ignores_later_steps_writing_into_its_output(
     assert main([*argv[:-2], str(other), "--resume"]) == 0 and ran == [1, 1]  # another output folder
 
 
+def test_a_finished_step_that_fails_when_run_again_is_not_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dayhike.cli import main
+
+    catalog = tmp_path / "catalog.sqlite"
+    catalog.write_bytes(b"")
+    (tmp_path / "CL").mkdir()
+    runs: list[str] = []
+
+    def climate(*args, **kwargs):
+        runs.append("climate")
+        if runs.count("climate") == 2:
+            raise RuntimeError("killed")
+        return 0
+
+    monkeypatch.setattr("dayhike.cli._sample_climate", climate)
+    monkeypatch.setattr("dayhike.cli._build_similarity", lambda *a, **k: runs.append("similarity") or 0)
+    climate_argv = ["sample-climate", "--catalog", str(catalog), "--climate", str(tmp_path / "CL")]
+    similarity_argv = ["build-similarity", "--catalog", str(catalog), "--dem", str(tmp_path / "CL"),
+                       "--landcover", str(tmp_path / "CL")]
+    assert main(climate_argv) == 0
+    assert main(similarity_argv) == 0
+    with pytest.raises(RuntimeError):
+        main(climate_argv)
+
+    assert main([*climate_argv, "--resume"]) == 0
+    assert main([*similarity_argv, "--resume"]) == 0
+    assert runs == ["climate", "similarity", "climate", "climate", "similarity"]
+
+
 def test_a_step_that_failed_leaves_no_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from dayhike.cli import main
 
