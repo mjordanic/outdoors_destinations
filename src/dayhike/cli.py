@@ -482,6 +482,12 @@ def main(argv: list[str] | None = None) -> int:
         default=Path("data/commons-cache.sqlite"),
         help="Wikimedia API responses; a later run fetches only what this lacks",
     )
+    photos.add_argument(
+        "--warm-only",
+        action="store_true",
+        help="Only fill --cache with the answers for POIs on a hike, from the Catalog alone (run it right after ingest, "
+        "beside the CPU steps); --out is not read",
+    )
     osm_download = subparsers.add_parser(
         "export-osm-download",
         help="Write the ODbL download of the OpenStreetMap part of a serving export's hikes (hikes-osm.sqlite and a README)",
@@ -580,8 +586,16 @@ def main(argv: list[str] | None = None) -> int:
         print(export_landmarks(args.out, geonames))
         return 0
     if args.command == "export-photos":
-        from dayhike.photos import export_photos
+        from dayhike.photos import export_photos, warm_photos
 
+        if args.warm_only:
+            try:
+                warmed = warm_photos(args.catalog, args.cache, progress=lambda line: print(line, flush=True))
+            except FileNotFoundError as exc:
+                print(exc, file=sys.stderr)
+                return 1
+            print(f"{warmed} POIs warmed")
+            return 0
         try:
             count = export_photos(
                 args.catalog, args.out, args.cache, progress=lambda line: print(line, flush=True)
