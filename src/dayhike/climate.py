@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from dayhike.catalog import CLIMATE_FEATURE_NAMES, ensure_column, geometry_store_path_for, remove_similarity
+from dayhike.db import writer
 from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS
 from dayhike.download import download as _download
 
@@ -250,7 +251,7 @@ def _raster_cells(
 
 def _drop_vertex_climate(store_path: Path) -> None:
     """Drop the per-vertex climate older versions stored; run VACUUM to free the disk."""
-    store = sqlite3.connect(store_path)
+    store = writer(store_path)
     try:
         store.execute("DROP TABLE IF EXISTS vertex_climate")
         store.execute("DELETE FROM geometry_meta WHERE key = 'worldclim_attribution'")
@@ -267,7 +268,7 @@ def _write_catalog_climate(
     catalog_path: Path, hike_ids: np.ndarray, means: np.ndarray
 ) -> None:
     """Replace every hike's climate: covered hikes get means, the rest NULL."""
-    catalog = sqlite3.connect(catalog_path)
+    catalog = writer(catalog_path)
     try:
         for name in CLIMATE_FEATURE_NAMES:
             ensure_column(catalog, "feature_vectors", name, "REAL")

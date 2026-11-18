@@ -68,6 +68,7 @@ import zlib
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
+from functools import partial
 from pathlib import Path
 from urllib.request import urlretrieve as default_urlretrieve
 
@@ -101,6 +102,7 @@ from dayhike.dem import (
 from dayhike.extracts import UrlRetrieve
 from dayhike.loops import LOOP_SEEDS, LOOP_TRAILHEADS, LoopTarget, find_loops
 from dayhike.npy import map_npy
+from dayhike.parallel import parallel_iter
 from dayhike.regions import Region
 from dayhike.similarity import (
     ALONG_KINDS,
@@ -758,41 +760,13 @@ def _write_hikes(
             " source TEXT NOT NULL, source_ref TEXT NOT NULL, source_url TEXT, commons_contributors INTEGER);"
             "CREATE VIRTUAL TABLE hike_boxes USING rtree(id, south, north, west, east)"
         )
-        for start in range(0, len(hikes), _HIKE_CHUNK):
-            chunk = hikes[start : start + _HIKE_CHUNK]
-            walks = _vertices(geo, chunk[0][0], chunk[-1][0])
-            rows, boxes = [], []
-            for dayhike_id, name, name_origin, sac_scale, th_lat, th_lon, *built in chunk:
-                points = _trailhead_points(trailhead_kinds, th_lat, th_lon)
-                line = elevation = walk_m = climb_m = descent_m = None
-                walk = walks.get(dayhike_id)
-                if walk is not None and len(walk[0]) >= 2:
-                    lat, lon, ele = walk
-                    walk_m = float(_step_m(lat, lon).sum())
-                    kept_lat, kept_lon = simplify_line(lat, lon, LINE_TOLERANCE_M)
-                    line = encode_polyline(kept_lat, kept_lon)
-                    boxes.append((dayhike_id, kept_lat.min(), kept_lat.max(), kept_lon.min(), kept_lon.max()))
-                    smooth = (
-                        "copernicus" in sources
-                        if dem_of is None
-                        else COPERNICUS.register_id in dem_of.get(dayhike_id, "").split(",")
-                    )
-                    profile = drawn_profile(lat, lon, ele, smooth=smooth)
-                    if profile is not None:
-                        elevation = np.round(profile).astype("<i2").tobytes()
-                        climb_m, descent_m = (round(v) for v in climb_and_descent(lat, lon, ele))
-                    along = [p for kinds, radius in line_kinds for p in _line_points(kinds, lat, lon, radius)]
-                    points = sorted(along, key=lambda point: point[4]) + points
-                rows.append(
-                    (dayhike_id, name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, *built, points)
-                )
-            _name_points(geo, rows)
+        starts = range(0, len(hikes), _HIKE_CHUNK)
+        # Each chunk of hikes is built from its own read of the GeometryStore, in a worker when
+        # DAYHIKE_WORKERS says so (ADR-0044); the rows are written here, in chunk order.
+        build = partial(_hike_chunk, geometry_store_path_for(catalog_path), hikes, line_kinds, trailhead_kinds, sources, dem_of)
+        for (rows, boxes), start in zip(parallel_iter(build, starts), starts):
             db.executemany(
-                "INSERT INTO hikes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [
-                    (*row[:9], zlib.compress(json.dumps(row[-1], ensure_ascii=False).encode()), *row[9:16])
-                    for row in rows
-                ],
+                "INSERT INTO hikes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows
             )
             db.executemany("INSERT INTO hike_boxes VALUES (?, ?, ?, ?, ?)", boxes)
             if progress is not None:
@@ -802,6 +776,56 @@ def _write_hikes(
         geo.close()
         db.close()
     return sources
+
+
+def _hike_chunk(
+    geo_path: Path,
+    hikes: list[tuple],
+    line_kinds: tuple[tuple[_Kinds, float], ...],
+    trailhead_kinds: Mapping[str, _Kinds],
+    sources: Mapping[str, str],
+    dem_of: Mapping[int, str] | None,
+    start: int,
+) -> tuple[list[tuple], list[tuple]]:
+    """The ``hikes`` rows and ``hike_boxes`` rows of the chunk of ``hikes`` at ``start``,
+    as ``_write_hikes`` inserts them. It opens its own GeometryStore connection, so a
+    forked worker never uses one its parent opened."""
+    chunk = hikes[start : start + _HIKE_CHUNK]
+    geo = sqlite3.connect(f"file:{geo_path}?mode=ro", uri=True)
+    try:
+        walks = _vertices(geo, chunk[0][0], chunk[-1][0])
+        rows, boxes = [], []
+        for dayhike_id, name, name_origin, sac_scale, th_lat, th_lon, *built in chunk:
+            points = _trailhead_points(trailhead_kinds, th_lat, th_lon)
+            line = elevation = walk_m = climb_m = descent_m = None
+            walk = walks.get(dayhike_id)
+            if walk is not None and len(walk[0]) >= 2:
+                lat, lon, ele = walk
+                walk_m = float(_step_m(lat, lon).sum())
+                kept_lat, kept_lon = simplify_line(lat, lon, LINE_TOLERANCE_M)
+                line = encode_polyline(kept_lat, kept_lon)
+                boxes.append((dayhike_id, kept_lat.min(), kept_lat.max(), kept_lon.min(), kept_lon.max()))
+                smooth = (
+                    "copernicus" in sources
+                    if dem_of is None
+                    else COPERNICUS.register_id in dem_of.get(dayhike_id, "").split(",")
+                )
+                profile = drawn_profile(lat, lon, ele, smooth=smooth)
+                if profile is not None:
+                    elevation = np.round(profile).astype("<i2").tobytes()
+                    climb_m, descent_m = (round(v) for v in climb_and_descent(lat, lon, ele))
+                along = [p for kinds, radius in line_kinds for p in _line_points(kinds, lat, lon, radius)]
+                points = sorted(along, key=lambda point: point[4]) + points
+            rows.append(
+                (dayhike_id, name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, *built, points)
+            )
+        _name_points(geo, rows)
+    finally:
+        geo.close()
+    return (
+        [(*row[:9], zlib.compress(json.dumps(row[-1], ensure_ascii=False).encode()), *row[9:16]) for row in rows],
+        boxes,
+    )
 
 
 def external_sources(source_ids: set[str]) -> dict[str, dict[str, str]]:

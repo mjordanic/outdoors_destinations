@@ -558,6 +558,7 @@ def build_catalog(
     external_dir: Path | str | None = None,
     paths: str = "graded",
     paths_of: Mapping[Path | str, str] | None = None,
+    pass_cache: Path | str | None = None,
 ) -> Catalog:
     """Ingest OSM XML or PBF snapshot(s) into a Catalog of DayHikes.
 
@@ -592,6 +593,10 @@ def build_catalog(
     list as used is refused. ``paths`` is the level of paths in no hiking
     relation read into the TrailGraph, one of ``PATH_LEVELS`` (ADR-0065); from
     ``trails`` up the named-trail hikes are built from them too (ADR-0066).
+    ``pass_cache`` is a directory where the work file is kept as the passes over
+    the snapshot leave it, and read from there by a later build of the same
+    snapshot files, paths levels and pass code, so that build skips the passes
+    (``fresh`` reads the snapshot again and replaces it); it holds one snapshot.
     ``paths_of`` gives an input (a file or directory of ``osm_path``) a level
     of its own: a Europe and US build reads Europe at ``graded`` and the US at
     ``trails``, each as a build of it alone would (ADR-0069).
@@ -634,6 +639,7 @@ def build_catalog(
         external=external_hikes,
         previous=before,
         paths=levels,
+        pass_cache=None if pass_cache is None else Path(pass_cache),
     )
     emit_progress(progress, "write", str(catalog_path))
     # Each file is written under a staging name and all are renamed together once

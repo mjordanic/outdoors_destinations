@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from dayhike.catalog import EARTH_RADIUS_M, geometry_store_path_for, remove_similarity
+from dayhike.db import writer
 from dayhike.download import download as _download
 from dayhike.parallel import parallel_iter, workers
 
@@ -605,7 +606,7 @@ def sample_dem(
     touched: dict[int, set[str]] = {}
     if progress is not None:
         progress("dem sample: vertices")
-    write = sqlite3.connect(store_path)
+    write = writer(store_path)
     try:
         write.execute("PRAGMA journal_mode=WAL")
         # Hikes share vertices, so each distinct point is sampled once, in raster
@@ -735,7 +736,7 @@ def check_one_dem_source(read: Mapping[str, str]) -> None:
 
 
 def _record_dem_sources(catalog_path: Path, by_hike: dict[int, set[str]]) -> None:
-    catalog = sqlite3.connect(catalog_path)
+    catalog = writer(catalog_path)
     try:
         if "dem_source" not in {row[1] for row in catalog.execute("PRAGMA table_info(dayhikes)")}:
             catalog.execute("ALTER TABLE dayhikes ADD COLUMN dem_source TEXT")
@@ -752,7 +753,7 @@ def _refresh_catalog_elevations(
     catalog_path: Path, store_path: Path, hike_ids: set[int]
 ) -> None:
     store = sqlite3.connect(store_path)
-    catalog = sqlite3.connect(catalog_path)
+    catalog = writer(catalog_path)
     try:
         by_hike: dict[int, list[tuple[float, float, float]]] = {dayhike_id: [] for dayhike_id in hike_ids}
         ids = list(hike_ids)

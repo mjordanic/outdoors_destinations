@@ -71,7 +71,7 @@ the demo: [Web demo](#web-demo) and [docs/deploy.md](deploy.md).
 - [Origin and max hours](#4-optional-origin-and-max-hours)
 - [Pulling a real extract](#pulling-a-real-extract): [ingest](#how-ingest-runs), [NetworkHikes](#how-networkhikes-are-chosen-at-a-start), [Valhalla](#valhalla-drivetime-only)
 - [Web demo](#web-demo): [what the page does](#what-the-page-does), [what the list leaves out](#what-the-list-leaves-out), [drawn rows](#drawn-rows-redraw-and-strict-order), [Wish](#describing-a-hike-instead-of-a-seed-wish), [serving](#serving-export-and-running-it), [site pages](#site-pages-and-settings), [export](#what-the-export-holds), [API](#api), [measurements](#web-demo-measurements), [deployment](#deployment-and-the-coverage-map)
-- [Tests](#tests), [Clean rebuild](#clean-rebuild), [Python API](#python-api), [Notebooks](#notebook-walkthrough), [Attribution](#attribution)
+- [Tests](#tests), [Clean rebuild](#clean-rebuild), [rebuild runbook](#rebuild-runbook-workers-steps-at-the-same-time-resuming-and-caches), [Python API](#python-api), [Notebooks](#notebook-walkthrough), [Attribution](#attribution)
 
 ## Install
 
@@ -2726,16 +2726,18 @@ at the rebuild.
    # for Commons categories that have no free Wikidata image (one request each). The cache makes a rerun skip those.
    ```
 
-   `ingest`, `sample-dem`, `sample-landcover`, `sample-trailgraph` and
-   `build-similarity` take `--workers N` (or `DAYHIKE_WORKERS=N` for every
-   step): they run their independent work in N forked processes and write
-   the same files as with one, the default (ADR-0044). Each worker adds
-   memory, so pick N for the machine's free cores and RAM: an ingest worker
-   adds up to about 30 % of ingest's one-process peak. Ingest's destination
-   search forks its workers before the snapshot loads, from a small process,
-   so it may take more: `--dest-workers N` (or `DAYHIKE_DEST_WORKERS=N`),
-   else the `--workers` count. `sample-climate` and
-   `export-serving` run in one process whatever `DAYHIKE_WORKERS` says.
+   `ingest`, `sample-dem`, `sample-landcover`, `sample-trailgraph`,
+   `build-similarity`, `count-commons` and `export-serving` take `--workers N`
+   (or `DAYHIKE_WORKERS=N` for every step): they run their independent work in N
+   forked processes and write the same files as with one, the default
+   (ADR-0044). Each worker adds memory, so pick N for the machine's free cores
+   and RAM: an ingest worker adds up to about 30 % of ingest's one-process
+   peak. Ingest's destination search forks its workers before the snapshot
+   loads, from a small process, so it may take more: `--dest-workers N` (or
+   `DAYHIKE_DEST_WORKERS=N`), else the `--workers` count. `sample-climate`
+   runs in one process whatever `DAYHIKE_WORKERS` says.
+   Which steps may overlap, what each count costs, how to resume a stopped
+   rebuild and which caches to keep: [Rebuild runbook](#rebuild-runbook-workers-steps-at-the-same-time-resuming-and-caches).
 
    Beside the sample steps, rebuild the highway tiles ([Highway tiles](#highway-tiles-all-of-europe-small-server):
    `prepare-roads.sh`, `prepare-highways.sh`, the `build_tiles` run) and serve
@@ -2758,6 +2760,171 @@ at the rebuild.
    `osm/geofabrik-index-v1.json` from `NEW` into `REF` (same volume: instant).
    Compare every path and size against this list first; never glob over `REF`.
    Delete `catalog.snaps.npz` after a tile rebuild. Keep `SNAP` a week.
+
+## Rebuild runbook: workers, steps at the same time, resuming and caches
+
+This is the one place that says how many processes each step may use, which
+steps may run at the same time, what survives a stopped rebuild, and what a
+rebuild of the same snapshot can skip. The files come out the same whatever you
+choose (ADR-0044): worker counts and overlap change wall time and memory,
+nothing else. **You choose the worker count of each step for each rebuild.**
+Nothing in the code fixes one, and every step defaults to 1 (the one-process
+build).
+
+### Worker counts
+
+| Step | CPU-parallel work | Worker count |
+| --- | --- | --- |
+| `ingest` | relation DayHikes, built DayHikes, NetworkHike starts, destination tiles, GeometryStore rows, Twin pairs | `--workers N`; the destination tiles `--dest-workers N` (else the `--workers` count) |
+| `sample-dem`, `sample-landcover`, `sample-trailgraph` | chunks of vertices or Segments read from rasters | `--workers N` |
+| `build-similarity` | chunks of hikes measured for the facts, Twin pairs | `--workers N` |
+| `count-commons` | chunks of hikes counted against the Commons points (the dumps are parsed in one process) | `--workers N` |
+| `export-serving` | chunks of hikes: line, profile, points near the line | `--workers N` |
+| `sample-climate` | none: one process | none |
+| `fetch-*` | downloads: threads for the network, not CPU workers | none |
+
+`DAYHIKE_WORKERS=N` sets the count for every step run from the shell that
+exports it; `--workers N` on a command overrides it for that command. When
+steps need different counts, set it per command
+(`DAYHIKE_WORKERS=4 uv run dayhike export-serving ...`). A bad value (0, text)
+stops the step before it starts. Workers are forked from the step's process, so
+they share what it holds (raster paths, search trees, the snapshot) until they
+write to those pages: a worker costs part of the step's own memory, not all of
+it. On a machine that also does other work, measure a step's peak at 2 workers
+before going higher.
+
+Measured on Slovenia (2,240 hikes, 8-core Mac shared with other jobs, so
+the wall times are rough; the CPU seconds are not), `export-serving` with the
+hike chunk shortened to 200 so that every worker has chunks (the default 2,000
+gives Slovenia only two):
+
+| workers | hikes phase (first to last chunk) | whole step | user CPU | peak RSS |
+| --- | --- | --- | --- | --- |
+| develop, 1 | 48 s | 102 s | 36 s | 247 MB |
+| branch, 1 | 71 s | 116 s | 37 s | 343 MB |
+| branch, 2 | 13 s | 53 s | 34 s | 333 MB |
+| branch, 4 | 12 s | 56 s | 34 s | 207 MB |
+
+`hikes.sqlite` and every other file of the export are byte-identical to
+develop's at 1, 2 and 4 workers (`cmp`; `meta.json` equal but for
+`export_seconds`). Only the hikes phase is parallel: the TrailGraph copy, the
+landmarks and the places (about 40 s here) run in one process, so past 2
+workers a small region gains nothing. On Europe the hikes phase is the
+52 minutes of rebuild-5.
+
+### Steps at the same time
+
+```
+fetch-dem ─┐
+fetch-extracts ─► ingest ─┬► sample-dem ► sample-landcover ► sample-climate ─┐
+                          ├► sample-trailgraph ──────────────────────────────┼► build-similarity ─┐
+                          └► count-commons ──────────────────────────────────┴───────────────────┼► export-serving ► export-photos
+fetch-landcover, fetch-climate, fetch-commons: network only, beside ingest        │
+prepare-roads / prepare-highways and the Valhalla tile build ─────────────────────┘ (before export-serving)
+```
+
+- **Beside ingest**: every `fetch-*` (`fetch-dem` must finish first when
+  `ingest --dem` is used), and the highway tiles: `prepare-highways.sh` and the
+  Valhalla (Docker) tile build read only the PBF, so run them while ingest
+  makes its passes over the snapshot (the passes hold one process and little
+  memory; leave the snapshot load and the destination stage alone on a 16 GB
+  machine). In the combined Europe and US build the tile preparation took 7
+  minutes beside ingest.
+- **After ingest, at the same time**: `sample-trailgraph` (reads rasters,
+  writes only `catalog.trailgraph.sqlite`) and `count-commons` (reads the
+  GeometryStore's coordinates, writes one Catalog column) beside the
+  `sample-dem`, `sample-landcover` and `sample-climate` chain. The three sample
+  steps stay in that order: they write the same Catalog and GeometryStore
+  files. The writers (the sample steps and `count-commons`) wait for each
+  other's SQLite write lock for up to 30 minutes (`dayhike.db.BUSY_TIMEOUT_S`)
+  instead of failing with "database is locked"; each holds the lock only for
+  one transaction.
+- **After all of those**: `build-similarity`, then `export-serving`, then
+  `export-photos` (network bound, last).
+- Two memory-heavy steps at once only after measuring both: rebuild-5's steps
+  peaked at 5.6 to 7.4 GB at 2 workers.
+
+### Time per step
+
+Rebuild-5 (Europe, 2 workers) and the estimate for the Europe and US build
+(about 530,000 hikes, 255 million vertices, 8-core Mac). The last column is a
+target, not a measurement on Europe: the same steps with 4 workers and the
+overlap above, assuming they scale as `export-serving` did on Slovenia. The
+sample steps and `build-similarity` used only 1.7 cores at 2 workers in
+rebuild-5, so there is room; measure before relying on it.
+
+| Step | rebuild-5 Europe | estimate Europe and US | with overlap and more workers |
+| --- | --- | --- | --- |
+| `sample-dem` | 69 min | about 2 h | about 1 h at 4 workers |
+| `sample-landcover` | 17 min | about 30 min | about 15 min at 4 workers |
+| `sample-climate` | 3.2 min | about 6 min | same (one process) |
+| `count-commons` | 42 min (17 parsing the dumps, 23 counting) | 1 to 1.3 h | counting about 10 min at 4 workers; the parse is skipped with `--cache-dir` |
+| `sample-trailgraph` | 25 min | about 45 min | beside the sample chain: 0 on the critical path |
+| `build-similarity` | 49 min | about 1.5 h | about 1 h at 4 workers |
+| `export-serving` | 52 min | about 1.6 h | about 0.5 h at 4 workers |
+
+Run one after another these are about 8 h; with `sample-trailgraph` and
+`count-commons` beside the sample chain, and the worker counts above, the
+longest path (`sample-dem`, `sample-landcover`, `sample-climate`,
+`build-similarity`, `export-serving`) is about 3 to 4 h. Measure each step's peak
+memory and wall time at the count you choose, and keep the numbers in the
+rebuild's notes.
+
+### Resuming a stopped rebuild
+
+A rebuild that stops (a crash, a restart of the machine, a kill) carries on from
+the work it finished, in the build's own data folder (beside the Catalog, never
+a temporary directory):
+
+- **Ingest phases.** The passes over the snapshot (relations, ways, nodes) are
+  kept in the work file `catalog.sqlite.work` and resume inside a pass. After
+  them each finished phase is pickled in `catalog.sqlite.work.phases/`: the
+  relation DayHikes, then each built source in order (DayStages, NetworkHikes,
+  named trails, DestinationHikes). Run the same `dayhike ingest` command again
+  and it loads the phases it finished (`assemble: resumed phase ...`) and runs
+  the one it stopped in again from its start. A phase is loaded only when the
+  snapshot files, paths levels, DEM tiles, `--previous` starts and the source
+  code of `dayhike` are the same as when it was kept, and the phases before it
+  were loaded too. `--fresh` starts over. The phases go with the work file when
+  the build completes. The Catalog is byte-identical to an uninterrupted run's
+  (`tests/test_resume.py`; Slovenia, killed after its NetworkHikes phase: see the
+  PR).
+- **Steps.** Every step leaves a marker `catalog.sqlite.steps/STEP.json` when it
+  succeeds. With `--resume`, `ingest`, `sample-dem`, `sample-landcover`,
+  `sample-climate`, `sample-trailgraph`, `count-commons`, `build-similarity` and
+  `export-serving` are skipped when their marker holds the same arguments, the
+  same raster, dump and PBF files (names, sizes, modification times), the same
+  code version and the same markers of the steps they read from (an earlier
+  step that ran again makes the later ones run again). A step that was running
+  when the machine stopped has no marker and runs again from its start; the
+  sample steps and the other writers are written to be run again. A new
+  `ingest` replaces the Catalog and clears the markers. Without `--resume` a
+  step always runs (and leaves its marker). Files changed by anything other
+  than these steps are not noticed: delete `catalog.sqlite.steps/` to forget
+  what finished.
+- A script that rebuilds everything is therefore the same command list run
+  again with `--resume` on every step after a crash.
+
+### Caches across rebuilds of one snapshot
+
+Opt-in, both keyed so that a stale cache is never used:
+
+- `ingest --pass-cache DIR` keeps the work file as the passes leave it, and a
+  later build of the same snapshot files, paths levels, work-file schema and
+  pass code (`PASS_CACHE_VERSION` in `ingest.py`, bumped when a pass writes other
+  rows) starts from it, so the passes (about 1.6 h on Europe and US) are not
+  run again. It holds one snapshot and about the size of the work file; `--fresh`
+  reads the snapshot again and replaces it.
+- `count-commons --cache-dir DIR` keeps the parsed Commons points (`.npz`, 24
+  bytes a point), keyed by the dumps' sizes and modification times, the
+  Catalog's bounds and `POINTS_CACHE_VERSION`; the 17 minutes of parsing are
+  skipped on the next run with the same dumps and bounds.
+
+Measured on Slovenia: the passes, relation DayHikes and writes took 70 to 83 s
+without the pass cache and 43 s with it (byte-identical files, a 64 MB cache);
+`count-commons` over 124,000 synthetic Commons points took 55 s at 1 worker and
+24 s at 4 (hike chunk of 100; same Catalog bytes as develop's). The 17 minutes of
+parsing on the real dumps are not measured here: the synthetic dumps parse in 2 s.
 
 ## Python API
 
