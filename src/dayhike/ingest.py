@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import sqlite3
@@ -71,8 +72,12 @@ from dayhike.osm import (
 from dayhike.parallel import parallel_iter, parallel_map
 from dayhike.similarity import TWIN_SHARE, TWIN_STEP_M, _even_points, _step_m, twin_groups
 from dayhike.stages import day_stages, external_stages
+from dayhike.steps import PhaseStore, ingest_key, remove_phases
 
 INGEST_WORK_SCHEMA = 12
+# Bump when a pass writes other rows from the same snapshot, so work-file tables cached
+# by an earlier version (``pass_cache``) are not read.
+PASS_CACHE_VERSION = 1
 INGEST_CHECKPOINT_OBJECTS = 50_000
 INGEST_PROGRESS_EVERY_OBJECTS = 100_000
 ID_FILTER_CHUNK = 1_000_000  # ids handed to an osmium IdFilter per numpy slice
@@ -150,6 +155,7 @@ def run_ingest(
     external: Sequence[tuple[str, Sequence[ExternalHike]]] = (),
     previous: PreviousStarts | None = None,
     paths: str | Sequence[str] = "graded",
+    pass_cache: Path | None = None,
 ) -> tuple[list[DayHike], IngestReport, Path, OsmSnapshot, dict[int, _StoredWalk]]:
     # One paths level for every source, or one per source (a Europe and US build, ADR-0069).
     levels = [paths] * len(source_paths) if isinstance(paths, str) else list(paths)
@@ -162,8 +168,14 @@ def run_ingest(
     work_path = work_path_for(catalog_path)
     fingerprint = _fingerprint(source_paths, levels)
     resume = not fresh and _work_is_resumable(work_path, fingerprint)
+    cached = None if pass_cache is None else _pass_cache_path(pass_cache, fingerprint, levels)
     if not resume:
         remove_work(work_path)
+        if cached is not None and not fresh and _work_is_resumable(cached, fingerprint):
+            emit_progress(progress, "passes", f"cached {cached}")
+            shutil.copyfile(cached, work_path)
+            resume = True
+            cached = None  # already there
 
     emit_progress(progress, "filter", "starting")
     scan_paths = _scan_paths(source_paths, progress, levels) if not resume else _stored_scan_paths(
@@ -174,9 +186,12 @@ def run_ingest(
     try:
         if not resume:
             _init_work(conn, fingerprint, source_paths, scan_paths)
+        passes_done = resume and _pass_done(conn, "nodes", scan_paths)
         _pass_relations(conn, scan_paths, progress)
         _pass_ways(conn, scan_paths, progress, levels)
         _pass_nodes(conn, scan_paths, progress)
+        if cached is not None and not passes_done:
+            _save_pass_cache(conn, cached, progress)
         if destination_source in sources:
             # Before the snapshot loads: the tile search forks its workers from a small process (ADR-0067).
             search_destinations(work_path, source_paths, getattr(heights, "raster_dir", None), progress)
@@ -195,18 +210,37 @@ def run_ingest(
         amenity_index = _amenity_index(snapshot.amenities)
         named = named_points(snapshot.named_points)
         lower = _lower_start(snapshot, heights, previous)
-        walks: dict[int, _StoredWalk] = {}
-        kept, report_counts = _keep_dayhikes(
-            snapshot,
-            access_tree,
-            amenity_index,
-            _drop_reason,
-            _dayhike_from_relation,
-            named,
-            named_points(snapshot.places),
-            walks if sources or external else None,
-            lower,
+        # Each phase's result is kept beside the work file when it finishes, so a run that stops
+        # carries on after the phases it finished (dayhike.steps); a phase it stopped in runs again.
+        phases = PhaseStore(
+            work_path,
+            ingest_key(
+                fingerprint,
+                levels,
+                INGEST_WORK_SCHEMA,
+                [getattr(source, "__name__", repr(source)) for source in sources],
+                getattr(heights, "raster_dir", None),
+                previous,
+            ),
         )
+
+        def relation_hikes_phase() -> dict[str, object]:
+            stored: dict[int, _StoredWalk] = {}
+            hikes, counts = _keep_dayhikes(
+                snapshot,
+                access_tree,
+                amenity_index,
+                _drop_reason,
+                _dayhike_from_relation,
+                named,
+                named_points(snapshot.places),
+                stored if sources or external else None,
+                lower,
+            )
+            return {"kept": hikes, "counts": counts, "walks": stored}
+
+        phase = _phase(phases, "relation-hikes", relation_hikes_phase, progress)
+        kept, report_counts, walks = phase["kept"], phase["counts"], phase["walks"]
         relation_hikes = tuple(kept)
         if sources:
             emit_progress(progress, "assemble", "built DayHikes")
@@ -222,7 +256,7 @@ def run_ingest(
                 getattr(heights, "raster_dir", None),
                 work_path=work_path,
             )
-            kept += _build_hikes(conn, sources, context, amenity_index)
+            kept += _build_hikes(conn, sources, context, amenity_index, phases, progress)
         external_counts = {"added": 0, "stages": 0, "twin": 0, "duplicate": 0, "length": 0}
         if external:
             emit_progress(progress, "assemble", "external hikes")
@@ -263,6 +297,19 @@ def run_ingest(
         conn.close()
 
 
+def _phase(
+    phases: PhaseStore, name: str, compute: Callable[[], dict[str, object]], progress: Progress | None
+) -> dict[str, object]:
+    """The kept result of an ingest phase, else ``compute()``, kept."""
+    phase = phases.load(name)
+    if phase is None:
+        phase = compute()
+        phases.save(name, phase)
+        return phase
+    emit_progress(progress, "assemble", f"resumed phase {name}")
+    return phase
+
+
 def _connect_work(work_path: Path) -> sqlite3.Connection:
     """The work file, in WAL mode without a sync at each commit: a crash of
     the machine can lose the last checkpoints, but a checkpoint and the rows
@@ -280,6 +327,7 @@ def remove_work(work_path: Path) -> None:
     """The work file and its WAL side files, so a stale WAL never meets a new work file."""
     for path in (work_path, Path(f"{work_path}-wal"), Path(f"{work_path}-shm")):
         path.unlink(missing_ok=True)
+    remove_phases(work_path)
 
 
 class _Pending:
@@ -324,6 +372,32 @@ def _fingerprint(paths: Sequence[Path], levels: Sequence[str]) -> str:
             {"path": str(path.resolve()), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns, "paths": level}
         )
     return json.dumps(rows)
+
+
+def _pass_cache_path(cache_dir: Path, fingerprint: str, levels: Sequence[str]) -> Path:
+    """Where the work file of the passes is kept for the same snapshot files (size, modification
+    time), paths levels, filter text, work-file schema and pass code (``PASS_CACHE_VERSION``)."""
+    key = json.dumps(
+        [PASS_CACHE_VERSION, INGEST_WORK_SCHEMA, fingerprint, [_catalog_filters_text(level) for level in levels]]
+    )
+    return cache_dir / f"passes-{hashlib.sha256(key.encode()).hexdigest()[:16]}.work"
+
+
+def _save_pass_cache(conn: sqlite3.Connection, cached: Path, progress: Progress | None) -> None:
+    """Keep a copy of the work file, as the passes left it, in ``cached``'s directory, in place of
+    any other snapshot's. A copy that cannot be made (a full disk) is left out: it only saves time."""
+    tmp = cached.with_name(cached.name + ".writing")
+    try:
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        shutil.copyfile(conn.execute("PRAGMA database_list").fetchone()[2], tmp)
+        for old in cached.parent.glob("passes-*.work"):
+            old.unlink(missing_ok=True)
+        tmp.replace(cached)
+        emit_progress(progress, "passes", f"kept in {cached}")
+    except OSError as exc:
+        tmp.unlink(missing_ok=True)
+        emit_progress(progress, "passes", f"not kept: {exc}")
 
 
 def _work_is_resumable(work_path: Path, fingerprint: str) -> bool:
@@ -1048,19 +1122,33 @@ def _build_hikes(
     sources: Sequence[BuiltHikeSource],
     context: BuildContext,
     amenity_index,
+    phases: PhaseStore | None = None,
+    progress: Progress | None = None,
 ) -> list[DayHike]:
     """The built DayHikes of every source, a walk built twice kept once. Their
-    vertices and ways wait in the work file for the GeometryStore."""
+    vertices and ways wait in the work file for the GeometryStore. With ``phases``,
+    each source's walks and DayHikes are kept when it finishes, and a later run
+    loads them instead of building them again."""
     conn.execute(
         "CREATE TABLE IF NOT EXISTS built_walks (id INTEGER PRIMARY KEY, vertices TEXT NOT NULL, ways TEXT NOT NULL)"
     )
     conn.execute("DELETE FROM built_walks")
     built: dict[int, DayHike] = {}
-    for source in sources:
-        walks = list(source(context))
-        _add_read_ways(conn, context.snapshot, walks)
-        context = replace(context, built=(*context.built, *walks))
-        made = parallel_map(lambda walk: built_dayhike(walk, context.snapshot, amenity_index), walks)
+    for index, source in enumerate(sources):
+        name = f"source-{index}-{getattr(source, '__name__', 'source')}"
+        phase = None if phases is None else phases.load(name)
+        if phase is not None:
+            emit_progress(progress, "assemble", f"resumed phase {name}")
+            walks, made = phase["walks"], phase["made"]
+            _add_read_ways(conn, context.snapshot, walks)
+            context = replace(context, built=(*context.built, *walks))
+        else:
+            walks = list(source(context))
+            _add_read_ways(conn, context.snapshot, walks)
+            context = replace(context, built=(*context.built, *walks))
+            made = parallel_map(lambda walk: built_dayhike(walk, context.snapshot, amenity_index), walks)
+            if phases is not None:
+                phases.save(name, {"walks": walks, "made": list(made)})
         for walk, (hike, walked) in zip(walks, made):
             if hike.id in built:
                 continue

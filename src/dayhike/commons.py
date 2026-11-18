@@ -11,12 +11,16 @@ written anywhere.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import sqlite3
 import subprocess
+import zipfile
 from array import array
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
+from functools import partial
 from itertools import groupby
 from pathlib import Path
 
@@ -24,8 +28,10 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 from dayhike.catalog import EARTH_RADIUS_M, geometry_store_path_for
+from dayhike.db import writer
 from dayhike.dem import Bounds
 from dayhike.download import download
+from dayhike.parallel import parallel_iter
 
 Progress = Callable[[str], None]
 
@@ -95,15 +101,66 @@ def _precise(coordinate: bytes) -> bool:
     return len(coordinate.partition(b".")[2].rstrip(b"0")) > 3
 
 
-def commons_points(dumps_dir: Path | str, bounds: Bounds, progress: Progress | None = None) -> CommonsPoints:
+# Bump when ``commons_points`` reads the dumps differently, so cached points are read again.
+POINTS_CACHE_VERSION = 1
+_POINTS_CACHE_PREFIX = "commons-points-"
+
+
+def commons_points(
+    dumps_dir: Path | str, bounds: Bounds, progress: Progress | None = None, cache_dir: Path | str | None = None
+) -> CommonsPoints:
     """The photo spot and uploader of every geotagged Commons file inside
     ``bounds``, read from the ``geo_tags``, ``page`` and ``image`` dumps in
     ``dumps_dir``. A spot is the file's primary coordinate on Earth with more
     than three decimals in both latitude and longitude. The uploader is the
     account number of the file's current version, kept in memory only.
 
+    With ``cache_dir``, the parsed points are kept there (``.npz``), keyed by
+    the dumps' sizes and modification times, the bounds and
+    ``POINTS_CACHE_VERSION``, and read from there while the key is the same:
+    parsing the dumps takes most of ``count_commons``' time. A cache for another
+    key is replaced.
+
     Europe holds about 25 million spots, so the joins run on sorted numpy
     arrays, looked up a chunk of dump rows at a time, not on dicts."""
+    if cache_dir is None:
+        return _parse_points(dumps_dir, bounds, progress)
+    cache = _points_cache_path(Path(cache_dir), dumps_dir, bounds)
+    try:
+        with np.load(cache) as stored:
+            points = CommonsPoints(stored["lat"], stored["lon"], stored["uploader"])
+        if progress is not None:
+            progress(f"commons: {len(points.lat)} cached points from {cache.name}")
+        return points
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile):
+        pass  # no cache for this key, or one that cannot be read: parse the dumps
+    points = _parse_points(dumps_dir, bounds, progress)
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    for old in cache.parent.glob(f"{_POINTS_CACHE_PREFIX}*.npz"):
+        old.unlink(missing_ok=True)
+    tmp = cache.with_name(cache.name + ".writing")
+    with tmp.open("wb") as out:
+        np.savez(out, lat=points.lat, lon=points.lon, uploader=points.uploader)
+    tmp.replace(cache)
+    return points
+
+
+def _points_cache_path(cache_dir: Path, dumps_dir: Path | str, bounds: Bounds) -> Path:
+    dumps = []
+    for table in TABLES:
+        stat = dump_path(dumps_dir, table).stat()
+        dumps.append([table, stat.st_size, stat.st_mtime_ns])
+    key = json.dumps(
+        {
+            "version": POINTS_CACHE_VERSION,
+            "dumps": dumps,
+            "bounds": [bounds.south, bounds.west, bounds.north, bounds.east],
+        }
+    )
+    return cache_dir / f"{_POINTS_CACHE_PREFIX}{hashlib.sha256(key.encode()).hexdigest()[:16]}.npz"
+
+
+def _parse_points(dumps_dir: Path | str, bounds: Bounds, progress: Progress | None) -> CommonsPoints:
     pages, lats, lons = array("q"), array("d"), array("d")
     for line in _rows(dump_path(dumps_dir, "geo_tags")):
         match = _GEO_TAG.match(line)
@@ -175,10 +232,16 @@ def _find(sorted_keys: np.ndarray, keys: np.ndarray) -> np.ndarray:
     return np.where(sorted_keys[at] == keys, at, -1)
 
 
-def count_commons(catalog_path: Path | str, dumps_dir: Path | str, progress: Progress | None = None) -> int:
+def count_commons(
+    catalog_path: Path | str,
+    dumps_dir: Path | str,
+    progress: Progress | None = None,
+    cache_dir: Path | str | None = None,
+) -> int:
     """Write each DayHike's Commons contributors into the Catalog's
     ``dayhikes.commons_contributors``; return how many DayHikes were counted.
-    Only the counts are written: no uploader leaves memory."""
+    Only the counts are written: no uploader leaves memory. ``cache_dir`` keeps the
+    parsed points for a rebuild of the same snapshot (``commons_points``)."""
     catalog_path = Path(catalog_path)
     geo = sqlite3.connect(f"file:{geometry_store_path_for(catalog_path)}?mode=ro", uri=True)
     try:
@@ -187,24 +250,20 @@ def count_commons(catalog_path: Path | str, dumps_dir: Path | str, progress: Pro
         ).fetchone()
         margin = 0.01  # degrees: more than 150 m at any latitude hikes reach
         points = commons_points(
-            dumps_dir, Bounds(south - margin, west - margin, north + margin, east + margin), progress
+            dumps_dir, Bounds(south - margin, west - margin, north + margin, east + margin), progress, cache_dir
         )
         tree = _tree(points)
         counts: dict[int, int] = {}
-        rows = geo.execute("SELECT dayhike_id, latitude, longitude FROM vertices ORDER BY dayhike_id, seq")
-        walks: dict[int, tuple[np.ndarray, np.ndarray]] = {}
-        for dayhike_id, vertices in groupby(rows, key=lambda row: row[0]):
-            coords = np.array([(lat, lon) for _, lat, lon in vertices], dtype=np.float64)
-            walks[dayhike_id] = (coords[:, 0], coords[:, 1])
-            if len(walks) == _HIKE_CHUNK:
-                counts |= contributor_counts(walks, points, tree=tree)
-                walks = {}
-                if progress is not None:
-                    progress(f"commons: {len(counts)} DayHikes counted")
-        counts |= contributor_counts(walks, points, tree=tree)
+        # The chunks of hikes are counted in forked workers when DAYHIKE_WORKERS says so (ADR-0044),
+        # which read the points and their tree as they are; the counts are joined in hike order.
+        count = partial(contributor_counts, points=points, tree=tree)
+        for chunk_counts in parallel_iter(count, _walk_chunks(geo)):
+            counts |= chunk_counts
+            if progress is not None:
+                progress(f"commons: {len(counts)} DayHikes counted")
     finally:
         geo.close()
-    catalog = sqlite3.connect(catalog_path)
+    catalog = writer(catalog_path)
     try:
         if "commons_contributors" not in {row[1] for row in catalog.execute("PRAGMA table_info(dayhikes)")}:
             catalog.execute("ALTER TABLE dayhikes ADD COLUMN commons_contributors INTEGER")
@@ -216,6 +275,19 @@ def count_commons(catalog_path: Path | str, dumps_dir: Path | str, progress: Pro
     finally:
         catalog.close()
     return len(counts)
+
+
+def _walk_chunks(geo: sqlite3.Connection) -> Iterator[dict[int, tuple[np.ndarray, np.ndarray]]]:
+    """The GeometryStore's DayHike lines (latitudes, longitudes), ``_HIKE_CHUNK`` hikes at a time, in id order."""
+    rows = geo.execute("SELECT dayhike_id, latitude, longitude FROM vertices ORDER BY dayhike_id, seq")
+    walks: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+    for dayhike_id, vertices in groupby(rows, key=lambda row: row[0]):
+        coords = np.array([(lat, lon) for _, lat, lon in vertices], dtype=np.float64)
+        walks[dayhike_id] = (coords[:, 0], coords[:, 1])
+        if len(walks) == _HIKE_CHUNK:
+            yield walks
+            walks = {}
+    yield walks
 
 
 def _unit_xyz(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:

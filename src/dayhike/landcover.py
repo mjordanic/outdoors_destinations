@@ -18,6 +18,7 @@ from dayhike.catalog import (
     geometry_store_path_for,
     remove_similarity,
 )
+from dayhike.db import writer
 from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS, format_corner, raster_order_sql
 from dayhike.download import download as _download
 from dayhike.parallel import parallel_iter, workers
@@ -297,7 +298,7 @@ def sample_landcover(
     sampled = 0
     touched: set[int] = set()
     stack = ExitStack()
-    write = sqlite3.connect(store_path)
+    write = writer(store_path)
     try:
         write.execute("PRAGMA journal_mode=WAL")
         ensure_column(write, "vertices", "landcover", "INTEGER")
@@ -398,7 +399,7 @@ def _refresh_catalog_fractions(
     catalog_path: Path, store_path: Path, hike_ids: set[int]
 ) -> None:
     store = sqlite3.connect(store_path)
-    catalog = sqlite3.connect(catalog_path)
+    catalog = writer(catalog_path)
     try:
         for name in LANDCOVER_FEATURE_NAMES:
             ensure_column(catalog, "feature_vectors", name, "REAL")

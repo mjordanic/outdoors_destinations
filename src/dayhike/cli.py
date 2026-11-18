@@ -38,6 +38,7 @@ from dayhike.regions import (
 )
 from dayhike.highways import HighwayDriveTimeClient, HighwaySnaps
 from dayhike.ingest import PATH_LEVELS
+from dayhike.steps import STEP_READS, StepLedger, file_key, files_key
 from dayhike.similarity import (
     CORE_MEASURES,
     MEASURE_NAMES,
@@ -75,6 +76,15 @@ def main(argv: list[str] | None = None) -> int:
         "--fresh",
         action="store_true",
         help="Ignore an existing ingest work file and start from the snapshot",
+    )
+    ingest.add_argument(
+        "--pass-cache",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="Keep the work file the passes over the snapshot leave in DIR, and start from it when "
+        "the same snapshot files, paths levels and code come again (--fresh reads the snapshot again); "
+        "it holds one snapshot, about the size of the work file (default: none)",
     )
     ingest.add_argument(
         "--list",
@@ -138,6 +148,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Worker processes for the destination hikes' tile search, which runs before the snapshot "
         f"loads, the same result with any number (default: ${DEST_WORKERS_ENV}, else the --workers count)",
     )
+    _add_resume(ingest)
     fetch_ext = subparsers.add_parser(
         "fetch-external",
         help="Download an external hike source into data/external/<source> (does not ingest)",
@@ -231,6 +242,7 @@ def main(argv: list[str] | None = None) -> int:
         help="WorldCover GeoTIFFs; Copernicus GLO-30 needs them for the ground under trees (default: data/landcover)",
     )
     _add_workers(sample)
+    _add_resume(sample)
     sample_lc = subparsers.add_parser(
         "sample-landcover",
         help="Sample local LandCover rasters onto GeometryStore vertices and Catalog fractions",
@@ -248,6 +260,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Directory of LandCover GeoTIFFs (default: data/landcover)",
     )
     _add_workers(sample_lc)
+    _add_resume(sample_lc)
     fetch_cm = subparsers.add_parser(
         "fetch-commons",
         help="Download the Wikimedia Commons geo_tags, page and image dumps (about 27 GB) into data/commons",
@@ -268,6 +281,16 @@ def main(argv: list[str] | None = None) -> int:
     count_cm.add_argument(
         "--commons", type=Path, default=DEFAULT_COMMONS_DIR, help="Directory of the Commons dumps (default: data/commons)"
     )
+    count_cm.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="Keep the parsed Commons points in DIR, and read them from there while the dumps and "
+        "the Catalog's bounds are the same (default: parse the dumps every run)",
+    )
+    _add_workers(count_cm)
+    _add_resume(count_cm)
     sample_cl = subparsers.add_parser(
         "sample-climate",
         help="Sample local climate rasters into Catalog hike-level monthly means",
@@ -284,6 +307,7 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_CLIMATE_DIR,
         help="Directory of CHELSA GeoTIFFs (default: data/climate)",
     )
+    _add_resume(sample_cl)
     sample_tg = subparsers.add_parser(
         "sample-trailgraph",
         help="Sample local DEM, LandCover and climate rasters onto the TrailGraph's vertices",
@@ -302,6 +326,7 @@ def main(argv: list[str] | None = None) -> int:
         "--climate", type=Path, default=DEFAULT_CLIMATE_DIR, help="CHELSA GeoTIFFs (default: data/climate)"
     )
     _add_workers(sample_tg)
+    _add_resume(sample_tg)
     similarity = subparsers.add_parser(
         "build-similarity",
         help="Build the similarity facts and Calibration next to a Catalog",
@@ -330,6 +355,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Keep the stored facts and only recompute the Calibration",
     )
     _add_workers(similarity)
+    _add_resume(similarity)
     rank = subparsers.add_parser("rank", help="Rank DayHikes by similarity to Seeds")
     rank.add_argument("--catalog", required=True, type=Path)
     rank.add_argument(
@@ -459,6 +485,8 @@ def main(argv: list[str] | None = None) -> int:
         help=f"A region the Catalog covers: one of {', '.join(region_names())}, or a region .toml file; "
         "repeatable. The site's pages name them (without it, or with only regions in Europe, they say Europe)",
     )
+    _add_workers(export)
+    _add_resume(export)
     countries = subparsers.add_parser(
         "export-countries",
         help="Add the country each hike starts in (for its emergency number) beside an existing serving export",
@@ -571,6 +599,8 @@ def main(argv: list[str] | None = None) -> int:
         os.environ[WORKERS_ENV] = str(args.workers)  # the stage's code reads it (dayhike.parallel)
     if getattr(args, "dest_workers", None) is not None:
         os.environ[DEST_WORKERS_ENV] = str(args.dest_workers)
+    if args.command in STEP_READS and not _STEP_RUNNING:
+        return _run_step(args, argv)
     if args.command == "export-serving":
         try:
             regions = [load_region(name) for name in args.region]
@@ -673,6 +703,7 @@ def main(argv: list[str] | None = None) -> int:
             external_dir=args.external_dir,
             paths=paths,
             paths_of=paths_of,
+            pass_cache=args.pass_cache,
         )
     if args.command == "sample-trailgraph":
         try:
@@ -729,7 +760,7 @@ def main(argv: list[str] | None = None) -> int:
             print(path)
         return 0
     if args.command == "count-commons":
-        print(count_commons(args.catalog, args.commons, progress=_progress))
+        print(count_commons(args.catalog, args.commons, progress=_progress, cache_dir=args.cache_dir))
         return 0
     if args.command == "sample-climate":
         return _sample_climate(args.catalog, args.climate)
@@ -776,6 +807,7 @@ def _ingest(
     external_dir: Path | None = None,
     paths: str = "graded",
     paths_of: dict[Path, str] | None = None,
+    pass_cache: Path | None = None,
 ) -> int:
     catalog = build_catalog(
         osm_paths,
@@ -789,6 +821,7 @@ def _ingest(
         external_dir=external_dir,
         paths=paths,
         paths_of=paths_of,
+        pass_cache=pass_cache,
     )
     print(catalog.path)
     print(catalog.ingest_report)
@@ -1048,6 +1081,60 @@ def _serve(
 def _progress(message: str) -> None:
     # Each line says when it was written (UTC), so a long rebuild's log times every step.
     print(f"{time.strftime('%H:%M:%SZ', time.gmtime())} {message}", file=sys.stderr, flush=True)
+
+
+_STEP_RUNNING: list[str] = []  # the step ``_run_step`` is running: ``main`` then runs its command
+
+
+def _add_resume(command: argparse.ArgumentParser) -> None:
+    command.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip this step when it finished before with the same inputs, code and earlier steps "
+        "(its marker is beside the Catalog, in CATALOG.steps); else run it",
+    )
+
+
+# Arguments that do not decide what a step writes, or that name its own output.
+_NOT_INPUTS = {
+    "command", "catalog", "workers", "dest_workers", "resume", "fresh", "list_dayhikes", "out", "pass_cache", "cache_dir",
+    "region_default",
+}
+
+
+def _input_key(value: object) -> object:
+    if isinstance(value, Path):
+        return files_key(value) if value.is_dir() else file_key(value) or str(value)
+    if isinstance(value, (list, tuple)):
+        return [_input_key(item) for item in value]
+    return str(value)
+
+
+def _step_inputs(args: argparse.Namespace) -> dict[str, object]:
+    inputs = {"catalog_exists": args.catalog.is_file()}
+    if args.command == "export-serving":
+        inputs["exported"] = (args.out / "meta.json").is_file()
+        inputs["out"] = str(args.out)
+    inputs.update({name: _input_key(value) for name, value in sorted(vars(args).items()) if name not in _NOT_INPUTS})
+    return inputs
+
+
+def _run_step(args: argparse.Namespace, argv: list[str] | None) -> int:
+    """Run a rebuild step, or with ``--resume`` skip it when its marker says it finished with
+    these inputs; leave its marker when it succeeds (dayhike.steps)."""
+    ledger = StepLedger(args.catalog)
+    if args.resume and ledger.done(args.command, _step_inputs(args)):
+        _progress(f"{args.command}: finished before with the same inputs, skipped (--resume)")
+        return 0
+    ledger.clear(args.command)
+    _STEP_RUNNING.append(args.command)
+    try:
+        code = main(argv)
+    finally:
+        _STEP_RUNNING.pop()
+    if code == 0:
+        ledger.mark(args.command, _step_inputs(args))
+    return code
 
 
 def _add_workers(command: argparse.ArgumentParser) -> None:

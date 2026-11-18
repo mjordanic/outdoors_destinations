@@ -61,7 +61,7 @@ from dayhike.catalog import (
     remove_similarity,
     trailgraph_path_for,
 )
-from dayhike.db import scoped
+from dayhike.db import scoped, writer
 from dayhike.npy import map_npy
 from dayhike.parallel import parallel_iter
 
@@ -909,7 +909,7 @@ def sample_trailgraph(
     has_landcover = bool(_raster_paths(landcover_dir)) if landcover_dir.is_dir() else False
     rasters = _climate_rasters(climate_dir) if climate_dir.is_dir() else []
     grid = _climate_grid(rasters) if rasters else None
-    db = sqlite3.connect(path)
+    db = writer(path)
     if has_landcover:
         ensure_column(db, "segments", "landcover_along", "BLOB")
     sampled = 0
