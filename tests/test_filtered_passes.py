@@ -13,10 +13,10 @@ import pytest
 
 import dayhike.ingest as ingest
 from dayhike.ingest import (
+    PATH_HIGHWAYS,
     PATH_KEYS,
     PATH_LEVELS,
     POINT_TAGS,
-    WAY_POINT_KEYS,
     _Pending,
     _connect_work,
     _init_work,
@@ -188,16 +188,16 @@ def test_point_tags_cover_every_node_that_is_a_point() -> None:
 
 
 def test_way_filters_cover_every_way_that_is_a_point_or_an_extra_path() -> None:
-    # The ways scans keep a way with a WAY_POINT_KEYS key or highway=trailhead (a point), or a PATH_KEYS key (a path).
+    # The ways scans keep a way with one of POINT_TAGS (a point), or a PATH_KEYS key and a PATH_HIGHWAYS highway (a path).
     values = {
-        "highway": ("path", "footway", "bridleway", "track", "trailhead", "service"),
+        "highway": ("path", "footway", "bridleway", "track", "trailhead", "service", "residential"),
         "sac_scale": ("hiking", "alpine_hiking", "none"),
         "footway": ("sidewalk", "crossing", "none"),
         "name": ("Somewhere",),
         "tourism": ("viewpoint",),
-        "natural": ("peak", "water"),
+        "natural": ("peak", "water", "wood"),
         "water": ("lake",),
-        "amenity": ("parking",),
+        "amenity": ("parking", "school"),
         "man_made": ("water_tap",),
         "place": ("hamlet",),
         "information": ("guidepost",),
@@ -208,10 +208,11 @@ def test_way_filters_cover_every_way_that_is_a_point_or_an_extra_path() -> None:
             for third in pairs:
                 tags = dict([first, second, third])
                 if _point_kind(tags) is not None:
-                    assert set(tags) & set(WAY_POINT_KEYS) or tags.get("highway") == "trailhead", tags
+                    assert set(tags.items()) & set(POINT_TAGS), tags
                 for level in PATH_LEVELS:
                     if _is_extra_path(tags, level):
                         assert set(tags) & set(PATH_KEYS[level]), (level, tags)
+                        assert tags.get("highway") in PATH_HIGHWAYS[level], (level, tags)
 
 
 def test_id_filter_takes_every_id_of_arrays_longer_than_a_chunk(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -265,10 +266,10 @@ def test_a_pass_resumed_inside_its_second_scan_keeps_the_first_scans_rows(
     assert len(killed_in) >= 2
 
 
-def test_the_node_pass_handles_only_the_nodes_its_filters_pass(
+def test_the_passes_handle_only_the_objects_their_filters_pass(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A file of many nodes of which few are wanted: the C++ filters skip the rest before Python sees them.
+    # A file of many objects of which few are wanted: the C++ filters skip the rest before Python sees them.
     osm = tmp_path / "many.osm"
     lines = ['<?xml version="1.0"?>', '<osm version="0.6">']
     for node_id in range(1, 60_001):
@@ -276,6 +277,8 @@ def test_the_node_pass_handles_only_the_nodes_its_filters_pass(
     lines.append('<node id="60001" lat="46.1" lon="14.1" version="1"><tag k="natural" v="peak"/></node>')
     lines.append('<node id="60002" lat="46.2" lon="14.2" version="1"><tag k="highway" v="crossing"/></node>')
     lines.append('<way id="1" version="1"><nd ref="5"/><nd ref="6"/><tag k="highway" v="path"/><tag k="sac_scale" v="hiking"/></way>')
+    lines.append('<way id="2" version="1"><nd ref="7"/><nd ref="8"/><tag k="natural" v="wood"/></way>')
+    lines.append('<way id="3" version="1"><nd ref="9"/><nd ref="10"/><tag k="highway" v="residential"/><tag k="name" v="Main"/></way>')
     lines.append("</osm>")
     osm.write_text("\n".join(lines))
     pbf = _write_pbf(osm, tmp_path / "many.osm.pbf")
@@ -292,15 +295,15 @@ def test_the_node_pass_handles_only_the_nodes_its_filters_pass(
     with closing(_work(tmp_path, "reference", [pbf])) as reference, closing(_work(tmp_path, "filtered", [pbf])) as filtered:
         for conn in (reference, filtered):
             _pass_relations(conn, [pbf], None)
-        _reference_pass_ways(reference, [pbf], ["graded"])
-        _pass_ways(filtered, [pbf], None, ["graded"])
-        _reference_pass_nodes(reference, [pbf])
         monkeypatch.setattr(ingest, "_scan", counting_scan)
+        _reference_pass_ways(reference, [pbf], ["trails"])
+        _pass_ways(filtered, [pbf], None, ["trails"])
+        _reference_pass_nodes(reference, [pbf])
         _pass_nodes(filtered, [pbf], None)
         assert _tables(filtered) == _tables(reference)
         assert filtered.execute("SELECT count(*) FROM path_nodes").fetchone() == (2,)
         assert filtered.execute("SELECT count(*) FROM amenities").fetchone() == (1,)
-    assert handled == {"nodes_points": [60001], "nodes": [5, 6]}
+    assert handled == {"ways_paths": [1], "nodes_points": [60001], "nodes": [5, 6]}
 
 
 @pytest.mark.skipif(shutil.which("osmium") is None, reason="needs osmium-tool")

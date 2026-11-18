@@ -94,7 +94,7 @@ CATALOG_TAG_FILTERS = (
 # bridleways (the ways of named trails), then named tracks too, then unnamed paths too.
 # Beyond ``graded`` they also enter the snapshot, with highway=trailhead nodes.
 PATH_LEVELS = ("graded", "trails", "named", "unnamed")
-# The tags a node needs for ``_point_kind`` (one scan, in file order): the nodes pass's TagFilter drops the rest in C++.
+# The tags an object needs for ``_point_kind`` (one scan, in file order): the passes' TagFilter drops the rest in C++.
 POINT_TAGS = (
     *(("tourism", value) for value in (*sorted(HUT_TOURISM), "viewpoint")),
     *(("natural", value) for value in ("peak", "spring", "water")),
@@ -104,12 +104,12 @@ POINT_TAGS = (
     ("information", "guidepost"),
     ("highway", "trailhead"),
 )
-# What a way needs for ``_is_extra_path`` at each level (the ways pass keeps it only if it has one of these keys),
-# and for ``_point_kind`` beside ``highway=trailhead``.
+# What a way needs for ``_is_extra_path`` at each level: the ways pass keeps it only if it has one of these keys
+# and one of these highways.
 PATH_KEYS = {"graded": ("sac_scale",), "trails": ("sac_scale", "name"), "named": ("sac_scale", "name"), "unnamed": ("highway",)}
-WAY_POINT_KEYS = ("tourism", "natural", "amenity", "man_made", "place", "information")
 TRAIL_PATH_HIGHWAYS = ("path", "footway", "bridleway")
 NAMED_PATH_HIGHWAYS = (*TRAIL_PATH_HIGHWAYS, "track")
+PATH_HIGHWAYS = {"graded": ("path",), "trails": TRAIL_PATH_HIGHWAYS, "named": NAMED_PATH_HIGHWAYS, "unnamed": NAMED_PATH_HIGHWAYS}
 NOT_A_PATH_FOOTWAYS = ("sidewalk", "crossing")
 TRAILHEAD_TAG_FILTER = "n/highway=trailhead"
 LAKE_WATER = ("lake", "reservoir", "pond")  # a named natural=water of these is a lake a NetworkHike may go to
@@ -708,7 +708,7 @@ def _pass_ways(
     snapshot what a build of it alone would.
 
     Filtering in C++, the passes scan the ways that can be a point or an extra
-    path (``ways_points``, ``ways_trailheads``, ``ways_paths``; the listed ways
+    path (``ways_points``, ``ways_paths``; the listed ways
     are left to the last scan) then the listed ways, by id (``ways``, whose end
     marks the pass done). A way both a point and a path is read twice: the rows
     it gives are the same."""
@@ -763,9 +763,8 @@ def _pass_ways(
         return f"{kept} hiking ways"
 
     scans = (
-        ("ways_points", lambda index: [osmium.filter.KeyFilter(*WAY_POINT_KEYS)]),
-        ("ways_trailheads", lambda index: [osmium.filter.TagFilter(("highway", "trailhead"))]),
-        ("ways_paths", lambda index: [osmium.filter.KeyFilter(*PATH_KEYS[levels[index]])]),
+        ("ways_points", lambda index: [osmium.filter.TagFilter(*POINT_TAGS)]),
+        ("ways_paths", lambda index: _path_filters(levels[index])),
     )
     for pass_name, filters_for in scans:
         _scan(conn, pass_name, paths, osmium.osm.WAY, filters_for, handle_unlisted, progress, "ways", detail)
@@ -774,6 +773,13 @@ def _pass_ways(
     extra = conn.execute("SELECT count(*) FROM path_ways").fetchone()[0]
     read = ", ".join(dict.fromkeys(levels))
     emit_progress(progress, "ways", f"{kept} hiking ways, {extra} paths in no relation ({read})")
+
+
+def _path_filters(level: str) -> list:
+    return [
+        osmium.filter.KeyFilter(*PATH_KEYS[level]),
+        osmium.filter.TagFilter(*(("highway", highway) for highway in PATH_HIGHWAYS[level])),
+    ]
 
 
 def _point_kind(tags: dict[str, str]) -> str | None:
