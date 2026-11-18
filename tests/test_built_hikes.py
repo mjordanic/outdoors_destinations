@@ -4,9 +4,11 @@ A built-hike source gets what ingest read and returns walks; the Catalog stores
 each as a DayHike with a stable id from its OSM way/node steps.
 """
 
+import json
 import sqlite3
 from pathlib import Path
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
@@ -28,7 +30,7 @@ def ridge_stage(context) -> list[BuiltWalk]:
     """A source that cuts Ridge Walk's second half out as a stage."""
     nodes = context.snapshot.nodes
     return [
-        BuiltWalk(
+        BuiltWalk.of(
             kind="stage",
             name="Ridge Walk, stage 2: Col – Summit",
             vertices=tuple((node, nodes[node]) for node in STAGE_NODES),
@@ -36,6 +38,22 @@ def ridge_stage(context) -> list[BuiltWalk]:
             parts=(RIDGE_WALK_ID,),
         )
     ]
+
+
+def test_a_built_walk_holds_its_vertices_as_arrays_and_gives_back_the_same_ones() -> None:
+    # Europe's built walks hold some 73 M vertices: as (node, (lat, lon)) tuples about 200 B each.
+    vertices = ((12_345_678_901, (45.0449661, 15.0)), (4, (45.08993220000001, -0.1)), (3, (46.5, 13.123456789012345)))
+
+    walk = BuiltWalk.of("stage", "Ridge Walk, stage 2", vertices, way_ids=(102,), parts=(1001,))
+
+    assert (walk.node_ids.dtype, walk.node_ids.shape) == (np.int64, (3,))
+    assert (walk.points.dtype, walk.points.shape) == (np.float64, (3, 2))
+    assert walk.vertices == vertices
+    assert [(type(node), type(lat), type(lon)) for node, (lat, lon) in walk.vertices] == [(int, float, float)] * 3
+    # The work file stores them as JSON text: the very same text.
+    assert json.dumps([[n, lat, lon] for n, (lat, lon) in walk.vertices]) == json.dumps(
+        [[n, lat, lon] for n, (lat, lon) in vertices]
+    )
 
 
 def test_a_source_adds_a_built_dayhike_with_its_kind_parts_and_geometry(tmp_path: Path) -> None:

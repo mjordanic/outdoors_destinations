@@ -38,7 +38,7 @@ from dayhike.catalog import (
     declared_ends,
     named_points,
 )
-from dayhike.osm import OsmRelation, OsmWay
+from dayhike.osm import OsmRelation, OsmWay, WaysWithout
 from dayhike.parallel import parallel_map
 from dayhike.serving import VERSION_DIFFERS
 from dayhike.similarity import CORRIDOR_M, TWIN_STEP_M, _even_points, twin_groups
@@ -151,9 +151,7 @@ def network_source(context: BuildContext) -> list[BuiltWalk]:
     ``TWIN_REACH_M`` of a leg."""
     snapshot = context.snapshot
     legs = [relation for relation in snapshot.relations if relation.tags.get("network:type") == "node_network"]
-    ways = snapshot.ways
-    if snapshot.path_ways:
-        ways = {way_id: way for way_id, way in ways.items() if way_id not in snapshot.path_ways}
+    ways = WaysWithout(snapshot.ways, snapshot.path_ways) if snapshot.path_ways else snapshot.ways
     hikes = network_hikes(
         legs,
         ways,
@@ -184,7 +182,7 @@ def network_source(context: BuildContext) -> list[BuiltWalk]:
                 crossing_m / straight_m,
                 CROSSING_MAX_RATIO,
             )
-    return [BuiltWalk("network", hike.name, hike.vertices, hike.way_ids, hike.parts) for hike in hikes]
+    return [BuiltWalk.of("network", hike.name, hike.vertices, hike.way_ids, hike.parts) for hike in hikes]
 
 
 def _relation_walks(context: BuildContext, legs: Sequence[OsmRelation]) -> list[list[Point]]:

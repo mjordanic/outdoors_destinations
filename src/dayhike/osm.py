@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 import re
 from array import array
 from bisect import bisect_left
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from itertools import islice
 
@@ -147,10 +148,89 @@ class _Elevations(_SortedIds):
         return default if at < 0 else self._ele[at]
 
 
+class WayStore(_SortedIds):
+    """Ways (id, node ids, tags) as flat arrays, read like the dict of an
+    ``OsmSnapshot``: ``ways[way_id]`` is its ``OsmWay``. Every way's node ids
+    are one array cut at offsets, and ways of the same tags share one dict
+    (read only). Europe's work file holds ~5 M ways: as OsmWays of tuples and
+    dicts about 1-2 kB each, here about 8 B a node. It iterates in load order,
+    like the dict it replaces; ways ``update`` adds, ones it did not load
+    (those a source read), come after."""
+
+    def __init__(self, ids: array, offsets: array, nodes: array, tag_at: array, tags: list[dict[str, str]]) -> None:
+        loaded = np.frombuffer(ids, dtype=np.int64) if len(ids) else np.empty(0, dtype=np.int64)
+        order = np.argsort(loaded, kind="stable")
+        super().__init__(loaded[order])
+        self._position = array("q", order.astype(np.int64).tobytes())  # each sorted id's place in load order
+        self._loaded, self._offsets, self._nodes, self._tag_at, self._tags = ids, offsets, nodes, tag_at, tags
+        self._added: dict[int, OsmWay] = {}
+
+    @classmethod
+    def from_rows(cls, rows: Iterable[tuple[int, str, str]]) -> WayStore:
+        """From work-file (id, node ids JSON, tags JSON) rows, one id once."""
+        ids, offsets, nodes, tag_at = array("q"), array("q", [0]), array("q"), array("q")
+        interned: dict[str, int] = {}
+        tags: list[dict[str, str]] = []
+        for way_id, node_ids_json, tags_json in rows:
+            ids.append(way_id)
+            nodes.extend(json.loads(node_ids_json))
+            offsets.append(len(nodes))
+            at = interned.setdefault(tags_json, len(tags))
+            if at == len(tags):
+                tags.append(json.loads(tags_json))
+            tag_at.append(at)
+        return cls(ids, offsets, nodes, tag_at, tags)
+
+    def __getitem__(self, way_id) -> OsmWay:
+        at = self._at(way_id)
+        if at < 0:
+            return self._added[way_id]
+        position = self._position[at]
+        return OsmWay(
+            tuple(self._nodes[self._offsets[position] : self._offsets[position + 1]]),
+            self._tags[self._tag_at[position]],
+        )
+
+    def __contains__(self, way_id) -> bool:
+        return self._at(way_id) >= 0 or way_id in self._added
+
+    def __iter__(self) -> Iterator[int]:
+        yield from self._loaded
+        yield from self._added
+
+    def __len__(self) -> int:
+        return len(self._loaded) + len(self._added)
+
+    def update(self, ways: Mapping[int, OsmWay]) -> None:
+        self._added.update(ways)
+
+
+class WaysWithout(Mapping[int, OsmWay]):
+    """``ways`` read without the ways ``left_out``, in the same order: a way
+    is built only when it is read, none are copied."""
+
+    def __init__(self, ways: Mapping[int, OsmWay], left_out: Collection[int]) -> None:
+        self._ways, self._left_out = ways, left_out
+
+    def __getitem__(self, way_id) -> OsmWay:
+        if way_id in self._left_out:
+            raise KeyError(way_id)
+        return self._ways[way_id]
+
+    def __contains__(self, way_id) -> bool:
+        return way_id not in self._left_out and way_id in self._ways
+
+    def __iter__(self) -> Iterator[int]:
+        return (way_id for way_id in self._ways if way_id not in self._left_out)
+
+    def __len__(self) -> int:
+        return len(self._ways) - sum(1 for way_id in self._left_out if way_id in self._ways)
+
+
 @dataclass
 class OsmSnapshot:
     nodes: Mapping[int, tuple[float, float]] = field(default_factory=dict)  # a NodeStore's, from a work file
-    ways: dict[int, OsmWay] = field(default_factory=dict)
+    ways: dict[int, OsmWay] | WayStore = field(default_factory=dict)  # a WayStore, from a work file
     relations: list[OsmRelation] = field(default_factory=list)
     amenities: list[tuple[str, tuple[tuple[float, float], ...]]] = field(
         default_factory=list

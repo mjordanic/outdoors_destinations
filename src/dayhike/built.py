@@ -17,6 +17,8 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import numpy as np
+
 from dayhike.catalog import (
     DayHike,
     LowerStart,
@@ -33,21 +35,54 @@ BUILT_ID_MAX = 2**53  # and below this, so JavaScript reads it exactly
 Point = tuple[float, float]  # (lat, lon)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class BuiltWalk:
     """One walk a source builds: ``kind`` (``network``, ``stage`` or
     ``trail`` or ``destination``, also its NameOrigin), its label, ordered (node id,
     point) vertices from its Trailhead, the OSM ways it walks, and the OSM relations
     it is built from. A source that read ways ingest did not (DestinationHikes)
-    gives them in ``ways``, with their nodes' points in ``nodes``."""
+    gives them in ``ways``, with their nodes' points in ``nodes``.
+
+    The vertices are held as arrays, ``node_ids`` and (lat, lon) rows in
+    ``points``: every source's walks wait until the last source has run, and
+    Europe's some 73 M vertices take about 200 B each as tuples, 24 B here.
+    ``vertices`` gives them back as (node id, point) tuples, the same values."""
 
     kind: str
     name: str
-    vertices: tuple[tuple[int, Point], ...]
+    node_ids: np.ndarray  # int64
+    points: np.ndarray  # float64 (lat, lon) rows
     way_ids: tuple[int, ...]
     parts: tuple[int, ...]
-    ways: Mapping[int, OsmWay] = field(default_factory=dict, compare=False)
-    nodes: Mapping[int, Point] = field(default_factory=dict, compare=False)
+    ways: Mapping[int, OsmWay] = field(default_factory=dict)
+    nodes: Mapping[int, Point] = field(default_factory=dict)
+
+    @classmethod
+    def of(
+        cls,
+        kind: str,
+        name: str,
+        vertices: Sequence[tuple[int, Point]],
+        way_ids: tuple[int, ...],
+        parts: tuple[int, ...],
+        ways: Mapping[int, OsmWay] | None = None,
+        nodes: Mapping[int, Point] | None = None,
+    ) -> BuiltWalk:
+        """The walk along ordered (node id, point) ``vertices``."""
+        return cls(
+            kind,
+            name,
+            np.array([node_id for node_id, _ in vertices], dtype=np.int64),
+            np.array([point for _, point in vertices], dtype=np.float64).reshape(-1, 2),
+            way_ids,
+            parts,
+            {} if ways is None else ways,
+            {} if nodes is None else nodes,
+        )
+
+    @property
+    def vertices(self) -> tuple[tuple[int, Point], ...]:
+        return tuple(zip(self.node_ids.tolist(), map(tuple, self.points.tolist())))
 
 
 @dataclass(frozen=True)
@@ -77,12 +112,13 @@ def built_dayhike(
 ) -> tuple[DayHike, list[tuple[int, float]]]:
     """The DayHike of ``walk`` and the (way id, metres walked) of each way it
     walks, first walked first."""
-    route, walked = route_of(walk.vertices, walk.way_ids, snapshot.ways)
+    vertices = walk.vertices
+    route, walked = route_of(vertices, walk.way_ids, snapshot.ways)
     hike = _dayhike(
         built_id(route),
         walk.name,
         walk.kind,
-        walk.vertices,
+        vertices,
         _strictest_sac_scale(walked, snapshot.ways),
         snapshot,
         amenity_index,

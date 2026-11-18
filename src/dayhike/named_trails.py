@@ -96,7 +96,7 @@ def named_trails(context: BuildContext) -> list[BuiltWalk]:
             f"({', '.join(f'{count} {reason}' for reason, count in sorted(dropped.items())) or 'none'})"
         )
     return [
-        BuiltWalk(kind=KIND_TRAIL, name=name, vertices=tuple(trail.walk.vertices), way_ids=trail.walked, parts=())
+        BuiltWalk.of(kind=KIND_TRAIL, name=name, vertices=trail.walk.vertices, way_ids=trail.walked, parts=())
         for trail, name in zip(kept, names)
     ]
 

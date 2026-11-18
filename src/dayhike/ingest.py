@@ -60,7 +60,7 @@ from dayhike.osm import (
     NodeStore,
     OsmRelation,
     OsmSnapshot,
-    OsmWay,
+    WayStore,
     _MEMBER_TYPE,
     _parse_ele_m,
     amenity_kind,
@@ -852,16 +852,21 @@ def _load_hiking_snapshot(
         )
     store = NodeStore.from_rows(conn.execute(nodes_sql + " ORDER BY id"))
     snapshot.nodes, snapshot.node_elevations = store.points, store.elevations
-    loaded = 0
     ways_sql = ["SELECT id, node_ids, tags FROM ways"]
     if with_paths:
         ways_sql.append("SELECT id, node_ids, tags FROM path_ways WHERE id IN (SELECT id FROM snapshot_path_ways)")
-    for sql in ways_sql:
-        for way_id, node_ids_json, tags_json in conn.execute(sql):
-            snapshot.ways[way_id] = OsmWay(tuple(json.loads(node_ids_json)), json.loads(tags_json))
-            loaded += 1
-            if loaded % INGEST_PROGRESS_EVERY_OBJECTS == 0:
-                emit_progress(progress, "assemble", f"loading ways {loaded}")
+
+    def way_rows():
+        # A way is in ``ways`` or in ``path_ways``, never both: a needed way is never a path.
+        loaded = 0
+        for sql in ways_sql:
+            for row in conn.execute(sql):
+                yield row
+                loaded += 1
+                if loaded % INGEST_PROGRESS_EVERY_OBJECTS == 0:
+                    emit_progress(progress, "assemble", f"loading ways {loaded}")
+
+    snapshot.ways = WayStore.from_rows(way_rows())
     if with_paths:
         snapshot.path_ways = frozenset(way_id for (way_id,) in conn.execute("SELECT id FROM snapshot_path_ways"))
     loaded = 0
