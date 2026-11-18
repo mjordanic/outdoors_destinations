@@ -32,6 +32,7 @@ from pathlib import Path
 
 import numpy as np
 
+from dayhike import climb_kernel
 from dayhike.catalog import (
     EARTH_RADIUS_M,
     GAP_JOIN_M,
@@ -1495,8 +1496,26 @@ def climb_and_descent(lat: np.ndarray, lon: np.ndarray, ele: np.ndarray) -> tupl
     (``_one_way_climb_and_descent``), so walking the other way swaps the two
     exactly and a walk retraced climbs exactly what it descends (ADR-0048).
     Vertices without elevation are skipped; none with it gives NaN for both.
+    Where numba is installed, ``climb_kernel`` computes it, to the same bits.
     """
     lat, lon, ele = (np.asarray(values, dtype=float) for values in (lat, lon, ele))
+    if climb_kernel.COMPILED:
+        rules = (
+            SPIKE_RISE_M,
+            SPIKE_GRADE,
+            SPIKE_RUN_M,
+            GAIN_HYSTERESIS_M,
+            NOISY_MEAN_M,
+            NOISY_REACH_M,
+            NOISY_WINDOW_M,
+            NOISY_STEP_M,
+        )
+        return climb_kernel.climb_and_descent(_step_m(lat, lon), _step_m(lat[::-1], lon[::-1]), ele, rules)
+    return _numpy_climb_and_descent(lat, lon, ele)
+
+
+def _numpy_climb_and_descent(lat: np.ndarray, lon: np.ndarray, ele: np.ndarray) -> tuple[float, float]:
+    """``climb_and_descent`` in numpy and Python, where numba is not installed."""
     climb, descent = _one_way_climb_and_descent(lat, lon, ele)
     back_climb, back_descent = _one_way_climb_and_descent(lat[::-1], lon[::-1], ele[::-1])
     return (climb + back_descent) / 2, (descent + back_climb) / 2

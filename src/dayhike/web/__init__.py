@@ -72,7 +72,7 @@ from dayhike.serving import (
     name_dem,
 )
 from dayhike.regions import labels_text
-from dayhike.similarity import DEFAULT_WEIGHTS, MEASURES, WISHABLE, Measure
+from dayhike.similarity import DEFAULT_WEIGHTS, MEASURES, WISHABLE, Measure, climb_and_descent
 from dayhike.trailgraph import Route, RouteError
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -572,6 +572,7 @@ def create_app(
         regions=data.meta.get("regions"),
         download_url=download_url,
     )
+    climb_and_descent(np.array([46.0, 46.001, 46.002]), np.array([13.0, 13.0, 13.0]), np.array([800.0, 850.0, 820.0]))
     app = FastAPI(title="HikesAlike", docs_url="/api/docs", openapi_url="/api/openapi.json")
     limiters = {"rank": RateLimiter(rank_rate, RATE_WINDOW_S), "api": RateLimiter(api_rate, RATE_WINDOW_S)}
     rankings = RankingQueue()
