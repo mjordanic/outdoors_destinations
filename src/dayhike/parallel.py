@@ -79,13 +79,13 @@ def parallel_map(task: Callable[[T], R], items: Iterable[T], count: int | None =
         _task = None
 
 
-def parallel_iter(task: Callable[[T], R], items: Iterable[T]) -> Iterator[R]:
-    """``task`` of each item, yielded in item order, run in ``workers()`` forked
-    processes when that is more than 1. Items are read as results are taken,
+def parallel_iter(task: Callable[[T], R], items: Iterable[T], count: int | None = None) -> Iterator[R]:
+    """``task`` of each item, yielded in item order, run in ``count`` (else
+    ``workers()``) forked processes when that is more than 1. Items are read as results are taken,
     at most ``IN_FLIGHT_PER_WORKER`` per worker ahead, so a stream of large
     items or results is never held whole. The workers are forked once, when
     the first result is asked for: they read the state of that moment."""
-    count = workers()
+    count = workers() if count is None else count
     if count <= 1:
         yield from map(task, items)
         return

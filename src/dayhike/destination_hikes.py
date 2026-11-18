@@ -13,6 +13,7 @@ is the built-hike source (ADR-0038) that chooses from them.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import pickle
@@ -31,7 +32,7 @@ import numpy as np
 from dayhike.built import BuildContext, BuiltWalk
 from dayhike.catalog import EARTH_RADIUS_M, KIND_RELATION
 from dayhike.osm import OsmWay
-from dayhike.parallel import parallel_map, workers
+from dayhike.parallel import parallel_iter, workers
 from dayhike.similarity import TWIN_STEP_M, _even_points, climb_and_descent, twin_groups
 
 Point = tuple[float, float]  # (lat, lon)
@@ -636,60 +637,77 @@ LARGE_EXTRACT_BYTES = 2 * 1024**3  # a larger extract keeps node locations in a 
 DEST_WORKERS_ENV = "DAYHIKE_DEST_WORKERS"  # the tile search's workers; DAYHIKE_WORKERS's count when unset
 
 
-def search_destinations(conn: sqlite3.Connection, source_paths: Sequence[Path], dem_dir: Path | None, progress=None) -> None:
-    """Every walk to a destination in the OSM files ``source_paths``, stored in the work
-    file ``conn`` (``destination_walks``, in order) with the ways they take (``destination_ways``)
-    for ``destination_source``. Ingest runs it after its passes, before the snapshot loads,
-    so the tile search's ``DAYHIKE_DEST_WORKERS`` workers fork from a small process. The ways
-    it reads wait in a temporary store, deleted when the search is done."""
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS destination_walks (seq INTEGER PRIMARY KEY, walk BLOB NOT NULL);
-        CREATE TABLE IF NOT EXISTS destination_ways (id INTEGER PRIMARY KEY, node_ids BLOB, lats BLOB, lons BLOB, tags TEXT);
-        DELETE FROM destination_walks;
-        DELETE FROM destination_ways;
-        """
-    )
-    if not source_paths:
-        conn.commit()
-        return
-    with tempfile.TemporaryDirectory(prefix="dayhike-destinations-") as work:
-        store = Path(work) / "walkable.sqlite"
+SEARCH_VERSION = 1  # part of the search's key: change it when a change of code changes what the search stores
+
+
+def search_destinations(work_path: Path, source_paths: Sequence[Path], dem_dir: Path | None, progress=None) -> None:
+    """Every walk to a destination in the OSM files ``source_paths``, tile by tile, into
+    ingest's work file ``work_path`` for ``destination_source``. Ingest runs it after its
+    passes, before the snapshot loads, so the tile search's ``DAYHIKE_DEST_WORKERS`` workers
+    fork from a small process. What it reads (``walkable_ways``, ``walkable_cells`` and the
+    destinations and car parks, ``destination_search``) and each tile's walks as the tile
+    is done (``destination_tiles``) stay in the work file, so a run stopped part way and
+    resumed reads nothing again and searches only the tiles not done, while its key (the
+    walk extracts, the cells read, the DEM folder, ``SEARCH_VERSION``) is unchanged."""
+    with closing(sqlite3.connect(work_path)) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS destination_search (key TEXT NOT NULL, destinations BLOB NOT NULL, starts BLOB NOT NULL);
+            CREATE TABLE IF NOT EXISTS destination_tiles (row INTEGER, col INTEGER, walks BLOB NOT NULL, PRIMARY KEY (row, col));
+            """
+        )
+        extracts = [_walk_extract(path, progress) for path in source_paths]
         cells = _wanted_cells(conn)
-        found = _Read()
-        for path in source_paths:
-            extract, located = _walk_extract(path, progress)
-            _read_walkable(extract, store, cells, found, Path(work), located)
-        destinations = found.destinations(dem_dir)
-        starts = found.starts()
-        del found  # the car parks' tags: not for the workers to inherit
+        search_key = json.dumps({
+            "version": SEARCH_VERSION,
+            "extracts": [[str(path.resolve()), path.stat().st_size, path.stat().st_mtime_ns, located] for path, located in extracts],
+            "cells": hashlib.sha256(np.array(sorted(cells), dtype=np.int64).tobytes()).hexdigest(),
+            "dem": str(dem_dir),
+        })  # fmt: skip
+        stored = conn.execute("SELECT key, destinations, starts FROM destination_search").fetchone()
+        if stored is not None and stored[0] == search_key:
+            destinations, starts = pickle.loads(stored[1]), pickle.loads(stored[2])
+        else:
+            conn.executescript(
+                """
+                DELETE FROM destination_search;
+                DELETE FROM destination_tiles;
+                DROP TABLE IF EXISTS walkable_ways;
+                DROP TABLE IF EXISTS walkable_cells;
+                """
+            )
+            found = _Read()
+            with tempfile.TemporaryDirectory(prefix="dayhike-destinations-") as work:
+                for extract, located in extracts:
+                    _read_walkable(extract, work_path, cells, found, Path(work), located)
+            destinations = found.destinations(dem_dir)
+            starts = found.starts()
+            del found  # the car parks' tags: not for the workers to inherit
+            conn.execute(
+                "INSERT INTO destination_search VALUES (?, ?, ?)", (search_key, pickle.dumps(destinations), pickle.dumps(starts))
+            )
+            conn.commit()
         tiles: dict[tuple[int, int], list[Destination]] = {}
         for destination in destinations:
             tiles.setdefault(_tile(destination.points[0]), []).append(destination)
+        done = set(conn.execute("SELECT row, col FROM destination_tiles").fetchall())
+        left = sorted(set(tiles) - done)
         if progress is not None:
             progress(
                 f"destinations: {len(destinations)} destinations and {len(starts)} car parks read; "
-                f"searching {len(tiles)} tiles"
+                f"searching {len(left)} tiles of {len(tiles)}"
             )
-        by_tile = _starts_by_tile(starts, tiles)
-        task = _TileTask(store, _marked(conn), dem_dir, progress)
-        items = [(key, [*here, *_near_edge(tiles, key)], by_tile.get(key, [])) for key, here in sorted(tiles.items())]
-        hikes = [hike for found_here in parallel_map(task, items, workers(DEST_WORKERS_ENV)) for hike in found_here]
-        conn.executemany(
-            "INSERT INTO destination_walks (seq, walk) VALUES (?, ?)",
-            ((seq, pickle.dumps(hike)) for seq, hike in enumerate(hikes)),  # exactly as found: floats, types and all
-        )
-        ids = sorted({way_id for hike in hikes for way_id in hike.way_ids})
-        with closing(sqlite3.connect(store)) as walkable:
-            for chunk in range(0, len(ids), 500):
-                part = ids[chunk : chunk + 500]
-                conn.executemany(
-                    "INSERT INTO destination_ways VALUES (?, ?, ?, ?, ?)",
-                    walkable.execute(f"SELECT * FROM ways WHERE id IN ({','.join('?' * len(part))})", part).fetchall(),
-                )
-        conn.commit()
+        by_tile = _starts_by_tile(starts, left)
+        task = _TileTask(work_path, _marked(conn), dem_dir, progress)
+        items = [(key, [*tiles[key], *_near_edge(tiles, key)], by_tile.get(key, [])) for key in left]
+        count = 0
+        # Each tile's walks go to the work file as it is done, not held here.
+        for (tile, _, _), found_here in zip(items, parallel_iter(task, items, workers(DEST_WORKERS_ENV))):
+            conn.execute("INSERT INTO destination_tiles VALUES (?, ?, ?)", (*tile, pickle.dumps(found_here)))
+            conn.commit()
+            count += len(found_here)
     if progress is not None:
-        progress(f"destinations: {len(hikes)} walks found on {len(tiles)} tiles")
+        progress(f"destinations: {count} walks found on {len(left)} tiles")
 
 
 def destination_source(context: BuildContext) -> list[BuiltWalk]:
@@ -698,7 +716,11 @@ def destination_source(context: BuildContext) -> list[BuiltWalk]:
     if not context.source_paths:
         return []
     with closing(sqlite3.connect(context.work_path)) as conn:
-        hikes = [pickle.loads(walk) for (walk,) in conn.execute("SELECT walk FROM destination_walks ORDER BY seq")]
+        hikes = [
+            hike
+            for (walks_here,) in conn.execute("SELECT walks FROM destination_tiles ORDER BY row, col")
+            for hike in pickle.loads(walks_here)
+        ]
         hikes = choose(hikes, *_copied(context, hikes))
         kept = [hike for hike in hikes if hike.twin is None]
         if context.progress is not None:
@@ -740,8 +762,8 @@ class _TileTask:
             for chunk in range(0, len(cells), 500):
                 part = cells[chunk : chunk + 500]
                 for way_id, ids, lats, lons, tags in conn.execute(
-                    "SELECT id, node_ids, lats, lons, tags FROM ways WHERE id IN "
-                    f"(SELECT way FROM way_cells WHERE cell IN ({','.join('?' * len(part))}))",
+                    "SELECT id, node_ids, lats, lons, tags FROM walkable_ways WHERE id IN "
+                    f"(SELECT way FROM walkable_cells WHERE cell IN ({','.join('?' * len(part))}))",
                     part,
                 ):
                     if way_id in ways:
@@ -821,13 +843,13 @@ def _copied(context: BuildContext, hikes: Sequence[DestinationHike]) -> tuple[li
 
 
 def _ways(conn: sqlite3.Connection, way_ids: set[int]) -> dict[int, tuple[OsmWay, dict[int, Point]]]:
-    """The stored ways of ``way_ids`` (``destination_ways``), each with its nodes' points."""
+    """The stored ways of ``way_ids`` (``walkable_ways``), each with its nodes' points."""
     found = {}
     ids = sorted(way_ids)
     for chunk in range(0, len(ids), 500):
         part = ids[chunk : chunk + 500]
         for way_id, node_ids, lats, lons, tags in conn.execute(
-            f"SELECT id, node_ids, lats, lons, tags FROM destination_ways WHERE id IN ({','.join('?' * len(part))})", part
+            f"SELECT id, node_ids, lats, lons, tags FROM walkable_ways WHERE id IN ({','.join('?' * len(part))})", part
         ):
             node_ids = np.frombuffer(node_ids, dtype=np.int64).tolist()
             points = zip(np.frombuffer(lats).tolist(), np.frombuffer(lons).tolist())
@@ -1043,7 +1065,7 @@ def _ele(tags: dict[str, str]) -> float | None:
 
 
 def _read_walkable(path: Path, store: Path, cells: set[int], found: _Read, work: Path, located: bool) -> None:
-    """Store the walkable ways of ``path`` that touch ``cells``, or are within reach
+    """Store (in the SQLite file ``store``) the walkable ways of ``path`` that touch ``cells``, or are within reach
     of a destination node or closed hut it holds (with their nodes' points, by cell),
     and gather its points into ``found``. ``located``: its ways carry their nodes'
     locations (the walk extract); else they are kept while it is read, in memory or
@@ -1070,9 +1092,9 @@ def _read_walkable(path: Path, store: Path, cells: set[int], found: _Read, work:
                     found.lake_ways[member.ref] = obj.id
     conn = sqlite3.connect(store)
     conn.execute(
-        "CREATE TABLE IF NOT EXISTS ways (id INTEGER PRIMARY KEY, node_ids BLOB, lats BLOB, lons BLOB, tags TEXT)"
+        "CREATE TABLE IF NOT EXISTS walkable_ways (id INTEGER PRIMARY KEY, node_ids BLOB, lats BLOB, lons BLOB, tags TEXT)"
     )
-    conn.execute("CREATE TABLE IF NOT EXISTS way_cells (cell INTEGER, way INTEGER)")
+    conn.execute("CREATE TABLE IF NOT EXISTS walkable_cells (cell INTEGER, way INTEGER)")
     rows, cell_rows = [], []
     processor = osmium.FileProcessor(str(path), osmium.osm.NODE | osmium.osm.WAY)
     if not located:
@@ -1122,12 +1144,12 @@ def _read_walkable(path: Path, store: Path, cells: set[int], found: _Read, work:
             _write_ways(conn, rows, cell_rows)
             rows, cell_rows = [], []
     _write_ways(conn, rows, cell_rows)
-    conn.execute("CREATE INDEX IF NOT EXISTS way_cells_cell ON way_cells (cell)")
+    conn.execute("CREATE INDEX IF NOT EXISTS walkable_cells_cell ON walkable_cells (cell)")
     conn.commit()
     conn.close()
 
 
 def _write_ways(conn: sqlite3.Connection, rows, cell_rows) -> None:
-    conn.executemany("INSERT OR IGNORE INTO ways VALUES (?, ?, ?, ?, ?)", rows)
-    conn.executemany("INSERT INTO way_cells VALUES (?, ?)", cell_rows)
+    conn.executemany("INSERT OR IGNORE INTO walkable_ways VALUES (?, ?, ?, ?, ?)", rows)
+    conn.executemany("INSERT INTO walkable_cells VALUES (?, ?)", cell_rows)
     conn.commit()

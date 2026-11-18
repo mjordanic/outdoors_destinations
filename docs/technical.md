@@ -1789,11 +1789,13 @@ car park. Its search runs as a stage of its own (`search_destinations`), after
 ingest's passes and before the snapshot loads. It cuts its own extract beside
 the source (`*.walk.osm.pbf`, every walkable way, car parks and destinations
 with their tags, its ways carrying their nodes' locations from osmium
-`add-locations-to-ways`), keeps the ways near destinations in a temporary
-SQLite store and searches 1° tiles in `parallel_map` workers forked from that
+`add-locations-to-ways`), keeps the ways near destinations in the work file
+and searches 1° tiles in `parallel_iter` workers forked from that
 small process (`--dest-workers N` or `DAYHIKE_DEST_WORKERS`, else the
 `--workers` count). A tile whose destinations have no car park within reach
-is not read. Every walk found and the ways it takes wait in the work file;
+is not read. Each tile's walks go into the work file as the tile is done, so
+a build stopped part way resumes (without `--fresh`) with the tiles not yet
+done, unless the walk extracts, the DEM folder or the search's code changed;
 the source chooses from them. The ways a kept walk takes that the snapshot
 lacks go into the snapshot and the work file's path tables, so the
 GeometryStore and the TrailGraph hold them.

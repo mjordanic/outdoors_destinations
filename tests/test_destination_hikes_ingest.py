@@ -253,8 +253,8 @@ def _read(path: Path, located: bool, work: Path) -> tuple:
     store, found = work / "walkable.sqlite", _Read()
     _read_walkable(path, store, set(), found, work, located)
     with sqlite3.connect(store) as conn:
-        ways = conn.execute("SELECT * FROM ways ORDER BY id").fetchall()
-        cells = conn.execute("SELECT * FROM way_cells ORDER BY cell, way").fetchall()
+        ways = conn.execute("SELECT * FROM walkable_ways ORDER BY id").fetchall()
+        cells = conn.execute("SELECT * FROM walkable_cells ORDER BY cell, way").fetchall()
     return ways, cells, found.found, found.parking, found.names, found.lakes, found.lake_ways
 
 
@@ -295,13 +295,13 @@ def test_the_destination_search_runs_before_the_snapshot_loads_with_its_own_work
     osm, dem = _fixture(tmp_path / "planina.osm", lake=True), _dem(tmp_path / "dem")
     serial = build_catalog(osm, tmp_path / "serial.sqlite", sources=[destination_source], dem_dir=dem)
     counts = []
-    parallel_map = destination_hikes.parallel_map
+    parallel_iter = destination_hikes.parallel_iter
 
     def counted(task, items, count=None):
         counts.append(count)
-        return parallel_map(task, items, count)
+        return parallel_iter(task, items, count)
 
-    monkeypatch.setattr(destination_hikes, "parallel_map", counted)
+    monkeypatch.setattr(destination_hikes, "parallel_iter", counted)
     monkeypatch.setenv("DAYHIKE_WORKERS", "1")
     monkeypatch.setenv("DAYHIKE_DEST_WORKERS", "2")
     lines: list[str] = []
@@ -315,3 +315,57 @@ def test_the_destination_search_runs_before_the_snapshot_loads_with_its_own_work
         (h.id, h.name, h.length_m) for h in _destination_hikes(serial)
     ]
     assert len(_destination_hikes(serial)) == 3
+
+
+def _two_tiles(path: Path) -> Path:
+    # A hut 4 km up a path from a named car park, in each of two 1-degree tiles.
+    nodes, ways = {}, []
+    for tile, lat in enumerate((45.5, 46.5)):
+        first = 1_000 * (tile + 1)
+        ids = [first + i for i in range(17)]
+        for i, node in enumerate(ids):
+            nodes[node] = ((round(lat + i * KM_LAT / 4, 7), LON), {})
+        nodes[first + 100] = ((round(lat + 4 * KM_LAT + 0.0001, 7), LON), {"tourism": "alpine_hut", "name": f"Koča {tile}"})
+        nodes[first + 101] = ((round(lat - 0.0002, 7), LON), {"amenity": "parking", "name": f"Dolina {tile}"})
+        ways.append((first, ids, {"highway": "path"}))
+    return _write_osm(path, nodes, ways)
+
+
+def test_a_build_stopped_part_way_through_the_tiles_resumes_with_the_tiles_done(tmp_path: Path) -> None:
+    osm = _two_tiles(tmp_path / "two.osm")
+    clean = build_catalog(osm, tmp_path / "clean.sqlite", sources=[destination_source])
+    assert len(_destination_hikes(clean)) == 2
+
+    def stop_at_the_second_tile(line: str) -> None:
+        if line.startswith("destinations: tile 46 N"):
+            raise RuntimeError("stopped")
+
+    with pytest.raises(RuntimeError, match="stopped"):
+        build_catalog(osm, tmp_path / "catalog.sqlite", sources=[destination_source], progress=stop_at_the_second_tile)
+    lines: list[str] = []
+    resumed = build_catalog(osm, tmp_path / "catalog.sqlite", sources=[destination_source], progress=lines.append)
+
+    assert [line for line in lines if line.startswith("destinations: tile")] == [
+        "destinations: tile 46 N 13 E: 1 walks to 1 destinations (0 out of reach of a car park) on 1 ways"
+    ]
+    # The stage's key held, so nothing was read again: a changed key would have searched both tiles.
+    assert "destinations: 2 destinations and 2 car parks read; searching 1 tiles of 2" in lines
+    assert [(h.id, h.name, h.length_m) for h in _destination_hikes(resumed)] == [
+        (h.id, h.name, h.length_m) for h in _destination_hikes(clean)
+    ]
+
+
+def test_a_stopped_build_whose_search_changed_since_searches_every_tile_again(tmp_path: Path, monkeypatch) -> None:
+    osm = _two_tiles(tmp_path / "two.osm")
+
+    def stop_at_the_second_tile(line: str) -> None:
+        if line.startswith("destinations: tile 46 N"):
+            raise RuntimeError("stopped")
+
+    with pytest.raises(RuntimeError, match="stopped"):
+        build_catalog(osm, tmp_path / "catalog.sqlite", sources=[destination_source], progress=stop_at_the_second_tile)
+    monkeypatch.setattr(destination_hikes, "SEARCH_VERSION", destination_hikes.SEARCH_VERSION + 1)
+    lines: list[str] = []
+    build_catalog(osm, tmp_path / "catalog.sqlite", sources=[destination_source], progress=lines.append)
+
+    assert "destinations: 2 destinations and 2 car parks read; searching 2 tiles of 2" in lines

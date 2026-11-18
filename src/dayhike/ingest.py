@@ -161,7 +161,7 @@ def run_ingest(
         _pass_nodes(conn, scan_paths, progress)
         if destination_source in sources:
             # Before the snapshot loads: the tile search forks its workers from a small process (ADR-0067).
-            search_destinations(conn, source_paths, getattr(heights, "raster_dir", None), progress)
+            search_destinations(work_path, source_paths, getattr(heights, "raster_dir", None), progress)
         emit_progress(progress, "assemble", "loading work file")
         snapshot = _load_hiking_snapshot(conn, progress, with_paths=any(level != "graded" for level in levels))
         emit_progress(
