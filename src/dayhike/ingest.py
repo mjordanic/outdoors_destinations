@@ -6,7 +6,7 @@ import sqlite3
 import subprocess
 import sys
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 
@@ -150,7 +150,7 @@ def run_ingest(
     external: Sequence[tuple[str, Sequence[ExternalHike]]] = (),
     previous: PreviousStarts | None = None,
     paths: str | Sequence[str] = "graded",
-) -> tuple[list[DayHike], IngestReport, Path, OsmSnapshot]:
+) -> tuple[list[DayHike], IngestReport, Path, OsmSnapshot, dict[int, _StoredWalk]]:
     # One paths level for every source, or one per source (a Europe and US build, ADR-0069).
     levels = [paths] * len(source_paths) if isinstance(paths, str) else list(paths)
     if len(levels) != len(source_paths):
@@ -258,7 +258,7 @@ def run_ingest(
             dropped_external_duplicate=external_counts["duplicate"],
             dropped_external_length=external_counts["length"],
         )
-        return kept, report, work_path, snapshot
+        return kept, report, work_path, snapshot, walks
     finally:
         conn.close()
 
@@ -1298,12 +1298,15 @@ def write_geometry_store(
     heights: Heights | None = None,
     dem_read: str = "",
     previous: PreviousStarts | None = None,
+    walks: Mapping[int, _StoredWalk] | None = None,
 ) -> None:
     """Write DayHikeGeometry, member ways, and raw amenity points beside the Catalog.
 
     Access points, named points and ``heights`` are those of ``run_ingest``,
     so each main walk starts at the same Trailhead as in the Catalog;
     ``snapshot`` is the one ``run_ingest`` loaded from it, else it is loaded again.
+    ``walks`` are the main walks ``run_ingest`` stored, which are read instead
+    of assembled again; a relation DayHike with none is assembled.
     ``dem_read`` names the DEM sources ``heights`` read (``dem_read_by``); it is recorded
     in ``geometry_meta`` unless empty.
     """
@@ -1375,9 +1378,12 @@ def write_geometry_store(
         if dem_read:
             out.execute("INSERT INTO geometry_meta (key, value) VALUES (?, ?)", (DEM_READ_KEY["ingest"], dem_read))
         relation_hikes = [hike for hike in dayhikes if hike.kind == KIND_RELATION]
-        # The main walks are assembled again in the workers; the rows are written here, in hike order.
+        # The rows are built in the workers, from the stored main walks (assembled when one is missing);
+        # they are written here, in hike order.
         relation_rows = parallel_iter(
-            lambda hike: _relation_geometry_rows(hike, relations[hike.id], snapshot, access_tree, named, lower),
+            lambda hike: _relation_geometry_rows(
+                hike, relations[hike.id], snapshot, access_tree, named, lower, walks
+            ),
             relation_hikes,
         )
         for hike in dayhikes:
@@ -1429,10 +1435,15 @@ def _relation_geometry_rows(
     access_tree,
     named: NamedPoints | None,
     lower: LowerStart | None = None,
+    walks: Mapping[int, _StoredWalk] | None = None,
 ) -> tuple[tuple, list[tuple], list[tuple]]:
     """A relation DayHike's rows of the GeometryStore: its dayhikes row, its
-    main walk's vertices and its member ways."""
-    walk = _main_walk(relation, snapshot, access_tree, named, lower)
+    main walk's vertices and its member ways. The main walk is the stored one
+    in ``walks``, else it is assembled."""
+    if walks is not None and hike.id in walks:
+        walk = _stored_walk(walks[hike.id], snapshot.nodes)
+    else:
+        walk = _main_walk(relation, snapshot, access_tree, named, lower)
     dayhike_row = (
         hike.id,
         hike.name,

@@ -73,8 +73,8 @@ def test_unnamed_paths_join_at_the_unnamed_level(pbf: Path, tmp_path: Path) -> N
 
 
 def test_a_named_path_in_no_relation_enters_the_snapshot(pbf: Path, tmp_path: Path) -> None:
-    _, _, _, default = run_ingest([pbf], tmp_path / "default" / "catalog.sqlite")
-    _, _, _, named = run_ingest([pbf], tmp_path / "named" / "catalog.sqlite", paths="named")
+    _, _, _, default, _ = run_ingest([pbf], tmp_path / "default" / "catalog.sqlite")
+    _, _, _, named, _ = run_ingest([pbf], tmp_path / "named" / "catalog.sqlite", paths="named")
 
     assert LAKE_PATH not in default.ways and N1 not in default.nodes
     assert named.ways[LAKE_PATH].tags["name"] == "Lake Path"
@@ -119,7 +119,7 @@ def test_a_work_file_of_another_paths_level_is_not_resumed(pbf: Path, tmp_path: 
     catalog_path = tmp_path / "catalog.sqlite"
     run_ingest([pbf], catalog_path)  # leaves its work file, as a run stopped before writing does
 
-    _, _, _, snapshot = run_ingest([pbf], catalog_path, paths="named")
+    _, _, _, snapshot, _ = run_ingest([pbf], catalog_path, paths="named")
 
     assert LAKE_PATH in snapshot.ways
 
