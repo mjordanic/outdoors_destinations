@@ -85,6 +85,34 @@ def test_the_pass_cache_is_left_alone_by_the_work_file_the_build_deletes(tmp_pat
     assert not (tmp_path / "b" / "catalog.sqlite.work").exists()
 
 
+def test_a_resumed_build_does_not_overwrite_the_pass_cache(
+    tmp_path: Path, source: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache = tmp_path / "pass-cache"
+    catalog = tmp_path / "a" / "catalog.sqlite"
+
+    def stopped(*args, **kwargs):
+        raise RuntimeError("stopped after the passes")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ingest, "_build_hikes", stopped)
+        with pytest.raises(RuntimeError):
+            build_catalog(source, catalog, pass_cache=cache)
+    entry = next(cache.iterdir())
+    before = entry.stat().st_mtime_ns
+
+    build_catalog(source, catalog, pass_cache=cache)
+
+    assert entry.stat().st_mtime_ns == before
+    assert _files(catalog) == _files(_plain(tmp_path, source))
+
+
+def _plain(tmp_path: Path, source: Path) -> Path:
+    catalog = tmp_path / "plain" / "catalog.sqlite"
+    build_catalog(source, catalog)
+    return catalog
+
+
 @pytest.mark.parametrize("change", ["mtime", "size", "version", "schema", "paths", "fresh"])
 def test_a_pass_cache_that_does_not_match_is_not_used(
     tmp_path: Path, source: Path, passes_read: list[Path], monkeypatch: pytest.MonkeyPatch, change: str

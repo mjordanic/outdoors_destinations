@@ -181,8 +181,19 @@ def test_a_step_is_done_for_the_inputs_and_code_it_ran_with_and_the_steps_it_rea
     assert not ledger.done("sample-landcover", {"landcover": "l"})
 
 
-def test_code_version_changes_with_the_source(tmp_path: Path) -> None:
-    assert code_version() == code_version() and len(code_version()) == 16
+def test_code_version_changes_with_the_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    package = tmp_path / "dayhike"
+    package.mkdir()
+    (package / "steps.py").write_text("A = 1\n")
+    monkeypatch.setattr("dayhike.steps.__file__", str(package / "steps.py"))
+    code_version.cache_clear()
+    before = code_version()
+    (package / "steps.py").write_text("A = 2\n")
+    code_version.cache_clear()
+    after = code_version()
+    code_version.cache_clear()
+
+    assert len(before) == 16 and before != after
 
 
 @pytest.mark.parametrize(
@@ -223,6 +234,29 @@ def test_resume_skips_a_finished_step_and_runs_one_whose_inputs_changed(
     (tmp_path / "CM" / "tile.tif").write_bytes(b"22")
     (tmp_path / "OUT" / "meta.json").unlink()  # export-serving: its output is gone
     assert main([*argv, "--resume"]) == 0 and ran == [1, 1, 1]  # an input changed: runs again
+
+
+def test_export_serving_resume_ignores_later_steps_writing_into_its_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dayhike.cli import main
+
+    catalog = tmp_path / "catalog.sqlite"
+    catalog.write_bytes(b"")
+    out = tmp_path / "OUT"
+    out.mkdir()
+    (out / "meta.json").write_text("{}")
+    ran: list[int] = []
+    monkeypatch.setattr("dayhike.cli._export_serving", lambda *a, **k: ran.append(1) or 0)
+    argv = ["export-serving", "--catalog", str(catalog), "--out", str(out), "--resume"]
+
+    assert main(argv) == 0 and ran == [1]
+    (out / "hikes.sqlite").write_bytes(b"photos added")  # export-photos writes into the same folder
+    assert main(argv) == 0 and ran == [1]
+    other = tmp_path / "OTHER"
+    other.mkdir()
+    (other / "meta.json").write_text("{}")
+    assert main([*argv[:-2], str(other), "--resume"]) == 0 and ran == [1, 1]  # another output folder
 
 
 def test_a_step_that_failed_leaves_no_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -168,7 +168,7 @@ def run_ingest(
     work_path = work_path_for(catalog_path)
     fingerprint = _fingerprint(source_paths, levels)
     resume = not fresh and _work_is_resumable(work_path, fingerprint)
-    cached = None if pass_cache is None else _pass_cache_path(pass_cache, fingerprint, levels)
+    cached = None if pass_cache is None or resume else _pass_cache_path(pass_cache, fingerprint, levels)
     if not resume:
         remove_work(work_path)
         if cached is not None and not fresh and _work_is_resumable(cached, fingerprint):
@@ -302,7 +302,9 @@ def _phase(
     """The kept result of an ingest phase, else ``compute()``, kept."""
     phase = phases.load(name)
     if phase is None:
-        return phases.cached(name, compute)
+        phase = compute()
+        phases.save(name, phase)
+        return phase
     emit_progress(progress, "assemble", f"resumed phase {name}")
     return phase
 

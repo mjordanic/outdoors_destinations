@@ -1096,7 +1096,10 @@ def _add_resume(command: argparse.ArgumentParser) -> None:
 
 
 # Arguments that do not decide what a step writes, or that name its own output.
-_NOT_INPUTS = {"command", "catalog", "workers", "dest_workers", "resume", "fresh", "list_dayhikes", "pass_cache", "cache_dir", "region_default"}
+_NOT_INPUTS = {
+    "command", "catalog", "workers", "dest_workers", "resume", "fresh", "list_dayhikes", "out", "pass_cache", "cache_dir",
+    "region_default",
+}
 
 
 def _input_key(value: object) -> object:
@@ -1111,6 +1114,7 @@ def _step_inputs(args: argparse.Namespace) -> dict[str, object]:
     inputs = {"catalog_exists": args.catalog.is_file()}
     if args.command == "export-serving":
         inputs["exported"] = (args.out / "meta.json").is_file()
+        inputs["out"] = str(args.out)
     inputs.update({name: _input_key(value) for name, value in sorted(vars(args).items()) if name not in _NOT_INPUTS})
     return inputs
 

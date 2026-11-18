@@ -25,7 +25,7 @@ import json
 import pickle
 import shutil
 import uuid
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from functools import lru_cache
 from pathlib import Path
 
@@ -144,14 +144,6 @@ class PhaseStore:
         except OSError:
             tmp.unlink(missing_ok=True)
         self._chain = key
-
-    def cached(self, name: str, compute: Callable[[], dict[str, object]]) -> dict[str, object]:
-        """The saved result of ``name``, else ``compute()``, saved."""
-        payload = self.load(name)
-        if payload is None:
-            payload = compute()
-            self.save(name, payload)
-        return payload
 
 
 def ingest_key(
