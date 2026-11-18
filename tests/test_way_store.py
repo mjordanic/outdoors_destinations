@@ -5,7 +5,7 @@ import json
 import numpy as np
 import pytest
 
-from dayhike.osm import OsmWay, WayStore
+from dayhike.osm import OsmWay, WayStore, WaysWithout
 
 
 def _rows():
@@ -88,3 +88,24 @@ def test_sparse_and_clustered_ids_read_like_a_dict():
     assert [ways.get(p) for p in probes] == [before.get(p) for p in probes]
     assert [p in ways for p in probes] == [p in before for p in probes]
     assert list(ways.items()) == list(before.items())
+
+
+def test_ways_without_some_read_like_the_filtered_dict_they_replace(monkeypatch):
+    ways = WayStore.from_rows(_rows())
+    ways.update({40: OsmWay((8, 9), {"highway": "path"})})
+    left_out = frozenset({10, 40, 99})
+    before = {way_id: way for way_id, way in ways.items() if way_id not in left_out}
+    built = []
+    read = WayStore.__getitem__
+    monkeypatch.setattr(WayStore, "__getitem__", lambda self, way_id: built.append(way_id) or read(self, way_id))
+
+    without = WaysWithout(ways, left_out)
+
+    assert list(without) == list(before) == [30, 12_000_000_000, 20]
+    assert len(without) == 3 and built == []
+    assert 10 not in without and 40 not in without and 99 not in without and 30 in without
+    with pytest.raises(KeyError):
+        without[10]
+    assert without.get(40) is None and built == []
+    assert list(without.items()) == list(before.items())
+    assert dict(without) == before

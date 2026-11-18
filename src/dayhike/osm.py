@@ -4,7 +4,7 @@ import json
 import re
 from array import array
 from bisect import bisect_left
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from itertools import islice
 
@@ -203,6 +203,28 @@ class WayStore(_SortedIds):
 
     def update(self, ways: Mapping[int, OsmWay]) -> None:
         self._added.update(ways)
+
+
+class WaysWithout(Mapping[int, OsmWay]):
+    """``ways`` read without the ways ``left_out``, in the same order: a way
+    is built only when it is read, none are copied."""
+
+    def __init__(self, ways: Mapping[int, OsmWay], left_out: Collection[int]) -> None:
+        self._ways, self._left_out = ways, left_out
+
+    def __getitem__(self, way_id) -> OsmWay:
+        if way_id in self._left_out:
+            raise KeyError(way_id)
+        return self._ways[way_id]
+
+    def __contains__(self, way_id) -> bool:
+        return way_id not in self._left_out and way_id in self._ways
+
+    def __iter__(self) -> Iterator[int]:
+        return (way_id for way_id in self._ways if way_id not in self._left_out)
+
+    def __len__(self) -> int:
+        return len(self._ways) - sum(1 for way_id in self._left_out if way_id in self._ways)
 
 
 @dataclass
