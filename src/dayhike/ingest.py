@@ -52,7 +52,7 @@ from dayhike.catalog import (
     tagged_ends,
 )
 from dayhike.dem import DEM_READ_KEY
-from dayhike.destination_hikes import destination_source
+from dayhike.destination_hikes import destination_source, search_destinations
 from dayhike.named_trails import named_trails
 from dayhike.names import unique_names
 from dayhike.network_hikes import network_source
@@ -159,6 +159,9 @@ def run_ingest(
         _pass_relations(conn, scan_paths, progress)
         _pass_ways(conn, scan_paths, progress, levels)
         _pass_nodes(conn, scan_paths, progress)
+        if destination_source in sources:
+            # Before the snapshot loads: the tile search forks its workers from a small process (ADR-0067).
+            search_destinations(work_path, source_paths, getattr(heights, "raster_dir", None), progress)
         emit_progress(progress, "assemble", "loading work file")
         snapshot = _load_hiking_snapshot(conn, progress, with_paths=any(level != "graded" for level in levels))
         emit_progress(
@@ -199,6 +202,7 @@ def run_ingest(
                 lower,
                 tuple(Path(path) for path in source_paths),
                 getattr(heights, "raster_dir", None),
+                work_path=work_path,
             )
             kept += _build_hikes(conn, sources, context, amenity_index)
         external_counts = {"added": 0, "stages": 0, "twin": 0, "duplicate": 0, "length": 0}

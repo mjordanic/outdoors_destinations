@@ -125,18 +125,18 @@ def test_a_pbf_ingest_runs_osmium_only_for_the_hiking_filter(
 ) -> None:
     source = _sorted_pbf(FIXTURE, tmp_path / "catalog.osm.pbf")
     osmium_commands: list[str] = []
-    run = subprocess.run
+    popen = subprocess.Popen
 
-    def record(cmd, *args, **kwargs):
+    def record(cmd, *args, **kwargs):  # subprocess.run starts its process with Popen too
         if Path(cmd[0]).name == "osmium":
             osmium_commands.append(cmd[1])
-        return run(cmd, *args, **kwargs)
+        return popen(cmd, *args, **kwargs)
 
-    monkeypatch.setattr("dayhike.ingest.subprocess.run", record)
+    monkeypatch.setattr("dayhike.ingest.subprocess.Popen", record)
     catalog = build_catalog(source, tmp_path / "catalog.sqlite")
 
-    # The catalog extract, and the walk extract DestinationHikes read (ADR-0067).
-    assert osmium_commands == ["tags-filter", "tags-filter"]
+    # The catalog extract, and the walk extract DestinationHikes read, its ways located (ADR-0067).
+    assert osmium_commands == ["tags-filter", "tags-filter", "add-locations-to-ways"]
     assert catalog.ingest_report.kept == 4
     assert list(tmp_path.glob("catalog.sqlite.access*")) == []
 

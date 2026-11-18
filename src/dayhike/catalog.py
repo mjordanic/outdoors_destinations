@@ -565,7 +565,8 @@ def build_catalog(
     amenities in a work file next to the Catalog, so the source does not need
     to fit in RAM. Re-running the same inputs resumes that work file.
     ``fresh=True`` discards it and starts again. ``progress`` receives one
-    line per stage (filter, relations, ways, nodes, assemble, write).
+    line per stage (filter, relations, ways, nodes, destinations, assemble,
+    write).
 
     Unnamed `highway=path` ways are not DayHikes; relations under 1 km,
     containers and node-network legs are counted in the ingest report and are
@@ -696,14 +697,14 @@ def _osm_paths_and_levels(
 def _osm_files(path: Path) -> list[Path]:
     if not path.is_dir():
         return [path]
-    # Ingest writes its osmium extract (``*.catalog.osm.pbf``, while being
-    # written ``*.writing.osm.pbf``) beside the source: not a source itself, and
+    # Ingest writes its osmium extracts (``*.catalog.osm.pbf``, ``*.walk.osm.pbf``, while
+    # being written ``*.writing.osm.pbf``) beside the source: not a source itself, and
     # listing it would change the fingerprint and stop the next run resuming.
     files = sorted(
         candidate
         for candidate in path.iterdir()
         if candidate.suffix in {".osm", ".xml", ".pbf"}
-        and not candidate.name.endswith((".catalog.osm.pbf", ".writing.osm.pbf"))
+        and not candidate.name.endswith((".catalog.osm.pbf", ".walk.osm.pbf", ".writing.osm.pbf"))
     )
     if not files:
         raise FileNotFoundError(f"No OSM files in {path}")
