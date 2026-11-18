@@ -642,7 +642,7 @@ def destination_source(context: BuildContext) -> list[BuiltWalk]:
     for hike in kept:
         ways = {way_id: extra[way_id][0] for way_id in hike.way_ids if way_id in extra}
         nodes = {node: point for way_id in ways for node, point in extra[way_id][1].items()}
-        built.append(BuiltWalk(KIND, hike.name, hike.vertices, hike.way_ids, (), ways, nodes))
+        built.append(BuiltWalk(KIND, hike.name, hike.node_ids, hike.points, hike.way_ids, (), ways, nodes))
     return built
 
 
@@ -704,7 +704,7 @@ def _copied(context: BuildContext, hikes: Sequence[DestinationHike]) -> tuple[li
             vertices = context.main_walk(relation).vertices
             if len(vertices) >= 2:
                 copied.append(RelationWalk(hike.length_m, tuple(point for _, point in vertices)))
-    built = [np.array([point for _, point in walk.vertices]) for walk in context.built if walked.intersection(walk.way_ids)]
+    built = [walk.points for walk in context.built if walked.intersection(walk.way_ids)]
     return copied, [points for points in built if len(points) >= 2]
 
 

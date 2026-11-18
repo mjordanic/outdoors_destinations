@@ -89,7 +89,7 @@ def day_stages(context: BuildContext) -> list[BuiltWalk]:
             if lower is not None and first != last and lower(first, last) == last:
                 stage = DayStage(stage.vertices[::-1], stage.length_m, stage.end, stage.start)
             walks.append(
-                BuiltWalk(
+                BuiltWalk.of(
                     kind="stage",
                     name=_stage_name(tour.name, k, *_end_names(stage, places)),
                     vertices=stage.vertices,

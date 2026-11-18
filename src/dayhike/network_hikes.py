@@ -184,7 +184,7 @@ def network_source(context: BuildContext) -> list[BuiltWalk]:
                 crossing_m / straight_m,
                 CROSSING_MAX_RATIO,
             )
-    return [BuiltWalk("network", hike.name, hike.vertices, hike.way_ids, hike.parts) for hike in hikes]
+    return [BuiltWalk.of("network", hike.name, hike.vertices, hike.way_ids, hike.parts) for hike in hikes]
 
 
 def _relation_walks(context: BuildContext, legs: Sequence[OsmRelation]) -> list[list[Point]]:
