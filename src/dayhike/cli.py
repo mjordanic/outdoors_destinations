@@ -17,6 +17,7 @@ from dayhike.catalog import (
     build_catalog,
     filter_by_drive_time,
 )
+from dayhike.destination_hikes import DEST_WORKERS_ENV
 from dayhike.dem import DEM_SOURCES, Bounds, DEFAULT_DEM_DIR, fetch_dem, sample_dem
 from dayhike.landcover import DEFAULT_LANDCOVER_DIR, fetch_worldcover, sample_landcover
 from dayhike.parallel import WORKERS_ENV
@@ -129,6 +130,14 @@ def main(argv: list[str] | None = None) -> int:
         "a Europe and US build reads data/osm/us=trails (ADR-0069)",
     )
     _add_workers(ingest)
+    ingest.add_argument(
+        "--dest-workers",
+        type=_parse_workers,
+        default=None,
+        metavar="N",
+        help="Worker processes for the destination hikes' tile search, which runs before the snapshot "
+        f"loads, the same result with any number (default: ${DEST_WORKERS_ENV}, else the --workers count)",
+    )
     fetch_ext = subparsers.add_parser(
         "fetch-external",
         help="Download an external hike source into data/external/<source> (does not ingest)",
@@ -554,6 +563,8 @@ def main(argv: list[str] | None = None) -> int:
             subparsers.choices[args.command].error(str(exc))
     if getattr(args, "workers", None) is not None:
         os.environ[WORKERS_ENV] = str(args.workers)  # the stage's code reads it (dayhike.parallel)
+    if getattr(args, "dest_workers", None) is not None:
+        os.environ[DEST_WORKERS_ENV] = str(args.dest_workers)
     if args.command == "export-serving":
         try:
             regions = [load_region(name) for name in args.region]

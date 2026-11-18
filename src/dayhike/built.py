@@ -57,7 +57,9 @@ class BuildContext:
     what it built (one line, like ingest's ``progress``) and the height rule
     that starts a line at its lower end (ADR-0048), None without heights; the
     OSM files ingest read and the DEM folder, for a source that reads more of
-    them (DestinationHikes), and the walks the sources before it built."""
+    them (DestinationHikes), the walks the sources before it built, and ingest's
+    work file, where a stage before the snapshot left what a source reads
+    (DestinationHikes' walks)."""
 
     snapshot: OsmSnapshot
     dayhikes: Sequence[DayHike]
@@ -67,6 +69,7 @@ class BuildContext:
     source_paths: tuple[Path, ...] = ()
     dem_dir: Path | None = None
     built: tuple[BuiltWalk, ...] = ()
+    work_path: Path | None = None
 
 
 BuiltHikeSource = Callable[[BuildContext], Iterable[BuiltWalk]]

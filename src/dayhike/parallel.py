@@ -1,10 +1,11 @@
 """Worker processes for the rebuild's stages (ADR-0044).
 
 ``workers()`` is how many processes a stage may use, from ``DAYHIKE_WORKERS``
-(the CLI's ``--workers`` sets it), 1 when unset: one process, as before.
-``parallel_map`` maps a function over items in that many forked processes and
-returns the results in item order, so a stage builds the same thing with any
-worker count; ``parallel_iter`` streams them. The workers are forked, so they
+(the CLI's ``--workers`` sets it), 1 when unset: one process, as before. A step
+with a count of its own reads it from its own variable, ``DAYHIKE_WORKERS`` when
+that is unset. ``parallel_map`` maps a function over items in that many forked
+processes (or ``count``) and returns the results in item order, so a stage
+builds the same thing with any worker count; ``parallel_iter`` streams them. The workers are forked, so they
 read what the stage holds (the snapshot, a graph, a closure's variables)
 without it being sent to them; only the items and the results are. A worker
 the system kills (out of memory) fails the stage with BrokenProcessPool
@@ -42,25 +43,26 @@ R = TypeVar("R")
 _task: Callable | None = None  # the function the forked workers run
 
 
-def workers() -> int:
-    """The worker count from ``DAYHIKE_WORKERS``: a whole number of at least 1, 1 when unset."""
-    value = os.environ.get(WORKERS_ENV)
+def workers(env: str = WORKERS_ENV) -> int:
+    """The worker count from ``env``: a whole number of at least 1. ``DAYHIKE_WORKERS``
+    unset is 1; another variable unset is ``DAYHIKE_WORKERS``'s count."""
+    value = os.environ.get(env)
     if value is None:
-        return 1
+        return 1 if env == WORKERS_ENV else workers()
     try:
         count = int(value)
     except ValueError:
         count = 0
     if count < 1:
-        raise ValueError(f"{WORKERS_ENV} must be a whole number of at least 1, got {value!r}")
+        raise ValueError(f"{env} must be a whole number of at least 1, got {value!r}")
     return count
 
 
-def parallel_map(task: Callable[[T], R], items: Iterable[T]) -> list[R]:
-    """``[task(item) for item in items]``, run in ``workers()`` forked processes
-    when that is more than 1, in item order either way."""
+def parallel_map(task: Callable[[T], R], items: Iterable[T], count: int | None = None) -> list[R]:
+    """``[task(item) for item in items]``, run in ``count`` (else ``workers()``)
+    forked processes when that is more than 1, in item order either way."""
     items = list(items)
-    count = min(workers(), len(items))
+    count = min(workers() if count is None else count, len(items))
     if count <= 1:
         return [task(item) for item in items]
     _check_fork_safe_blas()

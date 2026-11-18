@@ -6,13 +6,20 @@ and near the equator a degree of longitude is about as long.
 """
 
 import math
+import random
+from pathlib import Path
 
 from dayhike.destination_hikes import (
+    TILE_DEG,
     Destination,
     merged,
     RelationWalk,
     Start,
+    _starts_by_tile,
+    _TileTask,
+    _with_margin,
     destination_hikes,
+    walks,
 )
 from dayhike.osm import OsmWay
 
@@ -330,3 +337,64 @@ def test_of_two_equally_known_destinations_within_150_m_the_same_one_stays_in_an
     b = Destination("Koča B", "hut", (at(4.1, 0),))
 
     assert [d.name for d in merged([a, b])] == [d.name for d in merged([b, a])] == ["Koča B"]
+
+
+def test_a_destination_no_car_park_is_within_reach_of_gets_no_walk_but_still_splits_the_graph() -> None:
+    # Vrh is 13 km up the path from Dolina, past its 12.5 km (and 200 m to snap both ends):
+    # it is not searched. Triglav (16 km to a Wikidata peak) is walked past it, and that walk
+    # is the same as when Vrh is searched: its node still ends a segment of the graph.
+    net = Net()
+    net.line((0, 0), (13, 0), (15, 0), heights=[600, 1_900, 2_400])
+    triglav = Destination("Triglav", "peak", (at(15, 0),), ele=2_864, wikidata=True)
+
+    def found(vrh: Destination) -> dict[str, list]:
+        by_name: dict[str, list] = {}
+        for hike in walks(net.ways, net.nodes, [triglav, vrh], [DOLINA], net.heights):
+            by_name.setdefault(hike.destination.name, []).append(
+                (hike.length_m, hike.climb_m, hike.descent_m, hike.cost, hike.points.tolist(), hike.way_ids)
+            )
+        return by_name
+
+    skipped = found(Destination("Vrh", "peak", (at(13, 0),), ele=1_900))
+    searched = found(Destination("Vrh", "peak", (at(13, 0),), ele=1_900, wikidata=True))
+
+    assert "Vrh" not in skipped and "Vrh" in searched
+    assert skipped["Triglav"] == searched["Triglav"]
+
+
+def test_a_destination_is_searched_when_one_merged_into_it_is_within_reach() -> None:
+    # The peak's own point is 12.73 km from the car park, but the hut merged into it, where
+    # the path ends, 12.59 km: the walk of 12.49 km to it is built.
+    net = Net()
+    net.line((0, 0), (12.49, 0))
+    peak = Destination("Vrh", "peak", (at(12.63, 0),), ele=1_500, others=(at(12.49, 0),), other_names=("Koča",))
+
+    hikes = kept(net.hikes([peak], [Start("Dolina", (at(-0.095, 0),))]))
+
+    assert [hike.name for hike in hikes] == ["Vrh from Dolina"]
+
+
+def test_a_tile_with_no_destination_in_reach_of_a_car_park_reads_nothing() -> None:
+    task = _TileTask(Path("/nonexistent/walkable.sqlite"), {}, None)  # reading it would fail
+    far = [Start("Dolina", ((46.5, 13.5),))]
+
+    assert task(((46, 13), [Destination("Vrh", "peak", ((46.9, 13.9),), ele=2_000)], far)) == []
+    assert task(((46, 13), [Destination("Vrh", "peak", ((46.9, 13.9),), ele=2_000)], [])) == []
+
+
+def test_each_tile_gets_the_car_parks_within_its_margin_in_their_order() -> None:
+    rng = random.Random(7)
+    starts = []
+    for i in range(3_000):
+        lat, lon = rng.uniform(-3, 3) + rng.choice([0, 45, 69, -60]), rng.uniform(-4, 4)
+        corners = rng.choice([1, 1, 4])
+        starts.append(Start(f"P{i}", tuple((lat + rng.uniform(0, 0.01), lon + rng.uniform(0, 0.01)) for _ in range(corners))))
+    keys = {(row, col) for row in (-62, -61, -1, 0, 1, 44, 45, 46, 68, 69, 70) for col in range(-3, 3)}
+
+    by_tile = _starts_by_tile(starts, keys)
+
+    for row, col in keys:
+        south, west, north, east = _with_margin(row * TILE_DEG, col * TILE_DEG, (row + 1) * TILE_DEG, (col + 1) * TILE_DEG)
+        inside = [start for start in starts if any(south <= lat <= north and west <= lon <= east for lat, lon in start.points)]
+        assert by_tile.get((row, col), []) == inside
+    assert set(by_tile) <= keys

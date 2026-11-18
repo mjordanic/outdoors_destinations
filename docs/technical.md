@@ -1785,12 +1785,18 @@ the first way it walks, and the page links the ways its Route walks.
 `destination_source` (`dayhike.destination_hikes`, ADR-0067) is registered last: it
 builds DestinationHikes, "{destination} from {start}" walks from a car park to
 a named hut, viewpoint, lake or notable peak, up to 8 per destination and 8 per
-car park. It cuts its own extract beside the source (`*.walk.osm.pbf`, every
-walkable way, car parks and destinations with their tags), keeps the ways near
-destinations in a temporary SQLite store and searches 1° tiles in
-`parallel_map` workers. The ways a kept walk takes that the snapshot lacks go
-into the snapshot and the work file's path tables, so the GeometryStore and
-the TrailGraph hold them.
+car park. Its search runs as a stage of its own (`search_destinations`), after
+ingest's passes and before the snapshot loads. It cuts its own extract beside
+the source (`*.walk.osm.pbf`, every walkable way, car parks and destinations
+with their tags, its ways carrying their nodes' locations from osmium
+`add-locations-to-ways`), keeps the ways near destinations in a temporary
+SQLite store and searches 1° tiles in `parallel_map` workers forked from that
+small process (`--dest-workers N` or `DAYHIKE_DEST_WORKERS`, else the
+`--workers` count). A tile whose destinations have no car park within reach
+is not read. Every walk found and the ways it takes wait in the work file;
+the source chooses from them. The ways a kept walk takes that the snapshot
+lacks go into the snapshot and the work file's path tables, so the
+GeometryStore and the TrailGraph hold them.
 
 Last come the external hikes of each `--external` source (ADR-0062, `dayhike.external`),
 read from the cache `dayhike fetch-external` wrote under `data/external/<source>/`.
@@ -2722,7 +2728,10 @@ at the rebuild.
    step): they run their independent work in N forked processes and write
    the same files as with one, the default (ADR-0044). Each worker adds
    memory, so pick N for the machine's free cores and RAM: an ingest worker
-   adds up to about 30 % of ingest's one-process peak. `sample-climate` and
+   adds up to about 30 % of ingest's one-process peak. Ingest's destination
+   search forks its workers before the snapshot loads, from a small process,
+   so it may take more: `--dest-workers N` (or `DAYHIKE_DEST_WORKERS=N`),
+   else the `--workers` count. `sample-climate` and
    `export-serving` run in one process whatever `DAYHIKE_WORKERS` says.
 
    Beside the sample steps, rebuild the highway tiles ([Highway tiles](#highway-tiles-all-of-europe-small-server):

@@ -19,7 +19,9 @@ import pytest
 from dayhike import build_catalog
 from dayhike.built import BUILT_ID_MIN
 from dayhike.catalog import geometry_store_path_for, trailgraph_path_for
-from dayhike.destination_hikes import destination_source
+from dayhike import destination_hikes
+from dayhike.catalog import _osm_files
+from dayhike.destination_hikes import WALK_TAG_FILTERS, _Read, _read_walkable, _walk_extract, destination_source
 from dayhike.similarity import _step_m
 from dayhike.trailgraph import Route, TrailGraph
 from dem_tiles import write_dem_tile
@@ -223,3 +225,93 @@ def test_destinations_either_side_of_a_tile_edge_are_merged(tmp_path: Path) -> N
     catalog = build_catalog(osm, tmp_path / "catalog.sqlite", sources=[destination_source])
 
     assert [hike.name for hike in _destination_hikes(catalog)] == ["Razgled from Dolina"]
+
+
+def _needs_osmium() -> None:
+    if shutil.which("osmium") is None:
+        pytest.skip("osmium-tool is not on PATH")
+
+
+def _with_closed_hut_way(path: Path) -> Path:
+    # The fixture with a lake and a closed hut drawn as a way, whose first node the read looks up.
+    text = _fixture(path, lake=True).read_text()
+    hut = "".join(f'<node id="{700 + i}" version="1" lat="{lat}" lon="{lon}"/>' for i, (lat, lon) in enumerate(
+        [_at(8, 0.1), _at(8.02, 0.1), _at(8.02, 0.12), _at(8, 0.12)]
+    ))
+    way = (
+        '<way id="3500" version="1">' + "".join(f'<nd ref="{ref}"/>' for ref in [700, 701, 702, 703, 700])
+        + '<tag k="building" v="hut"/><tag k="abandoned:tourism" v="wilderness_hut"/><tag k="name" v="Stara koča"/></way>'
+    )
+    text = text.replace('<way id="1000"', hut + '<way id="1000"', 1).replace("</osm>", "").rstrip()
+    first_relation = text.index("<relation")
+    path.write_text(text[:first_relation] + way + text[first_relation:] + "\n</osm>")
+    return path
+
+
+def _read(path: Path, located: bool, work: Path) -> tuple:
+    work.mkdir()
+    store, found = work / "walkable.sqlite", _Read()
+    _read_walkable(path, store, set(), found, work, located)
+    with sqlite3.connect(store) as conn:
+        ways = conn.execute("SELECT * FROM ways ORDER BY id").fetchall()
+        cells = conn.execute("SELECT * FROM way_cells ORDER BY cell, way").fetchall()
+    return ways, cells, found.found, found.parking, found.names, found.lakes, found.lake_ways
+
+
+def test_the_walk_extract_carries_its_node_locations_and_reads_as_the_file_itself(tmp_path: Path) -> None:
+    _needs_osmium()
+    pbf = _pbf(_with_closed_hut_way(tmp_path / "planina.osm"))
+
+    extract, located = _walk_extract(pbf, None)
+
+    assert extract.name == "planina.walk.osm.pbf" and located
+    ways, cells, *points = _read(extract, True, tmp_path / "located")
+    assert (ways, cells, *points) == _read(pbf, False, tmp_path / "from-source")
+    assert {row[0] for row in ways} >= {1000, TRACK, 1002} and points[0] and points[1] and points[3]
+    assert "Stara koča" in {name for _, name, _, _ in points[0]}
+
+
+def test_a_walk_extract_cut_before_it_carried_node_locations_is_cut_again(tmp_path: Path) -> None:
+    _needs_osmium()
+    pbf = _pbf(_fixture(tmp_path / "planina.osm"))
+    extract, _ = _walk_extract(pbf, None)
+    lines: list[str] = []
+    assert _walk_extract(pbf, lines.append) == (extract, True) and lines == []
+
+    extract.with_name(extract.name + ".filters").write_text("\n".join(WALK_TAG_FILTERS) + "\n")  # an older cut's stamp
+
+    assert _walk_extract(pbf, lines.append) == (extract, True)
+    assert lines == [f"filter: {pbf.name} -> {extract.name}"]
+
+
+def test_a_walk_extract_beside_a_source_is_not_a_source(tmp_path: Path) -> None:
+    for name in ("planina.osm.pbf", "planina.walk.osm.pbf", "planina.catalog.osm.pbf"):
+        (tmp_path / name).write_bytes(b"")
+
+    assert _osm_files(tmp_path) == [tmp_path / "planina.osm.pbf"]
+
+
+def test_the_destination_search_runs_before_the_snapshot_loads_with_its_own_workers(tmp_path: Path, monkeypatch) -> None:
+    osm, dem = _fixture(tmp_path / "planina.osm", lake=True), _dem(tmp_path / "dem")
+    serial = build_catalog(osm, tmp_path / "serial.sqlite", sources=[destination_source], dem_dir=dem)
+    counts = []
+    parallel_map = destination_hikes.parallel_map
+
+    def counted(task, items, count=None):
+        counts.append(count)
+        return parallel_map(task, items, count)
+
+    monkeypatch.setattr(destination_hikes, "parallel_map", counted)
+    monkeypatch.setenv("DAYHIKE_WORKERS", "1")
+    monkeypatch.setenv("DAYHIKE_DEST_WORKERS", "2")
+    lines: list[str] = []
+
+    forked = build_catalog(osm, tmp_path / "forked.sqlite", sources=[destination_source], dem_dir=dem, progress=lines.append)
+
+    assert counts == [2]
+    searching = next(i for i, line in enumerate(lines) if "searching" in line)
+    assert searching < lines.index("assemble: loading work file")
+    assert [(h.id, h.name, h.length_m) for h in _destination_hikes(forked)] == [
+        (h.id, h.name, h.length_m) for h in _destination_hikes(serial)
+    ]
+    assert len(_destination_hikes(serial)) == 3

@@ -30,6 +30,27 @@ def test_a_worker_count_that_is_not_a_positive_whole_number_is_refused(monkeypat
         workers()
 
 
+def test_a_stages_own_worker_count_falls_back_to_the_shared_one(monkeypatch):
+    monkeypatch.setenv(WORKERS_ENV, "3")
+    monkeypatch.delenv("DAYHIKE_TEST_WORKERS", raising=False)
+
+    assert workers("DAYHIKE_TEST_WORKERS") == 3
+    monkeypatch.setenv("DAYHIKE_TEST_WORKERS", "5")
+    assert workers("DAYHIKE_TEST_WORKERS") == 5
+    monkeypatch.setenv("DAYHIKE_TEST_WORKERS", "none")
+    with pytest.raises(ValueError, match="DAYHIKE_TEST_WORKERS"):
+        workers("DAYHIKE_TEST_WORKERS")
+
+
+def test_parallel_map_takes_a_worker_count_of_its_own(monkeypatch):
+    monkeypatch.setenv(WORKERS_ENV, "1")
+
+    pids = parallel_map(lambda _: os.getpid(), range(200), count=2)
+
+    assert os.getpid() not in set(pids)
+    assert set(parallel_map(lambda _: os.getpid(), range(20), count=1)) == {os.getpid()}
+
+
 def test_parallel_map_returns_each_result_in_item_order(monkeypatch):
     monkeypatch.setenv(WORKERS_ENV, "3")
     table = {n: n * n for n in range(500)}  # read by the workers, never sent to them

@@ -4,15 +4,18 @@ A walk from a car park to a named Peak, Hut, Viewpoint or lake along every way
 a hiker may walk (the walkable graph), stored one way, start to destination; a
 hiker walks it there and back. ``destination_hikes`` is pure: it searches one
 piece of the walkable graph from each destination out to the car parks and
-chooses which walks stay. ``destination_source`` is the built-hike source
-(ADR-0038): it reads the walkable graph from the OSM extract itself, tile by
-tile, so it never needs the whole graph in memory.
+chooses which walks stay. ``search_destinations`` is a stage of ingest's own,
+before the snapshot loads: it reads the walkable graph from the OSM extract
+itself and searches it tile by tile, so it never needs the whole graph in
+memory, and stores the walks it finds in the work file. ``destination_source``
+is the built-hike source (ADR-0038) that chooses from them.
 """
 
 from __future__ import annotations
 
 import json
 import math
+import pickle
 import shutil
 import sqlite3
 import subprocess
@@ -28,7 +31,7 @@ import numpy as np
 from dayhike.built import BuildContext, BuiltWalk
 from dayhike.catalog import EARTH_RADIUS_M, KIND_RELATION
 from dayhike.osm import OsmWay
-from dayhike.parallel import parallel_map
+from dayhike.parallel import parallel_map, workers
 from dayhike.similarity import TWIN_STEP_M, _even_points, climb_and_descent, twin_groups
 
 Point = tuple[float, float]  # (lat, lon)
@@ -58,6 +61,7 @@ NEAR_COPY_M = 150.0  # a relation DayHike passing this close to both ends ...
 NEAR_COPY_LENGTH = 2.0  # ... at most this many times the walk there and back already goes there
 VIA_M = 150.0  # a dropped Twin's destination this close to a kept walk, and farther from its end, is a via
 FLAT_M = 10.0  # a segment whose heights stay within this counts only its ends' difference
+REACH_SLACK_M = 1.0  # float rounding: the reach test (``_in_reach``) never drops a destination a walk reaches
 ROAD_HIGHWAYS = frozenset({"residential", "unclassified", "tertiary", "service", "living_street"})
 HARD_SAC = frozenset({"demanding_alpine_hiking", "difficult_alpine_hiking"})  # T5, T6
 
@@ -206,6 +210,9 @@ def walks(
     the search goes out to the car parks, never past one, weighing metres by the
     way (roads, grade, marked route) and climb; a car park's cheapest walk is kept
     when it passes the rules of length, roads, another side and descent."""
+    in_reach = _in_reach(destinations, starts)
+    if not any(in_reach):
+        return []
     graph = _Graph(ways, nodes, heights or {}, marked or {})
     if not graph.size:
         return []
@@ -223,13 +230,37 @@ def walks(
             reached.setdefault(node, []).append(destination)
     if not start_at or not reached:
         return []
+    # A destination out of reach is not searched, but still ends a segment: segment costs
+    # count climb over the whole segment, so it splits the graph as it always did.
     graph.contract(set(start_at) | set(reached), set(start_at))
+    searched = {id(destination) for destination, near in zip(destinations, in_reach) if near}
     found: list[DestinationHike] = []
     for node, here in reached.items():
         for destination in here:
+            if id(destination) not in searched:
+                continue
             candidates = graph.search(node, SEARCH_COST_MAX * destination.one_way_max_m)
             found += _chosen_walks(graph, destination, candidates, start_at)
     return found
+
+
+def _in_reach(destinations: Sequence[Destination], starts: Sequence[Start]) -> list[bool]:
+    """Whether each destination has a car park within its longest walk and both snaps, in a
+    straight line from any of its points or those merged into it to any point of the car park.
+    A walk is never shorter than that line less the snaps, so a destination with none has no walk."""
+    if not destinations or not starts:
+        return [False] * len(destinations)
+    from sklearn.neighbors import BallTree
+
+    tree = BallTree(np.radians([point for start in starts for point in start.points]), metric="haversine")
+    points = [[*destination.points, *destination.others] for destination in destinations]
+    distance, _ = tree.query(np.radians([point for here in points for point in here]), k=1)
+    first = np.cumsum([0, *(len(here) for here in points[:-1])])
+    nearest = np.minimum.reduceat(distance[:, 0], first) * EARTH_RADIUS_M
+    return [
+        bool(metres <= destination.one_way_max_m + START_SNAP_M + DESTINATION_SNAP_M + REACH_SLACK_M)
+        for metres, destination in zip(nearest.tolist(), destinations)
+    ]
 
 
 def _chosen_walks(graph: _Graph, destination: Destination, candidates, start_at) -> list[DestinationHike]:
@@ -500,7 +531,7 @@ class _Graph:
         u, v, cost = u[first_of_pair], v[first_of_pair], cost[first_of_pair]
         self.arc_segment, self.arc_forward = segment[first_of_pair], forward[first_of_pair]
         self.arc_ptr = np.searchsorted(u, np.arange(size + 1))
-        self.arc_to = v
+        self.arc_of = dict(zip(zip(u.tolist(), v.tolist()), range(len(u))))  # (from, to): its arc
         self.search_graph = csr_matrix((cost, v, self.arc_ptr), shape=(size, size))
 
     def search(self, node: int, limit: float):
@@ -524,7 +555,7 @@ class _Graph:
         here = sink
         while here != source:  # back from the car park, arc by arc, each walked away from the destination
             back = int(before[here])
-            arc = int(self.arc_ptr[back]) + int(np.searchsorted(self.arc_to[self.arc_ptr[back] : self.arc_ptr[back + 1]], here))
+            arc = self.arc_of[(back, here)]
             on, steps = self.segments[int(self.arc_segment[arc])]
             if self.arc_forward[arc]:
                 on, steps = on[::-1], steps[::-1]
@@ -602,42 +633,77 @@ GENERIC_PARKING = frozenset({"parking", "parkplatz", "parkirišče", "parcheggio
 LARGE_EXTRACT_BYTES = 2 * 1024**3  # a larger extract keeps node locations in a file, not in memory
 
 
-def destination_source(context: BuildContext) -> list[BuiltWalk]:
-    """The DestinationHikes of the OSM files ingest read (``context.source_paths``)."""
-    if not context.source_paths:
-        return []
+DEST_WORKERS_ENV = "DAYHIKE_DEST_WORKERS"  # the tile search's workers; DAYHIKE_WORKERS's count when unset
+
+
+def search_destinations(conn: sqlite3.Connection, source_paths: Sequence[Path], dem_dir: Path | None, progress=None) -> None:
+    """Every walk to a destination in the OSM files ``source_paths``, stored in the work
+    file ``conn`` (``destination_walks``, in order) with the ways they take (``destination_ways``)
+    for ``destination_source``. Ingest runs it after its passes, before the snapshot loads,
+    so the tile search's ``DAYHIKE_DEST_WORKERS`` workers fork from a small process. The ways
+    it reads wait in a temporary store, deleted when the search is done."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS destination_walks (seq INTEGER PRIMARY KEY, walk BLOB NOT NULL);
+        CREATE TABLE IF NOT EXISTS destination_ways (id INTEGER PRIMARY KEY, node_ids BLOB, lats BLOB, lons BLOB, tags TEXT);
+        DELETE FROM destination_walks;
+        DELETE FROM destination_ways;
+        """
+    )
+    if not source_paths:
+        conn.commit()
+        return
     with tempfile.TemporaryDirectory(prefix="dayhike-destinations-") as work:
         store = Path(work) / "walkable.sqlite"
-        cells = _wanted_cells(context.snapshot)
+        cells = _wanted_cells(conn)
         found = _Read()
-        for path in context.source_paths:
-            _read_walkable(_walk_extract(path, context.progress), store, cells, found, Path(work))
-        destinations = found.destinations(context.dem_dir)
+        for path in source_paths:
+            extract, located = _walk_extract(path, progress)
+            _read_walkable(extract, store, cells, found, Path(work), located)
+        destinations = found.destinations(dem_dir)
         starts = found.starts()
-        marked: dict[int, list[int]] = {}
-        for relation in context.snapshot.relations:
-            for kind, way_id in relation.members:
-                if kind == "way":
-                    marked.setdefault(way_id, []).append(relation.id)
+        del found  # the car parks' tags: not for the workers to inherit
         tiles: dict[tuple[int, int], list[Destination]] = {}
         for destination in destinations:
             tiles.setdefault(_tile(destination.points[0]), []).append(destination)
-        if context.progress is not None:
-            context.progress(
-                f"assemble: destination hikes: {len(destinations)} destinations and {len(starts)} car parks read; "
+        if progress is not None:
+            progress(
+                f"destinations: {len(destinations)} destinations and {len(starts)} car parks read; "
                 f"searching {len(tiles)} tiles"
             )
-        task = _TileTask(store, starts, marked, context.dem_dir, context.progress)
-        items = [(key, [*here, *_near_edge(tiles, key)]) for key, here in sorted(tiles.items())]
-        hikes = [hike for found_here in parallel_map(task, items) for hike in found_here]
+        by_tile = _starts_by_tile(starts, tiles)
+        task = _TileTask(store, _marked(conn), dem_dir, progress)
+        items = [(key, [*here, *_near_edge(tiles, key)], by_tile.get(key, [])) for key, here in sorted(tiles.items())]
+        hikes = [hike for found_here in parallel_map(task, items, workers(DEST_WORKERS_ENV)) for hike in found_here]
+        conn.executemany(
+            "INSERT INTO destination_walks (seq, walk) VALUES (?, ?)",
+            ((seq, pickle.dumps(hike)) for seq, hike in enumerate(hikes)),  # exactly as found: floats, types and all
+        )
+        ids = sorted({way_id for hike in hikes for way_id in hike.way_ids})
+        with closing(sqlite3.connect(store)) as walkable:
+            for chunk in range(0, len(ids), 500):
+                part = ids[chunk : chunk + 500]
+                conn.executemany(
+                    "INSERT INTO destination_ways VALUES (?, ?, ?, ?, ?)",
+                    walkable.execute(f"SELECT * FROM ways WHERE id IN ({','.join('?' * len(part))})", part).fetchall(),
+                )
+        conn.commit()
+    if progress is not None:
+        progress(f"destinations: {len(hikes)} walks found on {len(tiles)} tiles")
+
+
+def destination_source(context: BuildContext) -> list[BuiltWalk]:
+    """The DestinationHikes of the OSM files ingest read (``context.source_paths``): of the
+    walks ``search_destinations`` stored in the work file, those that are no Twin."""
+    if not context.source_paths:
+        return []
+    with closing(sqlite3.connect(context.work_path)) as conn:
+        hikes = [pickle.loads(walk) for (walk,) in conn.execute("SELECT walk FROM destination_walks ORDER BY seq")]
         hikes = choose(hikes, *_copied(context, hikes))
         kept = [hike for hike in hikes if hike.twin is None]
         if context.progress is not None:
-            context.progress(
-                f"assemble: destination hikes: {len(kept)} kept of {len(hikes)} walks to "
-                f"{len(destinations)} destinations from {len(starts)} car parks on {len(tiles)} tiles"
-            )
-        extra = _ways(store, {way_id for hike in kept for way_id in hike.way_ids} - set(context.snapshot.ways))
+            context.progress(f"assemble: destination hikes: {len(kept)} kept of {len(hikes)} walks")
+        extra = _ways(conn, {way_id for hike in kept for way_id in hike.way_ids} - set(context.snapshot.ways))
     built = []
     for hike in kept:
         ways = {way_id: extra[way_id][0] for way_id in hike.way_ids if way_id in extra}
@@ -649,15 +715,24 @@ def destination_source(context: BuildContext) -> list[BuiltWalk]:
 class _TileTask:
     """One tile's walks, in a worker of its own: its destinations merged (with those
     of the tiles beside it near its edge, keeping the merged ones whose best-known
-    destination is its own), the ways within reach of them from the store, their
-    heights from the DEM, and the search."""
+    destination is its own), and unless no car park of the tile is within reach of
+    them, the ways within reach of them from the store, their heights from the DEM,
+    and the search."""
 
-    def __init__(self, store: Path, starts: Sequence[Start], marked, dem_dir: Path | None, progress=None) -> None:
-        self.store, self.starts, self.marked, self.dem_dir, self.progress = store, starts, marked, dem_dir, progress
+    def __init__(self, store: Path, marked, dem_dir: Path | None, progress=None) -> None:
+        self.store, self.marked, self.dem_dir, self.progress = store, marked, dem_dir, progress
 
-    def __call__(self, item: tuple[tuple[int, int], list[Destination]]) -> list[DestinationHike]:
-        (row, col), destinations = item
+    def __call__(self, item: tuple[tuple[int, int], list[Destination], list[Start]]) -> list[DestinationHike]:
+        (row, col), destinations, starts = item
         destinations = [destination for destination in merged(destinations) if _tile(destination.points[0]) == (row, col)]
+        far = len(destinations) - sum(_in_reach(destinations, starts))
+        if far == len(destinations):
+            if self.progress is not None:
+                self.progress(
+                    f"destinations: tile {row} N {col} E: none of {len(destinations)} destinations "
+                    "within reach of a car park"
+                )
+            return []
         south, west, north, east = _with_margin(row * TILE_DEG, col * TILE_DEG, (row + 1) * TILE_DEG, (col + 1) * TILE_DEG)
         with closing(sqlite3.connect(self.store)) as conn:
             cells = [_cell(lat, lon) for lat in _steps(south, north) for lon in _steps(west, east)]
@@ -674,7 +749,6 @@ class _TileTask:
                     node_ids = np.frombuffer(ids, dtype=np.int64)
                     ways[way_id] = OsmWay(tuple(node_ids.tolist()), json.loads(tags))
                     nodes.update(zip(node_ids.tolist(), zip(np.frombuffer(lats).tolist(), np.frombuffer(lons).tolist())))
-        starts = [start for start in self.starts if any(south <= lat <= north and west <= lon <= east for lat, lon in start.points)]
         heights: dict[int, float] = {}
         if self.dem_dir is not None and nodes:
             from dayhike.dem import sample_elevations
@@ -684,10 +758,48 @@ class _TileTask:
         found = walks(ways, nodes, destinations, starts, heights, self.marked)
         if self.progress is not None:
             self.progress(
-                f"assemble: destination hikes: tile {row} N {col} E: {len(found)} walks to {len(destinations)} "
-                f"destinations on {len(ways)} ways"
+                f"destinations: tile {row} N {col} E: {len(found)} walks to {len(destinations)} "
+                f"destinations ({far} out of reach of a car park) on {len(ways)} ways"
             )
         return found
+
+
+def _starts_by_tile(starts: Sequence[Start], keys) -> dict[tuple[int, int], list[Start]]:
+    """The car parks of each tile of ``keys``, in their order: those with a point in the
+    tile or its margin (``_with_margin``). Each car park is tested against the tiles
+    near it, not each tile against every car park."""
+    boxes = {
+        (row, col): _with_margin(row * TILE_DEG, col * TILE_DEG, (row + 1) * TILE_DEG, (col + 1) * TILE_DEG)
+        for row, col in keys
+    }
+    lon_reach = {row: col * TILE_DEG - west for (row, col), (_, west, _, _) in boxes.items()}  # a row's margin
+    _, _, lat_reach, _ = _with_margin(0.0, 0.0, 0.0, 0.0)
+    by_tile: dict[tuple[int, int], list[Start]] = {}
+    for start in starts:
+        lats, lons = [lat for lat, _ in start.points], [lon for _, lon in start.points]
+        low, high = min(lats) - lat_reach, max(lats) + lat_reach
+        for row in range(math.floor(low / TILE_DEG) - 1, math.floor(high / TILE_DEG) + 2):
+            if row not in lon_reach:
+                continue
+            west, east = min(lons) - lon_reach[row], max(lons) + lon_reach[row]
+            for col in range(math.floor(west / TILE_DEG) - 1, math.floor(east / TILE_DEG) + 2):
+                box = boxes.get((row, col))
+                if box is None:
+                    continue
+                south, west_edge, north, east_edge = box
+                if any(south <= lat <= north and west_edge <= lon <= east_edge for lat, lon in start.points):
+                    by_tile.setdefault((row, col), []).append(start)
+    return by_tile
+
+
+def _marked(conn: sqlite3.Connection) -> dict[int, list[int]]:
+    """The hiking relations each way is in, from the work file's relations, as the snapshot reads them."""
+    marked: dict[int, list[int]] = {}
+    for rel_id, members in conn.execute("SELECT id, members FROM relations"):
+        for kind, way_id in json.loads(members):
+            if kind == "way":
+                marked.setdefault(way_id, []).append(rel_id)
+    return marked
 
 
 def _copied(context: BuildContext, hikes: Sequence[DestinationHike]) -> tuple[list[RelationWalk], list[np.ndarray]]:
@@ -708,19 +820,18 @@ def _copied(context: BuildContext, hikes: Sequence[DestinationHike]) -> tuple[li
     return copied, [points for points in built if len(points) >= 2]
 
 
-def _ways(store: Path, way_ids: set[int]) -> dict[int, tuple[OsmWay, dict[int, Point]]]:
-    """The stored ways of ``way_ids``, each with its nodes' points."""
+def _ways(conn: sqlite3.Connection, way_ids: set[int]) -> dict[int, tuple[OsmWay, dict[int, Point]]]:
+    """The stored ways of ``way_ids`` (``destination_ways``), each with its nodes' points."""
     found = {}
     ids = sorted(way_ids)
-    with closing(sqlite3.connect(store)) as conn:
-        for chunk in range(0, len(ids), 500):
-            part = ids[chunk : chunk + 500]
-            for way_id, node_ids, lats, lons, tags in conn.execute(
-                f"SELECT id, node_ids, lats, lons, tags FROM ways WHERE id IN ({','.join('?' * len(part))})", part
-            ):
-                node_ids = np.frombuffer(node_ids, dtype=np.int64).tolist()
-                points = zip(np.frombuffer(lats).tolist(), np.frombuffer(lons).tolist())
-                found[way_id] = (OsmWay(tuple(node_ids), json.loads(tags)), dict(zip(node_ids, points)))
+    for chunk in range(0, len(ids), 500):
+        part = ids[chunk : chunk + 500]
+        for way_id, node_ids, lats, lons, tags in conn.execute(
+            f"SELECT id, node_ids, lats, lons, tags FROM destination_ways WHERE id IN ({','.join('?' * len(part))})", part
+        ):
+            node_ids = np.frombuffer(node_ids, dtype=np.int64).tolist()
+            points = zip(np.frombuffer(lats).tolist(), np.frombuffer(lons).tolist())
+            found[way_id] = (OsmWay(tuple(node_ids), json.loads(tags)), dict(zip(node_ids, points)))
     return found
 
 
@@ -759,10 +870,16 @@ def _with_margin(
     return south - lat_margin, west - lon_margin, north + lat_margin, east + lon_margin
 
 
-def _wanted_cells(snapshot) -> set[int]:
-    """The cells within reach of a destination ingest read: only their ways are stored."""
-    points = [(lat, lon) for lat, lon, _ in snapshot.destinations]
-    points += [point for kind, found in snapshot.amenities if kind == "hut" for point in found]
+def _wanted_cells(conn: sqlite3.Connection) -> set[int]:
+    """The cells within reach of a destination or hut ingest read (the snapshot's ``destinations``
+    and huts, from the work file's amenities): only their ways are stored."""
+    from dayhike.ingest import DESTINATION_KINDS  # ingest imports this module
+
+    points = [
+        (lat, lon)
+        for kind, lat, lon, name in conn.execute("SELECT kind, lat, lon, json_extract(tags, '$.name') FROM amenities")
+        if (name and kind in DESTINATION_KINDS) or kind == "hut"
+    ]
     return _cells_near(points)
 
 
@@ -775,37 +892,53 @@ def _cells_near(points) -> set[int]:
     return cells
 
 
-def _walk_extract(source: Path, progress) -> Path:
-    """The source's walk extract (``WALK_TAG_FILTERS``), cut with osmium and kept
-    beside it like the catalog extract; the source itself without osmium or a PBF."""
+def _walk_extract(source: Path, progress) -> tuple[Path, bool]:
+    """The source's walk extract (``WALK_TAG_FILTERS``), cut with osmium, its ways carrying
+    their nodes' locations, and kept beside it like the catalog extract; and whether its ways
+    carry them: the source itself, without osmium or a PBF, does not."""
     osmium_bin = shutil.which("osmium")
     name = source.name
     if osmium_bin is None or not name.lower().endswith(".pbf") or name.endswith(".catalog.osm.pbf"):
-        return source
+        return source, False
     stem = name[: -len(".osm.pbf")] if name.endswith(".osm.pbf") else source.stem
     cache = source.with_name(f"{stem}.walk.osm.pbf")
     filters = cache.with_name(cache.name + ".filters")
-    text = "\n".join(WALK_TAG_FILTERS) + "\n"
+    # The last line stamps an extract whose ways carry their nodes' locations: one cut before has none.
+    text = "\n".join([*WALK_TAG_FILTERS, "add-locations-to-ways"]) + "\n"
     if (
         cache.is_file()
         and cache.stat().st_mtime_ns >= source.stat().st_mtime_ns
         and filters.is_file()
         and filters.read_text() == text
     ):
-        return cache
+        return cache, True
     if progress is not None:
         progress(f"filter: {name} -> {cache.name}")
     writing = cache.with_name(f"{stem}.walk.writing.osm.pbf")
-    try:
-        subprocess.run(
-            [osmium_bin, "tags-filter", str(source.resolve()), *WALK_TAG_FILTERS, "-o", str(writing), "--overwrite", "--no-progress"],
-            check=True,
-        )
-        writing.replace(cache)
-        filters.write_text(text)
-    finally:
-        writing.unlink(missing_ok=True)
-    return cache
+    # osmium's node location index, in a file: Europe's is some 13 GB, which no process holds in memory.
+    with tempfile.TemporaryDirectory(prefix="dayhike-walk-extract-") as index:
+        try:
+            cut = subprocess.Popen(
+                [osmium_bin, "tags-filter", str(source.resolve()), *WALK_TAG_FILTERS, "-o", "-", "-f", "pbf", "--no-progress"],
+                stdout=subprocess.PIPE,
+            )
+            locate = subprocess.Popen(
+                [
+                    osmium_bin, "add-locations-to-ways", "-", "-F", "pbf", "-o", str(writing), "--overwrite",
+                    "--index-type", f"sparse_file_array,{Path(index) / 'locations.bin'}", "--ignore-missing-nodes",
+                    "--no-progress",
+                ],
+                stdin=cut.stdout,
+            )  # fmt: skip
+            cut.stdout.close()  # only the second reads it, so it ends the first if it stops early
+            codes = (cut.wait(), locate.wait())
+            if any(codes):
+                raise subprocess.CalledProcessError(max(codes), "osmium tags-filter | osmium add-locations-to-ways")
+            writing.replace(cache)
+            filters.write_text(text)
+        finally:
+            writing.unlink(missing_ok=True)
+    return cache, True
 
 
 class _Read:
@@ -909,41 +1042,49 @@ def _ele(tags: dict[str, str]) -> float | None:
         return None
 
 
-def _read_walkable(path: Path, store: Path, cells: set[int], found: _Read, work: Path) -> None:
+def _read_walkable(path: Path, store: Path, cells: set[int], found: _Read, work: Path, located: bool) -> None:
     """Store the walkable ways of ``path`` that touch ``cells``, or are within reach
     of a destination node or closed hut it holds (with their nodes' points, by cell),
-    and gather its points into ``found``."""
+    and gather its points into ``found``. ``located``: its ways carry their nodes'
+    locations (the walk extract); else they are kept while it is read, in memory or
+    for a file over 2 GB in a file in ``work``."""
     import osmium
 
-    hut_nodes = []  # a node of each closed hut drawn as a way, which the catalog does not read
+    # A node of each closed hut drawn as a way, which the catalog does not read: its point, or its id to look up.
+    hut_points, hut_nodes = [], []
     first_pass = osmium.FileProcessor(str(path), osmium.osm.RELATION | osmium.osm.WAY)
     for obj in first_pass.with_filter(osmium.filter.KeyFilter("water", *CLOSED_HUT_KEYS)):
         tags = dict(obj.tags)
         if obj.is_way():
             if tags.get("name") and len(obj.nodes) and any(tags.get(key) in HUT_TOURISM for key in CLOSED_HUT_KEYS):
-                hut_nodes.append(obj.nodes[0].ref)
+                first = obj.nodes[0]
+                if not located:
+                    hut_nodes.append(first.ref)
+                elif first.location.valid():
+                    hut_points.append((first.location.lat, first.location.lon))
             continue
         if tags.get("name") and tags.get("natural") == "water" and tags.get("water") in LAKE_WATER:
             found.lakes[obj.id] = (tags["name"], [])
             for member in obj.members:
                 if member.type == "w" and member.role != "inner":
                     found.lake_ways[member.ref] = obj.id
-    big = path.stat().st_size > LARGE_EXTRACT_BYTES
-    storage = f"sparse_file_array,{work / 'locations.bin'}" if big else "flex_mem"
     conn = sqlite3.connect(store)
     conn.execute(
         "CREATE TABLE IF NOT EXISTS ways (id INTEGER PRIMARY KEY, node_ids BLOB, lats BLOB, lons BLOB, tags TEXT)"
     )
     conn.execute("CREATE TABLE IF NOT EXISTS way_cells (cell INTEGER, way INTEGER)")
     rows, cell_rows = [], []
-    processor = osmium.FileProcessor(str(path), osmium.osm.NODE | osmium.osm.WAY).with_locations(storage)
+    processor = osmium.FileProcessor(str(path), osmium.osm.NODE | osmium.osm.WAY)
+    if not located:
+        big = path.stat().st_size > LARGE_EXTRACT_BYTES
+        processor = processor.with_locations(f"sparse_file_array,{work / 'locations.bin'}" if big else "flex_mem")
     read_nodes = len(found.found)
     for obj in processor.with_filter(osmium.filter.EmptyTagFilter().enable_for(osmium.osm.NODE)):
         if obj.is_node():
             found.node(dict(obj.tags), (obj.location.lat, obj.location.lon))
             continue
         if read_nodes is not None:  # the file's nodes come first: their destinations are known
-            near = [points[0] for _, _, points, _ in found.found[read_nodes:]]
+            near = [points[0] for _, _, points, _ in found.found[read_nodes:]] + hut_points
             for node in hut_nodes:
                 try:
                     location = processor.node_location_storage.get(node)
