@@ -38,15 +38,19 @@ def source(tmp_path: Path) -> Path:
     return path
 
 
+# The osmium scans of one snapshot file: relations; ways (points, paths, listed); nodes (points, geometry).
+SNAPSHOT_SCANS = 6
+
+
 @pytest.fixture
 def passes_read(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
     """The files the ingest passes read from the snapshot, in order."""
     read: list[Path] = []
     real = ingest._iter_file
 
-    def recorded(path, entities):
+    def recorded(path, entities, filters=()):
         read.append(path)
-        return real(path, entities)
+        return real(path, entities, filters)
 
     monkeypatch.setattr(ingest, "_iter_file", recorded)
     return read
@@ -57,10 +61,10 @@ def test_a_second_build_of_one_snapshot_skips_the_passes_and_builds_the_same_cat
 ) -> None:
     cache = tmp_path / "pass-cache"
     build_catalog(source, tmp_path / "plain" / "catalog.sqlite")
-    assert len(passes_read) == 3  # relations, ways, nodes
+    assert len(passes_read) == SNAPSHOT_SCANS
     passes_read.clear()
     build_catalog(source, tmp_path / "first" / "catalog.sqlite", pass_cache=cache)
-    assert len(passes_read) == 3
+    assert len(passes_read) == SNAPSHOT_SCANS
     assert len(list(cache.iterdir())) == 1
     passes_read.clear()
     messages: list[str] = []
@@ -162,7 +166,7 @@ def test_a_pass_cache_that_does_not_match_is_not_used(
 
     build_catalog(source, tmp_path / "second" / "catalog.sqlite", pass_cache=cache, fresh=fresh, paths=paths)
 
-    assert len(passes_read) == 3
+    assert len(passes_read) == SNAPSHOT_SCANS
 
 
 def test_a_cache_the_build_cannot_open_is_rebuilt(tmp_path: Path, source: Path, passes_read: list[Path]) -> None:
@@ -173,7 +177,7 @@ def test_a_cache_the_build_cannot_open_is_rebuilt(tmp_path: Path, source: Path, 
 
     catalog = build_catalog(source, tmp_path / "second" / "catalog.sqlite", pass_cache=cache)
 
-    assert len(passes_read) == 3
+    assert len(passes_read) == SNAPSHOT_SCANS
     assert catalog.ingest_report.kept == 4
 
 
@@ -184,7 +188,7 @@ def test_the_cli_takes_a_pass_cache(tmp_path: Path, source: Path, passes_read: l
     for name in ("a", "b"):
         main(["ingest", str(source), "--catalog", str(tmp_path / name / "catalog.sqlite"), "--pass-cache", str(cache)])
 
-    assert len(passes_read) == 3
+    assert len(passes_read) == SNAPSHOT_SCANS
     assert len(list(cache.iterdir())) == 1
 
 
