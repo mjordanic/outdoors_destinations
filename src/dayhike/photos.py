@@ -30,7 +30,6 @@ PAUSE_S = 1.0
 BATCH = 50
 MAX_URL = 4000
 PROGRESS_EVERY = 20
-COMMIT_EVERY = 200  # cached answers written before a commit
 CATEGORY_FILES = 10
 THUMB_PX = 480
 _FREE = re.compile(r"cc by( sa)?( \d+(?:\.\d+)?)?")
@@ -220,7 +219,6 @@ class CommonsClient:
         self.opener = opener or _urlopen_bytes
         self.pause_s = pause_s
         self._next = 0.0
-        self._pending = 0
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(self.path)
         self._db.execute("CREATE TABLE IF NOT EXISTS response (key TEXT PRIMARY KEY, body TEXT NOT NULL)")
@@ -239,14 +237,10 @@ class CommonsClient:
             "INSERT OR REPLACE INTO response (key, body) VALUES (?, ?)",
             (key, json.dumps(value, ensure_ascii=False)),
         )
-        self._pending += 1
-        if self._pending >= COMMIT_EVERY:
-            self.commit()
 
     def commit(self) -> None:
         """Write the answers held so far; a batch of API answers is one commit, not one per answer."""
         self._db.commit()
-        self._pending = 0
 
     def close(self) -> None:
         self.commit()
@@ -476,7 +470,7 @@ def _photos_on_hike(keys: Iterable[tuple], index: dict[tuple, dict], client: Com
     return photos_for_hike([index[key] for key in keys if key in index], client.one)
 
 
-def _pois_near_hikes(catalog_path: Path | str, geo: sqlite3.Connection, rows: list) -> set[tuple]:
+def _pois_near_hikes(catalog_path: Path | str, geo_path: Path, rows: list) -> set[tuple]:
     """Keys of the POIs that can be on a hike: a superset of what ``export_serving`` lists.
 
     It asks the serving export's own questions (a Corridor of 100 m, 2 km for a
@@ -484,6 +478,11 @@ def _pois_near_hikes(catalog_path: Path | str, geo: sqlite3.Connection, rows: li
     hundred-thousand-hike Catalog costs minutes, not the export. The Trailhead
     keeps the nearest few of all parking, so here it keeps every linked one
     near it: a superset is all a warm cache needs.
+
+    The GeometryStore is opened for one chunk of hikes at a time and closed
+    again before the chunk is computed on: ``warm_photos`` runs beside
+    sample-dem and sample-landcover, which switch that file's journal mode and
+    need it unlocked, and holds no connection to it while it works or waits.
     """
     import numpy as np
 
@@ -515,7 +514,11 @@ def _pois_near_hikes(catalog_path: Path | str, geo: sqlite3.Connection, rows: li
     found: set[int] = set()
     for start in range(0, len(hikes), _HIKE_CHUNK):
         chunk = hikes[start : start + _HIKE_CHUNK]
-        walks = _vertices(geo, chunk[0][0], chunk[-1][0])
+        geo = sqlite3.connect(f"file:{geo_path}?mode=ro", uri=True)
+        try:
+            walks = _vertices(geo, chunk[0][0], chunk[-1][0])
+        finally:
+            geo.close()
         for dayhike_id, th_lat, th_lon in chunk:
             walk = walks.get(dayhike_id)
             if walk is not None and len(walk[0]) >= 2:
@@ -549,9 +552,9 @@ def warm_photos(
     geo = sqlite3.connect(f"file:{geo_path}?mode=ro", uri=True)
     try:
         rows = _poi_rows(geo)
-        keys = _pois_near_hikes(catalog_path, geo, rows)
     finally:
         geo.close()
+    keys = _pois_near_hikes(catalog_path, geo_path, rows)
     tags = [row[3] for row in rows if row[0] in keys]
     if progress is not None:
         progress(f"photos: warming {len(tags)} of {len(rows)} POIs, the ones on a hike")

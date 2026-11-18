@@ -579,3 +579,53 @@ def test_the_warm_only_command_runs_without_a_serving_export(tmp_path: Path, mon
     assert code == 0
     assert seen == {"catalog": tmp_path / "c.sqlite", "cache": tmp_path / "k.sqlite"}
     assert "5 POIs warmed" in capsys.readouterr().out
+
+
+def test_warm_only_never_holds_the_geometry_store_open_while_it_computes_or_asks(tmp_path: Path, monkeypatch) -> None:
+    """sample-dem and sample-landcover switch the store's journal mode beside warm-only, which needs it unlocked."""
+    from dayhike import serving
+    from dayhike.photos import warm_photos
+
+    path, _out, pages = _fixture_export(tmp_path)
+    geo_file = str(geometry_store_path_for(path))
+    open_now: list[sqlite3.Connection] = []
+    opened = 0
+
+    class Tracked(sqlite3.Connection):
+        def close(self) -> None:
+            if self in open_now:
+                open_now.remove(self)
+            super().close()
+
+    real = sqlite3.connect
+
+    def tracking(database, *args, **kwargs):
+        nonlocal opened
+        connection = real(database, *args, factory=Tracked, **kwargs)
+        if geo_file in str(database):
+            opened += 1
+            open_now.append(connection)
+        return connection
+
+    monkeypatch.setattr("dayhike.photos.sqlite3.connect", tracking)
+    monkeypatch.setattr(serving, "_HIKE_CHUNK", 1)  # several chunks, so a connection kept between them shows
+    held_while_computing: list[int] = []
+    real_points = serving._line_points
+
+    def watching(*args, **kwargs):
+        held_while_computing.append(len(open_now))
+        return real_points(*args, **kwargs)
+
+    monkeypatch.setattr(serving, "_line_points", watching)
+    inner = _opener(pages)
+    held_while_asking: list[int] = []
+
+    def opener(request) -> bytes:
+        held_while_asking.append(len(open_now))
+        return inner(request)
+
+    warm_photos(path, tmp_path / "cache.sqlite", opener=opener, pause_s=0)
+
+    assert held_while_computing and set(held_while_computing) == {0}
+    assert held_while_asking and set(held_while_asking) == {0}
+    assert opened > 2  # one short read per chunk, not one connection across the whole pass
