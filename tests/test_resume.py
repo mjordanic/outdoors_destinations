@@ -12,6 +12,7 @@ import pytest
 
 from dayhike import build_catalog, geometry_store_path_for, ingest
 from dayhike.catalog import trailgraph_path_for
+from dayhike.destination_hikes import destination_source
 from dayhike.ingest import BUILT_HIKE_SOURCES, work_path_for
 from dayhike.steps import PhaseStore, StepLedger, code_version, phases_dir_for
 
@@ -76,8 +77,10 @@ def test_a_phase_file_cut_short_is_computed_again(tmp_path: Path) -> None:
     assert PhaseStore(work, "base").load("a") is None
 
 
-def _counting(sources, killed: str | None = None):
-    """The built-hike sources, each counting its calls; the one named ``killed`` stops the build."""
+def _counting(monkeypatch: pytest.MonkeyPatch, sources, killed: str | None = None):
+    """The built-hike sources, each counting its calls; the one named ``killed`` stops the build.
+    Ingest runs the destination search when its sources hold ``destination_source``, so that
+    name points at its counting stand-in."""
     calls: dict[str, int] = {}
     wrapped = []
     for source in sources:
@@ -91,22 +94,24 @@ def _counting(sources, killed: str | None = None):
             return source(context)
 
         wrapped.append(run)
+        if source is destination_source:
+            monkeypatch.setattr(ingest, "destination_source", run)
     return wrapped, calls
 
 
 @pytest.mark.parametrize("killed", ["day_stages", "network_source", "named_trails", "destination_source"])
 def test_ingest_stopped_in_a_phase_resumes_after_the_phases_it_finished_to_the_same_files(
-    tmp_path: Path, source: Path, killed: str
+    tmp_path: Path, source: Path, killed: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     build_catalog(source, tmp_path / "clean" / "catalog.sqlite")
     interrupted = tmp_path / "resumed" / "catalog.sqlite"
     names = [s.__name__ for s in BUILT_HIKE_SOURCES]
-    sources, first = _counting(BUILT_HIKE_SOURCES, killed)
+    sources, first = _counting(monkeypatch, BUILT_HIKE_SOURCES, killed)
     with pytest.raises(RuntimeError, match="killed"):
         build_catalog(source, interrupted, sources=sources)
     assert phases_dir_for(work_path_for(interrupted)).is_dir()
 
-    sources, second = _counting(BUILT_HIKE_SOURCES)
+    sources, second = _counting(monkeypatch, BUILT_HIKE_SOURCES)
     messages: list[str] = []
     build_catalog(source, interrupted, sources=sources, progress=messages.append)
 
@@ -121,7 +126,7 @@ def test_ingest_stopped_before_its_first_built_source_still_keeps_the_relation_p
     tmp_path: Path, source: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     catalog = tmp_path / "catalog.sqlite"
-    sources, _ = _counting(BUILT_HIKE_SOURCES, "day_stages")
+    sources, _ = _counting(monkeypatch, BUILT_HIKE_SOURCES, "day_stages")
     with pytest.raises(RuntimeError, match="killed"):
         build_catalog(source, catalog, sources=sources)
     calls = []
@@ -138,7 +143,7 @@ def test_phases_kept_for_other_inputs_or_code_are_not_used(
     tmp_path: Path, source: Path, monkeypatch: pytest.MonkeyPatch, change: str
 ) -> None:
     catalog = tmp_path / "catalog.sqlite"
-    sources, _ = _counting(BUILT_HIKE_SOURCES, "network_source")
+    sources, _ = _counting(monkeypatch, BUILT_HIKE_SOURCES, "network_source")
     with pytest.raises(RuntimeError, match="killed"):
         build_catalog(source, catalog, sources=sources)
     fresh = False
@@ -148,7 +153,7 @@ def test_phases_kept_for_other_inputs_or_code_are_not_used(
         monkeypatch.setattr("dayhike.steps.code_version", lambda: "another version of the code")
     else:
         fresh = True
-    sources, calls = _counting(BUILT_HIKE_SOURCES)
+    sources, calls = _counting(monkeypatch, BUILT_HIKE_SOURCES)
 
     build_catalog(source, catalog, sources=sources, fresh=fresh)
 
