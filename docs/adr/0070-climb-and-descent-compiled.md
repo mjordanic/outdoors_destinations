@@ -12,7 +12,7 @@ Two numpy functions round `a * b + c` once (a fused multiply-add) on some builds
 
 **What it gives.** On the 76,450 calls an Écrins ingest makes (recorded on the commit before): the same results to the bit, and about 6× less CPU per call (823 → 128 µs, of which ~35 µs is still `_step_m`). One million random walks with NaN gaps, flat stretches, spikes, steep shores and vertices at one spot: the same bits. An Écrins build (ingest, sample-dem, build-similarity) writes the same Catalog, GeometryStore, TrailGraph and similarity arrays as before, with less CPU: ingest 246 → 195 s, build-similarity 94 → 64 s.
 
-**Cost.** numba and llvmlite join the dependencies (also in the web image). The kernel compiles on its first call in each process, a few seconds; it is not cached on disk, because the web image installs the package as root and runs as another user.
+**Cost.** numba and llvmlite join the dependencies (also in the web image). The kernel compiles on its first call in each process, a few seconds; the web app makes that call in `create_app`, at startup, so no request waits for it; it is not cached on disk, because the web image installs the package as root and runs as another user.
 
 **Considered Options**:
 
