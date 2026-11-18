@@ -15,7 +15,7 @@ import dayhike.ingest as ingest
 from dayhike.ingest import (
     PATH_KEYS,
     PATH_LEVELS,
-    POINT_KEYS,
+    POINT_TAGS,
     WAY_POINT_KEYS,
     _Pending,
     _connect_work,
@@ -165,8 +165,8 @@ def test_filtered_passes_of_two_files_with_their_own_levels(tmp_path: Path) -> N
     assert tables["path_ways"] and tables["pending_amenity_ways"]
 
 
-def test_point_keys_cover_every_key_a_point_kind_reads() -> None:
-    # The nodes and ways KeyFilter keeps only objects with one of POINT_KEYS: a kind read from another key would be lost.
+def test_point_tags_cover_every_node_that_is_a_point() -> None:
+    # The nodes TagFilter keeps only nodes with one of POINT_TAGS: a point without one would be lost.
     probes = {
         "tourism": ("alpine_hut", "wilderness_hut", "viewpoint"),
         "amenity": ("parking", "restaurant", "cafe", "drinking_water", "shelter", "water_point"),
@@ -184,7 +184,7 @@ def test_point_keys_cover_every_key_a_point_kind_reads() -> None:
         for second in pairs:
             tags = dict([first, second, ("name", "Somewhere")])
             if _point_kind(tags) is not None:
-                assert set(tags) & set(POINT_KEYS), tags
+                assert set(tags.items()) & set(POINT_TAGS), tags
 
 
 def test_way_filters_cover_every_way_that_is_a_point_or_an_extra_path() -> None:
@@ -274,6 +274,7 @@ def test_the_node_pass_handles_only_the_nodes_its_filters_pass(
     for node_id in range(1, 60_001):
         lines.append(f'<node id="{node_id}" lat="46.{node_id % 1000:03d}" lon="14.{node_id % 997:03d}" version="1"/>')
     lines.append('<node id="60001" lat="46.1" lon="14.1" version="1"><tag k="natural" v="peak"/></node>')
+    lines.append('<node id="60002" lat="46.2" lon="14.2" version="1"><tag k="highway" v="crossing"/></node>')
     lines.append('<way id="1" version="1"><nd ref="5"/><nd ref="6"/><tag k="highway" v="path"/><tag k="sac_scale" v="hiking"/></way>')
     lines.append("</osm>")
     osm.write_text("\n".join(lines))

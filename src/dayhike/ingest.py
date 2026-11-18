@@ -57,6 +57,9 @@ from dayhike.named_trails import named_trails
 from dayhike.names import unique_names
 from dayhike.network_hikes import network_source
 from dayhike.osm import (
+    HUT_TOURISM,
+    PLACE_KINDS,
+    RESTAURANT_CAFE_AMENITY,
     NodeStore,
     OsmRelation,
     OsmSnapshot,
@@ -91,13 +94,20 @@ CATALOG_TAG_FILTERS = (
 # bridleways (the ways of named trails), then named tracks too, then unnamed paths too.
 # Beyond ``graded`` they also enter the snapshot, with highway=trailhead nodes.
 PATH_LEVELS = ("graded", "trails", "named", "unnamed")
-# The tag keys ``_point_kind`` reads, ``highway`` also for ``_is_extra_path``: an object with none of them
-# is no point and no path, so the passes' KeyFilter drops it in C++.
-POINT_KEYS = ("tourism", "natural", "amenity", "man_made", "place", "information", "highway")
+# The tags a node needs for ``_point_kind`` (one scan, in file order): the nodes pass's TagFilter drops the rest in C++.
+POINT_TAGS = (
+    *(("tourism", value) for value in (*sorted(HUT_TOURISM), "viewpoint")),
+    *(("natural", value) for value in ("peak", "spring", "water")),
+    *(("amenity", value) for value in ("parking", *sorted(RESTAURANT_CAFE_AMENITY), "drinking_water", "shelter", "water_point")),
+    ("man_made", "water_tap"),
+    *(("place", value) for value in sorted(PLACE_KINDS)),
+    ("information", "guidepost"),
+    ("highway", "trailhead"),
+)
 # What a way needs for ``_is_extra_path`` at each level (the ways pass keeps it only if it has one of these keys),
 # and for ``_point_kind`` beside ``highway=trailhead``.
 PATH_KEYS = {"graded": ("sac_scale",), "trails": ("sac_scale", "name"), "named": ("sac_scale", "name"), "unnamed": ("highway",)}
-WAY_POINT_KEYS = tuple(key for key in POINT_KEYS if key != "highway")
+WAY_POINT_KEYS = ("tourism", "natural", "amenity", "man_made", "place", "information")
 TRAIL_PATH_HIGHWAYS = ("path", "footway", "bridleway")
 NAMED_PATH_HIGHWAYS = (*TRAIL_PATH_HIGHWAYS, "track")
 NOT_A_PATH_FOOTWAYS = ("sidewalk", "crossing")
@@ -802,7 +812,7 @@ def _is_extra_path(tags: dict[str, str], level: str) -> bool:
 def _pass_nodes(
     conn: sqlite3.Connection, paths: Sequence[Path], progress: Progress | None
 ) -> None:
-    """The geometry nodes, by id, and the point-kind nodes, by ``POINT_KEYS``: two
+    """The geometry nodes, by id, and the point-kind nodes, by ``POINT_TAGS``: two
     scans that filter in C++ (``nodes_points``, then ``nodes``, whose end marks
     the pass done). Only the point scan writes ``amenities``, in file order."""
     emit_progress(progress, "nodes", "starting")
@@ -845,7 +855,7 @@ def _pass_nodes(
     def detail() -> str:
         return f"{kept} kept"
 
-    point_filters = [osmium.filter.KeyFilter(*POINT_KEYS)]
+    point_filters = [osmium.filter.TagFilter(*POINT_TAGS)]
     _scan(conn, "nodes_points", paths, osmium.osm.NODE, lambda index: point_filters, handle_point, progress, "nodes", detail)
     id_filters = _id_filters(needed_nodes, path_nodes)
     _scan(conn, "nodes", paths, osmium.osm.NODE, lambda index: id_filters, handle_geometry, progress, "nodes", detail)
