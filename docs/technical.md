@@ -1622,10 +1622,17 @@ download tiles. `--catalog` defaults to `data/catalog.sqlite`.
 ends, so run time grows with the number of vertices sampled, not with repeated
 file opens. `sample-landcover` opens a WorldCover tile when a vertex first
 needs it and keeps at most 128 open, closing the least recently used (Europe
-has 267 tiles; the macOS default limit is 256 open files). `sample-climate`
-holds one climate raster at a time (about 170 MB as float32 for Europe) plus
-the vertex coordinates and their cell indices in memory: peak 4.4 GB for
-Europe's 42 million vertices.
+has 267 tiles; the macOS default limit is 256 open files). It puts each
+vertex's step to the next vertex in raster order, and makes the steps
+distinct, in numpy, a part of the map at a time, from runs it spools to the
+temporary directory (`TMPDIR`). That needs free disk of about 90 bytes per
+vertex while it runs (6.8 GB for 82 million vertices), and its main process
+stays under 3 GB of memory at any store size. `sample-climate` spools each
+vertex's hike and climate cell to the temporary directory (16 bytes per
+vertex), then holds one climate raster at a time (about 170 MB as float32 for
+Europe), the 36 rasters' values at the distinct cells and each DayHike's
+sums: peak 1.3 GB on 82 million vertices, where reading them all into memory
+took 5.7 GB.
 
 ```bash
 uv run dayhike sample-landcover

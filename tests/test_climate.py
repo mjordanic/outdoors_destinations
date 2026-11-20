@@ -1151,3 +1151,45 @@ def test_fetch_chelsa_writes_every_clip_on_one_transform_even_when_sources_diffe
             transforms.add(tuple(dataset.transform))
     assert len(paths) == 36
     assert len(transforms) == 1
+
+
+def _climate_snapshot(catalog_path: Path) -> tuple[list, list]:
+    catalog = sqlite3.connect(catalog_path)
+    try:
+        months = catalog.execute("SELECT * FROM climate_months ORDER BY dayhike_id, month").fetchall()
+        features = catalog.execute(
+            f"SELECT dayhike_id, {', '.join(CLIMATE_FEATURES)} FROM feature_vectors ORDER BY dayhike_id"
+        ).fetchall()
+    finally:
+        catalog.close()
+    return months, features
+
+
+def test_sample_climate_in_small_chunks_matches_one_chunk_to_the_bit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dayhike import climate
+
+    rasters = tmp_path / "rasters"
+    rasters.mkdir()
+    rng = np.random.default_rng(3)
+    for month in range(1, 13):
+        for var, low, high in (("tas", -5.0, 25.0), ("pr", 10.0, 200.0), ("rsds", 1000.0, 30000.0)):
+            data = rng.uniform(low, high, (40, 40)).astype("float32")
+            data[0, :5] = np.nan  # a few cells no raster covers
+            _write_tif(rasters / f"chelsa_{var}_{month:02d}.tif", data, west=14.9, south=44.9, east=15.6, north=45.7)
+    whole = tmp_path / "whole" / "catalog.sqlite"
+    whole.parent.mkdir()
+    build_catalog(FIXTURE, whole)
+    sampled = sample_climate(whole, rasters)
+
+    pieces = tmp_path / "pieces" / "catalog.sqlite"
+    pieces.parent.mkdir()
+    build_catalog(FIXTURE, pieces)
+    # Every hike's vertices are split over chunks, whose sums must add up in the same order.
+    monkeypatch.setattr(climate, "_VERTEX_CHUNK", 3)
+
+    assert sample_climate(pieces, rasters) == sampled > 0
+    months, features = _climate_snapshot(pieces)
+    assert (months, features) == _climate_snapshot(whole)
+    assert len({row[2] for row in months}) > 12

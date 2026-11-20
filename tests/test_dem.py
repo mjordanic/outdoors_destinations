@@ -753,3 +753,20 @@ def test_read_grid_cells_reads_each_cell_across_ragged_edge_blocks(tmp_path: Pat
     assert got.dtype == np.dtype("int16")
     assert np.array_equal(got, data[rows, cols])
     assert empty.shape == (0,) and empty.dtype == np.dtype("int16")
+
+
+def test_raster_block_then_position_is_raster_order() -> None:
+    from dayhike.dem import raster_block, raster_order_sql
+
+    rng = np.random.default_rng(7)
+    lat = np.r_[rng.uniform(-89.9, 89.9, 2000), 45.0, 45 + 1 / 7, 45 + 6.999999999 / 7, -0.0, 89.99999999999999]
+    lon = np.r_[rng.uniform(-180, 180, 2000), 15.0, 15 + 1 / 7, 15 + 6.999999999 / 7, 0.0, 179.99999999999997]
+    connection = sqlite3.connect(":memory:")
+    try:
+        connection.execute("CREATE TABLE p (lat REAL, lon REAL)")
+        connection.executemany("INSERT INTO p VALUES (?, ?)", zip(lat.tolist(), lon.tolist()))
+        ordered = connection.execute(f"SELECT lat, lon FROM p ORDER BY {raster_order_sql('lat', 'lon')}").fetchall()
+    finally:
+        connection.close()
+    order = np.lexsort((lon, lat, raster_block(lat, lon)))
+    assert list(zip(lat[order].tolist(), lon[order].tolist())) == ordered

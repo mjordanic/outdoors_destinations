@@ -936,3 +936,49 @@ def test_sample_landcover_reads_each_distinct_point_once_grouped_by_tile_and_mat
     finally:
         store.close()
     assert vertex_count == len(hikes) * 6
+
+
+def _landcover_snapshot(catalog_path: Path) -> tuple[list, list]:
+    store = sqlite3.connect(geometry_store_path_for(catalog_path))
+    try:
+        vertices = store.execute(
+            "SELECT dayhike_id, seq, landcover, landcover_along FROM vertices ORDER BY dayhike_id, seq"
+        ).fetchall()
+    finally:
+        store.close()
+    catalog = sqlite3.connect(catalog_path)
+    try:
+        fractions = catalog.execute(
+            f"SELECT dayhike_id, {', '.join(LANDCOVER_FRACTIONS)} FROM feature_vectors ORDER BY dayhike_id"
+        ).fetchall()
+    finally:
+        catalog.close()
+    return vertices, fractions
+
+
+def test_sample_in_small_spooled_runs_and_parts_matches_one_run_and_part(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dayhike import landcover
+
+    rasters = tmp_path / "rasters"
+    rasters.mkdir()
+    codes = np.random.default_rng(5).choice(np.array([10, 20, 30, 60, 70], dtype="uint8"), (200, 200))
+    _write_class_tif(rasters / "cover.tif", west=14.9, south=44.9, east=15.6, north=45.7, codes=codes)
+    whole = tmp_path / "whole.sqlite"
+    build_catalog(FIXTURE, whole)
+    sample_landcover(whole, rasters)
+
+    pieces = tmp_path / "pieces.sqlite"
+    build_catalog(FIXTURE, pieces)
+    # Hikes cross the runs, and each 1/7° block is a part of its own.
+    monkeypatch.setattr(landcover, "_SPOOL_ROWS", 3)
+    monkeypatch.setattr(landcover, "_PART_ROWS", 1)
+    monkeypatch.setattr(landcover, "_VERTEX_CHUNK", 2)
+    sample_landcover(pieces, rasters)
+
+    vertices, fractions = _landcover_snapshot(pieces)
+    assert (vertices, fractions) == _landcover_snapshot(whole)
+    assert {code for _id, _seq, code, _along in vertices} >= {10, 20, 30}
+    assert any(along for _id, _seq, _code, along in vertices)
+    assert all(row[1] is not None for row in fractions)

@@ -3,8 +3,9 @@ from __future__ import annotations
 import math
 import os
 import sqlite3
-from collections import OrderedDict
-from collections.abc import Callable, Sequence
+import tempfile
+from collections import OrderedDict, deque
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import ExitStack
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -19,7 +20,7 @@ from dayhike.catalog import (
     remove_similarity,
 )
 from dayhike.db import writer
-from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS, format_corner, raster_order_sql
+from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS, format_corner, raster_block
 from dayhike.download import download as _download
 from dayhike.parallel import parallel_iter, workers
 
@@ -267,13 +268,117 @@ def _sample_open_datasets(
     return out
 
 
-# Each vertex with the next vertex of its hike; the last one has itself.
-_STEPS_SQL = (
-    "SELECT dayhike_id, seq, latitude, longitude, "
-    "COALESCE(LEAD(latitude) OVER hike, latitude) AS next_latitude, "
-    "COALESCE(LEAD(longitude) OVER hike, longitude) AS next_longitude FROM vertices "
-    "WINDOW hike AS (PARTITION BY dayhike_id ORDER BY seq)"
-)
+class _Runs:
+    """Records spooled to one file in runs, each run sorted by an int64 key, so
+    the records of a range of keys are one slice of each run."""
+
+    def __init__(self, path: Path, dtype: np.dtype) -> None:
+        self.path, self.dtype = path, dtype
+        self._file = open(path, "wb")
+        self._starts: list[int] = []  # where each run begins in the file, in records
+        self._keys: list[np.ndarray] = []  # the distinct keys of each run
+        self._firsts: list[np.ndarray] = []  # the first record of each, then the run's length
+
+    def add(self, records: np.ndarray, keys: np.ndarray) -> None:
+        """Spool a run: ``records`` sorted by their ``keys``."""
+        if not len(records):
+            return
+        self._starts.append(self._size())
+        records.tofile(self._file)
+        distinct, first = np.unique(keys, return_index=True)
+        self._keys.append(distinct)
+        self._firsts.append(np.append(first, len(records)))
+
+    def _size(self) -> int:
+        return self._starts[-1] + int(self._firsts[-1][-1]) if self._starts else 0
+
+    def parts(self, limit: int) -> list[tuple[int, int]]:
+        """Ranges [low, high) of keys in order, each with at most ``limit``
+        records unless one key alone has more."""
+        if not self._keys:
+            return []
+        keys, at = np.unique(np.concatenate(self._keys), return_inverse=True)
+        counts = np.bincount(at, weights=np.concatenate([np.diff(first) for first in self._firsts]))
+        parts, low, size = [], int(keys[0]), 0
+        for key, count in zip(keys.tolist(), counts.astype(np.int64).tolist()):
+            if size and size + count > limit:
+                parts.append((low, key))
+                low, size = key, 0
+            size += count
+        parts.append((low, int(keys[-1]) + 1))
+        return parts
+
+    def read(self, low: int, high: int) -> np.ndarray:
+        """The records of keys in [low, high), run by run."""
+        self._file.flush()
+        slices = []
+        with open(self.path, "rb") as spooled:
+            for start, keys, first in zip(self._starts, self._keys, self._firsts, strict=True):
+                begin, end = first[np.searchsorted(keys, [low, high])].tolist()
+                spooled.seek((start + begin) * self.dtype.itemsize)
+                slices.append(np.fromfile(spooled, self.dtype, count=end - begin))
+        return np.concatenate(slices)
+
+    def close(self) -> None:
+        self._file.close()
+        self.path.unlink(missing_ok=True)
+
+
+# A vertex as read; the step from it to the next vertex of its hike; what a
+# vertex whose step has a class or reads takes: its class (``_NO_CLASS`` for
+# none), and where its step's reads along are in the spooled reads.
+_VERTEX = np.dtype([("rowid", "<i8"), ("hike", "<i8"), ("lat", "<f8"), ("lon", "<f8")])
+_STEP = np.dtype([("rowid", "<i8"), ("hike", "<i8"), ("lat", "<f8"), ("lon", "<f8"), ("nlat", "<f8"), ("nlon", "<f8")])
+_UPDATE = np.dtype([("rowid", "<i8"), ("hike", "<i8"), ("code", "<i8"), ("at", "<i8"), ("size", "<i8")])
+_NO_CLASS = np.iinfo(np.int64).min
+_SPOOL_ROWS = 1_000_000  # vertices read, and spooled as one run, at a time
+_PART_ROWS = 4_000_000  # steps (or updates) held in memory at a time, unless one 1/7° block has more
+
+
+def _spool_steps(store_path: Path, steps: _Runs) -> None:
+    """Spool each vertex's step to the next vertex of its hike (the last
+    vertex's step is to itself), in runs sorted by ``raster_block``."""
+    read = sqlite3.connect(store_path)
+    try:
+        cursor = read.execute("SELECT rowid, dayhike_id, latitude, longitude FROM vertices ORDER BY dayhike_id, seq")
+        held = np.zeros(0, _VERTEX)  # the last vertex read: its next one is not read yet
+        while True:
+            rows = cursor.fetchmany(_SPOOL_ROWS)
+            vertices = np.concatenate([held, np.fromiter(rows, _VERTEX, len(rows))])
+            if not len(vertices):
+                return
+            # After the last vertex read comes only itself.
+            following = np.concatenate([vertices[1:], vertices[-1:]])
+            if rows:
+                vertices, following, held = vertices[:-1], following[:-1], vertices[-1:]
+            same = following["hike"] == vertices["hike"]
+            run = np.empty(len(vertices), _STEP)
+            for name in ("rowid", "hike", "lat", "lon"):
+                run[name] = vertices[name]
+            run["nlat"] = np.where(same, following["lat"], vertices["lat"])
+            run["nlon"] = np.where(same, following["lon"], vertices["lon"])
+            keys = raster_block(run["lat"], run["lon"])
+            order = np.argsort(keys, kind="stable")
+            steps.add(run[order], keys[order])
+            if not rows:
+                return
+    finally:
+        read.close()
+
+
+def _distinct_steps(spooled: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The distinct (lat, lon, next lat, next lon) of spooled steps in raster
+    order, then by the next vertex, and the index of each spooled step's among them."""
+    columns = [spooled[name] for name in ("lat", "lon", "nlat", "nlon")]
+    order = np.lexsort([*reversed(columns), raster_block(columns[0], columns[1])])
+    columns = [column[order] for column in columns]
+    new = np.zeros(len(order), dtype=bool)
+    new[:1] = True
+    for column in columns:
+        new[1:] |= column[1:] != column[:-1]
+    of = np.empty(len(order), dtype=np.int64)
+    of[order] = np.cumsum(new) - 1
+    return np.column_stack([column[new] for column in columns]), of
 
 
 def sample_landcover(
@@ -307,70 +412,100 @@ def sample_landcover(
         stack.callback(tiles.close)
         # Hikes share vertices and steps, so each distinct step (a vertex and the
         # next one, the last vertex of a hike being a step to itself) is sampled
-        # once, in raster order, into ``steps``; the vertices then take their step's.
-        write.execute(
-            "CREATE TEMP TABLE steps (latitude REAL NOT NULL, longitude REAL NOT NULL, "
-            "next_latitude REAL NOT NULL, next_longitude REAL NOT NULL, code INTEGER, along BLOB)"
-        )
-        read = sqlite3.connect(store_path)
-        try:
-            cursor = read.execute(
-                "SELECT DISTINCT latitude, longitude, next_latitude, next_longitude FROM "
-                f"({_STEPS_SQL}) ORDER BY {raster_order_sql('latitude', 'longitude')}, next_latitude, next_longitude"
+        # once, in raster order; the vertices then take their step's. The steps
+        # are sorted and made distinct in numpy, a part of the raster at a time,
+        # from runs spooled to disk, so memory stays bounded at any store size.
+        spool = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="dayhike-landcover-")))
+        steps = _Runs(spool / "steps", _STEP)
+        stack.callback(steps.close)
+        updates = _Runs(spool / "updates", _UPDATE)
+        stack.callback(updates.close)
+        along = stack.enter_context(open(spool / "along", "wb"))
+        _spool_steps(store_path, steps)
+        # Each process reads through rasters it opened itself, never another's.
+        opened = {os.getpid(): tiles}
+
+        def chunk_classes(step: np.ndarray) -> tuple[np.ndarray, np.ndarray, bytes]:
+            # A chunk's class of each step's first vertex (``_NO_CLASS`` for none),
+            # the length of its reads along (0 for none) and those reads, in a worker.
+            if os.getpid() not in opened:
+                opened[os.getpid()] = _Tiles(rasters)
+            # The last vertex of a hike has no next one: a step of no length, not read.
+            counts, points = step_reads(*step.T)
+            wanted = [*zip(step[:, 0].tolist(), step[:, 1].tolist()), *map(tuple, points.tolist())]
+            # A point that begins several steps, or lies along several, is read once.
+            distinct = list(dict.fromkeys(wanted))
+            found = dict(zip(distinct, _sample_open_datasets(opened[os.getpid()], distinct), strict=True))
+            classes = [found[point] for point in wanted]
+            vertex, reads = classes[: len(step)], classes[len(step) :]
+            ends = np.cumsum(counts).tolist()
+            blobs = []
+            for count, end in zip(counts.tolist(), ends, strict=True):
+                read_along = reads[end - count : end]
+                blobs.append(bytes(c or 0 for c in read_along) if any(c is not None for c in read_along) else b"")
+            codes = np.array([_NO_CLASS if code is None else code for code in vertex], dtype=np.int64)
+            return codes, np.array([len(blob) for blob in blobs], dtype=np.int64), b"".join(blobs)
+
+        parts: deque[tuple[np.ndarray, np.ndarray, int]] = deque()  # spooled steps not yet sampled whole
+
+        def chunks() -> Iterator[np.ndarray]:
+            for low, high in steps.parts(_PART_ROWS):
+                spooled = steps.read(low, high)
+                distinct, of = _distinct_steps(spooled)
+                parts.append((spooled[["rowid", "hike"]], of, len(distinct)))
+                for start in range(0, len(distinct), _VERTEX_CHUNK):
+                    yield distinct[start : start + _VERTEX_CHUNK]
+
+        sampled_steps, in_part, written = 0, 0, 0
+        results: list[tuple[np.ndarray, np.ndarray, bytes]] = []
+        for result in parallel_iter(chunk_classes, chunks()):
+            results.append(result)
+            sampled_steps += len(result[0])
+            in_part += len(result[0])
+            if progress is not None:
+                progress(f"landcover sample: {sampled_steps} steps")
+            spooled, of, count = parts[0]
+            if in_part < count:
+                continue
+            # The part is sampled whole: spool what each of its vertices takes.
+            parts.popleft()
+            in_part = 0
+            codes = np.concatenate([codes for codes, _sizes, _reads in results])
+            sizes = np.concatenate([sizes for _codes, sizes, _reads in results])
+            reads = b"".join(reads for _codes, _sizes, reads in results)
+            results = []
+            along.write(reads)
+            at = written + np.cumsum(sizes) - sizes
+            written += len(reads)
+            code, at, size = codes[of], at[of], sizes[of]
+            take = (code != _NO_CLASS) | (size > 0)
+            update = np.empty(int(take.sum()), _UPDATE)
+            update["rowid"], update["hike"] = spooled["rowid"][take], spooled["hike"][take]
+            update["code"], update["at"], update["size"] = code[take], at[take], size[take]
+            update = update[np.argsort(update["rowid"])]
+            updates.add(update, update["rowid"] // _PART_ROWS)
+        steps.close()
+        along.flush()
+        reads = np.memmap(spool / "along", dtype="u1", mode="r") if written else np.zeros(0, dtype="u1")
+        # The vertices in table order, so the writes go through it once.
+        for low, high in updates.parts(_PART_ROWS):
+            update = updates.read(low, high)
+            update = update[np.argsort(update["rowid"])]
+            write.executemany(
+                "UPDATE vertices SET landcover = COALESCE(?, landcover), landcover_along = ? WHERE rowid = ?",
+                (
+                    (
+                        None if code == _NO_CLASS else code,
+                        reads[at : at + size].tobytes() if size else None,
+                        rowid,
+                    )
+                    for rowid, code, at, size in zip(
+                        update["rowid"].tolist(), update["code"].tolist(), update["at"].tolist(), update["size"].tolist()
+                    )
+                ),
             )
-            # Each process reads through rasters it opened itself, never another's.
-            opened = {os.getpid(): tiles}
-
-            def chunk_updates(rows: list[tuple]) -> list[tuple]:
-                # A chunk's (latitude, longitude, next latitude, next longitude, code,
-                # reads along the step) of steps with a class or reads, sampled in a worker.
-                if os.getpid() not in opened:
-                    opened[os.getpid()] = _Tiles(rasters)
-                # The last vertex of a hike has no next one: a step of no length, not read.
-                step = np.array(rows, dtype=float).reshape(-1, 4)
-                counts, points = step_reads(*step.T)
-                wanted = [*zip(step[:, 0].tolist(), step[:, 1].tolist()), *map(tuple, points.tolist())]
-                # A point that begins several steps, or lies along several, is read once.
-                distinct = list(dict.fromkeys(wanted))
-                found = dict(zip(distinct, _sample_open_datasets(opened[os.getpid()], distinct), strict=True))
-                classes = [found[point] for point in wanted]
-                vertex, reads = classes[: len(rows)], classes[len(rows) :]
-                ends = np.cumsum(counts).tolist()
-                updates = []
-                for row, code, count, end in zip(rows, vertex, counts.tolist(), ends, strict=True):
-                    along = reads[end - count : end]
-                    blob = bytes(c or 0 for c in along) if any(c is not None for c in along) else None
-                    if code is not None or blob is not None:
-                        updates.append((*row, code, blob))
-                return updates
-
-            steps = 0
-            chunks = iter(lambda: cursor.fetchmany(_VERTEX_CHUNK), [])
-            for updates in parallel_iter(chunk_updates, chunks):
-                write.executemany("INSERT INTO steps VALUES (?, ?, ?, ?, ?, ?)", updates)
-                steps += len(updates)
-                if progress is not None:
-                    progress(f"landcover sample: {steps} steps")
-        finally:
-            read.close()
-        write.execute("CREATE INDEX steps_at ON steps (latitude, longitude, next_latitude, next_longitude)")
-        write.execute(
-            "CREATE TEMP TABLE vertex_update (dayhike_id INTEGER NOT NULL, seq INTEGER NOT NULL, "
-            "code INTEGER, along BLOB, PRIMARY KEY (dayhike_id, seq)) WITHOUT ROWID"
-        )
-        # CROSS JOIN keeps the vertices as the outer loop and the index as the lookup.
-        write.execute(
-            "INSERT INTO vertex_update SELECT v.dayhike_id, v.seq, steps.code, steps.along "
-            f"FROM ({_STEPS_SQL}) AS v CROSS JOIN steps ON steps.latitude = v.latitude "
-            "AND steps.longitude = v.longitude AND steps.next_latitude = v.next_latitude "
-            "AND steps.next_longitude = v.next_longitude"
-        )
-        write.execute(
-            "UPDATE vertices SET landcover = COALESCE(u.code, vertices.landcover), landcover_along = u.along "
-            "FROM vertex_update AS u WHERE vertices.dayhike_id = u.dayhike_id AND vertices.seq = u.seq"
-        )
-        sampled = write.execute("SELECT COUNT(code) FROM vertex_update").fetchone()[0]
-        touched.update(row[0] for row in write.execute("SELECT DISTINCT dayhike_id FROM vertex_update"))
+            sampled += int((update["code"] != _NO_CLASS).sum())
+            touched.update(np.unique(update["hike"]).tolist())
         if progress is not None:
             progress(f"landcover sample: {sampled} vertices")
         if sampled:
@@ -403,10 +538,12 @@ def _refresh_catalog_fractions(
     try:
         for name in LANDCOVER_FEATURE_NAMES:
             ensure_column(catalog, "feature_vectors", name, "REAL")
-        by_hike: dict[int, list[tuple[int, float, float, bytes | None]]] = {dayhike_id: [] for dayhike_id in hike_ids}
-        ids = list(hike_ids)
+        ids = sorted(hike_ids)
+        updates = []
+        # A chunk of hikes at a time: their vertices are never all in memory.
         for start in range(0, len(ids), _HIKE_IN_CHUNK):
             chunk = ids[start : start + _HIKE_IN_CHUNK]
+            by_hike: dict[int, list[tuple[int, float, float, bytes | None]]] = {dayhike_id: [] for dayhike_id in chunk}
             placeholders = ",".join("?" * len(chunk))
             for dayhike_id, code, lat, lon, along in store.execute(
                 "SELECT dayhike_id, landcover, latitude, longitude, landcover_along FROM vertices "
@@ -414,12 +551,11 @@ def _refresh_catalog_fractions(
                 chunk,
             ):
                 by_hike[int(dayhike_id)].append((code or 0, lat, lon, along))
-        updates = []
-        for dayhike_id, rows in by_hike.items():
-            codes, lat, lon = np.array([row[:3] for row in rows], dtype=float).reshape(-1, 3).T
-            if np.any(codes > 0):
-                along = along_rows_of_vertices([row[3] for row in rows])
-                updates.append((*_landcover_fractions(codes, lat, lon, along), dayhike_id))
+            for dayhike_id, rows in by_hike.items():
+                codes, lat, lon = np.array([row[:3] for row in rows], dtype=float).reshape(-1, 3).T
+                if np.any(codes > 0):
+                    along = along_rows_of_vertices([row[3] for row in rows])
+                    updates.append((*_landcover_fractions(codes, lat, lon, along), dayhike_id))
         catalog.executemany(
             "UPDATE feature_vectors SET tree_fraction = ?, shrub_fraction = ?, "
             "grass_fraction = ?, bare_fraction = ?, snow_fraction = ? "

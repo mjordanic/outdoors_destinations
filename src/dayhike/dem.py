@@ -70,6 +70,22 @@ def raster_order_sql(lat: str, lon: str) -> str:
     )
 
 
+def raster_block(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
+    """The 1° cell and 1/7° block of ``raster_order_sql`` as one int64 per
+    point, computed as SQLite does: points sorted by it, then by latitude and
+    longitude, are in raster order."""
+    lat, lon = np.asarray(lat, dtype=float), np.asarray(lon, dtype=float)
+
+    def cell(column: np.ndarray, origin: int) -> np.ndarray:
+        return np.trunc(column + origin)
+
+    def block(column: np.ndarray, origin: int) -> np.ndarray:
+        return np.trunc((column + origin - cell(column, origin)) * _BLOCKS_PER_DEGREE)
+
+    # A block is 0 to 7 (7 only by rounding); a cell's longitude 0 to 360.
+    return (((cell(lat, 90) * 361 + cell(lon, 180)) * 8 + block(lat, 90)) * 8 + block(lon, 180)).astype(np.int64)
+
+
 def fabdem_tile_id(lat: float, lon: float) -> str:
     """Return the FABDEM 1° tile id whose southwest corner contains this point."""
     return format_corner(math.floor(lat), math.floor(lon))
