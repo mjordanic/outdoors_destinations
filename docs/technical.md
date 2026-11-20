@@ -2720,7 +2720,7 @@ at the rebuild.
    uv run dayhike ingest data/osm/europe-latest.osm.pbf --catalog data/catalog.sqlite --fresh --dem data/dem  # 2 h 42 min, 5.6 GB
    uv run dayhike sample-dem                    # 20 min
    uv run dayhike sample-landcover              # 21 min
-   uv run dayhike sample-climate                # 5 min, peak 4.4 GB; no per-vertex climate
+   uv run dayhike sample-climate                # 5 min; no per-vertex climate
    uv run dayhike fetch-commons                 # beside ingest: 3 dumps, 27 GB; 1.5 to 2 h at the dump server's 2-5 MB/s
    uv run dayhike count-commons                 # after ingest (ADR-0064): Slovenia 18 min, 1.8 GB; Europe about 50 min, about 3 GB (estimated)
    uv run dayhike sample-trailgraph             # not yet timed on Europe
