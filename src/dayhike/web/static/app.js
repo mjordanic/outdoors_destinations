@@ -391,6 +391,12 @@ function likedHash(hike) {
   return `${hike.route ? routeHash(hike) : `#hike=${hike.id}`}${modeHash()}`;
 }
 
+// The full address that opens ``hike`` measured as the GPX draws it, one way or with the way back, and
+// none of the Hiker's settings: a GPX file carries no starting place of theirs.
+function gpxAddress(hike) {
+  return `${location.origin}${location.pathname}${hike.route ? routeHash(hike) : `#hike=${hike.id}`}${hike.way_back != null ? "" : "&oneway"}`;
+}
+
 // The full address that opens ``hike`` as the liked one, to send to a friend.
 function hikeAddress(hike) {
   return `${location.origin}${location.pathname}${likedHash(hike)}`;
@@ -450,7 +456,7 @@ function gpxGap(hike) {
 // profile, credited to OpenStreetMap and the elevation map; measured with its way back, the way
 // back as a second track named so.
 async function gpxText(hike) {
-  const name = escapeHtml(hike.name), url = escapeHtml(hikeAddress(hike));
+  const name = escapeHtml(hike.name), url = escapeHtml(gpxAddress(hike));
   const points = decodePolyline(hike.line), heights = heightsAlong(points, hike.elevation);
   const tracks = [gpxTrack(hike.name, points, heights)];
   const back = await wayBackTrack(hike, points, heights);

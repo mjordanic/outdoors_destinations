@@ -231,7 +231,9 @@ so the file matches the length the page shows. With it off, the file is the
 hike one way. The line is simplified a little, so a GPS app may measure it a
 few percent shorter, as it cuts small bends; when the gap is 1 % or more, a
 line under the buttons says how much. The route data comes from OpenStreetMap and the heights from an
-elevation map, and the file credits both. The first download of a walk back
+elevation map, and the file credits both. The file links back to the hike
+alone (one way when the file is), without your starting place or other search
+settings, so a file you pass on does not say where you start from. The first download of a walk back
 along the trails can take a few seconds while the server reads the trails.
 
 ## One way or with the way back

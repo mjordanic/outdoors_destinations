@@ -2323,6 +2323,18 @@ def test_a_liked_hike_downloads_as_a_gpx_track_that_credits_openstreetmap_and_li
     assert min(heights) >= min(hike["elevation"]["metres"]) and max(heights) <= max(hike["elevation"]["metres"])
 
 
+def test_a_gpx_file_links_to_the_hike_alone_without_the_hiker_s_starting_place_or_settings(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=(
+        f"#hike={RIDGE_WALK_ID}&from=47.79941,13.04399&place=Salzburg%2C%20AT&hours=2&month=7&w=length:50&units=imperial"
+    ))
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    assert "from=47.79941" in page.evaluate("location.hash")  # the page's own address keeps them
+
+    _, gpx = downloaded_gpx(page, "#liked")
+
+    assert gpx.find(f"{GPX}metadata/{GPX}link").get("href") == f"{server}/#hike={RIDGE_WALK_ID}"
+
+
 def test_a_gpx_shorter_than_the_hike_s_length_says_by_how_much_on_the_card_and_in_the_file(browser, server) -> None:
     with urllib.request.urlopen(f"{server}/api/hikes/{RIDGE_WALK_ID}?return_to_start=false") as response:
         hike = json.load(response)
