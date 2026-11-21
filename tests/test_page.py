@@ -1552,6 +1552,42 @@ def test_each_next_page_is_drawn_from_the_areas_not_shown_with_the_same_draw_num
     assert rows == ["0", "block-head", "1", "block-head", "2"]
 
 
+def test_a_hike_is_listed_once_when_a_show_more_overlaps_the_one_suggest_loops_asks(browser, server, monkeypatch) -> None:
+    monkeypatch.setattr(web, "RESULTS", 1)  # three areas: three pages of one row
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}&strict")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+    more = page.get_by_role("button", name="Show 1 more")
+    more.click()
+    page.wait_for_function("() => state.results.length === 2")
+    held = []
+
+    def hold_next_pages(route) -> None:
+        if "after" in json.loads(route.request.post_data):
+            held.append(route)
+        else:
+            route.fallback()
+
+    page.route(f"{server}/api/rank", hold_next_pages)
+    more.click()  # the 3rd row, held
+    page.get_by_role("button", name="Suggest loops near these hikes (takes a few seconds)").click()
+    page.wait_for_function("() => state.answer.loops")
+    while len(held) < 2:  # Suggest loops asks for the 2nd row again, held too
+        page.wait_for_timeout(50)
+    held[0].fallback()  # the 3rd row comes for a list that is gone
+    page.wait_for_function("() => !document.querySelector('#show-more').disabled")
+    page.unroute(f"{server}/api/rank", hold_next_pages)
+    with page.expect_response(f"{server}/api/rank"):
+        more.click()  # the 2nd row again, while Suggest loops still waits for it
+    page.wait_for_function("() => state.results.length === 2")
+    held[1].fallback()
+    page.wait_for_timeout(500)
+
+    names = _names(page)
+    assert len(names) == len(set(names)) == 2
+    assert page.locator("#results-table tbody tr[data-index]").count() == 2
+
+
 def test_a_strict_link_opens_in_strict_order_and_the_address_follows_the_tick(browser, server) -> None:
     pool = Pool()
     page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}&oneway&strict")
@@ -3132,6 +3168,22 @@ def test_search_lists_the_hikes_near_a_peak_apart_from_hike_names(browser, serve
     assert hike.locator(".meta").inner_text().startswith("reaches the top · ")
     hike.dispatch_event("mousedown")
     page.get_by_text("Chosen: Ridge Walk").wait_for()
+
+
+def test_search_lists_a_hike_once_when_its_name_matches_and_it_reaches_a_peak_found(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+
+    page.locator("#search").fill("Ridge")
+
+    page.locator("#suggestions li.landmark", has_text="Hikes near Ridge Peak (peak)").wait_for()
+    options = page.locator("#suggestions li[role=option]")
+    names = [text.split("\n")[0] for text in options.all_inner_texts()]
+    assert names.count("Ridge Walk") == 1
+    assert len(names) == len(set(names))
+    # Arrow keys walk the options listed: the last one is reached, none is skipped.
+    page.locator("#search").press("ArrowUp")
+    last = page.locator("#search").get_attribute("aria-activedescendant")
+    assert page.locator(f"#{last}").inner_text() == options.last.inner_text()
 
 
 def test_show_on_map_opens_the_hike_map_at_the_landmark(browser, server) -> None:

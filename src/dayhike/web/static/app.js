@@ -1734,10 +1734,12 @@ function enterPick(typed, found) {
 // like the query (ADR-0053); ``onLandmark(landmark, open)`` then moves a map there, ``open`` asking to open it.
 // ``resting()`` is what the box says for the hike chosen (null: none is): text typed and left with no
 // suggestion picked gives way to it, so the box and the chosen hike agree.
+// Each hike is listed once, where it first comes: a name hit is not listed again under a Landmark.
 const MAX_QUERY = 100; // the longest search a name box takes (its maxlength)
 function nameSearch(input, list, onPick, onLandmark = null, resting = () => null) {
   let timer = null, abort = null, items = [], active = -1, entered = false, listed = null, named = [];
   const option = (item, extra = null) => {
+    if (items.some((shown) => shown.id === item.id)) return;
     const li = document.createElement("li");
     li.role = "option";
     li.id = `${list.id}-${items.length}`;
@@ -3391,6 +3393,7 @@ function showMoreButton(answer) {
 
 // The next rows of the shown Ranking: its query again, leaving out the areas of the rows shown (ADR-0032).
 // Loops are searched for the first rows only, so no later row's loop outscores the rows above (ADR-0054).
+// An answer for a list that has grown since it was asked lists nothing: another one listed those rows.
 async function showMore() {
   const { asked, results } = state, status = $("#more-status");
   $("#show-more").disabled = true;
@@ -3399,7 +3402,7 @@ async function showMore() {
   try {
     const after = results.map((result) => ({ lat: result.trailhead[0], lon: result.trailhead[1] }));
     const body = await postRank(asking({ ...asked.query, loops: false, after }), () => asked === state.asked && results === state.results);
-    if (asked !== state.asked || results !== state.results) return;
+    if (asked !== state.asked || results !== state.results || results.length !== after.length) return;
     state.pools.push(body.results);
     results.push(...pageOf(body.results));
     listRows(after.length);
