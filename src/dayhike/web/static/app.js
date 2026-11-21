@@ -1710,7 +1710,9 @@ function enterPick(typed, found) {
 // A hit is listed one way, as walked: its length says so unless it ends at its start.
 // With an export's Landmarks the list also has the hikes near a peak, hut, lake, pass or town named
 // like the query (ADR-0053); ``onLandmark(landmark, open)`` then moves a map there, ``open`` asking to open it.
-function nameSearch(input, list, onPick, onLandmark = null) {
+// ``resting()`` is what the box says for the hike chosen (null: none is): text typed and left with no
+// suggestion picked gives way to it, so the box and the chosen hike agree.
+function nameSearch(input, list, onPick, onLandmark = null, resting = () => null) {
   let timer = null, abort = null, items = [], active = -1, entered = false, listed = null, named = [];
   const option = (item, extra = null) => {
     const li = document.createElement("li");
@@ -1850,10 +1852,17 @@ function nameSearch(input, list, onPick, onLandmark = null) {
       else { clearTimeout(timer); search(query); } // else once it is
     } else if (event.key === "Escape") show([]);
   });
+  // Coming into the box selects its text, so what is typed replaces it rather than landing inside it.
+  let entering = false;
+  input.addEventListener("mousedown", () => { entering = document.activeElement !== input; });
+  input.addEventListener("mouseup", (event) => { if (entering) event.preventDefault(); entering = false; });
+  input.addEventListener("focus", () => input.select());
   // A search still pending would open the list again after the Hiker left the box.
   input.addEventListener("blur", () => {
     clearTimeout(timer);
     abort?.abort();
+    const rest = resting();
+    if (rest !== null) input.value = rest;
     setTimeout(() => show([]), 150);
   });
 }
@@ -1887,6 +1896,9 @@ async function remeasure(liked) {
   await measured;
 }
 
+// What the search box says for the liked hike: a catalog hike's name; nothing for a hike drawn on the map.
+const searchText = (hike) => hike.route ? "" : hike.name;
+
 // ``from``: "link" (the hike an address names; when it cannot be opened, the page shows no hike),
 // "map" (clicked on the map, which stays where it is), "search" (the hike's card is then scrolled to)
 // or null; ``note``: why Enter picked it, said beside its name.
@@ -1900,7 +1912,7 @@ async function choose(id, { from = null, note = null } = {}) {
     state.liked = hike;
     state.mapAt = null; // the map opens at the hike chosen, not at a place searched before
     if (state.wishing) setWishing(false);
-    $("#search").value = hike.name;
+    $("#search").value = searchText(hike);
     $("#liked-name").textContent = `Chosen: ${hike.name}, ${lengthText(hike)}${note ? ` (${note})` : ""}`;
     $("#liked-name").classList.remove("error-text");
     $("#pair-search").disabled = false;
@@ -1997,7 +2009,7 @@ async function chooseComposed(route, name, from = null) {
     if (request !== chosen) return;
     state.liked = hike;
     if (state.wishing) setWishing(false);
-    $("#search").value = "";
+    $("#search").value = searchText(hike);
     $("#liked-name").textContent = `Chosen: ${hike.name}, ${lengthText(hike)}`;
     $("#liked-name").classList.remove("error-text");
     $("#compose-name").value = hike.name;
@@ -3532,7 +3544,7 @@ async function start() {
       $("#map-pick-on").checked = true;
       pick.open();
     }
-  });
+  }, () => state.liked ? searchText(state.liked) : null);
   if (state.info.landmark_search) $("#search").placeholder = "Type a hike name, peak or place, e.g. Triglav";
   $("#search").addEventListener("input", forgetBrokenLink);
   $("#map-pick-on").addEventListener("change", (event) => {

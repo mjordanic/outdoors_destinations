@@ -2961,6 +2961,42 @@ def test_a_new_suggestion_list_drops_the_option_the_keys_chose_before(browser, s
     assert search.get_attribute("aria-activedescendant") is None  # no option is chosen in the new list
 
 
+def test_text_typed_after_a_pick_and_left_unpicked_gives_way_to_the_chosen_hike_s_name(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+    search = page.locator("#search")
+    search.fill("Ridge Walk")
+    page.locator("#suggestions li[role=option]", has_text="Ridge Walk").first.dispatch_event("mousedown")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+
+    search.focus()
+    search.press("End")
+    page.keyboard.type("xyz")  # the box no longer names the chosen hike
+    page.get_by_role("button", name="Find similar").click()  # leaves the box with no suggestion picked
+    page.locator("#results-table tbody tr").first.wait_for()
+
+    assert search.input_value() == "Ridge Walk"  # the box and the chosen hike agree again
+    assert page.locator("#liked-name").inner_text().startswith("Chosen: Ridge Walk")
+
+
+@pytest.mark.parametrize("touch", [False, True])
+def test_typing_into_the_box_after_a_pick_replaces_the_chosen_hike_s_name(browser, server, touch) -> None:
+    page = open_page(browser, server, Api({}), touch=touch, width=390 if touch else 1280)
+    search = page.locator("#search")
+    search.fill("Ridge Walk")
+    page.locator("#suggestions li[role=option]", has_text="Ridge Walk").first.dispatch_event("mousedown")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.locator("#liked-name").click()  # out of the box
+
+    if touch:
+        search.tap()
+    else:
+        search.click()
+    page.keyboard.type("Valley")
+
+    assert search.input_value() == "Valley"  # not inside the chosen hike's name
+    page.locator("#suggestions li[role=option]", has_text="Valley Path").first.wait_for()
+
+
 def test_a_result_that_loads_after_a_later_compared_hike_does_not_replace_its_card(browser, server) -> None:
     page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
     page.get_by_text("Chosen: Ridge Walk").wait_for()
