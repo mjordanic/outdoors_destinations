@@ -3720,6 +3720,7 @@ async function start() {
       syncRoundTrip();
       return;
     }
+    const month = $("#month").value;
     if (changed) resetSettings(); // a link names every setting it does not leave at its default (ADR-0071)
     const oneWay = parts.has("oneway"), modeChanged = returnToStart() === oneWay;
     $("#return-on").checked = !oneWay;
@@ -3733,17 +3734,21 @@ async function start() {
       chosen++; // drops a hike still loading
       brokenLink(new Error(`not a hike link: ${location.hash}`), malformed);
     };
+    const redraw = () => {
+      if ($("#month").value !== month) renderDetail($("#liked"), state.liked, { role: state.liked.route ? "Your hike" : "Liked hike" });
+    };
     if (kind === "hike") {
       const id = (decoded(parts.get("hike")) ?? "").trim();
       if (!/^\d{1,17}$/.test(id)) broken(true);
       else if (modeChanged || state.wishing || Number(id) !== state.liked?.id) choose(Number(id), { from: "link" });
+      else redraw();
     } else if (kind === "compose") {
       const route = parts.get("compose"), name = parts.has("name") ? decoded(parts.get("name")) : null;
       if (!state.info.compose) return;
       if (!/^[\w:.,-]+$/.test(route)) broken(true);
       else if (modeChanged || state.wishing || state.liked?.route?.text !== route) {
         chooseComposed(route, name?.slice(0, NAME_LENGTH), "link"); // a hand-made long name is cut, not refused
-      }
+      } else redraw();
     } else if (state.measures.some(wishable)) {
       chosen++; // drops a hike still loading
       setWishing(true);

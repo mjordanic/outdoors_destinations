@@ -3743,6 +3743,28 @@ def test_a_link_opened_in_a_tab_sets_every_setting_it_does_not_name_to_its_defau
     assert page.evaluate("location.hash") == "#hike=1002&month=7"  # what a reload of the link opens
 
 
+def test_a_link_to_the_hike_shown_with_no_month_shows_its_climate_with_no_month(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.route(f"{server}/api/hikes/*", lambda route: route.fulfill(json=_with_climate(route.fetch().json())))
+    page.evaluate("location.hash = '#hike=1002&month=1'")
+    page.get_by_text("Chosen: Valley Path").wait_for()
+    dimmed = page.locator('#liked svg[aria-label="Temperature by month"] rect[opacity="0.45"]')
+    assert dimmed.count() == 11  # every month but January
+
+    page.evaluate("location.hash = '#hike=1002'")
+    page.wait_for_function("() => document.querySelector('#month').value === ''")
+
+    assert dimmed.count() == 0
+
+
+def _with_climate(body: dict) -> dict:
+    """The hike in ``body`` with the same climate every month."""
+    for name in ("temperature_c", "precipitation_mm", "solar_radiation"):
+        body["facts"].update({f"{name}_{month:02d}": 10.0 for month in range(1, 13)})
+    return body
+
+
 def test_back_to_a_liked_hike_from_a_wish_turns_the_starting_place_filter_off(browser, server) -> None:
     page = open_page(browser, server, Api(WISHABLE), hash=f"#hike={RIDGE_WALK_ID}")
     page.get_by_text("Chosen: Ridge Walk").wait_for()
