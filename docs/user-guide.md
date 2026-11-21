@@ -94,8 +94,9 @@ them away again. With those columns shown on a phone, the list is wider than
 the screen: a line above it says to scroll it sideways for every measure's
 score.
 
-If you change a setting after a search, a line under **Find similar** says
-the list is from before your change, so you see it where you are on a phone.
+If you change a setting after a search, or while it is still running, a line
+under **Find similar** says the list is from before your change, so you see it
+where you are on a phone.
 
 While **Find similar** is greyed out, the line under it says why: no hike is
 chosen yet (choose one first), a hike is still loading, a search is still
@@ -145,7 +146,8 @@ its weight up without typing a value asks for the grey example value shown.
 A value the site cannot ask, such as a length of 0 or 99999 km, a box with
 no number, or a box emptied while its weight is above 0, shows a message
 beside its box, for example "Length must be from 1 to 2000 km". **Find
-hikes** stays greyed out, with the same reason under it, until you fix it.
+hikes** stays greyed out, with the same reason under it, until you fix it. It
+also waits, saying why, while every measure is at weight 0.
 **Reset weights** brings back the starting values. **Back to a hike you liked**
 takes you back to the normal search.
 
@@ -483,8 +485,9 @@ rank lower, are not drawn on this page (Redraw or tick Strict order shows
 them), or walk mostly the same trails as a listed hike. When none makes the
 list, the note says how the best loop found scores against the last row (below,
 level with it to three decimals, or above). When page 1 only left it out of its
-draw, or Strict order lists it just below the last row, a "List the best loop"
-button lists it: it ticks Strict order when that lists the loop, or else draws
+draw, or it ranks below the last row in Strict order (the note says where:
+just below it, or its place, such as #14), a "List the best loop" button lists
+it: it ticks Strict order when that lists the loop, or else draws
 page 1 again (with Strict order unticked) until the loop is in it. Otherwise
 the note says why it is not listed and that there is nothing to change. The
 note's first sentence says "and loops composed near the best of them" only
