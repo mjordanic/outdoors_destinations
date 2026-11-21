@@ -2221,7 +2221,7 @@ liked hike. Every shown hike has "Link to this hike" (`#hike=<id>` for a
 catalog or built hike, its `#compose=` link for a composed one, with `&oneway`
 when set, and the search settings: `&month=`, `&w=` (the weights moved from their defaults, `name:weight`
 comma-separated), `&adv`, `&regions=`, `&group=` and `&units=`, but not the starting place (`&from=lat,lon`, `&place=`, `&hours=`,
-`&km=`), which only the address bar keeps (ADR-0075); a wish link carries the same but its own weights; ADR-0054) and two buttons: Share sends that address to a touch screen's share
+`&km=`), which only the address bar keeps (ADR-0075); a plain click on it copies it as Share does rather than opening it in the same tab, which would drop the starting place and the list; a wish link carries the same but its own weights; ADR-0054) and two buttons: Share sends that address to a touch screen's share
 sheet, or copies it on a computer or where the sheet fails (a line beside the
 button then says "Link copied", or shows the link when it cannot be copied),
 and Download GPX saves the hike as drawn (the served line, simplified to within 10 m, so 1 % or

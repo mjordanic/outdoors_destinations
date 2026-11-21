@@ -507,33 +507,44 @@ async function downloadGpx(hike, button) {
 // computer's share sheet may never answer). ``note`` beside the button says what happened.
 async function shareHike(hike, button, note) {
   const url = hikeAddress(hike);
-  const say = (html) => {
-    note.innerHTML = html;
-    note.hidden = false;
-    clearTimeout(note.timer);
-    note.timer = setTimeout(() => { note.hidden = true; }, 6000);
-  };
   if (navigator.share && matchMedia("(pointer: coarse)").matches) {
-    say("Opening your phone's share menu…");
+    sayShared(note, "Opening your phone's share menu…");
     try {
       await navigator.share({ title: hike.name, url });
-      say("Shared.");
+      sayShared(note, "Shared.");
       return;
     } catch (error) {
       if (error.name === "AbortError") return; // the Hiker closed the share sheet
       // No share sheet here after all: copy the link instead.
     }
   }
-  try {
-    await navigator.clipboard.writeText(url);
+  if (await copyHikeAddress(hike, note)) {
     button.textContent = "Link copied";
     setTimeout(() => { button.textContent = "Share"; }, 2000);
-    say("Link copied: paste it in a message or a note to share this hike.");
+  }
+}
+
+function sayShared(note, html) {
+  note.innerHTML = html;
+  note.hidden = false;
+  clearTimeout(note.timer);
+  note.timer = setTimeout(() => { note.hidden = true; }, 6000);
+}
+
+// Copies ``hike``'s address to send to a friend, and says so in ``note``; where the page may not copy,
+// shows it there to copy by hand. Whether it was copied.
+async function copyHikeAddress(hike, note) {
+  const url = hikeAddress(hike);
+  try {
+    await navigator.clipboard.writeText(url);
+    sayShared(note, "Link copied: paste it in a message or a note to share this hike.");
+    return true;
   } catch {
     clearTimeout(note.timer); // the link stays until the Hiker copies it
     note.innerHTML = `Copy this link to share the hike: <input type="text" readonly value="${escapeHtml(url)}" aria-label="Link to share">`;
     note.hidden = false;
     note.querySelector("input").select();
+    return false;
   }
 }
 
@@ -1227,6 +1238,16 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     <p class="hint uncounted-note" hidden></p>
     <div class="table-wrap"><table class="facts"></table></div>`;
   card.querySelector(".share-hike")?.addEventListener("click", (event) => shareHike(hike, event.currentTarget, card.querySelector(".share-note")));
+  // A plain click copies the link rather than opening it here, which would drop the Hiker's starting place
+  // and list (ADR-0075); a click to open it in a new tab or window opens it.
+  for (const link of card.querySelectorAll("a.hike-link")) {
+    link.addEventListener("click", (event) => {
+      const note = card.querySelector(".share-note");
+      if (!note || event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      copyHikeAddress(hike, note);
+    });
+  }
   card.querySelector(".download-gpx")?.addEventListener("click", (event) => downloadGpx(hike, event.currentTarget));
   card.querySelector(".edit-composed")?.addEventListener("click", () => editComposed(
     hike.built ? { route: { text: hike.built.route }, name: hike.name } : hike,
@@ -3886,8 +3907,8 @@ async function start() {
   // An address opens its hike, composed hike or wish with the search settings it carries; a part the
   // page does not know is left alone, and a link cut short or changed says it could not be opened.
   // An address typed or gone back or forward to (``changed``, a hashchange) that names no hike is the
-  // home page as it opens, with no hike and no list; one whose settings differ from the list shown marks
-  // the list as from before (ADR-0055).
+  // home page as it opens, with no hike and no list; one whose settings differ from the list shown hides
+  // the list (ADR-0075).
   const openLinked = (changed) => {
     const parts = readLink(location.hash);
     const kind = ["hike", "compose", "wish"].find((name) => parts.has(name));

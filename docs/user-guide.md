@@ -213,7 +213,9 @@ without it.
 
 Open any hike from the results. It has a **Link to this hike**, and two
 buttons. The link and Share give the same address, with your settings as
-they are now, except your starting place.
+they are now, except your starting place. Clicking the link copies it, and
+a line beside Share says "Link copied"; your starting place and your list
+stay as they are. To open it in a new tab, middle-click or Ctrl/Cmd-click it.
 
 - **Share** sends the link to your friends. On a phone it opens the share
   sheet, and a line beside the button says "Opening your phone's share

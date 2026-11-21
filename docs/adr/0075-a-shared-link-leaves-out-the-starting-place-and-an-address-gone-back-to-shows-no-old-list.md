@@ -11,7 +11,8 @@ address bar, every setting included. That sent the visitor's starting place, its
 or distance limit to whoever got the link, with no word of it. A friend starts from somewhere else, and a
 place can be the visitor's exact coordinates. The links now carry every other setting (month, weights,
 regions, units, Strict order and the rest) but not `from`, `place`, `hours` or `km`; the address bar keeps
-them, so a reload still opens the visitor's own search. The GPX file's link already named the hike alone.
+them, so a reload still opens the visitor's own search. The GPX file's link already named the hike alone. A plain click on "Link to this hike" copies it as Share does instead of opening it in the same tab, where
+it would drop the visitor's starting place and list; a click to open it in a new tab still opens it.
 
 **An address gone back or forward to, or typed, opens as it does in a new tab (ADR-0073), with no list.**
 ADR-0055 kept the list shown and marked it "The query changed since this ranking" when the address named other

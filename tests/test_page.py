@@ -3801,7 +3801,7 @@ def test_an_address_of_the_list_s_own_settings_keeps_the_list(browser, server) -
     page.get_by_text("Chosen: Ridge Walk").wait_for()
     _find(page)
 
-    page.locator("#liked").get_by_role("link", name="Link to this hike").click()  # the same settings
+    page.evaluate(f"location.hash = '#hike={RIDGE_WALK_ID}&w=length:50&x'")  # the same settings, and a part it does not know
 
     page.wait_for_timeout(300)
     assert page.locator("#results").is_visible()
@@ -3809,6 +3809,21 @@ def test_an_address_of_the_list_s_own_settings_keeps_the_list(browser, server) -
 
     page.evaluate(f"location.hash = '#hike={RIDGE_WALK_ID}&w=length:50&from=45.8,15.9&km=200'")
     page.wait_for_function("() => document.querySelector('#results').hidden")  # other settings: no list
+
+
+def test_clicking_link_to_this_hike_copies_it_and_keeps_the_place_and_the_list(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}&from=45.8,15.9&km=200", init=COPIED)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+
+    page.locator("#liked").get_by_role("link", name="Link to this hike").click()
+
+    page.wait_for_function("() => window.copied.length")
+    page.locator("#liked .share-note").get_by_text("Link copied").wait_for()
+    assert page.evaluate("window.copied") == [f"{server}/#hike={RIDGE_WALK_ID}"]
+    assert page.get_by_label("Only hikes near a starting place").is_checked()
+    assert page.locator("#results").is_visible()
+    assert "from=45.8,15.9" in page.evaluate("location.hash")
 
 
 def test_back_to_the_home_address_shows_the_home_page_with_no_hike_or_list(browser, server) -> None:
