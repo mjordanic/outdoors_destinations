@@ -42,7 +42,9 @@ Pick one of three ways:
    hike only when one is named exactly as you typed, or it is the only hike
    found; the line beside the chosen hike then says so. Otherwise the list
    stays open and says how many hikes match, so you pick one (or use the arrow
-   keys, then Enter). It works the same on a phone and a computer.
+   keys, then Enter). A one-letter or over-100-character query is not
+   searched: the list says why instead. It works the same on a phone and a
+   computer.
    Once picked, the page moves to the hike's panel.
 
    You can also type a **peak, hut, viewpoint, lake, pass, ridge,
@@ -89,10 +91,12 @@ If you change a setting after a search, a line under **Find similar** says
 the list is from before your change, so you see it where you are on a phone.
 
 While **Find similar** is greyed out, the line under it says why: no hike is
-chosen yet (choose one first), a hike is still loading, or a search is still
-running. If your hike cannot be measured again after you change Return to
-start, that line says so and **Find similar** stays usable: pressing it
-measures your hike again, then finds.
+chosen yet (choose one first), a hike is still loading, a search is still
+running, every measure is at weight 0, or a drive limit is out of range
+(or neither Max drive hours nor Max km is ticked). If your hike cannot be
+measured again after you change Return to start, that line says so and
+**Find similar** stays usable: pressing it measures your hike again, then
+finds.
 
 If hikes on the list score below 0.47, what a typical pair of random hikes
 scores, a note above the list says from which row down the matches are weak,
