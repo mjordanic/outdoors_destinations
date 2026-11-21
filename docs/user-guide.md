@@ -305,9 +305,10 @@ Each hike has a score, and each thing compared has its own score. Press the
 - "No data" means we don't know that fact for the hike. Most often it is the
   difficulty grade, which most trails don't have on OpenStreetMap; a hike with
   no grade scores 0 on difficulty against a hike that has one. Any other fact
-  we don't know is simply left out of the score. When you describe the hike
-  you want, a hike with no data for something you asked for scores 0 on it
-  instead, so it is listed below the hikes that have that data.
+  we don't know scores 0 the same way against a hike you like that has it, and
+  when you describe the hike you want, for something you asked for, so it is
+  listed below the hikes that have that data. A fact the hike you like has no
+  data for is left out of the score.
 - Open a hike to see every measure side by side with the hike you like (or
   the one you want). A greyed row is a measure that is not part of the score:
   it still shows the facts and its score, faded, and says why: "not counted

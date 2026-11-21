@@ -471,10 +471,39 @@ def test_a_hike_with_no_data_for_a_wished_measure_ranks_below_hikes_with_that_da
     assert measures[0]["elevation_gain"]["note"] == "No data for this hike: counts as 0 against the value you asked for"
     # Climbing not weighted: the hike with no climb data and the better length wins as before.
     assert length_only[0] > length_only[1]
-    # A Seed hike, not a wish, still leaves the measure out of a pair either side lacks.
-    seeded, _ = score_rows(store, [1], np.array([0]), {"elevation_gain": 100, "length": 100})
-    seeded_length, _ = score_rows(store, [1], np.array([0]), {"length": 100})
-    assert seeded == pytest.approx(seeded_length)
+
+
+def test_a_hike_with_no_data_for_a_measure_the_seed_has_ranks_below_hikes_with_that_data(tmp_path: Path) -> None:
+    # Hike 0 has the Seed's length but no elevation, land cover or climate (as hikes on Svalbard);
+    # hike 2 is 2 km longer and has them all. Hike 1 is the Seed. Hike 0 ranked first on length alone.
+    gains = [np.nan, 600, 650, *np.linspace(0, 2_000, 97)]
+    lengths = [10_000, 10_000, 12_000, *np.linspace(5_000, 20_000, 97)]
+    temperatures = [np.nan, 10, 11, *np.linspace(-5, 25, 97)]
+    trees = [np.nan, 0.5, 0.55, *np.linspace(0, 1, 97)]
+    shares = {name: [np.nan, 0.0, 0.0, *np.zeros(97)] for name in LANDCOVER_SHARE_COLUMNS if name != "tree_share"}
+    profile = np.random.default_rng(3).random((100, 64))
+    profile[0] = np.nan
+    store = _calibrated(
+        tmp_path, 100, profile=profile, elevation_gain_m=gains, length_m=lengths,
+        temperature_c=temperatures, tree_share=trees, **shares,
+    )  # fmt: skip
+    weights = {"elevation_gain": 100, "length": 100, "landcover": 100, "temperature": 100, "profile": 100}
+    rows = np.array([0, 2])
+
+    weighted, _ = score_rows(store, [1], rows, weights)
+    length_only, _ = score_rows(store, [1], rows, {"length": 100})
+    measures = scored_measures(store, 1, rows, None)
+
+    assert weighted[1] > weighted[0]
+    # Still listed, scored 0 on every measure it has no data for: not dropped from its mean.
+    assert weighted[0] == pytest.approx(length_only[0] / 5)
+    for name in ("elevation_gain", "landcover", "temperature", "profile"):
+        assert measures[0][name]["raw"] == 0.0, name
+        assert measures[0][name]["note"] == "No data for this hike: counts as 0 against the hike you like", name
+    # A Seed with no data for a measure compares nothing there: the measure drops out.
+    no_data_seed, _ = score_rows(store, [0], np.array([1]), weights)
+    seed_length, _ = score_rows(store, [0], np.array([1]), {"length": 100})
+    assert no_data_seed == pytest.approx(seed_length)
 
 
 def test_weighted_mean_renormalizes_over_the_scored_columns() -> None:

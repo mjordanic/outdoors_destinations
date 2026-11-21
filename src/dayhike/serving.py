@@ -139,7 +139,7 @@ from dayhike.similarity import (
     random_pair_shares,
     rank_rows,
     ranked_scores,
-    wish_unmeasured,
+    unmeasured,
     score_rows,
 )
 from dayhike.sources import SOURCE_OSM, osm_record_url, osm_source_ref, read_register
@@ -295,8 +295,10 @@ FLOOR_TEXT = {
 NOT_COMPARED = {"waterside": "both dry"}
 PRESENT_TEXT = {"waterside": "is beside water"}
 
-# A DayHike with no data for a Measure a Wish asks a value of scores 0 there (ADR-0052).
+# A DayHike with no data for a Measure a Wish asks a value of, or the Seed has data for, scores 0 there
+# (ADR-0052, ADR-0071).
 UNMEASURED_NOTE = "No data for this hike: counts as 0 against the value you asked for"
+SEED_UNMEASURED_NOTE = "No data for this hike: counts as 0 against the hike you like"
 
 
 def score_note(
@@ -397,9 +399,9 @@ SCORE_HELP = {
         {
             "title": "The overall score",
             "text": "The overall score is the average of the measure scores, weighted as you set them: only "
-            "their ratios matter, and a measure with no data on either hike, or not compared, drops out; "
-            "when you describe the hike you want, a hike with no data for a measure you asked for scores 0 "
-            "on it instead. A "
+            "their ratios matter, and a measure with no data on the hike you like, or not compared, drops "
+            "out; a hike with no data for a measure the hike you like has, or that you asked for when you "
+            "describe the hike you want, scores 0 on it instead. A "
             "typical random pair of hikes scores about 0.47. With the default weights, 0.85 beats 99 random "
             "pairs in 100, and the best match for a hike usually scores about 0.97.",
         },
@@ -2452,20 +2454,17 @@ def scored_measures(
         same = _sameness(store, measure, seed, rows, month, raw)
         calibrated = calibrate(store, key, raw, measure_rarity(store, measure, seed, rows, month=month))
         pairs = f"random hike pairs where either {PRESENT_TEXT.get(measure.name, 'has one')}" if key == measure.name and measure.presence else "random hike pairs"
-        unmeasured = (
-            wish_unmeasured(store, measure, seed, rows, month)
-            if isinstance(seed, OutsideSeed) and seed.stated
-            else np.zeros(len(rows), dtype=bool)
-        )
-        measures[measure.name] = (raw, calibrated, random_pair_shares(store, key, raw)[1], same, pairs, unmeasured)
+        missing = unmeasured(store, measure, seed, rows, month)
+        measures[measure.name] = (raw, calibrated, random_pair_shares(store, key, raw)[1], same, pairs, missing)
+    no_data = UNMEASURED_NOTE if isinstance(seed, OutsideSeed) and seed.stated else SEED_UNMEASURED_NOTE
     return [
         {
             name: {
                 "score": _value(calibrated[i]),
                 "raw": _value(raw[i]),
-                "note": UNMEASURED_NOTE if unmeasured[i] else score_note(_value(calibrated[i]), _value(tied[i]), same[i], pairs),
+                "note": no_data if missing[i] else score_note(_value(calibrated[i]), _value(tied[i]), same[i], pairs),
             }
-            for name, (raw, calibrated, tied, same, pairs, unmeasured) in measures.items()
+            for name, (raw, calibrated, tied, same, pairs, missing) in measures.items()
         }
         for i in range(len(rows))
     ]
