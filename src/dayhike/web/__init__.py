@@ -29,6 +29,8 @@ they use none of it. With none given, no other origin may.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
+import logging
 import math
 import re
 import threading
@@ -76,6 +78,7 @@ from dayhike.regions import labels_text
 from dayhike.similarity import DEFAULT_WEIGHTS, MEASURES, WISHABLE, Measure, climb_and_descent
 from dayhike.trailgraph import Route, RouteError
 
+logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
 RESULTS = 10  # rows a Ranking lists; "Show 10 more" asks the next ones (ADR-0032)
 POOL = 30  # rows a Ranking answers with: the page draws RESULTS of them, or shows the first in Strict order (ADR-0047)
@@ -349,6 +352,18 @@ def wish_input(measure: Measure) -> dict | None:
     return {"kind": "number", "unit": unit, "min": low, "max": high, "step": step, "default": default, "display": display}
 
 
+def only_this_machine(url: str) -> bool:
+    """Whether ``url`` names this machine (localhost or a loopback or unspecified address), so no visitor can open it."""
+    host = urlsplit(url).hostname or ""
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_unspecified
+
+
 def site_pages(
     goatcounter: str | None,
     place_search: bool = False,
@@ -403,7 +418,8 @@ def site_pages(
     continents = [region.get("continent") for region in regions or [{"continent": "Europe"}]]
     europe_only = all(continent == "Europe" for continent in continents)
     covered = "Europe" if europe_only else labels_text([str(region["label"]) for region in regions])
-    if download_url and urlsplit(download_url).hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+    if download_url and only_this_machine(download_url):
+        logger.warning("the download URL %s is only reachable on this machine; the site shows no download link", download_url)
         download_url = None  # a link only this machine can open breaks for every visitor
     pages = {}
     for name in PAGES:

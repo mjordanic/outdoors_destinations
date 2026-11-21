@@ -1,5 +1,6 @@
 """The ODbL download: the OpenStreetMap part of the hike database, nothing else (issue #122)."""
 
+import logging
 import sqlite3
 from pathlib import Path
 
@@ -140,8 +141,26 @@ def test_the_credits_page_links_the_download_only_when_its_address_is_set(servin
     assert empty == without
 
 
-@pytest.mark.parametrize("local", ["http://127.0.0.1:8081/hikes-osm.sqlite", "http://localhost:8081/x", "http://[::1]:8081/x", "http://0.0.0.0/x"])
+@pytest.mark.parametrize("local", [
+    "http://127.0.0.1:8081/hikes-osm.sqlite", "http://localhost:8081/x", "http://[::1]:8081/x", "http://0.0.0.0/x",
+    "http://127.0.0.2:8081/x", "http://[::ffff:127.0.0.1]:8081/x", "http://foo.localhost:8081/x",
+])
 def test_the_credits_page_drops_a_download_address_only_this_machine_can_reach(serving: Path, local: str) -> None:
     page = TestClient(create_app(ServingData(serving), None, download_url=local)).get("/credits.html").text
 
     assert "Download the data" not in page and "8081" not in page
+
+
+def test_a_dropped_download_address_is_logged_once_with_its_value(serving: Path, caplog: pytest.LogCaptureFixture) -> None:
+    local = "http://127.0.0.1:8081/hikes-osm.sqlite"
+    with caplog.at_level(logging.WARNING, logger="dayhike.web"):
+        create_app(ServingData(serving), None, download_url=local)
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING and r.name == "dayhike.web"]
+    assert len(warnings) == 1 and local in warnings[0].getMessage()
+
+
+def test_a_public_download_address_that_only_looks_local_keeps_its_link(serving: Path) -> None:
+    page = TestClient(create_app(ServingData(serving), None, download_url="https://localhost.example.com/x")).get("/credits.html").text
+
+    assert "Download the data" in page and "localhost.example.com" in page
