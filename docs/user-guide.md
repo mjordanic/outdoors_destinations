@@ -53,7 +53,8 @@ Pick one of three ways:
    Lake Garda. Under the hike names the list then shows
    "Hikes near Zugspitze (peak, near Ehrwald, AT)" and the closest
    few hikes there, each saying how near it comes: "reaches the top", "passes
-   300 m from it", or for a town "starts 1.2 km from it". Where several
+   300 m from it", or for a town "starts 1.2 km from it". A hike already
+   listed by its name is not listed again under the place. Where several
    places share a name, the best known comes first (the one with names in
    the most languages, then the highest): "Mont Blanc" is the summit above
    Chamonix before the small hills of that name. A big lake, or a summit no
