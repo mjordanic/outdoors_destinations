@@ -1187,6 +1187,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     ${hike.way_back && hike.way_back.kind !== "none" ? `<p class="hint">Length, climb, descent and every measure include the way back to the start (${escapeHtml(wayBackText(hike.way_back))}); the map and profile show the hike itself.</p>` : ""}
     <ul class="badges">${badges.map((b) => (b.text ? `<li title="${escapeHtml(b.title)}">${escapeHtml(b.text)}</li>` : `<li>${escapeHtml(b)}</li>`)).join("")}</ul>
     ${emergencyLine(hike.emergency)}
+    ${hike.border_emergency ? emergencyLine(hike.border_emergency, true) : ""}
     <div class="map"></div>
     <div class="legend">${LEGEND.map(([label, color]) => `<span style="--c:${color}">${label}</span>`).join("")}</div>
     ${photoBlock(hike)}
@@ -1216,16 +1217,18 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
 }
 
 // The emergency number and mountain rescue service of the country a hike starts in, with its sources;
-// a hike near a border shows its start country's (112 works across the EU).
-function emergencyLine(emergency) {
+// a hike whose route crosses a border or starts within 2 km of one also shows the country across it (`across`).
+function emergencyLine(emergency, across = false) {
   if (!emergency) return '<p class="emergency">In an emergency, call the local emergency number.</p>';
   const { name, numbers, rescue, rescue_url: url, how, sources } = emergency;
   const link = (href, text) => `<a href="${escapeHtml(href)}" target="_blank" rel="noopener">${escapeHtml(text)}</a>`;
-  const parts = [`<strong>Emergency: ${numbers.map(escapeHtml).join(" or ")}</strong>`];
+  const where = across ? `Near the border with ${escapeHtml(name)} (the route crosses it or starts within 2 km): ` : "";
+  const parts = [`${where}<strong>Emergency: ${numbers.map(escapeHtml).join(" or ")}</strong>`];
   if (rescue) parts.push(`Mountain rescue: ${url ? link(url, rescue) : escapeHtml(rescue)}`);
   if (how && how !== `Call ${numbers[0]}.`) parts.push(escapeHtml(how));
   const cited = `${sources.length === 1 ? "source" : "sources"} ${sources.map((href) => link(href, new URL(href).hostname.replace(/^www\./, ""))).join(", ")}`;
-  return `<p class="emergency" title="Emergency services where this hike starts: ${escapeHtml(name)}">${parts.join(" · ")} <small>(${escapeHtml(name)}, ${cited})</small></p>`;
+  const title = across ? `Emergency services across the border: ${escapeHtml(name)}` : `Emergency services where this hike starts: ${escapeHtml(name)}`;
+  return `<p class="emergency" title="${title}">${parts.join(" · ")} <small>(${escapeHtml(name)}, ${cited})</small></p>`;
 }
 
 // Why a Measure a query weighs 0 is not counted, as the detail table says it: weighted 0, behind a

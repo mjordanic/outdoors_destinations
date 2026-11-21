@@ -19,6 +19,8 @@ COVERED = set(
     "AL AD AT BY BE BA BG HR CY CZ DK EE FO FI FR GE DE GI GR GG JE HU IS IE IM IT XK LV LI LT LU MK MT MD MC ME "
     "NL NO PL PT RO RU SM RS SK SI ES SE CH TR UA GB AX SJ US CA MX".split()
 )
+# The ADM0_A3 code Natural Earth names a country by, which its boundary lines use.
+A3 = {"HR": "HRV", "SI": "SVN", "IT": "ITA"}
 # Sources that speak for no country's own services: a row with only these says why in its notes.
 THIRD_PARTY = ("https://www.gov.uk/foreign-travel-advice/", "https://digital-strategy.ec.europa.eu/")
 
@@ -42,8 +44,23 @@ def _countries(path: Path, *squares: tuple[str, float, float]) -> Path:
     features = []
     for code, west, south in squares:
         ring = [[west, south], [west + 2, south], [west + 2, south + 2], [west, south + 2], [west, south]]
-        properties = {"NAME": code, "ISO_A2": "-99", "ISO_A2_EH": code}
+        properties = {"NAME": code, "ISO_A2": "-99", "ISO_A2_EH": code, "ADM0_A3": A3.get(code, code + "X")}
         features.append({"type": "Feature", "properties": properties, "geometry": {"type": "Polygon", "coordinates": [ring]}})
+    path.write_text(json.dumps({"type": "FeatureCollection", "features": features}))
+    return path
+
+
+def _borders(path: Path, *lines: tuple[str, str, list[tuple[float, float]]]) -> Path:
+    """Natural Earth-like land boundary lines: per (left, right, [(lon, lat), ...]) one line between two
+    countries, named by their ADM0_A3 codes as Natural Earth names them."""
+    features = [
+        {
+            "type": "Feature",
+            "properties": {"ADM0_A3_L": left, "ADM0_A3_R": right},
+            "geometry": {"type": "LineString", "coordinates": [list(point) for point in points]},
+        }
+        for left, right, points in lines
+    ]
     path.write_text(json.dumps({"type": "FeatureCollection", "features": features}))
     return path
 
@@ -128,3 +145,53 @@ def test_countries_are_exported_with_the_serving_export_or_beside_one(catalog_pa
     assert capsys.readouterr().out.strip() == str(out / "countries.npy")
     assert (out / "meta.json").read_bytes() == meta
     assert main(["export-countries", "--out", str(out), "--countries", str(_countries(tmp_path / "z.geojson", ("ZZ", 14, 44)))]) == 1
+
+
+# The fixture's Ridge Walk starts at 45.00 N 15.00 E and walks north to 45.09 N; the next hike starts at 45.20 N 15.10 E.
+HIKELAND = (("HR", 14, 44), ("SI", 14, 46), ("IT", 20, 44))
+
+
+def test_a_hike_whose_route_crosses_a_border_also_shows_the_other_countrys_services(export: Path, tmp_path: Path) -> None:
+    out = _copy(export, tmp_path / "out")
+    crossed = _borders(tmp_path / "b.geojson", ("HRV", "SVN", [(14.9, 45.05), (15.05, 45.05)]))  # 5.6 km north of the start
+    export_countries(out, _countries(tmp_path / "c.geojson", *HIKELAND), crossed)
+
+    data = ServingData(out)
+    ridge = data.detail(RIDGE_WALK_ID)
+    assert ridge["emergency"]["country"] == "HR"
+    assert ridge["border_emergency"] == emergency_services()["SI"]
+    assert data.detail(1002)["border_emergency"] is None  # 17 km from that line, and its route does not reach it
+
+
+@pytest.mark.parametrize(
+    ("line", "flagged"),
+    [
+        ([(15.02, 44.9), (15.02, 45.1)], True),  # 1.6 km east of the start
+        ([(15.03, 44.9), (15.03, 45.1)], False),  # 2.4 km east
+        ([(15.1, 44.9825), (14.9, 44.9825)], True),  # 1.9 km south
+        ([(15.1, 44.9775), (14.9, 44.9775)], False),  # 2.5 km south
+    ],
+)
+def test_a_hike_starting_within_2_km_of_a_border_also_shows_the_other_countrys_services(
+    export: Path, tmp_path: Path, line: list[tuple[float, float]], flagged: bool
+) -> None:
+    out = _copy(export, tmp_path / "out")
+    border = _borders(tmp_path / "b.geojson", ("SVN", "HRV", line))  # Croatia on its right
+    export_countries(out, _countries(tmp_path / "c.geojson", *HIKELAND), border)
+
+    shown = ServingData(out).detail(RIDGE_WALK_ID)["border_emergency"]
+    assert shown == (emergency_services()["SI"] if flagged else None)
+
+
+def test_borders_are_exported_with_the_countries_or_beside_an_export(catalog_path: Path, tmp_path: Path) -> None:
+    countries = _countries(tmp_path / "c.geojson", *HIKELAND)
+    borders = _borders(tmp_path / "b.geojson", ("HRV", "SVN", [(14.9, 45.05), (15.05, 45.05)]))
+    out = export_serving(catalog_path, tmp_path / "out", countries_path=countries, borders_path=borders)
+    assert np.load(out / "borders.npy").tolist() == ["SI", "", "", ""]  # Ridge Walk's route crosses it
+    export_countries(out, countries)  # a rerun without border lines drops them
+    assert not (out / "borders.npy").exists()
+
+    assert main(["export-countries", "--out", str(out), "--countries", str(countries), "--borders", str(borders)]) == 0
+    assert np.load(out / "borders.npy").tolist() == ["SI", "", "", ""]
+    assert main(["export-countries", "--out", str(out), "--borders", str(borders)]) == 1  # sides need the countries
+    assert not (export_serving(catalog_path, out) / "borders.npy").exists()

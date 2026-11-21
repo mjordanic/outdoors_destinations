@@ -37,6 +37,9 @@ similarity directory live. It writes a directory a server memory-maps:
   country the hike starts in, for its emergency number (``export_countries``), when
   a Natural Earth countries file is given. ``export_countries`` writes it beside an
   existing export too; without it a hike's country is that of the town nearest its start.
+- ``borders.npy``: per Trailhead the ISO 3166 code of the country across the national border its
+  route crosses or its Trailhead is within ``BORDER_M`` of, else "", for that country's emergency
+  number too, when Natural Earth boundary lines are given with the countries file.
 - ``meta.json``: written last, so a directory without it is incomplete.
 
 ``ServingData`` opens such a directory without ``Catalog.open``: name search,
@@ -522,12 +525,15 @@ def emergency_services() -> dict[str, dict]:
         }
 
 
-def export_countries(out_dir: Path | str, countries_path: Path | str | None = None) -> Path:
+def export_countries(
+    out_dir: Path | str, countries_path: Path | str | None = None, borders_path: Path | str | None = None
+) -> Path:
     """Write ``countries.npy`` into the export ``out_dir``: per Trailhead the ISO 3166 code of the
-    country it is in, from Natural Earth admin-0 country shapes (``countries_path``, the GeoJSON
-    the coverage map reads); for a Trailhead outside every shape (an island or coast the
-    simplified shapes leave out) the country of the nearest place in ``places.sqlite``. Reads
-    only ``trailheads.npy`` and ``places.sqlite``.
+    country it is in, from Natural Earth admin-0 country shapes (``countries_path``, the 10m
+    GeoJSON); for a Trailhead outside every shape (an island or coast the shapes leave out) the
+    country of the nearest place in ``places.sqlite``. With Natural Earth land boundary lines
+    (``borders_path``) also ``borders.npy`` (``_across_borders``); without them an old one is
+    dropped. Reads only ``trailheads.npy``, ``places.sqlite`` and, with borders, ``hikes.sqlite``.
 
     Raises ServingExportError, writing nothing, when a Trailhead has no country, or its country
     no row in ``EMERGENCY_PATH``: every hike shows its emergency number.
@@ -535,8 +541,11 @@ def export_countries(out_dir: Path | str, countries_path: Path | str | None = No
     from scipy.spatial import cKDTree
 
     out = Path(out_dir)
+    if borders_path is not None and countries_path is None:
+        raise ServingExportError("border lines need the countries file: its ADM0_A3 codes name the countries either side")
     trailheads = np.load(out / "trailheads.npy").reshape(-1, 2)
     codes = np.full(len(trailheads), "", dtype="<U2")
+    code_of_a3: dict[str, str] = {}  # ADM0_A3, the code a boundary line names its sides by
     if countries_path is not None:
         shapes, shape_codes = [], []
         for feature in json.loads(Path(countries_path).read_text())["features"]:
@@ -545,6 +554,8 @@ def export_countries(out_dir: Path | str, countries_path: Path | str | None = No
             if code:
                 shapes.append(shapely.geometry.shape(feature["geometry"]))
                 shape_codes.append(code)
+                if properties.get("ADM0_A3"):
+                    code_of_a3[properties["ADM0_A3"]] = code
         points = shapely.points(trailheads[:, 1], trailheads[:, 0])
         tree, shape_codes = shapely.STRtree(shapes), np.array(shape_codes, dtype="<U2")
         at, shape = tree.query(points, predicate="within")
@@ -563,8 +574,85 @@ def export_countries(out_dir: Path | str, countries_path: Path | str | None = No
     if unknown:
         listed = ", ".join(f"{code or 'no country'} ({count} Trailheads)" for code, count in unknown.items())
         raise ServingExportError(f"no emergency number for {listed}: add the country to {EMERGENCY_PATH}")
+    across = None if borders_path is None else _across_borders(out, trailheads, codes, borders_path, code_of_a3)
     np.save(out / "countries.npy", codes)
+    if across is None:
+        (out / "borders.npy").unlink(missing_ok=True)
+    else:
+        np.save(out / "borders.npy", across)
     return out / "countries.npy"
+
+
+# A hike whose route crosses a national border, or whose Trailhead is this near one, also shows the
+# emergency services of the country across it.
+BORDER_M = 2_000
+
+
+def _across_borders(
+    out: Path, trailheads: np.ndarray, codes: np.ndarray, borders_path: Path | str, code_of_a3: Mapping[str, str]
+) -> np.ndarray:
+    """Per Trailhead the ISO 3166 code of the country across the border nearest it, of those its
+    Trailhead is within ``BORDER_M`` of and those its route (``hikes.sqlite``) crosses; "" with
+    none, or when that country has no row in ``EMERGENCY_PATH``. The borders are Natural Earth land
+    boundary lines (``borders_path``), each naming the countries left and right of it by ADM0_A3."""
+    segments, sides = [], []
+    for feature in json.loads(Path(borders_path).read_text())["features"]:
+        properties = feature["properties"]
+        side = [code_of_a3.get(properties.get(key) or "", "") for key in ("ADM0_A3_L", "ADM0_A3_R")]
+        for part in shapely.get_parts(shapely.geometry.shape(feature["geometry"])):
+            xy = shapely.get_coordinates(part)
+            segments.append(np.stack([xy[:-1], xy[1:]], axis=1))
+            sides += [side] * (len(xy) - 1)
+    across = np.full(len(trailheads), "", dtype="<U2")
+    if not sides:
+        return across
+    segments, sides = np.concatenate(segments), np.array(sides, dtype="<U2")  # (lon, lat) ends; (left, right)
+    tree = shapely.STRtree(shapely.linestrings(segments))
+    points = shapely.points(trailheads[:, 1], trailheads[:, 0])
+    rows, hit = tree.query(points, predicate="dwithin", distance=_degrees_within(trailheads[:, 0], BORDER_M))
+    # Only the routes that can reach a border are decoded: those of the hikes it is within walk_m of.
+    with scoped(sqlite3.connect(f"file:{out / 'hikes.sqlite'}?mode=ro", uri=True)) as db:
+        ids, walk_m = map(np.array, zip(*db.execute("SELECT id, coalesce(walk_m, 0) FROM hikes ORDER BY id")))
+        (of, _), degrees = tree.query_nearest(points, return_distance=True, all_matches=False)
+        reach = of[degrees <= _degrees_within(trailheads[of, 0], walk_m[of])]
+        lines = {}
+        for chunk in itertools.batched(ids[reach].tolist(), 500):
+            query = f"SELECT id, line FROM hikes WHERE line != '' AND id IN ({','.join('?' * len(chunk))})"
+            lines.update(db.execute(query, chunk))
+    routed = np.array([row for row in reach if int(ids[row]) in lines], dtype=np.int64)
+    routes = [shapely.linestrings(np.array(decode_polyline(lines[int(ids[row])]))[:, ::-1]) for row in routed]
+    route, crossed = tree.query(np.array(routes, dtype=object), predicate="intersects") if routes else ([], [])
+    crossing = np.concatenate([np.zeros(len(rows), bool), np.ones(len(route), bool)])
+    rows, hit = np.concatenate([rows, routed[route]]).astype(np.int64), np.concatenate([hit, crossed]).astype(np.int64)
+    metres = _metres_to_segments(trailheads[rows], segments[hit])
+    kept = crossing | (metres <= BORDER_M)  # the query's bound in degrees holds more than BORDER_M
+    rows, hit, metres = rows[kept], hit[kept], metres[kept]
+    order = np.lexsort((metres, rows))
+    first = order[np.unique(rows[order], return_index=True)[1]]  # each Trailhead's nearest border
+    rows, (left, right) = rows[first], sides[hit[first]].T
+    other = np.where(left != codes[rows], left, right)
+    known = emergency_services()
+    across[rows] = [code if code in known else "" for code in other.tolist()]
+    return across
+
+
+def _degrees_within(lat: np.ndarray, metres: np.ndarray | float) -> np.ndarray:
+    """A radius in degrees holding every point within ``metres`` of a point at ``lat``: a bound to query by."""
+    degrees = np.degrees(np.asarray(metres, dtype=np.float64) / EARTH_RADIUS_M)
+    return degrees / np.cos(np.radians(np.minimum(np.abs(lat) + degrees, 89.0)))
+
+
+def _metres_to_segments(points: np.ndarray, segments: np.ndarray) -> np.ndarray:
+    """Metres from each (lat, lon) point to its segment ((lon, lat) ends), on the plane tangent at
+    the point: within a few metres for the ``BORDER_M`` a border flag needs."""
+    scale = math.radians(1) * EARTH_RADIUS_M
+    x = (segments[..., 0] - points[:, 1:]) * np.cos(np.radians(points[:, :1])) * scale
+    y = (segments[..., 1] - points[:, :1]) * scale
+    start, step = np.stack([x[:, 0], y[:, 0]], axis=-1), np.stack([x[:, 1] - x[:, 0], y[:, 1] - y[:, 0]], axis=-1)
+    length2 = (step**2).sum(axis=-1)
+    along = np.divide(-(start * step).sum(axis=-1), length2, out=np.zeros_like(length2), where=length2 > 0)
+    nearest = start + np.clip(along, 0, 1)[:, None] * step
+    return np.hypot(nearest[:, 0], nearest[:, 1])
 
 
 def export_serving(
@@ -576,6 +664,7 @@ def export_serving(
     valhalla_url: str | None = None,
     geonames_path: Path | str | None = None,
     countries_path: Path | str | None = None,
+    borders_path: Path | str | None = None,
     regions: Sequence[Region] = (),
     progress: Progress | None = None,
 ) -> Path:
@@ -588,7 +677,8 @@ def export_serving(
     existing snap cache; with ``valhalla_url`` every Trailhead not in it is
     snapped now, so a server never has to. ``geonames_path`` is a GeoNames
     dump (``allCountries``, zip or txt) for ``places.sqlite``; ``countries_path`` the Natural
-    Earth countries GeoJSON for ``countries.npy``. ``regions``, the ones the Catalog was built from, are
+    Earth countries GeoJSON for ``countries.npy``, ``borders_path`` its land boundary lines for
+    ``borders.npy``. ``regions``, the ones the Catalog was built from, are
     named in ``meta.json`` (label and continent) for the site's pages; none leaves them saying Europe.
     """
     started = time.monotonic()
@@ -664,10 +754,11 @@ def export_serving(
     else:
         (out / "places.sqlite").unlink(missing_ok=True)
     export_landmarks(out, geonames_path)
-    if countries_path is not None:
-        export_countries(out, countries_path)
+    if countries_path is not None or borders_path is not None:  # border lines alone fail: they need countries
+        export_countries(out, countries_path, borders_path)
     else:
         (out / "countries.npy").unlink(missing_ok=True)
+        (out / "borders.npy").unlink(missing_ok=True)
     # The elevation maps in use: those the DayHikes record (ADR-0063); for a Catalog sampled before,
     # FABDEM, unless the GeometryStore was sampled from Copernicus GLO-30 (ADR-0030).
     if dems_used:
@@ -1469,6 +1560,8 @@ class ServingData:
         self._one_way_m = self.store.mode(False).column("length_m")  # what makes a hike multi-day (ADR-0056)
         countries = self.directory / "countries.npy"
         self.countries = np.load(countries) if countries.is_file() else None
+        borders = self.directory / "borders.npy"
+        self.borders = np.load(borders) if borders.is_file() else None
 
     def _db(self) -> sqlite3.Connection:
         return sqlite3.connect(self._db_uri, uri=True)
@@ -1686,6 +1779,12 @@ class ServingData:
             code = towns[int(tree.query(_unit(lat, lon)[0])[1])][1]
         return emergency_services().get(code)
 
+    def border_emergency(self, row: int) -> dict | None:
+        """The emergency numbers and mountain rescue service of the country across the border a
+        hike crosses or starts near (``borders.npy``); None for a hike near none, or without it."""
+        code = str(self.borders[row]) if self.borders is not None else ""
+        return emergency_services().get(code)
+
     def multi_day(self, row: int) -> bool:
         """Whether a hike is a multi-day route: longer than ``MULTI_DAY_M`` one way (ADR-0056)."""
         return bool(self._one_way_m[row] > MULTI_DAY_M)
@@ -1800,6 +1899,7 @@ class ServingData:
             # Distinct Commons uploaders near the line (#170): shown, never scored; None if never counted.
             "commons_contributors": commons,
             "emergency": self.emergency(*map(float, self.trailheads[row]), row),
+            "border_emergency": self.border_emergency(row),
             **self._climb(row, (climb_m, descent_m), return_to_start),
             "line": line,
             "elevation": None
@@ -1930,6 +2030,7 @@ class ServingData:
             "region": self._place_near(float(lat[0]), float(lon[0])),
             "commons_contributors": None,  # counted for Catalog DayHikes only (ADR-0064)
             "emergency": self.emergency(float(lat[0]), float(lon[0])),
+            "border_emergency": None,  # borders are checked for Catalog DayHikes only
             "climb_m": climb_m,
             "descent_m": descent_m,
             "line": line,

@@ -2416,10 +2416,26 @@ within 5 km, and with `--geonames` the lakes, passes and mountains within 2 km
 of a hike, else 10 km, a GeoNames peak at an OSM Peak of its name adding its
 names to it, and each Landmark with how many names it has (ADR-0055);
 `export-places` rewrites it too. With `--countries` (the Natural Earth
-countries GeoJSON the coverage map reads) it writes `countries.npy`, the
-country each Trailhead is in, for the hike's emergency number;
-`dayhike export-countries --out data/web-serving --countries /tmp/countries.geojson`
-adds it beside an existing export. A Trailhead outside every (simplified)
+**10m** countries GeoJSON; the coverage map's 50m shapes put about 240 hikes
+2–50 km from a border, Borkum or Ceuta for one, in the neighbour) it writes `countries.npy`, the
+country each Trailhead is in, for the hike's emergency number. With
+`--borders` too (Natural Earth 10m land boundary lines) it writes
+`borders.npy`: for a hike whose route crosses a national border or whose
+Trailhead is within 2 km of one, the country across it (the nearest such
+border), so the hike's panel shows that country's emergency number as well
+(about 3 % of hikes; about 2 minutes for Europe and the US):
+
+```bash
+for f in ne_10m_admin_0_countries ne_10m_admin_0_boundary_lines_land; do
+  curl -L -o /tmp/$f.geojson https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/$f.geojson
+done
+uv run dayhike export-countries --out data/web-serving \
+  --countries /tmp/ne_10m_admin_0_countries.geojson --borders /tmp/ne_10m_admin_0_boundary_lines_land.geojson
+```
+
+`export-countries` adds them beside an existing export (it reads
+`trailheads.npy`, `places.sqlite` and, with `--borders`, `hikes.sqlite`); without `--borders` it drops an
+old `borders.npy`. A Trailhead outside every
 shape, on a coast, takes the country of the nearest place in `places.sqlite`;
 without places it has no country. `export-countries` stops writing nothing, and
 `export-serving --countries` stops before `meta.json`, when a Trailhead has no country or its country has no row in
@@ -2522,7 +2538,10 @@ one-way `walk_m`; those of search, Landmarks, a Ranking, a detail and compose al
 within 30 km of its start and that town's country ("Igls, AT"; null without `places.sqlite`).
 A detail and compose also have `emergency`, the row of `src/dayhike/data/emergency.csv` for
 the country the hike starts in (`country`, `name`, `numbers`, `rescue`, `rescue_url`, `how`,
-`sources`, `notes`): the Trailhead's in `countries.npy`, else the nearest town's; null with neither. A Ranking that waits 25 s for its turn answers 503 with
+`sources`, `notes`): the Trailhead's in `countries.npy`, else the nearest town's; null with neither.
+They also have `border_emergency`, the same row for the country across the border a DayHike's
+route crosses or its Trailhead is within 2 km of (`borders.npy`); null for every other hike, a
+ComposedHike, or an export without it. A Ranking that waits 25 s for its turn answers 503 with
 `Retry-After: 5`. Detail, compose, rank and pair take
 `return_to_start` (default true; `?return_to_start=false` on `GET
 /api/hikes/{id}`): true measures every hike with its way back to its start
