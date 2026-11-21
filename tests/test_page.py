@@ -3480,7 +3480,7 @@ def test_a_start_place_found_with_the_map_closed_opens_it_there(browser, server)
 # ---------- what the visitor check of round 3 found (ADR-0054) ----------
 
 
-def test_a_shared_hike_link_carries_the_search_settings_and_opens_them(browser, server) -> None:
+def test_a_shared_hike_link_carries_the_search_settings_but_not_the_starting_place(browser, server) -> None:
     page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", init=COPIED)
     page.get_by_text("Chosen: Ridge Walk").wait_for()
     page.get_by_label("Weather month").select_option("1")
@@ -3496,18 +3496,16 @@ def test_a_shared_hike_link_carries_the_search_settings_and_opens_them(browser, 
     page.locator("#liked").get_by_role("button", name="Share").click()
     page.locator("#liked").get_by_role("button", name="Link copied").wait_for()
     link = page.evaluate("window.copied[0]")
-    assert link.startswith(f"{server}/#hike={RIDGE_WALK_ID}&month=1&w=length:50")
-    assert "from=45.81444,15.97798&place=Zagreb%2C%20HR&hours=2&km=200" in link
-    assert page.evaluate("location.hash") == link.removeprefix(server + "/")  # a reload opens it too
+    assert link == f"{server}/#hike={RIDGE_WALK_ID}&month=1&w=length:50"  # no place, coordinates or limit (ADR-0075)
+    assert page.locator("#liked").get_by_role("link", name="Link to this hike").get_attribute("href") == link.removeprefix(server + "/")
+    # The page's own address keeps them, so a reload opens the Hiker's own search.
+    assert "from=45.81444,15.97798&place=Zagreb%2C%20HR&hours=2&km=200" in page.evaluate("location.hash")
 
     friend = open_page(browser, server, Api({}), hash=link.removeprefix(server + "/"))
     friend.get_by_text("Chosen: Ridge Walk").wait_for()
     assert friend.get_by_label("Weather month").input_value() == "1"
     assert friend.get_by_label("Length weight, 0 to 100").input_value() == "50"
-    assert friend.get_by_label("Only hikes near a starting place").is_checked()
-    assert friend.get_by_label("From", exact=True).input_value() == "Zagreb, HR"
-    assert friend.get_by_label("Max km value").input_value() == "200"
-    assert friend.get_by_text("Start: Zagreb, HR (45.8144, 15.9780)").is_visible()
+    assert not friend.get_by_label("Only hikes near a starting place").is_checked()
 
 
 def test_a_wish_link_opens_its_month_and_starting_place_too(browser, server) -> None:
@@ -3780,20 +3778,52 @@ def test_suggest_loops_keeps_the_rows_shown_and_says_where_the_loops_are(browser
 # ---------- the fourth visitor check (ADR-0055, ADR-0056) ----------
 
 
-def test_an_address_edited_to_other_settings_marks_the_list_shown_as_from_before(browser, server) -> None:
-    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+def test_an_address_gone_back_to_with_other_settings_shows_no_list_found_for_others(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}&w=length:50")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.evaluate(f"location.hash = '#hike={RIDGE_WALK_ID}&from=45.8,15.9&km=200'")
+    page.get_by_label("Only hikes near a starting place").wait_for()
+    page.wait_for_function("() => document.querySelector('#drive-on').checked")
+    _find(page)
+
+    page.go_back()  # the earlier settings: no starting place, Length at 50
+
+    page.wait_for_function("() => location.hash.endsWith('&w=length:50')")
+    assert page.locator('.weight[data-measure="length"] output').inner_text() == "50"
+    assert not page.get_by_label("Only hikes near a starting place").is_checked()
+    page.wait_for_function("() => document.querySelector('#results').hidden")  # as on a reload of it (ADR-0075)
+    assert page.locator("#status").inner_text() == ""
+    assert page.get_by_role("button", name="Find similar").is_enabled()
+
+
+def test_an_address_of_the_list_s_own_settings_keeps_the_list(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}&w=length:50")
     page.get_by_text("Chosen: Ridge Walk").wait_for()
     _find(page)
+
+    page.evaluate(f"location.hash = '#hike={RIDGE_WALK_ID}&w=length:50&x'")  # the same settings, and a part it does not know
+
+    page.wait_for_timeout(300)
+    assert page.locator("#results").is_visible()
     assert not page.locator("#results-stale").is_visible()
 
-    page.evaluate(f"location.hash = '#hike={RIDGE_WALK_ID}&w=length:50'")  # typed in the address bar
+    page.evaluate(f"location.hash = '#hike={RIDGE_WALK_ID}&w=length:50&from=45.8,15.9&km=200'")
+    page.wait_for_function("() => document.querySelector('#results').hidden")  # other settings: no list
 
-    page.locator("#results-stale").get_by_text("The query changed since this ranking").wait_for()
-    assert page.locator('.weight[data-measure="length"] output').inner_text() == "50"
-    page.go_back()  # the address the list was found with: the weights as it names them, the mark stays
-    page.wait_for_function("() => location.hash === '#hike=1001'")
-    assert page.locator('.weight[data-measure="length"] output').inner_text() == "100"
-    assert page.locator("#results-stale").is_visible()
+
+def test_clicking_link_to_this_hike_copies_it_and_keeps_the_place_and_the_list(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}&from=45.8,15.9&km=200", init=COPIED)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+
+    page.locator("#liked").get_by_role("link", name="Link to this hike").click()
+
+    page.wait_for_function("() => window.copied.length")
+    page.locator("#liked .share-note").get_by_text("Link copied").wait_for()
+    assert page.evaluate("window.copied") == [f"{server}/#hike={RIDGE_WALK_ID}"]
+    assert page.get_by_label("Only hikes near a starting place").is_checked()
+    assert page.locator("#results").is_visible()
+    assert "from=45.8,15.9" in page.evaluate("location.hash")
 
 
 def test_back_to_the_home_address_shows_the_home_page_with_no_hike_or_list(browser, server) -> None:
@@ -4452,3 +4482,95 @@ def test_a_hike_counted_on_commons_says_how_many_contributors_photographed_near_
 
     assert "photos on Wikimedia Commons within 150 m" in badge.get_attribute("title")
     assert "not" in badge.get_attribute("title") and "score" in badge.get_attribute("title")
+
+
+# ---------- what the visitor check of round 3 in the US found (ADR-0075) ----------
+
+
+def _picked(page):
+    search = page.locator("#search")
+    search.fill("Ridge Walk")
+    page.locator("#suggestions li[role=option]", has_text="Ridge Walk").first.dispatch_event("mousedown")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.locator("#liked-name").click()  # out of the box
+    return search
+
+
+def test_escape_in_the_search_box_puts_the_chosen_hike_s_name_back(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+    search = _picked(page)
+    search.focus()
+    page.keyboard.type("Valley")
+    page.locator("#suggestions li[role=option]", has_text="Valley Path").first.wait_for()
+    # While other text is typed, the list says first which hike Find similar still uses.
+    assert page.locator("#suggestions li").first.inner_text().startswith("Until you pick one, Find similar uses “Ridge Walk”")
+
+    search.press("Escape")
+
+    assert search.input_value() == "Ridge Walk"  # not the browser's emptied search box
+    assert page.locator("#suggestions").is_hidden()
+    assert page.locator("#liked-name").inner_text().startswith("Chosen: Ridge Walk")
+
+
+@pytest.mark.parametrize("empty", ["keys", "clear"])
+def test_an_emptied_search_box_puts_the_chosen_hike_s_name_back(browser, server, empty) -> None:
+    page = open_page(browser, server, Api({}))
+    search = _picked(page)
+    search.focus()  # selects the name
+
+    if empty == "keys":
+        search.press("Backspace")
+    else:  # the search box's own ×: an emptied value and an input event
+        search.evaluate("box => { box.value = ''; box.dispatchEvent(new Event('input', { bubbles: true })); }")
+
+    assert search.input_value() == "Ridge Walk"
+    assert page.evaluate("document.activeElement.selectionEnd - document.activeElement.selectionStart") == len("Ridge Walk")
+    page.keyboard.type("Valley")  # what is typed next replaces it
+    assert search.input_value() == "Valley"
+
+
+def test_escape_with_no_hike_chosen_only_closes_the_list(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+    search = page.locator("#search")
+    search.fill("Ridge")
+    page.locator("#suggestions li[role=option]").first.wait_for()
+
+    search.press("Escape")
+
+    assert page.locator("#suggestions").is_hidden()
+    assert page.locator("#liked-name").inner_text() == "No hike chosen yet."
+
+
+def test_redraw_before_any_list_is_shown_does_nothing(browser, server) -> None:
+    errors: list[str] = []
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+
+    page.locator("#redraw").dispatch_event("click")  # hidden with no list: a script's click
+
+    page.wait_for_timeout(200)
+    assert errors == []
+    assert page.locator("#results").is_hidden()
+
+
+def test_the_gpx_note_is_in_miles_when_miles_are_chosen(browser, server) -> None:
+    with urllib.request.urlopen(f"{server}/api/hikes/{RIDGE_WALK_ID}?return_to_start=false") as response:
+        hike = json.load(response)
+    gpx_m = sum(metres_between(a, b) for a, b in itertools.pairwise(decode_polyline(hike["line"])))
+    walk_m = gpx_m / 0.95
+    page = open_page(browser, server, Api({}))
+    page.route(f"{server}/api/hikes/{RIDGE_WALK_ID}*", lambda route: route.fulfill(json={**route.fetch().json(), "walk_m": walk_m}))
+    page.evaluate(f"location.hash = '#hike={RIDGE_WALK_ID}&oneway'")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+
+    page.locator("#units").select_option("imperial")
+
+    mile = 1609.344
+    says = (
+        f"GPS apps measure this GPX about 5 % shorter, {gpx_m / mile:.1f} mi against {walk_m / mile:.1f} mi: "
+        "its line is simplified to within 33 ft of the trail, which cuts small bends."
+    )
+    page.wait_for_function("says => document.querySelector('#liked .gpx-note').textContent === says", arg=says)
+    _, gpx = downloaded_gpx(page, "#liked")
+    assert gpx.find(f"{GPX}metadata").findtext(f"{GPX}desc").endswith(says)
