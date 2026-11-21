@@ -975,7 +975,7 @@ def test_a_hike_says_the_town_and_country_it_starts_near(placed: ServingData, da
     assert data.search("Valley Path")[0]["region"] is None  # an export without places names none
 
 
-def _renamed(catalog_path: Path, out: Path, names: dict[int, str], origin: str = NAME_ORIGIN_PLACE) -> ServingData:
+def _renamed(catalog_path: Path, out: Path, names: dict[int, str], origin: str = NAME_ORIGIN_OSM_NAME) -> ServingData:
     """A placed export whose hikes have the ``names`` ingest's naming would give them, from ``origin``."""
     directory = export_serving(catalog_path, out, geonames_path=CITIES)
     with sqlite3.connect(directory / "hikes.sqlite") as db:
@@ -988,12 +988,12 @@ def _renamed(catalog_path: Path, out: Path, names: dict[int, str], origin: str =
 def test_a_hike_named_near_a_place_says_that_place_where_it_starts_then_the_town(
     catalog_path: Path, tmp_path: Path
 ) -> None:
-    # Ingest names the place nearest the Trailhead, a hamlet as well as a town ("Wicklow Way near Clonegal");
-    # the town nearest it, for where the hike is, can be another (Bunclody).
-    renamed = _renamed(catalog_path, tmp_path / "out", {1002: "Valley Path near Planina", 1001: "Hike near Ogulin (3)"})
+    # Ingest adds the place nearest the Trailhead to an OSM name two hikes share, a hamlet as well as a town
+    # ("Wicklow Way near Clonegal"); the town nearest it, for where the hike is, can be another (Bunclody).
+    renamed = _renamed(catalog_path, tmp_path / "out", {1002: "Valley Path near Vrh", 1001: "Hike near Ogulin (3)"})
     [valley] = [hike for hike in renamed.search("Valley Path") if hike["id"] == 1002]
 
-    assert valley["region"] == renamed.detail(1002)["region"] == "Planina, Ogulin, HR"
+    assert valley["region"] == renamed.detail(1002)["region"] == "Vrh, Ogulin, HR"
     assert renamed.search("Hike near Ogulin")[0]["region"] is None  # Ridge Walk starts near no town
 
 
@@ -1006,35 +1006,48 @@ def test_a_hike_named_near_a_place_says_that_place_where_it_starts_then_the_town
     ],
 )
 def test_a_hike_whose_name_names_no_other_start_says_the_town(catalog_path: Path, tmp_path: Path, name: str) -> None:
-    renamed = _renamed(catalog_path, tmp_path / "out", {1002: name})
+    renamed = _renamed(catalog_path, tmp_path / "out", {1002: name}, NAME_ORIGIN_PLACE)
 
     assert renamed.detail(1002)["region"] == "Ogulin, HR"
 
 
 @pytest.mark.parametrize(
-    ("name", "note"),
+    ("name", "origin", "note"),
     [
         (
             "Hike near Planina (JK11)",
+            NAME_ORIGIN_PLACE,
             "Named by this site after Planina, a place near where it starts: its source gives it no name "
             "that says where it is. “JK11” is the name its source gives it, a code.",
         ),
         (
-            "Valley Path near Planina (2)",
-            "“near Planina” is added by this site: Planina is a place near where it starts. “(2)” is its "
+            "Valley Path near Vrh (2)",
+            NAME_ORIGIN_OSM_NAME,
+            "“near Vrh” is added by this site: Vrh is a place near where it starts. “(2)” is its "
             "number in its source, or tells it apart from other hikes of the same name.",
         ),
-        ("Valley Path", None),
+        ("Valley Path", NAME_ORIGIN_OSM_NAME, None),
     ],
 )
-def test_a_name_this_site_made_says_how(catalog_path: Path, tmp_path: Path, name: str, note: str | None) -> None:
-    renamed = _renamed(catalog_path, tmp_path / "out", {1002: name})
+def test_a_name_this_site_made_says_how(
+    catalog_path: Path, tmp_path: Path, name: str, origin: str, note: str | None
+) -> None:
+    renamed = _renamed(catalog_path, tmp_path / "out", {1002: name}, origin)
 
     assert renamed.detail(1002)["name_note"] == note
 
 
-def test_an_osm_name_with_its_own_near_is_not_said_to_be_made_by_this_site(catalog_path: Path, tmp_path: Path) -> None:
-    renamed = _renamed(catalog_path, tmp_path / "out", {1002: "Circular walk near Ambleside"}, NAME_ORIGIN_OSM_NAME)
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Circular walk near Ambleside",  # a place the export does not know
+        "Circular walk near Planina",  # a village 15 km from where it starts, and no town
+    ],
+)
+def test_an_osm_name_with_its_own_near_is_not_said_to_be_made_by_this_site(
+    catalog_path: Path, tmp_path: Path, name: str
+) -> None:
+    renamed = _renamed(catalog_path, tmp_path / "out", {1002: name})
     [walk] = renamed.search("Circular walk")
 
     assert renamed.detail(1002)["name_note"] is None
@@ -1042,7 +1055,7 @@ def test_an_osm_name_with_its_own_near_is_not_said_to_be_made_by_this_site(catal
 
 
 def test_an_osm_code_renamed_to_a_placeholder_says_this_site_named_it(catalog_path: Path, tmp_path: Path) -> None:
-    renamed = _renamed(catalog_path, tmp_path / "out", {1002: "Hike near Planina (JK11)"}, NAME_ORIGIN_OSM_NAME)
+    renamed = _renamed(catalog_path, tmp_path / "out", {1002: "Hike near Planina (JK11)"})
 
     assert renamed.detail(1002)["name_note"] == (
         "Named by this site after Planina, a place near where it starts: its source gives it no name "

@@ -85,6 +85,7 @@ from dayhike.catalog import (
     MAX_CAR_SPEED_MS,
     NAME_ORIGIN_OSM_NAME,
     NAME_ORIGIN_SYNTHETIC,
+    PLACE_RADIUS_M,
     MatrixClient,
     Origin,
     Trailhead,
@@ -1765,15 +1766,46 @@ class ServingData:
         chord, i = tree.query(_unit(lat, lon)[0], distance_upper_bound=2 * math.sin(LANDMARK_TOWN_M / (2 * EARTH_RADIUS_M)))
         return (*towns[i], 2 * EARTH_RADIUS_M * math.asin(chord / 2)) if math.isfinite(chord) else None
 
-    def _region(self, row: int, name: str, origin: str) -> str | None:
+    def _region(self, row: int, named: re.Match | None) -> str | None:
         """Where a hike starts, as the town nearest its Trailhead and its country ("Bovec, SI"); None with no town near.
-        A name that says the place it starts near (ADR-0068: "Wicklow Way near Clonegal") puts that place
-        first when the town is another, so the two agree ("Clonegal, Bunclody, IE")."""
+        A name that says the place it starts near (``named_place``, ADR-0068: "Wicklow Way near Clonegal") puts
+        that place first when the town is another, so the two agree ("Clonegal, Bunclody, IE")."""
         region = self._place_near(*map(float, self.trailheads[row]))
-        place = named_place(name, origin)
-        if region is None or place is None or region.startswith(f"{place}, "):
+        if region is None or named is None or region.startswith(f"{named['place']}, "):
             return region
-        return f"{place}, {region}"
+        return f"{named['place']}, {region}"
+
+    def named_place(self, row: int, name: str, origin: str) -> re.Match | None:
+        """The "near {place}" ingest gave a hike's name (ADR-0017, ADR-0066, ADR-0068), its ``place`` and the
+        ``brackets`` of codes after it ("Hike near Háj (JK11)": "Háj"), or None. An OSM name says "near" itself
+        at times ("Circular walk near Ambleside"): one that is no "Hike near {place}" placeholder counts only when
+        the place is one ``names.unique_names`` could have named it after (``_could_name``)."""
+        found = _named(name)
+        if found is None or origin != NAME_ORIGIN_OSM_NAME or name.startswith("Hike near "):
+            return found
+        return found if self._could_name(row, found["place"]) else None
+
+    def _could_name(self, row: int, place: str) -> bool:
+        """Whether a hike's start is near a place or Landmark called ``place``: within ``PLACE_RADIUS_M`` of
+        its Trailhead, or the town nearest it at any distance (from ``places.sqlite`` and ``landmarks.sqlite``,
+        what the export has of the places ingest names after); False without either file."""
+        lat, lon = map(float, self.trailheads[row])
+        folded = _fold(place).strip()
+        towns, tree = self._towns
+        if tree is not None and _fold(towns[int(tree.query(_unit(lat, lon)[0])[1])][0]).strip() == folded:
+            return True
+        points = []
+        for path, query in (
+            (self.places, "SELECT p.lat, p.lon FROM place_names n JOIN places p ON p.id = n.place WHERE n.name = ?"),
+            (
+                self.landmarks,
+                "SELECT l.lat, l.lon FROM landmark_names n JOIN landmarks l ON l.id = n.landmark WHERE n.name = ? AND n.whole",
+            ),
+        ):
+            if path is not None:
+                with scoped(sqlite3.connect(path, uri=True)) as db:
+                    points += db.execute(query, (folded,)).fetchall()
+        return any(_haversine_m(lat, lon, *point) <= PLACE_RADIUS_M for point in points)
 
     def _place_near(self, lat: float, lon: float) -> str | None:
         """The town nearest a point and its country ("Bovec, SI"); None with no town near."""
@@ -1830,7 +1862,7 @@ class ServingData:
                 # One way, what makes it multi-day (ADR-0056), and where it starts: twins of a name told apart
                 "walk_m": _value(self._one_way_m[row]),
                 "multi_day": self.multi_day(row),
-                "region": self._region(row, *names[int(self.store.ids[row])][::3]),
+                "region": self._region(row, self.named_place(row, *names[int(self.store.ids[row])][::3])),
             }
             for row in rows
         ]
@@ -1899,16 +1931,17 @@ class ServingData:
         if source_ref is None:
             source_ref = osm_source_ref(dayhike_id, kind, json.loads(parts or "[]"), route)
         profile = np.frombuffer(elevation, dtype="<i2").tolist() if elevation else None
+        named = self.named_place(row, name, name_origin)
         detail = {
             "id": dayhike_id,
             "name": _shown_name(dayhike_id, name, name_origin),
             "name_origin": name_origin,
-            "name_note": name_note(name, name_origin),
+            "name_note": name_note(named),
             "sac_scale": sac_scale,
             "trailhead": [float(v) for v in self.trailheads[row]],
             "walk_m": walk_m,
             "multi_day": self.multi_day(row),
-            "region": self._region(row, name, name_origin),
+            "region": self._region(row, named),
             # Distinct Commons uploaders near the line (#170): shown, never scored; None if never counted.
             "commons_contributors": commons,
             # Metres from its Trailhead to the nearest car park in a straight line; None with none within 20 km.
@@ -2797,31 +2830,20 @@ def _in_chunks(db: sqlite3.Connection, query: str, values: list) -> list[tuple]:
 _NAMED_PLACE = re.compile(r"^.+ near (?P<place>[^()]+?)(?P<brackets>(?: \([^()]*\))*)$")
 
 
-def named_place(name: str, origin: str) -> str | None:
-    """The place a hike's name says it starts near ("Hike near Háj (JK11)": "Háj"), or None:
-    the "near {place}" ingest adds (ADR-0017, ADR-0066, ADR-0068), after any brackets of codes.
-    An OSM name other than "Hike near ..." may hold its own "near" ("Circular walk near Ambleside"): None."""
-    found = _named(name, origin)
-    return found["place"] if found else None
-
-
-def _named(name: str, origin: str) -> re.Match | None:
-    if origin == NAME_ORIGIN_OSM_NAME and not name.startswith("Hike near "):
-        return None
+def _named(name: str) -> re.Match | None:
     found = _NAMED_PLACE.match(name)
     # A DayStage is named after its tour ("Hike near Fidje, stage 1: to Vegusdal", ADR-0040), not its own start.
     return found if found and ", stage " not in found["place"] else None
 
 
-def name_note(name: str, origin: str) -> str | None:
-    """How this site made a hike's name, for a name it made (ADR-0068): "Hike near {place}" when its
+def name_note(found: re.Match | None) -> str | None:
+    """How this site made a hike's name, ``found`` by ``ServingData.named_place`` (ADR-0068): "Hike near {place}" when its
     source names it nothing that says where it is, "near {place}" added to its own name, and what the
     brackets after hold, a code from its source or a number; None for a name as its source gives it."""
-    found = _named(name, origin)
     if found is None:
         return None
     place = found["place"]
-    if name.startswith("Hike near "):
+    if found.string.startswith("Hike near "):
         note = f"Named by this site after {place}, a place near where it starts: its source gives it no name that says where it is."
     else:
         note = f"“near {place}” is added by this site: {place} is a place near where it starts."
