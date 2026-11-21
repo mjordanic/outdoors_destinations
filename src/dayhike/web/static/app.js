@@ -1923,6 +1923,8 @@ function syncFind() {
   }
   const drive = driveProblem();
   if (drive) wrong.push(drive);
+  const group = groupProblem();
+  if (group) wrong.push(group);
   $("#find").disabled = none || ranking || (busy && held === chosen) || wrong.length > 0;
   $("#find-why").textContent = none && !busy && !ranking
     ? `Choose a hike first: search for one by name or select one on the map${$("#wish-on").hidden ? "" : ", or describe the one you want"}.`
@@ -3023,6 +3025,14 @@ function driveProblem() {
   return null;
 }
 
+// What is wrong with the grouping radius typed, or null: empty, the server groups by the limits (ADR-0032).
+function groupProblem() {
+  const input = $("#group-km");
+  if (input.value.trim() === "" && !input.validity.badInput) return null;
+  const km = limitKm("#group-km");
+  return km >= 0.1 && km <= 50 ? null : `Group hikes starting within ${kmShown(0.1)} to ${limitText(50)}.`;
+}
+
 async function findSimilar() {
   const was = state.liked;
   if (!state.wishing && was && (was.way_back != null) !== measuredBack(was)) { // its measuring again failed
@@ -3058,12 +3068,9 @@ async function findSimilar() {
       if ($("#hours-on").checked) query.max_hours = Number($("#hours").value);
       if ($("#km-on").checked) query.max_km = limitKm("#km");
     }
-    const group = $("#group-km").value.trim();
-    if (group !== "") { // empty: the server groups by the limits (ADR-0032)
-      const km = limitKm("#group-km");
-      if (!(km >= 0.1 && km <= 50)) throw new Error(`Group hikes starting within ${kmShown(0.1)} to ${limitText(50)}.`);
-      query.group_km = km;
-    }
+    const group = groupProblem();
+    if (group) throw new Error(group);
+    if ($("#group-km").value.trim() !== "") query.group_km = limitKm("#group-km");
   } catch (error) {
     setStatus(error.message, true);
     // Beside the list it leaves, which is no answer to this search.
@@ -3700,6 +3707,7 @@ async function start() {
   }
   $("#origin").addEventListener("change", syncAddress);
   $("#group-km").addEventListener("input", markStale);
+  $("#group-km").addEventListener("input", syncFind);
   $("#group-km").addEventListener("change", syncAddress);
   window.addEventListener("resize", showSwipeCue);
   $("#origin").addEventListener("keydown", (event) => { if (event.key === "Enter") findPlace(); });

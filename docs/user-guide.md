@@ -97,8 +97,9 @@ the list is from before your change, so you see it where you are on a phone.
 
 While **Find similar** is greyed out, the line under it says why: no hike is
 chosen yet (choose one first), a hike is still loading, a search is still
-running, every measure is at weight 0, or a drive limit is out of range
-(or neither Max drive hours nor Max km is ticked). If your hike cannot be
+running, every measure is at weight 0, a drive limit is out of range
+(or neither Max drive hours nor Max km is ticked), or the grouping distance
+under More options is not a number from 0.1 to 50 km. If your hike cannot be
 measured again after you change Return to start, that line says so and
 **Find similar** stays usable: pressing it measures your hike again, then
 finds.

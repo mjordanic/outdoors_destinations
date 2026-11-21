@@ -2813,6 +2813,26 @@ def test_find_waits_and_says_why_while_the_drive_hours_are_wrong(browser, server
     assert page.locator("#find-why").inner_text() == ""
 
 
+@pytest.mark.parametrize("typed", ["0", "99999", "e"])
+def test_find_waits_and_says_why_while_the_grouping_radius_is_wrong(browser, server, typed) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_text("More options", exact=True).click()
+    radius = page.get_by_label("Group hikes starting within (km)")
+    find = page.get_by_role("button", name="Find similar")
+
+    radius.press_sequentially(typed)  # "e" is no number: the box is empty and its input bad
+
+    assert find.is_disabled()
+    assert page.locator("#find-why").inner_text() == "Group hikes starting within 0.1 to 50 km."
+
+    radius.fill("2")
+    assert find.is_enabled()
+    assert page.locator("#find-why").inner_text() == ""
+    radius.fill("")
+    assert find.is_enabled()
+
+
 def test_find_waits_while_a_drive_limit_is_asked_but_neither_hours_nor_km_is_ticked(browser, server) -> None:
     page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
     page.get_by_text("Chosen: Ridge Walk").wait_for()
