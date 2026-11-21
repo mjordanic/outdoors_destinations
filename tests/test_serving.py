@@ -247,6 +247,37 @@ def test_search_scans_a_bounded_number_of_occurrences_of_a_word_of_two_letters_o
     assert [hit["name"] for hit in data.search("al")] == ["Ridge Walk"]
 
 
+def test_search_finds_an_exact_name_first_though_its_first_word_is_in_more_names_than_are_scanned(
+    export: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = _renamed(export, tmp_path / "wanderweg", [
+        ("Wanderweg 523 near Salla", []),
+        ("Wanderweg 24 - Neubeuern", []),
+        ("Wanderweg 52 near Salla", []),
+        ("Wanderweg 66 - Hochfelln", []),
+    ])  # fmt: skip
+    monkeypatch.setattr(serving, "SEARCH_SCAN_CAP", 2)  # Wanderweg is in more names than are scanned
+
+    assert [hit["name"] for hit in data.search("Wanderweg 52 near Salla")] == [
+        "Wanderweg 52 near Salla",
+        "Wanderweg 523 near Salla",
+    ]
+    assert [hit["name"] for hit in data.search("Wanderweg 66 - Hochfelln")] == ["Wanderweg 66 - Hochfelln"]
+    monkeypatch.setattr(serving, "SEARCH_SCAN_CAP", 1)  # every word is: the exact name is still found
+    assert [hit["name"] for hit in data.search("wanderweg 52 near salla")][:1] == ["Wanderweg 52 near Salla"]
+
+
+def test_search_puts_the_exact_name_before_the_hike_to_the_summit_named(export: Path, tmp_path: Path) -> None:
+    data = _renamed(export, tmp_path / "triglav-exact", [
+        ("Triglav via Dom Planika from Pri lesi", [("peak", "Triglav", 1)]),
+        ("Triglav", [("peak", "Triglav", 300)]),
+        ("Ridge Walk", []),
+        ("Valley Path", []),
+    ])  # fmt: skip
+
+    assert [hit["name"] for hit in data.search("Triglav")] == ["Triglav", "Triglav via Dom Planika from Pri lesi"]
+
+
 def test_search_finds_a_name_typed_with_a_typo_and_says_it_is_only_similar(data: ServingData) -> None:
     for typed in ("Valey", "Vallley", "Valkey Path", "Rdige walk"):
         assert [(hit["name"], hit["match"]) for hit in data.search(typed)][:1] in (

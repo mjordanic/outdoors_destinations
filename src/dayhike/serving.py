@@ -1586,12 +1586,15 @@ class ServingData:
         The best come first: the exact name, then names starting with the
         query, then names holding it from a word's start (Tour du Mont
         Blanc), then names where every word starts a word, then the rest;
-        shorter names first within each. Of the best SEARCH_SUMMIT_CAP, a hike
-        reaching the top of a Peak named so comes first, and one named after a
-        Viewpoint on it last within its group (see ``_summits_first``). A
-        number also finds that DayHike id.
-        Only the first SEARCH_SCAN_CAP occurrences, in id order, of the
-        longest word (two letters or more) are considered.
+        shorter names first within each. Of the best SEARCH_SUMMIT_CAP, after
+        the exact name, a hike reaching the top of a Peak named so comes first,
+        and one named after a Viewpoint on it last within its group (see
+        ``_summits_first``). A number also finds that DayHike id.
+        The names looked at are those holding the longest word (two letters
+        or more) found fewer than SEARCH_SCAN_CAP times, or, when every word
+        is found more often, the first SEARCH_SCAN_CAP occurrences, in id
+        order, of the longest word and the names that are exactly the query:
+        Wanderweg 52 near Salla is found though Wanderweg is in many names.
 
         After them come the names that hold every word with up to
         ``_Spellings.typos`` of its letters wrong (a word of the names
@@ -1626,22 +1629,29 @@ class ServingData:
 
     def _rows_with_words(self, words: list[str], needle: str, skip: set[int]) -> list[int]:
         """Rows not in ``skip`` whose name holds every word, best first (see ``search``)."""
-        scan = max(words, key=len, default="")
-        if len(scan) < 2:
+        scans = sorted({word for word in words if len(word) >= 2}, key=lambda word: (-len(word), word))
+        if not scans:
             return []
+        for scan in scans:
+            rows, whole = self._rows_containing(scan)
+            if whole:
+                break
+        else:
+            rows = self._rows_containing(scans[0])[0] + self._rows_named(needle)
         found = [
             row
-            for row in self._rows_containing(scan)
+            for row in dict.fromkeys(rows)
             if row not in skip and all(word in self._folded[row] for word in words)
         ]
         found.sort(key=lambda row: (_relevance(self._folded[row], needle, words), len(self._folded[row]), row))
         return found
 
     def _summits_first(self, rows: list[int], needle: str, words: list[str]) -> list[int]:
-        """``rows`` (best first) with those reaching the top of a Peak named
-        from the query's start first, and those named after a Viewpoint on
-        them holding every word last among names as relevant: Triglav via Dom
-        Planika before Triglav View, a path to a view of Triglav."""
+        """``rows`` (best first) with, after the exact name, those reaching the
+        top of a Peak named from the query's start first, and those named
+        after a Viewpoint on them holding every word last among names as
+        relevant: Triglav via Dom Planika before Triglav View, a path to a view
+        of Triglav."""
         if not rows:
             return rows
         with scoped(self._db()) as db:
@@ -1657,7 +1667,7 @@ class ServingData:
                 elif kind == "viewpoint" and folded in self._folded[row] and all(word in folded for word in words):
                     viewpoint.add(row)
         relevance = {row: _relevance(self._folded[row], needle, words) for row in rows}
-        return sorted(rows, key=lambda row: (row not in summit, relevance[row], row in viewpoint))
+        return sorted(rows, key=lambda row: (relevance[row] > 0, row not in summit, relevance[row], row in viewpoint))
 
     def find_place(self, query: str, limit: int = 5) -> list[dict]:
         """Places with a name starting with the query, folded like ``search``.
@@ -1838,11 +1848,22 @@ class ServingData:
         with scoped(sqlite3.connect(self.landmarks, uri=True)) as db:
             return _Spellings([name for (name,) in db.execute("SELECT name FROM landmark_names WHERE whole")])
 
-    def _rows_containing(self, word: str) -> list[int]:
-        """Rows whose name holds ``word``, in id order, from its first SEARCH_SCAN_CAP occurrences."""
-        hits = itertools.islice(re.finditer(re.escape(word), self._haystack), SEARCH_SCAN_CAP)
+    def _rows_containing(self, word: str) -> tuple[list[int], bool]:
+        """Rows whose name holds ``word``, in id order, from its first SEARCH_SCAN_CAP
+        occurrences, and whether those are all of them."""
+        hits = itertools.islice(re.finditer(re.escape(word), self._haystack), SEARCH_SCAN_CAP + 1)
         offsets = np.fromiter((hit.start() for hit in hits), dtype=np.int64)
-        return np.unique(np.searchsorted(self._starts, offsets, side="right") - 1).tolist()
+        rows = np.unique(np.searchsorted(self._starts, offsets[:SEARCH_SCAN_CAP], side="right") - 1).tolist()
+        return rows, len(offsets) <= SEARCH_SCAN_CAP
+
+    def _rows_named(self, name: str) -> list[int]:
+        """Rows whose whole folded name is ``name``, from its first SEARCH_SCAN_CAP occurrences."""
+        line, offsets = "\n" + name + "\n", []
+        at = self._haystack.find(line)
+        while at >= 0 and len(offsets) < SEARCH_SCAN_CAP:
+            offsets.append(at + 1)  # the name starts after its newline
+            at = self._haystack.find(line, at + 1)
+        return (np.searchsorted(self._starts, offsets, side="right") - 1).tolist()
 
     def _summaries(self, rows: list[int], return_to_start: bool = False) -> list[dict]:
         """Name and main figures per row, one way or with the way back."""
