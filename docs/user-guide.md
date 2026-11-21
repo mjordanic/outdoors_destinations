@@ -167,8 +167,12 @@ the hut slider to 100. Turn Length down to 30.
   "lat, lon", use your browser's location, or use "Find place" to look up a
   town or village. The drive time is an estimate based on main roads, so
   treat it as a rough guide. The limits stay set when you open another hike
-  in the same tab, and the note above the results always names them, for
-  example "within a 2 h drive of Munich, DE". A fresh page starts with none.
+  from the results, the search box or the map in the same tab, and the note
+  above the results always names them, for example "within a 2 h drive of
+  Munich, DE". A fresh page, or a link opened in the tab, starts with none
+  unless the link names them. Leaving a hike you described for a hike you
+  liked turns "Only hikes near a starting place" off; the place stays in its
+  box for ticking again.
 - **More options.** Under the limits, this sets how close hikes must start to
   be grouped as one area (see "Reading the results" below).
 - **Units** (top of the page). Show every length and height in km and metres,
@@ -206,7 +210,10 @@ Advanced search being open, Return to start, Strict order, the starting place
 with its limits, and the grouping distance. Whoever opens it sees the same
 search, ready for **Find similar**. A link to a hike you described works the
 same way. The address in your browser keeps them up to date, so a reload
-keeps them too. Older links without settings still open the hike.
+keeps them too. A link opened in a tab that is already open (typed, pasted,
+or gone Back or Forward to) sets every setting it does not name to its
+default, so it opens the same search as a fresh page; only the units stay as
+they are when the link does not name them. Older links without settings still open the hike.
 
 A link that has been cut short or changed by hand says "This link could not be
 opened" beside the search box. A part of a link the page does not know is
