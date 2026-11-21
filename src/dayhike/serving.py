@@ -110,6 +110,7 @@ from dayhike.similarity import (
     CORRIDOR_M,
     FACT_COLUMNS,
     MEASURES,
+    PEAK_SUMMITED_M,
     PEAKS_AROUND_M,
     PROFILE_POINTS,
     SEARCH_STEP_M,
@@ -189,6 +190,7 @@ UNNAMING_KINDS = ("restaurant_cafe", "parking")  # amenity points that name no h
 TRAILHEAD_NEAREST = 3  # parking and restaurant/cafe points kept per Trailhead
 VALHALLA_CACHE_BYTES = 256 * 1024 * 1024  # mjolnir.max_cache_size; the build default is 1 GB
 SEARCH_SCAN_CAP = 5_000  # occurrences of the scanned word a search looks at, so short queries stay fast
+SEARCH_SUMMIT_CAP = 200  # best names a search looks into for the summit or viewpoint they are named after
 FUZZY_MIN_LETTERS = 4  # a shorter query word is found only as typed
 FUZZY_SPELLINGS = 3  # the nearest words a word with a typo is tried as
 FUZZY_QUERIES = 6  # the respelled queries a search tries, fewest typos first
@@ -1481,8 +1483,12 @@ class ServingData:
 
         Matching ignores case and accents and folds German ue/oe/ae to u/o/a.
         The best come first: the exact name, then names starting with the
-        query, then names where every word starts a word, then the rest;
-        shorter names first within each. A number also finds that DayHike id.
+        query, then names holding it from a word's start (Tour du Mont
+        Blanc), then names where every word starts a word, then the rest;
+        shorter names first within each. Of the best SEARCH_SUMMIT_CAP, a hike
+        reaching the top of a Peak named so comes first, and one named after a
+        Viewpoint on it last within its group (see ``_summits_first``). A
+        number also finds that DayHike id.
         Only the first SEARCH_SCAN_CAP occurrences, in id order, of the
         longest word (two letters or more) are considered.
 
@@ -1502,8 +1508,9 @@ class ServingData:
             except KeyError:
                 pass
         by_name = self._rows_with_words(words, needle, set(rows))
+        by_name[:SEARCH_SUMMIT_CAP] = self._summits_first(by_name[:SEARCH_SUMMIT_CAP], needle, words)
         rows += by_name
-        similar = {row for row in by_name if _relevance(self._folded[row], needle, words) == 3}
+        similar = {row for row in by_name if _relevance(self._folded[row], needle, words) == 4}
         if len(rows) < limit:
             for spelled in self._spellings.respelled(words):
                 found = self._rows_with_words(spelled, " ".join(spelled), set(rows))
@@ -1528,6 +1535,28 @@ class ServingData:
         ]
         found.sort(key=lambda row: (_relevance(self._folded[row], needle, words), len(self._folded[row]), row))
         return found
+
+    def _summits_first(self, rows: list[int], needle: str, words: list[str]) -> list[int]:
+        """``rows`` (best first) with those reaching the top of a Peak named
+        from the query's start first, and those named after a Viewpoint on
+        them holding every word last among names as relevant: Triglav via Dom
+        Planika before Triglav View, a path to a view of Triglav."""
+        if not rows:
+            return rows
+        with scoped(self._db()) as db:
+            points = dict(
+                _in_chunks(db, "SELECT id, points FROM hikes WHERE id IN ({})", [int(self.store.ids[row]) for row in rows])
+            )
+        summit, viewpoint = set(), set()
+        for row in rows:
+            for kind, _, _, _, _, off_m, name, _ in json.loads(zlib.decompress(points[int(self.store.ids[row])])):
+                folded = _fold(name or "")
+                if kind == "peak" and off_m <= PEAK_SUMMITED_M and folded.startswith(needle):
+                    summit.add(row)
+                elif kind == "viewpoint" and folded in self._folded[row] and all(word in folded for word in words):
+                    viewpoint.add(row)
+        relevance = {row: _relevance(self._folded[row], needle, words) for row in rows}
+        return sorted(rows, key=lambda row: (row not in summit, relevance[row], row in viewpoint))
 
     def find_place(self, query: str, limit: int = 5) -> list[dict]:
         """Places with a name starting with the query, folded like ``search``.
@@ -2625,15 +2654,18 @@ def _typos_off(word: np.ndarray, table: np.ndarray) -> np.ndarray:
 
 
 def _relevance(name: str, needle: str, words: list[str]) -> int:
-    """0 the exact name, 1 starts with the query, 2 every word starts a word, else 3."""
+    """0 the exact name, 1 starts with the query, 2 holds it from a word's start,
+    3 every word starts a word, else 4."""
     if name == needle:
         return 0
     if name.startswith(needle):
         return 1
+    if re.search(r"(?<!\w)" + re.escape(needle), name):
+        return 2
     name_words = re.split(r"\W+", name)
     if all(any(part.startswith(word) for part in name_words) for word in words):
-        return 2
-    return 3
+        return 3
+    return 4
 
 
 def _in_chunks(db: sqlite3.Connection, query: str, values: list) -> list[tuple]:

@@ -2455,7 +2455,10 @@ short:
 The details, endpoint by endpoint (JSON): `GET /api/search?q=` (every word in any order, at least one of
 two letters or more; case, accents
 and ue/oe/ae spellings ignored; the exact name first, then names starting with
-the query, then names where every word starts a word, shorter first; a number
+the query, then names holding it from a word's start, then names where every
+word starts a word, shorter first; among the best 200 a hike reaching the top
+of a Peak named from the query's start comes first, and one named after a
+Viewpoint on it last of its group (Triglav View after Triglav); a number
 finds that id; while they are fewer than `limit`, then names with a word
 spelled one typo off a query word of 4 to 7 letters, two off a longer one, no
 digits; each hit's `match` is `similar` for these and for a name holding a word
