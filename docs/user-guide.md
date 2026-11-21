@@ -245,7 +245,8 @@ opened" beside the search box. A part of a link the page does not know is
 ignored, and the hike still opens. If you edit the address to other settings,
 or go Back or Forward to one, a list found with other settings goes, as it would
 on a reload of that address: press **Find similar** for the list of those
-settings. Back to the home address shows the page as it opens, with no hike and
+settings. An address of the list's own settings keeps the list, no longer
+marked as from before. Back to the home address shows the page as it opens, with no hike and
 no list.
 
 Good to know: the GPX file holds the line of the hike as you see it on the
