@@ -658,13 +658,14 @@ is the shared share of fractions, `agree` is 1 when two yes/no facts agree
 (two DayHikes that both lack an OSM flag's feature are not compared; `round_trip`
 compares both values), `profile` is 1 − the mean
 absolute difference of two ProfileShapes, walked either way. A Measure whose
-fact is missing on either DayHike drops out of that pair and the other weights
-renormalize; a candidate with no weighted Measure scored is left out. One
-exception: a DayHike with no Difficulty grade scores 0 on Difficulty against a
-Seed that has one, so it ranks below a hike with the grade asked for (ADR-0043);
-against a Wish, a DayHike with no data for any Measure the Wish asks a value of
-scores 0 on it the same way, so it ranks below the hikes that have that data
-(ADR-0052, no data against a Wish).
+fact (or ProfileShape) the Seed lacks drops out of that pair and the other
+weights renormalize; a candidate with no weighted Measure scored is left out.
+A candidate with no data for a Measure the Seed has data for scores 0 on it, as
+far apart as values go, so it ranks below the hikes that have that data and
+stays listed: first for a missing Difficulty grade (ADR-0043), then for any
+Measure a Wish asks a value of (ADR-0052, no data against a Wish), and for any
+Measure of a Seed hike (ADR-0071, no data against a Seed). The
+Calibration's random pairs still leave missing data out.
 
 ### What the score means
 
@@ -1305,9 +1306,9 @@ uv run dayhike build-similarity
 ```
 
 Every hike needs heights and land cover from the rasters: a hike outside the
-downloaded box has none, so those Measures drop out of its comparison and it
-can score near 1 against very different hikes. The box from step 4 covers
-every hike in the extract.
+downloaded box has none, so it scores 0 on those Measures against every hike
+that has them, and a Ranking from it compares only its other Measures. The box
+from step 4 covers every hike in the extract.
 
 **9. See which names you can use as Seeds**
 
@@ -2248,9 +2249,9 @@ hike opens in the same tab, and the limit inputs are not restored by the
 browser on a reload. The DriveTime is estimated on highways-only tiles as in
 **Highway tiles** above; the distance needs no routing engine. Measures with no data for a hike show "no data".
 Most often it is the missing Difficulty grade, which scores 0 on Difficulty
-against a graded hike (ADR-0043); any other missing fact drops out of that
-pair's score (missing data for a Measure a Wish asks a value of scores 0
-instead, ADR-0052, no data against a Wish). Climb and
+against a graded hike (ADR-0043); any other missing fact scores 0 the same way
+against a Seed that has it or a Wish that asks a value of it (ADR-0052,
+ADR-0071), and a fact the Seed lacks drops out of that pair's score. Climb and
 descent say "with the way back" or "one way" in the hike's panel and the
 results table (a loop's panel says neither); the search list gives every hike one way. Every API request the
 page makes ends after 60 s with "The server did not answer within 60 s", and

@@ -386,7 +386,10 @@ def test_ranking_with_month_uses_july_not_june_august_regime(tmp_path: Path) -> 
     july_scores = {item.dayhike.id: item.score for item in with_july.items}
     assert without_scores[1002] == pytest.approx(without_scores[1007])
     assert july_scores[1002] > july_scores[1007]
-    assert [item.dayhike.id for item in with_july.items] == [1002, 1007]
+    # Relation 1003 has no climate and scores 0 on it (ADR-0071), tied with PS-1, as far apart in
+    # July; the tie breaks on id.
+    assert [item.dayhike.id for item in with_july.items] == [1002, 1003, 1007]
+    assert july_scores[1003] == 0.0
 
 
 def test_query_month_outside_1_to_12_fails(tmp_path: Path) -> None:

@@ -317,7 +317,12 @@ def test_rank_matches_rank_dayhikes_and_reports_every_measure(
         assert set(result["measures"]) == set(MEASURE_NAMES)
     assert results[0]["measures"]["length"]["raw"] == pytest.approx(0.5)
     assert "random hike pair" in results[0]["measures"]["length"]["note"]
-    assert results[0]["measures"]["elevation_gain"] == {"score": None, "raw": None, "note": None}
+    # No climb data where the Seed has some: raw 0 (ADR-0071); no random pair has a climb to calibrate it on.
+    assert results[0]["measures"]["elevation_gain"] == {
+        "score": None,
+        "raw": 0.0,
+        "note": "No data for this hike: counts as 0 against the hike you like",
+    }
 
 
 @pytest.mark.parametrize(

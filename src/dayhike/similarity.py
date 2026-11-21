@@ -584,30 +584,29 @@ def ranked_scores(
 ) -> np.ndarray:
     """Raw scores of one Measure between a Seed and ``rows`` as a Ranking weighs them.
 
-    ``measure_scores``, except that a DayHike without a Difficulty grade scores 0
-    on Difficulty (as far apart as grades go) against a Seed that has one: a
-    hike with the Seed's grade ranks above one with no grade, which stays listed.
-    Against a Wish the same holds for every Measure the Wish asks a value of: a
-    DayHike with no data for it scores 0 there (``wish_unmeasured``).
-    The Calibration's random pairs still leave a missing grade out.
+    ``measure_scores``, except that a DayHike with no data for a Measure the Seed
+    has data for (a Difficulty grade, a climb, a land cover) scores 0 there, as far
+    apart as values go (``unmeasured``): a hike with the data ranks above one
+    without, which stays listed (ADR-0043, ADR-0052, ADR-0071). A Wish has data
+    for the Measures it asks a value of. The Calibration's random pairs still
+    leave missing data out.
     """
     raw = measure_scores(store, measure, seed, rows, month=month)
-    if isinstance(seed, OutsideSeed) and seed.stated:
-        return np.where(wish_unmeasured(store, measure, seed, rows, month), 0.0, raw)
-    if measure.name != "difficulty":
-        return raw
-    (column,) = measure.columns
-    graded = ~np.isnan(_seed_value(store, seed, column))
-    return np.where(graded & np.isnan(store.column(column)[rows]), 0.0, raw)
+    return np.where(unmeasured(store, measure, seed, rows, month), 0.0, raw)
 
 
-def wish_unmeasured(
-    store: SimilarityStore, measure: Measure, wish: OutsideSeed, rows: np.ndarray, month: int | None
+def unmeasured(
+    store: SimilarityStore, measure: Measure, seed: int | OutsideSeed, rows: np.ndarray, month: int | None
 ) -> np.ndarray:
-    """Per row, whether the Wish asks a value of ``measure`` and the DayHike has no
-    data for it (a fact column NaN, such as no elevation or no climate there)."""
-    columns = _columns(measure, month) if measure.columns else []
-    if not columns or any(np.isnan(_seed_value(store, wish, column)) for column in columns):
+    """Per row, whether the Seed has data for ``measure`` and the DayHike has none
+    (a fact column or its ProfileShape NaN, such as no elevation or no climate there)."""
+    if measure.kind == "profile":
+        left = seed.profile if isinstance(seed, OutsideSeed) else store.profile[seed]
+        if np.isnan(left).any():
+            return np.zeros(len(rows), dtype=bool)
+        return np.isnan(store.profile[rows]).any(axis=-1)
+    columns = _columns(measure, month)
+    if any(np.isnan(_seed_value(store, seed, column)) for column in columns):
         return np.zeros(len(rows), dtype=bool)
     return np.isnan(np.column_stack([store.column(column)[rows] for column in columns])).any(axis=1)
 

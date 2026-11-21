@@ -199,7 +199,7 @@
       <div class="table-wrap"><table id="results-table"></table></div>
       <p id="results-more" hidden><button type="button" class="secondary" id="show-more">Show 10 more</button> <span class="status" id="more-status" role="status" aria-live="polite"></span> <span class="hint" id="other-areas"></span></p>
       <p id="results-loops" hidden><button type="button" class="secondary" id="suggest-loops">Suggest loops near these hikes (takes a few seconds)</button></p>
-      <p class="hint"><span id="results-scores"></span> Only the best of hikes that follow the same route is listed. A dash is “no data”, or a hut, cafe, shelter, viewpoint, summit or parking neither hike has mapped: either way it is left out of that pair’s score.</p>
+      <p class="hint"><span id="results-scores"></span> Only the best of hikes that follow the same route is listed. A dash in a measure’s score is “no data” on the hike you like, or a hut, cafe, shelter, viewpoint, summit or parking neither hike has mapped: either way it is left out of that pair’s score. A hike with no data for a measure the hike you like has scores 0 on it; a dash in its own Length or Climb is that missing data.</p>
     </section>
 
     <article id="selected" class="card" hidden></article>
@@ -208,7 +208,7 @@
 
 <footer class="credits" id="credits">
   <p>Map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors (<a href="https://opendatacommons.org/licenses/odbl/">ODbL</a>) · elevation <!--elevation--><a href="https://doi.org/10.5523/bris.s5hqmjcdj8yo2ibzi9b4ew3sn">FABDEM</a> (<a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">CC BY-NC-SA 4.0</a>)<!--/elevation--> · <a href="credits.html">full credits</a></p>
-  <p class="hint">Climate and land cover are missing for some regions; those measures then show “no data” and drop out of the score, or count as 0 when you describe the hike you want and ask a value of them. Drive times are estimates, not routes. Check conditions and maps before you go.</p>
+  <p class="hint">Elevation, climate and land cover are missing for some regions; those measures then show “no data” and count as 0 against a hike you like that has them, or when you describe the hike you want and ask a value of them. When the hike you like has no data for one, it drops out of the score. Drive times are estimates, not routes. Check conditions and maps before you go.</p>
   <nav class="site-nav" aria-label="Site">
     <a href="/">Find hikes</a> · <a href="about.html">About</a> · <a href="credits.html">Data and credits</a> · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms and safety</a>
   </nav>

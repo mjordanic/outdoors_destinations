@@ -1,5 +1,5 @@
 ---
-status: accepted (amends ADR-0013, ADR-0024; extends ADR-0043)
+status: accepted (amends ADR-0013, ADR-0024; extends ADR-0043; extended to a Seed hike by ADR-0071)
 ---
 
 # A hike with no data for a wished Measure scores 0 on it

@@ -482,9 +482,10 @@ def test_forested_seed_ranks_forested_neighbour_ahead_of_barer_match(
     scores = {item.dayhike.id: item.score for item in ranking.items}
 
     # PS-1 (1007) is forested like the Seed, Valley Path (1002) bare; the
-    # unsampled relation:1003 has no LandCover and is not ranked on it.
-    assert [item.dayhike.id for item in ranking.items] == [1007, 1002]
+    # unsampled relation:1003 has no LandCover and scores 0 on it (ADR-0071).
+    assert [item.dayhike.id for item in ranking.items] == [1007, 1002, 1003]
     assert scores[1007] > scores[1002]
+    assert scores[1003] == 0.0
 
 
 def test_landcover_fractions_stay_put_after_ranking(tmp_path: Path) -> None:
