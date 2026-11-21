@@ -3285,6 +3285,7 @@ function dropLimit(box) {
 }
 
 const LOOP_DRAWS = 1000; // "List the best loop" draws page 1 again at most this many times to list it
+const NOISE_SPAN = 26.1; // drawNoise lies within about -3.1 and 22.9: a row this far below the rest is never drawn
 
 // How page 1 can list the best loop of its pool it does not list: Strict order, when it would list it,
 // else the first draw after the shown one that does, with Strict order unticked; null when neither does.
@@ -3294,11 +3295,14 @@ function loopListing() {
   const unshown = pool.map((_, i) => i).filter((i) => !state.results.includes(pool[i]) && loopScore(pool[i]) > -Infinity);
   if (!unshown.length) return null;
   const best = unshown.reduce((a, b) => (loopScore(pool[b]) > loopScore(pool[a]) ? b : a));
+  if (loopScore(pool[best]).toFixed(3) !== state.answer.loop_search?.best?.toFixed(3)) return null;
   if (!state.strict && best < count) return { strict: true, draw: state.draw };
-  const scores = pool.map(drawScore), keys = pool.map(resultKey);
+  const scores = pool.map(drawScore), keys = pool.map(resultKey), t = state.info.draw.t;
+  const above = scores.filter((_, i) => i !== best).sort((a, b) => b - a);
+  if ((above[count - 1] - scores[best]) / t > NOISE_SPAN) return null;
   for (let k = 1; k <= LOOP_DRAWS; k++) {
     const draw = (state.draw + k) >>> 0;
-    if (drawn(scores, keys, draw, count, state.info.draw.t).includes(best)) return { strict: false, draw };
+    if (drawn(scores, keys, draw, count, t).includes(best)) return { strict: false, draw };
   }
   return null;
 }

@@ -1801,17 +1801,20 @@ def test_the_loop_note_says_plainly_when_no_loop_is_listed(browser, server, sear
 
 
 @pytest.mark.parametrize(
-    ("in_pool", "why"),
+    ("loop", "why"),
     [
-        (True, "; this draw left it out."),
-        (
-            False,
-            "; it ranks after the hikes it ties with, or walks mostly the same trails as a listed hike or the hike you like,"
-            " so there is nothing to change.",
+        (0.6, "; this draw left it out."),
+        *(
+            (
+                loop,  # no loop in the pool, or only one scoring below the best found
+                "; it ranks after the hikes it ties with, or walks mostly the same trails as a listed hike or the hike you like,"
+                " so there is nothing to change.",
+            )
+            for loop in (None, 0.55)
         ),
     ],
 )
-def test_a_loop_above_the_rows_drawn_says_why_it_is_not_listed(browser, server, monkeypatch, in_pool, why) -> None:
+def test_a_loop_above_the_rows_drawn_says_why_it_is_not_listed(browser, server, monkeypatch, loop, why) -> None:
     monkeypatch.setattr(web, "RESULTS", 1)  # three areas: page 1 draws one row of a three-row pool
 
     def above(route) -> None:
@@ -1820,10 +1823,10 @@ def test_a_loop_above_the_rows_drawn_says_why_it_is_not_listed(browser, server, 
         for row in rows:
             row["score"] = 0.5
         shown = drawn([r["score"] for r in rows], [str(r["id"]) for r in rows], 11, 1)
-        if in_pool:  # a loop under a row the draw leaves out
+        if loop is not None:  # a loop under a row the draw leaves out
             other = rows[next(i for i in range(len(rows)) if i not in shown)]
-            other["versions"] = [dict(other, versions=[], id=None, name="Loop from the hut", score=0.6, route={"text": "loop"})]
-        body["loop_search"] = {"starts": 31, "found": 14, "listed": int(in_pool), "best": 0.6, "stopped": False}
+            other["versions"] = [dict(other, versions=[], id=None, name="Loop from the hut", score=loop, route={"text": "loop"})]
+        body["loop_search"] = {"starts": 31, "found": 14, "listed": int(loop is not None), "best": 0.6, "stopped": False}
         route.fulfill(json=body)
 
     page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", draw=11)
@@ -1834,8 +1837,8 @@ def test_a_loop_above_the_rows_drawn_says_why_it_is_not_listed(browser, server, 
     note = page.locator("#results-loops-note")
     assert f"14 found, none listed: the best scores 0.600, above #1's 0.500{why}" in note.inner_text()
     button = page.get_by_role("button", name="List the best loop")
-    assert button.is_visible() == in_pool
-    if in_pool:  # the button lists it, its row's version marked composed
+    assert button.is_visible() == (loop == 0.6)
+    if loop == 0.6:  # the button lists it, its row's version marked composed
         button.click()
         assert "1 listed: #1 (marked composed)" in note.inner_text()
         assert page.locator("#results-table .composed-var").count() == 1
