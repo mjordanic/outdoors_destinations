@@ -337,6 +337,9 @@ whenever the list has one.
   beside it says why.
 - Redraw and Strict order change the first 10 rows and remove the rows "Show
   10 more" added; press it again for the next ones.
+- When no listed row scores as high as the best match, the note above the
+  list names its score, such as "This draw leaves out the best match, scoring
+  0.979". The line goes once "Show 10 more" lists a row that high.
 - When the best areas score exactly the same, the note above the list says
   so. Their order among themselves means nothing.
 - A link to a hike or a wish keeps Strict order when it is ticked. Without
