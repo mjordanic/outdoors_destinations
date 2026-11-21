@@ -1853,6 +1853,9 @@ function nameSearch(input, list, onPick, onLandmark = null, resting = () => null
     } else if (event.key === "Escape") show([]);
   });
   // Coming into the box selects its text, so what is typed replaces it rather than landing inside it.
+  let entering = false;
+  input.addEventListener("mousedown", () => { entering = document.activeElement !== input; });
+  input.addEventListener("mouseup", (event) => { if (entering) event.preventDefault(); entering = false; });
   input.addEventListener("focus", () => input.select());
   // A search still pending would open the list again after the Hiker left the box.
   input.addEventListener("blur", () => {
