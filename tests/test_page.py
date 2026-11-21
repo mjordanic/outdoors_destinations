@@ -3873,6 +3873,23 @@ def test_an_address_of_the_list_s_own_settings_keeps_the_list(browser, server) -
     page.wait_for_function("() => document.querySelector('#results').hidden")  # other settings: no list
 
 
+def test_an_address_of_the_list_s_own_settings_with_an_advanced_weight_keeps_the_list(browser, server) -> None:
+    address = f"#hike={RIDGE_WALK_ID}&w=lowest:50&adv"
+    page = open_page(browser, server, Api({}), hash=address)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+    page.get_by_label("Length weight, 0 to 100").fill("0")
+    assert page.locator("#results-stale").is_visible()
+
+    _go_to(page, address)
+
+    page.wait_for_timeout(300)  # the Advanced search toggle events have run
+    assert page.locator("#advanced").get_attribute("open") is not None
+    assert page.locator("#results").is_visible()
+    assert not page.locator("#results-stale").is_visible()
+    assert "changed" not in page.locator("#status").inner_text()
+
+
 def test_an_address_of_the_list_s_own_starting_place_keeps_the_list_as_its_answer(browser, server) -> None:
     page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}&from=45.2,15.1&km=50")
     page.get_by_text("Chosen: Ridge Walk").wait_for()

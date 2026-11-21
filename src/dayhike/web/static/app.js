@@ -3446,7 +3446,7 @@ function loopListing() {
   if (!unshown.length) return null;
   const best = unshown.reduce((a, b) => (loopScore(pool[b]) > loopScore(pool[a]) ? b : a));
   if (loopScore(pool[best]).toFixed(3) !== state.answer.loop_search?.best?.toFixed(3)) return null;
-  if (!state.strict && best < count) return { strict: true, draw: state.draw, rank: best + 1 };
+  if (!state.strict && best < count) return { strict: true, draw: state.draw };
   const scores = pool.map(drawScore), keys = pool.map(resultKey), t = state.info.draw.t;
   const above = scores.filter((_, i) => i !== best).sort((a, b) => b - a);
   if ((above[count - 1] - scores[best]) / t > Math.log(LOOP_DRAWS)) return null;
@@ -3848,7 +3848,8 @@ async function start() {
     host.addEventListener("input", syncAddress);
     host.addEventListener("change", syncAddress);
   }
-  $("#advanced").addEventListener("toggle", () => {
+  $("#advanced").addEventListener("toggle", (event) => {
+    if (event.oldState === event.newState) return;
     const counts = [...$("#advanced-weights").querySelectorAll(".weight")].some(
       (row) => !leftOut(row) && Number(row.querySelector("input:not(.wish)").value) > 0,
     );
