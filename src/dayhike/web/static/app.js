@@ -3223,6 +3223,7 @@ function renderResults() {
     : `No hike matched, out of ${considered}. Try a longer drive, a longer distance or other weights.`;
 
   showFilters();
+  noteUnmeasured();
   $("#results-draw").hidden = !shown.length;
   $("#results-loops").hidden = !state.info.compose || body.loops; // SuggestedLoops on request (ADR-0028)
   const table = $("#results-table");
@@ -3400,6 +3401,21 @@ function noteLeftOut() {
   $("#results-left-out").textContent = !state.strict && best && state.results.every((result) => result.score < best.score)
     ? ` This draw leaves out the best match, scoring ${best.score.toFixed(3)}: Redraw, or tick Strict order to see it.`
     : "";
+}
+
+// A liked hike with no data for a measure weighing above 0 is compared on the others alone: a note above
+// the list names them and says the results are not reliable (every hike can score 1.000 on its length).
+function noteUnmeasured() {
+  const body = state.answer, liked = state.asked.basis, note = $("#results-unmeasured");
+  const weighed = state.query.wish ? [] : comparedMeasures(body.return_to_start).filter((m) => body.weights[m.name] > 0);
+  const unknown = (m) => (m.name === "profile" ? !liked.profile_shape : factText(m, liked.facts, body.month) == null);
+  const missing = weighed.filter(unknown), known = weighed.filter((m) => !unknown(m));
+  note.hidden = !missing.length;
+  if (note.hidden) return;
+  const named = (measures) => (measures.length > 1
+    ? `${measures.slice(0, -1).map((m) => m.label).join(", ")} and ${measures.at(-1).label}` : measures[0].label);
+  note.textContent = `“${liked.name}” has no data for ${named(missing)}, so these results compare only what is known of it${
+    known.length ? ` (${named(known)})` : ""} and are not reliable.`;
 }
 
 // Rows scoring below what a typical pair of random hikes scores are weak matches: a note above the list

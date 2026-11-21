@@ -110,6 +110,12 @@ or that all are when even the best one is. This
 happens most with a tight distance or drive limit: there is simply nothing
 much like your hike nearby. A long tour can then show up on the list too.
 
+If the hike you like has no data for a measure you weigh above 0 (on Svalbard,
+for example, it has no climb, top, landscape or temperature), a note above
+the list names those measures and says the results are not reliable: the
+hikes are compared only on what is known of yours, and many can score 1.000
+on length alone.
+
 ### Or describe the hike you want
 
 No particular hike in mind? Press **"No particular hike in mind? Describe the

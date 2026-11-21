@@ -1386,6 +1386,24 @@ def _find(page) -> None:
     page.locator("#results-table tbody tr").first.wait_for()
 
 
+def test_a_liked_hike_without_data_for_a_weighed_measure_says_the_results_are_not_reliable(browser, server) -> None:
+    # The fixture has no land cover, climate or water: Ridge Walk has no data for those measures.
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+
+    note = page.locator("#results-unmeasured")
+    assert note.inner_text() == (
+        "“Ridge Walk” has no data for Landscape, Typical temperature and Lake or sea, so these results compare"
+        " only what is known of it (Length, Climbing and Highest point) and are not reliable."
+    )
+
+    for measure in ("Landscape", "Typical temperature", "Lake or sea"):
+        page.get_by_label(f"{measure} weight, 0 to 100").fill("0")
+    _find(page)
+    page.wait_for_function("() => document.querySelector('#results-unmeasured').hidden")
+
+
 def test_the_page_draws_as_the_server_does(browser, server) -> None:
     page = open_page(browser, server, Api({}))
     keys = ["1002", "19787033", "n1w2n3", "Loop near Peyrou"]
