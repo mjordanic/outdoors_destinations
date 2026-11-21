@@ -1386,6 +1386,24 @@ def _find(page) -> None:
     page.locator("#results-table tbody tr").first.wait_for()
 
 
+def test_a_liked_hike_without_data_for_a_weighed_measure_says_the_results_are_not_reliable(browser, server) -> None:
+    # The fixture has no land cover, climate or water: Ridge Walk has no data for those measures.
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+
+    note = page.locator("#results-unmeasured")
+    assert note.inner_text() == (
+        "“Ridge Walk” has no data for Landscape, Typical temperature and Lake or sea, so these results compare"
+        " only what is known of it (Length, Climbing and Highest point) and are not reliable."
+    )
+
+    for measure in ("Landscape", "Typical temperature", "Lake or sea"):
+        page.get_by_label(f"{measure} weight, 0 to 100").fill("0")
+    _find(page)
+    page.wait_for_function("() => document.querySelector('#results-unmeasured').hidden")
+
+
 def test_the_page_draws_as_the_server_does(browser, server) -> None:
     page = open_page(browser, server, Api({}))
     keys = ["1002", "19787033", "n1w2n3", "Loop near Peyrou"]
@@ -2323,6 +2341,18 @@ def test_a_liked_hike_downloads_as_a_gpx_track_that_credits_openstreetmap_and_li
     assert min(heights) >= min(hike["elevation"]["metres"]) and max(heights) <= max(hike["elevation"]["metres"])
 
 
+def test_a_gpx_file_links_to_the_hike_alone_without_the_hiker_s_starting_place_or_settings(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=(
+        f"#hike={RIDGE_WALK_ID}&from=47.79941,13.04399&place=Salzburg%2C%20AT&hours=2&month=7&w=length:50&units=imperial"
+    ))
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    assert "from=47.79941" in page.evaluate("location.hash")  # the page's own address keeps them
+
+    _, gpx = downloaded_gpx(page, "#liked")
+
+    assert gpx.find(f"{GPX}metadata/{GPX}link").get("href") == f"{server}/#hike={RIDGE_WALK_ID}"
+
+
 def test_a_gpx_shorter_than_the_hike_s_length_says_by_how_much_on_the_card_and_in_the_file(browser, server) -> None:
     with urllib.request.urlopen(f"{server}/api/hikes/{RIDGE_WALK_ID}?return_to_start=false") as response:
         hike = json.load(response)
@@ -2811,6 +2841,26 @@ def test_find_waits_and_says_why_while_the_drive_hours_are_wrong(browser, server
     page.locator("#hours").fill("2")
     assert find.is_enabled()
     assert page.locator("#find-why").inner_text() == ""
+
+
+@pytest.mark.parametrize("typed", ["0", "99999", "e"])
+def test_find_waits_and_says_why_while_the_grouping_radius_is_wrong(browser, server, typed) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_text("More options", exact=True).click()
+    radius = page.get_by_label("Group hikes starting within (km)")
+    find = page.get_by_role("button", name="Find similar")
+
+    radius.press_sequentially(typed)  # "e" is no number: the box is empty and its input bad
+
+    assert find.is_disabled()
+    assert page.locator("#find-why").inner_text() == "Group hikes starting within 0.1 to 50 km."
+
+    radius.fill("2")
+    assert find.is_enabled()
+    assert page.locator("#find-why").inner_text() == ""
+    radius.fill("")
+    assert find.is_enabled()
 
 
 def test_find_waits_while_a_drive_limit_is_asked_but_neither_hours_nor_km_is_ticked(browser, server) -> None:

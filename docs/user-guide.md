@@ -97,8 +97,9 @@ the list is from before your change, so you see it where you are on a phone.
 
 While **Find similar** is greyed out, the line under it says why: no hike is
 chosen yet (choose one first), a hike is still loading, a search is still
-running, every measure is at weight 0, or a drive limit is out of range
-(or neither Max drive hours nor Max km is ticked). If your hike cannot be
+running, every measure is at weight 0, a drive limit is out of range
+(or neither Max drive hours nor Max km is ticked), or the grouping distance
+under More options is not a number from 0.1 to 50 km. If your hike cannot be
 measured again after you change Return to start, that line says so and
 **Find similar** stays usable: pressing it measures your hike again, then
 finds.
@@ -108,6 +109,12 @@ scores, a note above the list says from which row down the matches are weak,
 or that all are when even the best one is. This
 happens most with a tight distance or drive limit: there is simply nothing
 much like your hike nearby. A long tour can then show up on the list too.
+
+If the hike you like has no data for a measure you weigh above 0 (on Svalbard,
+for example, it has no climb, top, landscape or temperature), a note above
+the list names those measures and says the results are not reliable: the
+hikes are compared only on what is known of yours, and many can score 1.000
+on length alone.
 
 ### Or describe the hike you want
 
@@ -230,7 +237,9 @@ so the file matches the length the page shows. With it off, the file is the
 hike one way. The line is simplified a little, so a GPS app may measure it a
 few percent shorter, as it cuts small bends; when the gap is 1 % or more, a
 line under the buttons says how much. The route data comes from OpenStreetMap and the heights from an
-elevation map, and the file credits both. The first download of a walk back
+elevation map, and the file credits both. The file links back to the hike
+alone (one way when the file is), without your starting place or other search
+settings, so a file you pass on does not say where you start from. The first download of a walk back
 along the trails can take a few seconds while the server reads the trails.
 
 ## One way or with the way back

@@ -391,6 +391,12 @@ function likedHash(hike) {
   return `${hike.route ? routeHash(hike) : `#hike=${hike.id}`}${modeHash()}`;
 }
 
+// The full address that opens ``hike`` measured as the GPX draws it, one way or with the way back, and
+// none of the Hiker's settings: a GPX file carries no starting place of theirs.
+function gpxAddress(hike) {
+  return `${location.origin}${location.pathname}${hike.route ? routeHash(hike) : `#hike=${hike.id}`}${hike.way_back != null ? "" : "&oneway"}`;
+}
+
 // The full address that opens ``hike`` as the liked one, to send to a friend.
 function hikeAddress(hike) {
   return `${location.origin}${location.pathname}${likedHash(hike)}`;
@@ -450,7 +456,7 @@ function gpxGap(hike) {
 // profile, credited to OpenStreetMap and the elevation map; measured with its way back, the way
 // back as a second track named so.
 async function gpxText(hike) {
-  const name = escapeHtml(hike.name), url = escapeHtml(hikeAddress(hike));
+  const name = escapeHtml(hike.name), url = escapeHtml(gpxAddress(hike));
   const points = decodePolyline(hike.line), heights = heightsAlong(points, hike.elevation);
   const tracks = [gpxTrack(hike.name, points, heights)];
   const back = await wayBackTrack(hike, points, heights);
@@ -1923,6 +1929,8 @@ function syncFind() {
   }
   const drive = driveProblem();
   if (drive) wrong.push(drive);
+  const group = groupProblem();
+  if (group) wrong.push(group);
   $("#find").disabled = none || ranking || (busy && held === chosen) || wrong.length > 0;
   $("#find-why").textContent = none && !busy && !ranking
     ? `Choose a hike first: search for one by name or select one on the map${$("#wish-on").hidden ? "" : ", or describe the one you want"}.`
@@ -3023,6 +3031,14 @@ function driveProblem() {
   return null;
 }
 
+// What is wrong with the grouping radius typed, or null: empty, the server groups by the limits (ADR-0032).
+function groupProblem() {
+  const input = $("#group-km");
+  if (input.value.trim() === "" && !input.validity.badInput) return null;
+  const km = limitKm("#group-km");
+  return km >= 0.1 && km <= 50 ? null : `Group hikes starting within ${kmShown(0.1)} to ${limitText(50)}.`;
+}
+
 async function findSimilar() {
   const was = state.liked;
   if (!state.wishing && was && (was.way_back != null) !== measuredBack(was)) { // its measuring again failed
@@ -3058,12 +3074,9 @@ async function findSimilar() {
       if ($("#hours-on").checked) query.max_hours = Number($("#hours").value);
       if ($("#km-on").checked) query.max_km = limitKm("#km");
     }
-    const group = $("#group-km").value.trim();
-    if (group !== "") { // empty: the server groups by the limits (ADR-0032)
-      const km = limitKm("#group-km");
-      if (!(km >= 0.1 && km <= 50)) throw new Error(`Group hikes starting within ${kmShown(0.1)} to ${limitText(50)}.`);
-      query.group_km = km;
-    }
+    const group = groupProblem();
+    if (group) throw new Error(group);
+    if ($("#group-km").value.trim() !== "") query.group_km = limitKm("#group-km");
   } catch (error) {
     setStatus(error.message, true);
     // Beside the list it leaves, which is no answer to this search.
@@ -3210,6 +3223,7 @@ function renderResults() {
     : `No hike matched, out of ${considered}. Try a longer drive, a longer distance or other weights.`;
 
   showFilters();
+  noteUnmeasured();
   $("#results-draw").hidden = !shown.length;
   $("#results-loops").hidden = !state.info.compose || body.loops; // SuggestedLoops on request (ADR-0028)
   const table = $("#results-table");
@@ -3387,6 +3401,21 @@ function noteLeftOut() {
   $("#results-left-out").textContent = !state.strict && best && state.results.every((result) => result.score < best.score)
     ? ` This draw leaves out the best match, scoring ${best.score.toFixed(3)}: Redraw, or tick Strict order to see it.`
     : "";
+}
+
+// A liked hike with no data for a measure weighing above 0 is compared on the others alone: a note above
+// the list names them and says the results are not reliable (every hike can score 1.000 on its length).
+function noteUnmeasured() {
+  const body = state.answer, liked = state.asked.basis, note = $("#results-unmeasured");
+  const weighed = state.query.wish ? [] : comparedMeasures(body.return_to_start).filter((m) => body.weights[m.name] > 0);
+  const unknown = (m) => (m.name === "profile" ? !liked.profile_shape : factText(m, liked.facts, body.month) == null);
+  const missing = weighed.filter(unknown), known = weighed.filter((m) => !unknown(m));
+  note.hidden = !missing.length;
+  if (note.hidden) return;
+  const named = (measures) => (measures.length > 1
+    ? `${measures.slice(0, -1).map((m) => m.label).join(", ")} and ${measures.at(-1).label}` : measures[0].label);
+  note.textContent = `“${liked.name}” has no data for ${named(missing)}, so these results compare only what is known of it${
+    known.length ? ` (${named(known)})` : ""} and are not reliable.`;
 }
 
 // Rows scoring below what a typical pair of random hikes scores are weak matches: a note above the list
@@ -3700,6 +3729,7 @@ async function start() {
   }
   $("#origin").addEventListener("change", syncAddress);
   $("#group-km").addEventListener("input", markStale);
+  $("#group-km").addEventListener("input", syncFind);
   $("#group-km").addEventListener("change", syncAddress);
   window.addEventListener("resize", showSwipeCue);
   $("#origin").addEventListener("keydown", (event) => { if (event.key === "Enter") findPlace(); });
