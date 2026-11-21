@@ -2384,7 +2384,7 @@ def test_a_find_the_server_never_answers_ends_with_a_message(browser, server) ->
     assert page.get_by_role("button", name="Find similar").is_enabled()
 
 
-def test_the_list_names_the_starting_place_and_limit_it_keeps_for_another_hike(browser, server) -> None:
+def test_the_list_names_the_starting_place_and_limit_another_hikes_link_does_not_keep(browser, server) -> None:
     page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
     page.get_by_text("Chosen: Ridge Walk").wait_for()
     page.get_by_label("Only hikes near a starting place").check()
@@ -2395,12 +2395,12 @@ def test_the_list_names_the_starting_place_and_limit_it_keeps_for_another_hike(b
 
     assert "within a 2 h drive of Zagreb, HR" in page.locator("#results-note").inner_text()
 
-    # Another hike's link in the same tab keeps the limit: the list says so.
+    # Another hike's link in the same tab names no limit, so it opens with none (ADR-0073).
     other = page.evaluate("state.results[0].id")
     page.evaluate("id => { location.hash = `#hike=${id}`; }", other)
     page.wait_for_function("id => state.liked?.id === id", arg=other)
     _find(page)
-    assert "within a 2 h drive of Zagreb, HR" in page.locator("#results-note").inner_text()
+    assert "Zagreb" not in page.locator("#results-note").inner_text()
 
 
 def test_a_reloaded_page_restores_no_starting_place_or_limit(browser, server) -> None:
@@ -3485,8 +3485,9 @@ def test_an_address_edited_to_other_settings_marks_the_list_shown_as_from_before
 
     page.locator("#results-stale").get_by_text("The query changed since this ranking").wait_for()
     assert page.locator('.weight[data-measure="length"] output').inner_text() == "50"
-    page.go_back()  # the address the list was found with: the weights stay as set, so it stays marked
+    page.go_back()  # the address the list was found with: the weights as it names them, the mark stays
     page.wait_for_function("() => location.hash === '#hike=1001'")
+    assert page.locator('.weight[data-measure="length"] output').inner_text() == "100"
     assert page.locator("#results-stale").is_visible()
 
 
@@ -3751,6 +3752,108 @@ def test_every_help_button_on_a_phone_takes_a_tap_anywhere_in_a_44_px_square(bro
 
     assert page.locator("#results-table button.help").count() > 3
     assert page.evaluate(HELP_MISSES) == []
+
+
+# ---------- the final visitor check (ADR-0073) ----------
+
+
+def test_a_link_opened_in_a_tab_sets_every_setting_it_does_not_name_to_its_default(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_label("Weather month").select_option("1")
+    page.get_by_label("Length weight, 0 to 100").fill("50")
+    page.get_by_label("Only hikes near a starting place").check()
+
+    page.evaluate("location.hash = '#hike=1002&month=7'")  # a friend's link pasted into this tab
+    page.get_by_text("Chosen: Valley Path").wait_for()
+
+    assert page.get_by_label("Weather month").input_value() == "7"
+    assert page.get_by_label("Length weight, 0 to 100").input_value() == "100"  # as the page opens
+    assert not page.get_by_label("Only hikes near a starting place").is_checked()
+    assert page.evaluate("location.hash") == "#hike=1002&month=7"  # what a reload of the link opens
+
+
+def test_a_link_to_the_hike_shown_with_no_month_shows_its_climate_with_no_month(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.route(f"{server}/api/hikes/*", lambda route: route.fulfill(json=_with_climate(route.fetch().json())))
+    page.evaluate("location.hash = '#hike=1002&month=1'")
+    page.get_by_text("Chosen: Valley Path").wait_for()
+    dimmed = page.locator('#liked svg[aria-label="Temperature by month"] rect[opacity="0.45"]')
+    assert dimmed.count() == 11  # every month but January
+
+    page.evaluate("location.hash = '#hike=1002'")
+    page.wait_for_function("() => document.querySelector('#month').value === ''")
+
+    assert dimmed.count() == 0
+
+
+def _with_climate(body: dict) -> dict:
+    """The hike in ``body`` with the same climate every month."""
+    for name in ("temperature_c", "precipitation_mm", "solar_radiation"):
+        body["facts"].update({f"{name}_{month:02d}": 10.0 for month in range(1, 13)})
+    return body
+
+
+def test_back_to_a_liked_hike_from_a_wish_turns_the_starting_place_filter_off(browser, server) -> None:
+    page = open_page(browser, server, Api(WISHABLE), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    page.get_by_label("Only hikes near a starting place").check()
+
+    page.get_by_role("button", name="Back to a hike you liked").click()
+
+    assert not page.get_by_label("Only hikes near a starting place").is_checked()
+    assert "km=" not in page.evaluate("location.hash") and "hours=" not in page.evaluate("location.hash")
+
+
+def test_a_hike_chosen_from_a_wish_has_the_starting_place_filter_off(browser, server) -> None:
+    page = open_page(browser, server, Api(WISHABLE))
+    page.get_by_role("button", name="No particular hike in mind?").click()
+    page.get_by_label("Only hikes near a starting place").check()
+
+    page.evaluate("() => choose(1002)")  # a hike picked from the search box or the map
+    page.get_by_text("Chosen: Valley Path").wait_for()
+
+    assert not page.get_by_label("Only hikes near a starting place").is_checked()
+
+
+def test_a_hike_link_opened_from_a_wish_keeps_the_starting_place_it_names(browser, server) -> None:
+    page = open_page(browser, server, Api(WISHABLE))
+    page.get_by_role("button", name="No particular hike in mind?").click()
+
+    page.evaluate("location.hash = '#hike=1002&from=45.8,15.9&km=200'")
+    page.get_by_text("Chosen: Valley Path").wait_for()
+
+    assert page.get_by_label("Only hikes near a starting place").is_checked()
+    assert page.get_by_label("Max km value").input_value() == "200"
+
+
+def test_a_hike_link_opened_from_a_wish_has_the_weights_it_names(browser, server) -> None:
+    page = open_page(browser, server, Api(WISHABLE), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_label("Length weight, 0 to 100").fill("50")
+    page.get_by_role("button", name="No particular hike in mind?").click()
+
+    page.evaluate("location.hash = '#hike=1002&month=7&w=highest:30'")  # a friend's link pasted into this tab
+    page.get_by_text("Chosen: Valley Path").wait_for()
+
+    assert page.get_by_label("Length weight, 0 to 100").input_value() == "100"
+    assert page.get_by_label("Highest point weight, 0 to 100").input_value() == "30"
+    assert page.evaluate("location.hash") == "#hike=1002&month=7&w=highest:30"
+
+
+def test_a_link_to_the_hike_liked_before_a_wish_leaves_the_wish(browser, server) -> None:
+    page = open_page(browser, server, Api(WISHABLE), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_role("button", name="No particular hike in mind?").click()
+
+    page.evaluate("id => { location.hash = `#hike=${id}&month=7`; }", RIDGE_WALK_ID)
+    page.wait_for_function("() => !state.wishing")
+
+    assert page.get_by_text("Chosen: Ridge Walk").is_visible()
+    assert page.get_by_label("Weather month").input_value() == "7"
+    assert page.evaluate("location.hash") == f"#hike={RIDGE_WALK_ID}&month=7"
 
 
 # ---------- units: km and metres, or miles and feet ----------

@@ -2245,7 +2245,7 @@ start is typed as "lat, lon", taken from the
 browser, or found by "Find place" among the GeoNames towns and villages in the
 export, ADR-0029, ADR-0042); the note above the results names the limits and
 the place, "within a 2 h drive of Munich, DE", as they stay set when another
-hike opens in the same tab, and the limit inputs are not restored by the
+hike opens in the same tab from the page (a link opened in the tab resets them, ADR-0073), and the limit inputs are not restored by the
 browser on a reload. The DriveTime is estimated on highways-only tiles as in
 **Highway tiles** above; the distance needs no routing engine. Measures with no data for a hike show "no data".
 Most often it is the missing Difficulty grade, which scores 0 on Difficulty

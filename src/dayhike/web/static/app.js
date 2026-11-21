@@ -667,7 +667,8 @@ function applySettings(parts, weights) {
 // The limits as the page opens, before an address fills them (``start``), for ``resetSettings``.
 const OPENED = {};
 
-// The settings an address can name, as the page opens: the home page's address, gone back to, names none.
+// The settings an address can name, as the page opens: the home page's address, gone back to, names none,
+// and a link opened in a tab sets those it does not name to these (ADR-0073).
 function resetSettings() {
   $("#month").value = "";
   for (const row of document.querySelectorAll(".weight")) {
@@ -1668,7 +1669,14 @@ function swapWeights(on) {
 }
 
 // The page asks for a hike the Hiker describes (on), or for hikes like a Seed (off).
-function setWishing(on) {
+// ``keepPlace``: leaving a wish keeps "Only hikes near a starting place" on (a link naming it); else
+// a liked hike starts with it off, as a wish's place is not the hike's (ADR-0073).
+function setWishing(on, { keepPlace = false } = {}) {
+  if (!on && state.wishing && !keepPlace && $("#drive-on").checked) {
+    $("#drive-on").checked = false;
+    $("#drive").hidden = true;
+    showGroupDefault();
+  }
   if (on !== state.wishing) swapWeights(on);
   state.wishing = on;
   document.body.classList.toggle("wishing", on);
@@ -1947,7 +1955,7 @@ async function choose(id, { from = null, note = null } = {}) {
     state.liked = hike;
     syncRoundTrip();
     state.mapAt = null; // the map opens at the hike chosen, not at a place searched before
-    if (state.wishing) setWishing(false);
+    if (state.wishing) setWishing(false, { keepPlace: from === "link" });
     $("#search").value = searchText(hike);
     $("#liked-name").textContent = `Chosen: ${hike.name}, ${lengthText(hike)}${note ? ` (${note})` : ""}`;
     $("#liked-name").classList.remove("error-text");
@@ -2047,7 +2055,7 @@ async function chooseComposed(route, name, from = null) {
     if (request !== chosen) return;
     state.liked = hike;
     syncRoundTrip();
-    if (state.wishing) setWishing(false);
+    if (state.wishing) setWishing(false, { keepPlace: from === "link" });
     $("#search").value = searchText(hike);
     $("#liked-name").textContent = `Chosen: ${hike.name}, ${lengthText(hike)}`;
     $("#liked-name").classList.remove("error-text");
@@ -3715,26 +3723,35 @@ async function start() {
       syncRoundTrip();
       return;
     }
+    const month = $("#month").value;
+    if (changed) resetSettings(); // a link names every setting it does not leave at its default (ADR-0073)
     const oneWay = parts.has("oneway"), modeChanged = returnToStart() === oneWay;
     $("#return-on").checked = !oneWay;
     syncRoundTrip();
     if (parts.has("strict") !== state.strict) setStrict(parts.has("strict"));
     applySettings(parts, kind !== "wish");
+    if (kind !== "wish" && state.wishing) {
+      state.kept.seed = [...document.querySelectorAll(".weight")].map((row) => row.querySelector("input:not(.wish)").value);
+    }
     const broken = (malformed) => {
       chosen++; // drops a hike still loading
       brokenLink(new Error(`not a hike link: ${location.hash}`), malformed);
     };
+    const redraw = () => {
+      if ($("#month").value !== month) renderDetail($("#liked"), state.liked, { role: state.liked.route ? "Your hike" : "Liked hike" });
+    };
     if (kind === "hike") {
       const id = (decoded(parts.get("hike")) ?? "").trim();
       if (!/^\d{1,17}$/.test(id)) broken(true);
-      else if (modeChanged || Number(id) !== state.liked?.id) choose(Number(id), { from: "link" });
+      else if (modeChanged || state.wishing || Number(id) !== state.liked?.id) choose(Number(id), { from: "link" });
+      else redraw();
     } else if (kind === "compose") {
       const route = parts.get("compose"), name = parts.has("name") ? decoded(parts.get("name")) : null;
       if (!state.info.compose) return;
       if (!/^[\w:.,-]+$/.test(route)) broken(true);
-      else if (modeChanged || state.liked?.route?.text !== route) {
+      else if (modeChanged || state.wishing || state.liked?.route?.text !== route) {
         chooseComposed(route, name?.slice(0, NAME_LENGTH), "link"); // a hand-made long name is cut, not refused
-      }
+      } else redraw();
     } else if (state.measures.some(wishable)) {
       chosen++; // drops a hike still loading
       setWishing(true);
