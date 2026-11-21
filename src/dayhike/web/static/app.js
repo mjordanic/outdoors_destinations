@@ -666,7 +666,8 @@ function applySettings(parts, weights) {
 // The limits as the page opens, before an address fills them (``start``), for ``resetSettings``.
 const OPENED = {};
 
-// The settings an address can name, as the page opens: the home page's address, gone back to, names none.
+// The settings an address can name, as the page opens: the home page's address, gone back to, names none,
+// and a link opened in a tab sets those it does not name to these (ADR-0071).
 function resetSettings() {
   $("#month").value = "";
   for (const row of document.querySelectorAll(".weight")) {
@@ -1665,7 +1666,14 @@ function swapWeights(on) {
 }
 
 // The page asks for a hike the Hiker describes (on), or for hikes like a Seed (off).
-function setWishing(on) {
+// ``keepPlace``: leaving a wish keeps "Only hikes near a starting place" on (a link naming it); else
+// a liked hike starts with it off, as a wish's place is not the hike's (ADR-0071).
+function setWishing(on, { keepPlace = false } = {}) {
+  if (!on && state.wishing && !keepPlace && $("#drive-on").checked) {
+    $("#drive-on").checked = false;
+    $("#drive").hidden = true;
+    showGroupDefault();
+  }
   if (on !== state.wishing) swapWeights(on);
   state.wishing = on;
   document.body.classList.toggle("wishing", on);
@@ -1944,7 +1952,7 @@ async function choose(id, { from = null, note = null } = {}) {
     state.liked = hike;
     syncRoundTrip();
     state.mapAt = null; // the map opens at the hike chosen, not at a place searched before
-    if (state.wishing) setWishing(false);
+    if (state.wishing) setWishing(false, { keepPlace: from === "link" });
     $("#search").value = searchText(hike);
     $("#liked-name").textContent = `Chosen: ${hike.name}, ${lengthText(hike)}${note ? ` (${note})` : ""}`;
     $("#liked-name").classList.remove("error-text");
@@ -2044,7 +2052,7 @@ async function chooseComposed(route, name, from = null) {
     if (request !== chosen) return;
     state.liked = hike;
     syncRoundTrip();
-    if (state.wishing) setWishing(false);
+    if (state.wishing) setWishing(false, { keepPlace: from === "link" });
     $("#search").value = searchText(hike);
     $("#liked-name").textContent = `Chosen: ${hike.name}, ${lengthText(hike)}`;
     $("#liked-name").classList.remove("error-text");
@@ -3712,6 +3720,7 @@ async function start() {
       syncRoundTrip();
       return;
     }
+    if (changed) resetSettings(); // a link names every setting it does not leave at its default (ADR-0071)
     const oneWay = parts.has("oneway"), modeChanged = returnToStart() === oneWay;
     $("#return-on").checked = !oneWay;
     syncRoundTrip();
