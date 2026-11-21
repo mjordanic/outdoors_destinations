@@ -1042,6 +1042,36 @@ def test_a_feature_neither_hike_has_mapped_shows_a_dash_and_says_it_is_not_compa
     assert "Neither has one mapped: not compared" in hut.locator("td").last.inner_text()
 
 
+def test_a_hike_card_says_how_the_site_made_its_name(browser, server) -> None:
+    note = "Named by this site after Planina, a place near where it starts: its source gives it no name that says where it is."
+
+    def renamed(route) -> None:
+        route.fulfill(json={**route.fetch().json(), "name": "Hike near Planina (JK11)", "name_note": note})
+
+    page = open_page(browser, server, Api({}))
+    page.route(f"{server}/api/hikes/1002*", renamed)
+    page.goto(f"{server}/#hike=1002")
+    page.get_by_text("Chosen: Hike near Planina (JK11)").wait_for()
+
+    assert page.locator("#liked .name-note").inner_text() == note
+
+
+@pytest.mark.parametrize(("parking_m", "note"), [
+    (4_578.0, "It starts 4.6 km from the nearest car park in a straight line, on the trail: the walk to its start is not counted."),
+    (1_900.0, None),  # a car park this near is the usual walk to a start
+    (None, None),
+])
+def test_a_hike_that_starts_far_from_a_car_park_says_so(browser, server, parking_m, note) -> None:
+    # Half Dome Trail (OSM relation 16315186) starts at a junction 4.6 km from the Yosemite Valley car parks.
+    page = open_page(browser, server, Api({}))
+    page.route(f"{server}/api/hikes/1002*", lambda route: route.fulfill(json={**route.fetch().json(), "parking_m": parking_m}))
+    page.goto(f"{server}/#hike=1002")
+    page.get_by_text("Chosen: Valley Path").wait_for()
+
+    shown = page.locator("#liked .parking-note")
+    assert (shown.inner_text() if shown.count() else None) == note
+
+
 def test_the_logo_takes_a_hiker_home_to_a_fresh_page(browser, server) -> None:
     page = open_page(browser, server, Api({}), hash="#hike=1002")
     page.get_by_text("Chosen: Valley Path").wait_for()
