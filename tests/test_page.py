@@ -3228,6 +3228,19 @@ def test_a_search_too_short_or_too_long_says_so_and_drops_the_list_before(browse
     assert page.locator("#suggestions").get_by_text(says).is_visible()
 
 
+def test_the_two_letter_note_goes_as_soon_as_the_query_is_long_enough(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+    page.route(f"{server}/api/search?*", lambda route: None)  # held: the search never comes back
+    page.route(f"{server}/api/landmarks?*", lambda route: None)
+    search = page.locator("#search")
+    search.press_sequentially("r")
+    page.locator("#suggestions").get_by_text("Type at least 2 letters").wait_for()
+
+    search.press_sequentially("i")
+
+    assert page.locator("#suggestions").get_by_text("Type at least 2 letters").count() == 0
+
+
 def test_enter_in_the_search_box_with_one_hike_found_picks_it(browser, server) -> None:
     page = open_page(browser, server, Api({}))
     page.route(f"{server}/api/search?*", lambda route: route.fulfill(json={"results": SEARCHED[:1]}))

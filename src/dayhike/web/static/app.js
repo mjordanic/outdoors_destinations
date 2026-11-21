@@ -1836,7 +1836,7 @@ function nameSearch(input, list, onPick, onLandmark = null, resting = () => null
     if (why === null) return false;
     abort?.abort();
     show([]);
-    note(why);
+    note(why, "nothing unsearchable");
     list.hidden = false;
     input.setAttribute("aria-expanded", "true");
     return true;
@@ -1851,6 +1851,7 @@ function nameSearch(input, list, onPick, onLandmark = null, resting = () => null
       show([]);
       return;
     }
+    if (list.querySelector(".unsearchable")) show([]); // why a shorter query was not searched goes now, not once this one is back
     timer = setTimeout(() => search(query), 200);
   });
   input.addEventListener("keydown", (event) => {
