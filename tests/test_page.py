@@ -477,6 +477,7 @@ def test_a_measure_the_wish_does_not_ask_is_left_out_not_no_data(browser, server
     page.get_by_role("button", name="Find hikes").click()
     row = page.locator("#results-table tbody tr").first
     row.wait_for()
+    page.get_by_role("button", name="Show the score of every measure").click()
 
     titles = row.locator("td.cell.none").evaluate_all("cells => cells.map(c => c.title)")
     assert titles and set(titles) == {"not in your wish"}
@@ -1004,6 +1005,25 @@ def test_a_liked_hike_that_fails_to_be_measured_again_leaves_find_usable_to_try_
     assert page.url.endswith("&oneway")
 
 
+def test_the_results_table_shows_a_few_key_columns_and_the_scores_per_measure_behind_a_more_button(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash="#hike=1002")
+    page.get_by_text("Chosen: Valley Path").wait_for()
+    page.get_by_role("button", name="Find similar").click()
+    page.locator("#results-table tbody tr").first.wait_for()
+
+    shown = page.locator("#results-table thead th:visible").all_inner_texts()
+    assert 4 <= len(shown) <= 6, shown
+    assert page.locator("#results-table th.measure:visible").count() == 0
+    assert page.locator("#results-table td.cell:visible").count() == 0
+
+    more = page.get_by_role("button", name="Show the score of every measure")
+    more.click()
+    assert page.locator("#results-table th.measure:visible").count() > 0
+    assert page.locator("#results-table td.cell:visible").count() > 0
+    page.get_by_role("button", name="Hide the score of every measure").click()
+    assert page.locator("#results-table th.measure:visible").count() == 0
+
+
 def test_a_feature_neither_hike_has_mapped_shows_a_dash_and_says_it_is_not_compared(browser, server) -> None:
     # The Valley Path (1002) and the hikes without a Hut: neither has one mapped (ADR-0026).
     page = open_page(browser, server, Api({}), hash="#hike=1002")
@@ -1012,6 +1032,7 @@ def test_a_feature_neither_hike_has_mapped_shows_a_dash_and_says_it_is_not_compa
     page.get_by_label("Hut along weight, 0 to 100").fill("100")
     page.get_by_role("button", name="Find similar").click()
 
+    page.get_by_role("button", name="Show the score of every measure").click()
     not_compared = page.locator('td[title="Neither has one mapped: not compared"]')
     page.locator("#results-table").locator(not_compared).first.wait_for()
     assert page.locator("#results-table").locator(not_compared).first.inner_text() == "–"
@@ -3305,6 +3326,8 @@ def test_on_a_phone_folds_show_they_open_the_table_says_it_scrolls_and_share_kee
     assert page.evaluate(top) == before
 
     _find(page)
+    assert not page.get_by_text("Scroll the table sideways for every measure's score →").is_visible()
+    page.get_by_role("button", name="Show the score of every measure").click()
     assert page.get_by_text("Scroll the table sideways for every measure's score →").is_visible()
 
 

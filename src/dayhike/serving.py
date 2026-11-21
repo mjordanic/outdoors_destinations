@@ -225,33 +225,33 @@ _SIMILARITY_FILES = (
 # Groups are sections of the weights panel only; scoring knows no groups (ADR-0013). The page
 # shows the "basic" group and folds the others away behind Advanced search (ADR-0031).
 MEASURE_INFO: dict[str, tuple[str, str, str, str]] = {
-    "length": ("basic", "Length", "Walk length; scored by the shorter over the longer (floor 1 km), against random hike pairs.", "OpenStreetMap: the hike's line, from the ways of its hiking relation."),
-    "elevation_gain": ("basic", "Climbing", "Metres climbed, the larger of climb and descent; scored by the smaller over the larger (floor 100 m), against random hike pairs. Any climb of 100 m or less counts as the same: so many hikes share that, it says little, and two hikes that match closely on a less common climb, like 166 m and 167 m, are the closer match.", "FABDEM elevation along the line."),
-    "difficulty": ("effort", "Difficulty", "Strictest SAC grade, 1-6; scored by the gap against random hike pairs, lowest from 3 grades apart.", "OpenStreetMap: the sac_scale grade of the hike's ways."),
-    "highest": ("basic", "Highest point", "Highest elevation; scored by the gap against random hike pairs, lowest from 400 m apart.", "FABDEM elevation along the line."),
-    "lowest": ("altitude", "Lowest point", "Lowest elevation; scored by the gap against random hike pairs, lowest from 400 m apart.", "FABDEM elevation along the line."),
+    "length": ("basic", "Length", "Walk length; the closer the two values, the higher the score (1 km or less counts as the same).", "OpenStreetMap: the hike's line, from the ways of its hiking relation."),
+    "elevation_gain": ("basic", "Climbing", "Metres climbed, the larger of climb and descent; the closer the two values, the higher the score. Any climb of 100 m or less counts as the same: so many hikes share that, it says little, and two hikes that match closely on a less common climb, like 166 m and 167 m, are the closer match.", "FABDEM elevation along the line."),
+    "difficulty": ("effort", "Difficulty", "Hardest trail grade on the walk, from 1 (ordinary hiking path) to 6 (hard alpine route), the SAC scale; the smaller the gap, the higher the score, lowest from 3 grades apart.", "OpenStreetMap: the sac_scale grade of the hike's ways."),
+    "highest": ("basic", "Highest point", "Highest elevation; the smaller the gap, the higher the score, lowest from 400 m apart.", "FABDEM elevation along the line."),
+    "lowest": ("altitude", "Lowest point", "Lowest elevation; the smaller the gap, the higher the score, lowest from 400 m apart.", "FABDEM elevation along the line."),
     "profile": ("effort", "Profile shape", "Elevation profile scaled to 0-1 in length and height, walked either way.", "FABDEM elevation along the line."),
     "landcover": ("basic", "Landscape", "Shared share of tree, shrub, grass, bare, snow and other cover.", "ESA WorldCover 2021 land cover along the line."),
     "peak_summited": ("scenery", "Summit", "A Peak within 50 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap peaks."),
     "viewpoint_along": ("scenery", "Viewpoint along", "A Viewpoint within 100 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap viewpoints."),
-    "peaks_around": ("scenery", "Peaks around", "Peaks within 2 km of the line; scored by the fewer over the more (floor 1), against random hike pairs. No peak and 1 peak count as the same: so many hikes share that, it says little, and two hikes that match closely on a less common count, like 12 and 13 peaks, are the closer match.", "OpenStreetMap peaks."),
-    "temperature": ("basic", "Typical temperature", "Mean temperature (June-August, or the chosen month); scored by the gap against random hike pairs, lowest from 10 °C apart.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
-    "precipitation": ("weather", "Precipitation", "Mean monthly precipitation over the whole year, not June-August (or the chosen month's); scored by the smaller over the larger (floor 10 mm), against random hike pairs.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
-    "solar_radiation": ("weather", "Solar radiation", "Solar radiation (June-August, or the chosen month), kJ/m²/day; scored by the gap against random hike pairs, lowest from 5,000 apart.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
-    "southness": ("weather", "Sun-facing slopes", "Which way the slopes face: 1 south, 0 north, 0.5 east or west; a flat walk faces no way and counts 0.5 (from FABDEM); scored by the gap against random hike pairs.", "FABDEM slopes along the line."),
-    "water_count": ("water", "Water sources", "WaterSources within 100 m of the line, counted up to 3; scored by the gap against random hike pairs.", "OpenStreetMap drinking water, springs, taps and water points."),
-    "dry_stretch": ("water", "Dry stretch", "Longest walk between WaterSources; scored by the shorter over the longer (floor 1 km), against random hike pairs.", "OpenStreetMap drinking water, springs, taps and water points."),
-    "waterside": ("basic", "Lake or sea", "Share of the walk within 200 m of sea, lake or wide river (WorldCover); scored by the gap against random hike pairs where either is beside water, a gap under 0.15 counting as none, lowest from 0.5 apart. Any share under 15 % counts as dry, the same as none, and two dry hikes are not compared on it: so many hikes are dry, it says little, and two hikes that match closely on a less common share, like 50 % and 55 %, are the closer match.", "ESA WorldCover 2021 permanent water (sea, lakes, wide rivers)."),
+    "peaks_around": ("scenery", "Peaks around", "Peaks within 2 km of the line; the closer the two values, the higher the score. No peak and 1 peak count as the same: so many hikes share that, it says little, and two hikes that match closely on a less common count, like 12 and 13 peaks, are the closer match.", "OpenStreetMap peaks."),
+    "temperature": ("basic", "Typical temperature", "Mean temperature (June-August, or the chosen month); the smaller the gap, the higher the score, lowest from 10 °C apart.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
+    "precipitation": ("weather", "Precipitation", "Mean monthly precipitation over the whole year, not June-August (or the chosen month's); the closer the two values, the higher the score (10 mm or less counts as the same).", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
+    "solar_radiation": ("weather", "Solar radiation", "Solar radiation (June-August, or the chosen month), kJ/m²/day; the smaller the gap, the higher the score, lowest from 5,000 apart.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
+    "southness": ("weather", "Sun-facing slopes", "Which way the slopes face: 1 south, 0 north, 0.5 east or west; a flat walk faces no way and counts 0.5 (from FABDEM). The smaller the gap, the higher the score.", "FABDEM slopes along the line."),
+    "water_count": ("water", "Water sources", "Water sources within 100 m of the line, counted up to 3. The smaller the gap, the higher the score.", "OpenStreetMap drinking water, springs, taps and water points."),
+    "dry_stretch": ("water", "Dry stretch", "Longest walk between water sources; the closer the two values, the higher the score (1 km or less counts as the same).", "OpenStreetMap drinking water, springs, taps and water points."),
+    "waterside": ("basic", "Lake or sea", "Share of the walk within 200 m of sea, lake or wide river (WorldCover); the smaller the gap, the higher the score, lowest from 0.5 apart (a share under 0.15 counts as none). Any share under 15 % counts as dry, the same as none, and two dry hikes are not compared on it: so many hikes are dry, it says little, and two hikes that match closely on a less common share, like 50 % and 55 %, are the closer match.", "ESA WorldCover 2021 permanent water (sea, lakes, wide rivers)."),
     "hut_along": ("facilities", "Hut along", "A Hut within 100 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap huts."),
     "restaurant_cafe_along": ("facilities", "Restaurant or cafe along", "A restaurant or cafe within 100 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap restaurants and cafes."),
     "shelter_along": ("facilities", "Shelter along", "A Shelter within 100 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap shelters."),
     "restaurant_cafe_trailhead": ("facilities", "Restaurant at trailhead", "A restaurant or cafe within 500 m of the Trailhead, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap restaurants and cafes."),
     "parking_trailhead": ("facilities", "Parking at trailhead", "Parking within 500 m of the Trailhead, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap parking."),
     "surface": ("trail", "Surface", "Shared share of paved, gravel, natural and rock surface.", "OpenStreetMap surface tags, else the kind of path or road."),
-    "tarmac_approach": ("trail", "Tarmac approach", "Paved metres before the trail leaves the road; scored by the gap against random hike pairs, lowest from 2 km apart.", "OpenStreetMap surface tags, else the kind of path or road."),
+    "tarmac_approach": ("trail", "Tarmac approach", "Paved metres before the trail leaves the road; the smaller the gap, the higher the score, lowest from 2 km apart.", "OpenStreetMap surface tags, else the kind of path or road."),
     "round_trip": ("trail", "Round trip", "Ends within 50 m of the Trailhead, or not (always, with the way back).", "OpenStreetMap: the hike's line, from the ways of its hiking relation."),
-    "climb_grade": ("effort", "Climb grade", "Gain over the length of the stretches that climb; scored by the smaller over the larger (floor 3 %), against random hike pairs. Any grade of 3 % or less counts as the same: so many hikes share that, it says little, and two hikes that match closely on a less common grade, like 12 % and 12.1 %, are the closer match.", "FABDEM elevation along the line."),
-    "steepest_km": ("effort", "Steepest km", "Largest height change over 1 km; scored by the smaller over the larger (floor 50 m), against random hike pairs. Any change of 50 m or less counts as the same: so many hikes share that, it says little, and two hikes that match closely on a less common change, like 180 m and 182 m, are the closer match.", "FABDEM elevation along the line."),
+    "climb_grade": ("effort", "Climb grade", "Gain over the length of the stretches that climb; the closer the two values, the higher the score. Any grade of 3 % or less counts as the same: so many hikes share that, it says little, and two hikes that match closely on a less common grade, like 12 % and 12.1 %, are the closer match.", "FABDEM elevation along the line."),
+    "steepest_km": ("effort", "Steepest km", "Largest height change over 1 km; the closer the two values, the higher the score. Any change of 50 m or less counts as the same: so many hikes share that, it says little, and two hikes that match closely on a less common change, like 180 m and 182 m, are the closer match.", "FABDEM elevation along the line."),
 }
 
 # The Wish form's input for each Measure that takes a number (``WISHABLE`` but yes/no): unit,
@@ -348,11 +348,11 @@ def _percent(share: float) -> int:
 # scores below it holds nothing much alike (ADR-0054).
 TYPICAL_PAIR = 0.47
 SCORE_HELP = {
-    "overall": "Average of the measure scores below, under your weights. Each one is the share of random hike "
-    f"pairs less alike than these two. A typical pair scores about {TYPICAL_PAIR}; with the default weights, 0.85 beats "
-    "99 random pairs in 100.",
-    "measure": "Share of random hike pairs less alike than these two on this measure: 0.9 means only 1 pair "
-    "in 10 is as alike; 0 means nothing in common.",
+    "overall": "How alike the two hikes are, from 0 to 1: the average of the measure scores below, under your "
+    f"weights. Higher is more alike. A typical pair of hikes scores about {TYPICAL_PAIR}; 0.85 is a strong match, "
+    "closer than 99 of 100 pairs of hikes picked at random.",
+    "measure": "How alike the two hikes are on this measure, from 0 (nothing in common) to 1: 0.9 means only 1 "
+    "pair of hikes in 10 is as alike.",
     "sections": (
         {
             "title": "How alike, and how telling",
@@ -396,7 +396,7 @@ SCORE_HELP = {
             "hikes. For example, Ruta Teresiana and stage 8 of the Via Normanna climb about as much, top out "
             "near 1,170 m and are as warm in summer, but one is a 108 km pilgrim route and the other a 16 km "
             "stage. On Length they score 0.15: 85 % of random pairs are closer in length. Their overall score "
-            "is still 0.74, higher than 93 random pairs in 100, because the other measures match.",
+            "is still 0.74, higher than 93 of 100 pairs of hikes picked at random, because the other measures match.",
         },
         {
             "title": "The overall score",
@@ -404,8 +404,8 @@ SCORE_HELP = {
             "their ratios matter, and a measure with no data on the hike you like, or not compared, drops "
             "out; a hike with no data for a measure the hike you like has, or that you asked for when you "
             "describe the hike you want, scores 0 on it instead. A "
-            "typical random pair of hikes scores about 0.47. With the default weights, 0.85 beats 99 random "
-            "pairs in 100, and the best match for a hike usually scores about 0.97.",
+            "typical pair of hikes scores about 0.47. With the default weights, 0.85 is a strong match, closer "
+            "than 99 of 100 pairs of hikes picked at random, and the best match for a hike usually scores about 0.97.",
         },
         {
             "title": "Where the facts come from",

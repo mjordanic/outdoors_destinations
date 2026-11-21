@@ -2257,7 +2257,8 @@ results table (a loop's panel says neither); the search list gives every hike on
 page makes ends after 60 s with "The server did not answer within 60 s", and
 one that cannot connect says "The server could not be reached"; a failed Find
 says so above the list it leaves. Every score has a short line and a "?" beside it (in the results
-table, in each column heading); hover, focus, click or tap opens what the score
+table, in each column heading; the Measure columns are folded away until "Show the
+score of every measure" is pressed); hover, focus, click or tap opens what the score
 means, why alike hikes can score low on one measure, the data each measure
 reads and how the scores are made (ADR-0025).
 

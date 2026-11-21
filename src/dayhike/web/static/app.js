@@ -3160,6 +3160,7 @@ function renderResults() {
   const figures = body.return_to_start ? "with the way back" : "one way";
   table.innerHTML = `<thead><tr><th title="${drawnPage ? "Place in this list, not a rank: the rows are drawn, then listed by score. Strict order lists the exact ranking" : "Rank in the ranking"}">#</th><th class="name">Hike</th><th>Score ${helpButton("overall")}</th>${state.query.drive ? "<th>Drive</th>" : ""}${state.query.km ? '<th title="Straight line from the starting place">Distance</th>' : ""}<th title="Length, ${figures}">Length${body.return_to_start ? " with way back" : ""}</th><th title="Climb and descent, ${figures}">Up / down${body.return_to_start ? " with way back" : ""}</th>${measureHeads}</tr></thead>`;
   state.expanded = null;
+  $("#results-columns").hidden = !shown.length;
   table.appendChild(document.createElement("tbody"));
   listRows(0);
   showMoreButton(body);
@@ -3169,7 +3170,8 @@ function renderResults() {
 // Under a table wider than its box: a cue that it scrolls sideways, to every measure's score.
 function showSwipeCue() {
   const wrap = $("#results .table-wrap");
-  $("#results-swipe").hidden = $("#results").hidden || wrap.scrollWidth <= wrap.clientWidth + 1;
+  $("#results-swipe").hidden = $("#results").hidden || !$("#results-table").classList.contains("show-measures")
+    || wrap.scrollWidth <= wrap.clientWidth + 1;
 }
 
 // The filters the shown list was found with, as chips above it: the × of each drops it and finds again.
@@ -3603,6 +3605,12 @@ async function start() {
   });
   $("#find").addEventListener("click", findSimilar);
   $("#show-more").addEventListener("click", showMore);
+  $("#toggle-measures").addEventListener("click", () => {
+    const on = $("#results-table").classList.toggle("show-measures");
+    $("#toggle-measures").textContent = on ? "Hide the score of every measure" : "Show the score of every measure";
+    $("#toggle-measures").setAttribute("aria-expanded", String(on));
+    showSwipeCue();
+  });
   $("#redraw").addEventListener("click", redraw);
   $("#strict").addEventListener("change", (event) => setStrict(event.target.checked));
   // The shown Ranking again, with loops near its best hikes, though the query on the left changed since.

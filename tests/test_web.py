@@ -236,6 +236,17 @@ def test_a_measure_whose_same_zone_few_hikes_share_says_nothing_more(client: Tes
     assert "it says little" not in descriptions[name]
 
 
+def test_measure_help_is_in_plain_words_not_jargon(client: TestClient) -> None:
+    measures = client.get("/api/measures").json()["measures"]
+    descriptions = {m["name"]: m["description"] for m in measures}
+
+    for name, description in descriptions.items():
+        for jargon in ("random hike pairs", "WaterSources", "Strictest", "scored by the"):
+            assert jargon not in description, (name, jargon)
+    assert "Hardest trail grade" in descriptions["difficulty"] and "SAC" in descriptions["difficulty"]
+    assert "Water sources" in descriptions["water_count"]
+
+
 def test_every_osm_flag_says_two_hikes_without_it_are_not_compared(client: TestClient) -> None:
     descriptions = {m["name"]: m["description"] for m in client.get("/api/measures").json()["measures"]}
 
@@ -252,9 +263,10 @@ def test_the_score_explanation_says_what_a_score_means_and_how_it_is_made(client
     assert all(section["title"] and section["text"] for section in help_["sections"])
     assert "100,000 random pairs" in text
     # The rarity rank (ADR-0026): the share of random pairs less alike, a rare match counting for more.
-    assert "Share of random hike pairs less alike" in help_["measure"]
-    assert "0.9 means only 1 pair in 10" in help_["measure"]
-    assert "about 0.47" in help_["overall"] and "0.85 beats 99" in help_["overall"]  # under the basic set (ADR-0031)
+    assert "from 0 (nothing in common) to 1" in help_["measure"]
+    assert "0.9 means only 1 pair of hikes in 10" in help_["measure"]
+    assert "about 0.47" in help_["overall"] and "strong match" in help_["overall"]  # under the basic set (ADR-0031)
+    assert "beats" not in help_["overall"] + text  # plain words, not "0.85 beats 99 random pairs in 100"
     # Two hikes with no water source: identical, but it tells little (0.648 on the rebuild 4 Calibration).
     assert "0.65 on Water sources" in text and "35 %" in text and "pass no water source 0.65" in text
     assert "not compared" in text and "0.95" in text  # a shared absence; both passing a hut
