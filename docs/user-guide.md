@@ -98,8 +98,9 @@ the list is from before your change, so you see it where you are on a phone.
 While **Find similar** is greyed out, the line under it says why: no hike is
 chosen yet (choose one first), a hike is still loading, a search is still
 running, every measure is at weight 0, a drive limit is out of range
-(or neither Max drive hours nor Max km is ticked), or the grouping distance
-under More options is not a number from 0.1 to 50 km. If your hike cannot be
+(or neither Max drive hours nor Max km is ticked), the grouping distance
+under More options is not a number from 0.1 to 50 km, or no region is ticked
+under **Hikes in**. If your hike cannot be
 measured again after you change Return to start, that line says so and
 **Find similar** stays usable: pressing it measures your hike again, then
 finds.
@@ -181,6 +182,12 @@ the hut slider to 100. Turn Length down to 30.
   unless the link names them. Leaving a hike you described for a hike you
   liked turns "Only hikes near a starting place" off; the place stays in its
   box for ticking again.
+- **Hikes in.** Where the site has hikes in both Europe and the United
+  States, a checkbox for each, just above **Find similar**, keeps the list to
+  hikes starting there. Both are ticked at first: hikes anywhere. With "Only
+  hikes near a starting place" ticked and a place given, the place decides
+  instead: the boxes are greyed out, keep their ticks, and count again once
+  the place is cleared or that filter is off.
 - **More options.** Under the limits, this sets how close hikes must start to
   be grouped as one area (see "Reading the results" below).
 - **Units** (top of the page). Show every length and height in km and metres,
@@ -215,7 +222,7 @@ they are now.
 The link opens the same hike. A walk you drew opens the same walk, too. The
 link also carries your search settings: the month, the weights you changed,
 Advanced search being open, Return to start, Strict order, the starting place
-with its limits, and the grouping distance. Whoever opens it sees the same
+with its limits, the regions ticked under Hikes in, and the grouping distance. Whoever opens it sees the same
 search, ready for **Find similar**. A link to a hike you described works the
 same way. The address in your browser keeps them up to date, so a reload
 keeps them too. A link opened in a tab that is already open (typed, pasted,
