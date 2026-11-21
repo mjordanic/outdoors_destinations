@@ -284,6 +284,7 @@ function setUnits(units) {
   for (const card of [$("#liked"), $("#selected")]) {
     if (!card.hidden && card._shown) renderDetail(card, ...card._shown);
   }
+  syncFind(); // why Find waits, said in the units shown
 }
 
 const fmt = {
@@ -1978,9 +1979,7 @@ let ranking = false; // a Ranking runs: Find waits for it
 function syncFind() {
   const none = !state.wishing && !state.liked, busy = loading !== 0 && loading === chosen;
   const wrong = state.wishing ? wishBlockers() : [];
-  if (!state.wishing) {
-    try { readWeights(); } catch (error) { wrong.push(error.message); }
-  }
+  try { readWeights(); } catch (error) { wrong.push(error.message); }
   const drive = driveProblem();
   if (drive) wrong.push(drive);
   const group = groupProblem();
@@ -3050,7 +3049,7 @@ function setStrict(on) {
   $("#redraw").disabled = on;
   $("#redraw").title = on ? "Off in Strict order: untick it to draw other hikes" : REDRAW_TITLE;
   syncAddress();
-  if (state.pools.length) relist();
+  if (state.pools.length && !$("#results").hidden) relist(); // a list gone (no hike, another address) stays gone
 }
 
 // Page 1 drawn again from the same answer, until it lists another hike, a few times at most.
@@ -3232,6 +3231,9 @@ async function postRank(request, current = () => true) {
 // with "Show 10 more" asked for the rows past the first page (Suggest loops keeps the rows shown).
 async function rank(query, liked, stale = false, draw = state.draw, place = state.asked?.place, rows = 0) {
   const request = ++ranked;
+  // The settings it is asked with: those on the left now, or a stale query's own (Suggest loops); a setting
+  // changed before it answers marks its list as from before (``changes``).
+  const address = stale ? state.asked?.address : shownAddress(), seen = changes;
   ranking = true;
   $("#suggest-loops").disabled = true;
   syncFind();
@@ -3245,8 +3247,8 @@ async function rank(query, liked, stale = false, draw = state.draw, place = stat
       weights: body.weights, month: body.month, drive: Boolean(query.max_hours), km: Boolean(query.max_km),
       return_to_start: body.return_to_start, wish: query.wish ?? null, group_km: body.group_km, uncounted: query.uncounted,
     };
-    // ``address``: what it was asked as, so an address typed or gone back to that asks otherwise marks it.
-    state.asked = { query, basis: liked, place, address: shownAddress() };
+    // ``address``: what it was asked as, so an address typed or gone back to that asks otherwise hides it.
+    state.asked = { query, basis: liked, place, address };
     state.answer = body;
     state.draw = draw;
     state.pools = [body.results];
@@ -3254,7 +3256,7 @@ async function rank(query, liked, stale = false, draw = state.draw, place = stat
     // Instant: a smooth scroll can be cut short, and the list may be screens below the button.
     $("#results").scrollIntoView({ block: "start" });
     setStatus(`Done in ${(body.elapsed_ms / 1000).toFixed(1)} s.`);
-    if (stale) markStale();
+    if (stale || changes !== seen) markStale();
     while (state.results.length < rows && !$("#show-more").hidden && request === ranked) {
       const shown = state.results.length;
       await showMore();
@@ -3287,9 +3289,13 @@ const STALE_NOTE = "The query changed since this ranking; press Find again to up
 const FIND_STALE = (button) => `Your settings changed since the list below: press ${button} again to update it.`;
 const SUGGEST_LOOPS = "Suggest loops near these hikes (takes a few seconds)";
 
+// Settings changed on the left (``markStale``), counted so a Ranking answered after one knows it is from before.
+let changes = 0;
+
 // The shown results no longer match the query on the left; ``say``: under the Find button too (not when
 // it says why a search did not run).
 function markStale(say = true) {
+  changes++;
   if ($("#results").hidden) return;
   $("#results").classList.add("stale");
   $("#results-stale").textContent = STALE_NOTE;
@@ -3399,6 +3405,8 @@ function showFilters() {
     chips.push([`Grouped within ${limitText(query.group_km)}`, () => {
       $("#group-km").value = "";
       showGroupDefault();
+      syncFind();
+      syncAddress();
       findSimilar();
     }]);
   }
@@ -3421,6 +3429,8 @@ function dropLimit(box) {
     $("#drive").hidden = true;
   }
   showGroupDefault();
+  syncFind();
+  syncAddress();
   findSimilar();
 }
 
@@ -3428,6 +3438,7 @@ const LOOP_DRAWS = 100; // "List the best loop" draws page 1 again at most this 
 
 // How page 1 can list the best loop of its pool it does not list: Strict order, when it would list it,
 // else the first draw after the shown one that does, with Strict order unticked; null when neither does.
+// ``rank``: its row's place in the ranking.
 function loopListing() {
   const pool = state.pools[0] ?? [], count = state.info.results;
   const loopScore = (row) => Math.max(...[row, ...row.versions].filter((r) => r.route).map((r) => r.score));
@@ -3441,7 +3452,7 @@ function loopListing() {
   if ((above[count - 1] - scores[best]) / t > Math.log(LOOP_DRAWS)) return null;
   for (let k = 1; k <= LOOP_DRAWS; k++) {
     const draw = (state.draw + k) >>> 0;
-    if (drawn(scores, keys, draw, count, t).includes(best)) return { strict: false, draw };
+    if (drawn(scores, keys, draw, count, t).includes(best)) return { strict: false, draw, rank: best + 1 };
   }
   return null;
 }
@@ -3472,7 +3483,8 @@ function noteLoops() {
   const notDrawn = !state.strict && unshown.length > 0;
   const listing = !listed && search?.found && state.results.length ? loopListing() : null;
   const why = listing
-    ? versus === "below" ? "" : state.strict ? `; it ranks just below #${state.results.length}` : "; this draw left it out"
+    ? versus === "below" ? "" : !state.strict ? "; this draw left it out"
+      : listing.rank === state.results.length + 1 ? `; it ranks just below #${state.results.length}` : `; it ranks #${listing.rank}`
     : versus === "below" ? ": the hikes listed match better, so there is nothing to change"
       : `; it ranks after the hikes it ties with, or walks mostly the same trails as ${others}, so there is nothing to change`;
   const count = listed === rows.length ? `${listed} listed` : `${listed} listed in ${rows.length} row${rows.length === 1 ? "" : "s"}`;
@@ -3836,7 +3848,10 @@ async function start() {
     host.addEventListener("input", syncAddress);
     host.addEventListener("change", syncAddress);
   }
+  let advancedOpen = $("#advanced").open;
   $("#advanced").addEventListener("toggle", () => {
+    if ($("#advanced").open === advancedOpen) return;
+    advancedOpen = $("#advanced").open;
     const counts = [...$("#advanced-weights").querySelectorAll(".weight")].some(
       (row) => !leftOut(row) && Number(row.querySelector("input:not(.wish)").value) > 0,
     );
@@ -3893,8 +3908,8 @@ async function start() {
     const shown = !$("#results").hidden;
     const selected = $("#selected").hidden ? null : state.selected;
     if (state.wishing) history.replaceState(null, "", wishHash());
-    else if (liked.multi_day) { // measured one way either way: only the address changes
-      history.replaceState(null, "", likedHash(liked));
+    else if (liked.multi_day) { // measured one way either way: only the address and its links change
+      syncAddress();
       return;
     } else {
       if (liked.route) await chooseComposed(liked.route.text, liked.name_origin === "hiker" ? liked.name : null);
@@ -3936,10 +3951,15 @@ async function start() {
       state.kept.seed = [...document.querySelectorAll(".weight")].map((row) => row.querySelector("input:not(.wish)").value);
     }
     // An address of other settings opens as in a new tab (ADR-0073): with no list, not one found for others.
+    // An address of the list's own settings keeps it as their answer, not from before, though setting them marked it so.
     if (changed && !$("#results").hidden && state.asked?.address !== shownAddress()) {
       $("#results").hidden = $("#selected").hidden = true;
       pick.drawLoops();
       if (!ranking) setStatus(""); // what it said was of that list; a hike to load says so next
+    } else if (changed && !$("#results").hidden) {
+      $("#results").classList.remove("stale", "failed");
+      $("#results-stale").hidden = true;
+      if (!ranking) setStatus("");
     }
     const broken = (malformed) => {
       chosen++; // drops a hike still loading
@@ -3968,8 +3988,13 @@ async function start() {
     }
     refreshHikeLinks();
   };
-  window.addEventListener("hashchange", () => openLinked(true));
-  openLinked(false);
+  const openAddress = (changed) => {
+    openLinked(changed);
+    advancedOpen = $("#advanced").open;
+    syncFind();
+  };
+  window.addEventListener("hashchange", () => openAddress(true));
+  openAddress(false);
 }
 
 start();
