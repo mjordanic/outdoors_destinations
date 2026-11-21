@@ -1364,10 +1364,41 @@ def test_the_page_lists_hikes_drawn_by_score_from_the_answer_and_marks_those_str
         "cells => cells.map(c => Boolean(c.querySelector('.picked')))")  # fmt: skip
     assert marks == [i >= 2 for i in shown]
     note = page.locator("#results-note").inner_text()
-    assert "picked from the best 3 areas, closer matches more often" in note
+    assert "picked from the best 3 areas, closer matches more often, so a better match can be left out" in note
+    assert "# is a place in this list, not a rank" in note
+    assert "Each “Show 2 more” page is drawn too" in note
+    assert page.locator("#results-table thead th").first.get_attribute("title") == (
+        "Place in this list, not a rank: the rows are drawn, then listed by score. Strict order lists the exact ranking"
+    )
     assert "The best 3 areas match equally well" in note  # ties: the order among them says nothing
     assert page.get_by_role("button", name="Redraw").is_enabled()
     assert not page.get_by_label("Strict order").is_checked()
+
+
+def test_the_note_says_when_the_draw_leaves_out_the_best_match(browser, server, monkeypatch) -> None:
+    monkeypatch.setattr(web, "RESULTS", 2)
+    scores = [0.52, 0.5, 0.5]
+
+    def found(draw):
+        pool = Pool(scores)
+        page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", draw=draw)
+        page.route(f"{server}/api/rank", pool)
+        page.get_by_text("Chosen: Ridge Walk").wait_for()
+        _find(page)
+        return page, pool
+
+    _, pool = found(11)
+    draws = [d for d in range(1000) if 0 not in pool.drawn(d, 2)][:1] + [d for d in range(1000) if 0 in pool.drawn(d, 2)][:1]
+    left_out, shown = draws
+    said = "This draw leaves out the best match, scoring 0.520: Redraw, or tick Strict order to see it."
+
+    page, _ = found(left_out)
+    assert said in page.locator("#results-note").inner_text()
+    page.get_by_label("Strict order").check()
+    assert said not in page.locator("#results-note").inner_text()
+
+    page, _ = found(shown)
+    assert "leaves out the best match" not in page.locator("#results-note").inner_text()
 
 
 def test_strict_order_lists_the_ranking_as_it_is_without_asking_again(browser, server, monkeypatch) -> None:
@@ -1384,6 +1415,7 @@ def test_strict_order_lists_the_ranking_as_it_is_without_asking_again(browser, s
     assert _names(page) == pool.names([0, 1]) and len(pool.asked) == 1
     assert page.get_by_role("button", name="Redraw").is_disabled()
     assert "picked" not in page.locator("#results-note").inner_text()
+    assert page.locator("#results-table thead th").first.get_attribute("title") == "Rank in the ranking"
     assert page.locator("#results-table .picked").count() == 0
     assert page.evaluate("location.hash") == f"#hike={RIDGE_WALK_ID}&strict"
 
