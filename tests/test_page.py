@@ -3777,6 +3777,20 @@ def test_a_hike_link_opened_from_a_wish_keeps_the_starting_place_it_names(browse
     assert page.get_by_label("Max km value").input_value() == "200"
 
 
+def test_a_hike_link_opened_from_a_wish_has_the_weights_it_names(browser, server) -> None:
+    page = open_page(browser, server, Api(WISHABLE), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_label("Length weight, 0 to 100").fill("50")
+    page.get_by_role("button", name="No particular hike in mind?").click()
+
+    page.evaluate("location.hash = '#hike=1002&month=7&w=highest:30'")  # a friend's link pasted into this tab
+    page.get_by_text("Chosen: Valley Path").wait_for()
+
+    assert page.get_by_label("Length weight, 0 to 100").input_value() == "100"
+    assert page.get_by_label("Highest point weight, 0 to 100").input_value() == "30"
+    assert page.evaluate("location.hash") == "#hike=1002&month=7&w=highest:30"
+
+
 # ---------- units: km and metres, or miles and feet ----------
 
 FOOT_M, MILE_M = 0.3048, 1609.344

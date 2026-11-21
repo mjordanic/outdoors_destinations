@@ -3726,6 +3726,9 @@ async function start() {
     syncRoundTrip();
     if (parts.has("strict") !== state.strict) setStrict(parts.has("strict"));
     applySettings(parts, kind !== "wish");
+    if (kind !== "wish" && state.wishing) {
+      state.kept.seed = [...document.querySelectorAll(".weight")].map((row) => row.querySelector("input:not(.wish)").value);
+    }
     const broken = (malformed) => {
       chosen++; // drops a hike still loading
       brokenLink(new Error(`not a hike link: ${location.hash}`), malformed);
