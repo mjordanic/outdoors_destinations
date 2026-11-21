@@ -386,9 +386,11 @@ function routeHash(hike) {
   return `#compose=${hike.route.text}${name}`;
 }
 
-// The address of the page showing ``hike`` as the liked one, with the search settings on the left.
-function likedHash(hike) {
-  return `${hike.route ? routeHash(hike) : `#hike=${hike.id}`}${modeHash()}`;
+// The address of the page showing ``hike`` as the liked one, with the search settings on the left;
+// ``place``: with the starting place and its limits too, as the address bar keeps them. A link to share
+// leaves them out: they are the Hiker's own, and a friend starts from elsewhere.
+function likedHash(hike, place = true) {
+  return `${hike.route ? routeHash(hike) : `#hike=${hike.id}`}${modeHash(place)}`;
 }
 
 // The full address that opens ``hike`` measured as the GPX draws it, one way or with the way back, and
@@ -397,9 +399,9 @@ function gpxAddress(hike) {
   return `${location.origin}${location.pathname}${hike.route ? routeHash(hike) : `#hike=${hike.id}`}${hike.way_back != null ? "" : "&oneway"}`;
 }
 
-// The full address that opens ``hike`` as the liked one, to send to a friend.
+// The full address that opens ``hike`` as the liked one, to send to a friend: no starting place of the Hiker's.
 function hikeAddress(hike) {
-  return `${location.origin}${location.pathname}${likedHash(hike)}`;
+  return `${location.origin}${location.pathname}${likedHash(hike, false)}`;
 }
 
 // Heights at ``points`` along a hike's line, from its ElevationProfile (heights at equal steps along
@@ -448,8 +450,10 @@ function gpxGap(hike) {
   for (let i = 1; i < points.length; i++) gpx += metresBetween(points[i - 1], points[i]);
   const short = 1 - gpx / hike.walk_m;
   if (short < 0.01) return null;
-  const km = (m) => `${(m / 1000).toFixed(1)} km`, oneWay = hike.way_back && hike.way_back.kind !== "none" ? " one way" : "";
-  return `GPS apps measure this GPX about ${Math.round(short * 100)} % shorter, ${km(gpx)} against ${km(hike.walk_m)}${oneWay}: its line is simplified to within 10 m of the trail, which cuts small bends.`;
+  // One decimal in km or miles, so a gap of 1 % shows.
+  const length = (m) => (imperial() ? `${(m / MILE_M).toFixed(1)} mi` : `${(m / 1000).toFixed(1)} km`);
+  const oneWay = hike.way_back && hike.way_back.kind !== "none" ? " one way" : "";
+  return `GPS apps measure this GPX about ${Math.round(short * 100)} % shorter, ${length(gpx)} against ${length(hike.walk_m)}${oneWay}: its line is simplified to within ${fmt.short(10)} of the trail, which cuts small bends.`;
 }
 
 // ``hike`` as a GPX 1.1 file for hiking and GPS apps: its line as served with heights from its
@@ -550,8 +554,8 @@ function measuredBack(hike) {
 // from their defaults; a wish carries its own), "&adv" (Advanced search open), "&from=46.05,14.5",
 // "&place=Ljubljana%2C%20SI", "&hours=2", "&km=50" (only hikes near a starting place), "&regions=us"
 // (the regions ticked, while not every one is), "&group=3" (both in km whatever the page shows) and
-// "&units=imperial" (miles and feet).
-function modeHash() {
+// "&units=imperial" (miles and feet). ``place``: with the starting place and its limits.
+function modeHash(place = true) {
   const parts = [];
   if (!returnToStart()) parts.push("oneway");
   if (state.strict) parts.push("strict");
@@ -564,7 +568,7 @@ function modeHash() {
     if (moved.length) parts.push(`w=${moved.map((row) => `${row.dataset.measure}:${row.querySelector("input:not(.wish)").value}`).join(",")}`);
   }
   if ($("#advanced").open) parts.push("adv");
-  if ($("#drive-on").checked) {
+  if (place && $("#drive-on").checked) {
     const typed = parseLatLon($("#origin").value), origin = typed || state.origin;
     if (origin) {
       parts.push(`from=${+origin.lat.toFixed(5)},${+origin.lon.toFixed(5)}`);
@@ -617,11 +621,11 @@ function syncAddress() {
   if (base) history.replaceState(null, "", base + modeHash());
 }
 
-// Every "Link to this hike" shown carries the search settings as they are now, the same address Share
-// sends (ADR-0055).
+// Every "Link to this hike" shown carries the search settings as they are now but the starting place,
+// the same address Share sends (ADR-0055, ADR-0075).
 function refreshHikeLinks() {
   for (const card of [$("#liked"), $("#selected")]) {
-    for (const link of card.querySelectorAll("a.hike-link")) link.setAttribute("href", likedHash(card._hike));
+    for (const link of card.querySelectorAll("a.hike-link")) link.setAttribute("href", likedHash(card._hike, false));
   }
 }
 
@@ -1197,10 +1201,10 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     <div class="detail-head">
       <div><div class="role">${escapeHtml(role)}</div><h2>${escapeHtml(hike.name)}</h2></div>
       ${hike.route
-        ? `<span><a class="hike-link" href="${likedHash(hike)}" title="This address opens this hike as your hike">Link to this hike</a>${compare ? ' <button type="button" class="secondary edit-composed">Edit on the map</button>' : ""}</span>`
+        ? `<span><a class="hike-link" href="${likedHash(hike, false)}" title="This address opens this hike as your hike">Link to this hike</a>${compare ? ' <button type="button" class="secondary edit-composed">Edit on the map</button>' : ""}</span>`
         : hike.built ? builtLinks(hike, compare)
-        : hike.source && hike.source.id !== "osm" ? `<span><a class="hike-link" href="${likedHash(hike)}" title="This address opens this hike">Link to this hike</a></span>`
-        : `<span><a href="https://www.openstreetmap.org/relation/${hike.id}" target="_blank" rel="noopener">OpenStreetMap relation ${hike.id}</a> · <a class="hike-link" href="${likedHash(hike)}" title="This address opens this hike">Link to this hike</a></span>`}
+        : hike.source && hike.source.id !== "osm" ? `<span><a class="hike-link" href="${likedHash(hike, false)}" title="This address opens this hike">Link to this hike</a></span>`
+        : `<span><a href="https://www.openstreetmap.org/relation/${hike.id}" target="_blank" rel="noopener">OpenStreetMap relation ${hike.id}</a> · <a class="hike-link" href="${likedHash(hike, false)}" title="This address opens this hike">Link to this hike</a></span>`}
     </div>
     ${hike.name_note ? `<p class="hint name-note">${escapeHtml(hike.name_note)}</p>` : ""}
     ${hike.parking_m > FAR_PARKING_M ? `<p class="hint parking-note">It starts ${fmt.km(hike.parking_m)} from the nearest car park in a straight line, on the trail: the walk to its start is not counted.</p>` : ""}
@@ -1334,7 +1338,7 @@ function builtLinks(hike, compare) {
   const parts = ids.map((id) => `<a href="https://www.openstreetmap.org/${type}/${id}" target="_blank" rel="noopener">${id}</a>`);
   const edit = compare && state.info.compose ? ' <button type="button" class="secondary edit-composed">Edit on the map</button>' : "";
   const from = parts.length ? `OSM ${type}${parts.length === 1 ? "" : "s"} ${parts.join(", ")}` : "OSM paths";
-  return `<span>Built from ${from} · <a class="hike-link" href="${likedHash(hike)}" title="This address opens this hike">Link to this hike</a>${edit}</span>`;
+  return `<span>Built from ${from} · <a class="hike-link" href="${likedHash(hike, false)}" title="This address opens this hike">Link to this hike</a>${edit}</span>`;
 }
 
 // The Measures a comparison shows: with the way back every hike is a round trip, so not Round trip.
@@ -1748,7 +1752,8 @@ function enterPick(typed, found) {
 // With an export's Landmarks the list also has the hikes near a peak, hut, lake, pass or town named
 // like the query (ADR-0053); ``onLandmark(landmark, open)`` then moves a map there, ``open`` asking to open it.
 // ``resting()`` is what the box says for the hike chosen (null: none is): text typed and left with no
-// suggestion picked gives way to it, so the box and the chosen hike agree.
+// suggestion picked gives way to it, and so does a box emptied or Escape, so the box and the chosen hike
+// agree; while other text is typed, the list says the chosen hike stays until another is picked.
 // Each hike is listed once, where it first comes: a name hit is not listed again under a Landmark.
 const MAX_QUERY = 100; // the longest search a name box takes (its maxlength)
 function nameSearch(input, list, onPick, onLandmark = null, resting = () => null) {
@@ -1820,6 +1825,10 @@ function nameSearch(input, list, onPick, onLandmark = null, resting = () => null
       note(items.length ? `Hike names like “${query}”:` : `No hike name has every word of “${query}” as typed. Names like it:`);
       similar.forEach((item) => option(item));
     }
+    const rest = resting();
+    if (rest && list.childElementCount && input.value.trim() !== rest) { // a drawn hike rests as "": no name to say
+      list.prepend(note(`<span class="meta">Until you pick one, Find similar uses “${escapeHtml(rest)}”; Escape puts its name back.</span>`));
+    }
     list.hidden = items.length === 0 && !nothingFor;
     input.setAttribute("aria-expanded", String(!list.hidden));
     input.removeAttribute("aria-activedescendant"); // its option is gone
@@ -1880,9 +1889,21 @@ function nameSearch(input, list, onPick, onLandmark = null, resting = () => null
     input.setAttribute("aria-expanded", "true");
     return true;
   };
+  // The chosen hike's name back in the box, selected so what is typed next replaces it.
+  const restore = () => {
+    const rest = resting();
+    if (rest === null) return false;
+    clearTimeout(timer);
+    abort?.abort();
+    show([]);
+    input.value = rest;
+    input.select();
+    return true;
+  };
   input.addEventListener("input", () => {
     clearTimeout(timer);
     entered = false;
+    if (input.value === "" && restore()) return; // emptied, by keys or the box's ×
     const query = input.value.trim();
     if (unsearchable(query)) return;
     if (query.length < 2) {
@@ -1904,7 +1925,10 @@ function nameSearch(input, list, onPick, onLandmark = null, resting = () => null
       entered = true;
       if (listed === query) { if (items.length) decide(); else entered = false; } // the list of what is typed is in: decide now
       else { clearTimeout(timer); search(query); } // else once it is
-    } else if (event.key === "Escape") show([]);
+    } else if (event.key === "Escape") {
+      if (restore()) event.preventDefault(); // not the browser's own clearing of a search box
+      else show([]);
+    }
   });
   // Coming into the box selects its text, so what is typed replaces it rather than landing inside it.
   let entering = false;
@@ -2166,9 +2190,9 @@ const pick = {
     if (!this.map) {
       // Canvas with a tolerance: a tap a few pixels off a thin line still hits it.
       this.map = L.map(card.querySelector(".pick-map"), { renderer: L.canvas({ tolerance: PICK_TOLERANCE_PX }) });
+      this.layer = L.layerGroup().addTo(this.map); // with the map, so no load finds a map without it
       addBaseLayer(this.map);
       this.map.createPane(START_PANE).style.zIndex = 450;
-      this.layer = L.layerGroup().addTo(this.map);
       // Where most hikes are, until there is a hike or a starting place to show (ADR-0054).
       const [south, west, north, east] = state.info.core ?? state.info.coverage;
       this.map.fitBounds([[south, west], [north, east]]);
@@ -2398,6 +2422,7 @@ const compose = {
 
   // On or off; ``from``: a measured hike with a Route to open the drawing with (else the liked one, when composed).
   toggle(on, from = null) {
+    if (!pick.map) return; // its button is on the map's card: no map, no drawing
     this.on = on;
     this.cannot = null;
     const button = $("#compose-on");
@@ -3009,6 +3034,7 @@ function setStrict(on) {
 
 // Page 1 drawn again from the same answer, until it lists another hike, a few times at most.
 function redraw() {
+  if (!state.pools.length) return; // no list yet
   const shown = new Set(pageOf(state.pools[0]).map(resultKey)), was = state.draw;
   for (let tries = 0; tries < REDRAW_TRIES; tries++) {
     state.draw = (state.draw + 1) >>> 0;
@@ -3888,6 +3914,12 @@ async function start() {
     if (kind !== "wish" && state.wishing) {
       state.kept.seed = [...document.querySelectorAll(".weight")].map((row) => row.querySelector("input:not(.wish)").value);
     }
+    // An address of other settings opens as in a new tab (ADR-0073): with no list, not one found for others.
+    if (changed && !$("#results").hidden && state.asked?.address !== shownAddress()) {
+      $("#results").hidden = $("#selected").hidden = true;
+      pick.drawLoops();
+      if (!ranking) setStatus(""); // what it said was of that list; a hike to load says so next
+    }
     const broken = (malformed) => {
       chosen++; // drops a hike still loading
       brokenLink(new Error(`not a hike link: ${location.hash}`), malformed);
@@ -3914,7 +3946,6 @@ async function start() {
       history.replaceState(null, "", wishHash());
     }
     refreshHikeLinks();
-    if (changed && !$("#results").hidden && state.asked?.address !== shownAddress()) markStale();
   };
   window.addEventListener("hashchange", () => openLinked(true));
   openLinked(false);

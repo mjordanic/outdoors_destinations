@@ -45,7 +45,9 @@ Pick one of three ways:
    keys, then Enter). A one-letter or over-100-character query is not
    searched: the list says why instead. It works the same on a phone and a
    computer.
-   Once picked, the page moves to the hike's panel.
+   Once picked, the page moves to the hike's panel. The hike stays chosen until
+   you pick another: while you type a new name the list says so, and Escape,
+   emptying the box or leaving it puts the chosen hike's name back.
 
    You can also type a **peak, hut, viewpoint, lake, pass, ridge,
    town or village** the hike goes to or starts from, in any language the
@@ -211,7 +213,7 @@ without it.
 
 Open any hike from the results. It has a **Link to this hike**, and two
 buttons. The link and Share give the same address, with your settings as
-they are now.
+they are now, except your starting place.
 
 - **Share** sends the link to your friends. On a phone it opens the share
   sheet, and a line beside the button says "Opening your phone's share
@@ -223,11 +225,13 @@ they are now.
 
 The link opens the same hike. A walk you drew opens the same walk, too. The
 link also carries your search settings: the month, the weights you changed,
-Advanced search being open, Return to start, Strict order, the starting place
-with its limits, the regions ticked under Hikes in, and the grouping distance. Whoever opens it sees the same
-search, ready for **Find similar**. A link to a hike you described works the
-same way. The address in your browser keeps them up to date, so a reload
-keeps them too. A link opened in a tab that is already open (typed, pasted,
+Advanced search being open, Return to start, Strict order, the regions ticked
+under Hikes in, and the grouping distance. It leaves out your starting place,
+its coordinates and its drive or distance limit: they are yours, and a friend
+starts from somewhere else. Whoever opens it sees the same search, ready for
+**Find similar**. A link to a hike you described works the same way. The
+address in your browser keeps every setting up to date, your starting place
+too, so a reload keeps them. A link opened in a tab that is already open (typed, pasted,
 or gone Back or Forward to) sets every setting it does not name to its
 default, so it opens the same search as a fresh page; only the units stay as
 they are when the link does not name them. Older links without settings still open the hike.
@@ -235,9 +239,10 @@ they are when the link does not name them. Older links without settings still op
 A link that has been cut short or changed by hand says "This link could not be
 opened" beside the search box. A part of a link the page does not know is
 ignored, and the hike still opens. If you edit the address to other settings,
-or go Back or Forward to one, a list found with other settings is marked "The
-query changed since this ranking". Back to the home address shows the page as
-it opens, with no hike and no list.
+or go Back or Forward to one, a list found with other settings goes, as it would
+on a reload of that address: press **Find similar** for the list of those
+settings. Back to the home address shows the page as it opens, with no hike and
+no list.
 
 Good to know: the GPX file holds the line of the hike as you see it on the
 map, with a height at every point. With Return to start on, it also holds the

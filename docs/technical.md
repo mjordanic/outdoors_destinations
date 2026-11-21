@@ -2220,12 +2220,12 @@ it is off. Clicking a result shows it the same way, next to the
 liked hike. Every shown hike has "Link to this hike" (`#hike=<id>` for a
 catalog or built hike, its `#compose=` link for a composed one, with `&oneway`
 when set, and the search settings: `&month=`, `&w=` (the weights moved from their defaults, `name:weight`
-comma-separated), `&adv`, `&from=lat,lon`, `&place=`, `&hours=`, `&km=`, `&group=` and `&units=`; a wish link carries the
-same but its own weights; ADR-0054) and two buttons: Share sends that address to a touch screen's share
+comma-separated), `&adv`, `&regions=`, `&group=` and `&units=`, but not the starting place (`&from=lat,lon`, `&place=`, `&hours=`,
+`&km=`), which only the address bar keeps (ADR-0075); a wish link carries the same but its own weights; ADR-0054) and two buttons: Share sends that address to a touch screen's share
 sheet, or copies it on a computer or where the sheet fails (a line beside the
 button then says "Link copied", or shows the link when it cannot be copied),
 and Download GPX saves the hike as drawn (the served line, simplified to within 10 m, so 1 % or
-more shorter in a GPS app's measure says so in the panel and the GPX description) as a GPX
+more shorter in a GPS app's measure says so, in km or miles as the page shows, in the panel and the GPX description) as a GPX
 1.1 track, made in the browser, with a height per point from its
 ElevationProfile, credited to OpenStreetMap under the ODbL and to the
 elevation map; with Return to start on, its WayBack follows as a second track
