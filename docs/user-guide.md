@@ -155,7 +155,8 @@ the hut slider to 100. Turn Length down to 30.
 - **Return to start** (on by default). Every hike is compared with its walk
   back to where it started. A hike that goes up to a summit and the same way
   down counts as there and back. Switch it off to compare every hike one way
-  only.
+  only. A multi-day route you start from is always compared one way, and so
+  is every hike compared with it: nobody walks a tour back to its start.
 - **Where from, and how far.** Give a starting place and a maximum drive (up
   to 4 hours), a maximum distance in a straight line (up to 200 km), or both.
   Only hikes that start within those limits are kept. Type the place as
@@ -261,7 +262,7 @@ below the box's edge, the box says "More below ↓ scroll".
 - Not happy with the results? Change one slider at a time and press **Find
   similar** again. The results move with your weights.
 - A long tour is also listed as day stages. A stage's name reads "…, stage 2:
-  from – to".
+  from – to", and each stage starts where the one before it ends.
 - Planning for winter or summer? Set the **Month**.
 - Narrow with a drive limit if a result list is huge and far away.
 - The address in your browser holds your hike or your drawn walk, so you can

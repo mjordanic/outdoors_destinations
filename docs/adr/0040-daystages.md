@@ -1,5 +1,5 @@
 ---
-status: accepted (builds on ADR-0033 and ADR-0038; a stage's direction amended by ADR-0048)
+status: accepted (builds on ADR-0033 and ADR-0038; a stage's direction amended by ADR-0048, then ADR-0072: it walks its tour's way)
 ---
 
 # DayStages: day-sized pieces of long tours

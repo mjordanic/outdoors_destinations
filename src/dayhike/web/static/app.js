@@ -532,6 +532,12 @@ function returnToStart() {
   return $("#return-on").checked;
 }
 
+// Whether ``hike``, the liked hike, is measured with its way back: with Return to start, unless it is a
+// multi-day route, which is measured and compared one way (nobody walks a tour back to its start).
+function measuredBack(hike) {
+  return returnToStart() && !hike.multi_day;
+}
+
 // The search settings on the left as an address's parts, so a shared link or a reload opens the same
 // search (ADR-0054): "&oneway", "&strict", "&month=1", "&w=length:50,hut_along:100" (the weights moved
 // from their defaults; a wish carries its own), "&adv" (Advanced search open), "&from=46.05,14.5",
@@ -1184,6 +1190,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     ${scoreLine}
     ${sourceLine(hike)}
     ${hike.route ? `<p class="hint">Drawn from trail segments${hike.routes?.length ? ` along ${escapeHtml(hike.routes.slice(0, 5).join(", "))}${hike.routes.length > 5 ? " and more" : ""}` : ""}; measured as drawn${hike.way_back ? ", with its way back" : ""}.</p>` : ""}
+    ${hike.multi_day && !hike.way_back && !compare && returnToStart() ? '<p class="hint">A multi-day route is compared one way: Return to start adds no way back to a tour, and the hikes compared with it are measured one way too.</p>' : ""}
     ${hike.way_back && hike.way_back.kind !== "none" ? `<p class="hint">Length, climb, descent and every measure include the way back to the start (${escapeHtml(wayBackText(hike.way_back))}); the map and profile show the hike itself.</p>` : ""}
     <ul class="badges">${badges.map((b) => (b.text ? `<li title="${escapeHtml(b.title)}">${escapeHtml(b.text)}</li>` : `<li>${escapeHtml(b)}</li>`)).join("")}</ul>
     ${emergencyLine(hike.emergency)}
@@ -1443,8 +1450,9 @@ function askDefault(row) {
 function syncRoundTrip() {
   const row = document.querySelector('.weight[data-measure="round_trip"]');
   if (!row) return;
-  row.classList.toggle("unused", returnToStart());
-  row.querySelector("input:not(.wish)").disabled = returnToStart();
+  const back = state.liked && !state.wishing ? measuredBack(state.liked) : returnToStart();
+  row.classList.toggle("unused", back);
+  row.querySelector("input:not(.wish)").disabled = back;
 }
 
 // A weight row the query leaves out: unused, or not wishable while wishing.
@@ -1681,7 +1689,7 @@ function setWishing(on) {
   }
   history.replaceState(null, "", on ? wishHash() : state.liked ? likedHash(state.liked) : location.pathname + location.search);
   const liked = state.liked;
-  if (!on && liked && (liked.way_back != null) !== returnToStart()) remeasure(liked);
+  if (!on && liked && (liked.way_back != null) !== measuredBack(liked)) remeasure(liked);
 }
 
 // ---------- search ----------
@@ -1910,9 +1918,11 @@ async function choose(id, { from = null, note = null } = {}) {
   setStatus("Loading the hike…");
   syncFind();
   try {
-    const hike = await api(`/api/hikes/${id}?return_to_start=${returnToStart()}`);
+    let hike = await api(`/api/hikes/${id}?return_to_start=${returnToStart()}`);
+    if (hike.way_back && !measuredBack(hike)) hike = await api(`/api/hikes/${id}?return_to_start=false`);
     if (request !== chosen) return;
     state.liked = hike;
+    syncRoundTrip();
     state.mapAt = null; // the map opens at the hike chosen, not at a place searched before
     if (state.wishing) setWishing(false);
     $("#search").value = searchText(hike);
@@ -2004,13 +2014,16 @@ async function chooseComposed(route, name, from = null) {
   setStatus("Measuring your hike…");
   syncFind();
   try {
-    const hike = await api("/api/compose", {
+    const measure = (back) => api("/api/compose", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ route, name: name || null, return_to_start: returnToStart() }),
+      body: JSON.stringify({ route, name: name || null, return_to_start: back }),
     });
+    let hike = await measure(returnToStart());
+    if (hike.way_back && !measuredBack(hike)) hike = await measure(false);
     if (request !== chosen) return;
     state.liked = hike;
+    syncRoundTrip();
     if (state.wishing) setWishing(false);
     $("#search").value = searchText(hike);
     $("#liked-name").textContent = `Chosen: ${hike.name}, ${lengthText(hike)}`;
@@ -2962,7 +2975,7 @@ function rankBasis() {
 
 async function findSimilar() {
   const was = state.liked;
-  if (!state.wishing && was && (was.way_back != null) !== returnToStart()) { // its measuring again failed
+  if (!state.wishing && was && (was.way_back != null) !== measuredBack(was)) { // its measuring again failed
     await remeasure(was);
     if (state.liked === was) return; // still not measured: the status line says so
   }
@@ -3132,7 +3145,8 @@ function renderResults() {
   const considered = body.reachable == null
     ? `${state.info.dayhikes.toLocaleString("en")} hikes`
     : `${body.reachable.toLocaleString("en")} hikes within ${limits} of ${state.asked.place}`;
-  const mode = body.return_to_start ? "each with its way back to the start" : "each one way";
+  const mode = body.return_to_start ? "each with its way back to the start"
+    : tourOneWay() ? "each one way, as a multi-day route is compared" : "each one way";
   const composed = shown.some((result) => [result, ...result.versions].some((row) => row.route))
     ? " Rows marked composed are loops drawn from trail segments, not catalog hikes; with Select hike on map ticked, that map shows them dashed green."
     : "";
@@ -3177,6 +3191,12 @@ function showSwipeCue() {
     || wrap.scrollWidth <= wrap.clientWidth + 1;
 }
 
+// Whether the shown list is one way only because its liked hike is a multi-day route (``measuredBack``).
+function tourOneWay() {
+  const { query, basis } = state.asked;
+  return !query.wish && !query.return_to_start && Boolean(basis?.multi_day);
+}
+
 // The filters the shown list was found with, as chips above it: the × of each drops it and finds again.
 function showFilters() {
   const body = state.answer, { query, place } = state.asked;
@@ -3190,7 +3210,7 @@ function showFilters() {
       findSimilar();
     }]);
   }
-  if (!body.return_to_start) {
+  if (!body.return_to_start && !tourOneWay()) {
     chips.push(["One way, without the way back", () => {
       $("#return-on").checked = true;
       $("#return-on").dispatchEvent(new Event("change")); // measures the hike again and finds again
@@ -3631,7 +3651,10 @@ async function start() {
     const shown = !$("#results").hidden;
     const selected = $("#selected").hidden ? null : state.selected;
     if (state.wishing) history.replaceState(null, "", wishHash());
-    else {
+    else if (liked.multi_day) { // measured one way either way: only the address changes
+      history.replaceState(null, "", likedHash(liked));
+      return;
+    } else {
       if (liked.route) await chooseComposed(liked.route.text, liked.name_origin === "hiker" ? liked.name : null);
       else await choose(liked.id);
       if (state.liked === liked) return;

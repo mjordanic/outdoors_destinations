@@ -1440,7 +1440,7 @@ uv run dayhike sample-trailgraph --dem data/dem-copernicus
 uv run dayhike build-similarity --dem data/dem-copernicus
 ```
 
-(`ingest` reads the DEM too: it orients one-way lines, DayStages and NetworkHikes by the heights of their ends,
+(`ingest` reads the DEM too: it orients one-way lines, and so the tours' DayStages (ADR-0072), and NetworkHikes by the heights of their ends,
 ADR-0048. Left out of the recipe, it would keep the orientation FABDEM gave. `--previous` names the FABDEM
 build, read before it is replaced, so a line whose ends differ by 80 to 120 m keeps its start.)
 

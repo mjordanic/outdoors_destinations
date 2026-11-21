@@ -3585,6 +3585,29 @@ def test_a_multi_day_route_is_marked_in_the_list_and_panel_and_drawn_only_after_
     page.locator("#liked .badges li").first.get_by_text("multi-day, 1,073 km").wait_for()
 
 
+def test_a_liked_multi_day_route_is_measured_and_compared_one_way_with_return_to_start_on(browser, server) -> None:
+    # Hiker test: "201 km one way (402 km with the way back)" for a tour nobody walks back.
+    api = Api({})
+    page = open_page(browser, server, api)
+    page.route(f"{server}/api/hikes/{RIDGE_WALK_ID}?*", lambda route: route.fulfill(json={**route.fetch().json(), "multi_day": True}))
+    page.evaluate(f"location.hash = '#hike={RIDGE_WALK_ID}'")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+
+    assert page.locator("#return-on").is_checked()
+    assert "way back" not in page.locator("#liked-name").inner_text()
+    assert not any("way back" in badge for badge in page.locator("#liked .badges li").all_inner_texts())
+    page.locator("#liked").get_by_text("A multi-day route is compared one way").wait_for()
+    _find(page)
+    assert api.ranked[-1]["return_to_start"] is False
+    assert "each one way" in page.locator("#results-note").inner_text()
+    assert page.get_by_role("button", name="Clear One way, without the way back").count() == 0
+
+    asked = len(api.ranked)
+    page.locator("#return-on").uncheck()  # one way already: the address follows, nothing is measured or found again
+    page.wait_for_url("**&oneway")
+    assert len(api.ranked) == asked and not page.locator("#results").is_hidden()
+
+
 # The points of the 44 px square centred on each visible "?" that a tap there does not reach it.
 HELP_MISSES = """() => [...document.querySelectorAll('button.help')].filter((b) => b.offsetParent).flatMap((b, i) => {
   b.scrollIntoView({block: 'center', inline: 'center'});

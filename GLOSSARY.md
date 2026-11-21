@@ -13,7 +13,7 @@ A DayHike that ingest builds from OSM data rather than reads as one relation: a 
 _Avoid_: composed DayHike, generated hike, virtual relation, synthetic hike
 
 **DayStage**:
-A built DayHike that is one day of a long tour: a piece of 8–25 km of a relation DayHike over 25 km, cut where a day can end, at a hut, else a place, else parking near the line, as near 16 km as those allow. It is named "{tour}, stage k: {from} – {to}" and the tour stays listed too. Tours that share a stretch cut it at the same points; a DayStage that is a Twin of a relation DayHike, such as a stage relation, is left out (ADR-0040). An external hike over 25 km is cut the same way, but its stages stay external hikes (ADR-0062).
+A built DayHike that is one day of a long tour: a piece of 8–25 km of a relation DayHike over 25 km, cut where a day can end, at a hut, else a place, else parking near the line, as near 16 km as those allow. It walks its tour's way, so stage k + 1 starts where stage k ends (ADR-0072), and is named "{tour}, stage k: {from} – {to}"; the tour stays listed too. Tours that share a stretch cut it at the same points; a DayStage that is a Twin of a relation DayHike, such as a stage relation, is left out (ADR-0040). An external hike over 25 km is cut the same way, but its stages stay external hikes (ADR-0062).
 _Avoid_: stage (a stage is a relation), section, leg, day stage relation
 
 **DestinationHike**:
@@ -21,7 +21,7 @@ A built DayHike that walks from a car park to a named Peak, Hut, Viewpoint or la
 _Avoid_: peak hike, summit hike, out-and-back (any line is walked there and back)
 
 **Multi-day route**:
-A DayHike longer than 40 km one way, more than a day's walk: marked "multi-day" with its length, and listed after the day-length hikes of a Ranking unless its Seed or Wish is one too (ADR-0056).
+A DayHike longer than 40 km one way, more than a day's walk: marked "multi-day" with its length, and listed after the day-length hikes of a Ranking unless its Seed or Wish is one too (ADR-0056). Liked, it is measured and compared one way even with ReturnToStart on (ADR-0072).
 _Avoid_: tour (any long DayHike), long hike
 
 **Named-trail hike**:
@@ -37,7 +37,7 @@ Whether a DayHike label came from OSM `name`, OSM `ref`, the `from`/`to` tags, t
 _Avoid_: unnamed as a drop reason, title, display name
 
 **Trailhead**:
-The point where a DayHike's main walk starts, so it is the first vertex of DayHikeGeometry. A line starts at the end its `from`/`to` tags point to (ADR-0017); else at its lower end when its ends differ by more than 100 m (within 20 m of that, where the build before started it, there ingest started it again, ADR-0048), unless nothing reaches the lower end while something reaches the upper one (ADR-0048: parking or a place within 300 m, or a road through the end); else, when it lacks a `from` or `to` tag, at the end its dashed name points to; else at the end nearer an access point within 5 km; else at the end where member order starts it. A DayStage or a NetworkHike line starts at its lower end by the same height rule, else as it is built (ADR-0040, ADR-0039). A named-trail hike starts at the one end within 100 m of a `highway=trailhead` node, else by the height rule, else at the end nearer a trailhead node or parking (ADR-0066); a DestinationHike starts at its car park (ADR-0067). A loop starts at the far end of the one dead end it keeps (its stem), else at its vertex nearest an access point within 5 km. An access point is a parking point and nothing else. Drive time and nearby amenities are measured from here.
+The point where a DayHike's main walk starts, so it is the first vertex of DayHikeGeometry. A line starts at the end its `from`/`to` tags point to (ADR-0017); else at its lower end when its ends differ by more than 100 m (within 20 m of that, where the build before started it, there ingest started it again, ADR-0048), unless nothing reaches the lower end while something reaches the upper one (ADR-0048: parking or a place within 300 m, or a road through the end); else, when it lacks a `from` or `to` tag, at the end its dashed name points to; else at the end nearer an access point within 5 km; else at the end where member order starts it. A DayStage starts where its tour's walk reaches it (ADR-0072); a NetworkHike line starts at its lower end by the same height rule, else as it is built (ADR-0039). A named-trail hike starts at the one end within 100 m of a `highway=trailhead` node, else by the height rule, else at the end nearer a trailhead node or parking (ADR-0066); a DestinationHike starts at its car park (ADR-0067). A loop starts at the far end of the one dead end it keeps (its stem), else at its vertex nearest an access point within 5 km. An access point is a parking point and nothing else. Drive time and nearby amenities are measured from here.
 _Avoid_: start, parking (parking is an amenity near a Trailhead)
 
 **Catalog**:
@@ -193,7 +193,7 @@ The shortest walk from where a hike ends back to its Trailhead: nothing when it 
 _Avoid_: return route, loop closure, descent route
 
 **ReturnToStart**:
-The Hiker's choice, on by default, to measure every hike of a query with its WayBack, as the walk out from the Trailhead and back: the Seeds and every DayHike compared with them alike, so a summit line is compared up and back. Off, every hike is measured one way. The two are never mixed in one comparison.
+The Hiker's choice, on by default, to measure every hike of a query with its WayBack, as the walk out from the Trailhead and back: the Seeds and every DayHike compared with them alike, so a summit line is compared up and back. Off, every hike is measured one way. The two are never mixed in one comparison. A liked Multi-day route is compared one way whatever this says (ADR-0072).
 _Avoid_: round trip (a RoundTrip is a DayHike that itself ends at its Trailhead), loop mode, out-and-back mode
 
 **TarmacApproach**:
