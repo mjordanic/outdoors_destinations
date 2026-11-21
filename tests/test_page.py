@@ -3798,9 +3798,11 @@ def test_a_croatian_hike_shows_112_and_the_hgss(browser, server) -> None:
     [
         ("GB", "Emergency: 999 or 112 · Mountain rescue: Mountain Rescue · Call 999 or 112, ask for Police, then Mountain Rescue."),
         ("US", "Emergency: 911 · Mountain rescue: Mountain Rescue Association (United States, sources nps.gov, mra.org, gov.uk)"),
+        # No one park's dispatch line on every Canadian hike: the page linked lists each park's.
+        ("CA", "Emergency: 911 · Mountain rescue: Parks Canada · Call 911. In a national park, Parks Canada's page lists that park's dispatch line. (Canada,"),
     ],
 )
-def test_a_uk_or_us_hike_shows_its_own_countrys_number(browser, server, code, shown) -> None:
+def test_a_uk_us_or_canadian_hike_shows_its_own_countrys_number(browser, server, code, shown) -> None:
     from dayhike.serving import emergency_services
 
     def elsewhere(route) -> None:
@@ -3813,6 +3815,29 @@ def test_a_uk_or_us_hike_shows_its_own_countrys_number(browser, server, code, sh
     page.get_by_text("Chosen: Ridge Walk").wait_for()
     assert page.locator("#liked .emergency").inner_text().startswith(shown)
     assert "HGSS" not in page.locator("#liked").inner_text()
+
+
+def test_a_hike_at_a_border_shows_both_countries_numbers(browser, server) -> None:
+    from dayhike.serving import emergency_services
+
+    def at_border(route) -> None:
+        route.fulfill(json={**route.fetch().json(), "border_emergency": emergency_services()["SI"]})
+
+    page = browser.new_page()
+    page.route(lambda url: not url.startswith(server), lambda route: route.abort())
+    page.route(f"{server}/api/hikes/{RIDGE_WALK_ID}*", at_border)
+    page.goto(f"{server}/#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    start, across = page.locator("#liked .emergency").all_inner_texts()
+    assert start.startswith("Emergency: 112 · Mountain rescue: HGSS (Croatia,"), start
+    assert across == "Near the border with Slovenia (the route crosses it or starts within 2 km): Emergency: 112 · Mountain rescue: GRZS (Slovenia, source grzs.si)", across
+    assert page.locator("#liked .emergency").nth(1).get_by_role("link", name="GRZS", exact=True).get_attribute("href") == "https://www.grzs.si"
+
+
+def test_a_hike_away_from_borders_shows_one_countrys_numbers(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    assert page.locator("#liked .emergency").count() == 1
 
 
 def test_a_hike_panel_loads_a_commons_photo_only_once_that_hike_is_open(browser, server) -> None:

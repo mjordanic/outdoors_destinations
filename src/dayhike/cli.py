@@ -476,7 +476,13 @@ def main(argv: list[str] | None = None) -> int:
     export.add_argument(
         "--countries",
         type=Path,
-        help="Natural Earth admin-0 countries GeoJSON: the country each hike starts in, for its emergency number",
+        help="Natural Earth 10m admin-0 countries GeoJSON: the country each hike starts in, for its emergency number",
+    )
+    export.add_argument(
+        "--borders",
+        type=Path,
+        help="Natural Earth 10m admin-0 land boundary lines GeoJSON, with --countries: a hike crossing or starting "
+        "within 2 km of a border also shows the other country's emergency number",
     )
     export.add_argument(
         "--region",
@@ -495,7 +501,13 @@ def main(argv: list[str] | None = None) -> int:
     countries.add_argument(
         "--countries",
         type=Path,
-        help="Natural Earth admin-0 countries GeoJSON; without it, the country of the place nearest each Trailhead",
+        help="Natural Earth 10m admin-0 countries GeoJSON; without it, the country of the place nearest each Trailhead",
+    )
+    countries.add_argument(
+        "--borders",
+        type=Path,
+        help="Natural Earth 10m admin-0 land boundary lines GeoJSON, with --countries: a hike crossing or starting "
+        "within 2 km of a border also shows the other country's emergency number",
     )
     places = subparsers.add_parser(
         "export-places", help="Add GeoNames place search and the hike search's Landmarks beside an existing serving export"
@@ -608,13 +620,13 @@ def main(argv: list[str] | None = None) -> int:
             export.error(str(exc))
         return _export_serving(
             args.catalog, args.out, args.valhalla_tiles, args.snaps, args.valhalla_url, args.geonames, args.countries,
-            regions,
+            args.borders, regions,
         )
     if args.command == "export-countries":
         from dayhike.serving import ServingExportError, export_countries
 
         try:
-            print(export_countries(args.out, args.countries))
+            print(export_countries(args.out, args.countries, args.borders))
         except ServingExportError as exc:
             print(exc, file=sys.stderr)
             return 1
@@ -996,6 +1008,7 @@ def _export_serving(
     valhalla_url: str | None,
     geonames: Path | None,
     countries: Path | None,
+    borders: Path | None,
     regions: list[Region],
 ) -> int:
     from dayhike.serving import ServingExportError, export_serving, fetch_geonames
@@ -1010,6 +1023,7 @@ def _export_serving(
                 valhalla_url=valhalla_url,
                 geonames_path=geonames and fetch_geonames(geonames),
                 countries_path=countries,
+                borders_path=borders,
                 regions=regions,
                 progress=_progress,
             )
