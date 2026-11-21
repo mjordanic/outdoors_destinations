@@ -3873,6 +3873,18 @@ def test_an_address_of_the_list_s_own_settings_keeps_the_list(browser, server) -
     page.wait_for_function("() => document.querySelector('#results').hidden")  # other settings: no list
 
 
+def test_opening_advanced_search_with_an_advanced_weight_after_a_search_marks_the_list_stale(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}&w=lowest:50")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+    assert not page.locator("#results-stale").is_visible()
+
+    open_advanced(page)
+
+    page.locator("#results-stale").wait_for()
+    page.wait_for_function("() => location.hash.includes('&adv')")
+
+
 def test_an_address_of_the_list_s_own_settings_with_an_advanced_weight_keeps_the_list(browser, server) -> None:
     address = f"#hike={RIDGE_WALK_ID}&w=lowest:50&adv"
     page = open_page(browser, server, Api({}), hash=address)

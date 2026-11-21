@@ -3848,8 +3848,10 @@ async function start() {
     host.addEventListener("input", syncAddress);
     host.addEventListener("change", syncAddress);
   }
-  $("#advanced").addEventListener("toggle", (event) => {
-    if (event.oldState === event.newState) return;
+  let advancedOpen = $("#advanced").open;
+  $("#advanced").addEventListener("toggle", () => {
+    if ($("#advanced").open === advancedOpen) return;
+    advancedOpen = $("#advanced").open;
     const counts = [...$("#advanced-weights").querySelectorAll(".weight")].some(
       (row) => !leftOut(row) && Number(row.querySelector("input:not(.wish)").value) > 0,
     );
