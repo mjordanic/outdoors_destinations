@@ -82,8 +82,12 @@ Pick one of three ways:
 
 Then press **Find similar**. You get 10 hikes from among the most similar
 (see "Why the list changes from visit to visit" below), and the page moves to
-the list. On a phone the list is wider than the screen: a line above it says to
-scroll it sideways for every measure's score.
+the list. The list shows each hike's score, length and climb (and its drive
+or distance when you set one); press **Show the score of every measure** above
+it for a column per measure, and **Hide the score of every measure** to fold
+them away again. With those columns shown on a phone, the list is wider than
+the screen: a line above it says to scroll it sideways for every measure's
+score.
 
 If you change a setting after a search, a line under **Find similar** says
 the list is from before your change, so you see it where you are on a phone.
