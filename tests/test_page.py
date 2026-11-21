@@ -2918,6 +2918,36 @@ def test_only_the_us_ticked_lists_only_us_hikes_from_a_european_hike(browser, tw
     assert page.get_by_label("Europe", exact=True).is_checked()
 
 
+def test_a_region_choice_says_its_best_can_score_lower_than_the_best_anywhere(browser, two_regions_server) -> None:
+    page = open_page(browser, two_regions_server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    kept = "Kept to the United States, the best matches can score lower than the best anywhere."
+
+    _find(page)
+    assert "Kept to" not in page.locator("#results-note").inner_text()
+
+    page.get_by_label("Europe", exact=True).uncheck()
+    _find(page)
+    page.locator("#results-note").get_by_text(kept).wait_for()
+
+
+def test_weak_matches_kept_to_a_region_name_the_region(browser, two_regions_server) -> None:
+    page = open_page(browser, two_regions_server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_label("Europe", exact=True).uncheck()
+    page.route(f"{two_regions_server}/api/rank", Pool([0.31, 0.29]))
+    _find(page)
+
+    poor = page.locator("#results-poor")
+    assert "so nothing in the United States is much like this hike. Tick another region" in poor.inner_text()
+
+    page.unroute(f"{two_regions_server}/api/rank")
+    page.route(f"{two_regions_server}/api/rank", Pool([0.8, 0.3]))
+    page.get_by_label("Strict order").check()
+    _find(page)
+    poor.get_by_text("weak matches, as little else in the United States is much like this hike").wait_for()
+
+
 def test_find_waits_while_no_region_is_ticked(browser, two_regions_server) -> None:
     page = open_page(browser, two_regions_server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
     page.get_by_text("Chosen: Ridge Walk").wait_for()

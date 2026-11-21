@@ -3286,8 +3286,10 @@ function renderResults() {
     : "";
   const tied = pool.filter((result) => result.score === pool[0]?.score).length;
   const ties = tied > 1 ? ` The best ${tied} areas match equally well.` : "";
+  const kept = body.regions
+    ? ` Kept to ${regionsText(body.regions)}, the best matches can score lower than the best anywhere.` : "";
   $("#results-note").textContent = shown.length
-    ? `${state.query.wish ? "Closest to the hike you want" : `Like “${state.liked.name}”`}, out of ${considered}${loopRows ? " and loops composed near the best of them" : ""}, ${mode}.${picked}${ties} Click a row to see it.${composed}${searched}${versions}`
+    ? `${state.query.wish ? "Closest to the hike you want" : `Like “${state.liked.name}”`}, out of ${considered}${loopRows ? " and loops composed near the best of them" : ""}, ${mode}.${kept}${picked}${ties} Click a row to see it.${composed}${searched}${versions}`
     : `No hike matched, out of ${considered}. Try a longer drive, a longer distance or other weights.`;
 
   showFilters();
@@ -3503,10 +3505,11 @@ function notePoor() {
   if (note.hidden) return;
   const like = state.query.wish ? "what you want" : "this hike";
   const limits = [body.max_hours && `a ${body.max_hours} h drive`, body.max_km && limitText(body.max_km)].filter(Boolean).join(" and ");
-  const near = limits ? `within ${limits} of ${state.asked.place}` : "";
+  const near = limits ? `within ${limits} of ${state.asked.place}` : body.regions ? `in ${regionsText(body.regions)}` : "";
+  const wider = limits ? "Try a longer drive or distance, or other weights." : "Tick another region, or try other weights.";
   note.textContent = weak === 0
     ? `Weak matches: the best of these scores ${rows[0].score.toFixed(3)}, below the ${typical} of a typical pair of random hikes, so ${near
-      ? `nothing ${near} is much like ${like}. Try a longer drive or distance, or other weights.`
+      ? `nothing ${near} is much like ${like}. ${wider}`
       : `no hike is much like ${like} under these weights. Try other weights.`}`
     : `From #${weak + 1} down, these score below the ${typical} of a typical pair of random hikes: weak matches${near ? `, as little else ${near} is much like ${like}` : ""}.`;
 }
