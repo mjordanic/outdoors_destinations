@@ -1,5 +1,5 @@
 ---
-status: accepted (amends ADR-0053 and ADR-0054; amended by ADR-0071)
+status: accepted (amends ADR-0053 and ADR-0054; amended by ADR-0073)
 ---
 
 # What the page does after visitor check 4

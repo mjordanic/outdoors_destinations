@@ -2365,7 +2365,7 @@ def test_the_list_names_the_starting_place_and_limit_another_hikes_link_does_not
 
     assert "within a 2 h drive of Zagreb, HR" in page.locator("#results-note").inner_text()
 
-    # Another hike's link in the same tab names no limit, so it opens with none (ADR-0071).
+    # Another hike's link in the same tab names no limit, so it opens with none (ADR-0073).
     other = page.evaluate("state.results[0].id")
     page.evaluate("id => { location.hash = `#hike=${id}`; }", other)
     page.wait_for_function("id => state.liked?.id === id", arg=other)
@@ -3724,7 +3724,7 @@ def test_every_help_button_on_a_phone_takes_a_tap_anywhere_in_a_44_px_square(bro
     assert page.evaluate(HELP_MISSES) == []
 
 
-# ---------- the final visitor check (ADR-0071) ----------
+# ---------- the final visitor check (ADR-0073) ----------
 
 
 def test_a_link_opened_in_a_tab_sets_every_setting_it_does_not_name_to_its_default(browser, server) -> None:

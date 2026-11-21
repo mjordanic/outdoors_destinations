@@ -667,7 +667,7 @@ function applySettings(parts, weights) {
 const OPENED = {};
 
 // The settings an address can name, as the page opens: the home page's address, gone back to, names none,
-// and a link opened in a tab sets those it does not name to these (ADR-0071).
+// and a link opened in a tab sets those it does not name to these (ADR-0073).
 function resetSettings() {
   $("#month").value = "";
   for (const row of document.querySelectorAll(".weight")) {
@@ -1667,7 +1667,7 @@ function swapWeights(on) {
 
 // The page asks for a hike the Hiker describes (on), or for hikes like a Seed (off).
 // ``keepPlace``: leaving a wish keeps "Only hikes near a starting place" on (a link naming it); else
-// a liked hike starts with it off, as a wish's place is not the hike's (ADR-0071).
+// a liked hike starts with it off, as a wish's place is not the hike's (ADR-0073).
 function setWishing(on, { keepPlace = false } = {}) {
   if (!on && state.wishing && !keepPlace && $("#drive-on").checked) {
     $("#drive-on").checked = false;
@@ -3721,7 +3721,7 @@ async function start() {
       return;
     }
     const month = $("#month").value;
-    if (changed) resetSettings(); // a link names every setting it does not leave at its default (ADR-0071)
+    if (changed) resetSettings(); // a link names every setting it does not leave at its default (ADR-0073)
     const oneWay = parts.has("oneway"), modeChanged = returnToStart() === oneWay;
     $("#return-on").checked = !oneWay;
     syncRoundTrip();
