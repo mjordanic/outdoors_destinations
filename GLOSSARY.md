@@ -104,6 +104,10 @@ _Avoid_: isochrone, drive estimate as a stored column, distance (a straight-line
 The Hiker's optional limit on the straight-line (great-circle) distance from Origin to where a hike starts (a DayHike's Trailhead, a SuggestedLoop's start), checked at query time (ADR-0032). It needs no routing engine. With a DriveTime limit too, a hike must be within both.
 _Avoid_: road distance, range, radius (the GroupingRadius is another thing)
 
+**RegionChoice**:
+The Hiker's optional choice of the regions a Ranking keeps to, Europe, the United States or both, by where a hike starts: the United States west of 40° W, Europe east of it. Every region, anywhere, is the default. It applies before ranking, and not while an Origin limit is set, which decides alone (ADR-0074).
+_Avoid_: Region (a Region is the area a build covers), country filter, continent
+
 **GroupingRadius**:
 How near the start of a better row's hike a hike must start to be one of that row's versions rather than a row of its own (ADR-0020). Unless the Hiker sets it, it follows the query's limits: 5 % of the DistanceLimit, or of the DriveTime limit at 50 km per hour, the smaller, at least 500 m; 10 km with no limit (ADR-0032).
 _Avoid_: area size, cluster radius

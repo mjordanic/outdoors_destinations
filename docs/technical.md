@@ -2494,7 +2494,8 @@ meets that box, for "Select hike on map", each with its id, name, walk length,
 (with the Trailheads' box, `coverage`, for the page's swapped "lat, lon"
 warning, `place_search`, true when the export has `places.sqlite`, `landmark_search`, true when it has
 `landmarks.sqlite`, `results`
-and `max_rows`, the rows a page and a whole list hold, `max_km`, `grouping`,
+and `max_rows`, the rows a page and a whole list hold, `max_km`, `regions`, the regions the Catalog has
+hikes in (`name`, `label`, `named` as a sentence names it), `grouping`,
 the rule of the default GroupingRadius, and `draw`, `{"pool", "t"}`: the rows a
 Ranking answers with and the temperature the page draws its `results` rows of
 them with),
@@ -2507,8 +2508,9 @@ the most hikes; each with `name`, `kind`, `town` (the nearest other town within 
 apart) and its `country`, `lat`, `lon`, `match`, `hike_count` and
 `hikes`, its 5 nearest as search lists them with `off_m`; 404 without `landmarks.sqlite`), `POST /api/rank` with `{"seed": id, "weights": {measure: 0-100},
 "excluded": [measure], "month": 1-12, "origin": {"lat", "lon"}, "max_hours":
-0-4, "max_km": 0-200, "group_km": 0.1-50, "after": [{"lat", "lon"}], "draw":
-0-4294967295}` (ADR-0032:
+0-4, "max_km": 0-200, "regions": ["europe", "us"], "group_km": 0.1-50, "after": [{"lat", "lon"}], "draw":
+0-4294967295}` (ADR-0074: `regions` keeps to the hikes starting in them before ranking, the United States
+west of 40° W, Europe east of it, and is refused with an `origin`; ADR-0032:
 an `origin` needs `max_hours`, `max_km` or both, and a hike must be within each
 one given, `max_km` in a straight line to its start; `group_km` is the
 GroupingRadius, by default from the limits as `grouping` in `/api/info` says;
@@ -2520,8 +2522,8 @@ noise hashed from the draw number and each row's DayHike id or loop route text
 (`serving.drawn`, `drawNoise` in `app.js`), or the first `results` in Strict
 order; `draw`, the page's draw number, draws the loop search's 20 Trailheads
 from the best 60 DayHikes the same way, and without it they are the best 20;
-the answer echoes `max_hours`, `max_km`, `group_km`, `draw` and
-how many starts `after` had, `reachable` counts the hikes within the limits, and
+the answer echoes `max_hours`, `max_km`, `regions`, `group_km`, `draw` and
+how many starts `after` had, `reachable` counts the hikes within the limits, `in_regions` those in `regions`, and
 each hike has `drive_hours` and `distance_km`, null without that limit or start;
 ADR-0046: each row has `more_here`, the DayHikes starting in its area that are
 not listed and score within 0.05 of it, and `in_area`, every DayHike ranked
