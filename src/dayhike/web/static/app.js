@@ -3736,12 +3736,12 @@ async function start() {
     if (kind === "hike") {
       const id = (decoded(parts.get("hike")) ?? "").trim();
       if (!/^\d{1,17}$/.test(id)) broken(true);
-      else if (modeChanged || Number(id) !== state.liked?.id) choose(Number(id), { from: "link" });
+      else if (modeChanged || state.wishing || Number(id) !== state.liked?.id) choose(Number(id), { from: "link" });
     } else if (kind === "compose") {
       const route = parts.get("compose"), name = parts.has("name") ? decoded(parts.get("name")) : null;
       if (!state.info.compose) return;
       if (!/^[\w:.,-]+$/.test(route)) broken(true);
-      else if (modeChanged || state.liked?.route?.text !== route) {
+      else if (modeChanged || state.wishing || state.liked?.route?.text !== route) {
         chooseComposed(route, name?.slice(0, NAME_LENGTH), "link"); // a hand-made long name is cut, not refused
       }
     } else if (state.measures.some(wishable)) {

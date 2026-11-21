@@ -3791,6 +3791,19 @@ def test_a_hike_link_opened_from_a_wish_has_the_weights_it_names(browser, server
     assert page.evaluate("location.hash") == "#hike=1002&month=7&w=highest:30"
 
 
+def test_a_link_to_the_hike_liked_before_a_wish_leaves_the_wish(browser, server) -> None:
+    page = open_page(browser, server, Api(WISHABLE), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_role("button", name="No particular hike in mind?").click()
+
+    page.evaluate("id => { location.hash = `#hike=${id}&month=7`; }", RIDGE_WALK_ID)
+    page.wait_for_function("() => !state.wishing")
+
+    assert page.get_by_text("Chosen: Ridge Walk").is_visible()
+    assert page.get_by_label("Weather month").input_value() == "7"
+    assert page.evaluate("location.hash") == f"#hike={RIDGE_WALK_ID}&month=7"
+
+
 # ---------- units: km and metres, or miles and feet ----------
 
 FOOT_M, MILE_M = 0.3048, 1609.344
