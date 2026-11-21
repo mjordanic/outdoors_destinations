@@ -48,6 +48,7 @@ const COMPOSE_ZOOM = 13; // designing a hike shows the trail segments from this 
 const JUNCTION_PX = 8; // a click this near a junction's dot is for the junction, not the segment under it
 const MAX_COMPOSED_M = 100000; // the longest hike the server measures (trailgraph.MAX_WALK_M)
 const SHORTEST_HIKE_M = 1000; // the shortest catalog hike
+const FAR_PARKING_M = 2_000; // a hike starting further from a car park starts on the trail (Half Dome Trail, 4.6 km)
 const ROUND_TRIP_M = 50; // a hike ending this near its start is a round trip, its way back a short step (catalog.GAP_JOIN_M)
 const NAME_LENGTH = 120; // the longest name of a composed hike (web.NAME_LENGTH)
 const SEGMENT_LINE = { color: "#2563eb", weight: 3, opacity: 0.75 };
@@ -1185,6 +1186,8 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
         : hike.source && hike.source.id !== "osm" ? `<span><a class="hike-link" href="${likedHash(hike)}" title="This address opens this hike">Link to this hike</a></span>`
         : `<span><a href="https://www.openstreetmap.org/relation/${hike.id}" target="_blank" rel="noopener">OpenStreetMap relation ${hike.id}</a> · <a class="hike-link" href="${likedHash(hike)}" title="This address opens this hike">Link to this hike</a></span>`}
     </div>
+    ${hike.name_note ? `<p class="hint name-note">${escapeHtml(hike.name_note)}</p>` : ""}
+    ${hike.parking_m > FAR_PARKING_M ? `<p class="hint parking-note">It starts ${fmt.km(hike.parking_m)} from the nearest car park in a straight line, on the trail: the walk to its start is not counted.</p>` : ""}
     ${hike.line ? '<p class="hike-actions"><button type="button" class="secondary share-hike">Share</button> <button type="button" class="secondary download-gpx">Download GPX</button> <span class="share-note" role="status" hidden></span></p>' : ""}
     ${gap ? `<p class="hint gpx-note">${escapeHtml(gap)}</p>` : ""}
     ${scoreLine}

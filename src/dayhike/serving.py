@@ -703,10 +703,13 @@ def export_serving(
                 row[10] or osm_source_ref(row[0], row[6], json.loads(row[7] or "[]"), row[8]),
                 row[11],
                 row[12],
+                row[13],
             )
+            # The nearest car park to the Trailhead (AmenityFact), so a hike that starts on the trail, far from one, says so.
             for row in catalog.execute(
                 "SELECT d.id, d.name, d.name_origin, d.difficulty, t.latitude, t.longitude, "
-                f"{built}, {source}, {source_url}, {commons} FROM dayhikes d JOIN trailheads t ON t.dayhike_id = d.id ORDER BY d.id"
+                f"{built}, {source}, {source_url}, {commons}, a.nearest_m FROM dayhikes d JOIN trailheads t ON t.dayhike_id = d.id "
+                f"LEFT JOIN amenity_facts a ON a.dayhike_id = d.id AND a.kind = 'parking' ORDER BY d.id"
             )
         ]
         attribution = dict(catalog.execute("SELECT key, value FROM catalog_meta"))["attribution"]
@@ -852,7 +855,7 @@ def _write_hikes(
             " id INTEGER PRIMARY KEY, name TEXT NOT NULL, name_origin TEXT NOT NULL,"
             " sac_scale TEXT, walk_m REAL, line TEXT, elevation BLOB, climb_m REAL, descent_m REAL,"
             " points BLOB NOT NULL, kind TEXT NOT NULL, parts TEXT, route TEXT,"
-            " source TEXT NOT NULL, source_ref TEXT NOT NULL, source_url TEXT, commons_contributors INTEGER);"
+            " source TEXT NOT NULL, source_ref TEXT NOT NULL, source_url TEXT, commons_contributors INTEGER, parking_m REAL);"
             "CREATE VIRTUAL TABLE hike_boxes USING rtree(id, south, north, west, east)"
         )
         starts = range(0, len(hikes), _HIKE_CHUNK)
@@ -861,7 +864,7 @@ def _write_hikes(
         build = partial(_hike_chunk, geometry_store_path_for(catalog_path), hikes, line_kinds, trailhead_kinds, sources, dem_of)
         for (rows, boxes), start in zip(parallel_iter(build, starts), starts):
             db.executemany(
-                "INSERT INTO hikes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows
+                "INSERT INTO hikes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows
             )
             db.executemany("INSERT INTO hike_boxes VALUES (?, ?, ?, ?, ?)", boxes)
             if progress is not None:
@@ -918,7 +921,7 @@ def _hike_chunk(
     finally:
         geo.close()
     return (
-        [(*row[:9], zlib.compress(json.dumps(row[-1], ensure_ascii=False).encode()), *row[9:16]) for row in rows],
+        [(*row[:9], zlib.compress(json.dumps(row[-1], ensure_ascii=False).encode()), *row[9:17]) for row in rows],
         boxes,
     )
 
@@ -1542,6 +1545,7 @@ class ServingData:
             # An export from before Commons photos has no column: the page shows none.
             self._has_photos = "photos" in columns
             self._has_commons = "commons_contributors" in columns
+            self._has_parking = "parking_m" in columns
         # One string of every folded name between newlines: str.find walks it in C.
         self._haystack = "\n" + "\n".join(self._folded) + "\n"
         self._starts = np.cumsum([1] + [len(name) + 1 for name in self._folded[:-1]])
@@ -1760,9 +1764,15 @@ class ServingData:
         chord, i = tree.query(_unit(lat, lon)[0], distance_upper_bound=2 * math.sin(LANDMARK_TOWN_M / (2 * EARTH_RADIUS_M)))
         return (*towns[i], 2 * EARTH_RADIUS_M * math.asin(chord / 2)) if math.isfinite(chord) else None
 
-    def _region(self, row: int) -> str | None:
-        """Where a hike starts, as the town nearest its Trailhead and its country ("Bovec, SI"); None with no town near."""
-        return self._place_near(*map(float, self.trailheads[row]))
+    def _region(self, row: int, name: str) -> str | None:
+        """Where a hike starts, as the town nearest its Trailhead and its country ("Bovec, SI"); None with no town near.
+        A name that says the place it starts near (ADR-0068: "Wicklow Way near Clonegal") puts that place
+        first when the town is another, so the two agree ("Clonegal, Bunclody, IE")."""
+        region = self._place_near(*map(float, self.trailheads[row]))
+        place = named_place(name)
+        if region is None or place is None or region.startswith(f"{place}, "):
+            return region
+        return f"{place}, {region}"
 
     def _place_near(self, lat: float, lon: float) -> str | None:
         """The town nearest a point and its country ("Bovec, SI"); None with no town near."""
@@ -1819,7 +1829,7 @@ class ServingData:
                 # One way, what makes it multi-day (ADR-0056), and where it starts: twins of a name told apart
                 "walk_m": _value(self._one_way_m[row]),
                 "multi_day": self.multi_day(row),
-                "region": self._region(row),
+                "region": self._region(row, names[int(self.store.ids[row])][0]),
             }
             for row in rows
         ]
@@ -1872,6 +1882,7 @@ class ServingData:
             source = "source, source_ref" if self._has_source else f"'{SOURCE_OSM}', NULL"
             source += ", source_url" if self._has_source_url else ", NULL"
             source += ", commons_contributors" if self._has_commons else ", NULL"
+            source += ", parking_m" if self._has_parking else ", NULL"
             selected = db.execute(
                 "SELECT name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points, "
                 f"kind, parts, route, {source}{', photos' if self._has_photos else ''} FROM hikes WHERE id = ?",
@@ -1882,7 +1893,7 @@ class ServingData:
             *selected, photos_json = selected
         (
             name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m,
-            points, kind, parts, route, source, source_ref, source_url, commons,
+            points, kind, parts, route, source, source_ref, source_url, commons, parking_m,
         ) = selected
         if source_ref is None:
             source_ref = osm_source_ref(dayhike_id, kind, json.loads(parts or "[]"), route)
@@ -1891,13 +1902,16 @@ class ServingData:
             "id": dayhike_id,
             "name": _shown_name(dayhike_id, name, name_origin),
             "name_origin": name_origin,
+            "name_note": name_note(name),
             "sac_scale": sac_scale,
             "trailhead": [float(v) for v in self.trailheads[row]],
             "walk_m": walk_m,
             "multi_day": self.multi_day(row),
-            "region": self._region(row),
+            "region": self._region(row, name),
             # Distinct Commons uploaders near the line (#170): shown, never scored; None if never counted.
             "commons_contributors": commons,
+            # Metres from its Trailhead to the nearest car park in a straight line; None with none within 20 km.
+            "parking_m": parking_m,
             "emergency": self.emergency(*map(float, self.trailheads[row]), row),
             "border_emergency": self.border_emergency(row),
             **self._climb(row, (climb_m, descent_m), return_to_start),
@@ -2023,12 +2037,14 @@ class ServingData:
             "route": {"text": str(route), "start": walk.start, "segments": walk.segments, "steps": walk.steps},
             "name": name or self._proposed_name(walk, labels),
             "name_origin": "hiker" if name else "proposed",
+            "name_note": None,  # the Hiker's own name, or one proposed from its trails (ADR-0037)
             "sac_scale": walk.sac_scale,
             "trailhead": [float(lat[0]), float(lon[0])],
             "walk_m": walk_m,
             "multi_day": walk_m > MULTI_DAY_M,
             "region": self._place_near(float(lat[0]), float(lon[0])),
             "commons_contributors": None,  # counted for Catalog DayHikes only (ADR-0064)
+            "parking_m": None,  # a drawn hike starts where the Hiker chose
             "emergency": self.emergency(float(lat[0]), float(lon[0])),
             "border_emergency": None,  # borders are checked for Catalog DayHikes only
             "climb_m": climb_m,
@@ -2775,6 +2791,43 @@ def _in_chunks(db: sqlite3.Connection, query: str, values: list) -> list[tuple]:
         batch = values[start : start + 900]
         rows += db.execute(query.format(",".join("?" * len(batch))), batch).fetchall()
     return rows
+
+
+_NAMED_PLACE = re.compile(r"^.+ near (?P<place>[^()]+?)(?P<brackets>(?: \([^()]*\))*)$")
+
+
+def named_place(name: str) -> str | None:
+    """The place a hike's name says it starts near ("Hike near Háj (JK11)": "Háj"), or None:
+    the "near {place}" ingest adds (ADR-0017, ADR-0066, ADR-0068), after any brackets of codes."""
+    found = _named(name)
+    return found["place"] if found else None
+
+
+def _named(name: str) -> re.Match | None:
+    found = _NAMED_PLACE.match(name)
+    # A DayStage is named after its tour ("Hike near Fidje, stage 1: to Vegusdal", ADR-0040), not its own start.
+    return found if found and ", stage " not in found["place"] else None
+
+
+def name_note(name: str) -> str | None:
+    """How this site made a hike's name, for a name it made (ADR-0068): "Hike near {place}" when its
+    source names it nothing that says where it is, "near {place}" added to its own name, and what the
+    brackets after hold, a code from its source or a number; None for a name as its source gives it."""
+    found = _named(name)
+    if found is None:
+        return None
+    place = found["place"]
+    if name.startswith("Hike near "):
+        note = f"Named by this site after {place}, the place nearest where it starts: its source gives it no name that says where it is."
+    else:
+        note = f"“near {place}” is added by this site: {place} is the place nearest where it starts."
+    for code in re.findall(r"\(([^()]*)\)", found["brackets"]):
+        note += (
+            f" “({code})” is its number in its source, or tells it apart from other hikes of the same name."
+            if code.isdigit()
+            else f" “{code}” is the name its source gives it, a code."
+        )
+    return note
 
 
 def _shown_name(dayhike_id: int, name: str, origin: str) -> str:

@@ -975,6 +975,74 @@ def test_a_hike_says_the_town_and_country_it_starts_near(placed: ServingData, da
     assert data.search("Valley Path")[0]["region"] is None  # an export without places names none
 
 
+def _renamed(catalog_path: Path, out: Path, names: dict[int, str]) -> ServingData:
+    """A placed export whose hikes have the ``names`` ingest's naming would give them."""
+    directory = export_serving(catalog_path, out, geonames_path=CITIES)
+    with sqlite3.connect(directory / "hikes.sqlite") as db:
+        db.executemany("UPDATE hikes SET name = ? WHERE id = ?", [(name, i) for i, name in names.items()])
+    return ServingData(directory)
+
+
+def test_a_hike_named_near_a_place_says_that_place_where_it_starts_then_the_town(
+    catalog_path: Path, tmp_path: Path
+) -> None:
+    # Ingest names the place nearest the Trailhead, a hamlet as well as a town ("Wicklow Way near Clonegal");
+    # the town nearest it, for where the hike is, can be another (Bunclody).
+    renamed = _renamed(catalog_path, tmp_path / "out", {1002: "Valley Path near Planina", 1001: "Hike near Ogulin (3)"})
+    [valley] = [hike for hike in renamed.search("Valley Path") if hike["id"] == 1002]
+
+    assert valley["region"] == renamed.detail(1002)["region"] == "Planina, Ogulin, HR"
+    assert renamed.search("Hike near Ogulin")[0]["region"] is None  # Ridge Walk starts near no town
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Hike near Ogulin (JK11)",  # the town it starts near, named once
+        "Hike near Planina, stage 2: Vrh – Ogulin",  # a stage of a tour that starts elsewhere
+        "Hike near Planina (P+ (P – P+))",  # a code that holds brackets of its own
+    ],
+)
+def test_a_hike_whose_name_names_no_other_start_says_the_town(catalog_path: Path, tmp_path: Path, name: str) -> None:
+    renamed = _renamed(catalog_path, tmp_path / "out", {1002: name})
+
+    assert renamed.detail(1002)["region"] == "Ogulin, HR"
+
+
+@pytest.mark.parametrize(
+    ("name", "note"),
+    [
+        (
+            "Hike near Planina (JK11)",
+            "Named by this site after Planina, the place nearest where it starts: its source gives it no name "
+            "that says where it is. “JK11” is the name its source gives it, a code.",
+        ),
+        (
+            "Valley Path near Planina (2)",
+            "“near Planina” is added by this site: Planina is the place nearest where it starts. “(2)” is its "
+            "number in its source, or tells it apart from other hikes of the same name.",
+        ),
+        ("Valley Path", None),
+    ],
+)
+def test_a_name_this_site_made_says_how(catalog_path: Path, tmp_path: Path, name: str, note: str | None) -> None:
+    renamed = _renamed(catalog_path, tmp_path / "out", {1002: name})
+
+    assert renamed.detail(1002)["name_note"] == note
+
+
+def test_a_hike_says_how_far_its_start_is_from_the_nearest_car_park(data: ServingData, tmp_path: Path, export: Path) -> None:
+    # Ridge Walk's car park is 400 m due north of its Trailhead; none is within 20 km of Valley Path's.
+    assert data.detail(RIDGE_WALK_ID)["parking_m"] == pytest.approx(400, abs=1)
+    assert data.detail(1002)["parking_m"] is None
+
+    older = tmp_path / "older"
+    shutil.copytree(export, older)
+    with sqlite3.connect(older / "hikes.sqlite") as db:
+        db.execute("ALTER TABLE hikes DROP COLUMN parking_m")
+    assert ServingData(older).detail(RIDGE_WALK_ID)["parking_m"] is None  # an export from before has none
+
+
 def test_a_hike_longer_than_a_multi_day_length_one_way_is_said_to_be_multi_day(
     data: ServingData, monkeypatch: pytest.MonkeyPatch
 ) -> None:

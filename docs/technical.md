@@ -2393,7 +2393,7 @@ ElevationProfile at 128 equal steps in metres, the metres it climbs and
 descends in the walking direction (export format 2), and the amenity points the
 Measures count (WaterSources, Huts, restaurants, Shelters and Viewpoints in the
 Corridor, Peaks within 2 km, parking and restaurants within 500 m of the
-Trailhead) with their OSM names, its `source`, `source_ref` (ADR-0060) and `source_url` (ADR-0062), plus an R*Tree of each simplified line's
+Trailhead) with their OSM names, its `source`, `source_ref` (ADR-0060) and `source_url` (ADR-0062), `parking_m` (the nearest car park, ADR-0068), plus an R*Tree of each simplified line's
 bounding box for the map picker (export format 3), and, when the Catalog has a
 TrailGraph, `trailgraph.sqlite`: its Segments with a simplified line and the
 metres each climbs either way, the Junctions, amenity points and sampled
@@ -2536,7 +2536,11 @@ excluded and month, giving the score a Ranking would show for `b` with `a` as
 the Seed and every Measure's score. Every hike the API lists (search, Landmarks, a map box,
 detail, compose and a Ranking's DayHike rows) has `multi_day`, longer than 40 km one way (ADR-0056), and its
 one-way `walk_m`; those of search, Landmarks, a Ranking, a detail and compose also have `region`, the nearest town
-within 30 km of its start and that town's country ("Igls, AT"; null without `places.sqlite`).
+within 30 km of its start and that town's country ("Igls, AT"; null without `places.sqlite`), after the place
+its name says it starts near when that is another ("Clonegal, Bunclody, IE", ADR-0068).
+A detail also has `name_note`, how this site made its name (null for a name as its source gives it), and
+`parking_m`, metres from its Trailhead to the nearest car park in a straight line (null with none within 20 km
+or from an export before it).
 A detail and compose also have `emergency`, the row of `src/dayhike/data/emergency.csv` for
 the country the hike starts in (`country`, `name`, `numbers`, `rescue`, `rescue_url`, `how`,
 `sources`, `notes`): the Trailhead's in `countries.npy`, else the nearest town's; null with neither.
