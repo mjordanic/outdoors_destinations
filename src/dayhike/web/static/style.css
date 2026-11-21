@@ -148,6 +148,7 @@ svg text { font-size: 11px; fill: var(--muted); }
 #results-table th, #results-table td { padding: 5px 6px; border-bottom: 1px solid #eef0ec; white-space: nowrap; }
 #results-table thead th { background: #f3f6f2; position: sticky; top: 0; font-weight: 600; }
 #results-table th.measure { writing-mode: vertical-rl; transform: rotate(180deg); font-weight: 500; height: 160px; vertical-align: bottom; cursor: help; }
+#results-table:not(.show-measures) th.measure, #results-table:not(.show-measures) td.cell { display: none; }
 #results-table th.measure.excluded { color: var(--nodata); }
 #results-table td.name, #results-table th.name { position: sticky; left: 0; background: #fff; max-width: 220px; overflow: hidden; text-overflow: ellipsis; text-align: left; }
 #results-table thead th.name { background: #f3f6f2; }
