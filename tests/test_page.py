@@ -1657,8 +1657,8 @@ def test_a_distance_limit_alone_or_with_the_drive_time_is_asked(browser, server)
 
     page.get_by_label("Max km, straight line", exact=True).uncheck()
     page.get_by_label("Max drive hours", exact=True).uncheck()
-    page.get_by_role("button", name="Find similar").click()
-    page.locator("#status").get_by_text("Tick Max drive hours, Max km or both.").wait_for()
+    assert page.get_by_role("button", name="Find similar").is_disabled()
+    assert page.locator("#find-why").inner_text() == "Tick Max drive hours, Max km or both."
 
 
 def test_round_and_small_max_km_values_are_valid_in_the_box(browser, server) -> None:
@@ -2651,7 +2651,7 @@ def test_a_starting_place_set_after_a_find_says_the_list_is_from_before(browser,
     assert page.locator("#results-stale").is_visible()
 
 
-def test_a_find_the_page_refuses_says_so_beside_the_list_it_leaves(browser, server) -> None:
+def test_find_waits_and_says_why_while_every_weight_is_0_and_the_list_before_is_marked_stale(browser, server) -> None:
     api = Api({})
     page = open_page(browser, server, api, hash=f"#hike={RIDGE_WALK_ID}")
     page.get_by_text("Chosen: Ridge Walk").wait_for()
@@ -2660,10 +2660,58 @@ def test_a_find_the_page_refuses_says_so_beside_the_list_it_leaves(browser, serv
     for row in page.locator(".weight:visible input[type=range]").all():
         row.fill("0")
 
+    find = page.get_by_role("button", name="Find similar")
+    assert find.is_disabled()
+    assert page.locator("#find-why").inner_text() == "Give at least one measure a weight above 0."
+    assert "stale" in page.locator("#results").get_attribute("class")
+    assert len(api.ranked) == asked
+
+    page.get_by_label("Length weight, 0 to 100").fill("50")
+    assert find.is_enabled()
+    assert page.locator("#find-why").inner_text() == ""
+
+
+@pytest.mark.parametrize(("typed", "says"), [("0", "Max hours is from 0.5 to"), ("99", "Max hours is from 0.5 to")])
+def test_find_waits_and_says_why_while_the_drive_hours_are_wrong(browser, server, typed, says) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.locator("#drive-on").check()
+    page.locator("#hours-on").check()
+    find = page.get_by_role("button", name="Find similar")
+
+    page.locator("#hours").fill(typed)
+
+    assert find.is_disabled()
+    assert page.locator("#find-why").inner_text().startswith(says)
+
+    page.locator("#hours").fill("2")
+    assert find.is_enabled()
+    assert page.locator("#find-why").inner_text() == ""
+
+
+def test_find_waits_while_a_drive_limit_is_asked_but_neither_hours_nor_km_is_ticked(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.locator("#drive-on").check()
+    page.locator("#hours-on").uncheck()
+    page.locator("#km-on").uncheck()
+
+    assert page.get_by_role("button", name="Find similar").is_disabled()
+    assert page.locator("#find-why").inner_text() == "Tick Max drive hours, Max km or both."
+
+
+def test_a_find_the_page_refuses_says_so_beside_the_list_it_leaves(browser, server) -> None:
+    api = Api({})
+    page = open_page(browser, server, api, hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+    asked = len(api.ranked)
+    page.locator("#drive-on").check()  # no starting place set
+
     page.get_by_role("button", name="Find similar").click()
 
     stale = page.locator("#results-stale")
-    stale.get_by_text("This search was not run: Give at least one measure a weight above 0.").wait_for()
+    stale.get_by_text("This search was not run: Set a starting place.").wait_for()
     assert "The list below is from before." in stale.inner_text()
     assert "error" in stale.get_attribute("class")
     assert "stale" in page.locator("#results").get_attribute("class")
@@ -3178,6 +3226,51 @@ def test_enter_picks_only_an_exact_name_and_else_leaves_the_list_open_saying_so(
 
     page.get_by_text("Chosen: Ridge Walk").wait_for()
     assert "(Enter picked the hike with exactly that name)" in page.locator("#liked-name").inner_text()
+
+
+@pytest.mark.parametrize(
+    ("typed", "says"),
+    [("a", "Type at least 2 letters"), ("  ", "Type at least 2 letters"), ("x" * 300, "A search takes up to 100 characters")],
+)
+def test_a_search_too_short_or_too_long_says_so_and_drops_the_list_before(browser, server, typed, says) -> None:
+    page = open_page(browser, server, Api({}))
+    page.route(f"{server}/api/search?*", lambda route: route.fulfill(json={"results": SEARCHED}))
+    page.route(f"{server}/api/landmarks?*", lambda route: route.fulfill(json={"results": []}))
+    search = page.locator("#search")
+    search.fill("ridge")
+    page.locator("#suggestions li[role=option]").first.wait_for()
+
+    # Set as a script does: a typed or pasted text stops at the box's maxlength.
+    search.evaluate("(box, text) => { box.value = text; box.dispatchEvent(new Event('input', { bubbles: true })); }", typed)
+
+    page.locator("#suggestions").get_by_text(says).wait_for()
+    assert page.locator("#suggestions li[role=option]").count() == 0
+    search.press("Enter")  # still says so
+    assert page.locator("#suggestions").get_by_text(says).is_visible()
+
+
+def test_the_two_letter_note_goes_as_soon_as_the_query_is_long_enough(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+    page.route(f"{server}/api/search?*", lambda route: None)  # held: the search never comes back
+    page.route(f"{server}/api/landmarks?*", lambda route: None)
+    search = page.locator("#search")
+    search.press_sequentially("r")
+    page.locator("#suggestions").get_by_text("Type at least 2 letters").wait_for()
+
+    search.press_sequentially("i")
+
+    assert page.locator("#suggestions").get_by_text("Type at least 2 letters").count() == 0
+
+
+def test_enter_in_the_search_box_with_one_hike_found_picks_it(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+    page.route(f"{server}/api/search?*", lambda route: route.fulfill(json={"results": SEARCHED[:1]}))
+    page.route(f"{server}/api/landmarks?*", lambda route: route.fulfill(json={"results": []}))
+
+    page.locator("#search").fill("ridg")
+    page.locator("#search").press("Enter")
+
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
 
 
 def test_find_and_a_picked_hike_bring_their_card_into_view_on_a_phone(browser, server) -> None:
