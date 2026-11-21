@@ -2537,8 +2537,10 @@ the Seed and every Measure's score. Every hike the API lists (search, Landmarks,
 detail, compose and a Ranking's DayHike rows) has `multi_day`, longer than 40 km one way (ADR-0056), and its
 one-way `walk_m`; those of search, Landmarks, a Ranking, a detail and compose also have `region`, the nearest town
 within 30 km of its start and that town's country ("Igls, AT"; null without `places.sqlite`), after the place
-its name says it starts near when that is another ("Clonegal, Bunclody, IE", ADR-0068).
-A detail also has `name_note`, how this site made its name (null for a name as its source gives it), and
+its name says it starts near when that is another ("Clonegal, Bunclody, IE", ADR-0068); an OSM name says no such
+place unless it is a "Hike near {place}" placeholder.
+A detail also has `name_note`, how this site made its name (null for a name as its source gives it, and for an
+OSM name other than "Hike near {place}"), and
 `parking_m`, metres from its Trailhead to the nearest car park in a straight line (null with none within 20 km
 or from an export before it).
 A detail and compose also have `emergency`, the row of `src/dayhike/data/emergency.csv` for

@@ -11,7 +11,7 @@ import pytest
 
 from dayhike import Catalog, build_catalog, build_similarity, rank_dayhikes
 from dayhike import serving
-from dayhike.catalog import Origin
+from dayhike.catalog import NAME_ORIGIN_OSM_NAME, NAME_ORIGIN_PLACE, Origin
 from dayhike.db import scoped
 from dayhike.regions import load_region
 from dayhike.serving import (
@@ -975,11 +975,13 @@ def test_a_hike_says_the_town_and_country_it_starts_near(placed: ServingData, da
     assert data.search("Valley Path")[0]["region"] is None  # an export without places names none
 
 
-def _renamed(catalog_path: Path, out: Path, names: dict[int, str]) -> ServingData:
-    """A placed export whose hikes have the ``names`` ingest's naming would give them."""
+def _renamed(catalog_path: Path, out: Path, names: dict[int, str], origin: str = NAME_ORIGIN_PLACE) -> ServingData:
+    """A placed export whose hikes have the ``names`` ingest's naming would give them, from ``origin``."""
     directory = export_serving(catalog_path, out, geonames_path=CITIES)
     with sqlite3.connect(directory / "hikes.sqlite") as db:
-        db.executemany("UPDATE hikes SET name = ? WHERE id = ?", [(name, i) for i, name in names.items()])
+        db.executemany(
+            "UPDATE hikes SET name = ?, name_origin = ? WHERE id = ?", [(name, origin, i) for i, name in names.items()]
+        )
     return ServingData(directory)
 
 
@@ -1014,12 +1016,12 @@ def test_a_hike_whose_name_names_no_other_start_says_the_town(catalog_path: Path
     [
         (
             "Hike near Planina (JK11)",
-            "Named by this site after Planina, the place nearest where it starts: its source gives it no name "
+            "Named by this site after Planina, a place near where it starts: its source gives it no name "
             "that says where it is. “JK11” is the name its source gives it, a code.",
         ),
         (
             "Valley Path near Planina (2)",
-            "“near Planina” is added by this site: Planina is the place nearest where it starts. “(2)” is its "
+            "“near Planina” is added by this site: Planina is a place near where it starts. “(2)” is its "
             "number in its source, or tells it apart from other hikes of the same name.",
         ),
         ("Valley Path", None),
@@ -1029,6 +1031,24 @@ def test_a_name_this_site_made_says_how(catalog_path: Path, tmp_path: Path, name
     renamed = _renamed(catalog_path, tmp_path / "out", {1002: name})
 
     assert renamed.detail(1002)["name_note"] == note
+
+
+def test_an_osm_name_with_its_own_near_is_not_said_to_be_made_by_this_site(catalog_path: Path, tmp_path: Path) -> None:
+    renamed = _renamed(catalog_path, tmp_path / "out", {1002: "Circular walk near Ambleside"}, NAME_ORIGIN_OSM_NAME)
+    [walk] = renamed.search("Circular walk")
+
+    assert renamed.detail(1002)["name_note"] is None
+    assert walk["region"] == renamed.detail(1002)["region"] == "Ogulin, HR"
+
+
+def test_an_osm_code_renamed_to_a_placeholder_says_this_site_named_it(catalog_path: Path, tmp_path: Path) -> None:
+    renamed = _renamed(catalog_path, tmp_path / "out", {1002: "Hike near Planina (JK11)"}, NAME_ORIGIN_OSM_NAME)
+
+    assert renamed.detail(1002)["name_note"] == (
+        "Named by this site after Planina, a place near where it starts: its source gives it no name "
+        "that says where it is. “JK11” is the name its source gives it, a code."
+    )
+    assert renamed.detail(1002)["region"] == "Planina, Ogulin, HR"
 
 
 def test_a_hike_says_how_far_its_start_is_from_the_nearest_car_park(data: ServingData, tmp_path: Path, export: Path) -> None:

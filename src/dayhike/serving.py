@@ -83,6 +83,7 @@ from dayhike.catalog import (
     KIND_EXTERNAL,
     KIND_RELATION,
     MAX_CAR_SPEED_MS,
+    NAME_ORIGIN_OSM_NAME,
     NAME_ORIGIN_SYNTHETIC,
     MatrixClient,
     Origin,
@@ -1764,12 +1765,12 @@ class ServingData:
         chord, i = tree.query(_unit(lat, lon)[0], distance_upper_bound=2 * math.sin(LANDMARK_TOWN_M / (2 * EARTH_RADIUS_M)))
         return (*towns[i], 2 * EARTH_RADIUS_M * math.asin(chord / 2)) if math.isfinite(chord) else None
 
-    def _region(self, row: int, name: str) -> str | None:
+    def _region(self, row: int, name: str, origin: str) -> str | None:
         """Where a hike starts, as the town nearest its Trailhead and its country ("Bovec, SI"); None with no town near.
         A name that says the place it starts near (ADR-0068: "Wicklow Way near Clonegal") puts that place
         first when the town is another, so the two agree ("Clonegal, Bunclody, IE")."""
         region = self._place_near(*map(float, self.trailheads[row]))
-        place = named_place(name)
+        place = named_place(name, origin)
         if region is None or place is None or region.startswith(f"{place}, "):
             return region
         return f"{place}, {region}"
@@ -1821,7 +1822,7 @@ class ServingData:
                 "name": names[int(self.store.ids[row])][0],
                 "length_m": _value(store.column("length_m")[row]),
                 "elevation_gain_m": _value(store.column("elevation_gain_m")[row]),
-                **self._climb(row, names[int(self.store.ids[row])][1:], return_to_start),
+                **self._climb(row, names[int(self.store.ids[row])][1:3], return_to_start),
                 "highest_m": _value(store.column("highest_m")[row]),
                 "difficulty_rank": _value(store.column("difficulty_rank")[row]),
                 "round_trip": _value(store.column("round_trip")[row]),
@@ -1829,7 +1830,7 @@ class ServingData:
                 # One way, what makes it multi-day (ADR-0056), and where it starts: twins of a name told apart
                 "walk_m": _value(self._one_way_m[row]),
                 "multi_day": self.multi_day(row),
-                "region": self._region(row, names[int(self.store.ids[row])][0]),
+                "region": self._region(row, *names[int(self.store.ids[row])][::3]),
             }
             for row in rows
         ]
@@ -1859,11 +1860,11 @@ class ServingData:
             for i, name, origin, walk_m, line in found
         ], False
 
-    def _names(self, ids: list[int]) -> dict[int, tuple[str, float | None, float | None]]:
-        """Name, climb and descent (metres, walking direction) per DayHike id."""
+    def _names(self, ids: list[int]) -> dict[int, tuple[str, float | None, float | None, str]]:
+        """Name, climb, descent (metres, walking direction) and name origin per DayHike id."""
         with scoped(self._db()) as db:
             return {
-                dayhike_id: (_shown_name(dayhike_id, name, origin), climb_m, descent_m)
+                dayhike_id: (_shown_name(dayhike_id, name, origin), climb_m, descent_m, origin)
                 for dayhike_id, name, origin, climb_m, descent_m in db.execute(
                     f"SELECT id, name, name_origin, climb_m, descent_m FROM hikes WHERE id IN ({','.join('?' * len(ids))})",
                     ids,
@@ -1902,12 +1903,12 @@ class ServingData:
             "id": dayhike_id,
             "name": _shown_name(dayhike_id, name, name_origin),
             "name_origin": name_origin,
-            "name_note": name_note(name),
+            "name_note": name_note(name, name_origin),
             "sac_scale": sac_scale,
             "trailhead": [float(v) for v in self.trailheads[row]],
             "walk_m": walk_m,
             "multi_day": self.multi_day(row),
-            "region": self._region(row, name),
+            "region": self._region(row, name, name_origin),
             # Distinct Commons uploaders near the line (#170): shown, never scored; None if never counted.
             "commons_contributors": commons,
             # Metres from its Trailhead to the nearest car park in a straight line; None with none within 20 km.
@@ -2796,31 +2797,34 @@ def _in_chunks(db: sqlite3.Connection, query: str, values: list) -> list[tuple]:
 _NAMED_PLACE = re.compile(r"^.+ near (?P<place>[^()]+?)(?P<brackets>(?: \([^()]*\))*)$")
 
 
-def named_place(name: str) -> str | None:
+def named_place(name: str, origin: str) -> str | None:
     """The place a hike's name says it starts near ("Hike near Háj (JK11)": "Háj"), or None:
-    the "near {place}" ingest adds (ADR-0017, ADR-0066, ADR-0068), after any brackets of codes."""
-    found = _named(name)
+    the "near {place}" ingest adds (ADR-0017, ADR-0066, ADR-0068), after any brackets of codes.
+    An OSM name other than "Hike near ..." may hold its own "near" ("Circular walk near Ambleside"): None."""
+    found = _named(name, origin)
     return found["place"] if found else None
 
 
-def _named(name: str) -> re.Match | None:
+def _named(name: str, origin: str) -> re.Match | None:
+    if origin == NAME_ORIGIN_OSM_NAME and not name.startswith("Hike near "):
+        return None
     found = _NAMED_PLACE.match(name)
     # A DayStage is named after its tour ("Hike near Fidje, stage 1: to Vegusdal", ADR-0040), not its own start.
     return found if found and ", stage " not in found["place"] else None
 
 
-def name_note(name: str) -> str | None:
+def name_note(name: str, origin: str) -> str | None:
     """How this site made a hike's name, for a name it made (ADR-0068): "Hike near {place}" when its
     source names it nothing that says where it is, "near {place}" added to its own name, and what the
     brackets after hold, a code from its source or a number; None for a name as its source gives it."""
-    found = _named(name)
+    found = _named(name, origin)
     if found is None:
         return None
     place = found["place"]
     if name.startswith("Hike near "):
-        note = f"Named by this site after {place}, the place nearest where it starts: its source gives it no name that says where it is."
+        note = f"Named by this site after {place}, a place near where it starts: its source gives it no name that says where it is."
     else:
-        note = f"“near {place}” is added by this site: {place} is the place nearest where it starts."
+        note = f"“near {place}” is added by this site: {place} is a place near where it starts."
     for code in re.findall(r"\(([^()]*)\)", found["brackets"]):
         note += (
             f" “({code})” is its number in its source, or tells it apart from other hikes of the same name."

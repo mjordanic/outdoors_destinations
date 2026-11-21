@@ -1043,7 +1043,7 @@ def test_a_feature_neither_hike_has_mapped_shows_a_dash_and_says_it_is_not_compa
 
 
 def test_a_hike_card_says_how_the_site_made_its_name(browser, server) -> None:
-    note = "Named by this site after Planina, the place nearest where it starts: its source gives it no name that says where it is."
+    note = "Named by this site after Planina, a place near where it starts: its source gives it no name that says where it is."
 
     def renamed(route) -> None:
         route.fulfill(json={**route.fetch().json(), "name": "Hike near Planina (JK11)", "name_note": note})
