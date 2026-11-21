@@ -548,8 +548,9 @@ function measuredBack(hike) {
 // The search settings on the left as an address's parts, so a shared link or a reload opens the same
 // search (ADR-0054): "&oneway", "&strict", "&month=1", "&w=length:50,hut_along:100" (the weights moved
 // from their defaults; a wish carries its own), "&adv" (Advanced search open), "&from=46.05,14.5",
-// "&place=Ljubljana%2C%20SI", "&hours=2", "&km=50" (only hikes near a starting place), "&group=3"
-// (both in km whatever the page shows) and "&units=imperial" (miles and feet).
+// "&place=Ljubljana%2C%20SI", "&hours=2", "&km=50" (only hikes near a starting place), "&regions=us"
+// (the regions ticked, while not every one is), "&group=3" (both in km whatever the page shows) and
+// "&units=imperial" (miles and feet).
 function modeHash() {
   const parts = [];
   if (!returnToStart()) parts.push("oneway");
@@ -572,6 +573,8 @@ function modeHash() {
     if ($("#hours-on").checked && !$("#hours-on").disabled) parts.push(`hours=${encodeURIComponent($("#hours").value)}`);
     if ($("#km-on").checked) parts.push(`km=${encodeURIComponent(typedKm("#km"))}`);
   }
+  const boxes = regionBoxes(), ticked = boxes.filter((box) => box.checked);
+  if (ticked.length < boxes.length) parts.push(`regions=${ticked.map((box) => box.value).join(",")}`);
   const group = $("#group-km").value.trim();
   if (group) parts.push(`group=${encodeURIComponent(typedKm("#group-km"))}`);
   // Miles and feet always; km and m only where the browser's locale would show miles, so a shared
@@ -661,6 +664,10 @@ function applySettings(parts, weights) {
       setOrigin({ ...from, label });
     }
   }
+  if (parts.has("regions")) {
+    const named = (decoded(parts.get("regions")) ?? "").toLowerCase().split(",");
+    for (const box of regionBoxes()) box.checked = named.includes(box.value);
+  }
   const group = Number(parts.get("group"));
   if (parts.has("group")) {
     if (group >= 0.1 && group <= 50) fill($("#group-km"), group, String(kmShown(group)));
@@ -691,6 +698,8 @@ function resetSettings() {
     else $(id).value = value;
     $(id).checked = checked;
   }
+  for (const box of regionBoxes()) box.checked = true;
+  syncRegions();
   $("#group-km").value = "";
 }
 
@@ -1931,6 +1940,9 @@ function syncFind() {
   if (drive) wrong.push(drive);
   const group = groupProblem();
   if (group) wrong.push(group);
+  syncRegions();
+  const region = regionProblem();
+  if (region) wrong.push(region);
   $("#find").disabled = none || ranking || (busy && held === chosen) || wrong.length > 0;
   $("#find-why").textContent = none && !busy && !ranking
     ? `Choose a hike first: search for one by name or select one on the map${$("#wish-on").hidden ? "" : ", or describe the one you want"}.`
@@ -2890,6 +2902,7 @@ function setOrigin(origin, found = false) {
   pick.focus({ center: [origin.lat, origin.lon] });
   $("#origin-found").textContent = `Start: ${origin.label} (${origin.lat.toFixed(4)}, ${origin.lon.toFixed(4)})`;
   markStale();
+  syncFind();
   if (found) syncAddress();
 }
 
@@ -3014,6 +3027,54 @@ function rankBasis() {
   return state.wishing ? "wish" : state.liked;
 }
 
+// ---------- region choice ----------
+
+// The region checkboxes, one per region of ``/api/info`` (``regions``), every one ticked: anywhere, the
+// default. A catalog of one region shows none (ADR-0074).
+function buildRegions() {
+  const regions = state.info.regions ?? [];
+  $("#regions").hidden = regions.length < 2;
+  $("#region-boxes").innerHTML = regions.length < 2 ? "" : regions.map(({ name, label }) =>
+    `<label class="check"><input type="checkbox" class="region" value="${escapeHtml(name)}" checked autocomplete="off"> ${escapeHtml(label)}</label>`).join("");
+}
+
+function regionBoxes() {
+  return [...document.querySelectorAll("#region-boxes input.region")];
+}
+
+// Whether the starting place decides where the hikes are: "Only hikes near a starting place" with a place,
+// typed as lat, lon or found. The region choice then does not apply (ADR-0074).
+function placeDecides() {
+  return $("#drive-on").checked && Boolean(parseLatLon($("#origin").value) || state.origin);
+}
+
+// The region choice greyed out, saying why, while the starting place decides; its ticks stay as they are.
+function syncRegions() {
+  const off = placeDecides();
+  $("#regions").disabled = off;
+  $("#regions-hint").hidden = !off;
+}
+
+// The regions a Ranking keeps to, or null: every one ticked (anywhere), or the starting place decides.
+function chosenRegions() {
+  const boxes = regionBoxes();
+  if (placeDecides() || boxes.every((box) => box.checked)) return null;
+  return boxes.filter((box) => box.checked).map((box) => box.value);
+}
+
+// The regions ``names`` as a sentence names them: "Europe", "the United States".
+function regionsText(names) {
+  const labels = state.info.regions.filter((region) => names.includes(region.name)).map((region) => region.named);
+  return labels.length > 1 ? `${labels.slice(0, -1).join(", ")} and ${labels.at(-1)}` : labels.join("");
+}
+
+// What is wrong with the region choice, or null: Find waits while no region is ticked.
+function regionProblem() {
+  const boxes = regionBoxes();
+  if (!boxes.length || placeDecides() || boxes.some((box) => box.checked)) return null;
+  return `Tick ${boxes.map((box) => box.parentElement.textContent.trim()).join(", ")} or both.`;
+}
+
 // What is wrong with the drive limits as set, or null: Find waits for it and says so (not the starting place,
 // which a search for an address may still be setting).
 function driveProblem() {
@@ -3073,6 +3134,11 @@ async function findSimilar() {
       place = typed ? typed.label : origin.label;
       if ($("#hours-on").checked) query.max_hours = Number($("#hours").value);
       if ($("#km-on").checked) query.max_km = limitKm("#km");
+    }
+    const regions = chosenRegions(); // null while the starting place decides
+    if (regions) {
+      if (!regions.length) throw new Error(regionProblem());
+      query.regions = regions;
     }
     const group = groupProblem();
     if (group) throw new Error(group);
@@ -3195,9 +3261,11 @@ function renderResults() {
   $("#selected").hidden = true;
   // The limits named with their starting place: a limit kept from an earlier search is plain to see.
   const limits = [body.max_hours && `a ${body.max_hours} h drive`, body.max_km && limitText(body.max_km)].filter(Boolean).join(" and ");
-  const considered = body.reachable == null
-    ? `${state.info.dayhikes.toLocaleString("en")} hikes`
-    : `${body.reachable.toLocaleString("en")} hikes within ${limits} of ${state.asked.place}`;
+  const considered = body.reachable != null
+    ? `${body.reachable.toLocaleString("en")} hikes within ${limits} of ${state.asked.place}`
+    : body.in_regions != null
+      ? `${body.in_regions.toLocaleString("en")} hikes in ${regionsText(body.regions)}`
+      : `${state.info.dayhikes.toLocaleString("en")} hikes`;
   const mode = body.return_to_start ? "each with its way back to the start"
     : tourOneWay() ? "each one way, as a multi-day route is compared" : "each one way";
   const loopRows = shown.some((result) => [result, ...result.versions].some((row) => row.route));
@@ -3218,8 +3286,10 @@ function renderResults() {
     : "";
   const tied = pool.filter((result) => result.score === pool[0]?.score).length;
   const ties = tied > 1 ? ` The best ${tied} areas match equally well.` : "";
+  const kept = body.regions
+    ? ` Kept to ${regionsText(body.regions)}, the best matches can score lower than the best anywhere.` : "";
   $("#results-note").textContent = shown.length
-    ? `${state.query.wish ? "Closest to the hike you want" : `Like “${state.liked.name}”`}, out of ${considered}${loopRows ? " and loops composed near the best of them" : ""}, ${mode}.${picked}${ties} Click a row to see it.${composed}${searched}${versions}`
+    ? `${state.query.wish ? "Closest to the hike you want" : `Like “${state.liked.name}”`}, out of ${considered}${loopRows ? " and loops composed near the best of them" : ""}, ${mode}.${kept}${picked}${ties} Click a row to see it.${composed}${searched}${versions}`
     : `No hike matched, out of ${considered}. Try a longer drive, a longer distance or other weights.`;
 
   showFilters();
@@ -3258,6 +3328,13 @@ function showFilters() {
   const chips = [];
   if (body.max_hours) chips.push([`Within a ${body.max_hours} h drive of ${place}`, () => dropLimit("#hours-on")]);
   if (body.max_km) chips.push([`Within ${limitText(body.max_km)} of ${place}`, () => dropLimit("#km-on")]);
+  if (body.regions) {
+    chips.push([`In ${regionsText(body.regions)}`, () => {
+      for (const box of regionBoxes()) box.checked = true;
+      syncAddress();
+      findSimilar();
+    }]);
+  }
   if (body.month) {
     chips.push([`Weather in ${MONTHS[body.month - 1]}`, () => {
       $("#month").value = "";
@@ -3428,10 +3505,11 @@ function notePoor() {
   if (note.hidden) return;
   const like = state.query.wish ? "what you want" : "this hike";
   const limits = [body.max_hours && `a ${body.max_hours} h drive`, body.max_km && limitText(body.max_km)].filter(Boolean).join(" and ");
-  const near = limits ? `within ${limits} of ${state.asked.place}` : "";
+  const near = limits ? `within ${limits} of ${state.asked.place}` : body.regions ? `in ${regionsText(body.regions)}` : "";
+  const wider = limits ? "Try a longer drive or distance, or other weights." : "Tick another region, or try other weights.";
   note.textContent = weak === 0
     ? `Weak matches: the best of these scores ${rows[0].score.toFixed(3)}, below the ${typical} of a typical pair of random hikes, so ${near
-      ? `nothing ${near} is much like ${like}. Try a longer drive or distance, or other weights.`
+      ? `nothing ${near} is much like ${like}. ${wider}`
       : `no hike is much like ${like} under these weights. Try other weights.`}`
     : `From #${weak + 1} down, these score below the ${typical} of a typical pair of random hikes: weak matches${near ? `, as little else ${near} is much like ${like}` : ""}.`;
 }
@@ -3650,6 +3728,7 @@ async function start() {
     <strong>Measure cells:</strong> ${escapeHtml(state.scoreHelp.measure)} ${helpButton("measures")}`;
   scoreHelp.listen();
   buildWeights();
+  buildRegions();
   $("#wish-on").hidden = !state.measures.some(wishable);
   syncFind();
   $("#wish-on").addEventListener("click", () => {
@@ -3719,7 +3798,8 @@ async function start() {
     syncFind(); // a wish box folded away asks nothing
   });
   $("#drive-on").addEventListener("change", (event) => { $("#drive").hidden = !event.target.checked; markStale(); });
-  $("#origin").addEventListener("input", () => { placed++; state.origin = null; state.missed = null; $("#origin-found").textContent = ""; markStale(); });
+  $("#origin").addEventListener("input", () => { placed++; state.origin = null; state.missed = null; $("#origin-found").textContent = ""; markStale(); syncFind(); });
+  $("#region-boxes").addEventListener("change", () => { markStale(); syncFind(); syncAddress(); });
   for (const limit of ["#drive-on", "#hours-on", "#hours", "#km-on", "#km"]) {
     $(limit).addEventListener("input", markStale);
     $(limit).addEventListener("input", syncFind);

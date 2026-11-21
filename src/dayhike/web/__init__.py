@@ -37,6 +37,7 @@ import threading
 import time
 import unicodedata
 import urllib.error
+from typing import Literal
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -66,6 +67,7 @@ from dayhike.serving import (
     GROUP_SHARE,
     MEASURE_GROUPS,
     MEASURE_INFO,
+    REGIONS,
     SCORE_HELP,
     TYPICAL_PAIR,
     WISH_DISPLAY,
@@ -290,6 +292,8 @@ class RankRequest(Weighted):
     origin: Place | None = None
     max_hours: float | None = Field(default=None, gt=0, le=MAX_DRIVE_HOURS)
     max_km: float | None = Field(default=None, gt=0, le=MAX_KM)  # straight line from origin to a hike's start
+    # Only hikes starting in these (a RegionChoice, ADR-0074); none: every hike. Not with an origin, which decides alone.
+    regions: list[Literal["europe", "us"]] | None = Field(default=None, min_length=1)
     loops: bool = False  # SuggestedLoops too, only on request (ADR-0028)
     # Hikes starting this near a better one are its versions; None follows the limits (ADR-0032).
     # At least 0.1 km, so the rows after those shown leave the rows shown out.
@@ -322,6 +326,8 @@ class RankRequest(Weighted):
     def _one_seed(self) -> RankRequest:
         if sum(given is not None for given in (self.seed, self.composed, self.wish)) != 1:
             raise ValueError("give one of a DayHike, a composed hike or a wish")
+        if self.regions is not None and self.origin is not None:
+            raise ValueError("give regions or an origin, not both: hikes near a starting place are wherever it is")
         return self
 
     def given_weights(self) -> dict[str, float]:
@@ -709,6 +715,8 @@ def create_app(
             "compose": data.trailgraph is not None,
             "max_drive_hours": MAX_DRIVE_HOURS,
             "max_km": MAX_KM,
+            # The RegionChoice: the regions this Catalog has hikes in; ``named`` is how a sentence names one (ADR-0074).
+            "regions": [{"name": name, "label": REGIONS[name][0], "named": REGIONS[name][1]} for name in data.regions],
             "results": RESULTS,
             "max_rows": MAX_ROWS,
             # The page draws its rows from a pool of this many with probability rising as exp(score / t) (ADR-0047).
@@ -825,6 +833,9 @@ def create_app(
         near = None if body.max_km is None else (origin, body.max_km * 1000)
         group_m = group_radius_m(body.max_hours, body.max_km) if body.group_km is None else body.group_km * 1000
         seed = seed_of(body.seed, body.composed) if body.wish is None else body.wish
+        if body.regions is not None and not set(body.regions) <= set(data.regions):
+            raise HTTPException(400, f"this catalog has hikes in {', '.join(data.regions)} only")
+        in_regions = None if body.regions is None else data.region_rows(body.regions)
         tab = request.headers.get(TAB_HEADER, "")
         turn = rankings.enter(client_key(request), tab if TAB_NAME.fullmatch(tab) else "", RANK_WAIT_S)
         if turn == "own":
@@ -852,7 +863,7 @@ def create_app(
                 seed,
                 weights,
                 month=body.month,
-                allowed_rows=None if hours is None else sorted(hours),
+                allowed_rows=in_regions if hours is None else sorted(hours),
                 limit=POOL,
                 return_to_start=body.return_to_start,
                 reach=reach,
@@ -890,6 +901,8 @@ def create_app(
             "loops": body.loops,
             "max_hours": body.max_hours,
             "max_km": body.max_km,
+            "regions": body.regions,
+            "in_regions": None if in_regions is None else len(in_regions),  # the hikes starting there
             "group_km": round(group_m / 1000, 3),
             "after": len(body.after),
             "draw": body.draw,

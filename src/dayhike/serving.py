@@ -68,7 +68,7 @@ import time
 import unicodedata
 import zipfile
 import zlib
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 from functools import partial
@@ -217,6 +217,12 @@ LANDMARK_NEAR_M = 2_000.0  # a GeoNames Landmark is on the hikes passing this cl
 LANDMARK_FAR_M = 10_000.0  # ... else, with none, on those passing this close: a big lake's shore, a summit no trail reaches
 LANDMARK_MERGE_M = 1_500.0  # a GeoNames peak this near an OSM Peak of one of its names is that Peak, under all its names
 MULTI_DAY_M = 40_000.0  # a hike longer than this one way is a multi-day route (ADR-0056)
+# The RegionChoice a Ranking can keep to, by where a hike starts: the United States west of this
+# longitude, Europe east of it. It runs through the Atlantic, west of Europe's westernmost islands (the
+# Azores, 31° W) and east of the United States (67° W), so no hike is near it (ADR-0074).
+REGION_SPLIT_LON = -40.0
+# Name: its label, and how a sentence names it; west of the split last.
+REGIONS = {"europe": ("Europe", "Europe"), "us": ("United States", "the United States")}
 LANDMARK_HIKES = 5  # the hikes a Landmark lists, nearest first
 LANDMARK_TOWN_M = 30_000.0  # a Landmark is told apart by the nearest town this close
 _HIKE_CHUNK = 2_000
@@ -1568,6 +1574,9 @@ class ServingData:
         self.countries = np.load(countries) if countries.is_file() else None
         borders = self.directory / "borders.npy"
         self.borders = np.load(borders) if borders.is_file() else None
+        self._west = np.asarray(self.trailheads[:, 1]) < REGION_SPLIT_LON  # in the United States (REGIONS)
+        has = {"europe": not self._west.all(), "us": bool(self._west.any())}
+        self.regions = [name for name in REGIONS if has[name]]  # the RegionChoice's names this Catalog has hikes in
 
     def _db(self) -> sqlite3.Connection:
         return sqlite3.connect(self._db_uri, uri=True)
@@ -1837,6 +1846,16 @@ class ServingData:
         hike crosses or starts near (``borders.npy``); None for a hike near none, or without it."""
         code = str(self.borders[row]) if self.borders is not None else ""
         return emergency_services().get(code)
+
+    def region_rows(self, names: Collection[str]) -> np.ndarray:
+        """The rows (``trailheads.npy`` order) of the hikes starting in any of the regions ``names``
+        (``REGIONS``), for a Ranking's ``allowed_rows`` (ADR-0074)."""
+        keep = np.zeros(len(self._west), dtype=bool)
+        if "us" in names:
+            keep |= self._west
+        if "europe" in names:
+            keep |= ~self._west
+        return np.flatnonzero(keep)
 
     def multi_day(self, row: int) -> bool:
         """Whether a hike is a multi-day route: longer than ``MULTI_DAY_M`` one way (ADR-0056)."""

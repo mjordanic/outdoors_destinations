@@ -9,6 +9,7 @@ import itertools
 import json
 import math
 import re
+import shutil
 import socket
 import threading
 import time
@@ -2861,6 +2862,150 @@ def test_find_waits_and_says_why_while_the_grouping_radius_is_wrong(browser, ser
     assert page.locator("#find-why").inner_text() == ""
     radius.fill("")
     assert find.is_enabled()
+
+
+@pytest.fixture(scope="module")
+def two_regions_server(data: ServingData, tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    """The test export with every hike but the Ridge Walk and the Valley Path moved 120° west, into the
+    United States, as a Europe and US build is (ADR-0069)."""
+    directory = tmp_path_factory.mktemp("two-regions") / "web-serving"
+    shutil.copytree(data.directory, directory)
+    trailheads = np.load(directory / "trailheads.npy")
+    for row in set(range(len(trailheads))) - {data.row_of(RIDGE_WALK_ID), data.row_of(1002)}:
+        trailheads[row, 1] -= 120.0
+    np.save(directory / "trailheads.npy", trailheads)
+    yield from serve(create_app(ServingData(directory), lambda max_hours: Matrix(), rank_rate=1_000, api_rate=100_000))
+
+
+def _listed(page) -> list[str]:
+    return page.locator("#results-table tbody tr td.name").evaluate_all("cells => cells.map(c => c.innerText)")
+
+
+def test_the_region_choice_starts_at_every_region_beside_the_starting_place(browser, server, two_regions_server) -> None:
+    api = Api({})
+    page = open_page(browser, two_regions_server, api, hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+
+    assert page.get_by_label("Europe", exact=True).is_checked()
+    assert page.get_by_label("United States", exact=True).is_checked()
+    # In the starting place's panel, just above Find similar.
+    assert page.locator("section.panel:has(#drive-on) #regions").is_visible()
+    _find(page)
+    assert "regions" not in api.ranked[-1]
+    assert any("Valley Path" in name for name in _listed(page)) and len(_listed(page)) > 1  # both regions
+    assert "regions" not in page.evaluate("location.hash")
+    # A catalog of one region has no choice to make.
+    europe = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    europe.get_by_text("Chosen: Ridge Walk").wait_for()
+    assert not europe.locator("#regions").is_visible()
+
+
+def test_only_the_us_ticked_lists_only_us_hikes_from_a_european_hike(browser, two_regions_server) -> None:
+    api = Api({})
+    page = open_page(browser, two_regions_server, api, hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_label("Europe", exact=True).uncheck()
+
+    _find(page)
+
+    assert api.ranked[-1]["regions"] == ["us"]
+    assert _listed(page) and not any("Valley Path" in name for name in _listed(page))
+    assert "out of 2 hikes in the United States" in page.locator("#results-note").inner_text()
+    chip = page.locator("#results-filters li", has_text="In the United States")
+    chip.get_by_role("button").click()  # drops the choice and finds again, anywhere
+    page.locator("#results-table td.name", has_text="Valley Path").wait_for()
+    assert "regions" not in api.ranked[-1]
+    assert page.get_by_label("Europe", exact=True).is_checked()
+
+
+def test_a_region_choice_says_its_best_can_score_lower_than_the_best_anywhere(browser, two_regions_server) -> None:
+    page = open_page(browser, two_regions_server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    kept = "Kept to the United States, the best matches can score lower than the best anywhere."
+
+    _find(page)
+    assert "Kept to" not in page.locator("#results-note").inner_text()
+
+    page.get_by_label("Europe", exact=True).uncheck()
+    _find(page)
+    page.locator("#results-note").get_by_text(kept).wait_for()
+
+
+def test_weak_matches_kept_to_a_region_name_the_region(browser, two_regions_server) -> None:
+    page = open_page(browser, two_regions_server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_label("Europe", exact=True).uncheck()
+    page.route(f"{two_regions_server}/api/rank", Pool([0.31, 0.29]))
+    _find(page)
+
+    poor = page.locator("#results-poor")
+    assert "so nothing in the United States is much like this hike. Tick another region" in poor.inner_text()
+
+    page.unroute(f"{two_regions_server}/api/rank")
+    page.route(f"{two_regions_server}/api/rank", Pool([0.8, 0.3]))
+    page.get_by_label("Strict order").check()
+    _find(page)
+    poor.get_by_text("weak matches, as little else in the United States is much like this hike").wait_for()
+
+
+def test_find_waits_while_no_region_is_ticked(browser, two_regions_server) -> None:
+    page = open_page(browser, two_regions_server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_label("Europe", exact=True).uncheck()
+    page.get_by_label("United States", exact=True).uncheck()
+
+    assert page.get_by_role("button", name="Find similar").is_disabled()
+    assert page.locator("#find-why").inner_text() == "Tick Europe, United States or both."
+
+
+def test_a_starting_place_decides_over_the_region_choice_and_keeps_it(browser, two_regions_server) -> None:
+    api = Api({})
+    page = open_page(browser, two_regions_server, api, hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_label("Europe", exact=True).uncheck()
+    page.get_by_label("United States", exact=True).uncheck()
+    page.get_by_label("Only hikes near a starting place").check()
+    page.get_by_label("From", exact=True).fill("45.1, 15.1")
+    page.get_by_label("Max km, straight line").check()
+
+    assert page.get_by_label("Europe", exact=True).is_disabled()
+    assert page.get_by_text("The starting place is used instead").is_visible()
+    assert page.get_by_role("button", name="Find similar").is_enabled()  # no region ticked asks nothing now
+    _find(page)
+    assert api.ranked[-1]["origin"] == {"lat": 45.1, "lon": 15.1} and "regions" not in api.ranked[-1]
+    assert any("Valley Path" in name for name in _listed(page))  # near the place, in Europe
+    assert page.get_by_label("From", exact=True).input_value() == "45.1, 15.1"
+
+    assert page.get_by_label("United States", exact=True).is_disabled()
+    page.get_by_label("Only hikes near a starting place").uncheck()  # the place no longer decides
+    assert page.get_by_label("Europe", exact=True).is_enabled()
+    assert not page.get_by_text("The starting place is used instead").is_visible()
+    assert page.get_by_label("From", exact=True).input_value() == "45.1, 15.1"  # the place stays, for ticking again
+    page.get_by_label("United States", exact=True).check()
+    _find(page)
+    assert api.ranked[-1]["regions"] == ["us"] and "origin" not in api.ranked[-1]
+    page.get_by_label("Only hikes near a starting place").check()
+    page.get_by_label("From", exact=True).fill("")  # no place: the region choice applies again
+    assert page.get_by_label("Europe", exact=True).is_enabled()
+
+
+def test_a_link_carries_the_region_choice_and_a_link_without_one_ticks_every_region(browser, two_regions_server) -> None:
+    page = open_page(browser, two_regions_server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.get_by_label("Europe", exact=True).uncheck()
+
+    link = page.evaluate("location.hash")
+    assert link == f"#hike={RIDGE_WALK_ID}&regions=us"
+    friend = open_page(browser, two_regions_server, Api({}), hash=link)
+    friend.get_by_text("Chosen: Ridge Walk").wait_for()
+    assert not friend.get_by_label("Europe", exact=True).is_checked()
+    assert friend.get_by_label("United States", exact=True).is_checked()
+
+    friend.evaluate("location.hash = '#hike=1002'")  # a bare link pasted into the tab
+    friend.get_by_text("Chosen: Valley Path").wait_for()
+    assert friend.get_by_label("Europe", exact=True).is_checked()
+    assert friend.get_by_label("United States", exact=True).is_checked()
+    assert friend.evaluate("location.hash") == "#hike=1002"
 
 
 def test_find_waits_while_a_drive_limit_is_asked_but_neither_hours_nor_km_is_ticked(browser, server) -> None:
