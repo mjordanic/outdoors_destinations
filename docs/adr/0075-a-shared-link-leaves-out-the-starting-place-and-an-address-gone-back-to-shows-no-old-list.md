@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted (amends ADR-0055)
 ---
 
 # A shared link leaves out the starting place, and an address gone back to shows no list of other settings
