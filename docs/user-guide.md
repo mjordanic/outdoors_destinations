@@ -461,5 +461,6 @@ draw, or Strict order lists it just below the last row, a "List the best loop"
 button lists it: it ticks Strict order when that lists the loop, or else draws
 page 1 again (with Strict order unticked) until the loop is in it. Otherwise
 the note says why it is not listed and that there is nothing to change. The
-heading above the list names loops only while a loop is listed. When the search
-finds none, it says "no loop found, so none is listed".
+note's first sentence says "and loops composed near the best of them" only
+while a loop is listed. When the search finds none, it says "no loop found, so
+none is listed".
