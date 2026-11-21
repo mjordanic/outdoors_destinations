@@ -110,6 +110,8 @@ scores, a note above the list says from which row down the matches are weak,
 or that all are when even the best one is. This
 happens most with a tight distance or drive limit: there is simply nothing
 much like your hike nearby. A long tour can then show up on the list too.
+With one region ticked under **Hikes in**, the best matches there can score
+lower than the best anywhere, and the note above the list says so.
 
 If the hike you like has no data for a measure you weigh above 0 (on Svalbard,
 for example, it has no climb, top, landscape or temperature), a note above
