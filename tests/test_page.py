@@ -1589,7 +1589,7 @@ def test_the_page_says_what_the_ranking_does_not_list(browser, server) -> None:
     assert "later pages do not show them" in count.get_attribute("title")
     assert page.locator("#other-areas").inner_text() == "24,113 more hikes start in other areas."
     note = page.locator("#results-loops-note").inner_text()
-    assert "Loops: searched from 31 starts near the best hikes, 14 found, none listed." in note
+    assert "Loops: searched from 31 starts near the best hikes, 14 found, none listed: each walks" in note
     assert "stopped at its time limit" in note
 
 
@@ -1770,6 +1770,11 @@ def test_a_row_whose_version_is_a_loop_is_marked_composed(browser, server) -> No
             {"found": 14, "best": 0.01},
             ", 14 found, none listed: the best scores {best}, above #{n}'s {last}; it ranks after the hikes it ties with,"
             " or walks mostly the same trails as a listed hike or the hike you like, so there is nothing to change.",
+        ),
+        (
+            {"found": 3, "best": None},  # measured, but each was left out before the ranking
+            ", 3 found, none listed: each walks mostly the same trails as the hike you like or a hike in the catalog,"
+            " or starts out of reach or by a hike listed before, so there is nothing to change.",
         ),
         ({"found": 0, "best": None}, ", no loop found, so none is listed."),
     ],

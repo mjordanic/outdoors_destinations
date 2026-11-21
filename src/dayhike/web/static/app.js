@@ -3339,7 +3339,9 @@ function noteLoops() {
   const where = listed
     ? `, ${count}: ${rows.join(", ")} (marked composed)${search?.found > listed ? `; the others rank lower, ${notDrawn ? "are not drawn on this page (Redraw or tick Strict order), " : ""}or walk mostly the same trails as ${others}` : ""}`
     : search?.found
-      ? `, none listed${best != null && last ? `: the best scores ${best}, ${versus} #${state.results.length}'s ${lastScore}${why}` : ""}`
+      ? `, none listed${best == null
+        ? `: each walks mostly the same trails as ${state.query.wish ? "" : "the hike you like or "}a hike in the catalog, or starts out of reach or by a hike listed before, so there is nothing to change`
+        : last ? `: the best scores ${best}, ${versus} #${state.results.length}'s ${lastScore}${why}` : ""}`
       : "";
   $("#results-loops-note").textContent = search && state.results.length
     ? ` Loops: searched from ${search.starts} start${search.starts === 1 ? "" : "s"} near the best hikes, ${search.found ? `${search.found} found${where}` : "no loop found, so none is listed"}.${search.stopped ? " The search stopped at its time limit, so it may have missed some loops." : ""}`
