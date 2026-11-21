@@ -1712,6 +1712,7 @@ function enterPick(typed, found) {
 // like the query (ADR-0053); ``onLandmark(landmark, open)`` then moves a map there, ``open`` asking to open it.
 // ``resting()`` is what the box says for the hike chosen (null: none is): text typed and left with no
 // suggestion picked gives way to it, so the box and the chosen hike agree.
+const MAX_QUERY = 100; // the longest search a name box takes (its maxlength)
 function nameSearch(input, list, onPick, onLandmark = null, resting = () => null) {
   let timer = null, abort = null, items = [], active = -1, entered = false, listed = null, named = [];
   const option = (item, extra = null) => {
@@ -1828,10 +1829,23 @@ function nameSearch(input, list, onPick, onLandmark = null, resting = () => null
     if (picked) { pick(picked.item.id, `Enter picked ${picked.why}`); return; }
     list.insertAdjacentHTML("afterbegin", `<li class="nothing enter-note" role="presentation">${items.length} hikes match; pick one (or use ↑ ↓, then Enter).</li>`);
   };
+  // A query the search cannot take: the list of an earlier one goes and the box says why.
+  const unsearchable = (query) => {
+    const why = query.length > MAX_QUERY ? `A search takes up to ${MAX_QUERY} characters; this one has ${query.length}.`
+      : input.value !== "" && query.length < 2 ? "Type at least 2 letters to search." : null;
+    if (why === null) return false;
+    abort?.abort();
+    show([]);
+    note(why);
+    list.hidden = false;
+    input.setAttribute("aria-expanded", "true");
+    return true;
+  };
   input.addEventListener("input", () => {
     clearTimeout(timer);
     entered = false;
     const query = input.value.trim();
+    if (unsearchable(query)) return;
     if (query.length < 2) {
       abort?.abort();
       show([]);
@@ -1846,7 +1860,7 @@ function nameSearch(input, list, onPick, onLandmark = null, resting = () => null
       event.preventDefault();
       if (active >= 0) { pick(items[active].id); return; }
       const query = input.value.trim();
-      if (query.length < 2) return;
+      if (unsearchable(query) || query.length < 2) return;
       entered = true;
       if (listed === query) { if (items.length) decide(); else entered = false; } // the list of what is typed is in: decide now
       else { clearTimeout(timer); search(query); } // else once it is
@@ -1879,6 +1893,11 @@ let ranking = false; // a Ranking runs: Find waits for it
 function syncFind() {
   const none = !state.wishing && !state.liked, busy = loading !== 0 && loading === chosen;
   const wrong = state.wishing ? wishBlockers() : [];
+  if (!state.wishing) {
+    try { readWeights(); } catch (error) { wrong.push(error.message); }
+  }
+  const drive = driveProblem();
+  if (drive) wrong.push(drive);
   $("#find").disabled = none || ranking || (busy && held === chosen) || wrong.length > 0;
   $("#find-why").textContent = none && !busy && !ranking
     ? `Choose a hike first: search for one by name or select one on the map${$("#wish-on").hidden ? "" : ", or describe the one you want"}.`
@@ -2957,6 +2976,23 @@ function rankBasis() {
   return state.wishing ? "wish" : state.liked;
 }
 
+// What is wrong with the drive limits as set, or null: Find waits for it and says so (not the starting place,
+// which a search for an address may still be setting).
+function driveProblem() {
+  if (!$("#drive-on").checked) return null;
+  const byHours = $("#hours-on").checked, byKm = $("#km-on").checked;
+  if (!byHours && !byKm) return "Tick Max drive hours, Max km or both.";
+  if (byHours) {
+    const hours = Number($("#hours").value);
+    if (!(hours >= 0.5 && hours <= state.info.max_drive_hours)) return `Max hours is from 0.5 to ${state.info.max_drive_hours}.`;
+  }
+  if (byKm) {
+    const km = limitKm("#km");
+    if (!(km >= 1 && km <= state.info.max_km)) return `Max ${limitUnit()} is from ${kmShown(1)} to ${kmShown(state.info.max_km)}.`;
+  }
+  return null;
+}
+
 async function findSimilar() {
   const was = state.liked;
   if (!state.wishing && was && (was.way_back != null) !== returnToStart()) { // its measuring again failed
@@ -2985,22 +3021,12 @@ async function findSimilar() {
       if (!origin) {
         throw new Error(state.missed ? `No start: ${state.missed} was not found.` : "Set a starting place.");
       }
-      const byHours = $("#hours-on").checked, byKm = $("#km-on").checked;
-      if (!byHours && !byKm) throw new Error("Tick Max drive hours, Max km or both.");
+      const wrong = driveProblem();
+      if (wrong) throw new Error(wrong);
       query.origin = { lat: origin.lat, lon: origin.lon };
       place = typed ? typed.label : origin.label;
-      if (byHours) {
-        const hours = Number($("#hours").value);
-        if (!(hours >= 0.5 && hours <= state.info.max_drive_hours)) {
-          throw new Error(`Max hours is from 0.5 to ${state.info.max_drive_hours}.`);
-        }
-        query.max_hours = hours;
-      }
-      if (byKm) {
-        const km = limitKm("#km");
-        if (!(km >= 1 && km <= state.info.max_km)) throw new Error(`Max ${limitUnit()} is from ${kmShown(1)} to ${kmShown(state.info.max_km)}.`);
-        query.max_km = km;
-      }
+      if ($("#hours-on").checked) query.max_hours = Number($("#hours").value);
+      if ($("#km-on").checked) query.max_km = limitKm("#km");
     }
     const group = $("#group-km").value.trim();
     if (group !== "") { // empty: the server groups by the limits (ADR-0032)
@@ -3586,6 +3612,8 @@ async function start() {
   $("#origin").addEventListener("input", () => { placed++; state.origin = null; state.missed = null; $("#origin-found").textContent = ""; markStale(); });
   for (const limit of ["#drive-on", "#hours-on", "#hours", "#km-on", "#km"]) {
     $(limit).addEventListener("input", markStale);
+    $(limit).addEventListener("input", syncFind);
+    $(limit).addEventListener("change", syncFind);
     $(limit).addEventListener("input", showGroupDefault);
     $(limit).addEventListener("change", syncAddress);
   }
