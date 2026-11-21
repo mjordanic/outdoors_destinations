@@ -3988,8 +3988,13 @@ async function start() {
     }
     refreshHikeLinks();
   };
-  window.addEventListener("hashchange", () => openLinked(true));
-  openLinked(false);
+  const openAddress = (changed) => {
+    openLinked(changed);
+    advancedOpen = $("#advanced").open;
+    syncFind();
+  };
+  window.addEventListener("hashchange", () => openAddress(true));
+  openAddress(false);
 }
 
 start();

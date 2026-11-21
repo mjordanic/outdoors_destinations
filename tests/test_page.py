@@ -3885,6 +3885,23 @@ def test_opening_advanced_search_with_an_advanced_weight_after_a_search_marks_th
     page.wait_for_function("() => location.hash.includes('&adv')")
 
 
+def test_the_list_s_own_address_closing_advanced_search_keeps_the_list(browser, server) -> None:
+    address = f"#hike={RIDGE_WALK_ID}&w=lowest:50"
+    page = open_page(browser, server, Api({}), hash=address)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+    open_advanced(page)
+    page.locator("#results-stale").wait_for()
+
+    _go_to(page, address)
+
+    page.wait_for_timeout(300)  # the Advanced search toggle events have run
+    assert page.locator("#advanced").get_attribute("open") is None
+    assert page.locator("#results").is_visible()
+    assert not page.locator("#results-stale").is_visible()
+    assert "changed" not in page.locator("#status").inner_text()
+
+
 def test_an_address_of_the_list_s_own_settings_with_an_advanced_weight_keeps_the_list(browser, server) -> None:
     address = f"#hike={RIDGE_WALK_ID}&w=lowest:50&adv"
     page = open_page(browser, server, Api({}), hash=address)
