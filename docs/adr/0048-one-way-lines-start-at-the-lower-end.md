@@ -1,5 +1,5 @@
 ---
-status: accepted (amends ADR-0012 Round 2, ADR-0017, ADR-0039 and ADR-0040)
+status: accepted (amends ADR-0012 Round 2, ADR-0017, ADR-0039 and ADR-0040; DayStages walk their tour's way since ADR-0072)
 ---
 
 # A one-way line starts at its lower end
