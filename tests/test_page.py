@@ -1281,7 +1281,7 @@ def test_loops_are_suggested_only_when_the_hiker_asks_for_them(browser, server) 
     page.get_by_label("Length weight, 0 to 100").fill("10")  # the shown Ranking's query is the one asked again
     with page.expect_response(f"{server}/api/rank"):
         suggest.click()
-    page.wait_for_function("() => document.querySelector('#results-note').textContent.includes('loops composed')")
+    page.wait_for_function("() => document.querySelector('#results-loops-note').textContent.includes('Loops: searched')")
 
     assert api.ranked[-1] == {**api.ranked[-2], "loops": True}
     # Searched from a few starts only (ADR-0045), so the page says the loops are not all there are.
@@ -1506,7 +1506,7 @@ def test_redraw_draws_page_one_again_from_the_answer_and_drops_later_pages(brows
     assert _names(page) == pool.names(pool.drawn(draw, 1, answer=0), answer=0) != first
     assert page.get_by_role("button", name="Show 1 more").is_visible()
     page.get_by_role("button", name="Suggest loops near these hikes (takes a few seconds)").click()
-    page.wait_for_function("() => document.querySelector('#results-note').textContent.includes('loops composed')")
+    page.wait_for_function("() => document.querySelector('#results-loops-note').textContent.includes('Loops: searched')")
     assert pool.asked[-1]["draw"] == draw and pool.asked[-1]["loops"]  # the draw goes on with loops
 
 
@@ -1625,7 +1625,7 @@ def test_the_page_says_what_the_ranking_does_not_list(browser, server) -> None:
     assert "later pages do not show them" in count.get_attribute("title")
     assert page.locator("#other-areas").inner_text() == "24,113 more hikes start in other areas."
     note = page.locator("#results-loops-note").inner_text()
-    assert "Loops: searched from 31 starts near the best hikes, 14 found, none listed." in note
+    assert "Loops: searched from 31 starts near the best hikes, 14 found, none listed: each walks" in note
     assert "stopped at its time limit" in note
 
 
@@ -1773,6 +1773,7 @@ def test_a_row_whose_version_is_a_loop_is_marked_composed(browser, server) -> No
         first = body["results"][0]
         first["versions"] = [dict(first, versions=[], id=None, name="Loop from the hut", route={"text": "loop"})]
         body["loop_search"] = {"starts": 5, "found": 3, "listed": 1, "best": first["score"], "stopped": False}
+        body["loops"] = True
         route.fulfill(json=body)
 
     page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}&strict")
@@ -1785,21 +1786,31 @@ def test_a_row_whose_version_is_a_loop_is_marked_composed(browser, server) -> No
     assert row.locator(".composed-var").inner_text() == "composed var 2"
     assert "1 listed: #1 (marked composed)" in page.locator("#results-loops-note").inner_text()
     assert "Rows marked composed are loops" in page.locator("#results-note").inner_text()
+    assert "and loops composed near the best of them" in page.locator("#results-note").inner_text()
 
 
 @pytest.mark.parametrize(
     ("search", "says"),
     [
-        ({"found": 14, "best": -0.01}, ", 14 found, none listed: the best scores {best}, below #{n}'s {last}."),
+        (
+            {"found": 14, "best": -0.01},
+            ", 14 found, none listed: the best scores {best}, below #{n}'s {last}: the hikes listed match better,"
+            " so there is nothing to change.",
+        ),
         (
             {"found": 14, "best": -0.0001},
             ", 14 found, none listed: the best scores {last}, level with #{n}'s {last}; it ranks after the hikes it ties with,"
-            " or walks mostly the same trails as a listed hike or the hike you like.",
+            " or walks mostly the same trails as a listed hike or the hike you like, so there is nothing to change.",
         ),
         (
             {"found": 14, "best": 0.01},
             ", 14 found, none listed: the best scores {best}, above #{n}'s {last}; it ranks after the hikes it ties with,"
-            " or walks mostly the same trails as a listed hike or the hike you like.",
+            " or walks mostly the same trails as a listed hike or the hike you like, so there is nothing to change.",
+        ),
+        (
+            {"found": 3, "best": None},  # measured, but each was left out before the ranking
+            ", 3 found, none listed: each walks mostly the same trails as the hike you like or a hike in the catalog,"
+            " or starts out of reach or by a hike listed before, so there is nothing to change.",
         ),
         ({"found": 0, "best": None}, ", no loop found, so none is listed."),
     ],
@@ -1814,6 +1825,7 @@ def test_the_loop_note_says_plainly_when_no_loop_is_listed(browser, server, sear
         body["results"][-1]["score"] = last
         best = None if search["best"] is None else last + search["best"]
         body["loop_search"] = {"starts": 31, "found": search["found"], "listed": 0, "best": best, "stopped": False}
+        body["loops"] = True
         shown.update(n=len(body["results"]), last=f"{last:.3f}", best=None if best is None else f"{best:.3f}")
         route.fulfill(json=body)
 
@@ -1824,19 +1836,26 @@ def test_the_loop_note_says_plainly_when_no_loop_is_listed(browser, server, sear
 
     note = page.locator("#results-loops-note").inner_text()
     assert f"Loops: searched from 31 starts near the best hikes{says.format(**shown)}" in note
+    # The headline names no loops the list does not show, and no loop is there to list.
+    assert "loops composed" not in page.locator("#results-note").inner_text()
+    assert not page.get_by_role("button", name="List the best loop").is_visible()
 
 
 @pytest.mark.parametrize(
-    ("in_pool", "why"),
+    ("loop", "why"),
     [
-        (True, "; it is not drawn on this page: Redraw or tick Strict order."),
-        (
-            False,
-            "; it ranks after the hikes it ties with, or walks mostly the same trails as a listed hike or the hike you like.",
+        (0.6, "; this draw left it out."),
+        *(
+            (
+                loop,  # no loop in the pool, or only one scoring below the best found
+                "; it ranks after the hikes it ties with, or walks mostly the same trails as a listed hike or the hike you like,"
+                " so there is nothing to change.",
+            )
+            for loop in (None, 0.55)
         ),
     ],
 )
-def test_a_loop_above_the_rows_drawn_says_why_it_is_not_listed(browser, server, monkeypatch, in_pool, why) -> None:
+def test_a_loop_above_the_rows_drawn_says_why_it_is_not_listed(browser, server, monkeypatch, loop, why) -> None:
     monkeypatch.setattr(web, "RESULTS", 1)  # three areas: page 1 draws one row of a three-row pool
 
     def above(route) -> None:
@@ -1845,10 +1864,10 @@ def test_a_loop_above_the_rows_drawn_says_why_it_is_not_listed(browser, server, 
         for row in rows:
             row["score"] = 0.5
         shown = drawn([r["score"] for r in rows], [str(r["id"]) for r in rows], 11, 1)
-        if in_pool:  # a loop under a row the draw leaves out
+        if loop is not None:  # a loop under a row the draw leaves out
             other = rows[next(i for i in range(len(rows)) if i not in shown)]
-            other["versions"] = [dict(other, versions=[], id=None, name="Loop from the hut", score=0.6, route={"text": "loop"})]
-        body["loop_search"] = {"starts": 31, "found": 14, "listed": int(in_pool), "best": 0.6, "stopped": False}
+            other["versions"] = [dict(other, versions=[], id=None, name="Loop from the hut", score=loop, route={"text": "loop"})]
+        body["loop_search"] = {"starts": 31, "found": 14, "listed": int(loop is not None), "best": 0.6, "stopped": False}
         route.fulfill(json=body)
 
     page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", draw=11)
@@ -1856,8 +1875,43 @@ def test_a_loop_above_the_rows_drawn_says_why_it_is_not_listed(browser, server, 
     page.get_by_text("Chosen: Ridge Walk").wait_for()
     _find(page)
 
-    note = page.locator("#results-loops-note").inner_text()
-    assert f"14 found, none listed: the best scores 0.600, above #1's 0.500{why}" in note
+    note = page.locator("#results-loops-note")
+    assert f"14 found, none listed: the best scores 0.600, above #1's 0.500{why}" in note.inner_text()
+    button = page.get_by_role("button", name="List the best loop")
+    assert button.is_visible() == (loop == 0.6)
+    if loop == 0.6:  # the button lists it, its row's version marked composed
+        button.click()
+        assert "1 listed: #1 (marked composed)" in note.inner_text()
+        assert page.locator("#results-table .composed-var").count() == 1
+        assert not button.is_visible()
+
+
+def test_the_best_loop_strict_order_lists_is_listed_by_ticking_it(browser, server, monkeypatch) -> None:
+    monkeypatch.setattr(web, "RESULTS", 1)  # three areas: Strict order lists the first, a draw may not
+
+    def first_left_out(route) -> None:
+        body = route.fetch().json()
+        rows = body["results"]
+        for row in rows:
+            row["score"] = 0.5
+        keys = [str(r["id"]) for r in rows]
+        # The best row, first in the pool, is one draw 11 leaves out.
+        best = next(i for i in range(len(rows)) if drawn([0.501 if j == i else 0.5 for j in range(len(rows))], keys, 11, 1) != [i])
+        rows.insert(0, rows.pop(best))
+        rows[0]["score"] = 0.501
+        rows[0]["versions"] = [dict(rows[0], versions=[], id=None, name="Loop from the hut", route={"text": "loop"})]
+        body["loop_search"] = {"starts": 31, "found": 14, "listed": 1, "best": 0.501, "stopped": False}
+        route.fulfill(json=body)
+
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}", draw=11)
+    page.route(f"{server}/api/rank", first_left_out)
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+    assert page.locator("#results-table .composed-var").count() == 0
+
+    page.get_by_role("button", name="List the best loop").click()
+    assert page.get_by_label("Strict order").is_checked()
+    assert "1 listed: #1 (marked composed)" in page.locator("#results-loops-note").inner_text()
 
 
 def test_a_loop_tied_with_the_last_row_past_the_page_ranks_just_below_it(browser, server, monkeypatch) -> None:
@@ -1877,8 +1931,12 @@ def test_a_loop_tied_with_the_last_row_past_the_page_ranks_just_below_it(browser
     page.get_by_text("Chosen: Ridge Walk").wait_for()
     _find(page)
 
-    note = page.locator("#results-loops-note").inner_text()
-    assert "14 found, none listed: the best scores 0.500, level with #1's 0.500; it ranks just below #1." in note
+    note = page.locator("#results-loops-note")
+    assert "14 found, none listed: the best scores 0.500, level with #1's 0.500; it ranks just below #1." in note.inner_text()
+    # Strict order cannot list it: the button draws a page that does, with Strict order unticked.
+    page.get_by_role("button", name="List the best loop").click()
+    assert "1 listed: #1 (marked composed)" in note.inner_text()
+    assert not page.get_by_label("Strict order").is_checked()
 
 
 def test_a_server_that_cannot_compose_offers_no_loops(browser, server) -> None:

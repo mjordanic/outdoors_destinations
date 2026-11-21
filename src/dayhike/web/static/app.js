@@ -3187,7 +3187,8 @@ function renderResults() {
     : `${body.reachable.toLocaleString("en")} hikes within ${limits} of ${state.asked.place}`;
   const mode = body.return_to_start ? "each with its way back to the start"
     : tourOneWay() ? "each one way, as a multi-day route is compared" : "each one way";
-  const composed = shown.some((result) => [result, ...result.versions].some((row) => row.route))
+  const loopRows = shown.some((result) => [result, ...result.versions].some((row) => row.route));
+  const composed = loopRows
     ? " Rows marked composed are loops drawn from trail segments, not catalog hikes; with Select hike on map ticked, that map shows them dashed green."
     : "";
   const searched = body.loops
@@ -3205,7 +3206,7 @@ function renderResults() {
   const tied = pool.filter((result) => result.score === pool[0]?.score).length;
   const ties = tied > 1 ? ` The best ${tied} areas match equally well.` : "";
   $("#results-note").textContent = shown.length
-    ? `${state.query.wish ? "Closest to the hike you want" : `Like “${state.liked.name}”`}, out of ${considered}${body.loops ? " and loops composed near the best of them" : ""}, ${mode}.${picked}${ties} Click a row to see it.${composed}${searched}${versions}`
+    ? `${state.query.wish ? "Closest to the hike you want" : `Like “${state.liked.name}”`}, out of ${considered}${loopRows ? " and loops composed near the best of them" : ""}, ${mode}.${picked}${ties} Click a row to see it.${composed}${searched}${versions}`
     : `No hike matched, out of ${considered}. Try a longer drive, a longer distance or other weights.`;
 
   showFilters();
@@ -3285,8 +3286,40 @@ function dropLimit(box) {
   findSimilar();
 }
 
+const LOOP_DRAWS = 100; // "List the best loop" draws page 1 again at most this many times to list it
+
+// How page 1 can list the best loop of its pool it does not list: Strict order, when it would list it,
+// else the first draw after the shown one that does, with Strict order unticked; null when neither does.
+function loopListing() {
+  const pool = state.pools[0] ?? [], count = state.info.results;
+  const loopScore = (row) => Math.max(...[row, ...row.versions].filter((r) => r.route).map((r) => r.score));
+  const unshown = pool.map((_, i) => i).filter((i) => !state.results.includes(pool[i]) && loopScore(pool[i]) > -Infinity);
+  if (!unshown.length) return null;
+  const best = unshown.reduce((a, b) => (loopScore(pool[b]) > loopScore(pool[a]) ? b : a));
+  if (loopScore(pool[best]).toFixed(3) !== state.answer.loop_search?.best?.toFixed(3)) return null;
+  if (!state.strict && best < count) return { strict: true, draw: state.draw };
+  const scores = pool.map(drawScore), keys = pool.map(resultKey), t = state.info.draw.t;
+  const above = scores.filter((_, i) => i !== best).sort((a, b) => b - a);
+  if ((above[count - 1] - scores[best]) / t > Math.log(LOOP_DRAWS)) return null;
+  for (let k = 1; k <= LOOP_DRAWS; k++) {
+    const draw = (state.draw + k) >>> 0;
+    if (drawn(scores, keys, draw, count, t).includes(best)) return { strict: false, draw };
+  }
+  return null;
+}
+
+// Page 1 again, listing the best loop of its pool it left out.
+function listBestLoop() {
+  const how = loopListing();
+  if (!how) return;
+  state.draw = how.draw;
+  if (how.strict !== state.strict) setStrict(how.strict);
+  else relist();
+}
+
 // What the loop search did, of the loops in the rows shown, with their versions: which rows they are,
-// counted as rows, or, with none listed, how the best loop found scores against the rows shown.
+// counted as rows, or, with none listed, how the best loop found scores against the rows shown, and
+// either a button that lists it or why there is nothing to change.
 function noteLoops() {
   const search = state.answer.loop_search;
   const loops = state.results.map((result) => [result, ...result.versions].filter((row) => row.route).length);
@@ -3298,19 +3331,27 @@ function noteLoops() {
   const versus = Number(best) < Number(lastScore) ? "below" : best === lastScore ? "level with" : "above";
   const unshown = (state.pools[0] ?? [])
     .filter((row) => !state.results.includes(row)).flatMap((row) => [row, ...row.versions]).filter((row) => row.route);
-  const drawn = !state.strict && unshown.length > 0;
-  const why = versus === "below" ? "" : unshown.some((row) => row.score.toFixed(3) === best)
-    ? state.strict ? `; it ranks just below #${state.results.length}` : "; it is not drawn on this page: Redraw or tick Strict order"
-    : `; it ranks after the hikes it ties with, or walks mostly the same trails as ${others}`;
+  const notDrawn = !state.strict && unshown.length > 0;
+  const listing = !listed && search?.found && state.results.length ? loopListing() : null;
+  const why = listing
+    ? versus === "below" ? "" : state.strict ? `; it ranks just below #${state.results.length}` : "; this draw left it out"
+    : versus === "below" ? ": the hikes listed match better, so there is nothing to change"
+      : `; it ranks after the hikes it ties with, or walks mostly the same trails as ${others}, so there is nothing to change`;
   const count = listed === rows.length ? `${listed} listed` : `${listed} listed in ${rows.length} row${rows.length === 1 ? "" : "s"}`;
   const where = listed
-    ? `, ${count}: ${rows.join(", ")} (marked composed)${search?.found > listed ? `; the others rank lower, ${drawn ? "are not drawn on this page (Redraw or tick Strict order), " : ""}or walk mostly the same trails as ${others}` : ""}`
+    ? `, ${count}: ${rows.join(", ")} (marked composed)${search?.found > listed ? `; the others rank lower, ${notDrawn ? "are not drawn on this page (Redraw or tick Strict order), " : ""}or walk mostly the same trails as ${others}` : ""}`
     : search?.found
-      ? `, none listed${best != null && last ? `: the best scores ${best}, ${versus} #${state.results.length}'s ${lastScore}${why}` : ""}`
+      ? `, none listed${best == null
+        ? `: each walks mostly the same trails as ${state.query.wish ? "" : "the hike you like or "}a hike in the catalog, or starts out of reach or by a hike listed before, so there is nothing to change`
+        : last ? `: the best scores ${best}, ${versus} #${state.results.length}'s ${lastScore}${why}` : ""}`
       : "";
   $("#results-loops-note").textContent = search && state.results.length
     ? ` Loops: searched from ${search.starts} start${search.starts === 1 ? "" : "s"} near the best hikes, ${search.found ? `${search.found} found${where}` : "no loop found, so none is listed"}.${search.stopped ? " The search stopped at its time limit, so it may have missed some loops." : ""}`
     : "";
+  $("#list-loop").hidden = !listing;
+  $("#list-loop").title = listing && !listing.strict
+    ? "Draw page 1 again so that it lists the best loop found, with Strict order unticked"
+    : "Tick Strict order: page 1 then lists the best loop found";
 }
 
 // Rows for the results from ``from`` on, at the end of the table. A block "Show 10 more" adds is headed by
@@ -3679,6 +3720,7 @@ async function start() {
   });
   $("#redraw").addEventListener("click", redraw);
   $("#strict").addEventListener("change", (event) => setStrict(event.target.checked));
+  $("#list-loop").addEventListener("click", listBestLoop);
   // The shown Ranking again, with loops near its best hikes, though the query on the left changed since.
   $("#suggest-loops").addEventListener("click", () => rank(
     { ...state.asked.query, loops: true }, state.asked.basis, $("#results").classList.contains("stale"),
