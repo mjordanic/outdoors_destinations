@@ -1393,12 +1393,20 @@ def test_the_note_says_when_the_draw_leaves_out_the_best_match(browser, server, 
     said = "This draw leaves out the best match, scoring 0.520: Redraw, or tick Strict order to see it."
 
     page, _ = found(left_out)
-    assert said in page.locator("#results-note").inner_text()
+    note = page.locator("#results-left-out")
+    assert note.inner_text().strip() == said
     page.get_by_label("Strict order").check()
-    assert said not in page.locator("#results-note").inner_text()
+    assert note.inner_text() == ""
+
+    page, _ = found(left_out)
+    note = page.locator("#results-left-out")
+    page.get_by_role("button", name="Show 2 more").click()
+    page.locator("#results-table tbody tr[data-index]").nth(2).wait_for()
+    assert 0.52 in page.evaluate("state.results.map(r => r.score)")
+    assert note.inner_text() == ""  # Show more listed the best match
 
     page, _ = found(shown)
-    assert "leaves out the best match" not in page.locator("#results-note").inner_text()
+    assert page.locator("#results-left-out").inner_text() == ""
 
 
 def test_strict_order_lists_the_ranking_as_it_is_without_asking_again(browser, server, monkeypatch) -> None:

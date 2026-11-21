@@ -3130,13 +3130,8 @@ function renderResults() {
   $("#wish-card").hidden = true;
   $("#results-title").textContent = state.query.wish ? "Hikes closest to the one you want" : "Most similar hikes";
   const drawnPage = !state.strict && pool.length > shown.length;
-  // A best match the draw left out is named, as a Hiker reads the list as the best there is.
-  const best = pool[0];
-  const leftOut = drawnPage && shown.every((result) => result.score < best.score)
-    ? ` This draw leaves out the best match, scoring ${best.score.toFixed(3)}: Redraw, or tick Strict order to see it.`
-    : "";
   const picked = drawnPage
-    ? ` These ${shown.length} are picked from the best ${pool.length} areas, closer matches more often, so a better match can be left out, and # is a place in this list, not a rank. Each “Show ${state.info.results} more” page is drawn too. Redraw for others, or tick Strict order for the exact ranking.${leftOut}`
+    ? ` These ${shown.length} are picked from the best ${pool.length} areas, closer matches more often, so a better match can be left out, and # is a place in this list, not a rank. Each “Show ${state.info.results} more” page is drawn too. Redraw for others, or tick Strict order for the exact ranking.`
     : "";
   const tied = pool.filter((result) => result.score === pool[0]?.score).length;
   const ties = tied > 1 ? ` The best ${tied} areas match equally well.` : "";
@@ -3262,9 +3257,18 @@ function listRows(from) {
     tbody.appendChild(row);
   });
   noteLoops();
+  noteLeftOut();
   noteDraw();
   notePoor();
   pick.drawLoops();
+}
+
+// A best match no listed row scores as high as is named, as a Hiker reads the list as the best there is.
+function noteLeftOut() {
+  const best = state.pools[0][0];
+  $("#results-left-out").textContent = !state.strict && best && state.results.every((result) => result.score < best.score)
+    ? ` This draw leaves out the best match, scoring ${best.score.toFixed(3)}: Redraw, or tick Strict order to see it.`
+    : "";
 }
 
 // Rows scoring below what a typical pair of random hikes scores are weak matches: a note above the list
