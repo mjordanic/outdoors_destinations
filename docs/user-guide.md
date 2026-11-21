@@ -456,6 +456,10 @@ listed in 2 rows: #2, #5 (marked composed)". Not all 14 are listed. The others
 rank lower, are not drawn on this page (Redraw or tick Strict order shows
 them), or walk mostly the same trails as a listed hike. When none makes the
 list, the note says how the best loop found scores against the last row (below,
-level with it to three decimals, or above), and why one that scores as well is
-not listed. When the search finds none, it says "no loop found, so none is
-listed".
+level with it to three decimals, or above). When page 1 only left it out of its
+draw, or Strict order lists it just below the last row, a "List the best loop"
+button lists it: it ticks Strict order when that lists the loop, or else draws
+page 1 again (with Strict order unticked) until the loop is in it. Otherwise
+the note says why it is not listed and that there is nothing to change. The
+heading above the list names loops only while a loop is listed. When the search
+finds none, it says "no loop found, so none is listed".
