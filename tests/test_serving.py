@@ -1,7 +1,9 @@
 import dataclasses
 import json
+import shutil
 import sqlite3
 import time
+import zlib
 from pathlib import Path
 
 import numpy as np
@@ -10,6 +12,7 @@ import pytest
 from dayhike import Catalog, build_catalog, build_similarity, rank_dayhikes
 from dayhike import serving
 from dayhike.catalog import Origin
+from dayhike.db import scoped
 from dayhike.regions import load_region
 from dayhike.serving import (
     ELEVATION_POINTS,
@@ -219,11 +222,13 @@ def test_search_folds_german_ue_oe_ae_spellings() -> None:
     assert _fold("Schönau Bärental") == _fold("Schoenau Baerental")
 
 
-def test_search_relevance_puts_exact_then_prefix_then_word_starts_first() -> None:
+def test_search_relevance_puts_exact_then_prefix_then_the_query_in_order_then_word_starts_first() -> None:
     assert _relevance("triglav", "triglav", ["triglav"]) == 0
     assert _relevance("triglav north face", "triglav", ["triglav"]) == 1
-    assert _relevance("dolic - triglav", "triglav dolic", ["triglav", "dolic"]) == 2
-    assert _relevance("pod triglavom", "riglav", ["riglav"]) == 3
+    assert _relevance("tour du mont blanc", "mont blanc", ["mont", "blanc"]) == 2
+    assert _relevance("dolic - triglav", "triglav dolic", ["triglav", "dolic"]) == 3
+    assert _relevance("lac blanc from montana", "mont blanc", ["mont", "blanc"]) == 3
+    assert _relevance("pod triglavom", "riglav", ["riglav"]) == 4
 
 
 def test_search_prefix_matches_come_first(data: ServingData) -> None:
@@ -255,6 +260,75 @@ def test_search_finds_a_name_typed_with_a_typo_and_says_it_is_only_similar(data:
 def test_a_word_only_inside_a_longer_word_is_a_similar_name(data: ServingData) -> None:
     # As Rappenloch is only inside Krappenlochklamm: the name has no such word.
     assert [(hit["name"], hit["match"]) for hit in data.search("idge")] == [("Ridge Walk", "similar")]
+
+
+def _renamed(export: Path, out: Path, hikes: list[tuple[str, list[tuple[str, str, int]]]]) -> ServingData:
+    """A copy of ``export`` whose DayHikes, in id order, have these names and named
+    points: (kind, name, metres off the line)."""
+    shutil.copytree(export, out)
+    with scoped(sqlite3.connect(out / "hikes.sqlite")) as db:
+        ids = [dayhike_id for (dayhike_id,) in db.execute("SELECT id FROM hikes ORDER BY id")]
+        for dayhike_id, (name, points) in zip(ids, hikes, strict=True):
+            rows = [[kind, "line", 45.0, 15.0, 0, off_m, point, None] for kind, point, off_m in points]
+            db.execute(
+                "UPDATE hikes SET name = ?, points = ? WHERE id = ?",
+                (name, zlib.compress(json.dumps(rows).encode()), dayhike_id),
+            )
+        db.commit()
+    return ServingData(out)
+
+
+def test_search_puts_the_hike_to_the_summit_named_first_and_viewpoint_paths_named_after_it_last(
+    export: Path, tmp_path: Path
+) -> None:
+    data = _renamed(export, tmp_path / "triglav", [
+        ("Triglav View from Pri Cerkvi", [("viewpoint", "Triglav View", 5)]),
+        ("Triglavska jezera - Mala Tičarica", [("hut", "Koča pri Triglavskih jezerih", 33)]),
+        ("Triglav via Dom Planika pod Triglavom from Pri lesi", [("peak", "Mali Triglav", 448), ("peak", "Triglav", 1)]),
+        ("Kredarica via Triglavski dom na Kredarici from Trenta", [("peak", "Triglav", 988)]),
+    ])  # fmt: skip
+
+    assert [hit["name"] for hit in data.search("Triglav")] == [
+        "Triglav via Dom Planika pod Triglavom from Pri lesi",  # reaches the top of Triglav
+        "Triglavska jezera - Mala Tičarica",
+        "Triglav View from Pri Cerkvi",  # a view of it
+        "Kredarica via Triglavski dom na Kredarici from Trenta",  # passes 988 m from the top
+    ]
+
+
+def test_search_typed_to_part_of_a_summit_name_puts_the_hike_to_that_summit_first(export: Path, tmp_path: Path) -> None:
+    data = _renamed(export, tmp_path / "zugspitze", [
+        ("Zugspitzblick from P 10", [("viewpoint", "Zugspitzblick", 9)]),
+        ("Zugspitz-Blick from Mösern", [("viewpoint", "Zugspitz-Blick", 0)]),
+        ("Zugspitze from Ehrwalder Almbahn", [("peak", "Zugspitzeck", 591), ("peak", "Zugspitze", 0)]),
+        ("Zugspitzi am Gaisbach", []),
+    ])  # fmt: skip
+
+    assert [hit["name"] for hit in data.search("Zugspitz")] == [
+        "Zugspitze from Ehrwalder Almbahn",
+        "Zugspitzi am Gaisbach",
+        "Zugspitzblick from P 10",
+        "Zugspitz-Blick from Mösern",
+    ]
+
+
+def test_search_puts_names_holding_the_query_in_its_order_before_names_with_its_words_apart(
+    export: Path, tmp_path: Path
+) -> None:
+    # No hike reaches the top of Mont Blanc: the Tour du Mont Blanc is named after it.
+    data = _renamed(export, tmp_path / "mont-blanc", [
+        ("Lac Blanc from Montana", []),
+        ("Panorama Mont Blanc from Introd", [("viewpoint", "Panorama Mont Blanc", 0)]),
+        ("Petit Mont Blanc from Planay", [("viewpoint", "Petit Mont Blanc", 0)]),
+        ("Tour du Mont Blanc - Itinéraire principal", [("peak", "Mont Truc", 1277)]),
+    ])  # fmt: skip
+
+    assert [hit["name"] for hit in data.search("Mont Blanc")] == [
+        "Tour du Mont Blanc - Itinéraire principal",
+        "Petit Mont Blanc from Planay",
+        "Panorama Mont Blanc from Introd",
+        "Lac Blanc from Montana",
+    ]
 
 
 def test_names_spelled_like_the_query_come_after_every_name_with_its_words(
