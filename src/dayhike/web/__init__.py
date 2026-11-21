@@ -39,6 +39,7 @@ from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from html import escape as html_escape
+from urllib.parse import urlsplit
 from pathlib import Path
 
 import numpy as np
@@ -402,6 +403,8 @@ def site_pages(
     continents = [region.get("continent") for region in regions or [{"continent": "Europe"}]]
     europe_only = all(continent == "Europe" for continent in continents)
     covered = "Europe" if europe_only else labels_text([str(region["label"]) for region in regions])
+    if download_url and urlsplit(download_url).hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+        download_url = None  # a link only this machine can open breaks for every visitor
     pages = {}
     for name in PAGES:
         html = (STATIC_DIR / f"{name}.html").read_text(encoding="utf-8").replace("<!--analytics-->", analytics)

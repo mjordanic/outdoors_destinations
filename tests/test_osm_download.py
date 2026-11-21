@@ -138,3 +138,10 @@ def test_the_credits_page_links_the_download_only_when_its_address_is_set(servin
     assert "OpenStreetMap part" in with_link and "heights" in with_link
     assert "Download the data" not in without and "hikes-osm" not in without
     assert empty == without
+
+
+@pytest.mark.parametrize("local", ["http://127.0.0.1:8081/hikes-osm.sqlite", "http://localhost:8081/x", "http://[::1]:8081/x", "http://0.0.0.0/x"])
+def test_the_credits_page_drops_a_download_address_only_this_machine_can_reach(serving: Path, local: str) -> None:
+    page = TestClient(create_app(ServingData(serving), None, download_url=local)).get("/credits.html").text
+
+    assert "Download the data" not in page and "8081" not in page
