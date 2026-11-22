@@ -57,7 +57,7 @@ The area one build covers, as a region file (TOML in `src/dayhike/data/regions/`
 _Avoid_: area, country list, bbox (the box is one part of a Region)
 
 **DayHikeGeometry**:
-The ordered lon/lat vertices of a DayHike's main walk, starting at the Trailhead: the longest connected piece of its OSM member ways (ways a few tens of metres apart count as connected, and so do pieces a way of up to 500 m that the relation leaves out runs between, ADR-0076), each way at most once, without Leftovers. Consecutive ways meet; there is no jump between them. The similarity facts are built from it; Ranking does not read it.
+The ordered lon/lat vertices of a DayHike's main walk, starting at the Trailhead: the longest connected piece of its OSM member ways (ways a few tens of metres apart count as connected, and so do pieces a way of up to 500 m that the relation leaves out runs between, ADR-0077), each way at most once, without Leftovers. Consecutive ways meet; there is no jump between them. The similarity facts are built from it; Ranking does not read it.
 _Avoid_: path, route, trace, LineString, chain
 
 **Leftover**:
@@ -85,7 +85,7 @@ A "connect here" offer: two nearby TrailGraph points, within the snap tolerance 
 _Avoid_: shortcut, snap, gap (a gap Segment is joined automatically)
 
 **ComposedHike**:
-A walk the Hiker draws from TrailGraph Segments, from a start Junction, Segment after Segment. It may reuse a Segment, and is measured as drawn, by distance walked: its facts come from the same rules as a DayHike's, applied to the vertices walked. It has a name the Hiker may change (proposed from the trails it walks longest, each at least 30 % of it (ADR-0037), and a named place at its start). It is not stored; it is shared through its URL, which names the OSM ways it walks from OSM node to OSM node, not Junctions or Segments, so the link opens the same walk after a rebuild, and it is not in the Catalog.
+A walk the Hiker draws from TrailGraph Segments, from a start Junction, Segment after Segment. It may reuse a Segment, and is measured as drawn, by distance walked: its facts come from the same rules as a DayHike's, applied to the vertices walked. It has a name the Hiker may change (proposed as "Your hike along" the trails it walks longest, each at least 30 % of it (ADR-0037), "from" a named place at its start, so it does not read as a catalog hike of that trail). It is not stored; it is shared through its URL, which names the OSM ways it walks from OSM node to OSM node, not Junctions or Segments, so the link opens the same walk after a rebuild, and it is not in the Catalog.
 _Avoid_: custom route, user route, composed DayHike
 
 **SuggestedLoop**:
@@ -113,7 +113,7 @@ How near the start of a better row's hike a hike must start to be one of that ro
 _Avoid_: area size, cluster radius
 
 **Landmark**:
-A named place the hike search finds hikes by (ADR-0053, ADR-0055): an OSM Peak, Hut, Shelter or Viewpoint on a DayHike, a GeoNames lake, pass, mountain or ridge a DayHike passes within 2 km of (else within 10 km), or a GeoNames town or village a DayHike's Trailhead is within 5 km of; it lists its nearest DayHikes. Among equal matches the one with the most names (in other languages) comes first.
+A named place the hike search finds hikes by (ADR-0053, ADR-0055): an OSM Peak, Hut, Shelter or Viewpoint on a DayHike, a GeoNames lake, pass, mountain or ridge a DayHike passes within 2 km of (else within 10 km), or a GeoNames town or village a DayHike's Trailhead is within 5 km of; it lists its nearest DayHikes. Among equal matches the one with the most names (in other languages) comes first. One named exactly as typed leads the hike names when famous (a peak, lake, pass or ridge with 10 names or more) or the most photographed of those so named (ADR-0076).
 _Avoid_: spot, POI, place (that is the Origin's "Find place")
 
 **Hut**:
@@ -125,7 +125,7 @@ How many distinct people put geotagged photos on Wikimedia Commons within 150 m 
 _Avoid_: popularity score, fame, well-known badge
 
 **Difficulty**:
-The technical grade of a DayHike, derived from OSM `sac_scale` on member ways (the strictest grade present). With its way back it stays the DayHike's own grade (ADR-0077).
+The technical grade of a DayHike, derived from OSM `sac_scale` on member ways (the strictest grade present). With its way back it stays the DayHike's own grade (ADR-0078).
 _Avoid_: hardness, danger, exposure (those are not this field; alpine fall hazard stays inside Difficulty)
 
 **DEM**:
@@ -193,7 +193,7 @@ A DayHike whose main walk ends within 50 m of its Trailhead, so its length is th
 _Avoid_: loop (the main walk's loop includes lollipops), circular, closed route
 
 **WayBack**:
-The shortest walk from where a hike ends back to its Trailhead: nothing when it ends there, a straight step across a gap of at most 50 m, else the shortest way along the TrailGraph's trails when it is shorter than the hike walked backwards, else the hike retraced. The trail search looks only for ways back of up to 50 km; a hike with no shorter way back than that is retraced, so a long line costs no more to measure than a day hike (ADR-0035). It never crosses a Link.
+The shortest walk from where a hike ends back to its Trailhead: nothing when it ends there, a straight step across a gap of at most 50 m, else the shortest way along the TrailGraph's trails no harder than the hike (on no path whose `sac_scale` is stricter than the hike's strictest, no grade at all for a hike with none, ADR-0076) when it is shorter than the hike walked backwards, else the hike retraced. The trail search looks only for ways back of up to 50 km; a hike with no shorter way back than that is retraced, so a long line costs no more to measure than a day hike (ADR-0035). It never crosses a Link.
 _Avoid_: return route, loop closure, descent route
 
 **ReturnToStart**:

@@ -150,4 +150,4 @@ def test_a_walk_mostly_on_one_trail_is_named_after_it(naming) -> None:
     hike = data.compose(_route(path, 1, [short_link["id"], long_trail["id"]]))
 
     assert hike["walk_m"] == pytest.approx(5_150, abs=10)
-    assert hike["name"] == "Long Trail from Stone Spring"
+    assert hike["name"] == "Your hike along Long Trail from Stone Spring"

@@ -35,8 +35,9 @@ the server wakes up.
 Pick one of three ways:
 
 1. **Type its name** in the search box. A small typo is fine: "Triglov"
-   finds Triglav. When no name has every word as you typed it, the list says
-   so and marks each name that is only like it "similar name". So does a name
+   finds Triglav, "Mt Whitney" finds Mount Whitney, and a country after a
+   comma keeps to the hikes there: "Triglav, Slovenia". When no name has
+   every word as you typed it, the list says so and marks each name that is only like it "similar name". So does a name
    that holds your word only inside a longer word ("Rappenloch" in
    "Krappenlochklamm"): check that it is the hike you meant. **Enter** picks a
    hike only when one is named exactly as you typed, or it is the only hike
@@ -52,7 +53,8 @@ Pick one of three ways:
    You can also type a **peak, hut, viewpoint, lake, pass, ridge,
    town or village** the hike goes to or starts from, in any language the
    place has a name in: "Gardasee", "Lake Garda" and "Lago di Garda" all find
-   Lake Garda. Under the hike names the list then shows
+   Lake Garda. Under the hike names (above them for a famous place named
+   exactly as you typed, such as "Matterhorn") the list then shows
    "Hikes near Zugspitze (peak, near Ehrwald, AT)" and the closest
    few hikes there, each saying how near it comes: "reaches the top", "passes
    300 m from it", or for a town "starts 1.2 km from it". A hike already
@@ -64,7 +66,9 @@ Pick one of three ways:
    its middle, so a hike along the shore of a big lake can read several km. A
    typo is fine here too. When it lists only some of the hikes there, press
    **Show on map**: the map opens at that place, with every hike there to
-   click.
+   click. Where a place has too many hikes to draw, the map zooms in on it by
+   itself, a step at a time, until they show as lines; it stops as soon as you
+   move or zoom the map yourself.
 
    Each hike in the list says the town it starts near and its country ("near
    Igls, AT"), so hikes of one name are easy to tell apart. A route of several
@@ -83,16 +87,18 @@ Pick one of three ways:
    walk on. A click on another junction walks the shortest way there; a click
    on the green start dot walks back to the start. What each click did is said
    under the map, so the map stays still under your pointer. You can then use
-   that walk as your liked hike.
+   that walk as your liked hike. Unless you type a name for it, it is called
+   "Your hike along" the trails it follows most, "from" a named place at its
+   start, so it does not read as a catalog hike of that trail's name.
 
 Then press **Find similar**. You get 10 hikes from among the most similar
 (see "Why the list changes from visit to visit" below), and the page moves to
 the list. The list shows each hike's score, length and climb (and its drive
-or distance when you set one); press **Show the score of every measure** above
+or distance when you set one); on a phone the length and climb sit under the
+hike's name, so the list fits the screen. Press **Show the score of every measure** above
 it for a column per measure, and **Hide the score of every measure** to fold
-them away again. With those columns shown on a phone, the list is wider than
-the screen: a line above it says to scroll it sideways for every measure's
-score.
+them away again. Whenever the list is wider than the screen, a line above it
+says to scroll it sideways.
 
 If you change a setting after a search, or while it is still running, a line
 under **Find similar** says the list is from before your change, so you see it
@@ -184,7 +190,9 @@ the hut slider to 100. Turn Length down to 30.
   treat it as a rough guide. The limits stay set when you open another hike
   from the results, the search box or the map in the same tab, and the note
   above the results always names them, for example "within a 2 h drive of
-  Munich, DE". A fresh page, or a link opened in the tab, starts with none
+  Munich, DE". When no hike starts within the limits (a place far from
+  Europe and the contiguous United States, such as Sydney), the list says no
+  hikes are mapped there yet and what the site covers. A fresh page, or a link opened in the tab, starts with none
   unless the link names them. Leaving a hike you described for a hike you
   liked turns "Only hikes near a starting place" off; the place stays in its
   box for ticking again.
@@ -193,7 +201,10 @@ the hut slider to 100. Turn Length down to 30.
   hikes starting there. Both are ticked at first: hikes anywhere. With "Only
   hikes near a starting place" ticked and a place given, the place decides
   instead: the boxes are greyed out, keep their ticks, and count again once
-  the place is cleared or that filter is off.
+  the place is cleared or that filter is off. With both ticked, the best
+  matches of a hike often all come from its own side of the ocean; the note
+  above the list then says so and to tick only the other region to see its
+  best matches.
 - **More options.** Under the limits, this sets how close hikes must start to
   be grouped as one area (see "Reading the results" below).
 - **Units** (top of the page). Show every length and height in km and metres,
@@ -201,7 +212,8 @@ the hut slider to 100. Turn Length down to 30.
   the values you type (a wish, the distance limit, the grouping radius) all
   switch together, and a value you typed keeps its meaning. The page starts in
   miles and feet when your browser's language is US English (or Liberian or
-  Burmese); otherwise in km and metres. A shared link keeps the units it was made with.
+  Burmese); otherwise in km and metres. Temperatures show in °F with miles
+  and feet, and in °C with km and metres. A shared link keeps the units it was made with.
 
 On a phone, "2. What similar means" starts folded away; like Advanced search and
 More options, its title has an arrow and the word "show" while it is closed.

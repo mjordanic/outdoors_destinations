@@ -40,6 +40,7 @@ const API_BASE = ($('meta[name="api-base"]')?.content ?? "").replace(/\/+$/, "")
 const WAKE_AFTER_MS = 1500; // a first answer slower than this is a server starting from zero
 
 const PICK_ZOOM = 12; // the map shows hikes from this zoom on
+const PICK_FIT_MAX_ZOOM = PICK_ZOOM + 6; // a place found zooms in no further than this to fit its hikes in
 const PICK_LINE = { color: "#6b2fa3", weight: 3, opacity: 0.85 };
 const PICK_HOVER = { color: "#c2410c", weight: 5, opacity: 1 };
 const PICK_TOLERANCE_PX = 10; // a click this far off a hike's line or dot still chooses it
@@ -287,6 +288,8 @@ function setUnits(units) {
   syncFind(); // why Find waits, said in the units shown
 }
 
+const fahrenheit = (c) => c * 1.8 + 32;
+
 const fmt = {
   km: (m) => (imperial()
     ? (m < MILE_M / 10 ? `${Math.round(m / FOOT_M).toLocaleString("en")} ft` : `${(m / MILE_M).toFixed(m < 10 * MILE_M ? 1 : 0)} mi`)
@@ -297,6 +300,8 @@ const fmt = {
   // A long length in whole km or miles: "1,073 km".
   long: (m) => `${Math.round(m / (imperial() ? MILE_M : 1000)).toLocaleString("en")} ${imperial() ? "mi" : "km"}`,
   pct: (x) => `${Math.round(x * 100)} %`,
+  // A temperature, in °F with miles and feet.
+  temp: (c) => `${(imperial() ? fahrenheit(c) : c).toFixed(1)} ${imperial() ? "°F" : "°C"}`,
   yes: (x) => (x ? "yes" : "no"),
 };
 
@@ -357,7 +362,7 @@ function factText(measure, facts, month) {
     case "difficulty": return SAC[Math.round(v)] || String(v);
     case "peaks_around": return `${v}`;
     case "water_count": return v >= 3 ? "3 or more" : `${v}`;
-    case "temperature": return `${v.toFixed(1)} °C`;
+    case "temperature": return fmt.temp(v);
     // Without a month it is the average month of the whole year, not of June-August (``climate.regime``).
     case "precipitation": return `${Math.round(v)} mm / month${month ? "" : ", averaged over the year"}`;
     case "solar_radiation": return `${Math.round(v).toLocaleString("en")} kJ/m²/day`;
@@ -823,11 +828,12 @@ function stackedBar(titleText, parts, emptyText) {
   return wrap;
 }
 
-function monthBars(titleText, values, { color, unit, month, decimals = 0 }) {
+// ``shown``: a value as said in ``unit`` (°F of a temperature in °C); the bars stand on 0 of ``values`` all the same.
+function monthBars(titleText, values, { color, unit, month, decimals = 0, shown = (v) => v }) {
   const wrap = document.createElement("div");
   const title = document.createElement("h3");
   const max = Math.max(...values), min = Math.min(...values);
-  title.textContent = `${titleText} (${min.toFixed(decimals)} to ${max.toFixed(decimals)} ${unit})`;
+  title.textContent = `${titleText} (${shown(min).toFixed(decimals)} to ${shown(max).toFixed(decimals)} ${unit})`;
   wrap.appendChild(title);
   const W = 300, H = 74, T = 6, B = 16;
   const low = Math.min(0, ...values), high = Math.max(0, ...values) || 1;
@@ -839,7 +845,7 @@ function monthBars(titleText, values, { color, unit, month, decimals = 0 }) {
       x: i * bw + 2, width: bw - 4, y: Math.min(y(v), y(0)), height: Math.max(1, Math.abs(y(v) - y(0))),
       fill: color, opacity: month && month !== i + 1 ? 0.45 : 1,
     }, root);
-    svg("title", {}, rect).textContent = `${MONTHS[i]}: ${v.toFixed(decimals)} ${unit}`;
+    svg("title", {}, rect).textContent = `${MONTHS[i]}: ${shown(v).toFixed(decimals)} ${unit}`;
     svg("text", { x: i * bw + bw / 2, y: H - 3, "text-anchor": "middle" }, root).textContent = MONTHS[i][0];
   });
   svg("line", { x1: 0, x2: W, y1: y(0), y2: y(0), stroke: "#9aa39c" }, root);
@@ -859,7 +865,8 @@ function climateChart(facts, month) {
     return wrap;
   }
   wrap.append(
-    monthBars("Temperature by month", temperature, { color: "#d9534f", unit: "°C", month, decimals: 1 }),
+    monthBars("Temperature by month", temperature,
+      { color: "#d9534f", unit: imperial() ? "°F" : "°C", month, decimals: 1, shown: imperial() ? fahrenheit : undefined }),
     monthBars("Precipitation by month", series("precipitation_mm"), { color: WATER, unit: "mm", month }),
     monthBars("Solar radiation by month", series("solar_radiation"), { color: "#e9b949", unit: "kJ/m²/day", month }),
   );
@@ -1529,13 +1536,17 @@ function folded(row) {
 const wishable = (measure) => measure.wish != null;
 const yesNo = (measure) => measure.wish.kind === "yes/no";
 // A number wish is sent in the Measure's fact units; the page may show it in another, such as km for metres (ADR-0035).
-// In miles and feet a length in km is typed in miles and a height in metres in feet, rounded as typed.
-const imperialShown = (measure) => (!imperial() || measure.wish.unit !== "m" ? null
-  : measure.wish.display?.unit === "km" ? { unit: "mi", per: MILE_M, digits: 2 } : { unit: "ft", per: FOOT_M, digits: 0 });
+// In miles and feet a length in km is typed in miles, a height in metres in feet and a temperature in °C
+// in °F (``zero``: the °F of 0 °C), rounded as typed.
+const imperialShown = (measure) => (!imperial() ? null
+  : measure.wish.unit === "°C" ? { unit: "°F", per: 5 / 9, zero: 32, digits: 1 }
+    : measure.wish.unit !== "m" ? null
+      : measure.wish.display?.unit === "km" ? { unit: "mi", per: MILE_M, digits: 2 } : { unit: "ft", per: FOOT_M, digits: 0 });
 const shownUnit = (measure) => imperialShown(measure)?.unit ?? measure.wish.display?.unit ?? measure.wish.unit;
 const perShown = (measure) => imperialShown(measure)?.per ?? measure.wish.display?.per ?? 1;
-const toShown = (measure, value) => rounded(value / perShown(measure), imperialShown(measure)?.digits ?? 6);
-const toFact = (measure, value) => Math.round(value * perShown(measure) * 1e6) / 1e6;
+const zeroShown = (measure) => imperialShown(measure)?.zero ?? 0;
+const toShown = (measure, value) => rounded(value / perShown(measure) + zeroShown(measure), imperialShown(measure)?.digits ?? 6);
+const toFact = (measure, value) => Math.round((value - zeroShown(measure)) * perShown(measure) * 1e6) / 1e6;
 // A wish typed as shown, in fact units; typed at an end of its range as shown, rounded to miles or feet: that end.
 function wishFact(measure, shown) {
   const { min, max } = measure.wish;
@@ -1811,6 +1822,24 @@ function nameSearch(input, list, onPick, onLandmark = null, resting = () => null
     list.appendChild(li);
     return li;
   };
+  // A Landmark's head, saying where it is ("peak, near Lone Pine, US"), then its hikes not listed yet.
+  const landmarkOptions = (landmark) => {
+    const where = [LANDMARK_KINDS[landmark.kind] ?? landmark.kind, landmark.town && `near ${landmark.town}`, landmark.country]
+      .filter(Boolean).join(", ");
+    const similar = landmark.match === "similar" ? ' <span class="similar-tag">similar name</span>' : "";
+    const head = note(`Hikes near ${escapeHtml(landmark.name)} (${escapeHtml(where)})${similar}`, "landmark");
+    if (onLandmark) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "link";
+      button.textContent = "Show on map";
+      button.addEventListener("mousedown", (event) => { event.preventDefault(); show([]); onLandmark(landmark, true); });
+      head.appendChild(button);
+    }
+    landmark.hikes.forEach((item) => option(item, nearText(landmark, item.off_m)));
+    const more = landmark.hike_count - landmark.hikes.length;
+    if (more > 0) note(`<span class="meta">and ${more.toLocaleString("en")} more${onLandmark ? ": show them on the map" : ""}</span>`);
+  };
   const show = (found, landmarks = [], nothingFor = null) => {
     items = [];
     named = found;
@@ -1823,24 +1852,11 @@ function nameSearch(input, list, onPick, onLandmark = null, resting = () => null
         ? `<li class="nothing">No hike name, peak or place has every word of “${escapeHtml(nothingFor)}”.<span class="meta">Try a word of a trail's name, a peak, hut, lake or town, or select a hike on the map.</span></li>`
         : `<li class="nothing">No hike name has every word of “${escapeHtml(nothingFor)}”.<span class="meta">Only hike names are searched, not places; try a word of a trail's name, or select a hike on the map.</span></li>`;
     }
+    // A famous Landmark named so leads the hike names: the Matterhorn before Matterhorn Trail in Oregon (ADR-0076).
+    const leading = landmarks.filter((landmark) => landmark.leads);
+    leading.forEach(landmarkOptions);
     found.filter((item) => item.match !== "similar").forEach((item) => option(item));
-    for (const landmark of landmarks) {
-      const where = [LANDMARK_KINDS[landmark.kind] ?? landmark.kind, landmark.town && `near ${landmark.town}`, landmark.country]
-        .filter(Boolean).join(", ");
-      const similar = landmark.match === "similar" ? ' <span class="similar-tag">similar name</span>' : "";
-      const head = note(`Hikes near ${escapeHtml(landmark.name)} (${escapeHtml(where)})${similar}`, "landmark");
-      if (onLandmark) {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "link";
-        button.textContent = "Show on map";
-        button.addEventListener("mousedown", (event) => { event.preventDefault(); show([]); onLandmark(landmark, true); });
-        head.appendChild(button);
-      }
-      landmark.hikes.forEach((item) => option(item, nearText(landmark, item.off_m)));
-      const more = landmark.hike_count - landmark.hikes.length;
-      if (more > 0) note(`<span class="meta">and ${more.toLocaleString("en")} more${onLandmark ? ": show them on the map" : ""}</span>`);
-    }
+    landmarks.filter((landmark) => !landmark.leads).forEach(landmarkOptions);
     const similar = found.filter((item) => item.match === "similar");
     if (similar.length) {
       // Only names like the query: say so before the Hiker picks one for the hike they meant.
@@ -1854,7 +1870,7 @@ function nameSearch(input, list, onPick, onLandmark = null, resting = () => null
     list.hidden = items.length === 0 && !nothingFor;
     input.setAttribute("aria-expanded", String(!list.hidden));
     input.removeAttribute("aria-activedescendant"); // its option is gone
-    if (landmarks.length && onLandmark) onLandmark(landmarks[0], false);
+    if (landmarks.length && onLandmark) onLandmark(leading[0] ?? landmarks[0], false);
     if (entered && items.length) decide();
   };
   const move = (step) => {
@@ -1964,6 +1980,11 @@ function nameSearch(input, list, onPick, onLandmark = null, resting = () => null
     const rest = resting();
     if (rest !== null) input.value = rest;
     setTimeout(() => show([]), 150);
+  });
+  // A click or tap anywhere else leaves the box as Escape does, also where it leaves the focus in the box
+  // (a phone's tap on plain text can): the chosen hike's name comes back.
+  document.addEventListener("pointerdown", (event) => {
+    if (document.activeElement === input && !input.contains(event.target) && !list.contains(event.target)) input.blur();
   });
 }
 
@@ -2203,6 +2224,7 @@ const pick = {
   loops: null, // the suggested loops and the shown row's versions of the Ranking
   timer: null,
   abort: null,
+  fitting: false, // a place was just found: zoom in on it, a step at a time, until its hikes can be drawn
 
   open() {
     const card = $("#map-pick");
@@ -2217,6 +2239,8 @@ const pick = {
       const [south, west, north, east] = state.info.core ?? state.info.coverage;
       this.map.fitBounds([[south, west], [north, east]]);
       this.map.on("moveend", () => this.load());
+      // The Hiker takes the map over: it stops zooming in by itself.
+      for (const event of ["pointerdown", "wheel", "keydown"]) this.map.getContainer().addEventListener(event, () => { this.fitting = false; });
       this.map.on("click", (event) => {
         const near = this.near(event.layerPoint);
         if (near.length === 1) choose(near[0], { from: "map" });
@@ -2234,17 +2258,20 @@ const pick = {
 
   // Show a place the Hiker searched (a Landmark, or the start place) close enough to see
   // its hikes as lines: a town's hikes start within 5 km, the others pass within 2 km.
-  // With the map closed, it opens there.
+  // With the map closed, it opens there. Where a view that size holds too many hikes to draw
+  // (a dense place), it zooms in on the same centre until they can be, or to PICK_FIT_MAX_ZOOM.
   focus(at) {
     state.mapAt = at;
     if (!this.map || $("#map-pick").hidden) return;
     state.mapAt = null;
+    this.fitting = true;
     this.map.setView(at.center, at.zoom ?? PICK_ZOOM);
   },
 
   // The map follows the liked hike, or else the starting place: it opens on them, and moves to a hike
   // chosen by name while it is open, zoomed in so the hikes there show.
   follow() {
+    this.fitting = false;
     if (!this.map || $("#map-pick").hidden || compose.on) return;
     const liked = state.liked, origin = !liked && $("#drive-on").checked ? (parseLatLon($("#origin").value) || state.origin) : null;
     if (liked) this.map.setView(...viewOf(this.map, liked, PICK_ZOOM), { animate: false });
@@ -2271,6 +2298,7 @@ const pick = {
 
   close() {
     $("#map-pick").hidden = true;
+    this.fitting = false;
     clearTimeout(this.timer);
     this.abort?.abort();
   },
@@ -2309,11 +2337,17 @@ const pick = {
         if (request !== boxed || compose.on) return;
         this.draw(body.results);
         const count = body.results.length;
+        if (body.too_many && this.fitting && this.map.getZoom() < Math.min(PICK_FIT_MAX_ZOOM, this.map.getMaxZoom())) {
+          this.hint("Too many hikes in view; zooming in on the place…");
+          this.map.setZoom(this.map.getZoom() + 1, { animate: false }); // its moveend loads the hikes again
+          return;
+        }
+        this.fitting = false;
         if (body.too_many) this.hint("Too many hikes in view; zoom in further to see them as lines.");
         else if (!count) this.hint("No hikes in view; move the map.");
         else this.hint(`${count} hike${count === 1 ? "" : "s"} in view. Click a line to choose it.`);
       } catch (error) {
-        if (error.name !== "AbortError" && request === boxed) this.hint(error.message);
+        if (error.name !== "AbortError" && request === boxed) { this.fitting = false; this.hint(error.message); }
       }
     }, 250);
   },
@@ -2454,6 +2488,7 @@ const compose = {
     if (!this.layer) this.layer = L.layerGroup().addTo(pick.map);
     clearTimeout(pick.timer);
     pick.abort?.abort();
+    pick.fitting = false;
     pick.hover(null);
     pick.layer.clearLayers();
     pick.lines.clear();
@@ -3343,8 +3378,11 @@ function renderResults() {
     ? ` Kept to ${regionsText(body.regions)}, the best matches can score lower than the best anywhere.` : "";
   $("#results-note").textContent = shown.length
     ? `${state.query.wish ? "Closest to the hike you want" : `Like “${state.liked.name}”`}, out of ${considered}${loopRows ? " and loops composed near the best of them" : ""}, ${mode}.${kept}${picked}${ties} Click a row to see it.${composed}${searched}${versions}`
-    : `No hike matched, out of ${considered}. Try a longer drive, a longer distance or other weights.`;
+    : body.reachable === 0
+      ? `No hikes are mapped within ${limits} of ${state.asked.place} yet: this site covers ${state.info.covered}.`
+      : `No hike matched, out of ${considered}. Try a longer drive, a longer distance or other weights.`;
 
+  noteOneRegion();
   showFilters();
   noteUnmeasured();
   $("#results-draw").hidden = !shown.length;
@@ -3353,7 +3391,7 @@ function renderResults() {
   const measureHeads = comparedMeasures(body.return_to_start).map((m) =>
     `<th class="measure${body.weights[m.name] ? "" : " excluded"}" title="${escapeHtml(`${m.label}: ${m.description}`)}">${escapeHtml(m.label)} ${helpButton(m.name)}</th>`).join("");
   const figures = body.return_to_start ? "with the way back" : "one way";
-  table.innerHTML = `<thead><tr><th title="${drawnPage ? "Place in this list, not a rank: the rows are drawn, then listed by score. Strict order lists the exact ranking" : "Rank in the ranking"}">#</th><th class="name">Hike</th><th>Score ${helpButton("overall")}</th>${state.query.drive ? "<th>Drive</th>" : ""}${state.query.km ? '<th title="Straight line from the starting place">Distance</th>' : ""}<th title="Length, ${figures}">Length${body.return_to_start ? " with way back" : ""}</th><th title="Climb and descent, ${figures}">Up / down${body.return_to_start ? " with way back" : ""}</th>${measureHeads}</tr></thead>`;
+  table.innerHTML = `<thead><tr><th title="${drawnPage ? "Place in this list, not a rank: the rows are drawn, then listed by score. Strict order lists the exact ranking" : "Rank in the ranking"}">#</th><th class="name">Hike<span class="figure-line">Length · up / down${body.return_to_start ? " with way back" : ""}</span></th><th>Score ${helpButton("overall")}</th>${state.query.drive ? "<th>Drive</th>" : ""}${state.query.km ? '<th title="Straight line from the starting place">Distance</th>' : ""}<th class="figure" title="Length, ${figures}">Length${body.return_to_start ? " with way back" : ""}</th><th class="figure" title="Climb and descent, ${figures}">Up / down${body.return_to_start ? " with way back" : ""}</th>${measureHeads}</tr></thead>`;
   state.expanded = null;
   $("#results-columns").hidden = !shown.length;
   table.appendChild(document.createElement("tbody"));
@@ -3362,11 +3400,21 @@ function renderResults() {
   showSwipeCue();
 }
 
-// Under a table wider than its box: a cue that it scrolls sideways, to every measure's score.
+// Every region open, every row shown in one: the other's best matches score lower, so say how to see them.
+function noteOneRegion() {
+  const body = state.answer, inRegions = new Set(state.results.map((result) => result.region));
+  const other = !body.regions && body.reachable == null && inRegions.size === 1
+    ? state.info.regions.find((region) => !inRegions.has(region.name)) : null;
+  $("#results-region").textContent = other
+    ? ` All of these are in ${regionsText([...inRegions])}: tick only ${other.label} to see its best matches.` : "";
+}
+
+// Under a table wider than its box: a cue that it scrolls sideways (to every measure's score, when shown).
 function showSwipeCue() {
   const wrap = $("#results .table-wrap");
-  $("#results-swipe").hidden = $("#results").hidden || !$("#results-table").classList.contains("show-measures")
-    || wrap.scrollWidth <= wrap.clientWidth + 1;
+  $("#results-swipe").hidden = $("#results").hidden || wrap.scrollWidth <= wrap.clientWidth + 1;
+  $("#results-swipe").textContent = $("#results-table").classList.contains("show-measures")
+    ? "Scroll the table sideways for every measure's score →" : "Scroll the table sideways for more columns →";
 }
 
 // Whether the shown list is one way only because its liked hike is a multi-day route (``measuredBack``).
@@ -3613,6 +3661,7 @@ async function showMore() {
     state.pools.push(body.results);
     results.push(...pageOf(body.results));
     listRows(after.length);
+    noteOneRegion();
     showMoreButton(body);
     showSwipeCue();
     status.textContent = body.results.length ? `Done in ${(body.elapsed_ms / 1000).toFixed(1)} s.` : "No more hikes in other areas.";
@@ -3651,12 +3700,15 @@ function resultRow(result, number, open) {
   const picked = state.picked.has(result)
     ? ' <span class="picked" title="Not among the best of its ten: drawn in for variety. Strict order lists the best in order instead">picked</span>'
     : "";
-  row.innerHTML = `<td><span class="number">${number}</span>${picked}</td><td class="name" title="${escapeHtml(result.name)}"><span class="hike-name">${tag}${escapeHtml(result.name)}</span>${versions || more ? `<span class="badge-line">${versions}${more}</span>` : ""}</td>
+  const length = result.length_m != null ? fmt.km(result.length_m) : "–";
+  const climb = result.climb_m != null ? upDown(result.climb_m, result.descent_m) : "–";
+  // On a phone the Length and Up / down columns give way to this line under the name (style.css).
+  row.innerHTML = `<td><span class="number">${number}</span>${picked}</td><td class="name" title="${escapeHtml(result.name)}"><span class="hike-name">${tag}${escapeHtml(result.name)}</span>${versions || more ? `<span class="badge-line">${versions}${more}</span>` : ""}<span class="figure-line">${length} · ${climb}</span></td>
     <td class="score">${result.score.toFixed(3)}</td>
     ${drive ? `<td>${result.drive_hours.toFixed(1)} h</td>` : ""}
     ${km ? `<td>${(imperial() ? (result.distance_km * 1000) / MILE_M : result.distance_km).toFixed(1)} ${limitUnit()}</td>` : ""}
-    <td class="figure">${result.length_m != null ? fmt.km(result.length_m) : "–"}</td>
-    <td class="figure">${result.climb_m != null ? upDown(result.climb_m, result.descent_m) : "–"}</td>${cells}`;
+    <td class="figure">${length}</td>
+    <td class="figure">${climb}</td>${cells}`;
   row.addEventListener("click", open);
   row.addEventListener("keydown", (event) => {
     if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); }

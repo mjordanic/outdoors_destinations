@@ -1190,7 +1190,7 @@ def assemble_main_walk(
     different pieces within ``GAP_JOIN_M`` are joined; with ``bridges``, the
     ways of ``ways`` the relation does not list, of at most ``BRIDGE_M``, that
     run from a node of one piece to a node of another join them too, shortest
-    first (a way its mappers left out, ADR-0076). The longest piece is
+    first (a way its mappers left out, ADR-0077). The longest piece is
     walked, its dead-end tips within ``GAP_JOIN_M`` first joined in pairs
     (see ``_tip_gap_edges``). A piece whose closed loop, after setting aside
     dead ends and then shortcuts, is at least ``LOOP_SHARE`` of its length is

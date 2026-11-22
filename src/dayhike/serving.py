@@ -86,6 +86,7 @@ from dayhike.catalog import (
     NAME_ORIGIN_OSM_NAME,
     NAME_ORIGIN_SYNTHETIC,
     PLACE_RADIUS_M,
+    SAC_SCALE_RANK,
     MatrixClient,
     Origin,
     Trailhead,
@@ -157,6 +158,7 @@ from dayhike.trailgraph import (
     TrailGraph,
     WayBack,
     _unit,
+    back_rank,
     decode_coords,
     round_trip,
     way_back,
@@ -196,6 +198,13 @@ TRAILHEAD_NEAREST = 3  # parking and restaurant/cafe points kept per Trailhead
 VALHALLA_CACHE_BYTES = 256 * 1024 * 1024  # mjolnir.max_cache_size; the build default is 1 GB
 SEARCH_SCAN_CAP = 5_000  # occurrences of the scanned word a search looks at, so short queries stay fast
 SEARCH_SUMMIT_CAP = 200  # best names a search looks into for the summit or viewpoint they are named after
+FAR_PARKING_M = 2_000.0  # a hike starting further from a car park starts on the trail (Half Dome Trail, 4.6 km)
+# A Landmark of these kinds known in this many languages or more is famous: it leads the hike search (ADR-0076)
+FAMOUS_NAMES = 10
+FAMOUS_KINDS = ("peak", "lake", "pass", "ridge")
+LANDMARK_PLACE_SCAN = 500  # Landmarks a search narrowed to a country looks through for those in it
+# A word a name is often shortened to, and the word it is short for: what search compares (ADR-0076)
+SHORT_WORDS = {"mt": "mount"}
 FUZZY_MIN_LETTERS = 4  # a shorter query word is found only as typed
 FUZZY_SPELLINGS = 3  # the nearest words a word with a typo is tried as
 FUZZY_QUERIES = 6  # the respelled queries a search tries, fewest typos first
@@ -1546,7 +1555,9 @@ class ServingData:
         self.trailheads = map_npy(self.directory / "trailheads.npy")
         self._db_uri = f"file:{self.directory / 'hikes.sqlite'}?mode=ro&immutable=1"
         with scoped(self._db()) as db:
-            self._folded = [_fold(name) for (name,) in db.execute("SELECT name FROM hikes ORDER BY id")]
+            # Unshortened in one pass over them all ("\n" joined), not name by name: half a second for 900,000.
+            names = [_fold(name) for (name,) in db.execute("SELECT name FROM hikes ORDER BY id")]
+            self._folded = _unshortened("\n".join(names)).split("\n") if names else []
             columns = {row[1] for row in db.execute("PRAGMA table_info(hikes)")}
             self._has_source = "source" in columns
             self._has_source_url = "source_url" in columns
@@ -1611,22 +1622,26 @@ class ServingData:
         names that hold a word only inside a longer one (Rappenloch in
         Krappenlochklamm), are marked ``"match": "similar"``; the others
         ``"match": "words"``.
+
+        A word of ``SHORT_WORDS`` is its long word, in the query and in the
+        names: "Mt Whitney" finds Mount Whitney Trail. A query ending in a
+        country after a comma ("Triglav, Slovenia") finds the hikes starting
+        there (``_row_countries``) by the words before it.
         """
-        needle = _fold(query.strip())
-        words = needle.split()
+        needle = _unshortened(_fold(query.strip()))
         rows: list[int] = []
         if needle.isascii() and needle.isdigit():
             try:
                 rows.append(self.row_of(int(needle)))
             except KeyError:
                 pass
-        by_name = self._rows_with_words(words, needle, set(rows))
+        needle, words, by_name, there = self._words_found(needle, rows)
         by_name[:SEARCH_SUMMIT_CAP] = self._summits_first(by_name[:SEARCH_SUMMIT_CAP], needle, words)
         rows += by_name
         similar = {row for row in by_name if _relevance(self._folded[row], needle, words) == 4}
         if len(rows) < limit:
             for spelled in self._spellings.respelled(words):
-                found = self._rows_with_words(spelled, " ".join(spelled), set(rows))
+                found = self._rows_with_words(spelled, " ".join(spelled), set(rows), there)
                 rows += found
                 similar.update(found)
                 if len(rows) >= limit:
@@ -1636,21 +1651,50 @@ class ServingData:
             for row, summary in zip(rows[:limit], self._summaries(rows[:limit]), strict=True)
         ]
 
-    def _rows_with_words(self, words: list[str], needle: str, skip: set[int]) -> list[int]:
-        """Rows not in ``skip`` whose name holds every word, best first (see ``search``)."""
+    def _words_found(
+        self, needle: str, skip: Collection[int]
+    ) -> tuple[str, list[str], list[int], np.ndarray | None]:
+        """The query ``search`` matches names by, its words, the rows not in ``skip`` holding them
+        (best first), and which rows start in the country it names (None for any): the query as
+        typed, or, ending in a country after a comma, the words before it (``_place_tail``)."""
+        tail = _place_tail(needle)
+        if tail is None or self._row_countries is None:
+            needle = tail[0] if tail else needle
+            return needle, needle.split(), self._rows_with_words(needle.split(), needle, set(skip)), None
+        head, country = tail
+        there = self._row_countries == country
+        return head, head.split(), self._rows_with_words(head.split(), head, set(skip), there), there
+
+    @functools.cached_property
+    def _row_countries(self) -> np.ndarray | None:
+        """The country each row starts in: its country in ``countries.npy``, else that of the town
+        nearest its start (``_towns``); None with neither file."""
+        towns, tree = self._towns
+        if tree is None and self.countries is None:
+            return None
+        countries = np.array(self.countries if self.countries is not None else [""] * len(self.trailheads), dtype="U3")
+        missing = np.flatnonzero(countries == "")
+        if tree is not None and len(missing):
+            points = np.asarray(self.trailheads)[missing]
+            countries[missing] = [towns[i][1] for i in tree.query(_unit(points[:, 0], points[:, 1]))[1]]
+        return countries
+
+    def _rows_with_words(self, words: list[str], needle: str, skip: set[int], there: np.ndarray | None = None) -> list[int]:
+        """Rows not in ``skip`` whose name holds every word, best first (see ``search``); only those
+        ``there`` marks when given, counted toward ``SEARCH_SCAN_CAP`` alone."""
         scans = sorted({word for word in words if len(word) >= 2}, key=lambda word: (-len(word), word))
         if not scans:
             return []
         for scan in scans:
-            rows, whole = self._rows_containing(scan)
+            rows, whole = self._rows_containing(scan, there)
             if whole:
                 break
         else:
-            rows = self._rows_containing(scans[0])[0] + self._rows_named(needle)
+            rows = self._rows_containing(scans[0], there)[0] + self._rows_named(needle)
         found = [
             row
             for row in dict.fromkeys(rows)
-            if row not in skip and all(word in self._folded[row] for word in words)
+            if row not in skip and (there is None or there[row]) and all(word in self._folded[row] for word in words)
         ]
         found.sort(key=lambda row: (_relevance(self._folded[row], needle, words), len(self._folded[row]), row))
         return found
@@ -1660,23 +1704,37 @@ class ServingData:
         top of a Peak named from the query's start first, and those named
         after a Viewpoint on them holding every word last among names as
         relevant: Triglav via Dom Planika before Triglav View, a path to a view
-        of Triglav."""
+        of Triglav. Of those reaching the top, one starting more than
+        ``FAR_PARKING_M`` from a car park comes after the rest: Half Dome via
+        Subdome from its car park before Half Dome Trail, the last 3 km of it."""
         if not rows:
             return rows
+        parking = "parking_m" if self._has_parking else "NULL"
         with scoped(self._db()) as db:
-            points = dict(
-                _in_chunks(db, "SELECT id, points FROM hikes WHERE id IN ({})", [int(self.store.ids[row]) for row in rows])
-            )
-        summit, viewpoint = set(), set()
+            found = {
+                dayhike_id: (points, parking_m)
+                for dayhike_id, points, parking_m in _in_chunks(
+                    db, f"SELECT id, points, {parking} FROM hikes WHERE id IN ({{}})", [int(self.store.ids[row]) for row in rows]
+                )
+            }
+        summit, viewpoint, on_trail = set(), set(), set()
         for row in rows:
-            for kind, _, _, _, _, off_m, name, _ in json.loads(zlib.decompress(points[int(self.store.ids[row])])):
-                folded = _fold(name or "")
+            points, parking_m = found[int(self.store.ids[row])]
+            if parking_m is not None and parking_m > FAR_PARKING_M:
+                on_trail.add(row)
+            for kind, _, _, _, _, off_m, name, _ in json.loads(zlib.decompress(points)):
+                folded = _unshortened(_fold(name or ""))
                 if kind == "peak" and off_m <= PEAK_SUMMITED_M and folded.startswith(needle):
                     summit.add(row)
                 elif kind == "viewpoint" and folded in self._folded[row] and all(word in folded for word in words):
                     viewpoint.add(row)
         relevance = {row: _relevance(self._folded[row], needle, words) for row in rows}
-        return sorted(rows, key=lambda row: (relevance[row] > 0, row not in summit, relevance[row], row in viewpoint))
+        return sorted(
+            rows,
+            key=lambda row: (
+                relevance[row] > 0, row not in summit, row in summit and row in on_trail, relevance[row], row in viewpoint
+            ),
+        )
 
     def find_place(self, query: str, limit: int = 5) -> list[dict]:
         """Places with a name starting with the query, folded like ``search``.
@@ -1713,15 +1771,28 @@ class ServingData:
         Landmarks' words, and those found are marked ``"match": "similar"``.
         Each says where it is: the nearest town other than itself (``town``) and that town's
         ``country``, from ``places.sqlite`` (without it, the town the export named and no country).
+
+        As in ``search``, "Mt" is Mount (a name spelled either way is found) and a
+        country after a comma narrows it to the Landmarks near a town there. One
+        named exactly the query ``leads`` the hike names on the page when it is
+        famous (``FAMOUS_NAMES`` names or more, of ``FAMOUS_KINDS``: the Matterhorn
+        before Matterhorn Trail in Oregon) or, of those named so, its hikes are
+        photographed by the most Commons contributors, more than any of the hikes
+        named best like the query (the Grand Canyon's before a walk named Grand
+        Canyon in New York). A Peak lists the hikes reaching its top first,
+        those from a car park before those starting further than
+        ``FAR_PARKING_M`` from one (ADR-0076).
         """
-        needle = _fold(query).strip()
+        needle = _unshortened(_fold(query).strip())
         if self.landmarks is None or len(needle) < 2:
             return []
+        tail = _place_tail(needle)
         with scoped(sqlite3.connect(self.landmarks, uri=True)) as db:
-            found, match = self._landmarks_named(db, needle, limit, self._landmark_names), "words"
+            needle, where = tail or (needle, None)
+            found, match = self._landmarks_in(db, _shortened(needle), limit, where), "words"
             if not found:
                 for spelled in self._landmark_spellings.respelled(needle.split()):
-                    found, match = self._landmarks_named(db, " ".join(spelled), limit, self._landmark_names), "similar"
+                    found, match = self._landmarks_in(db, _shortened(" ".join(spelled)), limit, where), "similar"
                     if found:
                         break
             hikes: dict[int, list[tuple[int, int]]] = {}
@@ -1730,9 +1801,25 @@ class ServingData:
                 [row[0] for row in found],
             ):
                 hikes.setdefault(landmark, []).append((dayhike_id, off_m))
+        exact = [row for row in found if row[8] == 0 and match == "words"]
+        named = self._best_named(query) if exact and self._has_commons else []
+        parking, commons = self._parking_and_commons([*[i for listed in hikes.values() for i, _ in listed], *named])
+        photos = {row[0]: max((commons.get(i) or 0 for i, _ in hikes.get(row[0], [])), default=0) for row in exact}
+        # Photographed: the most of those named exactly the query, and more than the hikes named best like it
+        best_named = max((commons.get(i) or 0 for i in named), default=None)
+        photographed = {
+            landmark
+            for landmark, count in photos.items()
+            if best_named is not None and count > best_named and count == max(photos.values())
+        }
         results = []
-        for landmark, name, kind, town, lat, lon, count in found:
+        for landmark, name, kind, town, lat, lon, count, names, rank in found:
             nearest = hikes.get(landmark, [])
+            if kind == "peak":
+                nearest.sort(key=lambda hike: (
+                    hike[1] > PEAK_SUMMITED_M, hike[1] <= PEAK_SUMMITED_M and (parking.get(hike[0]) or 0) > FAR_PARKING_M,
+                    hike[1], hike[0],
+                ))  # fmt: skip
             summaries = self._summaries([self.row_of(dayhike_id) for dayhike_id, _ in nearest])
             country = None
             if self._towns[1] is not None:
@@ -1740,24 +1827,59 @@ class ServingData:
                 country = near and near[1]
                 itself = near and near[0] == name and near[2] <= TRAILHEAD_M  # a town is near no other
                 town = None if not near or itself else near[0]
+            famous = kind in FAMOUS_KINDS and (names or 0) >= FAMOUS_NAMES
             results.append(
                 {
                     "name": name, "kind": kind, "town": town, "country": country, "lat": lat, "lon": lon,
-                    "match": match, "hike_count": count,
+                    "match": match, "hike_count": count, "leads": rank == 0 and match == "words" and (famous or landmark in photographed),
                     "hikes": [{**summary, "off_m": off_m} for summary, (_, off_m) in zip(summaries, nearest, strict=True)],
                 }
             )  # fmt: skip
         return results
 
+    def _landmarks_in(
+        self, db: sqlite3.Connection, needles: list[str], limit: int, where: str | None
+    ) -> list[tuple]:
+        """``_landmarks_named``, of those near a town (``_near_town``) of the country ``where``
+        (``_place_tail``) when given: the first ``limit`` of the best ``LANDMARK_PLACE_SCAN`` named so;
+        all of them without towns."""
+        if where is None or self._towns[1] is None:
+            return self._landmarks_named(db, needles, limit, self._landmark_names)
+        found = self._landmarks_named(db, needles, LANDMARK_PLACE_SCAN, self._landmark_names)
+        return [row for row in found if (self._near_town(row[4], row[5]) or ("", ""))[1] == where][:limit]
+
+    def _best_named(self, query: str) -> list[int]:
+        """The ids of the hikes ``search`` finds by name as well as its first (the same ``_relevance``),
+        of its first ``SEARCH_SUMMIT_CAP``: what a Landmark named so leads only when better photographed."""
+        needle, words, rows, _ = self._words_found(_unshortened(_fold(query.strip())), ())
+        rows = rows[:SEARCH_SUMMIT_CAP]
+        best = _relevance(self._folded[rows[0]], needle, words) if rows else None
+        return [int(self.store.ids[row]) for row in rows if _relevance(self._folded[row], needle, words) == best]
+
+    def _parking_and_commons(self, ids: list[int]) -> tuple[dict[int, float | None], dict[int, int | None]]:
+        """How far each DayHike starts from a car park and how many Commons contributors its photos have,
+        by id; None in an export without them."""
+        parking = "parking_m" if self._has_parking else "NULL"
+        commons = "commons_contributors" if self._has_commons else "NULL"
+        with scoped(self._db()) as db:
+            rows = _in_chunks(db, f"SELECT id, {parking}, {commons} FROM hikes WHERE id IN ({{}})", sorted(set(ids)))
+        return {i: metres for i, metres, _ in rows}, {i: count for i, _, count in rows}
+
     @staticmethod
-    def _landmarks_named(db: sqlite3.Connection, needle: str, limit: int, names: str = "NULL") -> list[tuple]:
-        """``names``: the column of how many names each has, or NULL (a file from before ADR-0055)."""
+    def _landmarks_named(db: sqlite3.Connection, needles: str | list[str], limit: int, names: str = "NULL") -> list[tuple]:
+        """The Landmarks with a name starting with any of ``needles`` (spellings of one query),
+        best first (see ``find_landmarks``): id, name, kind, town, lat, lon, hikes, how many names
+        and how it is named (0 exactly so, 1 so as an alias, 2 and 3 from it).
+        ``names``: the column of how many names each has, or NULL (a file from before ADR-0055)."""
+        needles = [needles] if isinstance(needles, str) else needles
+        ranges = " OR ".join(["(n.name >= ? AND n.name < ?)"] * len(needles))
+        exact = ", ".join("?" * len(needles))
         return db.execute(
-            "SELECT l.id, l.name, l.kind, l.town, l.lat, l.lon, l.hikes FROM landmark_names n "
-            "JOIN landmarks l ON l.id = n.landmark WHERE n.name >= ? AND n.name < ? "
-            "GROUP BY l.id ORDER BY MIN(CASE WHEN n.name = ? THEN 1 - n.whole ELSE 3 - n.whole END), "
-            f"{names} DESC, l.ele IS NULL, l.ele DESC, l.hikes DESC, l.id LIMIT ?",
-            (needle, needle + "\U0010ffff", needle, limit),
+            f"SELECT l.id, l.name, l.kind, l.town, l.lat, l.lon, l.hikes, {names}, "
+            f"MIN(CASE WHEN n.name IN ({exact}) THEN 1 - n.whole ELSE 3 - n.whole END) AS named FROM landmark_names n "
+            f"JOIN landmarks l ON l.id = n.landmark WHERE {ranges} "
+            f"GROUP BY l.id ORDER BY named, {names} DESC, l.ele IS NULL, l.ele DESC, l.hikes DESC, l.id LIMIT ?",
+            (*needles, *[bound for needle in needles for bound in (needle, needle + "\U0010ffff")], limit),
         ).fetchall()
 
     @functools.cached_property
@@ -1867,13 +1989,16 @@ class ServingData:
         with scoped(sqlite3.connect(self.landmarks, uri=True)) as db:
             return _Spellings([name for (name,) in db.execute("SELECT name FROM landmark_names WHERE whole")])
 
-    def _rows_containing(self, word: str) -> tuple[list[int], bool]:
+    def _rows_containing(self, word: str, there: np.ndarray | None = None) -> tuple[list[int], bool]:
         """Rows whose name holds ``word``, in id order, from its first SEARCH_SCAN_CAP
-        occurrences, and whether those are all of them."""
-        hits = itertools.islice(re.finditer(re.escape(word), self._haystack), SEARCH_SCAN_CAP + 1)
+        occurrences (in rows ``there`` marks, when given), and whether those are all of them."""
+        hits = re.finditer(re.escape(word), self._haystack)
+        if there is None:
+            hits = itertools.islice(hits, SEARCH_SCAN_CAP + 1)
         offsets = np.fromiter((hit.start() for hit in hits), dtype=np.int64)
-        rows = np.unique(np.searchsorted(self._starts, offsets[:SEARCH_SCAN_CAP], side="right") - 1).tolist()
-        return rows, len(offsets) <= SEARCH_SCAN_CAP
+        rows = np.searchsorted(self._starts, offsets, side="right") - 1
+        rows = rows[there[rows]] if there is not None else rows
+        return np.unique(rows[:SEARCH_SCAN_CAP]).tolist(), len(rows) <= SEARCH_SCAN_CAP
 
     def _rows_named(self, name: str) -> list[int]:
         """Rows whose whole folded name is ``name``, from its first SEARCH_SCAN_CAP occurrences."""
@@ -2037,7 +2162,12 @@ class ServingData:
         if None in ends:
             return back
         (lat, lon), (end_lat, end_lon) = ends
-        trail = self.trailgraph.trail_back(np.array([lat, end_lat]), np.array([lon, end_lon]), float(metres) + 1.0)
+        trail = self.trailgraph.trail_back(
+            np.array([lat, end_lat]),
+            np.array([lon, end_lon]),
+            float(metres) + 1.0,
+            back_rank(float(self.store.column("difficulty_rank")[row])),
+        )
         return back if trail is None else {**back, **walk_line(trail.lat, trail.lon, trail.ele)}
 
     def segments_in_box(
@@ -2148,19 +2278,22 @@ class ServingData:
 
     def _trip(self, walk: ComposedWalk, return_to_start: bool) -> tuple[ComposedWalk, WayBack | None]:
         """The walk with its way back and the way back (ADR-0019), or the walk and None.
-        The walk with its way back keeps the walk's own grade (ADR-0077)."""
+        The walk with its way back keeps the walk's own grade (ADR-0078)."""
         if not return_to_start:
             return walk, None
-        back = way_back(walk.lat, walk.lon, self.trailgraph)
+        rank = float(SAC_SCALE_RANK[walk.sac_scale]) if walk.sac_scale is not None else math.nan
+        back = way_back(walk.lat, walk.lon, self.trailgraph, rank)
         return replace(round_trip(walk, back), sac_scale=walk.sac_scale), back
 
     def _proposed_name(self, walk: ComposedWalk, labels: dict[int, str]) -> str:
-        """The two trails walked longest (in name order, so a longer walk on
-        them keeps the name), and the named hiking place nearest the start
-        within ``TRAILHEAD_M``: "Lake Loop and Summit Line from Summit Hut"."""
-        trails = self._trails(walk, labels) or "Your hike"
+        """"Your hike", along the two trails walked longest (in name order, so a
+        longer walk on them keeps the name), from the named hiking place nearest
+        the start within ``TRAILHEAD_M``: "Your hike along Lake Loop and Summit
+        Line from Summit Hut". It says it is the Hiker's own walk, not a
+        catalog hike of that trail's name."""
+        trails = self._trails(walk, labels)
         near = self._places_near_start(walk, TRAILHEAD_M)
-        return f"{trails} from {near[0][1]}" if near else trails
+        return "Your hike" + (f" along {trails}" if trails else "") + (f" from {near[0][1]}" if near else "")
 
     def _trails(self, walk: ComposedWalk, labels: dict[int, str]) -> str:
         """The two trails a walk walks longest, by name, joined by "and", of
@@ -2738,6 +2871,45 @@ def _fold(text: str) -> str:
     decomposed = unicodedata.normalize("NFKD", plain)
     bare = "".join(c for c in decomposed if not unicodedata.combining(c)).casefold()
     return bare.replace("ue", "u").replace("oe", "o").replace("ae", "a")
+
+
+_SHORT_WORD = re.compile(r"\b(" + "|".join(SHORT_WORDS) + r")\b(?:\.(?!\w))?")
+
+
+def _unshortened(folded: str) -> str:
+    """Folded text with each of ``SHORT_WORDS`` written out ("mt. whitney" is "mount whitney"):
+    what hike search compares, so "Mt Whitney" finds Mount Whitney Trail."""
+    return _SHORT_WORD.sub(lambda match: SHORT_WORDS[match[1]], folded)
+
+
+def _shortened(needle: str) -> list[str]:
+    """An unshortened query as a Landmark's folded name may spell it: each ``SHORT_WORDS`` word written
+    out, shortened, or shortened with a full stop ("mount whitney", "mt whitney", "mt. whitney"). As
+    the query's last word, which a name only starts with, it is shortened only as a whole word ("mt "):
+    "mount" finds no Mtskheta."""
+    spelled = {full: short for short, full in SHORT_WORDS.items()}
+    parts = re.split(r"(\w+)", needle)
+    options = [
+        (part, spelled[part] + (" " if i == len(parts) - 2 and not parts[-1] else ""), f"{spelled[part]}.")
+        if part in spelled
+        else (part,)
+        for i, part in enumerate(parts)
+    ]
+    return ["".join(choice) for choice in itertools.islice(itertools.product(*options), 9)]
+
+
+@functools.cache
+def _place_names() -> dict[str, str]:
+    """The folded names of the countries of ``emergency_services``, each with its code."""
+    return {_fold(row["name"]): code for code, row in emergency_services().items()}
+
+
+def _place_tail(needle: str) -> tuple[str, str] | None:
+    """A folded query ending in a country after a comma ("triglav, slovenia"): the words before it
+    and the country's code; None for a query ending in none, or naming only a country."""
+    head, comma, tail = needle.rpartition(",")
+    country = _place_names().get(tail.strip()) if comma else None
+    return (head.strip(), country) if country and head.strip() else None
 
 
 class _Spellings:

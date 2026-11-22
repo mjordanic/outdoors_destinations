@@ -155,6 +155,16 @@ svg text { font-size: 11px; fill: var(--muted); }
 #results-table td.name .hike-name { display: block; overflow: hidden; text-overflow: ellipsis; }
 #results-table td.name .badge-line { display: block; white-space: normal; }
 #results-table tbody tr { cursor: pointer; }
+/* A phone shows Length and Up / down under the name, not in columns scrolled out of view. */
+#results-table .figure-line { display: none; }
+@media (max-width: 640px) {
+  #results-table th.figure, #results-table td.figure { display: none; }
+  #results-table .figure-line { display: block; white-space: normal; font-size: 0.78rem; color: var(--muted); font-weight: 400; }
+  /* A name wraps rather than ends in "…", so the table fits beside the score. */
+  #results-table td.name, #results-table th.name { max-width: 180px; white-space: normal; }
+  #results-table td.name .hike-name { overflow-wrap: anywhere; }
+  #results-table .picked { display: block; margin-left: 0; }
+}
 /* The head of a block "Show 10 more" adds: its words stay in view while the table scrolls sideways. */
 #results-table tbody tr.block-head { cursor: default; }
 #results-table tr.block-head th { background: #f3f6f2; font-weight: 500; text-align: left; white-space: normal; }
@@ -308,4 +318,9 @@ button.help:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
   button.help:hover, button.help[aria-expanded="true"] { background: radial-gradient(circle, var(--green) 10px, transparent 10.5px); }
   .leaflet-touch .leaflet-bar a, .leaflet-bar a { width: 44px; height: 44px; line-height: 44px; font-size: 22px; }
   .compose-tools button.primary { min-height: 44px; }
+  /* No smaller tap than 32 px: a checkbox, a slider's name, a link in a sentence (its padding reaches over the lines). */
+  input[type="checkbox"], .check input[type="checkbox"], .wish-value input[type="checkbox"] { width: 32px; height: 32px; }
+  .weight label.name, label.panel-title { min-height: 32px; display: flex; align-items: center; }
+  a[href]:not(.leaflet-bar a) { padding-block: 10px; }
+  .top a.home { display: inline-block; min-height: 32px; padding-block: 0; }
 }

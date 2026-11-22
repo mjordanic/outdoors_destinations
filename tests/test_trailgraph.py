@@ -437,7 +437,8 @@ def test_composing_a_dayhikes_own_segments_reproduces_its_facts(sampled: Path) -
             continue
         walk = graph.walk(routes[dayhike_id])
         # One way, and with the way back: a composed Seed and the Catalog are measured alike.
-        for measured, stored in ((walk, store), (round_trip(walk, way_back(walk.lat, walk.lon, graph)), store.with_way_back)):
+        rank = float(store.facts[FACT_COLUMNS.index("difficulty_rank"), row])
+        for measured, stored in ((walk, store), (round_trip(walk, way_back(walk.lat, walk.lon, graph, rank)), store.with_way_back)):
             facts, shape = graph.facts(measured)
             for index, column in enumerate(FACT_COLUMNS):
                 expected = float(stored.facts[index, row])
@@ -776,7 +777,7 @@ def test_a_composed_hike_is_named_by_its_main_trails_and_start_or_by_the_hiker(d
     named = data.compose(summit, "Grey Peak the steep way")
 
     # The Lakeside Inn, 45 m from the start A, is a restaurant: no name for a hike (ADR-0022).
-    assert (proposed["name"], proposed["name_origin"]) == ("Summit Line", "proposed")
+    assert (proposed["name"], proposed["name_origin"]) == ("Your hike along Summit Line", "proposed")
     assert (named["name"], named["name_origin"]) == ("Grey Peak the steep way", "hiker")
     assert named["facts"] == proposed["facts"]
 
@@ -794,7 +795,7 @@ def test_api_segments_compose_rank_and_pair(client, summit: Route) -> None:
     hike = client.post("/api/compose", json=composed).json()
     assert hike["route"]["text"] == str(summit) and hike["facts"]["round_trip"] == 1.0  # with its way back
     assert client.post("/api/compose", json={**composed, "return_to_start": False}).json()["facts"]["round_trip"] == 0.0
-    assert hike["name"] == "Summit Line"
+    assert hike["name"] == "Your hike along Summit Line"
     named = client.post("/api/compose", json={**composed, "name": "  Up to Grey Peak "}).json()
     assert named["name"] == "Up to Grey Peak"
     ranked = client.post("/api/rank", json={"composed": composed}).json()
@@ -997,8 +998,8 @@ def test_a_harder_way_back_does_not_grade_a_composed_hike(data, monkeypatch) -> 
 
     found = serving.way_back
 
-    def harder(lat, lon, graph):
-        back = found(lat, lon, graph)
+    def harder(lat, lon, graph, *rank):
+        back = found(lat, lon, graph, *rank)
         return replace(back, walk=replace(back.walk, sac_scale="difficult_alpine_hiking"))
 
     own = data.compose(Route.parse(LONG_WAY), return_to_start=False)["facts"]["difficulty_rank"]
@@ -1104,11 +1105,11 @@ def test_a_step_closes_a_small_gap_and_without_a_trailgraph_a_walk_is_retraced()
     lat = np.array([46.0, 46.01, 46.0002])  # ends about 22 m north of its start
     lon = np.array([14.0, 14.0, 14.0])
 
-    step = way_back(lat, lon, None)
+    step = way_back(lat, lon, None, math.nan)
     assert step.kind == "step" and step.metres == pytest.approx(22.2, abs=0.1)
-    far = way_back(lat[:2], lon[:2], None)
+    far = way_back(lat[:2], lon[:2], None, math.nan)
     assert far.kind == "retrace" and far.metres == pytest.approx(1112, abs=1)
-    assert way_back(lat[:1], lon[:1], None).kind == "none"
+    assert way_back(lat[:1], lon[:1], None, math.nan).kind == "none"
 
 
 def test_seed_and_candidates_are_always_measured_in_one_mode(data, summit: Route) -> None:
@@ -1154,11 +1155,11 @@ def test_cli_samples_the_trailgraph_and_composes(
     assert capsys.readouterr().out.strip() == str(sum(len(s["coords"]) // 8 for s in _segments(sampled)))
     assert main(["compose", "--data", str(data.directory), "--limit", "2", str(summit)]) == 0
     lines = capsys.readouterr().out.strip().splitlines()
-    assert lines[0].startswith("Summit Line\t5456 m\t")  # up and back
+    assert lines[0].startswith("Your hike along Summit Line\t5456 m\t")  # up and back
     assert lines[0].endswith("\tway back 2728 m (retrace)")
     assert len(lines) == 3 and all(str(SUMMIT_LINE) not in line.split("\t")[0] for line in lines[1:])
     assert main(["compose", "--data", str(data.directory), "--limit", "2", "--one-way", str(summit)]) == 0
-    assert capsys.readouterr().out.startswith("Summit Line\t2728 m\t")
+    assert capsys.readouterr().out.startswith("Your hike along Summit Line\t2728 m\t")
 
 
 def _sampled_trailgraph(root: Path, workers: int, monkeypatch: pytest.MonkeyPatch) -> list[str]:

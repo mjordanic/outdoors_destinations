@@ -266,6 +266,7 @@ _FACTS_VERSION = hashlib.sha256(
             "dry-stretch-every-pass",  # a WaterSource ends a DryStretch at every pass of it (``walk_facts``)
             "landcover-by-length",  # LandCover shares weigh each vertex by half its two segments (``_landcover_fractions``)
             "landcover-along-steps", ALONG_MIN_M, ALONG_STEP_M,  # ...and long steps by the classes read along them
+            "way-back-no-harder",  # a trail back walks no path graded above the hike (ADR-0076)
             "summit-height", SUMMIT_TRUST_M,  # a summited Peak's mapped height can be the top (``summit_height``)
             "own-difficulty",  # the way back does not grade the hike (``_add_way_back``)
         ]
@@ -1103,7 +1104,7 @@ def _build_facts(
                     None, None, None, None, lat, lon, ele, codes,
                     np.full(len(lat), -1), np.full(len(lat), np.nan), ways, None, {}, codes_along,
                 )  # fmt: skip
-                back = way_back(lat, lon, graph)
+                back = way_back(lat, lon, graph, float(part_facts[column["difficulty_rank"], local]))
                 trip = round_trip(one_way, back)
                 for suffix, measured, target, shapes in (
                     ("", one_way, part_facts, part_profile),
@@ -1185,7 +1186,7 @@ def _add_way_back(
     are the DayHike's. Length adds the metres back; highest and lowest take
     the way back's too; Difficulty stays the DayHike's own grade, so a harder
     way the way back finds (a scramble beside the trail) does not grade the
-    hike (ADR-0077); LandCover weighs every vertex of the trip by length (when
+    hike (ADR-0078); LandCover weighs every vertex of the trip by length (when
     the GeometryStore has its classes); climate averages the vertices back
     with the DayHike's, weighted by the vertex count.
     """

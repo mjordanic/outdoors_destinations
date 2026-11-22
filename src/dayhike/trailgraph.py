@@ -1196,9 +1196,9 @@ class WayBack:
 
     ``kind`` is ``none`` (it ends where it starts), ``step`` (a straight step
     over a gap of at most ``GAP_JOIN_M``, as the main walk joins its ways),
-    ``trail`` (the shortest walk over the TrailGraph, in ``walk``) or
-    ``retrace`` (the walk itself, backwards), the shortest of them; ``metres``
-    is its length.
+    ``trail`` (the shortest walk over the TrailGraph no harder than the walk
+    itself, in ``walk``) or ``retrace`` (the walk itself, backwards), the
+    shortest of them; ``metres`` is its length.
     """
 
     kind: str
@@ -1206,15 +1206,17 @@ class WayBack:
     walk: ComposedWalk | None = None
 
 
-def way_back(lat: np.ndarray, lon: np.ndarray, graph: TrailGraph | None) -> WayBack:
+def way_back(lat: np.ndarray, lon: np.ndarray, graph: TrailGraph | None, difficulty_rank: float) -> WayBack:
     """The way back of the walk with these vertices (see ``WayBack``).
 
     Ends at most ``GAP_JOIN_M`` apart take the straight step. Otherwise the
-    shortest walk over the TrailGraph's trails and gaps (never a Link), when
-    both ends are TrailGraph vertices and it is shorter than retracing the
-    walk and than ``WAY_BACK_SEARCH_M``; else the walk retraced. Without a
-    TrailGraph there is no trail. The bound keeps the search's work that of a
-    day hike's for a walk of any length (ADR-0035).
+    shortest walk over the TrailGraph's trails and gaps (never a Link) no
+    harder than the walk, ``difficulty_rank`` (its strictest ``sac_scale``,
+    NaN where it has none), when both ends are TrailGraph vertices and it is
+    shorter than retracing the walk and than ``WAY_BACK_SEARCH_M``; else the
+    walk retraced (ADR-0076). Without a TrailGraph there is no trail. The
+    bound keeps the search's work that of a day hike's for a walk of any
+    length (ADR-0035).
     """
     if len(lat) < 2:
         return WayBack("none", 0.0)
@@ -1225,10 +1227,16 @@ def way_back(lat: np.ndarray, lon: np.ndarray, graph: TrailGraph | None) -> WayB
         return WayBack("step", gap)
     retrace = float(_haversine(lat[:-1], lon[:-1], lat[1:], lon[1:]).sum())
     limit = min(retrace - 1.0, WAY_BACK_SEARCH_M)
-    trail = None if graph is None or gap >= limit else graph.trail_back(lat, lon, limit)
+    trail = None if graph is None or gap >= limit else graph.trail_back(lat, lon, limit, back_rank(difficulty_rank))
     if trail is None:
         return WayBack("retrace", retrace)
     return WayBack("trail", float(_haversine(trail.lat[:-1], trail.lon[:-1], trail.lat[1:], trail.lon[1:]).sum()), trail)
+
+
+def back_rank(difficulty_rank: float) -> int:
+    """The strictest ``SAC_SCALE_RANK`` a trail back of a walk of this
+    Difficulty may walk: its own, and 0 (no ``sac_scale``) for a walk with none (NaN)."""
+    return 0 if math.isnan(difficulty_rank) else int(difficulty_rank)
 
 
 def round_trip(walk: ComposedWalk, back: WayBack) -> ComposedWalk:
@@ -1338,7 +1346,7 @@ _SEGMENT_COLUMNS = (
 
 
 # The arrays of ``TrailGraph._network``, as ``write_network`` saves them.
-NETWORK_ARRAYS = ("nodes", "start_of", "neighbour", "step_m", "segment_of")
+NETWORK_ARRAYS = ("nodes", "start_of", "neighbour", "step_m", "segment_of", "sac_rank")
 
 
 class TrailGraph:
@@ -1595,12 +1603,13 @@ class TrailGraph:
             landcover_along=steps,
         )
 
-    def trail_back(self, lat: np.ndarray, lon: np.ndarray, limit_m: float) -> ComposedWalk | None:
-        """The shortest walk over trail and gap Segments (never a Link) from
-        the walk's last vertex to its first, when both are TrailGraph vertices
-        and it is shorter than ``limit_m``; else None. The search stops at
-        the best way found, so its work grows with the ground within that
-        distance, not with the TrailGraph."""
+    def trail_back(self, lat: np.ndarray, lon: np.ndarray, limit_m: float, max_rank: int) -> ComposedWalk | None:
+        """The shortest walk over trail and gap Segments (never a Link, none
+        whose ``sac_scale`` ranks above ``max_rank``) from the walk's last
+        vertex to its first, when both are TrailGraph vertices and it is
+        shorter than ``limit_m``; else None. The search stops at the best way
+        found, so its work grows with the ground within that distance, not
+        with the TrailGraph."""
         rows: dict[int, tuple] = {}
         with scoped(self._db()) as db:
             end = self._locate(db, rows, lat[-1], lon[-1])
@@ -1619,13 +1628,20 @@ class TrailGraph:
             same = end[0] == start[0] and abs(end[2][end[1]] - start[2][start[1]]) < best
             if same:
                 best = abs(end[2][end[1]] - start[2][start[1]])
-            found = self._shortest([(n, m) for n, m, _ in sources], [(n, m) for n, m, _ in targets], best)
+            found = self._shortest(
+                [(n, m) for n, m, _ in sources], [(n, m) for n, m, _ in targets], best, max_rank
+            )
             if found is None:
-                return self._stitch(None, rows, [[end[0], end[1], start[1]]]) if same else None
-            _, s, t, chain, middle = found
-            pieces = [[end[0], end[1], sources[s][2]], *self._along(db, rows, chain, middle)]
-        pieces.append([start[0], targets[t][2], start[1]])
-        return self._stitch(None, rows, [piece for piece in pieces if piece[1] != piece[2]])
+                trail = self._stitch(None, rows, [[end[0], end[1], start[1]]]) if same else None
+            else:
+                _, s, t, chain, middle = found
+                pieces = [[end[0], end[1], sources[s][2]], *self._along(db, rows, chain, middle)]
+                pieces.append([start[0], targets[t][2], start[1]])
+                trail = self._stitch(None, rows, [piece for piece in pieces if piece[1] != piece[2]])
+        # The pieces of the Segments the walk's ends lie on are walked too.
+        if trail is not None and trail.sac_scale is not None and SAC_SCALE_RANK[trail.sac_scale] > max_rank:
+            return None
+        return trail
 
     def vertex_near(self, lat: float, lon: float, within_m: float) -> tuple[float, float] | None:
         """The vertex of a Segment (not a Link) nearest this point, at most
@@ -1648,15 +1664,20 @@ class TrailGraph:
         return at
 
     def _shortest(
-        self, sources: list[tuple[int, float]], targets: list[tuple[int, float]], limit_m: float
+        self,
+        sources: list[tuple[int, float]],
+        targets: list[tuple[int, float]],
+        limit_m: float,
+        max_rank: int = max(SAC_SCALE_RANK.values()),
     ) -> tuple[float, int, int, list[int], list[int]] | None:
         """The shortest walk over the network (``_network``) from one of the
         ``sources`` to one of the ``targets``, each a Junction index and the
-        metres to it or on from it, when shorter than ``limit_m``: its metres,
-        the source and target it joins, the Junction indices it passes and the
+        metres to it or on from it, on no Segment whose ``sac_scale`` ranks
+        above ``max_rank``, when shorter than ``limit_m``: its metres, the
+        source and target it joins, the Junction indices it passes and the
         Segment from each to the next; else None. The search stops at the best
         way found, so its work grows with the ground within that distance."""
-        _, start_of, neighbour, weight, segment_of = self._network()
+        _, start_of, neighbour, weight, segment_of, sac_rank = self._network()
         best, via = limit_m, None
         reach: dict[int, list[tuple[int, float]]] = {}
         for t, (node, to_target) in enumerate(targets):
@@ -1675,10 +1696,13 @@ class TrailGraph:
                 if metres + to_target < best:
                     best, via = metres + to_target, (node, t)
             first, after = int(start_of[node]), int(start_of[node + 1])
-            for k, other, step_m in zip(
-                range(first, after), neighbour[first:after].tolist(), weight[first:after].tolist()
+            for k, other, step_m, rank in zip(
+                range(first, after),
+                neighbour[first:after].tolist(),
+                weight[first:after].tolist(),
+                sac_rank[first:after].tolist(),
             ):
-                if other not in settled:
+                if other not in settled and rank <= max_rank:
                     heapq.heappush(heap, (metres + step_m, other, node, s, k))
         if via is None:
             return None
@@ -1723,14 +1747,17 @@ class TrailGraph:
                 return row[0], int(at[0]), np.concatenate([[0.0], np.cumsum(steps)])
         return None
 
-    def _network(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def _network(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """The Junction ids (sorted); per Junction index its neighbours along
-        the shortest Segment to each (Links and rings left out), as arrays of
-        the first entry per Junction, then per entry the neighbour, metres
-        and that Segment's id."""
+        the shortest Segment to each of every ``sac_scale`` (Links and rings
+        left out), as arrays of the first entry per Junction, then per entry
+        the neighbour, metres, that Segment's id and its ``SAC_SCALE_RANK``
+        (0 with none). A network saved before it had ranks is built again."""
         if self._graph is None:
             with self._graph_lock:  # a request arriving during a build waits for it, not a build of its own
-                if self._graph is None and self.network_dir.is_dir():
+                if self._graph is None and all(
+                    (self.network_dir / f"{name}.npy").is_file() for name in NETWORK_ARRAYS
+                ):
                     self._graph = tuple(map_npy(self.network_dir / f"{name}.npy") for name in NETWORK_ARRAYS)
                 elif self._graph is None:
                     self._graph = self._build_network()
@@ -1745,21 +1772,28 @@ class TrailGraph:
         for name, array in zip(NETWORK_ARRAYS, arrays):
             np.save(self.network_dir / f"{name}.npy", array)
 
-    def _build_network(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def _build_network(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         chunks = []
+        ranks = " ".join(f"WHEN '{scale}' THEN {rank}" for scale, rank in SAC_SCALE_RANK.items())
         with scoped(self._db()) as db:
-            cursor = db.execute("SELECT id, a, b, length_m FROM segments WHERE kind != 'link'")
+            cursor = db.execute(
+                f"SELECT id, a, b, length_m, CASE sac_scale {ranks} ELSE 0 END FROM segments WHERE kind != 'link'"
+            )
             while rows := cursor.fetchmany(100_000):  # arrays chunk by chunk, not a million tuples at once
                 chunks.append(np.array(rows, dtype=float))
-        found = np.concatenate(chunks) if chunks else np.empty((0, 4))
+        found = np.concatenate(chunks) if chunks else np.empty((0, 5))
         ids = found[:, 0].astype(np.int64)  # ids and OSM node ids are far below 2**53
         ends = found[:, 1:3].astype(np.int64)
         metres = found[:, 3].copy()
+        rank = found[:, 4].astype(np.int64)
         nodes = np.unique(ends)
         low, high = np.sort(np.searchsorted(nodes, ends), axis=1).T
         shortest = np.argsort(metres, kind="stable")
         shortest = shortest[low[shortest] != high[shortest]]
-        _, first = np.unique(low[shortest] * len(nodes) + high[shortest], return_index=True)
+        # The shortest Segment between two Junctions of each grade, so a search
+        # that may not walk a harder one still finds an easier one beside it.
+        pair = (low[shortest] * len(nodes) + high[shortest]) * (len(SAC_SCALE_RANK) + 1) + rank[shortest]
+        _, first = np.unique(pair, return_index=True)
         keep = shortest[first]
         weight = np.maximum(metres[keep], 1e-3)
         here = np.concatenate([low[keep], high[keep]])
@@ -1768,7 +1802,8 @@ class TrailGraph:
         neighbour = np.concatenate([high[keep], low[keep]])[order].astype(np.int32)
         step_m = np.concatenate([weight, weight])[order].astype(np.float32)
         segment_of = np.concatenate([ids[keep], ids[keep]])[order]
-        return (nodes, start_of, neighbour, step_m, segment_of)
+        sac_rank = np.concatenate([rank[keep], rank[keep]])[order].astype(np.uint8)
+        return (nodes, start_of, neighbour, step_m, segment_of, sac_rank)
 
     def amenities_near(self, lat: np.ndarray, lon: np.ndarray, radius_m: float) -> list[tuple]:
         """(id, kind, lat, lon, name, ele tag) of the amenity points in the walk's

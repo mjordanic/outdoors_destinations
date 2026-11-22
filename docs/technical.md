@@ -449,7 +449,7 @@ DayHikeGeometry is the main walk of the member-way graph: each distinct member
 way once, from the Trailhead, with no jump between consecutive ways except a
 joined gap of 50 m or less. Two pieces are also joined by a way of the snapshot
 the relation does not list, of at most 500 m, that runs from a node of one to a
-node of the other (ADR-0076): the walk follows it, but it is not in `ways`.
+node of the other (ADR-0077): the walk follows it, but it is not in `ways`.
 Member ways not on the walk are Leftovers. They
 stay in `ways` with `in_chain = 0` and a `leftover` reason (`role`, `repeat`,
 `disconnected`, `dead_end`, `shortcut`), and `dayhikes.unconnected_m` is their
@@ -588,12 +588,12 @@ the Catalog, never the GeometryStore, and rebuilds nothing per query.
 way back to its Trailhead: the Seed, a composed Seed and every DayHike it is
 compared with alike. The way back is the shortest one: none for a loop that
 ends where it starts, a straight step for ends at most 50 m apart, else the
-shortest walk over the TrailGraph's trails when it is shorter than the hike
-itself backwards and than 50 km (`WAY_BACK_SEARCH_M`, ADR-0035), else the hike
-retraced. So a hike that ends 500 m from its
+shortest walk over the TrailGraph's trails no harder than the hike (ADR-0076)
+when it is shorter than the hike itself backwards and than 50 km
+(`WAY_BACK_SEARCH_M`, ADR-0035), else the hike retraced. So a hike that ends 500 m from its
 start adds about 500 m, and a line up to a summit is compared up and back:
 twice the length, its climb and its descent both ways. Its Difficulty stays
-the hike's own: a harder way the way back finds does not grade it (ADR-0077). `build-similarity`
+the hike's own: a harder way the way back finds does not grade it (ADR-0078). `build-similarity`
 stores a second set of facts with the way back, calibrated on its own, and
 how each DayHike gets back (`way_back.npy`: metres back, climb and descent of
 the whole walk, kind). `--one-way` (`return_to_start=False` in Python, the
@@ -635,7 +635,7 @@ way instead of with its way back.
 | `length` | Catalog length | ratio | floor 1 km |
 | `elevation_gain` | metres climbed, larger of climb and descent (direction-free); DEM spikes are dropped: walking the vertices in order, a kept vertex, or a run of kept vertices up to 60 m long, all 10 m+ above (or all below) both the kept vertex before it and the next vertex, at 25 %+ grade into it and out of it, is dropped, and the test repeats on the new last kept vertex (the ends stay); a path along a steep shore or cliff reads the water or the slope beside it that way; where the kept heights, read as a line, stray 2.5 m+ on average over 200 m either side from their 90 m moving average (less near an end, so the ends stay), they are that moving average (ADR-0062); then a change counts once it moves 10 m and the end counts what it moved; climb and descent are the means of the walk both ways (ADR-0048, lower end) | ratio | floor 100 m |
 | `difficulty` | Difficulty as SAC rank 1–6 | tolerance | D = 3 |
-| `highest`, `lowest` | highest and lowest point; the highest is a summited Peak's mapped `ele` when that is up to 100 m above every vertex (ADR-0077) | tolerance | D = 400 m |
+| `highest`, `lowest` | highest and lowest point; the highest is a summited Peak's mapped `ele` when that is up to 100 m above every vertex (ADR-0078) | tolerance | D = 400 m |
 | `profile` | ProfileShape (64 points) | profile | — |
 | `landcover` | six LandCover shares (five plus the leftover) | mix | — |
 | `peak_summited` | a Peak within 50 m of the line | agree | — |
@@ -2180,8 +2180,8 @@ Link the Hiker did not take; "connect here" crosses a Link; the walk may repeat
 a Segment and is measured as drawn; while drawn, its readout estimates the
 climb from the Segments ("about"), and once it is the hike shown below (after
 "Use this hike" or "Edit on the map") it shows that hike's measured climb,
-"as measured", so the two agree; it gets a proposed name, from the trails
-walked longest (each at least 30 % of it) and a named place at the start, that the Hiker may change; its
+"as measured", so the two agree; it gets a proposed name that says it is the Hiker's own walk, "Your hike along"
+the trails walked longest (each at least 30 % of it) "from" a named place at the start, that the Hiker may change; its
 link, `#compose=1:104.11,105.13`, shares it as the OSM ways it walks from node
 to node (and `&name=…` when the Hiker named it), so it opens the same walk after
 a rebuild that adds or drops Junctions, and nothing is stored); see what
@@ -2463,7 +2463,7 @@ short:
 | Method | Path | Answers |
 | --- | --- | --- |
 | GET | `/api/health` | that the server is up |
-| GET | `/api/info` | hike count, coverage box, `core` (the box of the middle 80 % of Trailheads, where the map opens), `typical_pair` (0.47: below it the page calls a list's matches weak), attribution, which features are on |
+| GET | `/api/info` | hike count, coverage box, `core` (the box of the middle 80 % of Trailheads, where the map opens), `typical_pair` (0.47: below it the page calls a list's matches weak), `covered` (what the site covers, as its pages say it), attribution, which features are on |
 | GET | `/api/measures` | the Measures, grouped, with their plain descriptions |
 | GET | `/api/search?q=` | hikes by name |
 | GET | `/api/place?q=` | places by name, for the drive-time Origin |
@@ -2476,10 +2476,12 @@ short:
 
 The details, endpoint by endpoint (JSON): `GET /api/search?q=` (every word in any order, at least one of
 two letters or more; case, accents
-and ue/oe/ae spellings ignored; the exact name first, then names starting with
+and ue/oe/ae spellings ignored; "Mt" read as Mount; a country after a comma ("Triglav, Slovenia")
+keeps the hikes starting there, by the words before it (ADR-0076); the exact name first, then names starting with
 the query, then names holding it from a word's start, then names where every
 word starts a word, shorter first; among the best 200, after the exact name, a
-hike reaching the top of a Peak named from the query's start comes first, and one named after a
+hike reaching the top of a Peak named from the query's start comes first (one starting over 2 km from a car
+park last of those), and one named after a
 Viewpoint on it last of its group (Triglav View after Triglav); a number
 finds that id; while they are fewer than `limit`, then names with a word
 spelled one typo off a query word of 4 to 7 letters, two off a longer one, no
@@ -2509,8 +2511,9 @@ alternate name, then the most populous; 404 without `places.sqlite`),
 `GET /api/landmarks?q=&limit=` (up to 10, default 5, Landmarks with a folded name holding the query from a
 word's start, typos as search: the one named exactly first, then the one with the most names, the highest,
 the most hikes; each with `name`, `kind`, `town` (the nearest other town within 30 km, to tell equal names
-apart) and its `country`, `lat`, `lon`, `match`, `hike_count` and
-`hikes`, its 5 nearest as search lists them with `off_m`; 404 without `landmarks.sqlite`), `POST /api/rank` with `{"seed": id, "weights": {measure: 0-100},
+apart) and its `country`, `lat`, `lon`, `match`, `hike_count`, `leads` (true when the page lists its hikes
+before the hike names: named exactly the query and famous or best photographed, ADR-0076) and
+`hikes`, its 5 nearest as search lists them with `off_m` (a Peak's from a car park first among those reaching its top); 404 without `landmarks.sqlite`), `POST /api/rank` with `{"seed": id, "weights": {measure: 0-100},
 "excluded": [measure], "month": 1-12, "origin": {"lat", "lon"}, "max_hours":
 0-4, "max_km": 0-200, "regions": ["europe", "us"], "group_km": 0.1-50, "after": [{"lat", "lon"}], "draw":
 0-4294967295}` (ADR-0074: `regions` keeps to the hikes starting in them before ranking, the United States
@@ -2528,7 +2531,8 @@ order; `draw`, the page's draw number, draws the loop search's 20 Trailheads
 from the best 60 DayHikes the same way, and without it they are the best 20;
 the answer echoes `max_hours`, `max_km`, `regions`, `group_km`, `draw` and
 how many starts `after` had, `reachable` counts the hikes within the limits, `in_regions` those in `regions`, and
-each hike has `drive_hours` and `distance_km`, null without that limit or start;
+each hike has `drive_hours` and `distance_km`, null without that limit or start, and `region`, the
+region (`europe` or `us`) its start is in, so the page says when a list from every region keeps to one;
 ADR-0046: each row has `more_here`, the DayHikes starting in its area that are
 not listed and score within 0.05 of it, and `in_area`, every DayHike ranked
 that starts in its area, so the page adds the areas of the rows it did not draw
