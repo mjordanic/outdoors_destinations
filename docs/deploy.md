@@ -51,7 +51,9 @@ Segment or tile crosses it. A Europe cut ranks exactly as the Europe and US site
 does with only Europe ticked, and the US cut likewise: scores stay calibrated on
 the Europe and US hikes (ADR-0082). Its `meta.json` names the regions of its side,
 credits only the sources its hikes come from, and has the `data_tag` of the export
-with `-eu`, `-us` or `-demo` added, the tag of its data image (section 3).
+with `-eu`, `-us` or `-demo` added, the tag of its data image (section 3); the
+deploy workflow sets the memory of the table from that tag (section 9). When the
+export has `names.npz` (below), the cut writes its own for the hikes it keeps.
 Measured on the 2026-11-22 export (M-series Mac, one cut at a time): Europe
 14 minutes, the US 5, the demo 4.5 (16 GB of RAM; at most 2.6 GB used); most of it is
 writing the trail graph and rebuilding the Landmarks.
@@ -476,7 +478,7 @@ A code change needs only a new web image: build it on the current data image
 (section 3) and `gcloud run deploy` again, or let the deploy workflow do it
 (section 9). Moving the site to another of Europe and the US, Europe, the US
 or the demo is a change of data image: set `DAYHIKE_DATA_IMAGE` to that site's
-image (section 1) and run the workflow, with the memory that site needs. Every
+image (section 1) and run the workflow, which sets the memory from its tag. Every
 data image is kept (section 3), so moving back is the same change. A data
 refresh rebuilds the export, cuts it again (section 1), then the data images with the
 new `data_tag` (`facts_version` and the DEM: a Copernicus data image never takes

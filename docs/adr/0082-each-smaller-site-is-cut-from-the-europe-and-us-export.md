@@ -24,8 +24,8 @@ on the 2026-11-22 export, Europe in 14 minutes, the US in 5 and the demo in 4.5.
 | Demo | `<data_tag>-demo` | `--keep demo` |
 
 A cut writes its own `data_tag` with the suffix; the uncut export keeps the one it has, so its image is tagged
-`-eu-us` by hand (docs/deploy.md §3). `DAYHIKE_DATA_IMAGE` names the image, the workflow deploys it, and the
-pages, filter and credits follow from its data. Every data image is kept, so switching back is the same
+`-eu-us` by hand (docs/deploy.md §3). `DAYHIKE_DATA_IMAGE` names the image, the workflow deploys it with the memory its tag asks for (ADR-0081),
+and the pages, filter, smoke test and credits follow from its data. Every data image is kept, so switching back is the same
 change.
 
 **A cut is a complete export of the hikes it keeps.** `europe` keeps the hikes starting east of 40° W, `us`
@@ -33,7 +33,7 @@ those west of it, the RegionChoice's line (ADR-0074). Everything else is cut on 
 TrailGraph's Segments, Junctions, amenities, climate cells and water tiles, the highway tiles (Valhalla's
 level-0 grid is 4°, so 40° W is a tile edge) and the snaps; the cut refuses an export where a Segment or a
 tile crosses the line (none does in the 2026-11-22 build). Ids are kept, so a shared link to a kept hike or
-ComposedHike still opens. What is derived from the hikes is rebuilt: the way-back network, `places.sqlite`,
+ComposedHike still opens. What is derived from the hikes is rebuilt: the name search's index (`names.npz`, ADR-0081), the way-back network, `places.sqlite`,
 `landmarks.sqlite`, and in `meta.json` the count, the regions (the uncut export's of that side) and the
 credits (an external source no kept hike comes from is dropped, USGS 3DEP without a US hike).
 
