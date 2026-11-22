@@ -3569,7 +3569,7 @@ def test_a_map_the_hiker_has_touched_is_not_zoomed_in_by_itself(browser, server)
     assert len(spans) == 1
 
 
-def test_a_map_reopened_after_a_failed_show_on_map_is_not_zoomed_in_by_itself(browser, server) -> None:
+def test_a_map_after_a_failed_show_on_map_is_not_zoomed_in_by_itself(browser, server) -> None:
     page = open_page(browser, server, Api({}))
     failed: list[bool] = []
 
@@ -3583,11 +3583,11 @@ def test_a_map_reopened_after_a_failed_show_on_map_is_not_zoomed_in_by_itself(br
     page.route(f"{server}/api/hikes?*", answer)
     page.locator("#search").fill("Ridge Lake")
     page.locator("#suggestions li.landmark").get_by_role("button", name="Show on map").dispatch_event("mousedown")
-    page.wait_for_function("() => pick.fitting && !/^(Loading|Zoom in)/.test(document.querySelector('#map-pick-hint').textContent)")
-    page.locator("#map-pick-on").uncheck()
+    page.wait_for_function("() => pick.map && /^(?!Loading|Zoom in)./.test(document.querySelector('#map-pick-hint').textContent)")
     zoom = page.evaluate("pick.map.getZoom()")
 
-    page.locator("#map-pick-on").check()
+    page.locator("#compose-on").click()
+    page.locator("#compose-on").click()
 
     page.get_by_text("Too many hikes in view; zoom in further to see them as lines.").wait_for()
     assert page.evaluate("pick.map.getZoom()") == zoom

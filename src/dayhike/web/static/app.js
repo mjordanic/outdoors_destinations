@@ -2327,7 +2327,7 @@ const pick = {
         else if (!count) this.hint("No hikes in view; move the map.");
         else this.hint(`${count} hike${count === 1 ? "" : "s"} in view. Click a line to choose it.`);
       } catch (error) {
-        if (error.name !== "AbortError" && request === boxed) this.hint(error.message);
+        if (error.name !== "AbortError" && request === boxed) { this.fitting = false; this.hint(error.message); }
       }
     }, 250);
   },
@@ -2468,6 +2468,7 @@ const compose = {
     if (!this.layer) this.layer = L.layerGroup().addTo(pick.map);
     clearTimeout(pick.timer);
     pick.abort?.abort();
+    pick.fitting = false;
     pick.hover(null);
     pick.layer.clearLayers();
     pick.lines.clear();
