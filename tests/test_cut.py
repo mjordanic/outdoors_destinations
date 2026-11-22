@@ -24,7 +24,7 @@ import pytest
 from dayhike import build_catalog, build_similarity
 from dayhike.cli import main
 from dayhike.cut import CUTS_DIR, CutError, Keep, cut_serving, kept_twins, load_keep, tile_box
-from dayhike.serving import REGION_SPLIT_LON, ServingData, export_serving
+from dayhike.serving import NAME_INDEX, REGION_SPLIT_LON, ServingData, _read_name_index, export_serving
 from dayhike.similarity import CORE_MEASURES
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -234,6 +234,20 @@ def test_a_cut_holds_only_its_side(whole: ServingData, cuts: dict[str, ServingDa
         assert cells and all(((cell % 43_200) / 120 - 180 < REGION_SPLIT_LON) == west for cell in cells)
         assert {(w < REGION_SPLIT_LON) for (w,) in db.execute("SELECT west FROM water_tiles")} == {west}
         assert {(w < REGION_SPLIT_LON) for (w,) in db.execute("SELECT west FROM water_cells")} == {west}
+
+
+@pytest.mark.parametrize("side", ["europe", "us"])
+def test_a_cut_has_the_name_index_of_its_hikes_and_searches_as_the_whole_export(
+    whole: ServingData, cuts: dict[str, ServingData], side: str
+) -> None:
+    cut = cuts[side]
+    kept = set(cut.store.ids.tolist())
+
+    assert (whole.directory / NAME_INDEX).is_file()
+    assert _read_name_index(cut.directory, cut.store.ids) is not None  # its own hikes', so the server reads it
+    for query in ("ridge", "walk", "rdige wlak", "lake"):
+        expected = [hike for hike in whole.search(query, limit=100) if hike["id"] in kept]
+        assert _same(cut.search(query, limit=100), expected), query
 
 
 def test_both_cuts_together_hold_every_row_of_the_whole_export(whole: ServingData, cuts: dict[str, ServingData]) -> None:

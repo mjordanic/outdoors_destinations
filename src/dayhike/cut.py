@@ -23,8 +23,8 @@ stays the share of random pairs of the uncut export less alike, ADR-0026), and e
 of Twins keeps its kept members. Hike ids and Segment ids are kept, so a shared link to a kept hike
 or a ComposedHike on the kept side still opens.
 
-The cut rebuilds what is derived from the hikes kept: the way-back network
-(``TrailGraph.write_network``), ``places.sqlite`` and ``landmarks.sqlite`` (``export_places``,
+The cut rebuilds what is derived from the hikes kept: the name search's index (``export_name_index``),
+the way-back network (``TrailGraph.write_network``), ``places.sqlite`` and ``landmarks.sqlite`` (``export_places``,
 ``export_landmarks``, from the GeoNames dump), and ``meta.json``: the hike count, the regions (from
 the uncut export's, of the side kept, or the cut file's areas), the credits of the sources the kept
 hikes come from, and a ``data_tag`` ending in the cut's name (``-eu``, ``-us``, ``-demo``), the
@@ -59,10 +59,12 @@ from dayhike.regions import _box
 from dayhike.serving import (
     PLACE_MARGIN_DEG,
     REGION_SPLIT_LON,
+    NAME_INDEX,
     REGIONS,
     ServingData,
     ServingExportError,
     export_landmarks,
+    export_name_index,
     export_places,
 )
 
@@ -229,6 +231,10 @@ def cut_serving(
         {"hikes": keep_hikes, "hike_boxes": keep_hikes},
         lambda db: _temp_ids(db, "keep", ids),
     )
+    _fresh(out / NAME_INDEX)
+    if (source / NAME_INDEX).is_file():  # the name search's index (ADR-0081), of the hikes kept
+        report(f"cut: {NAME_INDEX}")
+        export_name_index(out)
     reach_graph, reach_tiles = _reaches(data, keep, kept, areas)
     compose = False
     if (source / "trailgraph.sqlite").is_file() and data.meta.get("compose"):
