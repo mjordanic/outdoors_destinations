@@ -1,4 +1,4 @@
-"""``dayhike cut-serving`` (ADR-0081): a Europe + US export cut to one side, or to a cut file's
+"""``dayhike cut-serving`` (ADR-0082): a Europe + US export cut to one side, or to a cut file's
 areas, is a complete export of its own, and ranks as the uncut export with that side ticked.
 
 The test export is the web fixture twice: as it is (Croatia), and moved 120° west into the United

@@ -1,5 +1,5 @@
 # The demo showcase (`dayhike cut-serving --keep demo`, docs/deploy.md §1): the Eastern Alps and four
-# western US states, cut from the Europe and US export, about an eighth of its hikes (ADR-0081).
+# western US states, cut from the Europe and US export, about an eighth of its hikes (ADR-0082).
 #
 # Each [[area]] keeps the hikes starting in it: in each of its countries (ISO 3166 codes, as the
 # export's countries.npy has them) and, when it has one, inside its polygon of [lat, lon] corners.

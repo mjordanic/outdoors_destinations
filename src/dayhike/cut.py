@@ -1,4 +1,4 @@
-"""Cut a finished serving export down to Europe, the United States or a few areas (ADR-0081).
+"""Cut a finished serving export down to Europe, the United States or a few areas (ADR-0082).
 
 ``cut_serving`` reads a serving export (``dayhike.serving``), read-only, and writes a complete
 export of only the hikes it keeps, without the Catalog or the pipeline:
@@ -378,16 +378,21 @@ def _cut_trailgraph(source: Path, target: Path, reach: _Reach, side: bool) -> No
     water = reach.touching_sql("south", f"south + {WATER_TILE_DEG}", "west", f"west + {WATER_TILE_DEG}")
 
     def setup(db: sqlite3.Connection) -> None:
-        segments = reach.touching_sql("box.south", "box.north", "box.west", "box.east")
-        # One read of the Segments kept for their ends and relations: the table is most of the file.
+        db.execute("CREATE TEMP TABLE segment_keep (id INTEGER PRIMARY KEY)")
         db.execute(
-            "CREATE TEMP TABLE segment_keep AS SELECT s.id, s.a, s.b, s.relation_ids "
-            f"FROM src.segment_boxes box JOIN src.segments s ON s.id = box.id WHERE {segments}"
+            "INSERT INTO temp.segment_keep "
+            f"SELECT id FROM src.segment_boxes WHERE {reach.touching_sql('south', 'north', 'west', 'east')}"
+        )
+        # The Segments are most of the file: their ends and relations are read once, in id order (the
+        # order they are stored in), not in the R*Tree's.
+        db.execute(
+            "CREATE TEMP TABLE segment_ends AS SELECT s.id, s.a, s.b, s.relation_ids "
+            "FROM temp.segment_keep k CROSS JOIN src.segments s ON s.id = k.id"
         )
         db.execute(
             "CREATE TEMP TABLE junction_keep AS "
             f"SELECT id FROM src.junctions WHERE {reach.point_sql('latitude', 'longitude')} "
-            "UNION SELECT a FROM temp.segment_keep UNION SELECT b FROM temp.segment_keep"
+            "UNION SELECT a FROM temp.segment_ends UNION SELECT b FROM temp.segment_ends"
         )
         db.execute(
             "CREATE TEMP TABLE amenity_keep AS "
@@ -405,7 +410,7 @@ def _cut_trailgraph(source: Path, target: Path, reach: _Reach, side: bool) -> No
             "segments": segment,
             "segment_ways": "segment_id IN (SELECT id FROM temp.segment_keep)",
             "segment_boxes": segment,
-            "relations": "id IN (SELECT DISTINCT r.value FROM temp.segment_keep s, json_each(s.relation_ids) r)",
+            "relations": "id IN (SELECT DISTINCT r.value FROM temp.segment_ends s, json_each(s.relation_ids) r)",
             "amenities": amenity,
             "amenity_boxes": amenity,
             "climate_cells": climate,
@@ -432,8 +437,9 @@ def _cut_sqlite(
     partial.unlink(missing_ok=True)
     db = sqlite3.connect(f"file:{partial}", uri=True)  # a URI connection, so the source attaches read-only
     try:
-        db.executescript("PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF; PRAGMA temp_store = FILE;")
+        db.executescript("PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF; PRAGMA cache_size = -262144;")
         db.execute("ATTACH DATABASE ? AS src", (f"file:{source}?mode=ro&immutable=1",))
+        db.executescript(f"PRAGMA src.cache_size = -262144; PRAGMA src.mmap_size = {source.stat().st_size};")
         schema = db.execute("SELECT type, name, sql FROM src.sqlite_master WHERE sql IS NOT NULL ORDER BY rowid").fetchall()
         virtual = [name for kind, name, sql in schema if kind == "table" and sql.upper().startswith("CREATE VIRTUAL")]
         tables = [
