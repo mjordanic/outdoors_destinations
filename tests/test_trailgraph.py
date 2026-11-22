@@ -776,7 +776,7 @@ def test_a_composed_hike_is_named_by_its_main_trails_and_start_or_by_the_hiker(d
     named = data.compose(summit, "Grey Peak the steep way")
 
     # The Lakeside Inn, 45 m from the start A, is a restaurant: no name for a hike (ADR-0022).
-    assert (proposed["name"], proposed["name_origin"]) == ("Summit Line", "proposed")
+    assert (proposed["name"], proposed["name_origin"]) == ("Your hike along Summit Line", "proposed")
     assert (named["name"], named["name_origin"]) == ("Grey Peak the steep way", "hiker")
     assert named["facts"] == proposed["facts"]
 
@@ -794,7 +794,7 @@ def test_api_segments_compose_rank_and_pair(client, summit: Route) -> None:
     hike = client.post("/api/compose", json=composed).json()
     assert hike["route"]["text"] == str(summit) and hike["facts"]["round_trip"] == 1.0  # with its way back
     assert client.post("/api/compose", json={**composed, "return_to_start": False}).json()["facts"]["round_trip"] == 0.0
-    assert hike["name"] == "Summit Line"
+    assert hike["name"] == "Your hike along Summit Line"
     named = client.post("/api/compose", json={**composed, "name": "  Up to Grey Peak "}).json()
     assert named["name"] == "Up to Grey Peak"
     ranked = client.post("/api/rank", json={"composed": composed}).json()
@@ -1137,11 +1137,11 @@ def test_cli_samples_the_trailgraph_and_composes(
     assert capsys.readouterr().out.strip() == str(sum(len(s["coords"]) // 8 for s in _segments(sampled)))
     assert main(["compose", "--data", str(data.directory), "--limit", "2", str(summit)]) == 0
     lines = capsys.readouterr().out.strip().splitlines()
-    assert lines[0].startswith("Summit Line\t5456 m\t")  # up and back
+    assert lines[0].startswith("Your hike along Summit Line\t5456 m\t")  # up and back
     assert lines[0].endswith("\tway back 2728 m (retrace)")
     assert len(lines) == 3 and all(str(SUMMIT_LINE) not in line.split("\t")[0] for line in lines[1:])
     assert main(["compose", "--data", str(data.directory), "--limit", "2", "--one-way", str(summit)]) == 0
-    assert capsys.readouterr().out.startswith("Summit Line\t2728 m\t")
+    assert capsys.readouterr().out.startswith("Your hike along Summit Line\t2728 m\t")
 
 
 def _sampled_trailgraph(root: Path, workers: int, monkeypatch: pytest.MonkeyPatch) -> list[str]:

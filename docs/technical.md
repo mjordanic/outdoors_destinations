@@ -2176,8 +2176,8 @@ Link the Hiker did not take; "connect here" crosses a Link; the walk may repeat
 a Segment and is measured as drawn; while drawn, its readout estimates the
 climb from the Segments ("about"), and once it is the hike shown below (after
 "Use this hike" or "Edit on the map") it shows that hike's measured climb,
-"as measured", so the two agree; it gets a proposed name, from the trails
-walked longest (each at least 30 % of it) and a named place at the start, that the Hiker may change; its
+"as measured", so the two agree; it gets a proposed name that says it is the Hiker's own walk, "Your hike along"
+the trails walked longest (each at least 30 % of it) "from" a named place at the start, that the Hiker may change; its
 link, `#compose=1:104.11,105.13`, shares it as the OSM ways it walks from node
 to node (and `&name=…` when the Hiker named it), so it opens the same walk after
 a rebuild that adds or drops Junctions, and nothing is stored); see what
@@ -2459,7 +2459,7 @@ short:
 | Method | Path | Answers |
 | --- | --- | --- |
 | GET | `/api/health` | that the server is up |
-| GET | `/api/info` | hike count, coverage box, `core` (the box of the middle 80 % of Trailheads, where the map opens), `typical_pair` (0.47: below it the page calls a list's matches weak), attribution, which features are on |
+| GET | `/api/info` | hike count, coverage box, `core` (the box of the middle 80 % of Trailheads, where the map opens), `typical_pair` (0.47: below it the page calls a list's matches weak), `covered` (what the site covers, as its pages say it), attribution, which features are on |
 | GET | `/api/measures` | the Measures, grouped, with their plain descriptions |
 | GET | `/api/search?q=` | hikes by name |
 | GET | `/api/place?q=` | places by name, for the drive-time Origin |
@@ -2524,7 +2524,8 @@ order; `draw`, the page's draw number, draws the loop search's 20 Trailheads
 from the best 60 DayHikes the same way, and without it they are the best 20;
 the answer echoes `max_hours`, `max_km`, `regions`, `group_km`, `draw` and
 how many starts `after` had, `reachable` counts the hikes within the limits, `in_regions` those in `regions`, and
-each hike has `drive_hours` and `distance_km`, null without that limit or start;
+each hike has `drive_hours` and `distance_km`, null without that limit or start, and `region`, the
+region (`europe` or `us`) its start is in, so the page says when a list from every region keeps to one;
 ADR-0046: each row has `more_here`, the DayHikes starting in its area that are
 not listed and score within 0.05 of it, and `in_area`, every DayHike ranked
 that starts in its area, so the page adds the areas of the rows it did not draw
