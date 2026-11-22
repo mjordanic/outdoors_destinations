@@ -35,11 +35,14 @@ similarity directory live. It writes a directory a server memory-maps:
   and searches hike names only.
 - ``countries.npy``: per Trailhead (``trailheads.npy`` order) the ISO 3166 code of the
   country the hike starts in, for its emergency number (``export_countries``), when
-  a Natural Earth countries file is given. ``export_countries`` writes it beside an
-  existing export too; without it a hike's country is that of the town nearest its start.
+  a Natural Earth countries file is given; a Trailhead within ``BORDER_M`` of an OpenStreetMap
+  national border takes the country OSM puts it in, when OSM boundaries are given too.
+  ``export_countries`` writes it beside an existing export too; without it a hike's country is
+  that of the town nearest its start.
 - ``borders.npy``: per Trailhead the ISO 3166 code of the country across the national border its
   route crosses or its Trailhead is within ``BORDER_M`` of, else "", for that country's emergency
-  number too, when Natural Earth boundary lines are given with the countries file.
+  number too, when Natural Earth boundary lines are given with the countries file; for a Trailhead
+  the OSM borders moved, the country Natural Earth put it in, with or without the lines.
 - ``meta.json``: written last, so a directory without it is incomplete.
 
 ``ServingData`` opens such a directory without ``Catalog.open``: name search,
@@ -544,14 +547,20 @@ def emergency_services() -> dict[str, dict]:
 
 
 def export_countries(
-    out_dir: Path | str, countries_path: Path | str | None = None, borders_path: Path | str | None = None
+    out_dir: Path | str,
+    countries_path: Path | str | None = None,
+    borders_path: Path | str | None = None,
+    osm_borders_paths: Sequence[Path | str] = (),
 ) -> Path:
     """Write ``countries.npy`` into the export ``out_dir``: per Trailhead the ISO 3166 code of the
     country it is in, from Natural Earth admin-0 country shapes (``countries_path``, the 10m
     GeoJSON); for a Trailhead outside every shape (an island or coast the shapes leave out) the
-    country of the nearest place in ``places.sqlite``. With Natural Earth land boundary lines
-    (``borders_path``) also ``borders.npy`` (``_across_borders``); without them an old one is
-    dropped. Reads only ``trailheads.npy``, ``places.sqlite`` and, with borders, ``hikes.sqlite``.
+    country of the nearest place in ``places.sqlite``. A Trailhead within ``BORDER_M`` of an
+    OpenStreetMap national border (``osm_borders_paths``, ``_osm_borders``) takes the country OSM
+    puts it in instead (``_osm_start_countries``). With Natural Earth land boundary lines
+    (``borders_path``) also ``borders.npy`` (``_across_borders``), where a Trailhead so moved has
+    Natural Earth's country, with or without them; with neither an old one is dropped. Reads only ``trailheads.npy``, ``places.sqlite``, the OSM files and, with borders,
+    ``hikes.sqlite``.
 
     Raises ServingExportError, writing nothing, when a Trailhead has no country, or its country
     no row in ``EMERGENCY_PATH``: every hike shows its emergency number.
@@ -561,6 +570,8 @@ def export_countries(
     out = Path(out_dir)
     if borders_path is not None and countries_path is None:
         raise ServingExportError("border lines need the countries file: its ADM0_A3 codes name the countries either side")
+    if osm_borders_paths and countries_path is None:
+        raise ServingExportError("OSM borders need the countries file: it tells which side of each is which country")
     trailheads = np.load(out / "trailheads.npy").reshape(-1, 2)
     codes = np.full(len(trailheads), "", dtype="<U2")
     code_of_a3: dict[str, str] = {}  # ADM0_A3, the code a boundary line names its sides by
@@ -574,10 +585,8 @@ def export_countries(
                 shape_codes.append(code)
                 if properties.get("ADM0_A3"):
                     code_of_a3[properties["ADM0_A3"]] = code
-        points = shapely.points(trailheads[:, 1], trailheads[:, 0])
         tree, shape_codes = shapely.STRtree(shapes), np.array(shape_codes, dtype="<U2")
-        at, shape = tree.query(points, predicate="within")
-        codes[at] = shape_codes[shape]
+        codes = _shape_codes(tree, shape_codes, trailheads[:, ::-1])
     places = out / "places.sqlite"
     if (codes == "").any() and places.is_file():
         with scoped(sqlite3.connect(f"file:{places}?mode=ro", uri=True)) as db:
@@ -588,11 +597,19 @@ def export_countries(
             _, nearest = cKDTree(_unit(where[:, 0], where[:, 1])).query(_unit(trailheads[missing, 0], trailheads[missing, 1]))
             codes[missing] = np.array([country for country, *_ in rows], dtype="<U2")[nearest]
     known = emergency_services()
+    shown = codes  # Natural Earth's country, which a hike the OSM borders move shows second
+    if osm_borders_paths:
+        start = _osm_start_countries(trailheads, *_osm_borders(osm_borders_paths, tree, shape_codes))
+        codes = np.where(np.isin(start, list(known)), start, codes)
     unknown = {code: int((codes == code).sum()) for code in sorted(set(codes.tolist()) - set(known))}
     if unknown:
         listed = ", ".join(f"{code or 'no country'} ({count} Trailheads)" for code, count in unknown.items())
         raise ServingExportError(f"no emergency number for {listed}: add the country to {EMERGENCY_PATH}")
     across = None if borders_path is None else _across_borders(out, trailheads, codes, borders_path, code_of_a3)
+    moved = codes != shown
+    if moved.any():  # never lose the country Natural Earth says a start is in: show it beside the new one
+        across = np.full(len(codes), "", dtype="<U2") if across is None else across
+        across[moved] = shown[moved]
     np.save(out / "countries.npy", codes)
     if across is None:
         (out / "borders.npy").unlink(missing_ok=True)
@@ -654,19 +671,170 @@ def _across_borders(
     return across
 
 
+# OpenStreetMap draws national borders to the metre, where Natural Earth's 10m lines lie up to about a
+# kilometre off (the Rio Grande, the 45th parallel) and put a start just inside a country in its neighbour.
+# Which side of an OSM border is which country is what Natural Earth says this far off it, at up to
+# OSM_SIDE_SAMPLES points along each border way, summed over the ways of the whole border (``_chains``).
+OSM_SIDE_M = 2_500
+OSM_SIDE_SAMPLES = 25
+
+
+def _osm_borders(
+    paths: Sequence[Path | str], tree: shapely.STRtree, shape_codes: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, dict[str, shapely.Geometry]]:
+    """The land borders in the OpenStreetMap files ``paths`` (extracts' national boundaries, as
+    ``osmium tags-filter <extract> r/admin_level=2`` writes them): every way two admin_level=2
+    boundary relations of different ISO3166-1:alpha2 codes share, other than a maritime one, as
+    segments ((lon, lat) ends) and per segment its (left, right) country, and by code the shape of
+    every country an extract holds whole. The sides are those most of the border's samples
+    ``OSM_SIDE_M`` off it fall in among Natural Earth's shapes (``tree``, ``shape_codes``); a border
+    they do not tell apart has "" for both."""
+    import osmium
+
+    countries: dict[int, set[str]] = {}
+    for path in paths:
+        for relation in osmium.FileProcessor(str(path), osmium.osm.RELATION):
+            tags = relation.tags
+            code = tags.get("ISO3166-1:alpha2") or tags.get("ISO3166-1")
+            if tags.get("boundary") == "administrative" and tags.get("admin_level") == "2" and code:
+                for member in relation.members:
+                    if member.type == "w":
+                        countries.setdefault(member.ref, set()).add(code.upper())
+    pairs = {way: tuple(sorted(codes)) for way, codes in countries.items() if len(codes) == 2}
+    lines: dict[int, np.ndarray] = {}
+    ends: dict[int, tuple[int, int]] = {}  # each way's first and last node
+    whole: dict[str, shapely.Geometry] = {}
+    wkb = osmium.geom.WKBFactory()
+    for path in paths:
+        for obj in osmium.FileProcessor(str(path)).with_areas(osmium.filter.TagFilter(("admin_level", "2"))):
+            if obj.is_area() and not obj.from_way():  # a country an extract holds every way of
+                code = obj.tags.get("ISO3166-1:alpha2") or obj.tags.get("ISO3166-1")
+                if obj.tags.get("boundary") == "administrative" and code:
+                    try:
+                        whole[code.upper()] = shapely.from_wkb(wkb.create_multipolygon(obj))
+                    except RuntimeError:  # its rings do not close: the extract holds only part of it
+                        pass
+            if not obj.is_way() or obj.id not in pairs or obj.tags.get("maritime") == "yes":
+                continue
+            if len(obj.nodes) >= 2 and all(node.location.valid() for node in obj.nodes):
+                lines[obj.id] = np.array([(node.lon, node.lat) for node in obj.nodes])
+                ends[obj.id] = (obj.nodes[0].ref, obj.nodes[-1].ref)
+    if not lines:
+        return np.empty((0, 2, 2)), np.empty((0, 2), dtype="<U2"), whole
+    segments = np.concatenate([np.stack([xy[:-1], xy[1:]], axis=1) for xy in lines.values()])
+    of = np.repeat(np.arange(len(lines)), [len(xy) - 1 for xy in lines.values()])  # each segment's way
+    real = (segments[:, 0] != segments[:, 1]).any(axis=1)
+    segments, of = segments[real], of[real]
+    pair = np.array([pairs[way] for way in lines], dtype="<U2")
+    first = np.searchsorted(of, np.arange(len(lines)))
+    count = np.bincount(of, minlength=len(lines))
+    asked = np.unique(
+        np.concatenate([start + np.linspace(0, n - 1, min(n, OSM_SIDE_SAMPLES)).astype(int) for start, n in zip(first, count) if n])
+    )
+    a, b = segments[asked, 0], segments[asked, 1]
+    middle, cos = (a + b) / 2, np.cos(np.radians((a[:, 1] + b[:, 1]) / 2))
+    east, north = (b[:, 0] - a[:, 0]) * cos, b[:, 1] - a[:, 1]
+    reach = np.degrees(OSM_SIDE_M / EARTH_RADIUS_M) / np.hypot(east, north)
+    off = np.stack([-north * reach / cos, east * reach], axis=1)  # to the left of the segment
+    left, right = _shape_codes(tree, shape_codes, middle + off), _shape_codes(tree, shape_codes, middle - off)
+    one, other = pair[of[asked], 0], pair[of[asked], 1]
+    vote = (left == one).astype(int) + (right == other) - (left == other) - (right == one)
+    chain, sign = _chains([pairs[way] for way in lines], [ends[way] for way in lines])
+    votes = np.zeros(len(lines), dtype=np.int64)
+    np.add.at(votes, chain[of[asked]], vote * sign[of[asked]])
+    along = votes[chain] * sign  # > 0: the way has its pair's first country on its left
+    sides = np.where((along > 0)[:, None], pair, np.where((along < 0)[:, None], pair[:, ::-1], ""))
+    return segments, sides[of], whole
+
+
+def _chains(pairs: Sequence[tuple[str, str]], ends: Sequence[tuple[int, int]]) -> tuple[np.ndarray, np.ndarray]:
+    """Per way (its two countries ``pairs`` and its first and last node ``ends``) the border it is part
+    of, the first way of those of the same two countries that meet it end to end, and 1 if it runs the
+    way that one does, else -1."""
+    at: dict[tuple[tuple[str, str], int], list[tuple[int, int]]] = {}
+    for way, (pair, way_ends) in enumerate(zip(pairs, ends)):
+        for end, node in enumerate(way_ends):
+            at.setdefault((pair, node), []).append((way, end))
+    chain, sign = np.full(len(ends), -1, dtype=np.int64), np.zeros(len(ends), dtype=np.int64)
+    for first in range(len(ends)):
+        if chain[first] >= 0:
+            continue
+        chain[first], sign[first], todo = first, 1, [first]
+        while todo:
+            way = todo.pop()
+            for end, node in enumerate(ends[way]):
+                for other, other_end in at[(pairs[way], node)]:
+                    if chain[other] < 0:  # one that ends where this one ends runs against it
+                        chain[other], sign[other] = first, sign[way] * (1 if other_end != end else -1)
+                        todo.append(other)
+    return chain, sign
+
+
+def _shape_codes(tree: shapely.STRtree, shape_codes: np.ndarray, lon_lat: np.ndarray) -> np.ndarray:
+    """The code of the shape in ``tree`` each (lon, lat) point is within; "" for one in none."""
+    codes = np.full(len(lon_lat), "", dtype="<U2")
+    at, shape = tree.query(shapely.points(lon_lat[:, 0], lon_lat[:, 1]), predicate="within")
+    codes[at] = shape_codes[shape]
+    return codes
+
+
+def _osm_start_countries(
+    trailheads: np.ndarray, segments: np.ndarray, sides: np.ndarray, whole: Mapping[str, shapely.Geometry]
+) -> np.ndarray:
+    """Per Trailhead within ``BORDER_M`` of a border (``_osm_borders``' ``segments``, their (left,
+    right) ``sides`` and the ``whole`` countries' shapes) the country it is in: the whole country whose
+    shape holds it, else the country on its side of the border nearest it, or the one across that
+    when the side's own shape is whole and leaves it out; "" for every other Trailhead, when the
+    segments nearest it (those meeting at the point nearest it) disagree, or neither will do."""
+    start = np.full(len(trailheads), "", dtype="<U2")
+    if not len(segments):
+        return start
+    tree = shapely.STRtree(shapely.linestrings(segments))
+    points = shapely.points(trailheads[:, 1], trailheads[:, 0])
+    rows, hit = tree.query(points, predicate="dwithin", distance=_degrees_within(trailheads[:, 0], BORDER_M))
+    origin, step = _plane(trailheads[rows], segments[hit])
+    metres = _metres_to_segments(trailheads[rows], segments[hit])
+    nearest = np.full(len(trailheads), np.inf)
+    np.minimum.at(nearest, rows, metres)
+    tied = (metres <= BORDER_M) & (metres <= nearest[rows] + 0.01)
+    rows, hit, origin, step = rows[tied], hit[tied], origin[tied], step[tied]
+    turn = origin[:, 0] * step[:, 1] - origin[:, 1] * step[:, 0]  # > 0: the Trailhead is left of the segment
+    across = start.copy()
+    for into, (left, right) in ((start, (0, 1)), (across, (1, 0))):
+        code = np.where(turn > 0, sides[hit, left], np.where(turn < 0, sides[hit, right], ""))
+        into[rows] = code
+        into[rows[code != into[rows]]] = ""
+    # A whole country's shape is drawn from the same ways, so it says the same, also where the sides do not.
+    near, codes = np.unique(rows), list(whole)
+    within = np.full(len(near), "", dtype="<U2")
+    if whole:
+        within = _shape_codes(shapely.STRtree(list(whole.values())), np.array(codes, dtype="<U2"), trailheads[near, ::-1])
+    # Outside every whole shape a Trailhead is in no whole country: its side's, else the one across.
+    side, other = start[near], across[near]
+    outside = np.where(~np.isin(side, codes), side, np.where(~np.isin(other, codes), other, ""))
+    start[near] = np.where(within != "", within, outside)
+    return start
+
+
 def _degrees_within(lat: np.ndarray, metres: np.ndarray | float) -> np.ndarray:
     """A radius in degrees holding every point within ``metres`` of a point at ``lat``: a bound to query by."""
     degrees = np.degrees(np.asarray(metres, dtype=np.float64) / EARTH_RADIUS_M)
     return degrees / np.cos(np.radians(np.minimum(np.abs(lat) + degrees, 89.0)))
 
 
-def _metres_to_segments(points: np.ndarray, segments: np.ndarray) -> np.ndarray:
-    """Metres from each (lat, lon) point to its segment ((lon, lat) ends), on the plane tangent at
-    the point: within a few metres for the ``BORDER_M`` a border flag needs."""
+def _plane(points: np.ndarray, segments: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Each segment's ((lon, lat) ends) start and step in metres (east, north) on the plane tangent at
+    its (lat, lon) point, the point at the origin."""
     scale = math.radians(1) * EARTH_RADIUS_M
     x = (segments[..., 0] - points[:, 1:]) * np.cos(np.radians(points[:, :1])) * scale
     y = (segments[..., 1] - points[:, :1]) * scale
-    start, step = np.stack([x[:, 0], y[:, 0]], axis=-1), np.stack([x[:, 1] - x[:, 0], y[:, 1] - y[:, 0]], axis=-1)
+    return np.stack([x[:, 0], y[:, 0]], axis=-1), np.stack([x[:, 1] - x[:, 0], y[:, 1] - y[:, 0]], axis=-1)
+
+
+def _metres_to_segments(points: np.ndarray, segments: np.ndarray) -> np.ndarray:
+    """Metres from each (lat, lon) point to its segment ((lon, lat) ends), on the plane tangent at
+    the point: within a few metres for the ``BORDER_M`` a border flag needs."""
+    start, step = _plane(points, segments)
     length2 = (step**2).sum(axis=-1)
     along = np.divide(-(start * step).sum(axis=-1), length2, out=np.zeros_like(length2), where=length2 > 0)
     nearest = start + np.clip(along, 0, 1)[:, None] * step
@@ -683,6 +851,7 @@ def export_serving(
     geonames_path: Path | str | None = None,
     countries_path: Path | str | None = None,
     borders_path: Path | str | None = None,
+    osm_borders_paths: Sequence[Path | str] = (),
     regions: Sequence[Region] = (),
     external_dir: Path | str | None = None,
     progress: Progress | None = None,
@@ -696,8 +865,9 @@ def export_serving(
     existing snap cache; with ``valhalla_url`` every Trailhead not in it is
     snapped now, so a server never has to. ``geonames_path`` is a GeoNames
     dump (``allCountries``, zip or txt) for ``places.sqlite``; ``countries_path`` the Natural
-    Earth countries GeoJSON for ``countries.npy``, ``borders_path`` its land boundary lines for
-    ``borders.npy``. ``regions``, the ones the Catalog was built from, are
+    Earth countries GeoJSON for ``countries.npy``, ``osm_borders_paths`` OpenStreetMap national
+    boundaries for the country of a Trailhead near one, ``borders_path`` Natural Earth's land boundary
+    lines for ``borders.npy`` (``export_countries``). ``regions``, the ones the Catalog was built from, are
     named in ``meta.json`` (label and continent) for the site's pages; none leaves them saying Europe.
     ``external_dir`` holds the caches of the Catalog's external sources (``dayhike fetch-external``): an
     OpenStreetMap hike that lies on one of their records names it (``OfficialRecords``), and an external
@@ -784,8 +954,8 @@ def export_serving(
     else:
         (out / "places.sqlite").unlink(missing_ok=True)
     export_landmarks(out, geonames_path)
-    if countries_path is not None or borders_path is not None:  # border lines alone fail: they need countries
-        export_countries(out, countries_path, borders_path)
+    if countries_path is not None or borders_path is not None or osm_borders_paths:  # borders alone fail: they need countries
+        export_countries(out, countries_path, borders_path, osm_borders_paths)
     else:
         (out / "countries.npy").unlink(missing_ok=True)
         (out / "borders.npy").unlink(missing_ok=True)

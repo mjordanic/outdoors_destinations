@@ -485,6 +485,14 @@ def main(argv: list[str] | None = None) -> int:
         "within 2 km of a border also shows the other country's emergency number",
     )
     export.add_argument(
+        "--osm-borders",
+        type=Path,
+        action="append",
+        default=[],
+        help="OpenStreetMap national boundaries (osmium tags-filter <extract> r/admin_level=2), repeatable, with "
+        "--countries: a hike starting within 2 km of a border takes the country OSM puts it in and also shows the one it had",
+    )
+    export.add_argument(
         "--region",
         action="append",
         default=[],
@@ -515,6 +523,14 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="Natural Earth 10m admin-0 land boundary lines GeoJSON, with --countries: a hike crossing or starting "
         "within 2 km of a border also shows the other country's emergency number",
+    )
+    countries.add_argument(
+        "--osm-borders",
+        type=Path,
+        action="append",
+        default=[],
+        help="OpenStreetMap national boundaries (osmium tags-filter <extract> r/admin_level=2), repeatable, with "
+        "--countries: a hike starting within 2 km of a border takes the country OSM puts it in and also shows the one it had",
     )
     places = subparsers.add_parser(
         "export-places", help="Add GeoNames place search and the hike search's Landmarks beside an existing serving export"
@@ -627,13 +643,13 @@ def main(argv: list[str] | None = None) -> int:
             export.error(str(exc))
         return _export_serving(
             args.catalog, args.out, args.valhalla_tiles, args.snaps, args.valhalla_url, args.geonames, args.countries,
-            args.borders, regions, args.external_dir,
+            args.borders, regions, args.external_dir, args.osm_borders,
         )
     if args.command == "export-countries":
         from dayhike.serving import ServingExportError, export_countries
 
         try:
-            print(export_countries(args.out, args.countries, args.borders))
+            print(export_countries(args.out, args.countries, args.borders, args.osm_borders))
         except ServingExportError as exc:
             print(exc, file=sys.stderr)
             return 1
@@ -1018,6 +1034,7 @@ def _export_serving(
     borders: Path | None,
     regions: list[Region],
     external_dir: Path | None = None,
+    osm_borders: tuple[Path, ...] | list[Path] = (),
 ) -> int:
     from dayhike.external import EXTERNAL_DIR
     from dayhike.serving import ServingExportError, export_serving, fetch_geonames
@@ -1033,6 +1050,7 @@ def _export_serving(
                 geonames_path=geonames and fetch_geonames(geonames),
                 countries_path=countries,
                 borders_path=borders,
+                osm_borders_paths=osm_borders,
                 regions=regions,
                 external_dir=EXTERNAL_DIR if external_dir is None else external_dir,
                 progress=_progress,
