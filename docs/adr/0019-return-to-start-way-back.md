@@ -1,5 +1,5 @@
 ---
-status: accepted (the trail search for the way back bounded at 50 km since ADR-0035; what the page says amended by ADR-0022; a liked multi-day route is measured one way since ADR-0072; a trail back no harder than the hike since ADR-0076; the grade with the way back the hike's own since ADR-0078)
+status: accepted (the trail search for the way back bounded at 50 km since ADR-0035; what the page says amended by ADR-0022; a liked multi-day route is measured one way since ADR-0072; a trail back no harder than the hike since ADR-0076, or than `mountain_hiking` since ADR-0080; the grade with the way back the hike's own since ADR-0078)
 ---
 
 # Return to start: every hike measured with its way back

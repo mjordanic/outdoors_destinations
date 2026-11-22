@@ -1,5 +1,5 @@
 ---
-status: accepted (amends ADR-0019's WayBack)
+status: accepted (amends ADR-0019's WayBack; a way back may always walk up to `mountain_hiking` since ADR-0080)
 ---
 
 # A way back is never harder than the hike

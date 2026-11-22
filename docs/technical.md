@@ -588,7 +588,8 @@ the Catalog, never the GeometryStore, and rebuilds nothing per query.
 way back to its Trailhead: the Seed, a composed Seed and every DayHike it is
 compared with alike. The way back is the shortest one: none for a loop that
 ends where it starts, a straight step for ends at most 50 m apart, else the
-shortest walk over the TrailGraph's trails no harder than the hike (ADR-0076)
+shortest walk over the TrailGraph's trails no harder than the hike, or than
+`mountain_hiking` (T2) for an easier or ungraded hike (ADR-0076, ADR-0080),
 when it is shorter than the hike itself backwards and than 50 km
 (`WAY_BACK_SEARCH_M`, ADR-0035), else the hike retraced. So a hike that ends 500 m from its
 start adds about 500 m, and a line up to a summit is compared up and back:
