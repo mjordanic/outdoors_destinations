@@ -64,7 +64,9 @@ Pick one of three ways:
    its middle, so a hike along the shore of a big lake can read several km. A
    typo is fine here too. When it lists only some of the hikes there, press
    **Show on map**: the map opens at that place, with every hike there to
-   click.
+   click. Where a place has too many hikes to draw, the map zooms in on it by
+   itself, a step at a time, until they show as lines; it stops as soon as you
+   move or zoom the map yourself.
 
    Each hike in the list says the town it starts near and its country ("near
    Igls, AT"), so hikes of one name are easy to tell apart. A route of several
