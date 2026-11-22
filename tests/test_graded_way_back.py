@@ -1,6 +1,6 @@
 """A way back is never harder than the hike (ADR-0076).
 
-tests/fixtures/graded_way_back.osm holds three Summit Trails, each with a
+tests/fixtures/graded_way_back.osm holds five Summit Trails, each with a
 shorter graded path between its ends (see its comment).
 """
 
@@ -62,12 +62,36 @@ def test_an_easy_way_back_beside_a_harder_shorter_one_is_taken(graph: TrailGraph
     assert back.metres == pytest.approx(7_740, abs=40)
 
 
-def test_a_hike_with_no_grade_takes_no_graded_way_back(graph: TrailGraph) -> None:
-    # A way back with a grade would give the round trip a Difficulty the hike has not.
+def test_a_way_back_may_always_walk_up_to_mountain_hiking(graph: TrailGraph) -> None:
+    # A hike with no grade, or graded hiking (T1), may walk back on a T2 path.
+    lat, lon = _summit_trail(-112.0)
+
+    for rank in (math.nan, HIKING):
+        back = way_back(lat, lon, graph, rank)
+        assert back.kind == "trail"
+        assert back.walk.sac_scale == "mountain_hiking"
+        assert back.metres == pytest.approx(5_560, abs=20)
+
+
+def test_a_hike_with_no_grade_takes_no_way_back_harder_than_mountain_hiking(graph: TrailGraph) -> None:
+    # The only shorter way back is a T3 path.
     lat, lon = _summit_trail(-114.0)
 
     assert way_back(lat, lon, graph, math.nan).kind == "retrace"
+    assert way_back(lat, lon, graph, float(SAC_SCALE_RANK["mountain_hiking"])).kind == "retrace"
     assert way_back(lat, lon, graph, float(SAC_SCALE_RANK["demanding_mountain_hiking"])).kind == "trail"
+
+
+def test_a_harder_hike_walks_back_on_up_to_its_own_grade(graph: TrailGraph) -> None:
+    alpine = float(SAC_SCALE_RANK["alpine_hiking"])
+
+    # A T4 path back for a T4 hike, not for a T3 one.
+    lat, lon = _summit_trail(-110.0)
+    assert way_back(lat, lon, graph, alpine).kind == "trail"
+    assert way_back(lat, lon, graph, float(SAC_SCALE_RANK["demanding_mountain_hiking"])).kind == "retrace"
+    # No T5 scramble back for a T4 hike.
+    lat, lon = _summit_trail(-118.0)
+    assert way_back(lat, lon, graph, alpine).kind == "retrace"
 
 
 def test_a_network_saved_without_grades_is_built_again(catalog: Path, tmp_path: Path) -> None:

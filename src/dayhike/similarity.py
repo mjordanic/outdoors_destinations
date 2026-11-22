@@ -269,6 +269,7 @@ _FACTS_VERSION = hashlib.sha256(
             "way-back-no-harder",  # a trail back walks no path graded above the hike (ADR-0076)
             "summit-height", SUMMIT_TRUST_M,  # a summited Peak's mapped height can be the top (``summit_height``)
             "own-difficulty",  # the way back does not grade the hike (``_add_way_back``)
+            "way-back-floor-t2",  # a trail back may always walk up to mountain_hiking (ADR-0080)
         ]
     ).encode()
 ).hexdigest()[:16]  # fmt: skip

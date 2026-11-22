@@ -9,7 +9,11 @@
        Easy Descent Trail (4002, hiking): beside the same Scramble, a 7.7 km
          hiking path S - E - P between the same two Junctions: it is the way back.
        Ungraded Trail (4003, no sac_scale): the only shorter way back is the
-         5.6 km Steep Cut, a demanding_mountain_hiking path: the hike is retraced. -->
+         5.6 km Steep Cut, a demanding_mountain_hiking path: the hike is retraced.
+       Ungraded Ridge Trail (4004, no sac_scale): the only shorter way back is
+         the 5.6 km Ridge Path, a mountain_hiking path: it is the way back.
+       Alpine Trail (4005, alpine_hiking): the only shorter way back is the
+         5.6 km Alpine Cut, an alpine_hiking path: it is the way back. -->
   <node id="1" lat="36.0000000" lon="-118.0000000" version="1"/><!-- P -->
   <node id="2" lat="36.0000000" lon="-117.9000000" version="1"/><!-- W -->
   <node id="3" lat="36.0500000" lon="-118.0000000" version="1"/><!-- S -->
@@ -20,6 +24,12 @@
   <node id="21" lat="36.0000000" lon="-114.0000000" version="1"/><!-- P -->
   <node id="22" lat="36.0000000" lon="-113.9000000" version="1"/><!-- W -->
   <node id="23" lat="36.0500000" lon="-114.0000000" version="1"/><!-- S -->
+  <node id="31" lat="36.0000000" lon="-112.0000000" version="1"/><!-- P -->
+  <node id="32" lat="36.0000000" lon="-111.9000000" version="1"/><!-- W -->
+  <node id="33" lat="36.0500000" lon="-112.0000000" version="1"/><!-- S -->
+  <node id="41" lat="36.0000000" lon="-110.0000000" version="1"/><!-- P -->
+  <node id="42" lat="36.0000000" lon="-109.9000000" version="1"/><!-- W -->
+  <node id="43" lat="36.0500000" lon="-110.0000000" version="1"/><!-- S -->
   <way id="401" version="1">
     <nd ref="1"/>
     <nd ref="2"/>
@@ -65,6 +75,31 @@
     <tag k="highway" v="path"/>
     <tag k="sac_scale" v="demanding_mountain_hiking"/>
   </way>
+  <way id="431" version="1">
+    <nd ref="31"/>
+    <nd ref="32"/>
+    <nd ref="33"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="432" version="1">
+    <nd ref="33"/>
+    <nd ref="31"/>
+    <tag k="highway" v="path"/>
+    <tag k="sac_scale" v="mountain_hiking"/>
+  </way>
+  <way id="441" version="1">
+    <nd ref="41"/>
+    <nd ref="42"/>
+    <nd ref="43"/>
+    <tag k="highway" v="path"/>
+    <tag k="sac_scale" v="alpine_hiking"/>
+  </way>
+  <way id="442" version="1">
+    <nd ref="43"/>
+    <nd ref="41"/>
+    <tag k="highway" v="path"/>
+    <tag k="sac_scale" v="alpine_hiking"/>
+  </way>
   <relation id="4001" version="1">
     <member type="way" ref="401" role=""/>
     <tag k="type" v="route"/>
@@ -82,5 +117,17 @@
     <tag k="type" v="route"/>
     <tag k="route" v="hiking"/>
     <tag k="name" v="Ungraded Trail"/>
+  </relation>
+  <relation id="4004" version="1">
+    <member type="way" ref="431" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Ungraded Ridge Trail"/>
+  </relation>
+  <relation id="4005" version="1">
+    <member type="way" ref="441" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Alpine Trail"/>
   </relation>
 </osm>

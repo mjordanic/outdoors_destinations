@@ -1197,8 +1197,8 @@ class WayBack:
     ``kind`` is ``none`` (it ends where it starts), ``step`` (a straight step
     over a gap of at most ``GAP_JOIN_M``, as the main walk joins its ways),
     ``trail`` (the shortest walk over the TrailGraph no harder than the walk
-    itself, in ``walk``) or ``retrace`` (the walk itself, backwards), the
-    shortest of them; ``metres`` is its length.
+    itself, or than ``mountain_hiking`` for an easier walk, in ``walk``) or
+    ``retrace`` (the walk itself, backwards), the shortest of them; ``metres`` is its length.
     """
 
     kind: str
@@ -1211,10 +1211,10 @@ def way_back(lat: np.ndarray, lon: np.ndarray, graph: TrailGraph | None, difficu
 
     Ends at most ``GAP_JOIN_M`` apart take the straight step. Otherwise the
     shortest walk over the TrailGraph's trails and gaps (never a Link) no
-    harder than the walk, ``difficulty_rank`` (its strictest ``sac_scale``,
-    NaN where it has none), when both ends are TrailGraph vertices and it is
-    shorter than retracing the walk and than ``WAY_BACK_SEARCH_M``; else the
-    walk retraced (ADR-0076). Without a TrailGraph there is no trail. The
+    harder than ``back_rank`` of the walk's ``difficulty_rank`` (its strictest
+    ``sac_scale``, NaN where it has none), when both ends are TrailGraph
+    vertices and it is shorter than retracing the walk and than
+    ``WAY_BACK_SEARCH_M``; else the walk retraced (ADR-0076). Without a TrailGraph there is no trail. The
     bound keeps the search's work that of a day hike's for a walk of any
     length (ADR-0035).
     """
@@ -1235,8 +1235,10 @@ def way_back(lat: np.ndarray, lon: np.ndarray, graph: TrailGraph | None, difficu
 
 def back_rank(difficulty_rank: float) -> int:
     """The strictest ``SAC_SCALE_RANK`` a trail back of a walk of this
-    Difficulty may walk: its own, and 0 (no ``sac_scale``) for a walk with none (NaN)."""
-    return 0 if math.isnan(difficulty_rank) else int(difficulty_rank)
+    Difficulty may walk: its own, but never below ``mountain_hiking`` (T2), for a
+    walk with none (NaN) too (ADR-0076)."""
+    floor = SAC_SCALE_RANK["mountain_hiking"]
+    return floor if math.isnan(difficulty_rank) else max(int(difficulty_rank), floor)
 
 
 def round_trip(walk: ComposedWalk, back: WayBack) -> ComposedWalk:
