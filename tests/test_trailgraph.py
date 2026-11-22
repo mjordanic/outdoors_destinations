@@ -993,6 +993,23 @@ def test_a_line_takes_a_shorter_way_back_where_one_exists(data) -> None:
     assert hike["way_back"]["kind"] == "trail" and hike["way_back"]["m"] == pytest.approx(1000, abs=2)
 
 
+def test_a_harder_way_back_does_not_grade_a_composed_hike(data, monkeypatch) -> None:
+    from dayhike import serving
+
+    found = serving.way_back
+
+    def harder(lat, lon, graph, *rank):
+        back = found(lat, lon, graph, *rank)
+        return replace(back, walk=replace(back.walk, sac_scale="difficult_alpine_hiking"))
+
+    own = data.compose(Route.parse(LONG_WAY), return_to_start=False)["facts"]["difficulty_rank"]
+    monkeypatch.setattr(serving, "way_back", harder)
+    hike = data.compose(Route.parse(LONG_WAY))
+
+    assert hike["way_back"]["kind"] == "trail"
+    assert hike["facts"]["difficulty_rank"] == own
+
+
 def test_a_designed_hike_carries_its_trail_way_back_with_heights_for_its_gpx(data) -> None:
     hike = data.compose(Route.parse(LONG_WAY))
     back = hike["way_back"]

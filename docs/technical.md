@@ -447,7 +447,10 @@ each way once, in walk order, with no Leftover:
 
 DayHikeGeometry is the main walk of the member-way graph: each distinct member
 way once, from the Trailhead, with no jump between consecutive ways except a
-joined gap of 50 m or less. Member ways not on the walk are Leftovers. They
+joined gap of 50 m or less. Two pieces are also joined by a way of the snapshot
+the relation does not list, of at most 500 m, that runs from a node of one to a
+node of the other (ADR-0077): the walk follows it, but it is not in `ways`.
+Member ways not on the walk are Leftovers. They
 stay in `ways` with `in_chain = 0` and a `leftover` reason (`role`, `repeat`,
 `disconnected`, `dead_end`, `shortcut`), and `dayhikes.unconnected_m` is their
 distinct length. Catalog `length_m` and `vertices` follow the walk only. See
@@ -589,7 +592,8 @@ shortest walk over the TrailGraph's trails no harder than the hike (ADR-0076)
 when it is shorter than the hike itself backwards and than 50 km
 (`WAY_BACK_SEARCH_M`, ADR-0035), else the hike retraced. So a hike that ends 500 m from its
 start adds about 500 m, and a line up to a summit is compared up and back:
-twice the length, its climb and its descent both ways. `build-similarity`
+twice the length, its climb and its descent both ways. Its Difficulty stays
+the hike's own: a harder way the way back finds does not grade it (ADR-0078). `build-similarity`
 stores a second set of facts with the way back, calibrated on its own, and
 how each DayHike gets back (`way_back.npy`: metres back, climb and descent of
 the whole walk, kind). `--one-way` (`return_to_start=False` in Python, the
@@ -631,7 +635,7 @@ way instead of with its way back.
 | `length` | Catalog length | ratio | floor 1 km |
 | `elevation_gain` | metres climbed, larger of climb and descent (direction-free); DEM spikes are dropped: walking the vertices in order, a kept vertex, or a run of kept vertices up to 60 m long, all 10 m+ above (or all below) both the kept vertex before it and the next vertex, at 25 %+ grade into it and out of it, is dropped, and the test repeats on the new last kept vertex (the ends stay); a path along a steep shore or cliff reads the water or the slope beside it that way; where the kept heights, read as a line, stray 2.5 m+ on average over 200 m either side from their 90 m moving average (less near an end, so the ends stay), they are that moving average (ADR-0062); then a change counts once it moves 10 m and the end counts what it moved; climb and descent are the means of the walk both ways (ADR-0048, lower end) | ratio | floor 100 m |
 | `difficulty` | Difficulty as SAC rank 1–6 | tolerance | D = 3 |
-| `highest`, `lowest` | highest and lowest point | tolerance | D = 400 m |
+| `highest`, `lowest` | highest and lowest point; the highest is a summited Peak's mapped `ele` when that is up to 100 m above every vertex (ADR-0078) | tolerance | D = 400 m |
 | `profile` | ProfileShape (64 points) | profile | — |
 | `landcover` | six LandCover shares (five plus the leftover) | mix | — |
 | `peak_summited` | a Peak within 50 m of the line | agree | — |

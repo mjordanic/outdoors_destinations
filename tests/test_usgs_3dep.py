@@ -257,7 +257,7 @@ def test_the_export_of_a_two_region_build_credits_each_dem(two_regions: Path) ->
     credits = client.get("/credits.html").text
     assert "FABDEM V1-2" in credits and "Credit: U.S. Geological Survey" in credits
     sources = {measure["name"]: measure["source"] for measure in client.get("/api/measures").json()["measures"]}
-    assert sources["highest"] == "FABDEM or USGS 3DEP elevation along the line."
+    assert sources["highest"] == "FABDEM or USGS 3DEP elevation along the line, or a summited peak's height as mapped in OpenStreetMap (ele)."
 
 
 def _one_dem_build(tmp_path: Path) -> Path:

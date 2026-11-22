@@ -69,7 +69,7 @@ import unicodedata
 import zipfile
 import zlib
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import ROUND_HALF_UP, Decimal
 from functools import partial
 from pathlib import Path
@@ -249,7 +249,7 @@ MEASURE_INFO: dict[str, tuple[str, str, str, str]] = {
     "length": ("basic", "Length", "Walk length; the closer the two values, the higher the score (1 km or less counts as the same).", "OpenStreetMap: the hike's line, from the ways of its hiking relation."),
     "elevation_gain": ("basic", "Climbing", "Metres climbed, the larger of climb and descent; the closer the two values, the higher the score. Any climb of 100 m or less counts as the same: so many hikes share that, it says little, and two hikes that match closely on a less common climb, like 166 m and 167 m, are the closer match.", "FABDEM elevation along the line."),
     "difficulty": ("effort", "Difficulty", "Hardest trail grade on the walk, from 1 (ordinary hiking path) to 6 (hard alpine route), the SAC scale; the smaller the gap, the higher the score, lowest from 3 grades apart.", "OpenStreetMap: the sac_scale grade of the hike's ways."),
-    "highest": ("basic", "Highest point", "Highest elevation; the smaller the gap, the higher the score, lowest from 400 m apart.", "FABDEM elevation along the line."),
+    "highest": ("basic", "Highest point", "Highest elevation; the smaller the gap, the higher the score, lowest from 400 m apart.", "FABDEM elevation along the line, or a summited peak's height as mapped in OpenStreetMap (ele)."),
     "lowest": ("altitude", "Lowest point", "Lowest elevation; the smaller the gap, the higher the score, lowest from 400 m apart.", "FABDEM elevation along the line."),
     "profile": ("effort", "Profile shape", "Elevation profile scaled to 0-1 in length and height, walked either way.", "FABDEM elevation along the line."),
     "landcover": ("basic", "Landscape", "Shared share of tree, shrub, grass, bare, snow and other cover.", "ESA WorldCover 2021 land cover along the line."),
@@ -2400,12 +2400,13 @@ class ServingData:
             return dict(_in_chunks(db, "SELECT id, coalesce(name, ref) FROM relations WHERE id IN ({})", relation_ids))
 
     def _trip(self, walk: ComposedWalk, return_to_start: bool) -> tuple[ComposedWalk, WayBack | None]:
-        """The walk with its way back and the way back (ADR-0019), or the walk and None."""
+        """The walk with its way back and the way back (ADR-0019), or the walk and None.
+        The walk with its way back keeps the walk's own grade (ADR-0078)."""
         if not return_to_start:
             return walk, None
         rank = float(SAC_SCALE_RANK[walk.sac_scale]) if walk.sac_scale is not None else math.nan
         back = way_back(walk.lat, walk.lon, self.trailgraph, rank)
-        return round_trip(walk, back), back
+        return replace(round_trip(walk, back), sac_scale=walk.sac_scale), back
 
     def _proposed_name(self, walk: ComposedWalk, labels: dict[int, str]) -> str:
         """"Your hike", along the two trails walked longest (in name order, so a

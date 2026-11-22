@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Iterable, Iterator, Mapping, Protocol, Sequenc
 
 import numpy as np
 
-from dayhike.osm import OsmRelation, OsmSnapshot, OsmWay
+from dayhike.osm import OsmRelation, OsmSnapshot, OsmWay, WayEnds
 from dayhike.sources import SOURCE_OSM, osm_source_ref, require_used
 
 if TYPE_CHECKING:
@@ -30,6 +30,7 @@ MIN_LENGTH_M = 1_000  # shortest DayHike; there is no upper cap (ADR-0033)
 AMENITY_RADIUS_M = 20_000  # great-circle from Trailhead; zero counts are valid
 TRAILHEAD_ACCESS_RADIUS_M = 5_000  # parking near a line end or loop vertex
 GAP_JOIN_M = 50  # member-way ends this close join two pieces with a straight gap
+BRIDGE_M = 500  # a way the relation does not list, at most this long, joins two pieces it runs between
 SNAP_TOLERANCE_M = 20  # a TrailGraph dead-end tip this close to another way joins it (ADR-0018)
 LOOP_SHARE = 0.5  # a piece whose closed loop is at least this share of its length is a loop
 STEM_ACCESS_RADIUS_M = 200  # a loop's dead end ending this close to parking is its stem
@@ -1181,11 +1182,15 @@ def assemble_main_walk(
     nodes: Mapping[int, tuple[float, float]],
     access_tree: BallTree | None,
     declared: EndChoice | None = None,
+    bridges: WayEnds | None = None,
 ) -> MainWalk:
     """The one place member ways become a DayHike's line (ADR-0012).
 
     Distinct member ways form a graph split at every shared node. Way ends of
-    different pieces within ``GAP_JOIN_M`` are joined; the longest piece is
+    different pieces within ``GAP_JOIN_M`` are joined; with ``bridges``, the
+    ways of ``ways`` the relation does not list, of at most ``BRIDGE_M``, that
+    run from a node of one piece to a node of another join them too, shortest
+    first (a way its mappers left out, ADR-0077). The longest piece is
     walked, its dead-end tips within ``GAP_JOIN_M`` first joined in pairs
     (see ``_tip_gap_edges``). A piece whose closed loop, after setting aside
     dead ends and then shortcuts, is at least ``LOOP_SHARE`` of its length is
@@ -1201,6 +1206,7 @@ def assemble_main_walk(
     name, see ``declared_start`` and ``LowerStart``), else from the end
     ``_pick_trailhead`` chooses with ``access_tree``.
     """
+    snapshot_nodes = nodes
     listed: list[int] = []  # way id per member-way listing in the snapshot
     leftovers: list[str | None] = []
     first_listing: dict[int, int] = {}
@@ -1237,6 +1243,9 @@ def assemble_main_walk(
     }
     edges = _split_ways(first_listing, way_nodes, nodes)
     edges += _gap_edges(edges, way_nodes, nodes, len(listed))
+    if bridges is not None:
+        members = {member_id for member_type, member_id in relation.members if member_type == "way"}
+        edges += _bridge_edges(edges, ways, snapshot_nodes, nodes, bridges, members, len(listed) + 2)
     removed = _main_piece_removals(edges)
     alive = {index for index in range(len(edges)) if index not in removed}
     tip_gaps = _tip_gap_edges(edges, alive, nodes, len(listed) + 1)
@@ -1392,6 +1401,50 @@ def _gap_edges(
         pieces.union(first, second)
         gaps.append(_Edge(None, (gap_rank, len(gaps)), (first, second), distance_m))
     return gaps
+
+
+def _bridge_edges(
+    edges: Sequence[_Edge],
+    ways: Mapping[int, OsmWay],
+    snapshot_nodes: Mapping[int, tuple[float, float]],
+    nodes: dict[int, tuple[float, float]],
+    bridges: WayEnds,
+    members: set[int],
+    rank: int,
+) -> list[_Edge]:
+    # Join pieces by the ways the relation does not list that run from a node
+    # of one to a node of another, at most BRIDGE_M, shortest first, as long as
+    # they are still different pieces. ``nodes`` gets the bridges' nodes.
+    pieces = _UnionFind()
+    for edge in edges:
+        for node_id in edge.node_ids[1:]:
+            pieces.union(edge.node_ids[0], node_id)
+    on_edges = {node_id for edge in edges for node_id in edge.node_ids}
+    walked = sorted(on_edges)
+    if len({pieces.find(node_id) for node_id in walked}) < 2:
+        return []
+    found: list[tuple[float, int, tuple[int, ...]]] = []
+    for way_id in bridges.ways_at(walked) - members:
+        ids = tuple(node_id for node_id in ways[way_id].node_ids if node_id in snapshot_nodes)
+        # Its ends on the pieces and nothing between them: it crosses no member way.
+        if len(ids) < 2 or ids[0] == ids[-1] or ids[0] not in on_edges or ids[-1] not in on_edges:
+            continue
+        if any(node_id in nodes for node_id in ids[1:-1]):
+            continue
+        if pieces.find(ids[0]) == pieces.find(ids[-1]):
+            continue
+        length_m = _linestring_length_m([snapshot_nodes[node_id] for node_id in ids])
+        if length_m <= BRIDGE_M:
+            found.append((length_m, way_id, ids))
+    joined: list[_Edge] = []
+    for length_m, _, ids in sorted(found):
+        if pieces.find(ids[0]) == pieces.find(ids[-1]):
+            continue
+        pieces.union(ids[0], ids[-1])
+        for node_id in ids:
+            nodes.setdefault(node_id, snapshot_nodes[node_id])
+        joined.append(_Edge(None, (rank, len(joined)), ids, length_m))
+    return joined
 
 
 def _tip_gap_edges(

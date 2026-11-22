@@ -64,6 +64,7 @@ from dayhike.osm import (
     NodeStore,
     OsmRelation,
     OsmSnapshot,
+    WayEnds,
     WayStore,
     _MEMBER_TYPE,
     _parse_ele_m,
@@ -1104,6 +1105,7 @@ def _keep_dayhikes(
         return hike, _store_walk(walk) if walks is not None else None
 
     kept = []
+    _way_ends(snapshot)
     # Each relation is walked in a worker; only its DayHike and stored walk come back.
     for result in parallel_map(keep, hiking):
         if isinstance(result, str):
@@ -1375,7 +1377,15 @@ def _main_walk(
         None if lower is None else lower.choice(ways, snapshot.nodes),
         None if tagged else declared_start(dashed_ends(tags), named),
     )
-    return assemble_main_walk(relation, snapshot.ways, snapshot.nodes, access_tree, declared)
+    return assemble_main_walk(relation, snapshot.ways, snapshot.nodes, access_tree, declared, _way_ends(snapshot))
+
+
+def _way_ends(snapshot: OsmSnapshot) -> WayEnds:
+    """The snapshot's ways by their end nodes, built once a snapshot: the
+    ways a main walk can bridge two pieces of its relation by."""
+    if snapshot.way_ends is None:
+        snapshot.way_ends = WayEnds(snapshot.ways)
+    return snapshot.way_ends
 
 
 def write_geometry_store(
@@ -1466,6 +1476,7 @@ def write_geometry_store(
         if dem_read:
             out.execute("INSERT INTO geometry_meta (key, value) VALUES (?, ?)", (DEM_READ_KEY["ingest"], dem_read))
         relation_hikes = [hike for hike in dayhikes if hike.kind == KIND_RELATION]
+        _way_ends(snapshot)
         # The rows are built in the workers, from the stored main walks (assembled when one is missing);
         # they are written here, in hike order.
         relation_rows = parallel_iter(

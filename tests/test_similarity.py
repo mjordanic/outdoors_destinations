@@ -50,6 +50,9 @@ from dayhike.similarity import (
     walk_facts,
     waterside_share,
     weighted_mean,
+    _add_way_back,
+    mapped_heights,
+    summit_height,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
@@ -891,6 +894,63 @@ def test_peak_summited_is_50_m_and_peaks_around_is_2_km() -> None:
     facts = _walk(("peak", 500, 40), peaks=[(500, 40), (500, 1_900), (500, 2_100)])
     assert (facts["peak_summited"], facts["peaks_around"]) == (1.0, 2.0)
     assert _walk(("peak", 500, 60))["peak_summited"] == 0.0
+
+
+def test_a_summited_peak_s_mapped_height_is_the_top_where_the_dem_reads_it_low() -> None:
+    # Copernicus GLO-30 reads Triglav's 2,864 m summit as 2,801 m: its 30 m cell flattens the top.
+    ele = np.array([2_000.0, 2_500.0, 2_790.0, 2_801.0])
+    assert summit_height(ele, np.array([2_864.0])) == 2_864.0
+    # A summit the DEM already reads higher, or no summit, leaves the highest vertex.
+    assert summit_height(ele, np.array([2_780.0])) == 2_801.0
+    assert summit_height(ele, np.array([np.nan])) == 2_801.0
+    assert summit_height(ele, np.empty(0)) == 2_801.0
+    # A mapped height far above the DEM (feet read as metres, a typo) is not trusted.
+    assert summit_height(ele, np.array([9_396.0])) == 2_801.0
+    # Without vertex heights there is no top to lift.
+    assert math.isnan(summit_height(np.full(4, np.nan), np.array([2_864.0])))
+
+
+def test_walk_facts_top_is_a_mapped_summit_within_50_m_of_the_line() -> None:
+    ele = np.array([1_000.0, 1_100.0, 1_200.0, 1_300.0, 1_400.0])
+
+    def highest(east_m: float) -> float:
+        peaks = AmenityPoints([(_metres_north(1_000), _metres_east(east_m))], ["peak"], [1_460.0])
+        return walk_facts(WALK_LAT, WALK_LON, ele, [], NO_POINTS, peaks)["highest_m"]
+
+    assert highest(40) == 1_460.0
+    assert highest(60) == 1_400.0
+    no_height = AmenityPoints([(_metres_north(1_000), _metres_east(0))], ["peak"])
+    assert walk_facts(WALK_LAT, WALK_LON, ele, [], NO_POINTS, no_height)["highest_m"] == 1_400.0
+
+
+def test_mapped_heights_read_ele_as_ingest_does() -> None:
+    np.testing.assert_array_equal(
+        mapped_heights(["2864", "2,864 m", "1200 ft", None, "unknown"]),
+        [2_864.0, 2_864.0, 1_200 * 0.3048, np.nan, np.nan],
+    )
+
+
+def test_a_harder_way_back_does_not_grade_the_hike() -> None:
+    # Mount Whitney Trail is graded T1 on every way, but the shortest way back
+    # down found the Mountaineer's Route (T5): the hike stays T1.
+    from dayhike.trailgraph import ComposedWalk, WayBack
+
+    def walk(lat, sac_scale):
+        n = len(lat)
+        return ComposedWalk(
+            None, None, None, None, np.asarray(lat), np.full(n, 15.0), np.linspace(2_500.0, 2_600.0, n),
+            np.zeros(n, dtype=np.int64), np.full(n, -1), np.full(n, np.nan), [], sac_scale, {},
+        )
+
+    out = [45.0, _metres_north(500), _metres_north(1_000)]
+    back = WayBack("trail", 1_000.0, walk(out[::-1], "demanding_alpine_hiking"))
+    trip = walk([*out, *out[::-1][1:]], "demanding_alpine_hiking")
+    facts = np.full(len(FACT_COLUMNS), np.nan, dtype=np.float32)
+    facts[FACT_COLUMNS.index("difficulty_rank")] = 1.0
+    facts[FACT_COLUMNS.index("length_m")] = 1_000.0
+    _add_way_back(facts, len(out), back, trip, None, False)
+    assert facts[FACT_COLUMNS.index("difficulty_rank")] == 1.0
+    assert facts[FACT_COLUMNS.index("length_m")] == 2_000.0
 
 
 def test_dry_stretch_is_the_longest_walk_between_water_sources() -> None:
