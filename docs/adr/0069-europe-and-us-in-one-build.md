@@ -1,5 +1,5 @@
 ---
-status: accepted (amends ADR-0065 and ADR-0066: the paths level is per input)
+status: accepted (amends ADR-0065 and ADR-0066: the paths level is per input; the deploy's memory set from the data image since ADR-0081)
 ---
 
 # Europe and the US in one build, Europe alone still a build

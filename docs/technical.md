@@ -2340,8 +2340,9 @@ uv run dayhike export-serving --catalog data/catalog.sqlite --out data/web-servi
 uv sync --extra web
 uv run dayhike serve --data data/web-serving --valhalla-url http://127.0.0.1:8002
 # http://127.0.0.1:8000 ; checks on real hikes, timings and memory (smoke.py
-# expects the full Europe export: on a smaller one its first check fails, as it
-# wants more than 100,000 DayHikes):
+# checks the known hikes of each region in /api/info "regions" and wants more
+# than 50,000 DayHikes for Europe and 10,000 for the US: on a smaller export its
+# first check fails):
 uv run python web/smoke.py --data data/web-serving --valhalla-url http://127.0.0.1:8002
 # --us checks the one-state US build instead (see "A US build")
 
@@ -2371,8 +2372,8 @@ value other than `https://host` is refused at start. `/robots.txt` allows every
 crawler and names `/sitemap.xml`, which lists the five pages by full address at
 the site URL (unset, at the address the request came to); a Ranking is made on
 request, so no search or API address is listed.
-The pages name what the export covers from its `meta.json` regions
-(`export-serving --region`): the tagline, the share description and the About
+The pages name what the export covers from its `meta.json` regions (the
+regions its hikes start in, labelled by `export-serving --region`; ADR-0081): the tagline, the share description and the About
 page say "hikes across Europe" while every region is in Europe, or the regions'
 labels ("Europe and Colorado") once one is not. The header's coverage map, a map
 of Europe, is shown only while every region is in Europe; the About page's
@@ -2425,7 +2426,11 @@ writes `places.sqlite`, the towns of 1,000 people or more within 2° of the
 Trailheads' box and the smaller villages within 5 km of a Trailhead for "Find
 place" (ADR-0042); `dayhike export-places --out
 data/web-serving` adds it beside an existing export, which needs no other
-change (ADR-0029). Every export also writes `landmarks.sqlite`, the Landmarks
+change (ADR-0029). Every export also writes `names.npz`, the name search's index
+(every hike name folded as search compares it, and the typo search's word tables), so
+a server starts without reading every name from `hikes.sqlite` (ADR-0081); `dayhike
+export-name-index --out data/web-serving` adds it beside an existing export, and a server
+without it, or with one of other hikes, builds it at start. Every export also writes `landmarks.sqlite`, the Landmarks
 the hike search finds hikes by (ADR-0053): the named Peaks, Huts, Shelters and
 Viewpoints on the hikes, the places of `places.sqlite` with the hikes starting
 within 5 km, and with `--geonames` the lakes, passes and mountains within 2 km
@@ -3047,7 +3052,7 @@ CLI: `dayhike ingest`, `dayhike fetch-extracts`, `dayhike fetch-dem`,
 `dayhike count-commons`, `dayhike sample-trailgraph`,
 `dayhike build-similarity` (`--calibrate-only`), `dayhike rank` (`--weight`,
 `--month`, `--limit`, `--one-way`), `dayhike compose` (the Route text of a shared link,
-`--name`, `--weight`, `--month`, `--limit`, `--one-way`; reads a serving export; a SuggestedLoop is listed by its link text, and each row's versions indented under it), `dayhike nearby`, `dayhike export-serving`, `dayhike export-places`, `dayhike export-countries`, `dayhike export-photos`, `dayhike export-osm-download`, `dayhike serve`, `dayhike coverage-map`.
+`--name`, `--weight`, `--month`, `--limit`, `--one-way`; reads a serving export; a SuggestedLoop is listed by its link text, and each row's versions indented under it), `dayhike nearby`, `dayhike export-serving`, `dayhike export-name-index`, `dayhike export-places`, `dayhike export-countries`, `dayhike export-photos`, `dayhike export-osm-download`, `dayhike serve`, `dayhike coverage-map`.
 
 Docstrings on those functions use the glossary in `GLOSSARY.md`.
 Examples: [`01`](../notebooks/01_raw_data_and_ingestion.ipynb) ingest,
