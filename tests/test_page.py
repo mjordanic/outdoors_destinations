@@ -4808,15 +4808,39 @@ def test_a_list_from_one_region_with_both_ticked_says_to_tick_only_the_other(bro
     page.get_by_text(f"Chosen: {liked['name']}").wait_for()
 
     _find(page)  # both regions: rows from both, no hint
-    assert "tick only" not in page.locator("#results-note").inner_text()
+    assert "tick only" not in page.locator("#results-region").inner_text()
 
     page.route(f"{two_regions_server}/api/rank", _one_region(region))
     page.get_by_role("button", name="Find similar").click()
-    page.locator("#results-note").get_by_text(hint).wait_for()
+    page.locator("#results-region").get_by_text(hint).wait_for()
 
     page.get_by_label("Europe" if region == "europe" else "United States", exact=True).uncheck()
     _find(page)  # kept to the other region, as the hint says: no hint
-    page.wait_for_function("() => !document.querySelector('#results-note').textContent.includes('tick only')")
+    page.wait_for_function("() => !document.querySelector('#results-region').textContent.includes('tick only')")
+
+
+def test_the_one_region_hint_goes_once_show_more_lists_the_other_region(browser, two_regions_server, monkeypatch) -> None:
+    monkeypatch.setattr(web, "RESULTS", 1)
+
+    def europe_first(route) -> None:
+        if "after" in json.loads(route.request.post_data):
+            route.fallback()
+            return
+        body = route.fetch().json()
+        body["results"].sort(key=lambda row: row["region"] != "europe")
+        route.fulfill(json=body)
+
+    page = open_page(browser, two_regions_server, Api({}), hash=f"#hike={RIDGE_WALK_ID}&strict")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.route(f"{two_regions_server}/api/rank", europe_first)
+    _find(page)
+    page.locator("#results-region").get_by_text("All of these are in Europe: tick only United States to see its best matches.").wait_for()
+
+    page.get_by_role("button", name="Show 1 more").click()
+    page.locator("#results-table tbody tr[data-index]").nth(1).wait_for()
+
+    assert page.evaluate("state.results.map((row) => row.region)") == ["europe", "us"]
+    assert page.locator("#results-region").inner_text() == ""
 
 
 def test_temperatures_are_in_fahrenheit_with_miles(browser, server) -> None:

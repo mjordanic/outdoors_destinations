@@ -3356,18 +3356,13 @@ function renderResults() {
   const ties = tied > 1 ? ` The best ${tied} areas match equally well.` : "";
   const kept = body.regions
     ? ` Kept to ${regionsText(body.regions)}, the best matches can score lower than the best anywhere.` : "";
-  // Every region open, every row in one: the other's best matches score lower, so say how to see them.
-  const inRegions = new Set(shown.map((result) => result.region));
-  const other = !body.regions && body.reachable == null && inRegions.size === 1
-    ? state.info.regions.find((region) => !inRegions.has(region.name)) : null;
-  const oneRegion = other
-    ? ` All of these are in ${regionsText([...inRegions])}: tick only ${other.label} to see its best matches.` : "";
   $("#results-note").textContent = shown.length
-    ? `${state.query.wish ? "Closest to the hike you want" : `Like “${state.liked.name}”`}, out of ${considered}${loopRows ? " and loops composed near the best of them" : ""}, ${mode}.${oneRegion}${kept}${picked}${ties} Click a row to see it.${composed}${searched}${versions}`
+    ? `${state.query.wish ? "Closest to the hike you want" : `Like “${state.liked.name}”`}, out of ${considered}${loopRows ? " and loops composed near the best of them" : ""}, ${mode}.${kept}${picked}${ties} Click a row to see it.${composed}${searched}${versions}`
     : body.reachable === 0
       ? `No hikes are mapped within ${limits} of ${state.asked.place} yet: this site covers ${state.info.covered}.`
       : `No hike matched, out of ${considered}. Try a longer drive, a longer distance or other weights.`;
 
+  noteOneRegion();
   showFilters();
   noteUnmeasured();
   $("#results-draw").hidden = !shown.length;
@@ -3383,6 +3378,15 @@ function renderResults() {
   listRows(0);
   showMoreButton(body);
   showSwipeCue();
+}
+
+// Every region open, every row shown in one: the other's best matches score lower, so say how to see them.
+function noteOneRegion() {
+  const body = state.answer, inRegions = new Set(state.results.map((result) => result.region));
+  const other = !body.regions && body.reachable == null && inRegions.size === 1
+    ? state.info.regions.find((region) => !inRegions.has(region.name)) : null;
+  $("#results-region").textContent = other
+    ? ` All of these are in ${regionsText([...inRegions])}: tick only ${other.label} to see its best matches.` : "";
 }
 
 // Under a table wider than its box: a cue that it scrolls sideways (to every measure's score, when shown).
@@ -3637,6 +3641,7 @@ async function showMore() {
     state.pools.push(body.results);
     results.push(...pageOf(body.results));
     listRows(after.length);
+    noteOneRegion();
     showMoreButton(body);
     showSwipeCue();
     status.textContent = body.results.length ? `Done in ${(body.elapsed_ms / 1000).toFixed(1)} s.` : "No more hikes in other areas.";
