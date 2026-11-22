@@ -61,8 +61,9 @@ writing the trail graph and rebuilding the Landmarks.
 The demo is Slovenia, Austria and Switzerland, and California, Colorado, Utah and
 Washington: the areas of `src/dayhike/data/cuts/demo.toml`. Every feature works
 there (drive time, suggested loops, drawing a hike, similar hikes); outside them
-there are no hikes. Its trail graph is kept within 22 km of its hikes and its
-highway tiles within 2° of their starts: its export is 3.5 GB against 16 GB,
+there are no hikes. Its trail graph is kept within 22 km of its hikes, and its
+highway tiles and the places its place search offers within 2° of each area's
+starts: its export is 3.5 GB against 16 GB,
 and on the Mac it opens in 1 s against 12 s and ranks in 0.14 s against 1.0 s
 (Triglava's hike, warm). For another showcase, copy that file and
 edit its `[[area]]` tables (`countries`, a `polygon` of `[lat, lon]` corners, or

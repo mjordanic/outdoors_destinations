@@ -47,8 +47,10 @@ both regions (ADR-0068). A group of Twins keeps its kept members.
 Switzerland (by `countries.npy`) and California, Colorado, Utah and Washington (US hikes inside each state's
 outline, to a few km): 109,756 hikes, a 3.5 GB export, each an `[[area]]` with the label the pages name it by. Its site keeps every
 feature: drive time, SuggestedLoops, composing and the similar-hike search. Its TrailGraph is kept within
-22 km of the kept hikes' lines (as far as a SuggestedLoop from their Trailheads walks) and its highway tiles
-within 2° of their Trailheads (as far as a place the place search finds), so a smaller image and fewer hikes
+22 km of the kept hikes' lines (as far as a SuggestedLoop from their Trailheads walks), with every climate
+cell and water tile a kept Segment reaches, so a walk crossing that edge measures as uncut; its highway tiles
+and its places are kept within 2° of each area's Trailheads, so every place the place search finds can be
+driven from. So a smaller image and fewer hikes
 to rank make it start and answer faster. Another showcase is another cut file; a region file reads as one
 area of its `bounds`.
 

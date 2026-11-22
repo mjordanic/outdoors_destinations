@@ -374,6 +374,66 @@ countries = ["US"]
     ]
 
 
+def _countries_cut(path: Path) -> Keep:
+    path.write_text(
+        '[[area]]\nlabel = "Croatia"\ncontinent = "Europe"\ncountries = ["HR"]\n\n'
+        '[[area]]\nlabel = "Moved"\ncontinent = "North America"\ncountries = ["US"]\n'
+    )
+    return load_keep(path)
+
+
+def test_a_cut_file_keeps_the_climate_and_water_a_segment_crossing_its_edge_reaches(
+    whole: ServingData, tmp_path: Path
+) -> None:
+    source = tmp_path / "edge"
+    shutil.copytree(whole.directory, source)
+    far_lat, far_lon = 60.1, 25.1  # in Finland, beyond every area's TrailGraph box
+    far_cell = int((90 - far_lat) * 120) * 43_200 + int((far_lon + 180) * 120)
+    with sqlite3.connect(source / "trailgraph.sqlite") as db:  # one Segment in Croatia runs on to Finland
+        segment = db.execute("SELECT min(id) FROM segment_boxes WHERE west >= ?", (REGION_SPLIT_LON,)).fetchone()[0]
+        db.execute("UPDATE segments SET climate_cell = ? WHERE id = ?", (np.array([-1, far_cell], "<i4").tobytes(), segment))
+        db.execute("UPDATE segment_boxes SET north = ?, east = ? WHERE id = ?", (far_lat + 0.1, far_lon + 0.1, segment))
+        db.execute("INSERT INTO climate_cells VALUES (?, ?)", (far_cell, b"\0" * 4))
+        db.execute("INSERT INTO water_tiles VALUES (60, 24, '[]', 1, 1)")
+        db.execute("INSERT INTO water_cells VALUES (60, 24, 7)")
+
+    out = cut_serving(source, tmp_path / "out", _countries_cut(tmp_path / "show.toml"), geonames_path=whole.geonames)
+
+    with sqlite3.connect(out / "trailgraph.sqlite") as db:
+        named = {
+            cell
+            for (blob,) in db.execute("SELECT climate_cell FROM segments WHERE climate_cell IS NOT NULL")
+            for cell in np.frombuffer(blob, dtype="<i4").tolist()
+            if cell >= 0
+        }
+        assert far_cell in named
+        assert named <= {cell for (cell,) in db.execute("SELECT cell FROM climate_cells")}
+        assert (60, 24) in set(db.execute("SELECT south, west FROM water_tiles"))
+        assert (60, 24, 7) in set(db.execute("SELECT south, west, cell FROM water_cells"))
+
+
+def test_a_cut_file_offers_only_the_places_its_highway_tiles_reach(whole: ServingData, tmp_path: Path) -> None:
+    geonames = tmp_path / "geonames.txt"
+    midway = ["9000001", "Midway", "Midway", "", "45.5", "-50.0", "P", "PPL", "XX", *[""] * 5, "5000", "", "0", "", "2026-01-01"]
+    geonames.write_text(whole.geonames.read_text() + "\t".join(midway) + "\n")  # a town between Europe and the US
+
+    out = cut_serving(whole.directory, tmp_path / "out", _countries_cut(tmp_path / "show.toml"), geonames_path=geonames)
+
+    trailheads = np.load(out / "trailheads.npy")
+    boxes = [trailheads[trailheads[:, 1] < REGION_SPLIT_LON], trailheads[trailheads[:, 1] >= REGION_SPLIT_LON]]
+    with sqlite3.connect(out / "places.sqlite") as db:
+        places = db.execute("SELECT name, country, lat, lon FROM places").fetchall()
+        assert {"HR", "US"} <= {country for _, country, _, _ in places}
+        assert "Midway" not in {name for name, _, _, _ in places}
+        for name, _, lat, lon in places:
+            assert any(
+                (box[:, 0].min() - 2 <= lat <= box[:, 0].max() + 2) and (box[:, 1].min() - 2 <= lon <= box[:, 1].max() + 2)
+                for box in boxes
+            ), name
+        assert db.execute("SELECT count(*) FROM place_names WHERE place NOT IN (SELECT id FROM places)").fetchone()[0] == 0
+        assert db.execute("SELECT count(*) FROM place_names WHERE name = 'midway'").fetchone()[0] == 0
+
+
 def test_an_area_no_hike_starts_in_is_refused(whole: ServingData, tmp_path: Path) -> None:
     (tmp_path / "empty.toml").write_text('[[area]]\nlabel = "Nowhere"\nbounds = { south = 1, west = 1, north = 2, east = 2 }\n')
 

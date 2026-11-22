@@ -14,8 +14,9 @@ export of only the hikes it keeps, without the Catalog or the pipeline:
   ``countries`` (ISO 3166 codes, by ``countries.npy``), each that is given. A region file
   (``dayhike/data/regions``) is read as one area of its ``bounds``. The TrailGraph is kept within
   ``GRAPH_MARGIN_M`` of the kept hikes' lines, as far as a SuggestedLoop from their Trailheads can
-  walk, and the highway tiles within ``PLACE_MARGIN_DEG`` of their Trailheads, as far as a place
-  the place search finds.
+  walk, with every climate cell and water tile a kept Segment reaches; the highway tiles and the
+  places within ``PLACE_MARGIN_DEG`` of each area's Trailheads, so a place the place search finds
+  can be driven from.
 
 Every Ranking of a cut equals the uncut export's with the RegionChoice of its side ticked: the
 facts, profiles and way back are the uncut export's rows, the Calibration is kept as it is (a score
@@ -262,6 +263,8 @@ def cut_serving(
         report("cut: places.sqlite")
         _fresh(out / "places.sqlite")
         export_places(geonames_path, out)
+        if keep.side is None:
+            _drop_places_outside(out / "places.sqlite", reach_tiles)
     else:
         _fresh(out / "places.sqlite")
     if (source / "landmarks.sqlite").is_file():
@@ -335,6 +338,17 @@ def _reaches(
     return _Reach(boxes=tuple(graph)), _Reach(boxes=tuple(tiles))
 
 
+def _drop_places_outside(path: Path, reach: _Reach) -> None:
+    """Drop the places of ``places.sqlite`` (written new by ``export_places``) outside ``reach``."""
+    db = sqlite3.connect(path, isolation_level=None)
+    try:
+        db.execute(f"DELETE FROM places WHERE NOT ({reach.point_sql('lat', 'lon')})")
+        db.execute("DELETE FROM place_names WHERE place NOT IN (SELECT id FROM places)")
+        db.execute("VACUUM")
+    finally:
+        db.close()
+
+
 def kept_twins(twins: np.ndarray, kept: np.ndarray) -> np.ndarray:
     """``twins`` (each row's first row of its group of Twins) for the rows ``kept`` (sorted), in their
     new numbering: each kept row's group is its kept members, led by the first of them."""
@@ -365,7 +379,9 @@ def _cut_similarity(source: Path, target: Path, kept: np.ndarray) -> None:
 def _cut_trailgraph(source: Path, target: Path, reach: _Reach, side: bool) -> None:
     """The TrailGraph within ``reach``: the Segments touching it and their Junctions, the Junctions,
     amenities and climate cells in it and the water tiles touching it. Cut at a side, a Segment
-    crossing ``REGION_SPLIT_LON`` is refused: it would be on neither side."""
+    crossing ``REGION_SPLIT_LON`` is refused: it would be on neither side. Cut to boxes, the climate
+    cells a kept Segment names and the water tiles its box touches are kept too, so a walk along a
+    Segment crossing a box's edge measures as in the uncut export."""
     uri = f"file:{source}?mode=ro&immutable=1"
     with sqlite3.connect(uri, uri=True) as db:
         if side:
@@ -379,9 +395,13 @@ def _cut_trailgraph(source: Path, target: Path, reach: _Reach, side: bool) -> No
         (a, _, c, _, e, f), _, width = json.loads(grid)
         # A cell's centre, as TrailGraph._write_climate_cells places it: transform @ (col + 0.5, row + 0.5).
         climate = reach.point_sql(f"{f!r} + {e!r} * (cell / {width} + 0.5)", f"{c!r} + {a!r} * (cell % {width} + 0.5)")
+        if not side:
+            climate += " OR cell IN (SELECT cell FROM temp.climate_keep)"
     else:
         climate = None
     water = reach.touching_sql("south", f"south + {WATER_TILE_DEG}", "west", f"west + {WATER_TILE_DEG}")
+    if not side:
+        water = f"({water}) OR (south, west) IN (SELECT south, west FROM temp.water_keep)"
 
     def setup(db: sqlite3.Connection) -> None:
         db.execute("CREATE TEMP TABLE segment_keep (id INTEGER PRIMARY KEY)")
@@ -404,6 +424,8 @@ def _cut_trailgraph(source: Path, target: Path, reach: _Reach, side: bool) -> No
             "CREATE TEMP TABLE amenity_keep AS "
             f"SELECT id FROM src.amenities WHERE {reach.point_sql('latitude', 'longitude')}"
         )
+        if not side:
+            _keep_segment_cells(db)
 
     segment = "id IN (SELECT id FROM temp.segment_keep)"
     amenity = "id IN (SELECT id FROM temp.amenity_keep)"
@@ -425,6 +447,27 @@ def _cut_trailgraph(source: Path, target: Path, reach: _Reach, side: bool) -> No
         },
         setup,
     )
+
+
+def _keep_segment_cells(db: sqlite3.Connection) -> None:
+    """``temp.climate_keep``: the climate cells the kept Segments name (``climate_cell``, per vertex, -1
+    none); ``temp.water_keep``: the water tiles their boxes touch."""
+    cells, tiles = [], set()
+    rows = db.execute(
+        "SELECT s.climate_cell, b.south, b.north, b.west, b.east FROM temp.segment_keep k "
+        "CROSS JOIN src.segments s ON s.id = k.id CROSS JOIN src.segment_boxes b ON b.id = k.id"
+    )
+    for blob, south, north, west, east in rows:
+        if blob:
+            cells.append(np.frombuffer(blob, dtype="<i4"))
+        for lat in range(math.floor(south / WATER_TILE_DEG), math.floor(north / WATER_TILE_DEG) + 1):
+            for lon in range(math.floor(west / WATER_TILE_DEG), math.floor(east / WATER_TILE_DEG) + 1):
+                tiles.add((lat * WATER_TILE_DEG, lon * WATER_TILE_DEG))
+    named = np.unique(np.concatenate(cells)) if cells else np.empty(0, dtype="<i4")
+    db.execute("CREATE TEMP TABLE climate_keep (cell INTEGER PRIMARY KEY)")
+    db.executemany("INSERT INTO temp.climate_keep VALUES (?)", ((c,) for c in named[named >= 0].tolist()))
+    db.execute("CREATE TEMP TABLE water_keep (south INTEGER, west INTEGER, PRIMARY KEY (south, west))")
+    db.executemany("INSERT INTO temp.water_keep VALUES (?, ?)", sorted(tiles))
 
 
 def _write_network(path: Path) -> None:
