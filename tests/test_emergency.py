@@ -41,9 +41,14 @@ def export(catalog_path: Path) -> Path:
 
 def _countries(path: Path, *squares: tuple[str, float, float]) -> Path:
     """Natural Earth-like countries: a 2° square per (code, west, south); France's ISO_A2 is -99 there."""
+    return _boxes(path, *((code, west, south, west + 2, south + 2) for code, west, south in squares))
+
+
+def _boxes(path: Path, *boxes: tuple[str, float, float, float, float]) -> Path:
+    """Natural Earth-like countries: a box per (code, west, south, east, north), as ``_countries``."""
     features = []
-    for code, west, south in squares:
-        ring = [[west, south], [west + 2, south], [west + 2, south + 2], [west, south + 2], [west, south]]
+    for code, west, south, east, north in boxes:
+        ring = [[west, south], [east, south], [east, north], [west, north], [west, south]]
         properties = {"NAME": code, "ISO_A2": "-99", "ISO_A2_EH": code, "ADM0_A3": A3.get(code, code + "X")}
         features.append({"type": "Feature", "properties": properties, "geometry": {"type": "Polygon", "coordinates": [ring]}})
     path.write_text(json.dumps({"type": "FeatureCollection", "features": features}))
@@ -62,6 +67,27 @@ def _borders(path: Path, *lines: tuple[str, str, list[tuple[float, float]]]) -> 
         for left, right, points in lines
     ]
     path.write_text(json.dumps({"type": "FeatureCollection", "features": features}))
+    return path
+
+
+def _osm_borders(path: Path, codes: tuple[str, str], *ways: list[tuple[float, float]], maritime: bool = False) -> Path:
+    """An OpenStreetMap file as ``osmium tags-filter <extract> r/admin_level=2`` writes one: the national
+    boundary relations of the two ``codes`` sharing the ``ways`` through their points ((lon, lat)), a
+    point two ways share being one node."""
+    ids = {point: i for i, point in enumerate(dict.fromkeys(point for way in ways for point in way), 1)}
+    nodes = "".join(f'<node id="{i}" lat="{lat}" lon="{lon}" version="1"/>' for (lon, lat), i in ids.items())
+    tags = '<tag k="boundary" v="administrative"/><tag k="admin_level" v="2"/>'
+    sea = '<tag k="maritime" v="yes"/>' if maritime else ""
+    lines = "".join(
+        f'<way id="{w}" version="1">{"".join(f'<nd ref="{ids[point]}"/>' for point in way)}{tags}{sea}</way>'
+        for w, way in enumerate(ways, 1)
+    )
+    members = "".join(f'<member type="way" ref="{w}" role="outer"/>' for w in range(1, len(ways) + 1))
+    relations = "".join(
+        f'<relation id="{i}" version="1">{members}<tag k="type" v="boundary"/>{tags}<tag k="ISO3166-1:alpha2" v="{code}"/></relation>'
+        for i, code in enumerate(codes, 1)
+    )
+    path.write_text(f'<?xml version="1.0" encoding="UTF-8"?><osm version="0.6">{nodes}{lines}{relations}</osm>')
     return path
 
 
@@ -195,3 +221,83 @@ def test_borders_are_exported_with_the_countries_or_beside_an_export(catalog_pat
     assert np.load(out / "borders.npy").tolist() == ["SI", "", "", ""]
     assert main(["export-countries", "--out", str(out), "--borders", str(borders)]) == 1  # sides need the countries
     assert not (export_serving(catalog_path, out) / "borders.npy").exists()
+
+
+# Natural Earth's border at 15.01 E puts the Ridge Walk's start (15.00 E) in the country west of it; the
+# OpenStreetMap border just west of the start puts it in the one east of it, where it is.
+def _west_of_start(metres: float) -> float:
+    return 15 - metres / (111_195 * np.cos(np.radians(45)))
+
+
+@pytest.mark.parametrize(
+    ("start", "across", "metres"),
+    [
+        ("US", "MX", 150),  # Boquillas Canyon Trail, 150 m inside the US on the Rio Grande
+        ("BA", "ME", 400),  # Kočanj kuk, in Bosnia and Herzegovina near Montenegro
+        ("US", "CA", 3),  # Long Trail near Carleton Mountain, 3 m inside Vermont
+    ],
+)
+def test_a_hike_starting_near_a_border_leads_with_the_country_its_trailhead_is_in_by_the_osm_border(
+    export: Path, tmp_path: Path, start: str, across: str, metres: float
+) -> None:
+    out = _copy(export, tmp_path / "out")
+    countries = _boxes(tmp_path / "c.geojson", (across, 13, 44, 15.01, 46), (start, 15.01, 44, 17, 46))
+    coarse = _borders(tmp_path / "b.geojson", (across + "X", start + "X", [(15.01, 44.9), (15.01, 45.1)]))
+    osm = _osm_borders(tmp_path / "borders.osm", (start, across), [(_west_of_start(metres), 44.9), (_west_of_start(metres), 45.1)])
+
+    export_countries(out, countries, coarse)
+    assert ServingData(out).detail(RIDGE_WALK_ID)["emergency"]["country"] == across  # Natural Earth alone
+    export_countries(out, countries, coarse, [osm])
+
+    ridge = ServingData(out).detail(RIDGE_WALK_ID)
+    assert ridge["emergency"] == emergency_services()[start]
+    assert ridge["border_emergency"] == emergency_services()[across]  # both blocks stay, the other second
+    assert np.load(out / "countries.npy")[0] == start
+
+
+def test_a_hike_far_from_any_osm_border_keeps_its_natural_earth_country(export: Path, tmp_path: Path) -> None:
+    out = _copy(export, tmp_path / "out")
+    # Natural Earth puts the other hikes' starts (15.1-15.5 E) back in Slovenia; the OSM border, 8 km and more
+    # west of them, has Croatia on its east side: only the Ridge Walk's start, 150 m from it, takes its side.
+    countries = _boxes(tmp_path / "c.geojson", ("SI", 13, 44, 15.01, 46), ("HR", 15.01, 44, 15.08, 46), ("SI", 15.08, 44, 17, 46))
+    osm = _osm_borders(tmp_path / "borders.osm", ("HR", "SI"), [(_west_of_start(150), 44.9), (_west_of_start(150), 45.1)])
+    export_countries(out, countries)
+    before = np.load(out / "countries.npy")
+    export_countries(out, countries, None, [osm])
+
+    after = np.load(out / "countries.npy")
+    assert before.tolist() == ["SI", "SI", "SI", "SI"]
+    assert after.tolist() == ["HR", "SI", "SI", "SI"]
+    assert ServingData(out).detail(1002)["emergency"]["country"] == "SI"
+
+
+def test_an_osm_border_way_takes_its_sides_from_the_whole_border(export: Path, tmp_path: Path) -> None:
+    out = _copy(export, tmp_path / "out")
+    # South of 45.08 N Natural Earth has Croatia on both sides of the border, so the way there cannot tell
+    # its sides; the way north of it, drawn the other way from their shared node, can.
+    countries = _boxes(tmp_path / "c.geojson", ("HR", 13, 44, 17, 45.08), ("HR", 13, 45.08, 15.01, 46), ("SI", 15.01, 45.08, 17, 46))
+    x = _west_of_start(150)
+    osm = _osm_borders(tmp_path / "borders.osm", ("HR", "SI"), [(x, 45.1), (x, 45.3)], [(x, 45.1), (x, 44.9)])
+    export_countries(out, countries, None, [osm])
+    assert np.load(out / "countries.npy")[0] == "SI"
+
+
+def test_a_maritime_osm_border_does_not_move_a_start(export: Path, tmp_path: Path) -> None:
+    out = _copy(export, tmp_path / "out")
+    countries = _boxes(tmp_path / "c.geojson", ("SI", 13, 44, 15.01, 46), ("HR", 15.01, 44, 17, 46))
+    osm = _osm_borders(tmp_path / "borders.osm", ("HR", "SI"), [(_west_of_start(150), 44.9), (_west_of_start(150), 45.1)], maritime=True)
+    export_countries(out, countries, None, [osm])
+    assert np.load(out / "countries.npy")[0] == "SI"
+
+
+def test_osm_borders_are_exported_with_the_countries_or_beside_an_export(catalog_path: Path, tmp_path: Path) -> None:
+    countries = _boxes(tmp_path / "c.geojson", ("SI", 13, 44, 15.01, 46), ("HR", 15.01, 44, 17, 46))
+    osm = _osm_borders(tmp_path / "borders.osm", ("HR", "SI"), [(_west_of_start(150), 44.9), (_west_of_start(150), 45.1)])
+    out = export_serving(catalog_path, tmp_path / "out", countries_path=countries, osm_borders_paths=[osm])
+    assert np.load(out / "countries.npy")[0] == "HR"
+
+    assert main(["export-countries", "--out", str(out), "--countries", str(countries)]) == 0
+    assert np.load(out / "countries.npy")[0] == "SI"
+    assert main(["export-countries", "--out", str(out), "--countries", str(countries), "--osm-borders", str(osm)]) == 0
+    assert np.load(out / "countries.npy")[0] == "HR"
+    assert main(["export-countries", "--out", str(out), "--osm-borders", str(osm)]) == 1  # sides need the countries

@@ -294,6 +294,7 @@ call on your machine.
 | `data/valhalla/` | Road PBF + Valhalla routing tiles Docker builds | gitignored |
 | `data/web-serving/` | Serving export for the web demo (`export-serving`) | **gitignored** |
 | `data/geonames/` | GeoNames `allCountries.zip` for the demo's place search | gitignored |
+| `data/borders/` | OSM national boundaries (`osmium tags-filter … r/admin_level=2`) for `--osm-borders` | gitignored |
 | `src/dayhike/web/static/` | The demo page, its script, the About, credits, Privacy and Terms pages, the logo (mark, wordmark, touch icon and social preview) and the coverage map | yes |
 | `web/` | Data and web Dockerfiles, Cloud Build config, local compose file and smoke script of the demo | yes |
 | `data/valhalla/compose.yaml` | How to run Valhalla | yes |
@@ -2448,8 +2449,34 @@ uv run dayhike export-countries --out data/web-serving \
   --countries /tmp/ne_10m_admin_0_countries.geojson --borders /tmp/ne_10m_admin_0_boundary_lines_land.geojson
 ```
 
+With `--osm-borders` too (repeatable; each the national boundaries of one OSM
+extract the Catalog was built from), a Trailhead within 2 km of an
+OpenStreetMap national border takes the country on its side of that border
+instead of Natural Earth's, so the panel leads with the country the hike
+starts in. Natural Earth's 10m lines lie up to about a kilometre off (the Rio
+Grande, the 45th parallel): Boquillas Canyon Trail, starting 150 m inside the
+US, showed Mexico first. A border here is a way two admin_level=2 relations of
+different ISO 3166 codes share, other than a maritime one; which side of it is
+which country is what Natural Earth says 2.5 km off it, summed over every way
+of that border. A Trailhead keeps Natural Earth's country where the borders
+nearest it disagree (a tripoint) or that country has no emergency row. OSM
+draws no land border in Crimea, so no Crimean hike changes. On the Europe and
+US build this moves 4,904 of 889,525 Trailheads (4,785 of them on flagged
+hikes, which keep both numbers, the other country now second), in about a
+minute more; against the OSM shapes of the 48 countries an extract holds
+whole, 3,466 of the 3,494 moves it can check are right:
+
+```bash
+mkdir -p data/borders  # not beside the extracts: an ingest of data/osm/europe/ would read it as one
+osmium tags-filter data/osm/europe/europe-latest.osm.pbf r/admin_level=2 -o data/borders/europe-admin2.osm.pbf  # about 4 minutes
+osmium tags-filter data/osm/us/us48-latest.osm.pbf r/admin_level=2 -o data/borders/us48-admin2.osm.pbf  # about 1.5 minutes
+uv run dayhike export-countries --out data/web-serving \
+  --countries /tmp/ne_10m_admin_0_countries.geojson --borders /tmp/ne_10m_admin_0_boundary_lines_land.geojson \
+  --osm-borders data/borders/europe-admin2.osm.pbf --osm-borders data/borders/us48-admin2.osm.pbf
+```
+
 `export-countries` adds them beside an existing export (it reads
-`trailheads.npy`, `places.sqlite` and, with `--borders`, `hikes.sqlite`); without `--borders` it drops an
+`trailheads.npy`, `places.sqlite`, the `--osm-borders` files and, with `--borders`, `hikes.sqlite`); without `--borders` it drops an
 old `borders.npy`. A Trailhead outside every
 shape, on a coast, takes the country of the nearest place in `places.sqlite`;
 without places it has no country. `export-countries` stops writing nothing, and
