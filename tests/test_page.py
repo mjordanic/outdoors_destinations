@@ -13,6 +13,7 @@ import shutil
 import socket
 import threading
 import time
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 import zlib
@@ -3510,6 +3511,62 @@ def test_show_on_map_opens_the_hike_map_at_the_landmark(browser, server) -> None
     assert page.locator("#map-pick-on").is_checked()
     page.wait_for_function(SHOWS, arg=[45.05, 15.01])
     page.get_by_text("Click a line to choose it").wait_for()
+
+
+def dense_hikes(server, page, drawable_span: float) -> list[float]:
+    """Stub the hikes in a map box: too many while the box is taller than ``drawable_span`` degrees, else the
+    real answer. Returns the spans asked."""
+    spans: list[float] = []
+
+    def answer(route) -> None:
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(route.request.url).query)
+        span = float(query["north"][0]) - float(query["south"][0])
+        spans.append(span)
+        if span > drawable_span:
+            route.fulfill(json={"results": [], "too_many": True})
+        else:
+            route.continue_()
+
+    page.route(f"{server}/api/hikes?*", answer)
+    return spans
+
+
+@pytest.mark.parametrize(("touch", "width"), [(False, 1280), (True, 390)])
+def test_show_on_map_in_a_dense_place_zooms_in_by_itself_until_the_hikes_are_drawn(browser, server, touch, width) -> None:
+    page = open_page(browser, server, Api({}), touch=touch, width=width)
+    spans = dense_hikes(server, page, drawable_span=0.03)  # a box that tall holds few enough hikes
+    page.locator("#search").fill("Ridge Lake")
+
+    page.locator("#suggestions li.landmark").get_by_role("button", name="Show on map").dispatch_event("mousedown")
+
+    page.get_by_text("Click a line to choose it").wait_for()
+    assert page.evaluate("pick.map.getZoom()") > page.evaluate("PICK_ZOOM + 1")  # it had to zoom in to get there
+    assert min(spans) <= 0.03 < max(spans)
+    page.wait_for_function(SHOWS, arg=[45.05, 15.01])  # on the same centre
+
+
+def test_show_on_map_zooms_in_no_further_than_the_limit_and_then_says_there_are_too_many(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+    dense_hikes(server, page, drawable_span=0.0)  # never drawable
+    page.locator("#search").fill("Ridge Lake")
+
+    page.locator("#suggestions li.landmark").get_by_role("button", name="Show on map").dispatch_event("mousedown")
+
+    page.get_by_text("Too many hikes in view; zoom in further to see them as lines.").wait_for()
+    assert page.evaluate("pick.map.getZoom()") == page.evaluate("PICK_FIT_MAX_ZOOM")
+
+
+def test_a_map_the_hiker_has_touched_is_not_zoomed_in_by_itself(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+    page.locator("#map-pick-on").check()
+    page.get_by_text("Zoom in on the map").wait_for()
+    spans = dense_hikes(server, page, drawable_span=0.0)  # never drawable
+    page.locator("#map-pick .pick-map").dispatch_event("pointerdown")
+    page.evaluate("pick.map.setZoom(PICK_ZOOM)")
+
+    page.get_by_text("Too many hikes in view; zoom in further to see them as lines.").wait_for()
+    assert page.evaluate("pick.map.getZoom()") == page.evaluate("PICK_ZOOM")
+    assert len(spans) == 1
 
 
 def test_a_landmark_or_start_place_found_moves_the_open_hike_map(browser, server) -> None:
