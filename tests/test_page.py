@@ -3558,14 +3558,16 @@ def test_show_on_map_zooms_in_no_further_than_the_limit_and_then_says_there_are_
 
 def test_a_map_the_hiker_has_touched_is_not_zoomed_in_by_itself(browser, server) -> None:
     page = open_page(browser, server, Api({}))
-    page.locator("#map-pick-on").check()
-    page.get_by_text("Zoom in on the map").wait_for()
     spans = dense_hikes(server, page, drawable_span=0.0)  # never drawable
+    page.locator("#search").fill("Ridge Lake")
+    page.locator("#suggestions li.landmark").get_by_role("button", name="Show on map").dispatch_event("mousedown")
+    page.wait_for_function("() => pick.fitting")
+    zoom = page.evaluate("pick.map.getZoom()")
+
     page.locator("#map-pick .pick-map").dispatch_event("pointerdown")
-    page.evaluate("pick.map.setZoom(PICK_ZOOM)")
 
     page.get_by_text("Too many hikes in view; zoom in further to see them as lines.").wait_for()
-    assert page.evaluate("pick.map.getZoom()") == page.evaluate("PICK_ZOOM")
+    assert page.evaluate("pick.map.getZoom()") == zoom
     assert len(spans) == 1
 
 
@@ -3586,8 +3588,7 @@ def test_a_map_after_a_failed_show_on_map_is_not_zoomed_in_by_itself(browser, se
     page.wait_for_function("() => pick.map && /^(?!Loading|Zoom in)./.test(document.querySelector('#map-pick-hint').textContent)")
     zoom = page.evaluate("pick.map.getZoom()")
 
-    page.locator("#compose-on").click()
-    page.locator("#compose-on").click()
+    page.evaluate("pick.map.panBy([20, 0], { animate: false })")
 
     page.get_by_text("Too many hikes in view; zoom in further to see them as lines.").wait_for()
     assert page.evaluate("pick.map.getZoom()") == zoom
