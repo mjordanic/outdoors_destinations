@@ -1811,10 +1811,10 @@ function nameSearch(input, list, onPick, onLandmark = null, resting = () => null
     list.appendChild(li);
     return li;
   };
-  // A Landmark's head, saying where it is ("peak, near Lone Pine, CA, US"), then its hikes not listed yet.
+  // A Landmark's head, saying where it is ("peak, near Lone Pine, US"), then its hikes not listed yet.
   const landmarkOptions = (landmark) => {
-    const where = [LANDMARK_KINDS[landmark.kind] ?? landmark.kind, landmark.town && `near ${landmark.town}`, landmark.state,
-      landmark.country].filter(Boolean).join(", ");
+    const where = [LANDMARK_KINDS[landmark.kind] ?? landmark.kind, landmark.town && `near ${landmark.town}`, landmark.country]
+      .filter(Boolean).join(", ");
     const similar = landmark.match === "similar" ? ' <span class="similar-tag">similar name</span>' : "";
     const head = note(`Hikes near ${escapeHtml(landmark.name)} (${escapeHtml(where)})${similar}`, "landmark");
     if (onLandmark) {

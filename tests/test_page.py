@@ -3478,7 +3478,7 @@ def test_search_lists_the_hikes_near_a_peak_apart_from_hike_names(browser, serve
 
     head = page.locator("#suggestions li.landmark").first
     head.wait_for()
-    assert head.inner_text().startswith("Hikes near Ridge Peak (peak, HR)")
+    assert head.inner_text().startswith("Hikes near Ridge Peak (peak)")
     hike = page.locator("#suggestions li.landmark + li[role=option]").first
     assert hike.locator(".meta").inner_text().startswith("reaches the top · ")
     hike.dispatch_event("mousedown")
@@ -3490,7 +3490,7 @@ def test_search_lists_a_hike_once_when_its_name_matches_and_it_reaches_a_peak_fo
 
     page.locator("#search").fill("Ridge")
 
-    page.locator("#suggestions li.landmark", has_text="Hikes near Ridge Peak (peak, HR)").wait_for()
+    page.locator("#suggestions li.landmark", has_text="Hikes near Ridge Peak (peak)").wait_for()
     options = page.locator("#suggestions li[role=option]")
     names = [text.split("\n")[0] for text in options.all_inner_texts()]
     assert names.count("Ridge Walk") == 1
@@ -3501,24 +3501,24 @@ def test_search_lists_a_hike_once_when_its_name_matches_and_it_reaches_a_peak_fo
     assert page.locator(f"#{last}").inner_text() == options.last.inner_text()
 
 
-def test_a_landmark_that_leads_is_listed_before_the_hike_names_with_its_state(browser, server) -> None:
+def test_a_landmark_that_leads_is_listed_before_the_hike_names(browser, server) -> None:
     # "Matterhorn" listed Matterhorn Trail in Oregon first, the Swiss Matterhorn's hikes after every name.
     def hike(id: int, name: str, region: str, off_m: int | None = None) -> dict:
         return {"id": id, "name": name, "length_m": 5000, "round_trip": False, "climb_m": 500, "descent_m": 500,
                 "elevation_gain_m": 500, "highest_m": 3000, "trailhead": [45.0, 15.0], "match": "words",
                 "region": region, **({} if off_m is None else {"off_m": off_m})}  # fmt: skip
 
-    def landmark(name: str, town: str, state: str | None, country: str, hikes: list[dict], leads: bool) -> dict:
-        return {"name": name, "kind": "peak", "town": town, "state": state, "country": country, "lat": 45.98,
+    def landmark(name: str, town: str, country: str, hikes: list[dict], leads: bool) -> dict:
+        return {"name": name, "kind": "peak", "town": town, "country": country, "lat": 45.98,
                 "lon": 7.66, "match": "words", "hike_count": len(hikes), "hikes": hikes, "leads": leads}  # fmt: skip
 
     page = open_page(browser, server, Api({}))
     page.route(f"{server}/api/search?*", lambda route: route.fulfill(json={"results": [
-        hike(1, "Matterhorn Trail", "Joseph, OR, US"), hike(2, "Hörnli Ridge", "Zermatt, CH"),
+        hike(1, "Matterhorn Trail", "Joseph, US"), hike(2, "Hörnli Ridge", "Zermatt, CH"),
     ]}))  # fmt: skip
     page.route(f"{server}/api/landmarks?*", lambda route: route.fulfill(json={"results": [
-        landmark("Matterhorn", "Zermatt", None, "CH", [hike(2, "Hörnli Ridge", "Zermatt, CH", 0)], True),
-        landmark("Matterhorn", "Joseph", "OR", "US", [hike(1, "Matterhorn Trail", "Joseph, OR, US", 0)], False),
+        landmark("Matterhorn", "Zermatt", "CH", [hike(2, "Hörnli Ridge", "Zermatt, CH", 0)], True),
+        landmark("Matterhorn", "Joseph", "US", [hike(1, "Matterhorn Trail", "Joseph, US", 0)], False),
     ]}))  # fmt: skip
 
     page.locator("#search").fill("Matterhorn")
@@ -3529,9 +3529,9 @@ def test_a_landmark_that_leads_is_listed_before_the_hike_names_with_its_state(br
         "Hikes near Matterhorn (peak, near Zermatt, CH)",
         "Hörnli Ridge",
         "Matterhorn Trail",  # the names: each hike once, where it first comes
-        "Hikes near Matterhorn (peak, near Joseph, OR, US)",
+        "Hikes near Matterhorn (peak, near Joseph, US)",
     ]
-    assert "near Joseph, OR, US" in page.locator("#suggestions li[role=option]").nth(1).inner_text()
+    assert "near Joseph, US" in page.locator("#suggestions li[role=option]").nth(1).inner_text()
 
 
 def test_show_on_map_opens_the_hike_map_at_the_landmark(browser, server) -> None:

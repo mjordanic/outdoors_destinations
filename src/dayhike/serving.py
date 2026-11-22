@@ -26,9 +26,8 @@ similarity directory live. It writes a directory a server memory-maps:
 - ``places.sqlite``: GeoNames towns of 1,000 people or more within
   ``PLACE_MARGIN_DEG`` of the Trailheads' box, each under every folded name it
   has, and smaller villages within ``VILLAGE_M`` of a Trailhead under their own
-  names, with its country and GeoNames admin1 code (a US state's), for the
-  page's place search, when a GeoNames dump (``allCountries``) is given.
-  ``export_places`` writes it beside an existing export too: it reads
+  names, for the page's place search, when a GeoNames dump (``allCountries``)
+  is given. ``export_places`` writes it beside an existing export too: it reads
   only ``trailheads.npy``, and an export without it still opens.
 - ``landmarks.sqlite``: the Landmarks the hike search finds hikes by
   (``export_landmarks``, ADR-0053), each with its nearest hikes; written by
@@ -201,22 +200,9 @@ FAR_PARKING_M = 2_000.0  # a hike starting further from a car park starts on the
 # A Landmark of these kinds known in this many languages or more is famous: it leads the hike search (ADR-0076)
 FAMOUS_NAMES = 10
 FAMOUS_KINDS = ("peak", "lake", "pass", "ridge")
-LANDMARK_PLACE_SCAN = 500  # Landmarks a search narrowed to a country or state looks through for those in it
+LANDMARK_PLACE_SCAN = 500  # Landmarks a search narrowed to a country looks through for those in it
 # A word a name is often shortened to, and the word it is short for: what search compares (ADR-0076)
-SHORT_WORDS = {"mt": "mount", "st": "saint"}
-# The US states a search can be narrowed to (ADR-0076): GeoNames admin1 code by name
-US_STATES = {
-    "Alabama": "AL", "Alaska": "AK", "Arizona": "AZ", "Arkansas": "AR", "California": "CA", "Colorado": "CO",
-    "Connecticut": "CT", "Delaware": "DE", "District of Columbia": "DC", "Florida": "FL", "Georgia": "GA",
-    "Hawaii": "HI", "Idaho": "ID", "Illinois": "IL", "Indiana": "IN", "Iowa": "IA", "Kansas": "KS",
-    "Kentucky": "KY", "Louisiana": "LA", "Maine": "ME", "Maryland": "MD", "Massachusetts": "MA",
-    "Michigan": "MI", "Minnesota": "MN", "Mississippi": "MS", "Missouri": "MO", "Montana": "MT",
-    "Nebraska": "NE", "Nevada": "NV", "New Hampshire": "NH", "New Jersey": "NJ", "New Mexico": "NM",
-    "New York": "NY", "North Carolina": "NC", "North Dakota": "ND", "Ohio": "OH", "Oklahoma": "OK",
-    "Oregon": "OR", "Pennsylvania": "PA", "Rhode Island": "RI", "South Carolina": "SC", "South Dakota": "SD",
-    "Tennessee": "TN", "Texas": "TX", "Utah": "UT", "Vermont": "VT", "Virginia": "VA", "Washington": "WA",
-    "West Virginia": "WV", "Wisconsin": "WI", "Wyoming": "WY",
-}  # fmt: skip
+SHORT_WORDS = {"mt": "mount"}
 FUZZY_MIN_LETTERS = 4  # a shorter query word is found only as typed
 FUZZY_SPELLINGS = 3  # the nearest words a word with a typo is tried as
 FUZZY_QUERIES = 6  # the respelled queries a search tries, fewest typos first
@@ -1281,9 +1267,8 @@ def export_places(geonames_path: Path | str, out_dir: Path | str) -> Path:
     Keeps the populated places within ``PLACE_MARGIN_DEG`` of the box of
     ``trailheads.npy``: a town (``TOWN_POPULATION`` people or a seat) anywhere
     there, a smaller place only within ``VILLAGE_M`` of a Trailhead, and none
-    of ``NOT_VILLAGE_CODES``. Each has its name, country, population,
-    position and GeoNames admin1 code (a US state's postal code), and an
-    index of its names folded like ``_fold``, marked whether
+    of ``NOT_VILLAGE_CODES``. Each has its name, country, population and
+    position, and an index of its names folded like ``_fold``, marked whether
     it is only an alternate name (not its name or ASCII name); a village keeps
     only its own two, as alternate names would take most of the file. Written
     to a temporary file first, so a server never opens half of one.
@@ -1300,8 +1285,7 @@ def export_places(geonames_path: Path | str, out_dir: Path | str) -> Path:
     db = sqlite3.connect(partial)
     try:
         db.execute(
-            "CREATE TABLE places (id INTEGER PRIMARY KEY, name TEXT, country TEXT, population INTEGER, lat REAL, lon REAL,"
-            " admin1 TEXT)"
+            "CREATE TABLE places (id INTEGER PRIMARY KEY, name TEXT, country TEXT, population INTEGER, lat REAL, lon REAL)"
         )
         db.execute(
             "CREATE TABLE place_names (name TEXT, place INTEGER, alternate INTEGER, PRIMARY KEY (name, place)) "
@@ -1309,7 +1293,7 @@ def export_places(geonames_path: Path | str, out_dir: Path | str) -> Path:
         )
         for line in _geonames_lines(geonames_path):
             # geonameid, name, asciiname, alternatenames, latitude, longitude, feature class (6) and code (7),
-            # country code (8), admin1 code (10), ... population (14)
+            # country code (8), ... population (14)
             fields = line.rstrip("\n").split("\t")
             if fields[6] != "P":
                 continue
@@ -1325,8 +1309,7 @@ def export_places(geonames_path: Path | str, out_dir: Path | str) -> Path:
                 continue
             place = int(fields[0])
             db.execute(
-                "INSERT INTO places VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (place, fields[1], fields[8], population, lat, lon, fields[10] or None),
+                "INSERT INTO places VALUES (?, ?, ?, ?, ?, ?)", (place, fields[1], fields[8], population, lat, lon)
             )
             own = {_fold(name).strip() for name in fields[1:3]}
             names = (own | ({_fold(name).strip() for name in fields[3].split(",")} if town else set())) - {""}
@@ -1640,9 +1623,8 @@ class ServingData:
 
         A word of ``SHORT_WORDS`` is its long word, in the query and in the
         names: "Mt Whitney" finds Mount Whitney Trail. A query ending in a
-        country or US state after a comma ("Triglav, Slovenia"), or without
-        one when its every word finds nothing ("Rainier Washington"), finds
-        the hikes starting there (``_where``) by the words before it.
+        country after a comma ("Triglav, Slovenia") finds the hikes starting
+        there (``_row_countries``) by the words before it.
         """
         needle = _unshortened(_fold(query.strip()))
         rows: list[int] = []
@@ -1657,7 +1639,7 @@ class ServingData:
         similar = {row for row in by_name if _relevance(self._folded[row], needle, words) == 4}
         if len(rows) < limit:
             for spelled in self._spellings.respelled(words):
-                found = there(self._rows_with_words(spelled, " ".join(spelled), set(rows)))
+                found = self._rows_with_words(spelled, " ".join(spelled), set(rows), there)
                 rows += found
                 similar.update(found)
                 if len(rows) >= limit:
@@ -1669,53 +1651,48 @@ class ServingData:
 
     def _words_found(
         self, needle: str, skip: Collection[int]
-    ) -> tuple[str, list[str], list[int], Callable[[list[int]], list[int]]]:
+    ) -> tuple[str, list[str], list[int], np.ndarray | None]:
         """The query ``search`` matches names by, its words, the rows not in ``skip`` holding them
-        (best first), and what keeps rows of the place it names: the query as typed, or, ending in a
-        country or US state after a comma or finding nothing, the words before it (``_place_tail``)."""
-        words = needle.split()
+        (best first), and which rows start in the country it names (None for any): the query as
+        typed, or, ending in a country after a comma, the words before it (``_place_tail``)."""
         tail = _place_tail(needle)
-        found = [] if tail and tail[2] else self._rows_with_words(words, needle, set(skip))
-        if found or tail is None:
-            return needle, words, found, lambda rows: rows
-        head, where, _ = tail
+        if tail is None or self._row_countries is None:
+            needle = tail[0] if tail else needle
+            return needle, needle.split(), self._rows_with_words(needle.split(), needle, set(skip)), None
+        head, country = tail
+        there = self._row_countries == country
+        return head, head.split(), self._rows_with_words(head.split(), head, set(skip), there), there
 
-        def there(rows: list[int]) -> list[int]:
-            return [row for row, place in zip(rows, self._where(rows), strict=True) if place is None or _in_place(place, where)]
-
-        return head, head.split(), there(self._rows_with_words(head.split(), head, set(skip))), there
-
-    def _where(self, rows: list[int]) -> list[tuple[str, str | None] | None]:
-        """The (country, state) each row starts in: its country in ``countries.npy``, else that of the
-        town nearest its start, and that town's state (``_towns``); None with neither file."""
+    @functools.cached_property
+    def _row_countries(self) -> np.ndarray | None:
+        """The country each row starts in: its country in ``countries.npy``, else that of the town
+        nearest its start (``_towns``); None with neither file."""
         towns, tree = self._towns
-        if not rows or (tree is None and self.countries is None):
-            return [None] * len(rows)
-        nearest: list[tuple[str, str, str | None] | None] = [None] * len(rows)
-        if tree is not None:
-            points = np.asarray(self.trailheads)[rows]
-            nearest = [towns[i] for i in tree.query(_unit(points[:, 0], points[:, 1]))[1]]
-        where: list[tuple[str, str | None] | None] = []
-        for row, town in zip(rows, nearest, strict=True):
-            country = str(self.countries[row]) if self.countries is not None else ""
-            where.append((country or (town[1] if town else ""), town[2] if town else None))
-        return where
+        if tree is None and self.countries is None:
+            return None
+        countries = np.array(self.countries if self.countries is not None else [""] * len(self.trailheads), dtype="U3")
+        missing = np.flatnonzero(countries == "")
+        if tree is not None and len(missing):
+            points = np.asarray(self.trailheads)[missing]
+            countries[missing] = [towns[i][1] for i in tree.query(_unit(points[:, 0], points[:, 1]))[1]]
+        return countries
 
-    def _rows_with_words(self, words: list[str], needle: str, skip: set[int]) -> list[int]:
-        """Rows not in ``skip`` whose name holds every word, best first (see ``search``)."""
+    def _rows_with_words(self, words: list[str], needle: str, skip: set[int], there: np.ndarray | None = None) -> list[int]:
+        """Rows not in ``skip`` whose name holds every word, best first (see ``search``); only those
+        ``there`` marks when given, counted toward ``SEARCH_SCAN_CAP`` alone."""
         scans = sorted({word for word in words if len(word) >= 2}, key=lambda word: (-len(word), word))
         if not scans:
             return []
         for scan in scans:
-            rows, whole = self._rows_containing(scan)
+            rows, whole = self._rows_containing(scan, there)
             if whole:
                 break
         else:
-            rows = self._rows_containing(scans[0])[0] + self._rows_named(needle)
+            rows = self._rows_containing(scans[0], there)[0] + self._rows_named(needle)
         found = [
             row
             for row in dict.fromkeys(rows)
-            if row not in skip and all(word in self._folded[row] for word in words)
+            if row not in skip and (there is None or there[row]) and all(word in self._folded[row] for word in words)
         ]
         found.sort(key=lambda row: (_relevance(self._folded[row], needle, words), len(self._folded[row]), row))
         return found
@@ -1790,12 +1767,11 @@ class ServingData:
         Watzmann, a hill near Berlin. When none is named
         so, the query is respelled as ``search`` respells it, from the
         Landmarks' words, and those found are marked ``"match": "similar"``.
-        Each says where it is: the nearest town other than itself (``town``), and the
-        ``country`` and US ``state`` of the town nearest it at any distance, from
-        ``places.sqlite`` (without it, the town the export named and no country).
+        Each says where it is: the nearest town other than itself (``town``) and that town's
+        ``country``, from ``places.sqlite`` (without it, the town the export named and no country).
 
         As in ``search``, "Mt" is Mount (a name spelled either way is found) and a
-        country or US state at the end narrows it to the Landmarks there. One
+        country after a comma narrows it to the Landmarks near a town there. One
         named exactly the query ``leads`` the hike names on the page when it is
         famous (``FAMOUS_NAMES`` names or more, of ``FAMOUS_KINDS``: the Matterhorn
         before Matterhorn Trail in Oregon) or, of those named so, its hikes are
@@ -1810,12 +1786,8 @@ class ServingData:
             return []
         tail = _place_tail(needle)
         with scoped(sqlite3.connect(self.landmarks, uri=True)) as db:
-            where, found, match = None, [], "words"
-            if not (tail and tail[2]):
-                found = self._landmarks_named(db, _shortened(needle), limit, self._landmark_names)
-            if not found and tail:
-                needle, where = tail[0], tail[1]
-                found = self._landmarks_in(db, _shortened(needle), limit, where)
+            needle, where = tail or (needle, None)
+            found, match = self._landmarks_in(db, _shortened(needle), limit, where), "words"
             if not found:
                 for spelled in self._landmark_spellings.respelled(needle.split()):
                     found, match = self._landmarks_in(db, _shortened(" ".join(spelled)), limit, where), "similar"
@@ -1847,17 +1819,16 @@ class ServingData:
                     hike[1], hike[0],
                 ))  # fmt: skip
             summaries = self._summaries([self.row_of(dayhike_id) for dayhike_id, _ in nearest])
-            country = state = None
-            nearby = self._nearest_town(lat, lon)
-            if nearby is not None:
-                _, country, state, _ = nearby
-                near = nearby if nearby[3] <= LANDMARK_TOWN_M else None
-                itself = near and near[0] == name and near[3] <= TRAILHEAD_M  # a town is near no other
+            country = None
+            if self._towns[1] is not None:
+                near = self._near_town(lat, lon)
+                country = near and near[1]
+                itself = near and near[0] == name and near[2] <= TRAILHEAD_M  # a town is near no other
                 town = None if not near or itself else near[0]
             famous = kind in FAMOUS_KINDS and (names or 0) >= FAMOUS_NAMES
             results.append(
                 {
-                    "name": name, "kind": kind, "town": town, "country": country, "state": state, "lat": lat, "lon": lon,
+                    "name": name, "kind": kind, "town": town, "country": country, "lat": lat, "lon": lon,
                     "match": match, "hike_count": count, "leads": rank == 0 and match == "words" and (famous or landmark in photographed),
                     "hikes": [{**summary, "off_m": off_m} for summary, (_, off_m) in zip(summaries, nearest, strict=True)],
                 }
@@ -1865,14 +1836,15 @@ class ServingData:
         return results
 
     def _landmarks_in(
-        self, db: sqlite3.Connection, needles: list[str], limit: int, where: tuple[tuple[str, str | None], ...] | None
+        self, db: sqlite3.Connection, needles: list[str], limit: int, where: str | None
     ) -> list[tuple]:
-        """``_landmarks_named``, of those near a town of ``where`` (``_place_tail``) when given:
-        the first ``limit`` of the best ``LANDMARK_PLACE_SCAN`` named so; all of them without towns."""
+        """``_landmarks_named``, of those near a town (``_near_town``) of the country ``where``
+        (``_place_tail``) when given: the first ``limit`` of the best ``LANDMARK_PLACE_SCAN`` named so;
+        all of them without towns."""
         if where is None or self._towns[1] is None:
             return self._landmarks_named(db, needles, limit, self._landmark_names)
         found = self._landmarks_named(db, needles, LANDMARK_PLACE_SCAN, self._landmark_names)
-        return [row for row in found if _in_place(self._nearest_town(row[4], row[5])[1:3], where)][:limit]
+        return [row for row in found if (self._near_town(row[4], row[5]) or ("", ""))[1] == where][:limit]
 
     def _best_named(self, query: str) -> list[int]:
         """The ids of the hikes ``search`` finds by name as well as its first (the same ``_relevance``),
@@ -1909,38 +1881,29 @@ class ServingData:
         ).fetchall()
 
     @functools.cached_property
-    def _towns(self) -> tuple[list[tuple[str, str, str | None]], object | None]:
-        """The towns of ``places.sqlite`` (``TOWN_POPULATION`` people or more), name, country and
-        a US town's state (None in a file from before ADR-0076), and a tree of where they are;
-        none and None without the file."""
+    def _towns(self) -> tuple[list[tuple[str, str]], object | None]:
+        """The towns of ``places.sqlite`` (``TOWN_POPULATION`` people or more), name and country,
+        and a tree of where they are; none and None without the file."""
         from scipy.spatial import cKDTree
 
         if self.places is None:
             return [], None
         with scoped(sqlite3.connect(self.places, uri=True)) as db:
-            admin1 = "admin1" if "admin1" in {row[1] for row in db.execute("PRAGMA table_info(places)")} else "NULL"
             rows = db.execute(
-                f"SELECT name, country, {admin1}, lat, lon FROM places WHERE population >= ? ORDER BY id",
-                (TOWN_POPULATION,),
+                "SELECT name, country, lat, lon FROM places WHERE population >= ? ORDER BY id", (TOWN_POPULATION,)
             ).fetchall()
         if not rows:
             return [], None
         where = np.array([(lat, lon) for *_, lat, lon in rows])
-        towns = [(name, country, state if country == "US" else None) for name, country, state, *_ in rows]
-        return towns, cKDTree(_unit(where[:, 0], where[:, 1]))
+        return [(name, country) for name, country, *_ in rows], cKDTree(_unit(where[:, 0], where[:, 1]))
 
-    def _nearest_town(self, lat: float, lon: float) -> tuple[str, str, str | None, float] | None:
-        """The town nearest a point, however far: name, country, state (``_towns``), metres; None without towns."""
+    def _near_town(self, lat: float, lon: float) -> tuple[str, str, float] | None:
+        """The town nearest a point within ``LANDMARK_TOWN_M``: name, country, metres; None with none."""
         towns, tree = self._towns
         if tree is None:
             return None
-        chord, i = tree.query(_unit(lat, lon)[0])
-        return (*towns[i], 2 * EARTH_RADIUS_M * math.asin(min(chord / 2, 1.0)))
-
-    def _near_town(self, lat: float, lon: float) -> tuple[str, str, str | None, float] | None:
-        """The town nearest a point within ``LANDMARK_TOWN_M`` (``_nearest_town``); None with none."""
-        near = self._nearest_town(lat, lon)
-        return near if near is not None and near[3] <= LANDMARK_TOWN_M else None
+        chord, i = tree.query(_unit(lat, lon)[0], distance_upper_bound=2 * math.sin(LANDMARK_TOWN_M / (2 * EARTH_RADIUS_M)))
+        return (*towns[i], 2 * EARTH_RADIUS_M * math.asin(chord / 2)) if math.isfinite(chord) else None
 
     def _region(self, row: int, named: re.Match | None) -> str | None:
         """Where a hike starts, as the town nearest its Trailhead and its country ("Bovec, SI"); None with no town near.
@@ -1984,10 +1947,9 @@ class ServingData:
         return any(_haversine_m(lat, lon, *point) <= PLACE_RADIUS_M for point in points)
 
     def _place_near(self, lat: float, lon: float) -> str | None:
-        """The town nearest a point, a US town's state, and its country ("Bovec, SI", "Joseph, OR, US");
-        None with no town near."""
+        """The town nearest a point and its country ("Bovec, SI"); None with no town near."""
         near = self._near_town(lat, lon)
-        return ", ".join(part for part in (near[0], near[2], near[1]) if part) if near else None
+        return f"{near[0]}, {near[1]}" if near else None
 
     def emergency(self, lat: float, lon: float, row: int | None = None) -> dict | None:
         """The emergency numbers and mountain rescue service of the country a hike starts in
@@ -2025,13 +1987,16 @@ class ServingData:
         with scoped(sqlite3.connect(self.landmarks, uri=True)) as db:
             return _Spellings([name for (name,) in db.execute("SELECT name FROM landmark_names WHERE whole")])
 
-    def _rows_containing(self, word: str) -> tuple[list[int], bool]:
+    def _rows_containing(self, word: str, there: np.ndarray | None = None) -> tuple[list[int], bool]:
         """Rows whose name holds ``word``, in id order, from its first SEARCH_SCAN_CAP
-        occurrences, and whether those are all of them."""
-        hits = itertools.islice(re.finditer(re.escape(word), self._haystack), SEARCH_SCAN_CAP + 1)
+        occurrences (in rows ``there`` marks, when given), and whether those are all of them."""
+        hits = re.finditer(re.escape(word), self._haystack)
+        if there is None:
+            hits = itertools.islice(hits, SEARCH_SCAN_CAP + 1)
         offsets = np.fromiter((hit.start() for hit in hits), dtype=np.int64)
-        rows = np.unique(np.searchsorted(self._starts, offsets[:SEARCH_SCAN_CAP], side="right") - 1).tolist()
-        return rows, len(offsets) <= SEARCH_SCAN_CAP
+        rows = np.searchsorted(self._starts, offsets, side="right") - 1
+        rows = rows[there[rows]] if there is not None else rows
+        return np.unique(rows[:SEARCH_SCAN_CAP]).tolist(), len(rows) <= SEARCH_SCAN_CAP
 
     def _rows_named(self, name: str) -> list[int]:
         """Rows whose whole folded name is ``name``, from its first SEARCH_SCAN_CAP occurrences."""
@@ -2908,44 +2873,32 @@ def _unshortened(folded: str) -> str:
 
 def _shortened(needle: str) -> list[str]:
     """An unshortened query as a Landmark's folded name may spell it: each ``SHORT_WORDS`` word written
-    out, shortened, or shortened with a full stop ("mount whitney", "mt whitney", "mt. whitney")."""
-    spelled = {full: (full, short, f"{short}.") for short, full in SHORT_WORDS.items()}
-    options = [spelled.get(part, (part,)) for part in re.split(r"(\w+)", needle)]
+    out, shortened, or shortened with a full stop ("mount whitney", "mt whitney", "mt. whitney"). As
+    the query's last word, which a name only starts with, it is shortened only as a whole word ("mt "):
+    "mount" finds no Mtskheta."""
+    spelled = {full: short for short, full in SHORT_WORDS.items()}
+    parts = re.split(r"(\w+)", needle)
+    options = [
+        (part, spelled[part] + (" " if i == len(parts) - 2 and not parts[-1] else ""), f"{spelled[part]}.")
+        if part in spelled
+        else (part,)
+        for i, part in enumerate(parts)
+    ]
     return ["".join(choice) for choice in itertools.islice(itertools.product(*options), 9)]
 
 
 @functools.cache
-def _place_names() -> dict[str, tuple[tuple[str, str | None], ...]]:
-    """The folded names of the countries of ``emergency_services`` and of ``US_STATES``, each with
-    the (country, state) it may be: Georgia is a country and a state."""
-    places: dict[str, list[tuple[str, str | None]]] = {}
-    for code, row in emergency_services().items():
-        places.setdefault(_fold(row["name"]), []).append((code, None))
-    for name, state in US_STATES.items():
-        places.setdefault(_fold(name), []).append(("US", state))
-    return {name: tuple(where) for name, where in places.items()}
+def _place_names() -> dict[str, str]:
+    """The folded names of the countries of ``emergency_services``, each with its code."""
+    return {_fold(row["name"]): code for code, row in emergency_services().items()}
 
 
-def _place_tail(needle: str) -> tuple[str, tuple[tuple[str, str | None], ...], bool] | None:
-    """A folded query ending in a country or US state ("triglav, slovenia", "rainier washington"):
-    the words before it, the (country, state) it may be, and whether a comma set it apart; None
-    for a query ending in neither, or naming only a place."""
+def _place_tail(needle: str) -> tuple[str, str] | None:
+    """A folded query ending in a country after a comma ("triglav, slovenia"): the words before it
+    and the country's code; None for a query ending in none, or naming only a country."""
     head, comma, tail = needle.rpartition(",")
-    if comma:
-        where = _place_names().get(tail.strip())
-        return (head.strip(), where, True) if where and head.strip() else None
-    words = needle.split()
-    for count in (3, 2, 1):
-        where = _place_names().get(" ".join(words[-count:]))
-        if where and len(words) > count:
-            return " ".join(words[:-count]), where, False
-    return None
-
-
-def _in_place(found: tuple[str, str | None], where: tuple[tuple[str, str | None], ...]) -> bool:
-    """Whether a (country, state) is one of ``where``'s; a state unknown (no admin1) is any of its country."""
-    country, state = found
-    return any(country == code and (want is None or state in (want, None)) for code, want in where)
+    country = _place_names().get(tail.strip()) if comma else None
+    return (head.strip(), country) if country and head.strip() else None
 
 
 class _Spellings:
