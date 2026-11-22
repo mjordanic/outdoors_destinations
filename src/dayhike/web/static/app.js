@@ -40,6 +40,7 @@ const API_BASE = ($('meta[name="api-base"]')?.content ?? "").replace(/\/+$/, "")
 const WAKE_AFTER_MS = 1500; // a first answer slower than this is a server starting from zero
 
 const PICK_ZOOM = 12; // the map shows hikes from this zoom on
+const PICK_FIT_MAX_ZOOM = PICK_ZOOM + 6; // a place found zooms in no further than this to fit its hikes in
 const PICK_LINE = { color: "#6b2fa3", weight: 3, opacity: 0.85 };
 const PICK_HOVER = { color: "#c2410c", weight: 5, opacity: 1 };
 const PICK_TOLERANCE_PX = 10; // a click this far off a hike's line or dot still chooses it
@@ -2218,6 +2219,7 @@ const pick = {
   loops: null, // the suggested loops and the shown row's versions of the Ranking
   timer: null,
   abort: null,
+  fitting: false, // a place was just found: zoom in on it, a step at a time, until its hikes can be drawn
 
   open() {
     const card = $("#map-pick");
@@ -2232,6 +2234,8 @@ const pick = {
       const [south, west, north, east] = state.info.core ?? state.info.coverage;
       this.map.fitBounds([[south, west], [north, east]]);
       this.map.on("moveend", () => this.load());
+      // The Hiker takes the map over: it stops zooming in by itself.
+      for (const event of ["pointerdown", "wheel", "keydown"]) this.map.getContainer().addEventListener(event, () => { this.fitting = false; });
       this.map.on("click", (event) => {
         const near = this.near(event.layerPoint);
         if (near.length === 1) choose(near[0], { from: "map" });
@@ -2249,17 +2253,20 @@ const pick = {
 
   // Show a place the Hiker searched (a Landmark, or the start place) close enough to see
   // its hikes as lines: a town's hikes start within 5 km, the others pass within 2 km.
-  // With the map closed, it opens there.
+  // With the map closed, it opens there. Where a view that size holds too many hikes to draw
+  // (a dense place), it zooms in on the same centre until they can be, or to PICK_FIT_MAX_ZOOM.
   focus(at) {
     state.mapAt = at;
     if (!this.map || $("#map-pick").hidden) return;
     state.mapAt = null;
+    this.fitting = true;
     this.map.setView(at.center, at.zoom ?? PICK_ZOOM);
   },
 
   // The map follows the liked hike, or else the starting place: it opens on them, and moves to a hike
   // chosen by name while it is open, zoomed in so the hikes there show.
   follow() {
+    this.fitting = false;
     if (!this.map || $("#map-pick").hidden || compose.on) return;
     const liked = state.liked, origin = !liked && $("#drive-on").checked ? (parseLatLon($("#origin").value) || state.origin) : null;
     if (liked) this.map.setView(...viewOf(this.map, liked, PICK_ZOOM), { animate: false });
@@ -2286,6 +2293,7 @@ const pick = {
 
   close() {
     $("#map-pick").hidden = true;
+    this.fitting = false;
     clearTimeout(this.timer);
     this.abort?.abort();
   },
@@ -2324,11 +2332,17 @@ const pick = {
         if (request !== boxed || compose.on) return;
         this.draw(body.results);
         const count = body.results.length;
+        if (body.too_many && this.fitting && this.map.getZoom() < Math.min(PICK_FIT_MAX_ZOOM, this.map.getMaxZoom())) {
+          this.hint("Too many hikes in view; zooming in on the place…");
+          this.map.setZoom(this.map.getZoom() + 1, { animate: false }); // its moveend loads the hikes again
+          return;
+        }
+        this.fitting = false;
         if (body.too_many) this.hint("Too many hikes in view; zoom in further to see them as lines.");
         else if (!count) this.hint("No hikes in view; move the map.");
         else this.hint(`${count} hike${count === 1 ? "" : "s"} in view. Click a line to choose it.`);
       } catch (error) {
-        if (error.name !== "AbortError" && request === boxed) this.hint(error.message);
+        if (error.name !== "AbortError" && request === boxed) { this.fitting = false; this.hint(error.message); }
       }
     }, 250);
   },
@@ -2469,6 +2483,7 @@ const compose = {
     if (!this.layer) this.layer = L.layerGroup().addTo(pick.map);
     clearTimeout(pick.timer);
     pick.abort?.abort();
+    pick.fitting = false;
     pick.hover(null);
     pick.layer.clearLayers();
     pick.lines.clear();
