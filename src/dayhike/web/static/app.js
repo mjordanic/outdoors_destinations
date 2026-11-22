@@ -2251,6 +2251,7 @@ const pick = {
   // The map follows the liked hike, or else the starting place: it opens on them, and moves to a hike
   // chosen by name while it is open, zoomed in so the hikes there show.
   follow() {
+    this.fitting = false;
     if (!this.map || $("#map-pick").hidden || compose.on) return;
     const liked = state.liked, origin = !liked && $("#drive-on").checked ? (parseLatLon($("#origin").value) || state.origin) : null;
     if (liked) this.map.setView(...viewOf(this.map, liked, PICK_ZOOM), { animate: false });
@@ -2277,6 +2278,7 @@ const pick = {
 
   close() {
     $("#map-pick").hidden = true;
+    this.fitting = false;
     clearTimeout(this.timer);
     this.abort?.abort();
   },
