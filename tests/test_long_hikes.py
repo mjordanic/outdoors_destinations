@@ -5,6 +5,7 @@ tests/fixtures/long_way_back.osm holds two long walks, each with a shorter
 trail back between its ends (see its comment).
 """
 
+import math
 import time
 from pathlib import Path
 
@@ -39,10 +40,10 @@ def test_a_line_whose_trail_back_is_far_retraces_instead_of_failing(graph: Trail
     # (build-similarity used to stop here with "at most 100 km long").
     lat, lon = _walk(N1, M1, N2)
 
-    back = way_back(lat, lon, graph)
+    back = way_back(lat, lon, graph, math.nan)
 
     assert back.kind == "retrace"
-    assert back.metres == pytest.approx(way_back(lat, lon, None).metres)
+    assert back.metres == pytest.approx(way_back(lat, lon, None, math.nan).metres)
     assert back.metres > 190_000
 
 
@@ -51,9 +52,9 @@ def test_a_long_walk_ending_near_its_start_still_takes_the_trail_back(graph: Tra
     # from its start walks those 5 km back, as a day hike would.
     lat, lon = _walk(N3, M2, N4)
 
-    back = way_back(lat, lon, graph)
+    back = way_back(lat, lon, graph, math.nan)
 
-    assert way_back(lat, lon, None).metres > 180_000
+    assert way_back(lat, lon, None, math.nan).metres > 180_000
     assert back.kind == "trail"
     assert back.metres == pytest.approx(4_990, abs=20)
 
@@ -63,10 +64,10 @@ def test_the_trail_search_stops_at_the_bound(graph: TrailGraph) -> None:
     # them is the 74 km Detour Back: past the bound, so the line is retraced.
     lat, lon = _walk(N5, M3, N6)
 
-    back = way_back(lat, lon, graph)
+    back = way_back(lat, lon, graph, math.nan)
 
     assert back.kind == "retrace"
-    assert back.metres == pytest.approx(way_back(lat, lon, None).metres)
+    assert back.metres == pytest.approx(way_back(lat, lon, None, math.nan).metres)
 
 
 def test_a_multi_day_seed_gets_no_suggested_loops(graph: TrailGraph) -> None:
