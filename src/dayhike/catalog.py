@@ -1419,14 +1419,15 @@ def _bridge_edges(
     for edge in edges:
         for node_id in edge.node_ids[1:]:
             pieces.union(edge.node_ids[0], node_id)
-    walked = sorted({node_id for edge in edges for node_id in edge.node_ids})
+    on_edges = {node_id for edge in edges for node_id in edge.node_ids}
+    walked = sorted(on_edges)
     if len({pieces.find(node_id) for node_id in walked}) < 2:
         return []
     found: list[tuple[float, int, tuple[int, ...]]] = []
     for way_id in bridges.ways_at(walked) - members:
         ids = tuple(node_id for node_id in ways[way_id].node_ids if node_id in snapshot_nodes)
-        # Its ends on the member ways and nothing between them: it crosses no member way.
-        if len(ids) < 2 or ids[0] == ids[-1] or ids[0] not in nodes or ids[-1] not in nodes:
+        # Its ends on the pieces and nothing between them: it crosses no member way.
+        if len(ids) < 2 or ids[0] == ids[-1] or ids[0] not in on_edges or ids[-1] not in on_edges:
             continue
         if any(node_id in nodes for node_id in ids[1:-1]):
             continue

@@ -22,7 +22,17 @@ the way back take the way back's Difficulty. The shortest way back from the summ
 Route (T5), so the card showed T5 for a T1 trail; Besseggen showed T6 the same way. A grade describes the
 walk the hike names: Difficulty with the way back now stays the hike's own, for a Catalog DayHike in
 `build-similarity` and for a ComposedHike at query time, as length, climb and the rest still add the way
-back. Which way back is found is not changed here.
+back. The way back itself is capped by the hike's own grade (#227, ADR-0076 "A way back is never harder
+than the hike"): a T1 hike whose shortest way back is a T5 scramble is retraced. This change keeps the
+Difficulty with the way back the hike's own whichever way back is found.
+
+**Known limits.** "Mount Whitney from Whitney Portal Trailhead" (DestinationHike 7199276719222726) follows
+the Mountaineer's Route: the Mount Whitney Trail is about 17 km one way, beyond the 16 km DestinationHike
+cap, so the only walk within the cap is that route. Its own ways grade it T4, an honest grade for that
+harder route; it showed T5 only through the way back, now fixed. Choosing another route would be a product
+change to the cap or to route selection. The JOT2/JOT5 names still appear in the list. The Besseggen length
+itself is fixed: relation 1417687 and JOT2 become the same ~14 km walk after a re-ingest (ADR-0077), and
+Twins rank them as one.
 
 **Consequences.** `build-similarity` again (its facts version changes), then `export-serving`; no re-ingest.
 

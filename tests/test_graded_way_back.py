@@ -80,11 +80,16 @@ def test_a_network_saved_without_grades_is_built_again(catalog: Path, tmp_path: 
     assert way_back(lat, lon, TrailGraph(graph.path), HIKING).kind == "retrace"
 
 
-def test_the_similarity_facts_measure_no_way_back_harder_than_the_hike(catalog: Path, tmp_path: Path) -> None:
+@pytest.fixture(scope="module")
+def store(catalog: Path, tmp_path_factory: pytest.TempPathFactory) -> SimilarityStore:
+    tmp_path = tmp_path_factory.mktemp("graded_way_back_similarity")
     (tmp_path / "dem").mkdir()
     (tmp_path / "landcover").mkdir()
     build_similarity(catalog, tmp_path / "dem", landcover_dir=tmp_path / "landcover")
-    store = SimilarityStore.open(catalog)
+    return SimilarityStore.open(catalog)
+
+
+def test_the_similarity_facts_measure_no_way_back_harder_than_the_hike(store: SimilarityStore) -> None:
     rank = FACT_COLUMNS.index("difficulty_rank")
 
     np.testing.assert_array_equal(
@@ -92,3 +97,15 @@ def test_the_similarity_facts_measure_no_way_back_harder_than_the_hike(catalog: 
     )
     kinds = {WAY_BACK_KINDS[int(kind)] for kind in store.with_way_back.way_back[3]}
     assert kinds == {"trail", "retrace"}
+
+
+def test_a_hiking_trail_beside_a_shorter_scramble_keeps_its_grade_with_the_way_back(
+    store: SimilarityStore,
+) -> None:
+    # Mount Whitney Trail (ADR-0078): the shortest way back is the Mountaineers
+    # Route, but the trail is retraced and the round trip stays T1.
+    back = store.with_way_back
+    index = list(back.ids).index(4001)
+
+    assert WAY_BACK_KINDS[int(back.way_back[3][index])] == "retrace"
+    assert back.facts[FACT_COLUMNS.index("difficulty_rank")][index] == HIKING

@@ -1105,6 +1105,7 @@ def _keep_dayhikes(
         return hike, _store_walk(walk) if walks is not None else None
 
     kept = []
+    _way_ends(snapshot)
     # Each relation is walked in a worker; only its DayHike and stored walk come back.
     for result in parallel_map(keep, hiking):
         if isinstance(result, str):
@@ -1475,6 +1476,7 @@ def write_geometry_store(
         if dem_read:
             out.execute("INSERT INTO geometry_meta (key, value) VALUES (?, ?)", (DEM_READ_KEY["ingest"], dem_read))
         relation_hikes = [hike for hike in dayhikes if hike.kind == KIND_RELATION]
+        _way_ends(snapshot)
         # The rows are built in the workers, from the stored main walks (assembled when one is missing);
         # they are written here, in hike order.
         relation_rows = parallel_iter(

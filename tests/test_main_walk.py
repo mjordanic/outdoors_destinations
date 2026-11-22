@@ -400,6 +400,21 @@ def test_a_way_that_crosses_a_member_way_does_not_join_pieces(tmp_path: Path) ->
     assert walk.way(2) == _left("disconnected")
 
 
+def test_a_way_from_a_piece_to_a_role_leftover_does_not_join_pieces(tmp_path: Path) -> None:
+    # Way 4, another relation's, runs from the line's end b to the start f of
+    # the alternative 3, which is on no piece: it bridges nothing.
+    nodes = {"a": (0, 0), "b": (0, 3), "f": (0.2, 3), "g": (0.2, 3.8), "e": (0, 4.5), "c": (0, 6.5)}
+    walk = Walk(
+        tmp_path, nodes, {1: "ab", 2: "ec", 3: "fg", 4: "bf"}, [1, 2, 3],
+        roles={3: "alternative"}, other_routes=[[4]],
+    )
+
+    assert walk.hike.length_m == pytest.approx(3_000.0, abs=1.0)
+    assert walk.vertices == "ab"
+    assert walk.way(2) == _left("disconnected")
+    assert walk.way(3) == _left("role")
+
+
 def test_a_way_left_mid_way_by_the_route_is_walked_in_part(tmp_path: Path) -> None:
     # Way 1 runs a-x-b; the route turns east at x, leaving x-b as a stub.
     nodes = {"a": (0, 0), "x": (0, 3), "b": (0, 3.2), "f": (3, 3)}
