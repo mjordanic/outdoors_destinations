@@ -2481,7 +2481,7 @@ uv run dayhike export-countries --out data/web-serving \
 ```
 
 `export-countries` adds them beside an existing export (it reads
-`trailheads.npy`, `places.sqlite`, the `--osm-borders` files and, with `--borders`, `hikes.sqlite`); without `--borders` it drops an
+`trailheads.npy`, `places.sqlite`, the `--osm-borders` files and, with `--borders`, `hikes.sqlite`); without `--borders`, and with no Trailhead the OSM borders move, it drops an
 old `borders.npy`. A Trailhead outside every
 shape, on a coast, takes the country of the nearest place in `places.sqlite`;
 without places it has no country. `export-countries` stops writing nothing, and
