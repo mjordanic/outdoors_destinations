@@ -549,6 +549,24 @@ def main(argv: list[str] | None = None) -> int:
         help="GeoNames allCountries.zip; downloaded there when missing",
     )
     places.add_argument("--out", type=Path, default=Path("data/web-serving"))
+    cut = subparsers.add_parser(
+        "cut-serving",
+        help="Cut a finished serving export down to Europe, the US or a cut file's areas, as an export of its own",
+    )
+    cut.add_argument("--from", dest="source", type=Path, default=Path("data/web-serving"), help="The export to cut (read only)")
+    cut.add_argument(
+        "--keep",
+        required=True,
+        help="europe or us (the hikes east or west of 40° W), a cut file of dayhike/data/cuts by name (demo), "
+        "or a cut or region .toml file",
+    )
+    cut.add_argument("--out", required=True, type=Path, help="Where to write the cut export")
+    cut.add_argument(
+        "--geonames",
+        type=Path,
+        default=Path("data/geonames/allCountries.zip"),
+        help="The GeoNames allCountries.zip the export was made with: the cut's place search and Landmarks",
+    )
     photos = subparsers.add_parser(
         "export-photos",
         help="Add up to two free Wikimedia Commons photos of each hike's named POIs to a serving export",
@@ -672,6 +690,25 @@ def main(argv: list[str] | None = None) -> int:
         geonames = fetch_geonames(args.geonames)
         print(export_places(geonames, args.out))
         print(export_landmarks(args.out, geonames))
+        return 0
+    if args.command == "cut-serving":
+        from dayhike.cut import CutError, cut_serving, load_keep
+        from dayhike.serving import ServingExportError
+
+        try:
+            keep = load_keep(args.keep)
+        except CutError as exc:
+            cut.error(str(exc))
+        has_places = (args.source / "places.sqlite").is_file()
+        try:
+            print(
+                cut_serving(
+                    args.source, args.out, keep, geonames_path=args.geonames if has_places else None, progress=_progress
+                )
+            )
+        except (StaleSimilarity, ServingExportError) as exc:
+            print(exc, file=sys.stderr)
+            return 1
         return 0
     if args.command == "export-photos":
         from dayhike.photos import export_photos, warm_photos

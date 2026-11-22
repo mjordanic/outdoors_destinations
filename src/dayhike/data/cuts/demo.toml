@@ -1,0 +1,59 @@
+# The demo showcase (`dayhike cut-serving --keep demo`, docs/deploy.md §1): the Eastern Alps and four
+# western US states, cut from the Europe and US export, about an eighth of its hikes (ADR-0081).
+#
+# Each [[area]] keeps the hikes starting in it: in each of its countries (ISO 3166 codes, as the
+# export's countries.npy has them) and, when it has one, inside its polygon of [lat, lon] corners.
+# The pages name the areas by label, in this order. A state's polygon follows its borders to a
+# few km, out to sea on the coast; a hike starting that close to a border may fall on either side.
+
+[[area]]
+label = "Slovenia"
+continent = "Europe"
+countries = ["SI"]
+
+[[area]]
+label = "Austria"
+continent = "Europe"
+countries = ["AT"]
+
+[[area]]
+label = "Switzerland"
+continent = "Europe"
+countries = ["CH"]
+
+[[area]]
+label = "California"
+continent = "North America"
+countries = ["US"]
+# Oregon at 42° N, Nevada to Lake Tahoe and down to the Colorado River, the river to Mexico.
+polygon = [
+    [42.00, -125.00], [42.00, -120.00], [39.00, -120.00], [35.00, -114.63], [34.87, -114.63],
+    [34.45, -114.37], [34.27, -114.13], [33.95, -114.53], [33.43, -114.72], [33.03, -114.52],
+    [32.72, -114.72], [32.53, -117.12], [32.53, -125.00],
+]
+
+[[area]]
+label = "Colorado"
+continent = "North America"
+countries = ["US"]
+polygon = [[41.00, -109.05], [41.00, -102.04], [37.00, -102.04], [37.00, -109.05]]
+
+[[area]]
+label = "Utah"
+continent = "North America"
+countries = ["US"]
+# Without Wyoming's corner in the north-east.
+polygon = [
+    [42.00, -114.05], [42.00, -111.05], [41.00, -111.05], [41.00, -109.05], [37.00, -109.05], [37.00, -114.05],
+]
+
+[[area]]
+label = "Washington"
+continent = "North America"
+countries = ["US"]
+# Canada at 49° N, Idaho at 117° W down the Snake River, then 46° N and the Columbia River to the sea.
+polygon = [
+    [49.00, -125.00], [49.00, -117.03], [46.42, -117.04], [46.00, -116.92], [46.00, -118.98],
+    [45.93, -119.34], [45.68, -120.50], [45.60, -121.18], [45.70, -121.50], [45.57, -122.25],
+    [45.62, -122.75], [46.12, -122.95], [46.20, -123.40], [46.25, -124.05], [46.25, -125.00],
+]
