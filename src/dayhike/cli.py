@@ -490,7 +490,7 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         default=[],
         help="OpenStreetMap national boundaries (osmium tags-filter <extract> r/admin_level=2), repeatable, with "
-        "--countries: a hike starting within 2 km of a border takes the country on its side of it, to the metre",
+        "--countries: a hike starting within 2 km of a border takes the country OSM puts it in and also shows the one it had",
     )
     export.add_argument(
         "--region",
@@ -530,7 +530,7 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         default=[],
         help="OpenStreetMap national boundaries (osmium tags-filter <extract> r/admin_level=2), repeatable, with "
-        "--countries: a hike starting within 2 km of a border takes the country on its side of it, to the metre",
+        "--countries: a hike starting within 2 km of a border takes the country OSM puts it in and also shows the one it had",
     )
     places = subparsers.add_parser(
         "export-places", help="Add GeoNames place search and the hike search's Landmarks beside an existing serving export"

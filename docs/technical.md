@@ -2451,20 +2451,25 @@ uv run dayhike export-countries --out data/web-serving \
 
 With `--osm-borders` too (repeatable; each the national boundaries of one OSM
 extract the Catalog was built from), a Trailhead within 2 km of an
-OpenStreetMap national border takes the country on its side of that border
-instead of Natural Earth's, so the panel leads with the country the hike
-starts in. Natural Earth's 10m lines lie up to about a kilometre off (the Rio
-Grande, the 45th parallel): Boquillas Canyon Trail, starting 150 m inside the
-US, showed Mexico first. A border here is a way two admin_level=2 relations of
-different ISO 3166 codes share, other than a maritime one; which side of it is
-which country is what Natural Earth says 2.5 km off it, summed over every way
-of that border. A Trailhead keeps Natural Earth's country where the borders
-nearest it disagree (a tripoint) or that country has no emergency row. OSM
-draws no land border in Crimea, so no Crimean hike changes. On the Europe and
-US build this moves 4,904 of 889,525 Trailheads (4,785 of them on flagged
-hikes, which keep both numbers, the other country now second), in about a
-minute more; against the OSM shapes of the 48 countries an extract holds
-whole, 3,466 of the 3,494 moves it can check are right:
+OpenStreetMap national border takes the country OSM puts it in instead of
+Natural Earth's, so the panel leads with the country the hike starts in.
+Natural Earth's 10m lines lie up to about a kilometre off (the Rio Grande, the
+45th parallel): Boquillas Canyon Trail, starting 150 m inside the US, showed
+Mexico first. Where the extract holds every way of a country (48 of them in
+Europe: not France, Spain, the Netherlands, Norway or Russia, whose relations
+reach beyond it, nor the US, Canada or Mexico), that country's OSM shape
+decides. Elsewhere it is the side of the nearest border the Trailhead is on: a
+border is a way two admin_level=2 relations of different ISO 3166 codes share,
+other than a maritime one, and which side of it is which country is what
+Natural Earth says 2.5 km off it, summed over every way of that border. A
+Trailhead keeps Natural Earth's country where neither tells (the borders
+nearest it disagree at a tripoint, or Natural Earth cannot tell the sides of
+a border) or the country has no emergency row. A hike whose country this
+changes always shows Natural Earth's country second (`borders.npy`), flagged
+or not, so it never loses the numbers of the country it may really start in.
+OSM draws no land border in Crimea, so no Crimean hike changes. On the Europe
+and US build this moves 4,891 of 889,525 Trailheads (79 of them not flagged
+before), in about a minute more and 2.6 GB of memory:
 
 ```bash
 mkdir -p data/borders  # not beside the extracts: an ingest of data/osm/europe/ would read it as one
@@ -2595,7 +2600,8 @@ A detail and compose also have `emergency`, the row of `src/dayhike/data/emergen
 the country the hike starts in (`country`, `name`, `numbers`, `rescue`, `rescue_url`, `how`,
 `sources`, `notes`): the Trailhead's in `countries.npy`, else the nearest town's; null with neither.
 They also have `border_emergency`, the same row for the country across the border a DayHike's
-route crosses or its Trailhead is within 2 km of (`borders.npy`); null for every other hike, a
+route crosses or its Trailhead is within 2 km of, or the one Natural Earth put a start the OSM borders
+moved in (`borders.npy`); null for every other hike, a
 ComposedHike, or an export without it. A Ranking that waits 25 s for its turn answers 503 with
 `Retry-After: 5`. Detail, compose, rank and pair take
 `return_to_start` (default true; `?return_to_start=false` on `GET

@@ -70,10 +70,17 @@ def _borders(path: Path, *lines: tuple[str, str, list[tuple[float, float]]]) -> 
     return path
 
 
-def _osm_borders(path: Path, codes: tuple[str, str], *ways: list[tuple[float, float]], maritime: bool = False) -> Path:
+def _osm_borders(
+    path: Path,
+    codes: tuple[str, str],
+    *ways: list[tuple[float, float]],
+    maritime: bool = False,
+    partial: str | None = None,
+) -> Path:
     """An OpenStreetMap file as ``osmium tags-filter <extract> r/admin_level=2`` writes one: the national
     boundary relations of the two ``codes`` sharing the ``ways`` through their points ((lon, lat)), a
-    point two ways share being one node."""
+    point two ways share being one node; the relation of the code ``partial`` also lists a way the
+    file leaves out, as one of a country reaching beyond the extract does."""
     ids = {point: i for i, point in enumerate(dict.fromkeys(point for way in ways for point in way), 1)}
     nodes = "".join(f'<node id="{i}" lat="{lat}" lon="{lon}" version="1"/>' for (lon, lat), i in ids.items())
     tags = '<tag k="boundary" v="administrative"/><tag k="admin_level" v="2"/>'
@@ -83,8 +90,10 @@ def _osm_borders(path: Path, codes: tuple[str, str], *ways: list[tuple[float, fl
         for w, way in enumerate(ways, 1)
     )
     members = "".join(f'<member type="way" ref="{w}" role="outer"/>' for w in range(1, len(ways) + 1))
+    beyond = f'<member type="way" ref="{len(ways) + 1}" role="outer"/>'
     relations = "".join(
-        f'<relation id="{i}" version="1">{members}<tag k="type" v="boundary"/>{tags}<tag k="ISO3166-1:alpha2" v="{code}"/></relation>'
+        f'<relation id="{i}" version="1">{members}{beyond if code == partial else ""}'
+        f'<tag k="type" v="boundary"/>{tags}<tag k="ISO3166-1:alpha2" v="{code}"/></relation>'
         for i, code in enumerate(codes, 1)
     )
     path.write_text(f'<?xml version="1.0" encoding="UTF-8"?><osm version="0.6">{nodes}{lines}{relations}</osm>')
@@ -268,7 +277,32 @@ def test_a_hike_far_from_any_osm_border_keeps_its_natural_earth_country(export: 
     after = np.load(out / "countries.npy")
     assert before.tolist() == ["SI", "SI", "SI", "SI"]
     assert after.tolist() == ["HR", "SI", "SI", "SI"]
-    assert ServingData(out).detail(1002)["emergency"]["country"] == "SI"
+    data = ServingData(out)
+    assert data.detail(1002)["emergency"]["country"] == "SI" and data.detail(1002)["border_emergency"] is None
+
+
+def test_a_hike_the_osm_borders_move_still_shows_the_country_natural_earth_put_it_in(export: Path, tmp_path: Path) -> None:
+    out = _copy(export, tmp_path / "out")
+    countries = _boxes(tmp_path / "c.geojson", ("SI", 13, 44, 15.01, 46), ("HR", 15.01, 44, 17, 46))
+    osm = _osm_borders(tmp_path / "borders.osm", ("HR", "SI"), [(_west_of_start(150), 44.9), (_west_of_start(150), 45.1)])
+    export_countries(out, countries, None, [osm])  # no Natural Earth lines: nothing else flags it
+
+    ridge = ServingData(out).detail(RIDGE_WALK_ID)
+    assert ridge["emergency"]["country"] == "HR" and ridge["border_emergency"] == emergency_services()["SI"]
+
+
+def test_a_start_inside_a_whole_osm_country_takes_that_country(export: Path, tmp_path: Path) -> None:
+    out = _copy(export, tmp_path / "out")
+    # San Marino as an enclave Natural Earth leaves out: its samples 2.5 km off its border are all in Italy,
+    # so only its OSM shape, whole in the extract, says the Ridge Walk starts in it.
+    countries = _boxes(tmp_path / "c.geojson", ("IT", 13, 44, 17, 46))
+    ring = [(14.995, 44.995), (15.005, 44.995), (15.005, 45.005), (14.995, 45.005), (14.995, 44.995)]
+    osm = _osm_borders(tmp_path / "borders.osm", ("SM", "IT"), ring, partial="IT")
+    export_countries(out, countries, None, [osm])
+
+    assert np.load(out / "countries.npy").tolist() == ["SM", "IT", "IT", "IT"]
+    ridge = ServingData(out).detail(RIDGE_WALK_ID)
+    assert ridge["emergency"]["country"] == "SM" and ridge["border_emergency"] == emergency_services()["IT"]
 
 
 def test_an_osm_border_way_takes_its_sides_from_the_whole_border(export: Path, tmp_path: Path) -> None:
