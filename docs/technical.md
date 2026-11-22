@@ -2393,7 +2393,8 @@ ElevationProfile at 128 equal steps in metres, the metres it climbs and
 descends in the walking direction (export format 2), and the amenity points the
 Measures count (WaterSources, Huts, restaurants, Shelters and Viewpoints in the
 Corridor, Peaks within 2 km, parking and restaurants within 500 m of the
-Trailhead) with their OSM names, its `source`, `source_ref` (ADR-0060) and `source_url` (ADR-0062), `parking_m` (the nearest car park, ADR-0068), plus an R*Tree of each simplified line's
+Trailhead) with their OSM names, its `source`, `source_ref` (ADR-0060) and `source_url` (ADR-0062), `parking_m` (the nearest car park, ADR-0068),
+`official_source`, `official_ref` and `official_url` (the official record an OSM hike lies on, see `--external-dir` below), plus an R*Tree of each simplified line's
 bounding box for the map picker (export format 3), and, when the Catalog has a
 TrailGraph, `trailgraph.sqlite`: its Segments with a simplified line and the
 metres each climbs either way, the Junctions, amenity points and sampled
@@ -2404,7 +2405,15 @@ older export, so rerun `export-serving` once), and beside it `trailgraph.network
 is searched on as `.npy` arrays the server memory-maps (about 75 MB for Europe; without it the first way back
 builds the network from the Segments, reading about half of `trailgraph.sqlite`, 10-20 s). With `--valhalla-tiles` it also links the
 tile extract and writes a `valhalla.json` that serves it inside the container;
-with `--valhalla-url` it snaps every Trailhead once (`snaps.npz`). With
+with `--valhalla-url` it snaps every Trailhead once (`snaps.npz`). It reads the caches of the Catalog's
+external sources from `--external-dir` (default `data/external`, as `fetch-external` writes them; ADR-0062),
+every record, those ingest dropped as Twins of an OSM hike too: an OSM hike with at least 80 % of its points
+(every 50 m) within 30 m of one record's line, as a Twin lies on the other, names that record
+(`official_*`; of two, the one more of it lies on), so a day stage of an official trail credits the trail's
+source as well as OpenStreetMap; and an external hike links its record's page as the source's adapter gives
+it now, not as ingest read it. A source with no cache there is named in the progress and matches nothing
+(Europe and the US: 6,013 of 874,786 OSM hikes, 381 of them DayStages; reading the caches about a minute and
+the matching about 2 minutes with 4 workers). With
 `--geonames` (GeoNames `allCountries.zip`, downloaded there when missing) it
 writes `places.sqlite`, the towns of 1,000 people or more within 2° of the
 Trailheads' box and the smaller villages within 5 km of a Trailhead for "Find

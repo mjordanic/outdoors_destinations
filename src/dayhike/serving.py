@@ -105,6 +105,7 @@ from dayhike.dem import (
     DemSourceMismatch,
     check_one_dem_source,
 )
+from dayhike.external import EXTERNAL_DIR, ExternalHike, read_external
 from dayhike.extracts import UrlRetrieve
 from dayhike.loops import LOOP_SEEDS, LOOP_TRAILHEADS, LoopTarget, find_loops
 from dayhike.npy import map_npy
@@ -683,6 +684,7 @@ def export_serving(
     countries_path: Path | str | None = None,
     borders_path: Path | str | None = None,
     regions: Sequence[Region] = (),
+    external_dir: Path | str | None = None,
     progress: Progress | None = None,
 ) -> Path:
     """Write the serving export of a Catalog into ``out_dir`` (see the module doc).
@@ -697,6 +699,9 @@ def export_serving(
     Earth countries GeoJSON for ``countries.npy``, ``borders_path`` its land boundary lines for
     ``borders.npy``. ``regions``, the ones the Catalog was built from, are
     named in ``meta.json`` (label and continent) for the site's pages; none leaves them saying Europe.
+    ``external_dir`` holds the caches of the Catalog's external sources (``dayhike fetch-external``): an
+    OpenStreetMap hike that lies on one of their records names it (``OfficialRecords``), and an external
+    hike links its record's page as the source's adapter gives it now; without it, neither.
     """
     started = time.monotonic()
     catalog_path, out = Path(catalog_path), Path(out_dir)
@@ -757,7 +762,12 @@ def export_serving(
         shutil.copyfile(similarity_dir_for(catalog_path) / name, similarity / name)
     trailheads = np.array([(row[4], row[5]) for row in hikes], dtype=np.float64).reshape(-1, 2)
     np.save(out / "trailheads.npy", trailheads)
-    sources = _write_hikes(catalog_path, out / "hikes.sqlite", hikes, progress, dem_of if dems_used else None)
+    official = (
+        None
+        if external_dir is None
+        else OfficialRecords.read({row[9] for row in hikes} - {SOURCE_OSM}, external_dir, progress)
+    )
+    sources = _write_hikes(catalog_path, out / "hikes.sqlite", hikes, progress, dem_of if dems_used else None, official)
     external = external_sources({row[9] for row in hikes})
     compose = _write_trailgraph(trailgraph_path_for(catalog_path), out / "trailgraph.sqlite", progress)
     # A rerun without tiles or snaps drops the old ones: they may be for other tiles.
@@ -847,11 +857,14 @@ def _write_hikes(
     hikes: list[tuple],
     progress: Progress | None,
     dem_of: Mapping[int, str] | None = None,
+    official: OfficialRecords | None = None,
 ) -> dict[str, str]:
     """Write ``hikes.sqlite``; return the GeometryStore's source attributions.
 
     With ``dem_of``, each DayHike's ``dem_source`` (ADR-0063), only a hike read
-    from Copernicus GLO-30 has its profile smoothed."""
+    from Copernicus GLO-30 has its profile smoothed. With ``official``, an OSM hike
+    that lies on an official record names it (``official_*``), and an external hike
+    links its record's page as ``official`` has it."""
     path.unlink(missing_ok=True)
     geo = sqlite3.connect(f"file:{geometry_store_path_for(catalog_path)}?mode=ro", uri=True)
     db = sqlite3.connect(path)
@@ -872,16 +885,19 @@ def _write_hikes(
             " id INTEGER PRIMARY KEY, name TEXT NOT NULL, name_origin TEXT NOT NULL,"
             " sac_scale TEXT, walk_m REAL, line TEXT, elevation BLOB, climb_m REAL, descent_m REAL,"
             " points BLOB NOT NULL, kind TEXT NOT NULL, parts TEXT, route TEXT,"
-            " source TEXT NOT NULL, source_ref TEXT NOT NULL, source_url TEXT, commons_contributors INTEGER, parking_m REAL);"
+            " source TEXT NOT NULL, source_ref TEXT NOT NULL, source_url TEXT, commons_contributors INTEGER, parking_m REAL,"
+            " official_source TEXT, official_ref TEXT, official_url TEXT);"
             "CREATE VIRTUAL TABLE hike_boxes USING rtree(id, south, north, west, east)"
         )
         starts = range(0, len(hikes), _HIKE_CHUNK)
         # Each chunk of hikes is built from its own read of the GeometryStore, in a worker when
         # DAYHIKE_WORKERS says so (ADR-0044); the rows are written here, in chunk order.
-        build = partial(_hike_chunk, geometry_store_path_for(catalog_path), hikes, line_kinds, trailhead_kinds, sources, dem_of)
+        build = partial(
+            _hike_chunk, geometry_store_path_for(catalog_path), hikes, line_kinds, trailhead_kinds, sources, dem_of, official
+        )
         for (rows, boxes), start in zip(parallel_iter(build, starts), starts):
             db.executemany(
-                "INSERT INTO hikes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows
+                "INSERT INTO hikes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows
             )
             db.executemany("INSERT INTO hike_boxes VALUES (?, ?, ?, ?, ?)", boxes)
             if progress is not None:
@@ -900,6 +916,7 @@ def _hike_chunk(
     trailhead_kinds: Mapping[str, _Kinds],
     sources: Mapping[str, str],
     dem_of: Mapping[int, str] | None,
+    official: OfficialRecords | None,
     start: int,
 ) -> tuple[list[tuple], list[tuple]]:
     """The ``hikes`` rows and ``hike_boxes`` rows of the chunk of ``hikes`` at ``start``,
@@ -911,8 +928,12 @@ def _hike_chunk(
         walks = _vertices(geo, chunk[0][0], chunk[-1][0])
         rows, boxes = [], []
         for dayhike_id, name, name_origin, sac_scale, th_lat, th_lon, *built in chunk:
+            kind, parts, route, source, source_ref, source_url, commons, parking_m = built
             points = _trailhead_points(trailhead_kinds, th_lat, th_lon)
             line = elevation = walk_m = climb_m = descent_m = None
+            on_record = None
+            if official is not None and source != SOURCE_OSM:
+                source_url = official.urls.get((source, source_ref), source_url)
             walk = walks.get(dayhike_id)
             if walk is not None and len(walk[0]) >= 2:
                 lat, lon, ele = walk
@@ -931,14 +952,20 @@ def _hike_chunk(
                     climb_m, descent_m = (round(v) for v in climb_and_descent(lat, lon, ele))
                 along = [p for kinds, radius in line_kinds for p in _line_points(kinds, lat, lon, radius)]
                 points = sorted(along, key=lambda point: point[4]) + points
+                if official is not None and source == SOURCE_OSM:
+                    on_record = official.on(lat, lon)
             rows.append(
-                (dayhike_id, name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, *built, points)
+                (
+                    dayhike_id, name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m,
+                    kind, parts, route, source, source_ref, source_url, commons, parking_m,
+                    *(on_record or (None, None, None)), points,
+                )
             )
         _name_points(geo, rows)
     finally:
         geo.close()
     return (
-        [(*row[:9], zlib.compress(json.dumps(row[-1], ensure_ascii=False).encode()), *row[9:17]) for row in rows],
+        [(*row[:9], zlib.compress(json.dumps(row[-1], ensure_ascii=False).encode()), *row[9:-1]) for row in rows],
         boxes,
     )
 
@@ -956,6 +983,90 @@ def external_sources(source_ids: set[str]) -> dict[str, dict[str, str]]:
 def external_credits(external: dict[str, dict[str, str]]) -> dict[str, str]:
     """The attribution line of each external source."""
     return {source_id: f"{row['name']} ({row['url']}), {row['licence']}" for source_id, row in external.items()}
+
+
+class OfficialRecords:
+    """The records of the external sources' caches (ADR-0062), those ingest dropped as Twins of an
+    OpenStreetMap hike among them, for the official record an OSM hike lies on (``on``) and each
+    record's page as its adapter gives it now (``urls``)."""
+
+    def __init__(self, records: Sequence[tuple[str, ExternalHike]]) -> None:
+        from scipy.spatial import cKDTree
+
+        self.records = [(source, hike.ref, hike.url) for source, hike in records]
+        self.urls: dict[tuple[str, str], str | None] = {}
+        for source, ref, url in self.records:
+            self.urls.setdefault((source, ref), url)
+        # Each record as a Twin compares it: a point every TWIN_STEP_M.
+        self._routes = [_even_points(*np.asarray(hike.points, dtype=float).T, TWIN_STEP_M) for _, hike in records]
+        self._tree = None
+        if self._routes:
+            points = np.concatenate(self._routes)
+            self._owner = np.repeat(np.arange(len(self._routes)), [len(route) for route in self._routes])
+            self._tree = cKDTree(_unit(points[:, 0], points[:, 1]))
+            # A point within TWIN_M of a record's line is within this of one of its points.
+            step = max(float(_step_m(route[:, 0], route[:, 1]).max()) for route in self._routes)
+            self._reach_m = TWIN_M + step / 2 + 1.0
+
+    @classmethod
+    def read(cls, sources: Collection[str], root: Path | str, progress: Progress | None = None) -> OfficialRecords:
+        """The records of ``sources`` cached under ``root``; a source with no cache there adds none."""
+        records = []
+        for source in sorted(sources):
+            try:
+                records += [(source, hike) for hike in read_external(source, root)]
+            except FileNotFoundError:
+                if progress is not None:
+                    progress(f"serving export: no cache of {source} under {root}, its records are not matched")
+        return cls(records)
+
+    def on(self, lat: np.ndarray, lon: np.ndarray) -> tuple[str, str, str | None] | None:
+        """The official record (source, ref, page) a walk lies on: at least ``TWIN_SHARE`` of its
+        points every ``TWIN_STEP_M`` within ``TWIN_M`` of the record's line, as one Twin lies on the
+        other; of two, the one more of it lies on. None when it lies on none."""
+        if self._tree is None:
+            return None
+        walk = _even_points(np.asarray(lat, dtype=float), np.asarray(lon, dtype=float), TWIN_STEP_M)
+        at = _unit(walk[:, 0], walk[:, 1])
+        chord = self._reach_m / EARTH_RADIUS_M
+        distance, _ = self._tree.query(at, distance_upper_bound=chord)
+        if np.isfinite(distance).mean() < TWIN_SHARE:
+            return None
+        near = self._tree.query_ball_point(at, chord)
+        point = np.repeat(np.arange(len(walk)), [len(samples) for samples in near])
+        owner = self._owner[np.concatenate([np.asarray(samples, dtype=np.int64) for samples in near])]
+        # Per record, how many of the walk's points have one of its points near: a bound of its share.
+        pairs = np.unique(point * len(self._routes) + owner)
+        records, counts = np.unique(pairs % len(self._routes), return_counts=True)
+        best, best_share = None, TWIN_SHARE
+        for record in records[np.lexsort((records, -counts))]:
+            if counts[records == record][0] / len(walk) < best_share:
+                break
+            share = self._share(walk, self._routes[record])
+            if share >= best_share and (best is None or share > best_share):
+                best, best_share = int(record), share
+        return None if best is None else self.records[best]
+
+    def _share(self, walk: np.ndarray, route: np.ndarray) -> float:
+        # The share of the walk's points within TWIN_M of the record's line, read on the pieces of it
+        # with a point within reach of the walk's box: no other piece can come within TWIN_M of it.
+        pad_lat = self._reach_m / 111_320
+        pad_lon = pad_lat / max(0.01, math.cos(math.radians(float(np.abs(walk[:, 0]).max()))))
+        inside = (
+            (route[:, 0] >= walk[:, 0].min() - pad_lat)
+            & (route[:, 0] <= walk[:, 0].max() + pad_lat)
+            & (route[:, 1] >= walk[:, 1].min() - pad_lon)
+            & (route[:, 1] <= walk[:, 1].max() + pad_lon)
+        )
+        keep = inside.copy()
+        keep[1:] |= inside[:-1]
+        keep[:-1] |= inside[1:]
+        rows = np.flatnonzero(keep)
+        distance = np.full(len(walk), np.inf)
+        for run in np.split(rows, np.flatnonzero(np.diff(rows) > 1) + 1):
+            if len(run) >= 2:
+                distance = np.minimum(distance, nearest_on_line(route[run, 0], route[run, 1], walk[:, 0], walk[:, 1])[0])
+        return float((distance <= TWIN_M).mean())
 
 
 def _check_trailgraph_sampled(source: Path, store: SimilarityStore) -> None:
@@ -1565,6 +1676,7 @@ class ServingData:
             self._has_photos = "photos" in columns
             self._has_commons = "commons_contributors" in columns
             self._has_parking = "parking_m" in columns
+            self._has_official = "official_source" in columns  # an export from before names no official record
         # One string of every folded name between newlines: str.find walks it in C.
         self._haystack = "\n" + "\n".join(self._folded) + "\n"
         self._starts = np.cumsum([1] + [len(name) + 1 for name in self._folded[:-1]])
@@ -2081,6 +2193,7 @@ class ServingData:
             source += ", source_url" if self._has_source_url else ", NULL"
             source += ", commons_contributors" if self._has_commons else ", NULL"
             source += ", parking_m" if self._has_parking else ", NULL"
+            source += ", official_source, official_ref, official_url" if self._has_official else ", NULL, NULL, NULL"
             selected = db.execute(
                 "SELECT name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points, "
                 f"kind, parts, route, {source}{', photos' if self._has_photos else ''} FROM hikes WHERE id = ?",
@@ -2092,6 +2205,7 @@ class ServingData:
         (
             name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m,
             points, kind, parts, route, source, source_ref, source_url, commons, parking_m,
+            official_source, official_ref, official_url,
         ) = selected
         if source_ref is None:
             source_ref = osm_source_ref(dayhike_id, kind, json.loads(parts or "[]"), route)
@@ -2133,16 +2247,24 @@ class ServingData:
                 "id": source,
                 "ref": source_ref,
                 "url": osm_record_url(source_ref) if source == SOURCE_OSM else source_url,
-                **{
-                    key: value
-                    for key, value in self.meta.get("sources", {}).get(source, {}).items()
-                    if key in ("name", "licence", "licence_url")
-                },
+                **self._credit(source),
             },
+            # The official record an OSM hike lies on (ADR-0062), credited as its source is; else None.
+            "official": None
+            if official_source is None
+            else {"id": official_source, "ref": official_ref, "url": official_url, **self._credit(official_source)},
         }
         if photos_json:
             detail["photos"] = json.loads(photos_json)
         return detail
+
+    def _credit(self, source: str) -> dict[str, str]:
+        # The name, licence and licence page of an external source, from the export's meta.json.
+        return {
+            key: value
+            for key, value in self.meta.get("sources", {}).get(source, {}).items()
+            if key in ("name", "licence", "licence_url")
+        }
 
     def way_back_walk(self, dayhike_id: int) -> dict:
         """A DayHike's way back to its start as walked (ADR-0019), for its GPX:
@@ -2269,6 +2391,7 @@ class ServingData:
             "built": None,
             # Drawn from OSM trail segments, it is no record of its own (ADR-0060).
             "source": {"id": SOURCE_OSM, "ref": None, "url": None},
+            "official": None,  # drawn from trail segments, it is no hike an official record is matched to
         }
 
     def _labels(self, relation_ids: list[int]) -> dict[int, str]:

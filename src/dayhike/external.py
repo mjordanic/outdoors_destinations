@@ -277,7 +277,7 @@ def _number(value) -> bool:
 LIPAS_API = "https://api.lipas.fi/v2/sports-sites"
 LIPAS_PAGE = 100
 LIPAS_TYPES = (4405, 4404)
-LIPAS_RECORD = "https://www.lipas.fi/liikuntapaikka/{}"
+LIPAS_RECORD = "https://www.lipas.fi/liikuntapaikat/{}"  # the record's page; .../liikuntapaikka/{} opens an empty one
 
 
 def fetch_lipas(directory: Path) -> Path:
@@ -324,7 +324,7 @@ def read_lipas(path: Path) -> Iterator[ExternalHike]:
     do not join it, branches included, are separate pieces of the same name:
     ``source_ref`` is ``{id}/{n}``, numbered from 1 in order
     of each piece's start (latitude, then longitude). The page is the Lipas
-    record, ``https://www.lipas.fi/liikuntapaikka/{id}``.
+    record, ``https://www.lipas.fi/liikuntapaikat/{id}``.
     """
     for feature in json.loads(Path(path).read_text())["features"]:
         properties = feature.get("properties") or {}

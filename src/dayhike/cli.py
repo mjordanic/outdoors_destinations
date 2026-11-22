@@ -491,6 +491,13 @@ def main(argv: list[str] | None = None) -> int:
         help=f"A region the Catalog covers: one of {', '.join(region_names())}, or a region .toml file; "
         "repeatable. The site's pages name them (without it, or with only regions in Europe, they say Europe)",
     )
+    export.add_argument(
+        "--external-dir",
+        type=Path,
+        default=Path("data/external"),
+        help="Directory of the external sources' caches (default: data/external): an OpenStreetMap hike that "
+        "lies on one of their records names it, and an external hike links its record's page as the source gives it now",
+    )
     _add_workers(export)
     _add_resume(export)
     countries = subparsers.add_parser(
@@ -620,7 +627,7 @@ def main(argv: list[str] | None = None) -> int:
             export.error(str(exc))
         return _export_serving(
             args.catalog, args.out, args.valhalla_tiles, args.snaps, args.valhalla_url, args.geonames, args.countries,
-            args.borders, regions,
+            args.borders, regions, args.external_dir,
         )
     if args.command == "export-countries":
         from dayhike.serving import ServingExportError, export_countries
@@ -1010,6 +1017,7 @@ def _export_serving(
     countries: Path | None,
     borders: Path | None,
     regions: list[Region],
+    external_dir: Path | None = None,
 ) -> int:
     from dayhike.serving import ServingExportError, export_serving, fetch_geonames
 
@@ -1025,6 +1033,7 @@ def _export_serving(
                 countries_path=countries,
                 borders_path=borders,
                 regions=regions,
+                external_dir=external_dir,
                 progress=_progress,
             )
         )
