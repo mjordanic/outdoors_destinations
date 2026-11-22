@@ -35,8 +35,9 @@ the server wakes up.
 Pick one of three ways:
 
 1. **Type its name** in the search box. A small typo is fine: "Triglov"
-   finds Triglav. When no name has every word as you typed it, the list says
-   so and marks each name that is only like it "similar name". So does a name
+   finds Triglav, "Mt Whitney" finds Mount Whitney, and a country after a
+   comma keeps to the hikes there: "Triglav, Slovenia". When no name has
+   every word as you typed it, the list says so and marks each name that is only like it "similar name". So does a name
    that holds your word only inside a longer word ("Rappenloch" in
    "Krappenlochklamm"): check that it is the hike you meant. **Enter** picks a
    hike only when one is named exactly as you typed, or it is the only hike
@@ -52,7 +53,8 @@ Pick one of three ways:
    You can also type a **peak, hut, viewpoint, lake, pass, ridge,
    town or village** the hike goes to or starts from, in any language the
    place has a name in: "Gardasee", "Lake Garda" and "Lago di Garda" all find
-   Lake Garda. Under the hike names the list then shows
+   Lake Garda. Under the hike names (above them for a famous place named
+   exactly as you typed, such as "Matterhorn") the list then shows
    "Hikes near Zugspitze (peak, near Ehrwald, AT)" and the closest
    few hikes there, each saying how near it comes: "reaches the top", "passes
    300 m from it", or for a town "starts 1.2 km from it". A hike already

@@ -2472,10 +2472,12 @@ short:
 
 The details, endpoint by endpoint (JSON): `GET /api/search?q=` (every word in any order, at least one of
 two letters or more; case, accents
-and ue/oe/ae spellings ignored; the exact name first, then names starting with
+and ue/oe/ae spellings ignored; "Mt" read as Mount; a country after a comma ("Triglav, Slovenia")
+keeps the hikes starting there, by the words before it (ADR-0076); the exact name first, then names starting with
 the query, then names holding it from a word's start, then names where every
 word starts a word, shorter first; among the best 200, after the exact name, a
-hike reaching the top of a Peak named from the query's start comes first, and one named after a
+hike reaching the top of a Peak named from the query's start comes first (one starting over 2 km from a car
+park last of those), and one named after a
 Viewpoint on it last of its group (Triglav View after Triglav); a number
 finds that id; while they are fewer than `limit`, then names with a word
 spelled one typo off a query word of 4 to 7 letters, two off a longer one, no
@@ -2505,8 +2507,9 @@ alternate name, then the most populous; 404 without `places.sqlite`),
 `GET /api/landmarks?q=&limit=` (up to 10, default 5, Landmarks with a folded name holding the query from a
 word's start, typos as search: the one named exactly first, then the one with the most names, the highest,
 the most hikes; each with `name`, `kind`, `town` (the nearest other town within 30 km, to tell equal names
-apart) and its `country`, `lat`, `lon`, `match`, `hike_count` and
-`hikes`, its 5 nearest as search lists them with `off_m`; 404 without `landmarks.sqlite`), `POST /api/rank` with `{"seed": id, "weights": {measure: 0-100},
+apart) and its `country`, `lat`, `lon`, `match`, `hike_count`, `leads` (true when the page lists its hikes
+before the hike names: named exactly the query and famous or best photographed, ADR-0076) and
+`hikes`, its 5 nearest as search lists them with `off_m` (a Peak's from a car park first among those reaching its top); 404 without `landmarks.sqlite`), `POST /api/rank` with `{"seed": id, "weights": {measure: 0-100},
 "excluded": [measure], "month": 1-12, "origin": {"lat", "lon"}, "max_hours":
 0-4, "max_km": 0-200, "regions": ["europe", "us"], "group_km": 0.1-50, "after": [{"lat", "lon"}], "draw":
 0-4294967295}` (ADR-0074: `regions` keeps to the hikes starting in them before ranking, the United States

@@ -3505,6 +3505,39 @@ def test_search_lists_a_hike_once_when_its_name_matches_and_it_reaches_a_peak_fo
     assert page.locator(f"#{last}").inner_text() == options.last.inner_text()
 
 
+def test_a_landmark_that_leads_is_listed_before_the_hike_names(browser, server) -> None:
+    # "Matterhorn" listed Matterhorn Trail in Oregon first, the Swiss Matterhorn's hikes after every name.
+    def hike(id: int, name: str, region: str, off_m: int | None = None) -> dict:
+        return {"id": id, "name": name, "length_m": 5000, "round_trip": False, "climb_m": 500, "descent_m": 500,
+                "elevation_gain_m": 500, "highest_m": 3000, "trailhead": [45.0, 15.0], "match": "words",
+                "region": region, **({} if off_m is None else {"off_m": off_m})}  # fmt: skip
+
+    def landmark(name: str, town: str, country: str, hikes: list[dict], leads: bool) -> dict:
+        return {"name": name, "kind": "peak", "town": town, "country": country, "lat": 45.98,
+                "lon": 7.66, "match": "words", "hike_count": len(hikes), "hikes": hikes, "leads": leads}  # fmt: skip
+
+    page = open_page(browser, server, Api({}))
+    page.route(f"{server}/api/search?*", lambda route: route.fulfill(json={"results": [
+        hike(1, "Matterhorn Trail", "Joseph, US"), hike(2, "Hörnli Ridge", "Zermatt, CH"),
+    ]}))  # fmt: skip
+    page.route(f"{server}/api/landmarks?*", lambda route: route.fulfill(json={"results": [
+        landmark("Matterhorn", "Zermatt", "CH", [hike(2, "Hörnli Ridge", "Zermatt, CH", 0)], True),
+        landmark("Matterhorn", "Joseph", "US", [hike(1, "Matterhorn Trail", "Joseph, US", 0)], False),
+    ]}))  # fmt: skip
+
+    page.locator("#search").fill("Matterhorn")
+
+    page.locator("#suggestions li.landmark").first.wait_for()
+    rows = [text.split("\n")[0] for text in page.locator("#suggestions li").all_inner_texts()]
+    assert [row.removesuffix("Show on map") for row in rows] == [
+        "Hikes near Matterhorn (peak, near Zermatt, CH)",
+        "Hörnli Ridge",
+        "Matterhorn Trail",  # the names: each hike once, where it first comes
+        "Hikes near Matterhorn (peak, near Joseph, US)",
+    ]
+    assert "near Joseph, US" in page.locator("#suggestions li[role=option]").nth(1).inner_text()
+
+
 def test_show_on_map_opens_the_hike_map_at_the_landmark(browser, server) -> None:
     page = open_page(browser, server, Api({}))
     page.locator("#search").fill("Ridge Lake")
