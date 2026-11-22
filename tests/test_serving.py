@@ -1,5 +1,6 @@
 import dataclasses
 import json
+import re
 import shutil
 import sqlite3
 import time
@@ -1004,6 +1005,201 @@ def test_a_hike_says_the_town_and_country_it_starts_near(placed: ServingData, da
     assert (valley["region"], ridge["region"]) == ("Ogulin, HR", None)
     assert placed.detail(1002)["region"] == "Ogulin, HR"
     assert data.search("Valley Path")[0]["region"] is None  # an export without places names none
+
+
+def _famous(
+    placed: ServingData,
+    out: Path,
+    hikes: list[tuple[str, dict]],
+    landmarks: list[tuple] = (),
+    towns: dict[str, tuple[str, str | None]] | None = None,
+) -> ServingData:
+    """A copy of the placed export whose DayHikes, in id order, have these names and columns: ``points``
+    as (kind, name, metres off the line), ``parking_m`` and ``commons_contributors``. Given ``landmarks``,
+    only these: (name, kind, lat, lon, how many names, [(hike index, metres off)]); given ``towns``,
+    these towns of ``places.sqlite`` in this (country, admin1)."""
+    shutil.copytree(placed.directory, out)
+    with scoped(sqlite3.connect(out / "hikes.sqlite")) as db:
+        ids = [dayhike_id for (dayhike_id,) in db.execute("SELECT id FROM hikes ORDER BY id")]
+        for dayhike_id, (name, columns) in zip(ids, hikes, strict=True):
+            points = [[kind, "line", 45.0, 15.0, 0, off_m, point, None] for kind, point, off_m in columns.get("points", [])]
+            db.execute(
+                "UPDATE hikes SET name = ?, points = ?, parking_m = ?, commons_contributors = ? WHERE id = ?",
+                (name, zlib.compress(json.dumps(points).encode()), columns.get("parking_m"), columns.get("commons"), dayhike_id),
+            )
+        db.commit()
+    if landmarks:
+        with scoped(sqlite3.connect(out / "landmarks.sqlite")) as db:
+            db.executescript("DELETE FROM landmarks; DELETE FROM landmark_hikes; DELETE FROM landmark_names;")
+            for landmark, (name, kind, lat, lon, names, near) in enumerate(landmarks, start=1):
+                db.execute(
+                    "INSERT INTO landmarks VALUES (?, ?, ?, NULL, ?, ?, NULL, ?, ?)", (landmark, name, kind, lat, lon, len(near), names)
+                )
+                db.executemany("INSERT INTO landmark_hikes VALUES (?, ?, ?)", [(landmark, ids[i], off_m) for i, off_m in near])
+                folded = _fold(name)
+                db.executemany(
+                    "INSERT INTO landmark_names VALUES (?, ?, ?)",
+                    [(folded[word.start() :], landmark, word.start() == 0) for word in re.finditer(r"\w+", folded)],
+                )
+            db.commit()
+    with scoped(sqlite3.connect(out / "places.sqlite")) as db:
+        for town, (country, admin1) in (towns or {}).items():
+            db.execute("UPDATE places SET country = ?, admin1 = ? WHERE name = ?", (country, admin1, town))
+        db.commit()
+    return ServingData(out)
+
+
+def test_a_famous_peak_named_so_leads_the_hike_names_and_its_namesakes_do_not(placed: ServingData, tmp_path: Path) -> None:
+    # "Matterhorn" listed Matterhorn Trail in Oregon first; the Swiss Matterhorn has 48 names in GeoNames.
+    data = _famous(placed, tmp_path / "matterhorn", [
+        ("Matterhorn Trail", {"points": [("peak", "Matterhorn", 0)]}),
+        ("Hörnli Ridge from Schwarzsee", {"points": [("peak", "Matterhorn", 30)]}),
+        ("Disappointment Cleaver Route", {}),
+        ("Overlook from Mount Rainier", {}),
+    ], [
+        ("Matterhorn", "peak", 45.0, 15.0, 1, [(0, 0)]),
+        ("Matterhorn", "peak", 45.2, 15.1, 48, [(1, 30)]),
+        ("Mount Rainier", "peak", 45.0, 15.0, 43, [(2, 0)]),
+        ("Mount Rainier", "town", 45.6, 15.5, 19, [(3, 900)]),  # a town known in many languages: no peak
+        ("Matterhornblick", "viewpoint", 45.0, 15.0, 30, [(0, 10)]),  # named from it, not so
+    ])  # fmt: skip
+
+    found = data.find_landmarks("Matterhorn")
+    assert [(landmark["name"], landmark["leads"], [hike["name"] for hike in landmark["hikes"]]) for landmark in found] == [
+        ("Matterhorn", True, ["Hörnli Ridge from Schwarzsee"]),
+        ("Matterhorn", False, ["Matterhorn Trail"]),
+        ("Matterhornblick", False, ["Matterhorn Trail"]),
+    ]
+    assert [(landmark["kind"], landmark["leads"]) for landmark in data.find_landmarks("Mount Rainier")] == [
+        ("peak", True), ("town", False)
+    ]
+    assert [landmark["leads"] for landmark in data.find_landmarks("Matterhorm")] == [False, False, False]  # a typo: similar
+
+
+def test_a_place_named_so_leads_when_more_photographed_than_the_hikes_named_best_like_it(
+    placed: ServingData, tmp_path: Path
+) -> None:
+    # "Grand Canyon" listed a 1.6 km walk of that name near Cairo, New York, first: no Commons photo is near it.
+    hikes = [
+        ("Grand Canyon", {"commons": 0}),
+        ("Yavapai Point from Grand Canyon Village", {"commons": 41}),
+        ("Eagle Heights from Middleton Junction", {"commons": 5}),
+        ("Valley Path", {}),
+    ]
+    landmarks = [
+        ("Grand Canyon", "town", 45.2, 15.1, 5, [(1, 800)]),
+        ("Grand Canyon", "shelter", 45.0, 15.0, 1, [(2, 10)]),  # named so too, less photographed
+    ]
+    data = _famous(placed, tmp_path / "canyon", hikes, landmarks)
+
+    assert [(landmark["kind"], landmark["leads"]) for landmark in data.find_landmarks("Grand Canyon")] == [
+        ("town", True), ("shelter", False)
+    ]
+    hikes[0] = ("Grand Canyon", {"commons": 50})  # the walk named so photographed most: it stays first
+    data = _famous(placed, tmp_path / "walk", hikes, landmarks)
+    assert [landmark["leads"] for landmark in data.find_landmarks("Grand Canyon")] == [False, False]
+
+
+def test_a_hike_to_a_summit_from_a_car_park_comes_before_one_starting_far_from_one(placed: ServingData, tmp_path: Path) -> None:
+    # "Half Dome" listed Half Dome Trail, its last 3.2 km starting 4.6 km from a car park, before the hike.
+    data = _famous(placed, tmp_path / "half-dome", [
+        ("Half Dome Trail", {"points": [("peak", "Half Dome", 0)], "parking_m": 4578}),
+        ("Half Dome via Subdome from Valley Trailhead Parking", {"points": [("peak", "Half Dome", 3)], "parking_m": 71}),
+        ("Half Dome View", {"points": [("peak", "Half Dome", 900)], "parking_m": 10}),
+        ("Valley Path", {}),
+    ], [("Half Dome", "peak", 45.0, 15.0, 35, [(0, 0), (1, 3), (2, 900)])])  # fmt: skip
+
+    assert [hit["name"] for hit in data.search("Half Dome")] == [
+        "Half Dome via Subdome from Valley Trailhead Parking",
+        "Half Dome Trail",  # reaches the top too
+        "Half Dome View",
+    ]
+    [peak] = data.find_landmarks("Half Dome")
+    assert [hike["name"] for hike in peak["hikes"]] == [
+        "Half Dome via Subdome from Valley Trailhead Parking", "Half Dome Trail", "Half Dome View"
+    ]
+
+
+def test_mt_and_st_are_mount_and_saint_in_hike_and_landmark_names(placed: ServingData, tmp_path: Path) -> None:
+    # "Mt Whitney" found nothing though Mount Whitney Trail is there.
+    data = _famous(placed, tmp_path / "mount", [
+        ("Mount Whitney Trail", {}),
+        ("Mt. Hood Trail", {}),
+        ("St. Moritz Dorf - Samedan", {}),
+        ("Smt Walk", {}),
+    ], [
+        ("Mount Whitney", "peak", 45.0, 15.0, 47, [(0, 0)]),
+        ("Mt. Tom", "peak", 45.0, 15.0, 1, [(1, 0)]),
+    ])  # fmt: skip
+
+    for typed, name in [
+        ("Mt Whitney", "Mount Whitney Trail"), ("mt. whitney", "Mount Whitney Trail"), ("Mount Whitney Trail", "Mount Whitney Trail"),
+        ("Mount Hood", "Mt. Hood Trail"), ("Mt Hood", "Mt. Hood Trail"), ("Saint Moritz", "St. Moritz Dorf - Samedan"),
+    ]:  # fmt: skip
+        assert [hit["name"] for hit in data.search(typed)][:1] == [name], typed
+    assert [hit["name"] for hit in data.search("smt")] == ["Smt Walk"]
+    assert [landmark["name"] for landmark in data.find_landmarks("Mt Whitney")] == ["Mount Whitney"]
+    assert [landmark["name"] for landmark in data.find_landmarks("Mount Tom")] == ["Mt. Tom"]
+    assert serving._unshortened("mt. whitney via st anton, mtb and smt") == "mount whitney via saint anton, mtb and smt"
+
+
+def test_a_query_ending_in_a_country_or_state_finds_the_hikes_and_landmarks_there(placed: ServingData, tmp_path: Path) -> None:
+    # "Triglav, Slovenia" found nothing though Triglav finds the hikes.
+    hikes = [
+        ("Triglav via Dom Planika from Pri lesi", {}),
+        ("Triglav View from Pri Cerkvi", {}),
+        ("Valley Path", {}),
+        ("Triglav Lake", {}),  # starts near Velikovecki Breg
+    ]
+    data = _famous(placed, tmp_path / "triglav", hikes, towns={"Ogulin": ("SI", None)})
+
+    assert len(data.search("Triglav")) == 3
+    for typed in ("Triglav, Slovenia", "triglav,slovenia", "Triglav Slovenia"):
+        assert {hit["name"] for hit in data.search(typed)} == {
+            "Triglav via Dom Planika from Pri lesi", "Triglav View from Pri Cerkvi"
+        }, typed
+    assert [hit["name"] for hit in data.search("Triglav, Croatia")] == ["Triglav Lake"]
+    assert [(landmark["name"], landmark["country"]) for landmark in data.find_landmarks("Vrh, Slovenia")] == [
+        ("Vrh", "SI"), ("Ridge Peak", "SI")  # also Grebenski vrh
+    ]
+    assert data.find_landmarks("Vrh, Croatia") == [] and data.search("Triglav, Austria") == []
+
+    # "Rainier, Washington": a US state, from the GeoNames admin1 of the town nearest the start.
+    data = _famous(placed, tmp_path / "rainier", [
+        ("Ridge Walk", {}), ("Rainier Loop", {}), ("Valley Path", {}), ("Mount Rainier from Brentwood", {}),
+    ], [
+        ("Mount Rainier", "peak", 45.2, 15.1, 43, [(1, 0)]),
+        ("Mount Rainier", "town", 45.6, 15.5, 19, [(3, 900)]),
+    ], towns={"Ogulin": ("US", "WA"), "Velikovecki Breg": ("US", "MD")})  # fmt: skip
+
+    assert [(hit["name"], hit["region"]) for hit in data.search("Rainier, Washington")] == [("Rainier Loop", "Ogulin, WA, US")]
+    assert [hit["name"] for hit in data.search("Rainier Maryland")] == ["Mount Rainier from Brentwood"]
+    assert [(landmark["kind"], landmark["state"], landmark["country"]) for landmark in data.find_landmarks("Mount Rainier")] == [
+        ("peak", "WA", "US"), ("town", "MD", "US")
+    ]
+    assert [landmark["kind"] for landmark in data.find_landmarks("Mount Rainier, Washington")] == ["peak"]
+    assert [hit["name"] for hit in data.search("Rainier, United States")] == ["Rainier Loop", "Mount Rainier from Brentwood"]
+
+
+def test_a_place_tail_is_a_country_or_us_state_after_the_words_it_narrows() -> None:
+    assert serving._place_tail("triglav, slovenia") == ("triglav", (("SI", None),), True)
+    assert serving._place_tail("rainier new york") == ("rainier", (("US", "NY"),), False)
+    assert serving._place_tail("lake, georgia") == ("lake", (("GE", None), ("US", "GA")), True)
+    assert serving._place_tail("slovenia") is None and serving._place_tail(", slovenia") is None
+    assert serving._place_tail("valley path") is None and serving._place_tail("triglav, nowhere") is None
+    assert serving._in_place(("US", None), (("US", "WA"),))  # a state unknown is any of its country's
+
+
+def test_places_keep_their_admin1_and_a_file_from_before_still_opens(placed: ServingData, tmp_path: Path) -> None:
+    with scoped(sqlite3.connect(placed.directory / "places.sqlite")) as db:
+        assert db.execute("SELECT admin1 FROM places WHERE name = 'Ogulin'").fetchall() == [("01",)]
+    shutil.copytree(placed.directory, tmp_path / "older")
+    with scoped(sqlite3.connect(tmp_path / "older" / "places.sqlite")) as db:
+        db.execute("ALTER TABLE places DROP COLUMN admin1")
+    older = ServingData(tmp_path / "older")
+
+    assert [hike["region"] for hike in older.search("Valley Path") if hike["id"] == 1002] == ["Ogulin, HR"]
+    assert older.find_landmarks("vrh")[0]["state"] is None
 
 
 def _placed_renamed(catalog_path: Path, out: Path, names: dict[int, str], origin: str = NAME_ORIGIN_OSM_NAME) -> ServingData:

@@ -1811,6 +1811,24 @@ function nameSearch(input, list, onPick, onLandmark = null, resting = () => null
     list.appendChild(li);
     return li;
   };
+  // A Landmark's head, saying where it is ("peak, near Lone Pine, CA, US"), then its hikes not listed yet.
+  const landmarkOptions = (landmark) => {
+    const where = [LANDMARK_KINDS[landmark.kind] ?? landmark.kind, landmark.town && `near ${landmark.town}`, landmark.state,
+      landmark.country].filter(Boolean).join(", ");
+    const similar = landmark.match === "similar" ? ' <span class="similar-tag">similar name</span>' : "";
+    const head = note(`Hikes near ${escapeHtml(landmark.name)} (${escapeHtml(where)})${similar}`, "landmark");
+    if (onLandmark) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "link";
+      button.textContent = "Show on map";
+      button.addEventListener("mousedown", (event) => { event.preventDefault(); show([]); onLandmark(landmark, true); });
+      head.appendChild(button);
+    }
+    landmark.hikes.forEach((item) => option(item, nearText(landmark, item.off_m)));
+    const more = landmark.hike_count - landmark.hikes.length;
+    if (more > 0) note(`<span class="meta">and ${more.toLocaleString("en")} more${onLandmark ? ": show them on the map" : ""}</span>`);
+  };
   const show = (found, landmarks = [], nothingFor = null) => {
     items = [];
     named = found;
@@ -1823,24 +1841,11 @@ function nameSearch(input, list, onPick, onLandmark = null, resting = () => null
         ? `<li class="nothing">No hike name, peak or place has every word of “${escapeHtml(nothingFor)}”.<span class="meta">Try a word of a trail's name, a peak, hut, lake or town, or select a hike on the map.</span></li>`
         : `<li class="nothing">No hike name has every word of “${escapeHtml(nothingFor)}”.<span class="meta">Only hike names are searched, not places; try a word of a trail's name, or select a hike on the map.</span></li>`;
     }
+    // A famous Landmark named so leads the hike names: the Matterhorn before Matterhorn Trail in Oregon (ADR-0076).
+    const leading = landmarks.filter((landmark) => landmark.leads);
+    leading.forEach(landmarkOptions);
     found.filter((item) => item.match !== "similar").forEach((item) => option(item));
-    for (const landmark of landmarks) {
-      const where = [LANDMARK_KINDS[landmark.kind] ?? landmark.kind, landmark.town && `near ${landmark.town}`, landmark.country]
-        .filter(Boolean).join(", ");
-      const similar = landmark.match === "similar" ? ' <span class="similar-tag">similar name</span>' : "";
-      const head = note(`Hikes near ${escapeHtml(landmark.name)} (${escapeHtml(where)})${similar}`, "landmark");
-      if (onLandmark) {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "link";
-        button.textContent = "Show on map";
-        button.addEventListener("mousedown", (event) => { event.preventDefault(); show([]); onLandmark(landmark, true); });
-        head.appendChild(button);
-      }
-      landmark.hikes.forEach((item) => option(item, nearText(landmark, item.off_m)));
-      const more = landmark.hike_count - landmark.hikes.length;
-      if (more > 0) note(`<span class="meta">and ${more.toLocaleString("en")} more${onLandmark ? ": show them on the map" : ""}</span>`);
-    }
+    landmarks.filter((landmark) => !landmark.leads).forEach(landmarkOptions);
     const similar = found.filter((item) => item.match === "similar");
     if (similar.length) {
       // Only names like the query: say so before the Hiker picks one for the hike they meant.
@@ -1854,7 +1859,7 @@ function nameSearch(input, list, onPick, onLandmark = null, resting = () => null
     list.hidden = items.length === 0 && !nothingFor;
     input.setAttribute("aria-expanded", String(!list.hidden));
     input.removeAttribute("aria-activedescendant"); // its option is gone
-    if (landmarks.length && onLandmark) onLandmark(landmarks[0], false);
+    if (landmarks.length && onLandmark) onLandmark(leading[0] ?? landmarks[0], false);
     if (entered && items.length) decide();
   };
   const move = (step) => {
