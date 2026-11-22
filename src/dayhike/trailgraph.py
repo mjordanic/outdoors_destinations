@@ -1236,7 +1236,7 @@ def way_back(lat: np.ndarray, lon: np.ndarray, graph: TrailGraph | None, difficu
 def back_rank(difficulty_rank: float) -> int:
     """The strictest ``SAC_SCALE_RANK`` a trail back of a walk of this
     Difficulty may walk: its own, but never below ``mountain_hiking`` (T2), for a
-    walk with none (NaN) too (ADR-0076)."""
+    walk with none (NaN) too (ADR-0076, ADR-0080)."""
     floor = SAC_SCALE_RANK["mountain_hiking"]
     return floor if math.isnan(difficulty_rank) else max(int(difficulty_rank), floor)
 

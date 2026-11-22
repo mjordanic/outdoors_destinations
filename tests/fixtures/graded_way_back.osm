@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <osm version="0.6" generator="dayhike-fixture">
-  <!-- Ways back no harder than the hike (ADR-0076). Three separate networks,
+  <!-- Ways back no harder than the hike (ADR-0076). Five separate networks,
        far apart, each a Summit Trail from a portal P up to a summit S by a
        switchback W: about 9.0 km + 10.6 km one way, graded as named.
 
