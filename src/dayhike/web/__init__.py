@@ -476,7 +476,9 @@ def site_pages(
                 f'<a href="{html_escape(row["url"])}">{html_escape(row["name"])}</a>, '
                 f'<a href="{html_escape(row["licence_url"])}">{html_escape(row["licence"])}</a>. '
                 "Each of these hikes is its own record with its own line, kept apart from the OpenStreetMap data "
-                "and under its own licence; its panel links the record.</li>"
+                "and under its own licence; its panel names the record, linked where the source has a page for it. "
+                "An OpenStreetMap hike that lies on one of its records, such as a day stage of an official trail, "
+                "names that record too.</li>"
                 for row in sources.values()
             )
             html = re.sub(r"<!--external-->.*?<!--/external-->", items, html, flags=re.S)

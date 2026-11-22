@@ -7,6 +7,7 @@ import zipfile
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
@@ -36,7 +37,7 @@ SUEDTIROL = "it-odh-suedtirol"
 LOUGH_URL = "https://www.sportireland.ie/outdoors/walking/trails/lough-fixture-way"
 LIPAS_PAGE = Path(__file__).parent / "fixtures" / "external" / "fi-lipas-api-page.json"
 TURRUTE_PAGE = Path(__file__).parent / "fixtures" / "external" / "no-turrutebasen-page.gpx"
-KORPI_URL = "https://www.lipas.fi/liikuntapaikka/100"
+KORPI_URL = "https://www.lipas.fi/liikuntapaikat/100"
 SUEDTIROL_URL = "https://data.civis.bz.it/dataset/percorsi-escursionistici"
 
 
@@ -154,8 +155,97 @@ def test_the_api_credits_an_external_hike_to_its_source_under_its_licence(export
     assert attribution[SOURCE] == "Sport Ireland Trail Routes (https://data.gov.ie/dataset/getirelandactive_trailroutes), CC BY 4.0"
     credits = client.get("/credits.html").text
     assert "Hiking routes from Sport Ireland Trail Routes" in credits
+    # Not every source has a page per record (Turrutebasen has none), so the page does not promise a link.
+    assert "its panel names the record, linked where the source has a page for it" in credits
+    assert "An OpenStreetMap hike that lies on one of its records" in credits
     assert 'href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>' in credits
     assert client.get(f"/api/hikes/{RIDGE_WALK_ID}").json()["source"]["id"] == "osm"
+
+
+RIDGE_URL = "https://www.sportireland.ie/outdoors/walking/trails/ridge-walk-trail"
+
+
+def test_an_osm_hike_that_lies_on_an_official_record_ingest_dropped_names_it(catalog_path: Path, tmp_path: Path) -> None:
+    # Ridge Walk Trail (trail/1) was dropped as a Twin of the OSM Ridge Walk; the OSM hike is listed and names it.
+    data = ServingData(export_serving(catalog_path, tmp_path / "web-serving", external_dir=EXTERNAL_DIR))
+    client = TestClient(create_app(data, None))
+    ridge = client.get(f"/api/hikes/{RIDGE_WALK_ID}").json()
+
+    assert ridge["source"]["id"] == "osm"
+    assert ridge["official"] == {
+        "id": SOURCE,
+        "ref": "trail/1",
+        "url": RIDGE_URL,
+        "name": "Sport Ireland Trail Routes",
+        "licence": "CC BY 4.0",
+        "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+    }
+    # An external hike is its own source, not an OSM hike on one.
+    assert client.get(f"/api/hikes/{external_id(SOURCE, 'trail/2')}").json()["official"] is None
+    officials = {hike_id for (hike_id,) in sqlite3.connect(data.directory / "hikes.sqlite").execute(
+        "SELECT id FROM hikes WHERE official_source IS NOT NULL"
+    )}
+    assert RIDGE_WALK_ID in officials and len(officials) < len(data.store.ids) / 2
+
+
+def test_without_the_caches_an_export_names_no_official_record(export: Path) -> None:
+    client = TestClient(create_app(ServingData(export), None))
+    assert client.get(f"/api/hikes/{RIDGE_WALK_ID}").json()["official"] is None
+
+
+def test_an_export_links_an_external_hike_s_page_as_its_cache_gives_it_now(catalog_path: Path, tmp_path: Path) -> None:
+    # The Catalog holds the page ingest read; the cache read at export has the record's page now.
+    cache = json.loads((EXTERNAL_DIR / SOURCE / f"{SOURCE}.geojson").read_text())
+    for feature in cache["features"]:
+        if feature["properties"]["TrailID"] == 2:
+            feature["properties"]["Website"] = "https://www.sportireland.ie/new/lough-fixture-way"
+    (tmp_path / "external" / SOURCE).mkdir(parents=True)
+    (tmp_path / "external" / SOURCE / f"{SOURCE}.geojson").write_text(json.dumps(cache))
+
+    data = ServingData(export_serving(catalog_path, tmp_path / "web-serving", external_dir=tmp_path / "external"))
+    lough = TestClient(create_app(data, None)).get(f"/api/hikes/{external_id(SOURCE, 'trail/2')}").json()
+
+    assert lough["source"]["url"] == "https://www.sportireland.ie/new/lough-fixture-way"
+
+
+def test_an_export_from_before_official_records_names_none(export: Path, tmp_path: Path) -> None:
+    import shutil
+
+    old = shutil.copytree(export, tmp_path / "old")
+    with sqlite3.connect(old / "hikes.sqlite") as db:
+        for column in ("official_source", "official_ref", "official_url"):
+            db.execute(f"ALTER TABLE hikes DROP COLUMN {column}")
+    assert TestClient(create_app(ServingData(old), None)).get(f"/api/hikes/{RIDGE_WALK_ID}").json()["official"] is None
+
+
+def _line(lat0: float, lat1: float, lon: float = 15.0) -> tuple[tuple[float, float], ...]:
+    # A north-south line every 0.001° (about 111 m).
+    count = round((lat1 - lat0) / 0.001)
+    return tuple((round(lat0 + i * 0.001, 6), lon) for i in range(count + 1))
+
+
+def test_a_day_stage_lies_on_the_long_official_record_it_is_a_piece_of() -> None:
+    from dayhike.external import ExternalHike
+    from dayhike.serving import OfficialRecords
+
+    trail = ExternalHike(ref="trail/40", name="Wicklow Way", points=_line(45.0, 45.3), url="https://example.org/40")
+    side = ExternalHike(ref="trail/361", name="Glendalough loop", points=_line(45.1, 45.13), url=None)
+    records = OfficialRecords([(SOURCE, trail), (SOURCE, side)])
+
+    def on(points) -> tuple | None:
+        lat, lon = (np.array(values) for values in zip(*points))
+        return records.on(lat, lon)
+
+    # A 10 km stage of the 33 km trail, 20 m beside it (0.00025° of longitude): on the trail, though the
+    # trail is not on the stage; the short loop it also follows holds less of it.
+    assert on(_line(45.1, 45.19, 15.00025)) == (SOURCE, "trail/40", "https://example.org/40")
+    # 40 m beside the line is off it.
+    assert on(_line(45.1, 45.19, 15.0005)) is None
+    # Half on the trail, half off it.
+    assert on(_line(45.25, 45.35)) is None
+    # Wholly on both: the record more of it lies on, then the first.
+    assert on(_line(45.105, 45.125))[1] == "trail/40"
+    assert OfficialRecords([]).on(np.array([45.0, 45.1]), np.array([15.0, 15.0])) is None
 
 
 def test_an_export_without_external_hikes_credits_none(tmp_path: Path) -> None:
@@ -406,7 +496,7 @@ def test_fetch_external_caches_every_lipas_page(tmp_path: Path, monkeypatch: pyt
     assert hikes["100"].points == ((60.0, 25.0), (60.01, 25.0))
     assert (hikes["600"].name, hikes["600"].url) == (
         "Pieni luontopolku",
-        "https://www.lipas.fi/liikuntapaikka/600",
+        "https://www.lipas.fi/liikuntapaikat/600",
     )
 
 

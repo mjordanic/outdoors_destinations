@@ -1073,6 +1073,34 @@ def test_a_hike_that_starts_far_from_a_car_park_says_so(browser, server, parking
     assert (shown.inner_text() if shown.count() else None) == note
 
 
+@pytest.mark.parametrize(("url", "linked"), [("https://www.sportireland.ie/outdoors/walking/trails/wicklow-way", True), (None, False)])
+def test_an_osm_hike_on_an_official_route_credits_its_record_beside_openstreetmap(browser, server, url, linked) -> None:
+    # Wicklow Way, stage 3 (an OSM DayStage of relation 2740) lies on Sport Ireland's Wicklow Way, trail/40;
+    # a Turrutebasen route has no page of its own, so its record is named, not linked.
+    official = {
+        "id": "ie-sport-ireland", "ref": "trail/40", "url": url, "name": "Sport Ireland Trail Routes",
+        "licence": "CC BY 4.0", "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+    }
+    page = open_page(browser, server, Api({}))
+    page.route(f"{server}/api/hikes/1002*", lambda route: route.fulfill(json={**route.fetch().json(), "official": official}))
+    page.goto(f"{server}/#hike=1002")
+    page.get_by_text("Chosen: Valley Path").wait_for()
+
+    line = page.locator("#liked .official-line")
+    assert line.inner_text() == "Lies on an official route: Sport Ireland Trail Routes, CC BY 4.0, record trail/40"
+    record = line.get_by_role("link", name="trail/40")
+    assert (record.get_attribute("href") if record.count() else None) == url
+    assert line.get_by_role("link", name="CC BY 4.0").get_attribute("href") == official["licence_url"]
+    # The OpenStreetMap credit stays: the line is OpenStreetMap's.
+    assert page.locator("#liked .detail-head").get_by_role("link", name="OpenStreetMap relation 1002").count() == 1
+
+
+def test_an_osm_hike_on_no_official_route_has_no_official_line(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash="#hike=1002")
+    page.get_by_text("Chosen: Valley Path").wait_for()
+    assert page.locator("#liked .official-line").count() == 0
+
+
 def test_the_logo_takes_a_hiker_home_to_a_fresh_page(browser, server) -> None:
     page = open_page(browser, server, Api({}), hash="#hike=1002")
     page.get_by_text("Chosen: Valley Path").wait_for()

@@ -49,7 +49,7 @@ A DayHike from an open official trail register rather than OpenStreetMap, such a
 _Avoid_: imported hike, official hike, third-party hike
 
 **Source**:
-Where a DayHike comes from: a row of the sources register (`docs/sources.csv`) and the record's own id there, its `source_ref`. An OSM DayHike is `osm`: a relation DayHike points at its relation, a DayStage at its tour, a NetworkHike at the signpost it starts from, a DestinationHike at the way node it starts from. An external hike points at its record in its register and links its page (ADR-0062). Its licence and credit come from the register row, which also lists the sources planned, being checked, watched and rejected, with the reason and the date the licence was read (ADR-0060).
+Where a DayHike comes from: a row of the sources register (`docs/sources.csv`) and the record's own id there, its `source_ref`. An OSM DayHike is `osm`: a relation DayHike points at its relation, a DayStage at its tour, a NetworkHike at the signpost it starts from, a DestinationHike at the way node it starts from. An external hike points at its record in its register and links its page (ADR-0062). An OSM hike that lies on an official record, at least 80 % of it within 30 m of the record's line, as a Twin lies on the other, names that record too, beside its own Source: a day stage of an official trail names the trail's. Its licence and credit come from the register row, which also lists the sources planned, being checked, watched and rejected, with the reason and the date the licence was read (ADR-0060).
 _Avoid_: provider, origin (an Origin is where the Hiker starts), dataset
 
 **Region**:

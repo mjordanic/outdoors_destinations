@@ -1224,6 +1224,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     ${gap ? `<p class="hint gpx-note">${escapeHtml(gap)}</p>` : ""}
     ${scoreLine}
     ${sourceLine(hike)}
+    ${officialLine(hike)}
     ${hike.route ? `<p class="hint">Drawn from trail segments${hike.routes?.length ? ` along ${escapeHtml(hike.routes.slice(0, 5).join(", "))}${hike.routes.length > 5 ? " and more" : ""}` : ""}; measured as drawn${hike.way_back ? ", with its way back" : ""}.</p>` : ""}
     ${hike.multi_day && !hike.way_back && !compare && returnToStart() ? '<p class="hint">A multi-day route is compared one way: Return to start adds no way back to a tour, and the hikes compared with it are measured one way too.</p>' : ""}
     ${hike.way_back && hike.way_back.kind !== "none" ? `<p class="hint">Length, climb, descent and every measure include the way back to the start (${escapeHtml(wayBackText(hike.way_back))}); the map and profile show the hike itself.</p>` : ""}
@@ -1331,18 +1332,30 @@ function photoBlock(hike) {
   return figures.length ? `<div class="photos">${figures.join("")}</div>` : "";
 }
 
-// Where a hike not from OpenStreetMap comes from (ADR-0060): its source, credited with its licence
-// (ADR-0062), and its record there; an OSM hike's head already links its relation.
-function sourceLine(hike) {
-  const source = hike.source;
-  if (!source || source.id === "osm") return "";
+// A record of a source: the source credited with its licence (ADR-0062), and the record, linked where
+// the source has a page for it.
+function recordCredit(source) {
   const ref = source.url
     ? `<a href="${escapeHtml(source.url)}" target="_blank" rel="noopener">${escapeHtml(source.ref)}</a>`
     : escapeHtml(source.ref);
   const licence = source.licence && (source.licence_url
     ? `, <a href="${escapeHtml(source.licence_url)}" target="_blank" rel="noopener">${escapeHtml(source.licence)}</a>`
     : `, ${escapeHtml(source.licence)}`);
-  return `<p class="hint source-line">Source: ${escapeHtml(source.name ?? source.id)}${licence || ""}, record ${ref}</p>`;
+  return `${escapeHtml(source.name ?? source.id)}${licence || ""}, record ${ref}`;
+}
+
+// Where a hike not from OpenStreetMap comes from (ADR-0060), and its record there; an OSM hike's head
+// already links its relation.
+function sourceLine(hike) {
+  const source = hike.source;
+  if (!source || source.id === "osm") return "";
+  return `<p class="hint source-line">Source: ${recordCredit(source)}</p>`;
+}
+
+// The official record an OSM hike lies on, such as a day stage of an official trail: credited beside
+// the OpenStreetMap credit in its head, which stays, since its line is OpenStreetMap's.
+function officialLine(hike) {
+  return hike.official ? `<p class="hint source-line official-line">Lies on an official route: ${recordCredit(hike.official)}</p>` : "";
 }
 
 // A built hike's head (ADR-0038): the OSM relations it is built from (for a named trail,
