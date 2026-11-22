@@ -437,7 +437,8 @@ def test_composing_a_dayhikes_own_segments_reproduces_its_facts(sampled: Path) -
             continue
         walk = graph.walk(routes[dayhike_id])
         # One way, and with the way back: a composed Seed and the Catalog are measured alike.
-        for measured, stored in ((walk, store), (round_trip(walk, way_back(walk.lat, walk.lon, graph)), store.with_way_back)):
+        rank = float(store.facts[FACT_COLUMNS.index("difficulty_rank"), row])
+        for measured, stored in ((walk, store), (round_trip(walk, way_back(walk.lat, walk.lon, graph, rank)), store.with_way_back)):
             facts, shape = graph.facts(measured)
             for index, column in enumerate(FACT_COLUMNS):
                 expected = float(stored.facts[index, row])
@@ -1087,11 +1088,11 @@ def test_a_step_closes_a_small_gap_and_without_a_trailgraph_a_walk_is_retraced()
     lat = np.array([46.0, 46.01, 46.0002])  # ends about 22 m north of its start
     lon = np.array([14.0, 14.0, 14.0])
 
-    step = way_back(lat, lon, None)
+    step = way_back(lat, lon, None, math.nan)
     assert step.kind == "step" and step.metres == pytest.approx(22.2, abs=0.1)
-    far = way_back(lat[:2], lon[:2], None)
+    far = way_back(lat[:2], lon[:2], None, math.nan)
     assert far.kind == "retrace" and far.metres == pytest.approx(1112, abs=1)
-    assert way_back(lat[:1], lon[:1], None).kind == "none"
+    assert way_back(lat[:1], lon[:1], None, math.nan).kind == "none"
 
 
 def test_seed_and_candidates_are_always_measured_in_one_mode(data, summit: Route) -> None:

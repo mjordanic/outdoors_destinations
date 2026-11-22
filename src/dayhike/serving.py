@@ -86,6 +86,7 @@ from dayhike.catalog import (
     NAME_ORIGIN_OSM_NAME,
     NAME_ORIGIN_SYNTHETIC,
     PLACE_RADIUS_M,
+    SAC_SCALE_RANK,
     MatrixClient,
     Origin,
     Trailhead,
@@ -157,6 +158,7 @@ from dayhike.trailgraph import (
     TrailGraph,
     WayBack,
     _unit,
+    back_rank,
     decode_coords,
     round_trip,
     way_back,
@@ -2037,7 +2039,12 @@ class ServingData:
         if None in ends:
             return back
         (lat, lon), (end_lat, end_lon) = ends
-        trail = self.trailgraph.trail_back(np.array([lat, end_lat]), np.array([lon, end_lon]), float(metres) + 1.0)
+        trail = self.trailgraph.trail_back(
+            np.array([lat, end_lat]),
+            np.array([lon, end_lon]),
+            float(metres) + 1.0,
+            back_rank(float(self.store.column("difficulty_rank")[row])),
+        )
         return back if trail is None else {**back, **walk_line(trail.lat, trail.lon, trail.ele)}
 
     def segments_in_box(
@@ -2150,7 +2157,8 @@ class ServingData:
         """The walk with its way back and the way back (ADR-0019), or the walk and None."""
         if not return_to_start:
             return walk, None
-        back = way_back(walk.lat, walk.lon, self.trailgraph)
+        rank = float(SAC_SCALE_RANK[walk.sac_scale]) if walk.sac_scale is not None else math.nan
+        back = way_back(walk.lat, walk.lon, self.trailgraph, rank)
         return round_trip(walk, back), back
 
     def _proposed_name(self, walk: ComposedWalk, labels: dict[int, str]) -> str:
