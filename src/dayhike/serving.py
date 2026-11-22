@@ -2162,12 +2162,14 @@ class ServingData:
         return round_trip(walk, back), back
 
     def _proposed_name(self, walk: ComposedWalk, labels: dict[int, str]) -> str:
-        """The two trails walked longest (in name order, so a longer walk on
-        them keeps the name), and the named hiking place nearest the start
-        within ``TRAILHEAD_M``: "Lake Loop and Summit Line from Summit Hut"."""
-        trails = self._trails(walk, labels) or "Your hike"
+        """"Your hike", along the two trails walked longest (in name order, so a
+        longer walk on them keeps the name), from the named hiking place nearest
+        the start within ``TRAILHEAD_M``: "Your hike along Lake Loop and Summit
+        Line from Summit Hut". It says it is the Hiker's own walk, not a
+        catalog hike of that trail's name."""
+        trails = self._trails(walk, labels)
         near = self._places_near_start(walk, TRAILHEAD_M)
-        return f"{trails} from {near[0][1]}" if near else trails
+        return "Your hike" + (f" along {trails}" if trails else "") + (f" from {near[0][1]}" if near else "")
 
     def _trails(self, walk: ComposedWalk, labels: dict[int, str]) -> str:
         """The two trails a walk walks longest, by name, joined by "and", of

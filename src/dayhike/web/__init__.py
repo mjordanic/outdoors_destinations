@@ -67,6 +67,7 @@ from dayhike.serving import (
     GROUP_SHARE,
     MEASURE_GROUPS,
     MEASURE_INFO,
+    REGION_SPLIT_LON,
     REGIONS,
     SCORE_HELP,
     TYPICAL_PAIR,
@@ -370,6 +371,14 @@ def only_this_machine(url: str) -> bool:
     return address.is_loopback or address.is_unspecified
 
 
+def covered_text(regions: Sequence[Mapping[str, str | None]] | None) -> str:
+    """What the site covers, as its pages say it (``site_pages``): "Europe" while every region of the export
+    is in Europe (or none is given), else their labels ("Europe and the contiguous United States")."""
+    if all(region.get("continent") == "Europe" for region in regions or []):
+        return "Europe"
+    return labels_text([str(region["label"]) for region in regions or []])
+
+
 def site_pages(
     goatcounter: str | None,
     place_search: bool = False,
@@ -423,7 +432,7 @@ def site_pages(
     )
     continents = [region.get("continent") for region in regions or [{"continent": "Europe"}]]
     europe_only = all(continent == "Europe" for continent in continents)
-    covered = "Europe" if europe_only else labels_text([str(region["label"]) for region in regions])
+    covered = covered_text(regions)
     if download_url and only_this_machine(download_url):
         logger.warning("the download URL %s is only reachable on this machine; the site shows no download link", download_url)
         download_url = None  # a link only this machine can open breaks for every visitor
@@ -705,6 +714,8 @@ def create_app(
         return {
             "dayhikes": data.meta["dayhikes"],
             "coverage": coverage,
+            # What the site covers, as its pages say it: a starting place with no hike near is told so.
+            "covered": covered_text(data.meta.get("regions")),
             "core": core,
             # A list whose best row scores below this holds nothing much alike: the page says so.
             "typical_pair": TYPICAL_PAIR,
@@ -884,6 +895,8 @@ def create_app(
         for result in listed:
             if result["id"] is not None:  # a SuggestedLoop has the hours to its own start
                 result["drive_hours"] = None if hours is None else hours[data.row_of(result["id"])]
+            # The RegionChoice its start is in (``ServingData.region_rows``): the page says when a list keeps to one.
+            result["region"] = "us" if result["trailhead"][1] < REGION_SPLIT_LON else "europe"
         starts = [result["trailhead"] for result in listed]
         metres = straight_line_distances_m(origin, starts) if origin is not None and starts else [None] * len(starts)
         for result, distance_m in zip(listed, metres):
