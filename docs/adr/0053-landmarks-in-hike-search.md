@@ -1,5 +1,5 @@
 ---
-status: accepted (the GeoNames Landmarks and their order amended by ADR-0055)
+status: accepted (the GeoNames Landmarks and their order amended by ADR-0055; famous places lead the hike search since ADR-0079)
 ---
 
 # The hike search also finds hikes by the peaks, huts, lakes and towns they reach

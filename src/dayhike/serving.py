@@ -69,7 +69,7 @@ import unicodedata
 import zipfile
 import zlib
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 from functools import partial
 from pathlib import Path
@@ -105,7 +105,7 @@ from dayhike.dem import (
     DemSourceMismatch,
     check_one_dem_source,
 )
-from dayhike.external import EXTERNAL_DIR, ExternalHike, read_external
+from dayhike.external import ExternalHike, read_external
 from dayhike.extracts import UrlRetrieve
 from dayhike.loops import LOOP_SEEDS, LOOP_TRAILHEADS, LoopTarget, find_loops
 from dayhike.npy import map_npy
@@ -200,11 +200,11 @@ VALHALLA_CACHE_BYTES = 256 * 1024 * 1024  # mjolnir.max_cache_size; the build de
 SEARCH_SCAN_CAP = 5_000  # occurrences of the scanned word a search looks at, so short queries stay fast
 SEARCH_SUMMIT_CAP = 200  # best names a search looks into for the summit or viewpoint they are named after
 FAR_PARKING_M = 2_000.0  # a hike starting further from a car park starts on the trail (Half Dome Trail, 4.6 km)
-# A Landmark of these kinds known in this many languages or more is famous: it leads the hike search (ADR-0076)
+# A Landmark of these kinds known in this many languages or more is famous: it leads the hike search (ADR-0079)
 FAMOUS_NAMES = 10
 FAMOUS_KINDS = ("peak", "lake", "pass", "ridge")
 LANDMARK_PLACE_SCAN = 500  # Landmarks a search narrowed to a country looks through for those in it
-# A word a name is often shortened to, and the word it is short for: what search compares (ADR-0076)
+# A word a name is often shortened to, and the word it is short for: what search compares (ADR-0079)
 SHORT_WORDS = {"mt": "mount"}
 FUZZY_MIN_LETTERS = 4  # a shorter query word is found only as typed
 FUZZY_SPELLINGS = 3  # the nearest words a word with a typo is tried as
@@ -1893,7 +1893,7 @@ class ServingData:
         named best like the query (the Grand Canyon's before a walk named Grand
         Canyon in New York). A Peak lists the hikes reaching its top first,
         those from a car park before those starting further than
-        ``FAR_PARKING_M`` from one (ADR-0076).
+        ``FAR_PARKING_M`` from one (ADR-0079).
         """
         needle = _unshortened(_fold(query).strip())
         if self.landmarks is None or len(needle) < 2:
@@ -2401,12 +2401,12 @@ class ServingData:
 
     def _trip(self, walk: ComposedWalk, return_to_start: bool) -> tuple[ComposedWalk, WayBack | None]:
         """The walk with its way back and the way back (ADR-0019), or the walk and None.
-        The walk with its way back keeps the walk's own grade (ADR-0078)."""
+        The walk with its way back keeps the walk's own grade (``round_trip``, ADR-0078)."""
         if not return_to_start:
             return walk, None
         rank = float(SAC_SCALE_RANK[walk.sac_scale]) if walk.sac_scale is not None else math.nan
         back = way_back(walk.lat, walk.lon, self.trailgraph, rank)
-        return replace(round_trip(walk, back), sac_scale=walk.sac_scale), back
+        return round_trip(walk, back), back
 
     def _proposed_name(self, walk: ComposedWalk, labels: dict[int, str]) -> str:
         """"Your hike", along the two trails walked longest (in name order, so a

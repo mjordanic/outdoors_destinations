@@ -1243,20 +1243,21 @@ def round_trip(walk: ComposedWalk, back: WayBack) -> ComposedWalk:
     """The walk followed by its way back, as one walk that ends where it starts.
 
     Only a trail back adds climate cells: a step or a retrace walks no new
-    ground, so the walk's mean climate stands (as the Catalog's does).
+    ground, so the walk's mean climate stands (as the Catalog's does). It
+    keeps the walk's own grade: the way back does not grade it (ADR-0078).
     """
     columns = ("lat", "lon", "ele", "landcover", "climate_cell", "southness")
     if back.kind == "none":
         return walk
     if back.kind == "trail":
         tail = {column: getattr(back.walk, column)[1:] for column in columns}
-        walked, scale, relations = back.walk.walked, back.walk.sac_scale, back.walk.relation_m
+        walked, relations = back.walk.walked, back.walk.relation_m
     elif back.kind == "step":
         tail = {column: getattr(walk, column)[:1] for column in columns}
-        walked, scale, relations = [], None, {}
+        walked, relations = [], {}
     else:
         tail = {column: getattr(walk, column)[::-1][1:] for column in columns}
-        walked, scale, relations = walk.walked[::-1], walk.sac_scale, walk.relation_m
+        walked, relations = walk.walked[::-1], walk.relation_m
     if back.kind != "trail":
         tail["climate_cell"] = np.full(len(tail["lat"]), -1, dtype=walk.climate_cell.dtype)
     # The rows of the steps back: each row is the step from its vertex to the next.
@@ -1267,7 +1268,6 @@ def round_trip(walk: ComposedWalk, back: WayBack) -> ComposedWalk:
         along = np.concatenate([own, own[-1:]])  # the straight step is not read along
     else:
         along = np.concatenate([own[:-1], own[:-1][::-1], own[-1:]])
-    scales = [s for s in (walk.sac_scale, scale) if s is not None]
     merged = dict(walk.relation_m)
     for relation, metres in relations.items():
         merged[relation] = merged.get(relation, 0.0) + metres
@@ -1275,7 +1275,6 @@ def round_trip(walk: ComposedWalk, back: WayBack) -> ComposedWalk:
         walk,
         **{column: np.concatenate([getattr(walk, column), tail[column]]) for column in columns},
         walked=[*walk.walked, *walked],
-        sac_scale=max(scales, key=SAC_SCALE_RANK.__getitem__) if scales else None,
         relation_m=merged,
         landcover_along=along,
     )

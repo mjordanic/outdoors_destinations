@@ -34,7 +34,7 @@ from dayhike import (
 )
 from dayhike.catalog import similarity_dir_for, trailgraph_path_for
 from dayhike.serving import decode_polyline
-from dayhike.similarity import FACT_COLUMNS, WAY_BACK_COLUMNS, SimilarityStore, climb_and_descent
+from dayhike.similarity import FACT_COLUMNS, WAY_BACK_COLUMNS, SimilarityStore
 from dayhike.trailgraph import (
     WAY_BACK_KINDS,
     Route,
@@ -520,6 +520,24 @@ def test_a_retraced_way_back_reads_the_same_steps_backwards() -> None:
     # The straight step back (133 m) is not read along: its two ends share it.
     grass = _landcover_fractions(stepped.landcover, stepped.lat, stepped.lon, stepped.landcover_along)[2]
     assert grass == pytest.approx(0.001 / (0.001 + 0.0002 + 0.0012))
+
+
+def test_a_round_trip_keeps_the_walk_s_own_grade() -> None:
+    from dayhike.trailgraph import ComposedWalk, WayBack
+
+    def walk(lon: list[float], sac_scale: str | None) -> ComposedWalk:
+        n = len(lon)
+        return ComposedWalk(
+            None, None, None, None, np.zeros(n), np.array(lon), np.zeros(n), np.zeros(n, dtype=int), np.full(n, -1),
+            np.full(n, np.nan), [(100.0, None)], sac_scale, {},
+        )  # fmt: skip
+
+    hike = walk([0.0, 0.001], "hiking")
+    # A trail back on a harder path (a scramble beside the trail) does not grade the hike (ADR-0078).
+    harder = WayBack("trail", 111.0, walk([0.001, 0.0005, 0.0], "demanding_alpine_hiking"))
+    assert round_trip(hike, harder).sac_scale == "hiking"
+    assert round_trip(walk([0.0, 0.001], None), harder).sac_scale is None
+    assert round_trip(hike, WayBack("retrace", 111.0)).sac_scale == "hiking"
 
 
 def test_sampling_again_changes_nothing_but_drops_the_similarity_facts(sampled: Path, tmp_path: Path) -> None:

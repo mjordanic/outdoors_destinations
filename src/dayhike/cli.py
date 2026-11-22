@@ -494,7 +494,7 @@ def main(argv: list[str] | None = None) -> int:
     export.add_argument(
         "--external-dir",
         type=Path,
-        default=Path("data/external"),
+        default=None,
         help="Directory of the external sources' caches (default: data/external): an OpenStreetMap hike that "
         "lies on one of their records names it, and an external hike links its record's page as the source gives it now",
     )
@@ -1019,6 +1019,7 @@ def _export_serving(
     regions: list[Region],
     external_dir: Path | None = None,
 ) -> int:
+    from dayhike.external import EXTERNAL_DIR
     from dayhike.serving import ServingExportError, export_serving, fetch_geonames
 
     try:
@@ -1033,7 +1034,7 @@ def _export_serving(
                 countries_path=countries,
                 borders_path=borders,
                 regions=regions,
-                external_dir=external_dir,
+                external_dir=EXTERNAL_DIR if external_dir is None else external_dir,
                 progress=_progress,
             )
         )
