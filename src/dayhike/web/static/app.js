@@ -1865,7 +1865,7 @@ function nameSearch(input, list, onPick, onLandmark = null, resting = () => null
         ? `<li class="nothing">No hike name, peak or place has every word of “${escapeHtml(nothingFor)}”.<span class="meta">Try a word of a trail's name, a peak, hut, lake or town, or select a hike on the map.</span></li>`
         : `<li class="nothing">No hike name has every word of “${escapeHtml(nothingFor)}”.<span class="meta">Only hike names are searched, not places; try a word of a trail's name, or select a hike on the map.</span></li>`;
     }
-    // A famous Landmark named so leads the hike names: the Matterhorn before Matterhorn Trail in Oregon (ADR-0076).
+    // A famous Landmark named so leads the hike names: the Matterhorn before Matterhorn Trail in Oregon (ADR-0079).
     const leading = landmarks.filter((landmark) => landmark.leads);
     leading.forEach(landmarkOptions);
     found.filter((item) => item.match !== "similar").forEach((item) => option(item));

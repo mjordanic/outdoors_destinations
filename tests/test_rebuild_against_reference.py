@@ -32,7 +32,7 @@ import pytest
 import rebuild_checks as rc
 from test_real_data import _main_walk_reasons
 
-from dayhike import SimilarityStore, geometry_store_path_for, similarity_dir_for
+from dayhike import SimilarityStore, geometry_store_path_for
 from dayhike.similarity import CALIBRATION_KEYS, FACT_COLUMNS, LANDCOVER_SHARE_COLUMNS
 
 pytestmark = [*rc.real_data, rc.needs_reference]

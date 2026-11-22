@@ -227,7 +227,7 @@ def test_a_measure_whose_same_zone_many_hikes_share_says_it_tells_little(
 
     assert zone in descriptions[name]
     assert "it says little" in descriptions[name]
-    assert f"two hikes that match closely on a less common" in descriptions[name] and example in descriptions[name]
+    assert "two hikes that match closely on a less common" in descriptions[name] and example in descriptions[name]
 
 
 @pytest.mark.parametrize("name", ["length", "precipitation", "dry_stretch", "water_count"])
