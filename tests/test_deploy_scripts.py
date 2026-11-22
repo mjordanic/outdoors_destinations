@@ -11,6 +11,7 @@ import importlib.util
 import json
 import shutil
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -21,6 +22,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import uvicorn
+import yaml
 
 from dayhike import build_catalog, build_similarity
 from dayhike.serving import ServingData, export_serving
@@ -142,3 +144,45 @@ def test_the_shell_holds_the_pages_as_the_server_fills_them_in_and_asks_the_serv
         assert "<urlset" in (out / "sitemap.xml").read_text()
     assert (out / "app.js").is_file() and (out / "vendor" / "leaflet").is_dir() and (out / "404.html").is_file()
     assert "Cache-Control: no-cache" in (out / "_headers").read_text()
+
+
+@pytest.mark.parametrize(
+    ("data_image", "memory_variable", "memory"),
+    [
+        ("r/dayhike-data:abc-eu-us", "", "4Gi"),
+        ("r/dayhike-data:abc-eu", "", "4Gi"),
+        ("r/dayhike-data:abc-us", "", "2Gi"),
+        ("r/dayhike-data:abc-demo", "", "2Gi"),
+        ("r/dayhike-data:c88caa19c38378f3-copernicus-glo30", "", "4Gi"),
+        ("r/dayhike-data:abc-us", "3Gi", "3Gi"),
+    ],
+)
+def test_the_deploy_sets_the_memory_from_the_data_image(
+    tmp_path: Path, data_image: str, memory_variable: str, memory: str
+) -> None:
+    if shutil.which("jq") is None:
+        pytest.skip("jq not on PATH")
+    workflow = yaml.safe_load((Path(__file__).parents[1] / ".github" / "workflows" / "deploy.yml").read_text())
+    steps = [step for job in workflow["jobs"].values() for step in job.get("steps", [])]
+    (script,) = [step["run"] for step in steps if step.get("id") == "candidate"]
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gcloud = bin_dir / "gcloud"
+    gcloud.write_text(
+        "#!/bin/bash\n"
+        'if [ "$2" = deploy ]; then printf "%s\\n" "$@" > "$CALLS"; fi\n'
+        'echo \'{"status": {"traffic": [{"tag": "c-0123456789ab", "revisionName": "r1", "url": "https://c"}]}}\'\n'
+    )
+    gcloud.chmod(0o755)
+    env = {
+        "PATH": f"{bin_dir}:/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin",
+        "GITHUB_SHA": "0123456789abcdef",
+        "GITHUB_OUTPUT": str(tmp_path / "output"),
+        "GITHUB_STEP_SUMMARY": str(tmp_path / "summary"),
+        "CALLS": str(tmp_path / "calls"),
+        "DATA_IMAGE": data_image,
+        "MEMORY": memory_variable,
+    }
+    subprocess.run(["bash", "-e", "-c", script], env=env, check=True)
+    arguments = (tmp_path / "calls").read_text().splitlines()
+    assert arguments[arguments.index("--memory") + 1] == memory

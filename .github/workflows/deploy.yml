@@ -43,7 +43,8 @@ jobs:
       # The data image, and with it which hikes the site has (docs/deploy.md, section 1): the
       # pages, the region filter and the smoke test follow from its data.
       DATA_IMAGE: ${{ vars.DAYHIKE_DATA_IMAGE }}
-      # Empty: 2 GiB for a US-only or demo data image (its tag ends in -us or -demo), else 4 GiB.
+      # Empty: 2 GiB for a US-only or demo data image (its tag ends in -us or -demo, not -eu-us),
+      # else 4 GiB.
       MEMORY: ${{ vars.DAYHIKE_MEMORY }}
       # The loading shell's origins, space-separated (docs/deploy.md, section 8); empty, none.
       CORS_ORIGINS: ${{ vars.DAYHIKE_CORS_ORIGINS }}
@@ -73,7 +74,7 @@ jobs:
           tag="c-${GITHUB_SHA::12}"
           memory="$MEMORY"
           if [ -z "$memory" ]; then
-            case "$DATA_IMAGE" in *-us|*-demo) memory=2Gi ;; *) memory=4Gi ;; esac
+            case "$DATA_IMAGE" in *-eu-us) memory=4Gi ;; *-us|*-demo) memory=2Gi ;; *) memory=4Gi ;; esac
           fi
           gcloud run deploy "$SERVICE" --project "$PROJECT" --region "$REGION" \
             --image "$IMAGE" --no-traffic --tag "$tag" --memory "$memory" \

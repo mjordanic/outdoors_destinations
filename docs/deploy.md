@@ -207,7 +207,7 @@ What the flags do:
 
 | Flag | Why |
 | --- | --- |
-| `--memory 4Gi` | For a Europe or a Europe and US export (section 1), the most Cloud Run gives 1 vCPU; a US-only export fits `2Gi`. The deploy workflow sets it on every deploy from the data image's tag: `2Gi` for a tag ending in `-us` or `-demo`, else `4Gi`, or the `DAYHIKE_MEMORY` repository variable when set (section 9). Measured peak of app plus Valhalla in the technical docs table, **Web demo measurements** ([technical.md](technical.md#web-demo-measurements)). The trail network for the way back is memory-mapped from the export's `trailgraph.network/` (an export without it builds it once per instance, a request arriving during the build waiting for it), and the image sets `MALLOC_ARENA_MAX=2`; with both, 8 visitors on 1 vCPU peak near 1.1 GB. Raise to 4Gi if the logs show out-of-memory restarts. |
+| `--memory 4Gi` | For a Europe or a Europe and US export (section 1), the most Cloud Run gives 1 vCPU; a US-only export fits `2Gi`. The deploy workflow sets it on every deploy from the data image's tag: `2Gi` for a tag ending in `-us` (but not `-eu-us`) or `-demo`, else `4Gi`, or the `DAYHIKE_MEMORY` repository variable when set (section 9). Measured peak of app plus Valhalla in the technical docs table, **Web demo measurements** ([technical.md](technical.md#web-demo-measurements)). The trail network for the way back is memory-mapped from the export's `trailgraph.network/` (an export without it builds it once per instance, a request arriving during the build waiting for it), and the image sets `MALLOC_ARENA_MAX=2`; with both, 8 visitors on 1 vCPU peak near 1.1 GB. Raise to 4Gi if the logs show out-of-memory restarts. |
 | `--min-instances 0` | Scale to zero; the captain accepted the cold start. |
 | `--max-instances 2` | The instance cap: at most two containers ever bill at once. |
 | `--concurrency 8` | Searches and hike pages run side by side; Rankings queue one at a time per instance (in the app). |
@@ -517,7 +517,8 @@ The deploy changes only the image, the memory, `DAYHIKE_PMTILES_URL`,
 repository variables of those names (empty, the variable is set empty: the maps
 keep the raster tiles, the credits page shows no download link, and no other
 origin may call the API). The memory is `DAYHIKE_MEMORY`, or, unset, `2Gi` for
-a data image whose tag ends in `-us` or `-demo` and `4Gi` for any other. CPU,
+a data image whose tag ends in `-us` (but not `-eu-us`) or `-demo` and `4Gi`
+for any other, `-eu-us` included. CPU,
 scaling and the other environment variables stay as section 3 set them. A data refresh is still built and pushed by
 hand (section 3), followed by a change of `DAYHIKE_DATA_IMAGE`; the next run
 builds on it. To roll back, move traffic to an earlier revision as in section 7,
@@ -547,7 +548,7 @@ reviewer before each deploy.
 | `DAYHIKE_DATA_IMAGE` | `europe-west1-docker.pkg.dev/PROJECT/dayhike/data:DATA_TAG` |
 | `DAYHIKE_PMTILES_URL` (optional) | `https://maps.hikesalike.com/europe.pmtiles` (section 10); unset or empty, the raster tiles |
 | `DAYHIKE_DOWNLOAD_URL` (optional) | `https://maps.hikesalike.com/hikes-osm.sqlite` (section 11); unset or empty, no download link |
-| `DAYHIKE_MEMORY` (optional) | `4Gi`; unset or empty, from the data image's tag (`2Gi` for `-us` or `-demo`, else `4Gi`) |
+| `DAYHIKE_MEMORY` (optional) | `4Gi`; unset or empty, from the data image's tag (`2Gi` for `-us`, not `-eu-us`, or `-demo`; else `4Gi`) |
 | `DAYHIKE_CORS_ORIGINS` (optional) | `https://hikesalike.com https://PROJECT.pages.dev` (section 8); unset or empty, none |
 | `CLOUDFLARE_PAGES_PROJECT` (optional) | the Pages project of the loading shell (section 8); unset or empty, no shell is published |
 | `CLOUDFLARE_ACCOUNT_ID` (with the project) | the Cloudflare account's id |

@@ -21,7 +21,7 @@ export from before that has no `regions` names them from its hikes the same way.
 site of Europe alone says "Europe", and runs the known-hike checks of each region present: in Slovenia and
 Switzerland for Europe, in California, Colorado and Utah for the US, so a showcase cut of a few countries
 and states that keeps those passes too. The workflow sets the memory from the data image's tag (`2Gi` for
-`-us` or `-demo`, else `4Gi`), unless `DAYHIKE_MEMORY` says otherwise. A map whose view lies wholly
+`-us`, but not `-eu-us`, or `-demo`; else `4Gi`), unless `DAYHIKE_MEMORY` says otherwise. A map whose view lies wholly
 outside the PMTiles file's bounds draws the raster tiles over the vector map, so one Europe file serves a
 Europe and US site. The preview image keeps only the brand and tagline. The workflow also publishes the
 loading shell of `docs/deploy.md` section 8 once a Cloudflare Pages project is configured.
