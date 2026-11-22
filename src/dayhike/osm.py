@@ -4,7 +4,7 @@ import json
 import re
 from array import array
 from bisect import bisect_left
-from collections.abc import Collection, Iterable, Iterator, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import islice
 
@@ -227,6 +227,38 @@ class WaysWithout(Mapping[int, OsmWay]):
         return len(self._ways) - sum(1 for way_id in self._left_out if way_id in self._ways)
 
 
+class WayEnds:
+    """The ways of a snapshot by their end nodes, as two sorted arrays: about
+    16 B a way end, so Europe's ~5 M ways take ~160 MB."""
+
+    def __init__(self, ways: Mapping[int, OsmWay]) -> None:
+        if isinstance(ways, WayStore):
+            ids = np.frombuffer(ways._loaded, dtype=np.int64) if len(ways._loaded) else np.empty(0, dtype=np.int64)
+            offsets = np.frombuffer(ways._offsets, dtype=np.int64)
+            nodes = np.frombuffer(ways._nodes, dtype=np.int64) if len(ways._nodes) else np.empty(0, dtype=np.int64)
+            has_nodes = offsets[1:] > offsets[:-1]
+            ids = ids[has_nodes]
+            first, last = nodes[offsets[:-1][has_nodes]], nodes[offsets[1:][has_nodes] - 1]
+            rest = ways._added
+        else:
+            ids, first, last, rest = np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64), ways
+        extra = [(way_id, way.node_ids[0], way.node_ids[-1]) for way_id, way in rest.items() if way.node_ids]
+        if extra:
+            more = np.array(extra, dtype=np.int64)
+            ids, first, last = np.concatenate([ids, more[:, 0]]), np.concatenate([first, more[:, 1]]), np.concatenate([last, more[:, 2]])
+        ends, owners = np.concatenate([first, last]), np.concatenate([ids, ids])
+        order = np.argsort(ends, kind="stable")
+        self._ends, self._owners = ends[order], owners[order]
+
+    def ways_at(self, node_ids: Sequence[int]) -> set[int]:
+        """The ids of the ways that start or end at any of ``node_ids``."""
+        wanted = np.asarray(node_ids, dtype=np.int64)
+        starts = self._ends.searchsorted(wanted, side="left")
+        stops = self._ends.searchsorted(wanted, side="right")
+        hit = stops > starts
+        return {int(way_id) for start, stop in zip(starts[hit], stops[hit]) for way_id in self._owners[start:stop]}
+
+
 @dataclass
 class OsmSnapshot:
     nodes: Mapping[int, tuple[float, float]] = field(default_factory=dict)  # a NodeStore's, from a work file
@@ -249,6 +281,8 @@ class OsmSnapshot:
     # Ids of the ways in ``ways`` no hiking relation lists, read with the paths option (ADR-0065):
     # only the TrailGraph walks them, no DayHike does.
     path_ways: frozenset[int] = frozenset()
+    # ``ways`` by their end nodes, built when a main walk first needs it (``ingest._way_ends``).
+    way_ends: WayEnds | None = field(default=None, repr=False, compare=False)
 
 
 def amenity_kind(tags: dict[str, str]) -> str | None:

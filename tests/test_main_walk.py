@@ -41,6 +41,7 @@ def _osm(
     tags: Mapping[str, str] = {"name": "Shape"},
     points: Sequence[tuple[float, float, Mapping[str, str]]] = (),
     way_tags: Mapping[int, Mapping[str, str]] = {},
+    other_routes: Sequence[Sequence[int]] = (),
 ) -> str:
     """Nodes by one-letter name at (x_km, y_km); ways as strings of node names.
 
@@ -49,7 +50,8 @@ def _osm(
     way to its role; every other member has role "". ``tags`` are the
     relation's tags besides type and route; ``points`` are tagged nodes
     (peaks, huts, places) at (x_km, y_km). ``way_tags`` replaces a member
-    way's tags (``highway=path`` otherwise).
+    way's tags (``highway=path`` otherwise). ``other_routes`` are the member
+    ways of other hiking relations.
     """
     node_ids = {name: 100 + index for index, name in enumerate(nodes)}
     xml = '<?xml version="1.0" encoding="UTF-8"?>\n<osm version="0.6">\n'
@@ -85,19 +87,25 @@ def _osm(
     relation_tags = "".join(f'<tag k="{k}" v="{v}"/>' for k, v in tags.items())
     xml += (
         f'<relation id="{RELATION_ID}" version="1">{listed}<tag k="type" v="route"/>'
-        f'<tag k="route" v="hiking"/>{relation_tags}</relation>\n</osm>\n'
+        f'<tag k="route" v="hiking"/>{relation_tags}</relation>\n'
     )
-    return xml
+    for number, route in enumerate(other_routes, start=1):
+        listed = "".join(f'<member type="way" ref="{way_id}" role=""/>' for way_id in route)
+        xml += (
+            f'<relation id="{RELATION_ID + number}" version="1">{listed}<tag k="type" v="route"/>'
+            '<tag k="route" v="hiking"/></relation>\n'
+        )
+    return xml + "</osm>\n"
 
 
 class Walk:
     def __init__(
         self, tmp_path: Path, nodes, ways, members, parking=(), road=None, roles={},
-        tags={"name": "Shape"}, points=(), way_tags={}, dem=None, previous=None,
+        tags={"name": "Shape"}, points=(), way_tags={}, dem=None, previous=None, other_routes=(),
     ) -> None:
         tmp_path.mkdir(exist_ok=True)
         osm = tmp_path / "shape.osm"
-        osm.write_text(_osm(nodes, ways, members, parking, road, roles, tags, points, way_tags))
+        osm.write_text(_osm(nodes, ways, members, parking, road, roles, tags, points, way_tags, other_routes))
         catalog_path = tmp_path / "catalog.sqlite"
         self.catalog_path = catalog_path
         catalog = build_catalog(osm, catalog_path, dem_dir=dem, previous=previous)
@@ -357,6 +365,39 @@ def test_pieces_500_m_apart_leave_the_shorter_disconnected(tmp_path: Path) -> No
     assert walk.way(2) == _walked(0, 4_000.0)
     assert walk.unconnected_m == pytest.approx(2_000.0, abs=1.0)
     assert walk.jumps == []
+
+
+def test_pieces_a_way_the_relation_does_not_list_runs_between_are_joined_by_it(tmp_path: Path) -> None:
+    # Besseggen (relation 1417687): its mappers left out the 175 m way between
+    # its two pieces, which another relation lists; the walk follows it.
+    nodes = {"a": (0, 0), "b": (0, 3), "m": (0.1, 3.08), "e": (0, 3.15), "c": (0, 6)}
+    walk = Walk(tmp_path, nodes, {1: "ab", 2: "ec", 3: "bme"}, [1, 2], other_routes=[[3]])
+
+    assert walk.hike.length_m == pytest.approx(6_000.0 + 2 * math.hypot(100, 75) - 150, abs=2.0)
+    assert walk.vertices == "abmec"
+    assert walk.way(1) == _walked(0, 3_000.0)
+    assert walk.way(2) == _walked(1, 2_850.0)
+    assert walk.unconnected_m == pytest.approx(0.0, abs=0.01)
+    assert walk.jumps == []
+
+
+def test_a_way_longer_than_500_m_between_pieces_does_not_join_them(tmp_path: Path) -> None:
+    nodes = {"a": (0, 0), "b": (0, 4), "m": (0.4, 4.25), "e": (0, 4.5), "c": (0, 6.5)}
+    walk = Walk(tmp_path, nodes, {1: "ab", 2: "ec", 3: "bme"}, [1, 2], other_routes=[[3]])
+
+    assert walk.vertices == "ab"
+    assert walk.way(2) == _left("disconnected")
+    assert walk.unconnected_m == pytest.approx(2_000.0, abs=1.0)
+
+
+def test_a_way_that_crosses_a_member_way_does_not_join_pieces(tmp_path: Path) -> None:
+    # Way 3 runs from piece one through piece one's own node b to piece two:
+    # it is no missing link but another trail, so it bridges nothing.
+    nodes = {"a": (0, 0), "x": (0, 2.9), "b": (0, 3), "e": (0, 3.15), "c": (0, 6)}
+    walk = Walk(tmp_path, nodes, {1: "axb", 2: "ec", 3: "xbe"}, [1, 2], other_routes=[[3]])
+
+    assert walk.vertices == "axb"
+    assert walk.way(2) == _left("disconnected")
 
 
 def test_a_way_left_mid_way_by_the_route_is_walked_in_part(tmp_path: Path) -> None:

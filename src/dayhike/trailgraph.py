@@ -1802,6 +1802,7 @@ class TrailGraph:
             _even_points,
             _haversine_m,
             _path_length_m,
+            mapped_heights,
             profile_shape,
             solar_aspect_points,
             walk_facts,
@@ -1812,16 +1813,17 @@ class TrailGraph:
         rows = self.amenities_near(lat, lon, PEAKS_AROUND_M)
         kinds = np.array([row[1] for row in rows], dtype=object)
         points = np.array([(row[2], row[3]) for row in rows], dtype=float).reshape(-1, 2)
+        heights = mapped_heights([row[5] for row in rows])
 
         def of_kinds(*wanted: str) -> AmenityPoints:
             keep = np.isin(kinds, wanted)
-            return AmenityPoints(points[keep], kinds[keep])
+            return AmenityPoints(points[keep], kinds[keep], heights[keep])
 
         facts["length_m"] = _path_length_m(lat, lon)
         facts.update(walk_facts(lat, lon, ele, walk.walked, of_kinds(*ALONG_KINDS), of_kinds("peak")))
         known = ele[np.isfinite(ele)]
         if known.size:
-            facts["highest_m"], facts["lowest_m"] = float(known.max()), float(known.min())
+            facts["lowest_m"] = float(known.min())
         if walk.sac_scale is not None:
             facts["difficulty_rank"] = float(SAC_SCALE_RANK[walk.sac_scale])
         if np.any(walk.landcover > 0):

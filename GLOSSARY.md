@@ -57,7 +57,7 @@ The area one build covers, as a region file (TOML in `src/dayhike/data/regions/`
 _Avoid_: area, country list, bbox (the box is one part of a Region)
 
 **DayHikeGeometry**:
-The ordered lon/lat vertices of a DayHike's main walk, starting at the Trailhead: the longest connected piece of its OSM member ways (ways a few tens of metres apart count as connected), each way at most once, without Leftovers. Consecutive ways meet; there is no jump between them. The similarity facts are built from it; Ranking does not read it.
+The ordered lon/lat vertices of a DayHike's main walk, starting at the Trailhead: the longest connected piece of its OSM member ways (ways a few tens of metres apart count as connected, and so do pieces a way of up to 500 m that the relation leaves out runs between, ADR-0076), each way at most once, without Leftovers. Consecutive ways meet; there is no jump between them. The similarity facts are built from it; Ranking does not read it.
 _Avoid_: path, route, trace, LineString, chain
 
 **Leftover**:
@@ -125,7 +125,7 @@ How many distinct people put geotagged photos on Wikimedia Commons within 150 m 
 _Avoid_: popularity score, fame, well-known badge
 
 **Difficulty**:
-The technical grade of a DayHike, derived from OSM `sac_scale` on member ways (the strictest grade present).
+The technical grade of a DayHike, derived from OSM `sac_scale` on member ways (the strictest grade present). With its way back it stays the DayHike's own grade (ADR-0077).
 _Avoid_: hardness, danger, exposure (those are not this field; alpine fall hazard stays inside Difficulty)
 
 **DEM**:

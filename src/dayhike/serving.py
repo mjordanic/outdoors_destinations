@@ -69,7 +69,7 @@ import unicodedata
 import zipfile
 import zlib
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import ROUND_HALF_UP, Decimal
 from functools import partial
 from pathlib import Path
@@ -2147,11 +2147,12 @@ class ServingData:
             return dict(_in_chunks(db, "SELECT id, coalesce(name, ref) FROM relations WHERE id IN ({})", relation_ids))
 
     def _trip(self, walk: ComposedWalk, return_to_start: bool) -> tuple[ComposedWalk, WayBack | None]:
-        """The walk with its way back and the way back (ADR-0019), or the walk and None."""
+        """The walk with its way back and the way back (ADR-0019), or the walk and None.
+        The walk with its way back keeps the walk's own grade (ADR-0077)."""
         if not return_to_start:
             return walk, None
         back = way_back(walk.lat, walk.lon, self.trailgraph)
-        return round_trip(walk, back), back
+        return replace(round_trip(walk, back), sac_scale=walk.sac_scale), back
 
     def _proposed_name(self, walk: ComposedWalk, labels: dict[int, str]) -> str:
         """The two trails walked longest (in name order, so a longer walk on
