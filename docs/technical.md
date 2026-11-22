@@ -2340,8 +2340,9 @@ uv run dayhike export-serving --catalog data/catalog.sqlite --out data/web-servi
 uv sync --extra web
 uv run dayhike serve --data data/web-serving --valhalla-url http://127.0.0.1:8002
 # http://127.0.0.1:8000 ; checks on real hikes, timings and memory (smoke.py
-# expects the full Europe export: on a smaller one its first check fails, as it
-# wants more than 100,000 DayHikes):
+# checks the known hikes of each region in /api/info "regions" and wants more
+# than 50,000 DayHikes for Europe and 10,000 for the US: on a smaller export its
+# first check fails):
 uv run python web/smoke.py --data data/web-serving --valhalla-url http://127.0.0.1:8002
 # --us checks the one-state US build instead (see "A US build")
 
@@ -2371,8 +2372,8 @@ value other than `https://host` is refused at start. `/robots.txt` allows every
 crawler and names `/sitemap.xml`, which lists the five pages by full address at
 the site URL (unset, at the address the request came to); a Ranking is made on
 request, so no search or API address is listed.
-The pages name what the export covers from its `meta.json` regions
-(`export-serving --region`): the tagline, the share description and the About
+The pages name what the export covers from its `meta.json` regions (the
+regions its hikes start in, labelled by `export-serving --region`; ADR-0081): the tagline, the share description and the About
 page say "hikes across Europe" while every region is in Europe, or the regions'
 labels ("Europe and Colorado") once one is not. The header's coverage map, a map
 of Europe, is shown only while every region is in Europe; the About page's
