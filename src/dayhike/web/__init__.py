@@ -605,7 +605,7 @@ def create_app(
         dayhikes=data.meta["dayhikes"],
         basemap=basemap,
         sources=data.meta.get("sources"),
-        regions=data.meta.get("regions"),
+        regions=data.covered,
         download_url=download_url,
     )
     climb_and_descent(np.array([46.0, 46.001, 46.002]), np.array([13.0, 13.0, 13.0]), np.array([800.0, 850.0, 820.0]))
@@ -717,7 +717,7 @@ def create_app(
             "dayhikes": data.meta["dayhikes"],
             "coverage": coverage,
             # What the site covers, as its pages say it: a starting place with no hike near is told so.
-            "covered": covered_text(data.meta.get("regions")),
+            "covered": covered_text(data.covered),
             "core": core,
             # A list whose best row scores below this holds nothing much alike: the page says so.
             "typical_pair": TYPICAL_PAIR,

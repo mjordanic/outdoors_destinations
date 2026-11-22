@@ -22,11 +22,19 @@ are supported (ADR-0069); pick one before the steps below:
 
 | Build | Ingest | `export-serving` | Cloud Run memory |
 | --- | --- | --- | --- |
-| **Europe only** (the default, today's site) | `dayhike ingest data/osm/europe-latest.osm.pbf` (paths level `graded`) | no `--region`, or `--region europe` | **2Gi** (section 3) |
-| **Europe and the US** | `dayhike ingest data/osm/europe data/osm/us --paths data/osm/us=trails` | `--region europe --region us-48` | **4Gi** |
+| **Europe only** | `dayhike ingest data/osm/europe-latest.osm.pbf` (paths level `graded`) | no `--region`, or `--region europe` | **4Gi** (section 3) |
+| **Europe and the US** (the last rebuild) | `dayhike ingest data/osm/europe data/osm/us --paths data/osm/us=trails` | `--region europe --region us-48` | **4Gi** |
 
 A US-only build is the same with only `data/osm/us` and `--paths trails`, and
-`--region us-48`; it fits 2Gi.
+`--region us-48`; it fits 2Gi. The deploy workflow sets the memory from the data
+image's tag (section 9).
+
+The export names the regions its hikes start in, in `meta.json`: without
+`--region`, "Europe" for hikes east of 40° W and "the United States" for hikes
+west of it (ADR-0074), and the pages, the region filter and the smoke test
+follow. `--region` only labels them otherwise ("the contiguous United States",
+"Colorado"); `export-serving` refuses, before writing anything, a `--region`
+list that leaves out a region the hikes start in, or names one where none does.
 
 - **Europe only** is every command in this file and in
   [technical.md](technical.md#clean-rebuild) as written. Nothing of the US is read or needed.
@@ -66,7 +74,7 @@ A US-only build is the same with only `data/osm/us` and `--paths trails`, and
   preview's estimate for this build (2026-11-17, not yet built in one piece):
   an export of about 7.4 GB, a data image of about 4.2 GB compressed, and
   2.3–2.8 GB of app plus Valhalla at run time, hence 4Gi. Go back to Europe
-  alone by deploying a Europe data image and setting the memory back to 2Gi.
+  alone by deploying a Europe data image.
 
 The export needs the Catalog, its GeometryStore, its similarity directory
 (`dayhike build-similarity`), and the highways-only Valhalla tiles ([technical docs](technical.md#highway-tiles-all-of-europe-small-server),
@@ -91,7 +99,17 @@ current GeoNames list. An export written without it falls back to public
 Nominatim. To add place search to an export already built, without exporting
 again, run `uv run dayhike export-places --out data/web-serving` (it reads
 only `trailheads.npy` and `hikes.sqlite` and leaves `meta.json` as it is; it also writes
-`landmarks.sqlite`, the peaks, huts, lakes and towns the hike search finds hikes by, ADR-0053), then rebuild the image. Rerun the
+`landmarks.sqlite`, the peaks, huts, lakes and towns the hike search finds hikes by, ADR-0053), then rebuild the image.
+
+The export also writes `names.npz`, the name search's index, so a server starts
+without reading every hike name from the 2.2 GB `hikes.sqlite` (about 15 s of
+one CPU for 890,000 hikes, the most of a cold start). An export written before
+it still opens: the server builds the same index at start. Add it to such an
+export, without exporting again, with `uv run dayhike export-name-index --out data/web-serving`
+(about 13 s; it reads only `hikes.sqlite` and `similarity/ids.npy`), then
+rebuild the data image. The index records the hikes it was written for: a
+server ignores one of other hikes and builds its own, so rerun the command on an
+export whose hikes changed. Rerun the
 command after any rebuild of the Catalog, the similarity facts or the tiles:
 it rewrites the directory and writes `meta.json` last, so a half-written export
 never opens.
@@ -162,7 +180,7 @@ docker buildx build --platform linux/amd64 -f web/Dockerfile \
 
 gcloud run deploy dayhike --image "$IMAGE" --region europe-west1 \
   --allow-unauthenticated \
-  --cpu 1 --memory 2Gi --execution-environment gen2 --cpu-boost \
+  --cpu 1 --memory 4Gi --execution-environment gen2 --cpu-boost \
   --min-instances 0 --max-instances 2 --concurrency 8 --timeout 60 \
   --set-env-vars DAYHIKE_FORWARDED_HOPS=1,DAYHIKE_SITE_URL=https://SERVICE.run.app
 ```
@@ -189,7 +207,7 @@ What the flags do:
 
 | Flag | Why |
 | --- | --- |
-| `--memory 2Gi` | For a Europe-only export; a Europe and US export (section 1) needs `--memory 4Gi`, the most Cloud Run gives 1 vCPU: set it with `gcloud run services update dayhike --region europe-west1 --memory 4Gi` when its data image goes live, and back to `2Gi` with a Europe-only one. Measured peak of app plus Valhalla in the technical docs table, **Web demo measurements** ([technical.md](technical.md#web-demo-measurements)). The trail network for the way back is memory-mapped from the export's `trailgraph.network/` (an export without it builds it once per instance, a request arriving during the build waiting for it), and the image sets `MALLOC_ARENA_MAX=2`; with both, 8 visitors on 1 vCPU peak near 1.1 GB. Raise to 4Gi if the logs show out-of-memory restarts. |
+| `--memory 4Gi` | For a Europe or a Europe and US export (section 1), the most Cloud Run gives 1 vCPU; a US-only export fits `2Gi`. The deploy workflow sets it on every deploy from the data image's tag: `2Gi` for a tag ending in `-us` or `-demo`, else `4Gi`, or the `DAYHIKE_MEMORY` repository variable when set (section 9). Measured peak of app plus Valhalla in the technical docs table, **Web demo measurements** ([technical.md](technical.md#web-demo-measurements)). The trail network for the way back is memory-mapped from the export's `trailgraph.network/` (an export without it builds it once per instance, a request arriving during the build waiting for it), and the image sets `MALLOC_ARENA_MAX=2`; with both, 8 visitors on 1 vCPU peak near 1.1 GB. Raise to 4Gi if the logs show out-of-memory restarts. |
 | `--min-instances 0` | Scale to zero; the captain accepted the cold start. |
 | `--max-instances 2` | The instance cap: at most two containers ever bill at once. |
 | `--concurrency 8` | Searches and hike pages run side by side; Rankings queue one at a time per instance (in the app). |
@@ -197,11 +215,11 @@ What the flags do:
 | `DAYHIKE_FORWARDED_HOPS=1` | The rate limit keys on the last `X-Forwarded-For` entry, the one Google's front end adds. Earlier entries are client-supplied and ignored, so the limit cannot be dodged by sending a fake header. If that last entry turns out to be a Google proxy address rather than the visitor, the limit becomes one shared budget per instance: stricter, never looser. |
 | `DAYHIKE_SITE_URL=https://HOST` (optional) | The site's public address (the live site's is `https://hikesalike.com`; before a custom domain, the Cloud Run URL). Each page then names itself in `og:url` and its preview image by full address, so a shared link shows the preview, and `/robots.txt` and `/sitemap.xml` name pages at it; unset, the image address stays relative and most link previews show none. |
 | `DAYHIKE_GOATCOUNTER=CODE` (optional) | Cookieless visit counts at `https://CODE.goatcounter.com`: every page loads the self-hosted `vendor/goatcounter/count.js`, and "Find" is counted as an event. Unset, no page loads analytics. Not set yet: no GoatCounter account. |
-| `DAYHIKE_CORS_ORIGINS="https://HOST ..."` (optional) | The origins whose pages may call the API (CORS): the loading shell of section 8. Unset, no other origin may. Not set yet: no shell. |
+| `DAYHIKE_CORS_ORIGINS="https://HOST ..."` (optional) | The origins whose pages may call the API (CORS): the loading shell of section 8. Unset, no other origin may. The deploy workflow sets it from the repository variable of that name (section 9). |
 | `DAYHIKE_TILE_URL=TEMPLATE` (optional) | The raster tile URL template both maps load their base map from, with `{z}`, `{x}` and `{y}` (for example `https://tiles.example.com/{z}/{x}/{y}.png`). Unset, the maps use `tile.openstreetmap.org` (section 6). `/api/info` names it as `basemap`. |
 | `DAYHIKE_TILE_ATTRIBUTION=HTML` (optional) | The tile provider's credit, as its terms ask for it: the map corner shows it beside "© OpenStreetMap contributors", which always stays, and the Data and credits page says the tiles are served by it. |
 | `DAYHIKE_TILE_MAX_ZOOM=N` (optional) | The deepest zoom the provider serves (default 19). |
-| `DAYHIKE_PMTILES_URL=URL` (optional) | A vector base map: a PMTiles file in the [Protomaps basemap](https://docs.protomaps.com/basemaps/downloads) schema, by full address or relative to the page. Both maps then draw it with MapLibre GL JS under their overlays (ADR-0061), credited "© OpenStreetMap contributors · Protomaps", and ask no raster tiles; where the vector map cannot be shown (no WebGL 2, or the file or its tiles cannot be read, for example blocked by CORS), each map falls back to the raster tiles above for the rest of the page's life. The host must answer range requests and, on another origin, allow the site's origin by CORS with the `range` request header and the `etag` response header exposed ([Protomaps cloud storage guide](https://docs.protomaps.com/pmtiles/cloud-storage)). The live site's file is `https://maps.hikesalike.com/europe.pmtiles` on Cloudflare R2 (section 10); the deploy workflow sets it from the `DAYHIKE_PMTILES_URL` repository variable (section 9). |
+| `DAYHIKE_PMTILES_URL=URL` (optional) | A vector base map: a PMTiles file in the [Protomaps basemap](https://docs.protomaps.com/basemaps/downloads) schema, by full address or relative to the page. Both maps then draw it with MapLibre GL JS under their overlays (ADR-0061), credited "© OpenStreetMap contributors · Protomaps", and ask no raster tiles; where the vector map cannot be shown (no WebGL 2, or the file or its tiles cannot be read, for example blocked by CORS), each map falls back to the raster tiles above for the rest of the page's life. A map whose view lies wholly outside the file's bounds (a US hike on a Europe file) draws the raster tiles over the vector map until it is moved back over the file, so one Europe file serves a Europe and US site. The host must answer range requests and, on another origin, allow the site's origin by CORS with the `range` request header and the `etag` response header exposed ([Protomaps cloud storage guide](https://docs.protomaps.com/pmtiles/cloud-storage)). The live site's file is `https://maps.hikesalike.com/europe.pmtiles` on Cloudflare R2 (section 10); the deploy workflow sets it from the `DAYHIKE_PMTILES_URL` repository variable (section 9). |
 | `DAYHIKE_DOWNLOAD_URL=URL` (optional) | Where the ODbL download of the OpenStreetMap part of the hikes is hosted (section 11). The Data and credits page then shows a "Download the data" link to it, saying what the file holds and leaves out; unset or empty, no link; a localhost or loopback address (for example `http://127.0.0.1:8081/...` from a local test) is ignored with a warning in the log, since only that machine could open it. The live site's file is `https://maps.hikesalike.com/hikes-osm.sqlite`; the deploy workflow sets it from the `DAYHIKE_DOWNLOAD_URL` repository variable (section 9). |
 
 The service also carries a service-level `scaling.maxInstanceCount` of 20 in
@@ -411,17 +429,13 @@ traffic to the revision: a later `gcloud run deploy` by hand gets none until
 `gcloud run services update-traffic dayhike --region europe-west1 --to-latest`
 (the deploy workflow does this itself).
 
-## 8. A loading shell on a static host (not done yet)
-
-**Not set up.** The live site is served at `https://hikesalike.com`, but no
-static host or shell exists yet; the host is chosen later. Nothing below has
-been run.
+## 8. A loading shell on a static host
 
 With `--min-instances 0` the first visit after a quiet spell waits for the
 container to start, and while Cloud Run serves the page too, the browser shows
-nothing until then. A shell on a static host (for example Cloudflare Pages)
-serves the page's files at once, so the loading screen (the logo, then "Waking
-the server…") shows while Cloud Run starts, and the page then calls the API on
+nothing until then. A shell on a static host (Cloudflare Pages) serves the
+page's files at once, so the loading screen (the logo, then "Waking the
+server…") shows while Cloud Run starts, and the page then calls the API on
 Cloud Run. What is built for it:
 
 - `index.html` holds `<meta name="api-base" content="">`; empty, the page asks
@@ -435,46 +449,35 @@ Cloud Run. What is built for it:
   `503` from Cloud Run's front end), so the page asks `/api/health` once in
   `no-cors` mode: any answer says the site is paused or busy, no answer that
   the server is down.
+- `web/shell.py --url https://SERVICE.run.app --out SHELL_DIR` writes the
+  shell: the pages and `robots.txt` and `sitemap.xml` fetched from the running
+  server, so they hold what it fills in (the regions and hike count of its data,
+  the GoatCounter tag, the base map, `og:url` with `DAYHIKE_SITE_URL`), the
+  other static files, a `404.html`, and a `_headers` file with the headers the
+  server sends with its pages (`Cache-Control: no-cache`, `nosniff`, the
+  referrer policy), with `index.html` pointed at the server.
+- The deploy workflow (section 9) publishes it after every deploy, once the
+  `CLOUDFLARE_PAGES_PROJECT` variable is set, so the shell and the API stay
+  the same version; it sets `DAYHIKE_CORS_ORIGINS` from the variable of that
+  name.
 
-The steps, once there is a host account:
+The one-time setup, by the maintainer, once there is a host account:
 
-1. Deploy Cloud Run as in section 3, with
-   `DAYHIKE_CORS_ORIGINS="https://SHELL_HOST"` added to `--set-env-vars`
-   (every host the shell is served at, such as the custom domain and the
-   host's own `*.pages.dev` name).
-2. Copy the static files and point the copy at Cloud Run:
+1. Create the Cloudflare Pages project (direct upload, production branch
+   `main`), and an API token that may edit Cloudflare Pages on that account.
+2. Set the repository variables `CLOUDFLARE_PAGES_PROJECT` and
+   `CLOUDFLARE_ACCOUNT_ID`, the secret `CLOUDFLARE_API_TOKEN`, and
+   `DAYHIKE_CORS_ORIGINS` to every host the shell is served at, such as
+   `https://hikesalike.com https://PROJECT.pages.dev` (space-separated).
+3. Run the workflow; check the shell at its `*.pages.dev` address.
+4. Point the custom domain at the Pages project, and keep `DAYHIKE_SITE_URL`
+   on the custom domain.
 
-   ```bash
-   SHELL_DIR=$(mktemp -d)/shell && cp -R src/dayhike/web/static "$SHELL_DIR"
-   sed -i '' 's|<meta name="api-base" content="">|<meta name="api-base" content="https://SERVICE.run.app">|' "$SHELL_DIR/index.html"
-   ```
+By hand, without the workflow: deploy with `DAYHIKE_CORS_ORIGINS` set, then
 
-   The server fills in the GoatCounter tag (`<!--analytics-->`) and, with
-   `DAYHIKE_SITE_URL`, the pages' `og:url` and full preview image address; a
-   shell copy keeps the placeholder and the relative image, so fill them the
-   same way if those settings are on. The server also generates `/robots.txt`
-   and `/sitemap.xml`; they are not in `static`, so publish both with the
-   shell, for example fetched from the running app with `DAYHIKE_SITE_URL` set
-   to the custom domain:
-
-   ```bash
-   curl -fsS https://SERVICE.run.app/robots.txt -o "$SHELL_DIR/robots.txt"
-   curl -fsS https://SERVICE.run.app/sitemap.xml -o "$SHELL_DIR/sitemap.xml"
-   ```
-3. Publish `$SHELL_DIR` on the static host after every `gcloud run deploy`, so
-   the shell and the API stay the same version (on Cloudflare Pages:
-   `wrangler pages deploy "$SHELL_DIR" --project-name gofindmeahike`).
-4. Point the custom domain at the static host.
-
-The server sends `Cache-Control: no-cache` on the page; a static host needs the
-same, for example a Cloudflare Pages `_headers` file (an example only; no such
-file is in the repository):
-
-```text
-/*
-  Cache-Control: no-cache
-  X-Content-Type-Options: nosniff
-  Referrer-Policy: strict-origin-when-cross-origin
+```bash
+python3 web/shell.py --url https://SERVICE.run.app --out "$(mktemp -d)/shell"
+npx wrangler pages deploy SHELL_DIR --project-name PROJECT --branch main
 ```
 
 ## 9. Deploy from GitHub Actions (not set up yet)
@@ -498,13 +501,24 @@ On a push to `main`, or by hand (`workflow_dispatch` on `main`), the workflow:
    the candidate keeps its tag and no traffic, and the live revision is untouched;
 6. checks that the candidate is still the latest revision, sends all traffic to
    the latest revision (so a later `gcloud run deploy` by hand, section 7, takes
-   the traffic as usual), then removes the candidate's tag.
+   the traffic as usual), then removes the candidate's tag;
+7. with `CLOUDFLARE_PAGES_PROJECT` set, publishes the loading shell of the
+   service (section 8) to Cloudflare Pages.
 
-The deploy changes only the image, `DAYHIKE_PMTILES_URL` and `DAYHIKE_DOWNLOAD_URL`,
-which it sets from the repository variables of those names (empty, the variable is
-set empty: the maps keep the raster tiles, and the credits page shows no download
-link): memory, CPU, scaling and the other environment
-variables stay as section 3 set them. A data refresh is still built and pushed by
+The smoke test follows the data: it reads the regions the candidate has hikes
+in (`/api/info`), checks that the page names them (only a site of Europe alone
+says "Europe"), and searches, opens and ranks the known hikes of each: in
+Slovenia and Switzerland for Europe, in California, Colorado and Utah for the
+United States, with drives from Ljubljana, Munich and Denver when the candidate
+has drive time.
+
+The deploy changes only the image, the memory, `DAYHIKE_PMTILES_URL`,
+`DAYHIKE_DOWNLOAD_URL` and `DAYHIKE_CORS_ORIGINS`, which it sets from the
+repository variables of those names (empty, the variable is set empty: the maps
+keep the raster tiles, the credits page shows no download link, and no other
+origin may call the API). The memory is `DAYHIKE_MEMORY`, or, unset, `2Gi` for
+a data image whose tag ends in `-us` or `-demo` and `4Gi` for any other. CPU,
+scaling and the other environment variables stay as section 3 set them. A data refresh is still built and pushed by
 hand (section 3), followed by a change of `DAYHIKE_DATA_IMAGE`; the next run
 builds on it. To roll back, move traffic to an earlier revision as in section 7,
 or re-run the workflow on an earlier commit. A failed candidate can be removed
@@ -519,7 +533,7 @@ provider below accepts only tokens for this repository's `main`.
 
 Set as repository variables, not environment variables: the job's `if` reads
 `GCP_WORKLOAD_IDENTITY_PROVIDER` before any environment applies. None is a
-secret. The deploy job runs in the `production` environment, which can require a
+secret; the one secret is `CLOUDFLARE_API_TOKEN`, for the loading shell. The deploy job runs in the `production` environment, which can require a
 reviewer before each deploy.
 
 | Variable | Example form |
@@ -533,6 +547,10 @@ reviewer before each deploy.
 | `DAYHIKE_DATA_IMAGE` | `europe-west1-docker.pkg.dev/PROJECT/dayhike/data:DATA_TAG` |
 | `DAYHIKE_PMTILES_URL` (optional) | `https://maps.hikesalike.com/europe.pmtiles` (section 10); unset or empty, the raster tiles |
 | `DAYHIKE_DOWNLOAD_URL` (optional) | `https://maps.hikesalike.com/hikes-osm.sqlite` (section 11); unset or empty, no download link |
+| `DAYHIKE_MEMORY` (optional) | `4Gi`; unset or empty, from the data image's tag (`2Gi` for `-us` or `-demo`, else `4Gi`) |
+| `DAYHIKE_CORS_ORIGINS` (optional) | `https://hikesalike.com https://PROJECT.pages.dev` (section 8); unset or empty, none |
+| `CLOUDFLARE_PAGES_PROJECT` (optional) | the Pages project of the loading shell (section 8); unset or empty, no shell is published |
+| `CLOUDFLARE_ACCOUNT_ID` (with the project) | the Cloudflare account's id |
 
 ### One-time cloud setup (by the maintainer)
 

@@ -43,6 +43,11 @@ similarity directory live. It writes a directory a server memory-maps:
   route crosses or its Trailhead is within ``BORDER_M`` of, else "", for that country's emergency
   number too, when Natural Earth boundary lines are given with the countries file; for a Trailhead
   the OSM borders moved, the country Natural Earth put it in, with or without the lines.
+- ``names.npz``: the name search's index (``export_name_index``): every hike name folded as search
+  compares it, and the words of them all a typo is matched against. ``export_name_index`` writes it beside an
+  existing export too: it reads only ``hikes.sqlite`` and ``similarity/ids.npy``. A server reads it in well
+  under a second; without it (an export from before, or one whose hikes it does not match) the server builds
+  the same index at start, reading every name from ``hikes.sqlite`` (about 15 s for 900,000 hikes).
 - ``meta.json``: written last, so a directory without it is incomplete.
 
 ``ServingData`` opens such a directory without ``Catalog.open``: name search,
@@ -212,6 +217,10 @@ SHORT_WORDS = {"mt": "mount"}
 FUZZY_MIN_LETTERS = 4  # a shorter query word is found only as typed
 FUZZY_SPELLINGS = 3  # the nearest words a word with a typo is tried as
 FUZZY_QUERIES = 6  # the respelled queries a search tries, fewest typos first
+NAME_INDEX = "names.npz"  # the name search's index, written by the export (``export_name_index``)
+# Raise when ``_fold``, ``_unshortened``, ``SHORT_WORDS``, ``FUZZY_MIN_LETTERS`` or ``_Spellings`` change what
+# the index holds: a server then builds it at start, as for an export without one, until it is rewritten.
+NAME_INDEX_FORMAT = 1
 GEONAMES_URL = "https://download.geonames.org/export/dump/allCountries.zip"
 GEONAMES_ATTRIBUTION = "GeoNames (geonames.org), CC BY 4.0"
 PLACE_MARGIN_DEG = 2.0  # places this far outside the Trailheads' box are kept: a start a drive away
@@ -236,6 +245,7 @@ MULTI_DAY_M = 40_000.0  # a hike longer than this one way is a multi-day route (
 REGION_SPLIT_LON = -40.0
 # Name: its label, and how a sentence names it; west of the split last.
 REGIONS = {"europe": ("Europe", "Europe"), "us": ("United States", "the United States")}
+REGION_CONTINENTS = {"europe": "Europe", "us": "North America"}  # the continent the site's pages name it on
 LANDMARK_HIKES = 5  # the hikes a Landmark lists, nearest first
 LANDMARK_TOWN_M = 30_000.0  # a Landmark is told apart by the nearest town this close
 _HIKE_CHUNK = 2_000
@@ -868,7 +878,8 @@ def export_serving(
     Earth countries GeoJSON for ``countries.npy``, ``osm_borders_paths`` OpenStreetMap national
     boundaries for the country of a Trailhead near one, ``borders_path`` Natural Earth's land boundary
     lines for ``borders.npy`` (``export_countries``). ``regions``, the ones the Catalog was built from, are
-    named in ``meta.json`` (label and continent) for the site's pages; none leaves them saying Europe.
+    named in ``meta.json`` (label and continent) for the site's pages; none names those the hikes are in
+    (``covered_regions``), and regions the hikes contradict are refused before anything is written.
     ``external_dir`` holds the caches of the Catalog's external sources (``dayhike fetch-external``): an
     OpenStreetMap hike that lies on one of their records names it (``OfficialRecords``), and an external
     hike links its record's page as the source's adapter gives it now; without it, neither.
@@ -931,6 +942,7 @@ def export_serving(
     for name in _SIMILARITY_FILES:
         shutil.copyfile(similarity_dir_for(catalog_path) / name, similarity / name)
     trailheads = np.array([(row[4], row[5]) for row in hikes], dtype=np.float64).reshape(-1, 2)
+    covered = covered_regions(regions_in(trailheads[:, 1]), regions)  # before the long work: it may refuse
     np.save(out / "trailheads.npy", trailheads)
     official = (
         None
@@ -954,6 +966,7 @@ def export_serving(
     else:
         (out / "places.sqlite").unlink(missing_ok=True)
     export_landmarks(out, geonames_path)
+    export_name_index(out)
     if countries_path is not None or borders_path is not None or osm_borders_paths:  # borders alone fail: they need countries
         export_countries(out, countries_path, borders_path, osm_borders_paths)
     else:
@@ -983,11 +996,42 @@ def export_serving(
         "drive_time": (out / "valhalla" / "valhalla.json").is_file() and (out / "snaps.npz").is_file(),
         "compose": compose,
         "export_seconds": round(time.monotonic() - started, 1),
+        "regions": covered,
     }
-    if regions:
-        meta["regions"] = [{"label": region.label, "continent": region.continent} for region in regions]
     (out / "meta.json").write_text(json.dumps(meta, indent=1, ensure_ascii=False))
     return out
+
+
+def regions_in(longitudes: np.ndarray) -> list[str]:
+    """The names of the ``REGIONS`` hikes start in, by their Trailheads' longitudes: the United States west of
+    ``REGION_SPLIT_LON``, Europe east of it (and Europe for an export of no hikes)."""
+    west = np.asarray(longitudes) < REGION_SPLIT_LON
+    has = {"europe": not west.all(), "us": bool(west.any())}
+    return [name for name in REGIONS if has[name]]
+
+
+def covered_regions(names: Sequence[str], regions: Sequence[Region] = ()) -> list[dict[str, str | None]]:
+    """What the site's pages say the hikes are across (``meta.json`` ``regions``, label and continent), for the
+    ``REGIONS`` the hikes start in (``regions_in``): those of ``regions`` (the ones the Catalog was built
+    from, ``--region``), else each as a sentence names it ("Europe", "the United States").
+
+    A region is on the side of ``REGION_SPLIT_LON`` its bounds' middle is on. With ``regions`` given, each
+    side the hikes start on needs one of them and each of them needs hikes on its side: raises
+    ``ServingExportError`` otherwise (a United States export named Europe would say so on every page).
+    """
+    if not regions:
+        return [{"label": REGIONS[name][1], "continent": REGION_CONTINENTS[name]} for name in names]
+    sides = ["us" if (region.bounds.west + region.bounds.east) / 2 < REGION_SPLIT_LON else "europe" for region in regions]
+    if unnamed := [REGIONS[name][1] for name in names if name not in sides]:
+        raise ServingExportError(f"hikes start in {' and '.join(unnamed)}, which no --region names")
+    if empty := [region.name for region, side in zip(regions, sides) if side not in names]:
+        raise ServingExportError(f"no hike starts in the region {', '.join(empty)}: leave it out")
+    return [
+        {"label": region.label, "continent": region.continent}
+        for name in REGIONS
+        for region, side in zip(regions, sides)
+        if side == name
+    ]
 
 
 def _credited_dems(dems_used: set[str], sources: Mapping[str, str]) -> list[str]:
@@ -1544,6 +1588,65 @@ def fetch_geonames(path: Path | str, urlretrieve: UrlRetrieve = default_urlretri
     return path
 
 
+def export_name_index(out_dir: Path | str) -> Path:
+    """Write ``names.npz`` into the export ``out_dir``: the name search's index of its ``hikes.sqlite``.
+
+    Holds every hike name folded and unshortened as search compares it (one line per hike, in id order),
+    the words of them all by length (``_Spellings``), ``NAME_INDEX_FORMAT`` and a checksum of the hikes'
+    ids, so a server uses it only for the hikes it was written from. Written to a temporary file first, so
+    a server never opens half of one. Reads ``hikes.sqlite`` read-only: run it again on an export whose
+    hikes changed (a cut of fewer hikes) and it indexes those.
+    """
+    out = Path(out_dir)
+    ids = np.load(out / "similarity" / "ids.npy", mmap_mode="r")
+    with scoped(sqlite3.connect(f"file:{out / 'hikes.sqlite'}?mode=ro&immutable=1", uri=True)) as db:
+        folded, spellings = _name_index(db)
+    arrays = {
+        "format": np.array(NAME_INDEX_FORMAT),
+        "ids": np.array(_ids_checksum(ids)),
+        "count": np.array(len(folded)),
+        "folded": np.frombuffer("\n".join(folded).encode(), dtype=np.uint8),
+    }
+    for length, (_, letters, masks) in spellings.tables().items():
+        arrays[f"letters_{length}"], arrays[f"masks_{length}"] = letters, masks
+    path, partial_path = out / NAME_INDEX, out / f"{NAME_INDEX}.partial"
+    with open(partial_path, "wb") as file:
+        np.savez(file, **arrays)
+    os.replace(partial_path, path)
+    return path
+
+
+def _name_index(db: sqlite3.Connection) -> tuple[list[str], _Spellings]:
+    """Every hike name of ``hikes.sqlite`` folded and unshortened, in id order, and their ``_Spellings``."""
+    # Unshortened in one pass over them all ("\n" joined), not name by name: half a second for 900,000.
+    names = [_fold(name) for (name,) in db.execute("SELECT name FROM hikes ORDER BY id")]
+    folded = _unshortened("\n".join(names)).split("\n") if names else []
+    return folded, _Spellings(folded)
+
+
+def _read_name_index(directory: Path, ids: np.ndarray) -> tuple[list[str], _Spellings] | None:
+    """The export's ``names.npz`` (``export_name_index``), or None without one, or with one of another
+    ``NAME_INDEX_FORMAT`` or of other hikes than ``ids``."""
+    path = directory / NAME_INDEX
+    if not path.is_file():
+        return None
+    with np.load(path) as index:
+        if int(index["format"]) != NAME_INDEX_FORMAT or int(index["ids"]) != _ids_checksum(ids):
+            return None
+        count = int(index["count"])
+        folded = str(memoryview(index["folded"]), "utf-8").split("\n") if count else []  # decoded without a copy
+        if len(folded) != count:
+            return None
+        lengths = sorted(int(key.removeprefix("letters_")) for key in index.files if key.startswith("letters_"))
+        tables = {length: (index[f"letters_{length}"], index[f"masks_{length}"]) for length in lengths}
+    return folded, _Spellings.of_tables(tables)
+
+
+def _ids_checksum(ids: np.ndarray) -> int:
+    """A checksum of the hikes' ids, in order: the name index holds the names of these hikes."""
+    return zlib.crc32(np.ascontiguousarray(ids, dtype=np.int64).tobytes())
+
+
 def export_places(geonames_path: Path | str, out_dir: Path | str) -> Path:
     """Write ``places.sqlite`` into the export ``out_dir`` from a GeoNames dump (zip or txt).
 
@@ -1835,10 +1938,10 @@ class ServingData:
         self.trailgraph = TrailGraph(graph) if self.meta.get("compose") and graph.is_file() else None
         self.trailheads = map_npy(self.directory / "trailheads.npy")
         self._db_uri = f"file:{self.directory / 'hikes.sqlite'}?mode=ro&immutable=1"
+        index = _read_name_index(self.directory, self.store.ids)
         with scoped(self._db()) as db:
-            # Unshortened in one pass over them all ("\n" joined), not name by name: half a second for 900,000.
-            names = [_fold(name) for (name,) in db.execute("SELECT name FROM hikes ORDER BY id")]
-            self._folded = _unshortened("\n".join(names)).split("\n") if names else []
+            # Without the export's index (or with one of other hikes), built from every name now, as it was written.
+            self._folded, self._spellings = index or _name_index(db)
             columns = {row[1] for row in db.execute("PRAGMA table_info(hikes)")}
             self._has_source = "source" in columns
             self._has_source_url = "source_url" in columns
@@ -1850,7 +1953,6 @@ class ServingData:
         # One string of every folded name between newlines: str.find walks it in C.
         self._haystack = "\n" + "\n".join(self._folded) + "\n"
         self._starts = np.cumsum([1] + [len(name) + 1 for name in self._folded[:-1]])
-        self._spellings = _Spellings(self._folded)
         places = self.directory / "places.sqlite"
         self.places = f"file:{places}?mode=ro&immutable=1" if places.is_file() else None
         # An export from before Landmarks (ADR-0053) opens without them: the page searches hike names only.
@@ -1868,8 +1970,9 @@ class ServingData:
         borders = self.directory / "borders.npy"
         self.borders = np.load(borders) if borders.is_file() else None
         self._west = np.asarray(self.trailheads[:, 1]) < REGION_SPLIT_LON  # in the United States (REGIONS)
-        has = {"europe": not self._west.all(), "us": bool(self._west.any())}
-        self.regions = [name for name in REGIONS if has[name]]  # the RegionChoice's names this Catalog has hikes in
+        self.regions = regions_in(self.trailheads[:, 1])  # the RegionChoice's names this Catalog has hikes in
+        # What the pages say the hikes are across: as the export names it, else (an export from before) by the hikes.
+        self.covered = self.meta.get("regions") or covered_regions(self.regions)
 
     def _db(self) -> sqlite3.Connection:
         return sqlite3.connect(self._db_uri, uri=True)
@@ -3232,6 +3335,22 @@ class _Spellings:
             )
             for length, spelled in by_length.items()
         }
+
+    @classmethod
+    def of_tables(cls, tables: Mapping[int, tuple[np.ndarray, np.ndarray]]) -> _Spellings:
+        """The spellings ``tables`` gives back: per length the words' letters and masks (as written by
+        ``export_name_index``), the words read from their letters, without counting them again."""
+        spellings = cls.__new__(cls)
+        spellings._words = {
+            # A row of uint32 letters is a numpy UTF-32 string of that length.
+            length: (letters.view(f"<U{length}").ravel().tolist(), letters, masks)
+            for length, (letters, masks) in tables.items()
+        }
+        return spellings
+
+    def tables(self) -> dict[int, tuple[list[str], np.ndarray, np.ndarray]]:
+        """Per word length: the words, commonest first, their letters (uint32 per letter) and letter masks."""
+        return self._words
 
     @staticmethod
     def typos(word: str) -> int:

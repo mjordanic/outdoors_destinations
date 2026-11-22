@@ -1191,6 +1191,38 @@ def test_with_a_pmtiles_file_set_both_maps_draw_it_as_vectors_and_ask_openstreet
         assert not [url for url in asked if "openstreetmap.org" in url]
 
 
+def test_a_map_viewing_outside_the_pmtiles_files_bounds_draws_the_raster_tiles_over_the_vector_map(browser, vector_server) -> None:
+    # As a US hike on the live site, whose PMTiles file covers Europe only: the vector map has nothing there.
+    asked: list[str] = []
+    page = browser.new_page()
+    page.set_default_timeout(30_000)  # MapLibre's first draw is slow on a CI machine's software WebGL
+    page.on("request", lambda request: asked.append(request.url))
+    page.route(lambda url: not url.startswith(vector_server), lambda route: route.abort())  # no tiles
+    page.goto(f"{vector_server}/#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    page.locator("#map-pick-on").check()
+    page.evaluate("pick.map.setView([45.0, 15.05], 11, { animate: false })")
+    page.wait_for_function("() => document.querySelectorAll('canvas.maplibregl-canvas').length === 2")
+    credit = "() => pick.map.getContainer().querySelector('.leaflet-control-attribution').innerText"
+    page.wait_for_function(f"() => ({credit})().includes('Protomaps')")
+    assert not [url for url in asked if "openstreetmap.org" in url]
+
+    page.evaluate("pick.map.setView([39.74, -104.99], 11, { animate: false })")  # Denver: outside the file's bounds
+    page.wait_for_function("() => pick.map.getContainer().querySelector('.leaflet-tile')")
+    assert any(url.startswith("https://tile.openstreetmap.org/11/") for url in asked)
+    assert "Protomaps" not in page.evaluate(credit) and "OpenStreetMap" in page.evaluate(credit)
+    assert page.locator("canvas.maplibregl-canvas").count() == 2  # the vector map stays, under the tiles
+    # The hike's own map, over the hike: still the vector map.
+    hike_map = "[...document.querySelectorAll('.leaflet-container')].find((map) => map !== pick.map.getContainer())"
+    assert page.evaluate(f"() => !{hike_map}.querySelector('.leaflet-tile')")
+    assert "Protomaps" in page.evaluate(f"() => {hike_map}.querySelector('.leaflet-control-attribution').innerText")
+
+    page.evaluate("pick.map.setView([45.0, 15.05], 11, { animate: false })")  # back over the file
+    page.wait_for_function("() => !pick.map.getContainer().querySelector('.leaflet-tile')")
+    assert "Protomaps" in page.evaluate(credit)
+    assert page.locator("canvas.maplibregl-canvas").count() == 2
+
+
 @pytest.mark.parametrize("failure", ["unreachable", "forbidden", "tiles fail", "no answer"])
 def test_when_the_vector_map_cannot_be_read_both_maps_fall_back_to_the_raster_tiles(browser, vector_server, failure) -> None:
     # As on the live site from a host its CORS rule leaves out: the browser blocks the PMTiles file.

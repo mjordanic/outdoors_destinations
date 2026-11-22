@@ -28,6 +28,7 @@ from dayhike.serving import (
     drawn,
     drawn_profile,
     encode_polyline,
+    export_name_index,
     export_serving,
     score_note,
     scored_measures,
@@ -294,6 +295,69 @@ def test_a_word_only_inside_a_longer_word_is_a_similar_name(data: ServingData) -
     assert [(hit["name"], hit["match"]) for hit in data.search("idge")] == [("Ridge Walk", "similar")]
 
 
+NAMES_TO_FIND = [
+    ("Mt. Whitney Trail", []),
+    ("Müllerhütte - Großglockner Rundweg", []),
+    ("Łysica przez Święta Katarzyna", []),
+    ("Koča pri Savici - Dom na Komni", []),
+]
+QUERIES = (
+    "mount whitney", "Mt Whitney", "mt. whit", "muellerhutte", "MÜLLER", "grossglockner rundweg", "glockner",
+    "lysica", "swieta katarzyna", "koca pri savici", "dom komni", "Savicі", "Grosglocknre", "Rundwge", "Whitny trail",
+    "Kocca pri", "1002", "x", "no such hike",
+)  # fmt: skip
+
+
+def test_export_writes_the_name_index_and_a_server_answers_the_same_with_or_without_it(
+    export: Path, tmp_path: Path
+) -> None:
+    indexed = _renamed(export, tmp_path / "indexed", NAMES_TO_FIND)
+    assert (indexed.directory / serving.NAME_INDEX).is_file()
+    built = tmp_path / "built"
+    shutil.copytree(indexed.directory, built)
+    (built / serving.NAME_INDEX).unlink()  # an export from before the index: built at start
+    without = ServingData(built)
+
+    assert indexed._folded == without._folded
+    assert indexed._spellings.tables().keys() == without._spellings.tables().keys()
+    for length, (words, letters, masks) in indexed._spellings.tables().items():
+        assert words == without._spellings.tables()[length][0] and all(type(word) is str for word in words)
+        assert np.array_equal(letters, without._spellings.tables()[length][1])
+        assert np.array_equal(masks, without._spellings.tables()[length][2])
+    for query in QUERIES:
+        assert indexed.search(query) == without.search(query), query
+    assert [hit["name"] for hit in indexed.search("Mt Whitney")] == ["Mt. Whitney Trail"]
+    assert [(hit["name"], hit["match"]) for hit in indexed.search("Grosglocknre")][:1] == [
+        ("Müllerhütte - Großglockner Rundweg", "similar")
+    ]
+
+
+def test_a_server_builds_the_name_index_itself_when_the_exports_is_of_other_hikes_or_another_format(
+    export: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    other = _renamed(export, tmp_path / "other", NAMES_TO_FIND)
+    ids = np.asarray(other.store.ids)
+
+    assert serving._read_name_index(other.directory, ids) is not None
+    assert serving._read_name_index(other.directory, ids + 1) is None  # other hikes: a cut, rerun without the index
+    assert serving._read_name_index(other.directory, ids[:-1]) is None
+    monkeypatch.setattr(serving, "NAME_INDEX_FORMAT", serving.NAME_INDEX_FORMAT + 1)  # an index of an older format
+    assert serving._read_name_index(other.directory, ids) is None
+    assert ServingData(other.directory)._folded[0] == "mount whitney trail"  # built again from the names
+
+
+def test_export_name_index_adds_the_index_beside_an_existing_export(export: Path, tmp_path: Path) -> None:
+    out = tmp_path / "old"
+    shutil.copytree(export, out)
+    (out / serving.NAME_INDEX).unlink()
+
+    from dayhike.cli import main
+
+    assert main(["export-name-index", "--out", str(out)]) == 0
+    assert ServingData(out)._folded == ServingData(export)._folded
+    assert not list(out.glob("*.partial"))
+
+
 def _renamed(export: Path, out: Path, hikes: list[tuple[str, list[tuple[str, str, int]]]]) -> ServingData:
     """A copy of ``export`` whose DayHikes, in id order, have these names and named
     points: (kind, name, metres off the line)."""
@@ -307,6 +371,7 @@ def _renamed(export: Path, out: Path, hikes: list[tuple[str, list[tuple[str, str
                 (name, zlib.compress(json.dumps(rows).encode()), dayhike_id),
             )
         db.commit()
+    export_name_index(out)  # the names changed: index them again
     return ServingData(out)
 
 
@@ -745,15 +810,65 @@ def test_a_rerun_without_tiles_or_snaps_drops_the_old_ones(catalog_path: Path, t
     assert (tiles / "valhalla_tiles.tar").read_bytes() == b"tiles"
 
 
-def test_the_export_names_the_regions_it_was_built_from(catalog_path: Path, export: Path, tmp_path: Path) -> None:
-    assert "regions" not in json.loads((export / "meta.json").read_text())  # none given: the pages say Europe
+def _region(directory: Path, name: str, label: str, continent: str, west: float, east: float):
+    """A region file of a box from ``west`` to ``east`` around the test hikes (latitude 44 to 46)."""
+    path = directory / f"{name}.toml"
+    path.write_text(
+        f'label = "{label}"\ncontinent = "{continent}"\nextracts = []\n'
+        f"bounds = {{ south = 44.0, west = {west}, north = 46.0, east = {east} }}\n"
+        f"[map]\nview = {{ west = {west}, south = 44.0, east = {east}, north = 46.0 }}\ncentre = {{ lon = {west}, lat = 45.0 }}\n"
+    )
+    return load_region(path)
 
-    out = export_serving(catalog_path, tmp_path / "out", regions=[load_region("europe"), load_region("us-colorado")])
 
-    assert json.loads((out / "meta.json").read_text())["regions"] == [
+def test_the_export_names_the_regions_its_hikes_start_in(
+    catalog_path: Path, export: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert json.loads((export / "meta.json").read_text())["regions"] == [{"label": "Europe", "continent": "Europe"}]
+    # The test hikes start at 15.0, 15.1, 15.2 and 15.5° E: two of them "in the United States", west of 15.15.
+    monkeypatch.setattr(serving, "REGION_SPLIT_LON", 15.15)
+    both = export_serving(catalog_path, tmp_path / "both")
+
+    assert json.loads((both / "meta.json").read_text())["regions"] == [
         {"label": "Europe", "continent": "Europe"},
+        {"label": "the United States", "continent": "North America"},
+    ]
+
+
+def test_the_export_names_its_hikes_regions_as_the_regions_given_and_refuses_regions_they_contradict(
+    catalog_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(serving, "REGION_SPLIT_LON", 15.15)  # two test hikes "in the United States"
+    west = _region(tmp_path, "west", "Colorado", "North America", 14.9, 15.12)
+    east = _region(tmp_path, "east", "the Alps", "Europe", 15.18, 15.6)
+
+    out = export_serving(catalog_path, tmp_path / "out", regions=[west, east])
+
+    assert json.loads((out / "meta.json").read_text())["regions"] == [  # Europe first, as the region filter lists it
+        {"label": "the Alps", "continent": "Europe"},
         {"label": "Colorado", "continent": "North America"},
     ]
+    with pytest.raises(ServingExportError, match="hikes start in the United States, which no --region names"):
+        export_serving(catalog_path, tmp_path / "east-only", regions=[east])
+    assert not (tmp_path / "east-only" / "meta.json").exists()  # refused before anything is written
+    assert not (tmp_path / "east-only" / "trailheads.npy").exists()
+    monkeypatch.setattr(serving, "REGION_SPLIT_LON", -40.0)  # every test hike in Europe
+    with pytest.raises(ServingExportError, match="no hike starts in the region us-colorado"):
+        export_serving(catalog_path, tmp_path / "us", regions=[load_region("europe"), load_region("us-colorado")])
+
+
+def test_a_server_names_the_regions_by_its_hikes_for_an_export_from_before_regions(export: Path, tmp_path: Path) -> None:
+    old = tmp_path / "old"
+    shutil.copytree(export, old)
+    meta = json.loads((old / "meta.json").read_text())
+    del meta["regions"]
+    (old / "meta.json").write_text(json.dumps(meta))
+    assert ServingData(old).covered == [{"label": "Europe", "continent": "Europe"}]  # the pages say Europe, as before
+
+    trailheads = np.load(old / "trailheads.npy")
+    trailheads[:, 1] -= 120.0
+    np.save(old / "trailheads.npy", trailheads)
+    assert ServingData(old).covered == [{"label": "the United States", "continent": "North America"}]
 
 
 CITIES = Path(__file__).parent / "fixtures" / "geonames.txt"
@@ -1028,6 +1143,7 @@ def _famous(
                 (name, zlib.compress(json.dumps(points).encode()), columns.get("parking_m"), columns.get("commons"), dayhike_id),
             )
         db.commit()
+    export_name_index(out)
     if landmarks:
         with scoped(sqlite3.connect(out / "landmarks.sqlite")) as db:
             db.executescript("DELETE FROM landmarks; DELETE FROM landmark_hikes; DELETE FROM landmark_names;")
@@ -1194,6 +1310,7 @@ def _placed_renamed(catalog_path: Path, out: Path, names: dict[int, str], origin
         db.executemany(
             "UPDATE hikes SET name = ?, name_origin = ? WHERE id = ?", [(name, origin, i) for i, name in names.items()]
         )
+    export_name_index(directory)
     return ServingData(directory)
 
 

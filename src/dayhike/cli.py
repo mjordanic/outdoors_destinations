@@ -497,7 +497,8 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         default=[],
         help=f"A region the Catalog covers: one of {', '.join(region_names())}, or a region .toml file; "
-        "repeatable. The site's pages name them (without it, or with only regions in Europe, they say Europe)",
+        "repeatable. The site's pages name them (with only regions in Europe, they say Europe); without it, they "
+        "name where the hikes start (Europe, the United States). Refused when the hikes start outside every region given",
     )
     export.add_argument(
         "--external-dir",
@@ -532,6 +533,12 @@ def main(argv: list[str] | None = None) -> int:
         help="OpenStreetMap national boundaries (osmium tags-filter <extract> r/admin_level=2), repeatable, with "
         "--countries: a hike starting within 2 km of a border takes the country OSM puts it in and also shows the one it had",
     )
+    names = subparsers.add_parser(
+        "export-name-index",
+        help="Add the name search's index (names.npz) beside an existing serving export, so a server starts "
+        "without reading every hike name (export-serving writes it too)",
+    )
+    names.add_argument("--out", type=Path, default=Path("data/web-serving"))
     places = subparsers.add_parser(
         "export-places", help="Add GeoNames place search and the hike search's Landmarks beside an existing serving export"
     )
@@ -653,6 +660,11 @@ def main(argv: list[str] | None = None) -> int:
         except ServingExportError as exc:
             print(exc, file=sys.stderr)
             return 1
+        return 0
+    if args.command == "export-name-index":
+        from dayhike.serving import export_name_index
+
+        print(export_name_index(args.out))
         return 0
     if args.command == "export-places":
         from dayhike.serving import export_landmarks, export_places, fetch_geonames

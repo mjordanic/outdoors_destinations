@@ -2425,7 +2425,11 @@ writes `places.sqlite`, the towns of 1,000 people or more within 2° of the
 Trailheads' box and the smaller villages within 5 km of a Trailhead for "Find
 place" (ADR-0042); `dayhike export-places --out
 data/web-serving` adds it beside an existing export, which needs no other
-change (ADR-0029). Every export also writes `landmarks.sqlite`, the Landmarks
+change (ADR-0029). Every export also writes `names.npz`, the name search's index
+(every hike name folded as search compares it, and the typo search's word tables), so
+a server starts without reading every name from `hikes.sqlite` (ADR-0081); `dayhike
+export-name-index --out data/web-serving` adds it beside an existing export, and a server
+without it, or with one of other hikes, builds it at start. Every export also writes `landmarks.sqlite`, the Landmarks
 the hike search finds hikes by (ADR-0053): the named Peaks, Huts, Shelters and
 Viewpoints on the hikes, the places of `places.sqlite` with the hikes starting
 within 5 km, and with `--geonames` the lakes, passes and mountains within 2 km
@@ -3047,7 +3051,7 @@ CLI: `dayhike ingest`, `dayhike fetch-extracts`, `dayhike fetch-dem`,
 `dayhike count-commons`, `dayhike sample-trailgraph`,
 `dayhike build-similarity` (`--calibrate-only`), `dayhike rank` (`--weight`,
 `--month`, `--limit`, `--one-way`), `dayhike compose` (the Route text of a shared link,
-`--name`, `--weight`, `--month`, `--limit`, `--one-way`; reads a serving export; a SuggestedLoop is listed by its link text, and each row's versions indented under it), `dayhike nearby`, `dayhike export-serving`, `dayhike export-places`, `dayhike export-countries`, `dayhike export-photos`, `dayhike export-osm-download`, `dayhike serve`, `dayhike coverage-map`.
+`--name`, `--weight`, `--month`, `--limit`, `--one-way`; reads a serving export; a SuggestedLoop is listed by its link text, and each row's versions indented under it), `dayhike nearby`, `dayhike export-serving`, `dayhike export-name-index`, `dayhike export-places`, `dayhike export-countries`, `dayhike export-photos`, `dayhike export-osm-download`, `dayhike serve`, `dayhike coverage-map`.
 
 Docstrings on those functions use the glossary in `GLOSSARY.md`.
 Examples: [`01`](../notebooks/01_raw_data_and_ingestion.ipynb) ingest,

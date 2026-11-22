@@ -1025,8 +1025,9 @@ const PROTOMAPS_CREDIT = '<a href="https://protomaps.com">Protomaps</a>';
 
 // The base map, from the server's setting (/api/info basemap): raster tiles (#120), with OpenStreetMap always
 // credited and the tile provider beside it when it names one; or, with a PMTiles file named, the vector map
-// drawn under the overlays (#119), falling back to the raster tiles where it cannot be drawn. Added to ``map``,
-// which zooms in no further than the setting's max zoom.
+// drawn under the overlays (#119), falling back to the raster tiles where it cannot be drawn, and with the
+// raster tiles over it while the view is wholly outside the file's bounds (a Europe file on a US hike), where
+// it has nothing to draw. Added to ``map``, which zooms in no further than the setting's max zoom.
 function addBaseLayer(map) {
   const { url, attribution, max_zoom: maxZoom, pmtiles: file } = state.info?.basemap ?? { url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", max_zoom: 19 };
   const raster = () => L.tileLayer(url, { maxZoom, attribution: attribution ? `${OSM_CREDIT} · ${attribution}` : OSM_CREDIT });
@@ -1040,6 +1041,7 @@ function addBaseLayer(map) {
   const base = L.layerGroup().addTo(map);
   let vector = null;
   let fallen = false;
+  let over = null; // the raster tiles over the vector map while the view is outside the file's bounds
   const fallBack = (error) => {
     if (fallen) return;
     fallen = vectorFailed = true;
@@ -1048,16 +1050,56 @@ function addBaseLayer(map) {
       const credit = vector.getAttribution();
       if (!vector.getMaplibreMap()) vector.onRemove = () => vector.getContainer()?.remove();
       base.removeLayer(vector);
-      if (credit) map.attributionControl?.removeAttribution(credit);
+      if (credit && !over) map.attributionControl?.removeAttribution(credit);
     }
-    base.addLayer(raster());
+    if (!over) base.addLayer(raster());
+  };
+  // Only the raster tiles' credit while they are drawn over the vector map: it shows nothing of its own.
+  const cover = (bounds) => {
+    if (fallen) return;
+    const outside = !map.getBounds().intersects(bounds);
+    if (outside === !!over) return;
+    const credit = vector.getAttribution();
+    if (outside) {
+      base.addLayer(over = raster());
+      if (credit) map.attributionControl?.removeAttribution(credit);
+    } else {
+      base.removeLayer(over);
+      over = null;
+      if (credit) map.attributionControl?.addAttribution(credit);
+    }
   };
   vectorScripts().then(() => {
     if (vectorFailed) throw new Error("the vector base map failed on another map");
+    const archive = pmtilesFile(file);
     vector = L.maplibreGL({ style: vectorStyle(file) });
-    vector.on("add", () => watchVector(vector, fallBack));
+    vector.on("add", () => {
+      watchVector(vector, fallBack);
+      // MapLibre credits its source once loaded: not while the raster tiles are over it.
+      vector.getMaplibreMap().once("load", () => { if (over && !fallen) map.attributionControl?.removeAttribution(vector.getAttribution()); });
+    });
     base.addLayer(vector);
+    // A file that cannot be read fails the vector map itself (watchVector): its bounds are only for covering it.
+    archive.getHeader().then(({ minLat, minLon, maxLat, maxLon }) => {
+      const bounds = L.latLngBounds([minLat, minLon], [maxLat, maxLon]);
+      map.whenReady(() => {
+        map.on("moveend", () => cover(bounds));
+        cover(bounds);
+      });
+    }, () => {});
   }).catch(fallBack);
+}
+
+// The PMTiles file at ``file``, one per page: MapLibre reads its tiles through the same reader (vectorStyle),
+// so its header is read once.
+const pmtilesFiles = new Map();
+function pmtilesFile(file) {
+  const url = new URL(file, document.baseURI).href;
+  if (!pmtilesFiles.has(url)) {
+    pmtilesFiles.set(url, new pmtiles.PMTiles(url));
+    pmtilesProtocol.add(pmtilesFiles.get(url));
+  }
+  return pmtilesFiles.get(url);
 }
 
 // Set once a vector base map fails (its file unreadable, its tiles or style failing, or nothing within
@@ -1095,6 +1137,7 @@ function watchVector(vector, fallBack) {
 // MapLibre GL JS with the maplibre-gl-leaflet layer, the PMTiles reader and the Protomaps style, all from
 // vendor/, loaded once and only for the vector base map. A browser without WebGL 2 cannot draw it.
 let vectorLoaded = null;
+let pmtilesProtocol = null;
 function vectorScripts() {
   const at = (path) => new URL(path, document.baseURI).href;
   const script = (path) => new Promise((resolve, reject) => {
@@ -1105,7 +1148,8 @@ function vectorScripts() {
     document.head.append(Object.assign(document.createElement("link"), { rel: "stylesheet", href: at("vendor/maplibre-gl/maplibre-gl.css") }));
     window.maplibregl = await import(at("vendor/maplibre-gl/maplibre-gl.mjs"));
     await Promise.all(["vendor/maplibre-gl-leaflet/leaflet-maplibre-gl.js", "vendor/pmtiles/pmtiles.js", "vendor/protomaps-basemaps/basemaps.js"].map(script));
-    maplibregl.addProtocol("pmtiles", new pmtiles.Protocol().tile);
+    pmtilesProtocol = new pmtiles.Protocol();
+    maplibregl.addProtocol("pmtiles", pmtilesProtocol.tile);
   })();
   return vectorLoaded;
 }
