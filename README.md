@@ -1,7 +1,7 @@
 # HikesAlike: hikes like the ones you love
 
-Pick a hike you loved. HikesAlike finds other hikes in Europe that feel the
-same: similar length, climb, scenery and weather. No hike in mind? Describe the
+Pick a hike you loved. HikesAlike finds other hikes in Europe and the United
+States that feel the same: similar length, climb, scenery and weather. No hike in mind? Describe the
 one you want instead, for example about 10 km with 800 m of climbing. You can
 also say where you start from and how far you will drive, such as "within
 2 hours of Munich".
@@ -11,21 +11,25 @@ account, no ads. If nobody has used it lately, the first page can take up to
 about 20 seconds to load.
 
 <p>
-  <img src="docs/images/search-results.png" alt="Ten hikes like the climb to Triglav from the Dolič hut, each with a score and how alike it is on length and climbing" width="688">
+  <img src="docs/images/search-results.png" alt="Ten hikes like the climb to Triglav from the Dolič hut, each with a score and how alike it is on length and climbing" width="752">
 </p>
 
 *Loved the climb to Triglav, Slovenia's highest peak, from the Dolič hut? Here
-are 10 of the most similar hikes, out of about 135,000 across Europe. A score
+are 10 of the most similar hikes, out of about 890,000 across Europe and the
+United States. A score
 of 1 would mean exactly alike; the green cells show how alike each hike is on
 length and on climbing, out of 100.*
 
 - **Day hikes and longer tours.** Long tours are also cut into day stages of
   8 to 25 km.
-- **Where:** Europe, wherever volunteers have mapped hiking routes on
+- **Where:** Europe and the contiguous United States, wherever volunteers
+  have mapped hiking routes on
   [OpenStreetMap](https://www.openstreetmap.org/about), the free map of the
   world that anyone can edit, and where public bodies publish their trail
-  registers as open data (Ireland's, from Sport Ireland). Many hikes in the Alps
-  and central Europe, fewer in the east and south-east. The shaded countries on the map below have hikes.
+  registers as open data (in Ireland, Finland, Norway, France's Écrins national
+  park and Italy's South Tyrol). Many hikes in the Alps and central Europe,
+  fewer in the east and south-east. The shaded countries on the map of Europe
+  below have hikes.
 - **Finding ideas, not navigating.** Check the trail, the weather and a proper
   map before you go
   ([terms and safety](https://hikesalike.com/terms.html)).
@@ -35,7 +39,7 @@ length and on climbing, out of 100.*
   [contact@hikesalike.com](mailto:contact@hikesalike.com).
 
 <p>
-  <img src="src/dayhike/web/static/coverage.svg" alt="Map of Europe; the shaded countries have hikes" width="360">
+  <img src="src/dayhike/web/static/coverage.svg" alt="Map of Europe; the shaded countries have hikes (the United States is not on this map)" width="360">
 </p>
 
 **More:** [How to use the site](docs/user-guide.md) · **Developers:**

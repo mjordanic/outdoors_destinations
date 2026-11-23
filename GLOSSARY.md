@@ -1,6 +1,6 @@
 # Hike catalog
 
-A local Catalog of DayHikes built from OpenStreetMap, ranked by similarity to Seed DayHikes the hiker already knows. Drive time is a query-time filter, not a property of a hike.
+A local Catalog of DayHikes built from OpenStreetMap and open official trail registers, ranked by similarity to Seed DayHikes the hiker already knows. Drive time is a query-time filter, not a property of a hike.
 
 ## Language
 
@@ -53,7 +53,7 @@ Where a DayHike comes from: a row of the sources register (`docs/sources.csv`) a
 _Avoid_: provider, origin (an Origin is where the Hiker starts), dataset
 
 **Region**:
-The area one build covers, as a region file (TOML in `src/dayhike/data/regions/` or anywhere): its Geofabrik extracts, the box the DEM, LandCover and climate rasters cover, and the coverage map's frame and projection centre. One Catalog can be built from several Regions. Without one, the fetch commands read `alps-dinarides` and the coverage map draws `europe`. A Region's box runs west to east; one crossing 180° is not supported.
+The area one build covers, as a region file (TOML in `src/dayhike/data/regions/` or anywhere): its Geofabrik extracts, the box the DEM, LandCover and climate rasters cover, and the coverage map's frame and projection centre. One Catalog can be built from several Regions. A Region also has a label and a continent, which the site's pages name when `export-serving --region` gives it; without one, an export names the regions its hikes start in (ADR-0081). Without a Region, the fetch commands read `alps-dinarides` and the coverage map draws `europe`. A Region's box runs west to east; one crossing 180° is not supported.
 _Avoid_: area, country list, bbox (the box is one part of a Region)
 
 **DayHikeGeometry**:
@@ -125,7 +125,7 @@ An OSM alpine or mountain hut near a Trailhead or along the DayHike geometry.
 _Avoid_: hotel, shelter (unless tagged as such and counted separately)
 
 **Commons contributors**:
-How many distinct people put geotagged photos on Wikimedia Commons within 150 m of a DayHike's line (ADR-0064). Shown beside the hike as a hint of how well known it is; never a Measure, never scored or ranked.
+How many distinct people put geotagged photos on Wikimedia Commons within 150 m of a DayHike's line (ADR-0064). Shown beside the hike as a hint of how well known it is; never a Measure, never scored, never in a Ranking. In the hike search it decides which of several places named the query leads, by the count of their hikes (ADR-0079).
 _Avoid_: popularity score, fame, well-known badge
 
 **Difficulty**:
@@ -261,5 +261,5 @@ The map from a Measure's raw score to the share of random DayHike pairs strictly
 _Avoid_: normalization, scaling, z-score, percentile rank among candidates
 
 **Hiker**:
-The person querying the Catalog. Phase 1 is a single local user; a future website may have many Hikers with ratings.
+The person querying the Catalog, from the CLI or the website. No Hiker is stored and none has ratings yet.
 _Avoid_: user, customer, tourist

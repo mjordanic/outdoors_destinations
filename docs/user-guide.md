@@ -15,10 +15,13 @@ hikes that fit.
   a lake or the sea. If you ask for more, it also looks at rain and sunshine.
 - It lists day hikes and longer tours. A long tour is also cut into day
   stages (8 to 25 km each). Hikes joined from signpost networks are included
-  too. Anything over about 25 km is usually more than a day.
-- It covers Europe wherever OpenStreetMap maps hiking routes. That is dense
-  in the Alps and central Europe, and thin in much of the east and
-  south-east.
+  too, and walks from a car park to a named peak, hut, viewpoint or lake and
+  back. Anything over about 25 km is usually more than a day.
+- It covers Europe and the contiguous United States wherever OpenStreetMap
+  maps hiking routes, plus the official trail registers some public bodies
+  publish as open data (in Ireland, Finland, Norway, France's Écrins national
+  park and Italy's South Tyrol). That is dense in the Alps and central Europe,
+  and thin in much of the east and south-east of Europe.
 - It is free: no ads, no account, no cookies, and no tips or donations asked
   for. The code is open source
   ([MIT](../LICENSE)) and the data it uses is credited
@@ -26,7 +29,9 @@ hikes that fit.
   [DATA-LICENSES.md](../DATA-LICENSES.md)).
 
 The first visit after a quiet spell can take up to about 20 seconds, while
-the server wakes up.
+the server wakes up; the page says "Waking the server…" meanwhile. If the
+server is paused or does not answer, the page says that instead, with a **Try
+again** button.
 
 ## How to search
 
@@ -223,6 +228,27 @@ of Bled", "Weather in Jan", "One way, without the way back", "Grouped within
 3 km". Press the × on a label to drop that filter; the list is found again
 without it.
 
+## What a hike's panel shows
+
+Open a hike and its panel shows its line on a map, its height profile, its
+landscape, trail surface and monthly weather, and the facts behind every
+measure. It also shows:
+
+- **Where it comes from.** An OpenStreetMap hike says which OpenStreetMap
+  relation or ways it is made from. A hike from an official trail register
+  names the register, its licence and the record. An OpenStreetMap hike that
+  lies on an official route, such as a day stage of a national trail, names
+  that route too: "Lies on an official route: …".
+- **Up to two photos** from Wikimedia Commons of named places along the hike,
+  each with its author and licence.
+- **Commons contributors:** how many people put geotagged photos on Wikimedia
+  Commons near the hike, a hint at how well known it is. It changes no score.
+- **Emergency numbers** and, where there is one, the mountain rescue service
+  of the country the hike starts in, with their sources. A hike that crosses a
+  national border or starts within 2 km of one shows the other country's too.
+- A note when a hike starts more than 2 km from the nearest car park: the walk
+  to its start is not counted.
+
 ## Download and share a hike
 
 Open any hike from the results. It has a **Link to this hike**, and two
@@ -267,7 +293,8 @@ walk back to the start as a second track, named "…: way back to the start",
 so the file matches the length the page shows. With it off, the file is the
 hike one way. The line is simplified a little, so a GPS app may measure it a
 few percent shorter, as it cuts small bends; when the gap is 1 % or more, a
-line under the buttons says how much. The route data comes from OpenStreetMap and the heights from an
+line under the buttons says how much. The route data comes from OpenStreetMap
+(or the official register the hike comes from) and the heights from an
 elevation map, and the file credits both. The file links back to the hike
 alone (one way when the file is), without your starting place or other search
 settings, so a file you pass on does not say where you start from. The first download of a walk back
@@ -325,8 +352,9 @@ below the box's edge, the box says "More below ↓ scroll".
 
 ## Where the data comes from
 
-Routes, huts, water and the like come from OpenStreetMap. Heights come from
-FABDEM, land cover from ESA WorldCover and climate from CHELSA. The full
+Routes, huts, water and the like come from OpenStreetMap, and some routes from
+official trail registers published as open data. Heights come from Copernicus
+DEM GLO-30, land cover from ESA WorldCover and climate from CHELSA. The full
 credits are on the site's credits page and in
 [DATA-LICENSES.md](../DATA-LICENSES.md).
 

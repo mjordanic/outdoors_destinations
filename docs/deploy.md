@@ -449,7 +449,7 @@ If an alert fires and the traffic is abuse, close the public access at once:
   MIT (`LICENSE`) and the data licences in `DATA-LICENSES.md`; keep it public,
   or change that page to offer the export another way (for example a download of `hikes.sqlite`).
 - **Tile and place-search policies.** The map uses `tile.openstreetmap.org`
-  (only as the fallback where the vector map cannot be shown once it is set, section 10), run by the OSM Foundation for low-volume use under its usage policy; if
+  (once the vector map is set, section 10, only where it cannot be shown or the view lies wholly outside its file, as for a US hike on the Europe file), run by the OSM Foundation for low-volume use under its usage policy; if
   traffic grows, switch to another tile provider with `DAYHIKE_TILE_URL` and
   `DAYHIKE_TILE_ATTRIBUTION` (section 3). Export with `--geonames` so
   the origin search reads `places.sqlite`; without it the page falls back to

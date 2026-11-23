@@ -406,7 +406,8 @@ def site_pages(
     ``dayhike export-osm-download``) the credits page links it and says what it holds; without, no link.
     A ``basemap`` from another provider than the OpenStreetMap Foundation's tiles is credited, between
     ``<!--basemap-->`` and ``<!--/basemap-->``, by its attribution in place of the Foundation's tile policy;
-    a vector one by the Protomaps basemap and the software that draws it.
+    a vector one by the Protomaps basemap and the software that draws it, then by the raster tiles drawn where
+    it does not reach (a view wholly outside its bounds) or cannot be drawn.
     ``sources`` (the export's external sources, ADR-0062: name, licence, licence_url and url per register id)
     are credited one item each between ``<!--external-->`` and ``<!--/external-->``.
     ``regions`` (the export's, each a label and a continent) name what the site covers between ``<!--regions-->``
@@ -474,11 +475,18 @@ def site_pages(
                 return world + joiner + credit if copernicus or fabdem else USGS_3DEP_ALONE_CREDITS.get(name, credit)
 
             html = re.sub(r"<!--elevation-->(.*?)<!--/elevation-->", elevation, html, flags=re.S)
-        if basemap.pmtiles is not None:
-            html = re.sub(r"<!--basemap-->.*?<!--/basemap-->", VECTOR_CREDIT, html, flags=re.S)
-        elif basemap.url != OSM_TILES:
+        served = None  # the raster tiles' provider, or None for the Foundation's words already on the page
+        if basemap.url != OSM_TILES:
             served = f"served by {basemap.attribution}" if basemap.attribution else "served by another tile provider"
-            html = re.sub(r"<!--basemap-->.*?<!--/basemap-->", served, html, flags=re.S)
+        if basemap.pmtiles is not None or served:
+
+            def base(block: re.Match, served: str | None = served) -> str:
+                raster = served or block[1]
+                if basemap.pmtiles is None:
+                    return raster
+                return f"{VECTOR_CREDIT}; where the vector map does not reach or cannot be drawn, raster tiles {raster}"
+
+            html = re.sub(r"<!--basemap-->(.*?)<!--/basemap-->", base, html, flags=re.S)
         if sources:
             items = "".join(
                 f'\n    <li><strong>Hiking routes from {html_escape(row["name"])}:</strong> '

@@ -1159,7 +1159,8 @@ def test_a_pmtiles_base_map_is_named_in_info_and_credited_with_the_software_that
     credits = client.get("/credits.html").text
     for credit in ("Protomaps basemap", "MapLibre GL JS", "maplibre-gl-leaflet", "PMTiles", "Noto Sans", "SIL OFL"):
         assert credit in credits, credit
-    assert "OpenStreetMap Foundation" not in credits
+    # The raster tiles drawn outside the file's bounds (a US hike on a Europe file) or when it cannot be drawn.
+    assert "where the vector map does not reach or cannot be drawn, raster tiles served by the OpenStreetMap Foundation" in credits
     for path in (
         "vendor/maplibre-gl/maplibre-gl.mjs", "vendor/maplibre-gl/maplibre-gl-worker.mjs", "vendor/maplibre-gl/LICENSE.txt",
         "vendor/maplibre-gl-leaflet/LICENSE", "vendor/pmtiles/LICENSE", "vendor/protomaps-basemaps/LICENSE.md",

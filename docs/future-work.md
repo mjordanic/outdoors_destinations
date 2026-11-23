@@ -47,8 +47,10 @@ a rewrite.
 
 ### Why it's parked
 
-A DayHike is one relation of at least 1 km; since ADR-0033 that includes
-multi-day tours and long sections, with no upper cap. Hut-to-hut is a sequence of
+A DayHike is a relation of at least 1 km, or a built hike; since ADR-0033 that
+includes multi-day tours and long sections, with no upper cap, and since
+ADR-0040 a tour over 25 km is also cut into DayStages that end at a hut, else a
+place, else parking. Hut-to-hut is a sequence of
 DayHikes (or stages) plus overnight Hut choice. OSM superroutes are not that
 product; they are often 200 km traces.
 
@@ -80,7 +82,7 @@ would make similarity meaningless.
 
 ### Why it's parked
 
-No unified GTFS across HR/SI/BA/ME/Alps. Stitching feeds is a project. Valhalla
+No unified GTFS across Europe and the US. Stitching feeds is a project. Valhalla
 can ingest GTFS, but coverage will be patchy.
 
 ### What would have to be true to start
@@ -96,7 +98,7 @@ can ingest GTFS, but coverage will be patchy.
 
 LandCover and ClimateNormal are FeatureVector material (ADR-0010). A weekend
 forecast is not: it would make "like Seed X" depend on the day of the query.
-SolarAspect has since been built as a Measure (`southness`, from FABDEM; see
+SolarAspect has since been built as a Measure (`southness`, from the DEM; see
 the Measures table in [technical.md](technical.md#measures)). Seasonal snow has no honest
 per-DayHike layer. LandCover snow is permanent ice on the land-cover map, not
 January snowpack.
@@ -113,7 +115,8 @@ January snowpack.
 
 **Built since (photos only):** a hike shows up to two free Wikimedia Commons
 photos (CC0, CC BY, CC BY-SA) with author and licence, added by
-`dayhike export-photos`; see [DATA-LICENSES.md](../DATA-LICENSES.md). Prose is
+`dayhike export-photos`; see [DATA-LICENSES.md](../DATA-LICENSES.md). Looking
+photos up when a hike is opened rather than at build time is open (#189). Prose is
 still parked. What follows is the original reasoning.
 
 ### Why it's parked
@@ -199,11 +202,11 @@ inside a long segment is missed.
 ### What would have to be true to start
 
 - Length-weighted shares from the vertex `landcover`, with notebook 05's
-  verification still passing.
+  verification still passing (built: ADR-0059).
 - Then for production: the LandCover entry in `GLOSSARY.md` says weighted by
   length instead of "each GeometryStore vertex counts once", and `sample-landcover`
   and `build-similarity` are rerun to refresh the Catalog fractions and the
-  similarity facts. Ranking changes with it.
+  similarity facts (built: ADR-0059). Ranking changes with it.
 - Reading along segments (built: ADR-0059 reads steps over 40 m every 20 m,
   kept in `vertices.landcover_along` and `segments.landcover_along`).
 - Elevation gain measured the same way before deciding whether it needs the
@@ -291,11 +294,15 @@ climbs 177 m and Marlinger Waalweg 314 m (475 m before). Levada da Ribeira da
 Janela still climbs 1,077 m: on long, sparsely noded stretches the DEM is wrong
 by more than a moving average can mend. In Liechtenstein, where FABDEM already
 counts 14 % less than the OSM tags, the median error rises from 15 % to 18 %.
+These were measured on FABDEM; the last build reads Copernicus GLO-30 and was
+not measured again.
 
 ### What would have to be true to start
 
 - A better DEM in steep valleys and on Madeira: lidar where a country publishes
-  it openly, read for those areas (issue #138's second direction).
+  it openly, read for those areas (issue #138's second direction, closed). For
+  the US, `fetch-dem --source 3dep` reads USGS 3DEP, but the build still reads
+  Copernicus GLO-30 there (#188).
 
 ---
 
@@ -429,8 +436,11 @@ items Wikidata gives no class.
 
 Of the 20 with no hike, 15 are short local trails, most of them educational
 (učne poti), with no OSM relation and no path of that name, which is OSM mapping work; one has 10
-ways named "Pot ob Rakah" (#125); two are Destinations (the Kokra canyon, the
-Pekel gorge at Borovnica, where a hike ends but none walks the gorge) (#124);
+ways named "Pot ob Rakah" (#125, which built named-trail hikes since, ADR-0066, but
+only for the US part of the build; Europe has none until #193); two are
+Destinations (the Kokra canyon, the Pekel gorge at Borovnica, where a hike ends
+but none walks the gorge) (#124, which built DestinationHikes since, ADR-0067, to
+peaks, huts, viewpoints and lakes only, so a gorge is still not one);
 two are multi-day routes with no OSM relation (the Walk of Peace, Via Dinarica
 Blue).
 
@@ -440,7 +450,8 @@ mostly mapped as areas, so only 7 are points), 251 have a hike within 150 m and 
 waterfalls, 4 saddles and a gorge. Slap Boka (930 m from the nearest hike, 9
 Wikipedia languages) and the Veliki Kozjak waterfall (544 m) are the best
 known; Slap Savica (233 m) and Peričnik (159 m) are just off a hike's line.
-These are #124's Destinations.
+These are #124's Destinations; the DestinationHikes built since (ADR-0067) reach
+peaks, not caves, waterfalls, saddles or gorges. Not counted again.
 
 **Recommendation: none now; a badge later, if a second region agrees.** No
 signal is good enough to change a score: the only strong one, Commons, is not
@@ -448,8 +459,8 @@ measured beyond the 60 hikes, and ranking by fame would push down the obscure
 hikes HikesAlike is good at finding. A "well-known" badge (3 or more distinct
 Commons uploaders within 150 m) is the candidate, with route sharing as a
 free second opinion. A tie-break or a filter would need the same data and more
-trust in it than one region gives. The Wikidata gap lists are useful today:
-they feed #124 and #125.
+trust in it than one region gives. The Wikidata gap lists fed #124 and #125,
+both built since (ADR-0067, ADR-0066).
 
 ### Second region: Colorado (#170)
 
@@ -516,9 +527,11 @@ well-known hikes, 3 of 30 obscure), but in Colorado it gives the badge to 11 of
 21 obscure long-route stages and leaves it off 9 of 25 classics. Drop route
 sharing as a second opinion. Ranking stays unchanged. Two changes could lift
 Commons, and neither is measured yet: counting per km, or leaving out files
-inside towns. A US hike population worth testing again needs the
-named-trail hikes of #153 first, since 35 of the 50 Colorado classics are not
-hikes today.
+inside towns. A US hike population worth testing again needed the
+named-trail hikes of #153 first, since 35 of the 50 Colorado classics were not
+hikes then; named-trail hikes (ADR-0066) and DestinationHikes (ADR-0067) are
+built since, in the US part of the build (ADR-0069), and the Colorado lists have
+not been measured again.
 
 ### What would have to be true to start
 
@@ -536,4 +549,6 @@ hikes today.
 **Built in #170 (ADR-0064):** `dayhike count-commons` counts Commons
 contributors for every DayHike from the `geo_tags`, `page` and `image` dumps
 and the panel shows "N Commons contributors". What stays open here: the count
-per km or without files inside towns, and a sort or filter by the count.
+per km or without files inside towns, and a sort or filter of a Ranking by the
+count. The count already decides which of several places named the query leads
+the hike search (ADR-0079).
