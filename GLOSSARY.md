@@ -108,6 +108,10 @@ _Avoid_: road distance, range, radius (the GroupingRadius is another thing)
 The Hiker's optional choice of the regions a Ranking keeps to, Europe, the United States or both, by where a hike starts: the United States west of 40° W, Europe east of it. Every region, anywhere, is the default. It applies before ranking, and not while an Origin limit is set, which decides alone (ADR-0074).
 _Avoid_: Region (a Region is the area a build covers), country filter, continent
 
+**Cut**:
+A serving export of some of another export's hikes, written by `dayhike cut-serving` from that export alone: one side of the RegionChoice's 40° W line (`europe`, `us`) or the areas of a cut file (the demo's). It keeps the uncut export's ids, rows and Calibration, so it ranks as the uncut site with only its side ticked; its data image is the site a deploy chooses (ADR-0082).
+_Avoid_: subset build, filtered export, Region (a Region is the area a build covers)
+
 **GroupingRadius**:
 How near the start of a better row's hike a hike must start to be one of that row's versions rather than a row of its own (ADR-0020). Unless the Hiker sets it, it follows the query's limits: 5 % of the DistanceLimit, or of the DriveTime limit at 50 km per hour, the smaller, at least 500 m; 10 km with no limit (ADR-0032).
 _Avoid_: area size, cluster radius

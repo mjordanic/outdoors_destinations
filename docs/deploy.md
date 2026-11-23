@@ -15,10 +15,67 @@ only once the deployment is approved.
 
 ## 1. Build the serving export (on the machine with the data)
 
+### Which site: Europe and the US, Europe, the US or the demo
+
+The site shows the hikes of the export in its data image, and reads everything
+else it shows from that export: the regions its pages name ("hikes across Europe
+and the contiguous United States"), whether the "Hikes in" choice shows (only with
+hikes in both), the credits, the place search and the map's opening view. So
+**whoever deploys chooses one thing, the data image**: `DAYHIKE_DATA_IMAGE` in the
+deploy workflow (section 9), or `DATA_IMAGE` by hand (section 3). There are four,
+all made from one Europe and US build (ADR-0082):
+
+| Site | Data image tag | Made with | Hikes (2026-11-22 build) | Cloud Run memory |
+| --- | --- | --- | ---: | --- |
+| **Europe and the US** | `<data_tag>-eu-us` | the export itself | 889,525 | 4Gi |
+| **Europe** | `<data_tag>-eu` | `cut-serving --keep europe` | 785,347 | 4Gi |
+| **United States** | `<data_tag>-us` | `cut-serving --keep us` | 104,178 | 2Gi |
+| **Demo** | `<data_tag>-demo` | `cut-serving --keep demo` | 109,756 | 2Gi |
+
+Build and export Europe and the US once, as below. Then cut each smaller site from
+that export; a cut needs nothing else of the build, only the GeoNames dump the
+export was made with (`--geonames`, default `data/geonames/allCountries.zip`):
+
+```bash
+uv run dayhike cut-serving --from data/web-serving --keep europe --out data/web-serving-eu
+uv run dayhike cut-serving --from data/web-serving --keep us --out data/web-serving-us
+uv run dayhike cut-serving --from data/web-serving --keep demo --out data/web-serving-demo
+```
+
+A cut reads the export without changing it and writes a complete export of its
+own; each file is written new, so an output made of hard links to the export
+(`cp -al`) leaves the export as it was. `europe` keeps the hikes starting east of
+40° W and `us` those west of it, the line the "Hikes in" choice uses (ADR-0074),
+and cuts the trail graph and highway tiles on the same line; it stops if a
+Segment or tile crosses it. A Europe cut ranks exactly as the Europe and US site
+does with only Europe ticked, and the US cut likewise: scores stay calibrated on
+the Europe and US hikes (ADR-0082). Its `meta.json` names the regions of its side,
+credits only the sources its hikes come from, and has the `data_tag` of the export
+with `-eu`, `-us` or `-demo` added, the tag of its data image (section 3); the
+deploy workflow sets the memory of the table from that tag (section 9). When the
+export has `names.npz` (below), the cut writes its own for the hikes it keeps.
+Measured on the 2026-11-22 export (M-series Mac, one cut at a time): Europe
+14 minutes, the US 5, the demo 4.5 (16 GB of RAM; at most 2.6 GB used); most of it is
+writing the trail graph and rebuilding the Landmarks.
+
+The demo is Slovenia, Austria and Switzerland, and California, Colorado, Utah and
+Washington: the areas of `src/dayhike/data/cuts/demo.toml`. Every feature works
+there (drive time, suggested loops, drawing a hike, similar hikes); outside them
+there are no hikes. Its trail graph is kept within 22 km of its hikes, and its
+highway tiles and the places its place search offers within 2° of each area's
+starts: its export is 3.5 GB against 16 GB,
+and on the Mac it opens in 1 s against 12 s and ranks in 0.14 s against 1.0 s
+(Triglava's hike, warm). For another showcase, copy that file and
+edit its `[[area]]` tables (`countries`, a `polygon` of `[lat, lon]` corners, or
+a `bounds` box; the pages name each by its `label`), then
+`--keep path/to/showcase.toml`; a region file works too, as one area of its
+`bounds` (`--keep src/dayhike/data/regions/us-colorado.toml`).
+
 ### Europe only, or Europe and the US
 
 The site serves one export, so it shows the hikes of one Catalog. Two builds
-are supported (ADR-0069); pick one before the steps below:
+are supported (ADR-0069); a site of one region is best cut from the Europe and
+US export (above), but these builds still work. Pick one before the steps below:
 
 | Build | Ingest | `export-serving` | Cloud Run memory |
 | --- | --- | --- | --- |
@@ -165,13 +222,17 @@ EOF
 gcloud artifacts repositories set-cleanup-policies dayhike --location=europe-west1 \
   --policy=/tmp/ar-cleanup.json --dry-run      # then again with --no-dry-run
 
-# the data image, once per data refresh: 1 to 2.4 GB compressed, a push of a couple of minutes
+# the data image of each site (section 1), once per data refresh: a push of a few minutes per GB compressed
 REPO=europe-west1-docker.pkg.dev/PROJECT/dayhike
 # data_tag is the export's facts_version and its elevation map(s), e.g. 3fa9…-fabdem or 3fa9…-copernicus-glo30, so the
-# same code on another DEM is another tag and the live image is kept for a rollback
-DATA_IMAGE=$REPO/data:$(jq -r .data_tag data/web-serving/meta.json)
+# same code on another DEM is another tag and the live image is kept for a rollback; a cut's data_tag ends in the
+# site it is (-eu, -us, -demo), and the uncut Europe and US export's image takes -eu-us after its own
+SERVING=data/web-serving-eu        # or data/web-serving-us, data/web-serving-demo
+DATA_IMAGE=$REPO/data:$(jq -r .data_tag "$SERVING/meta.json")
+# the uncut Europe and US export: SERVING=data/web-serving DATA_IMAGE=$REPO/data:$(jq -r .data_tag data/web-serving/meta.json)-eu-us
+# (an image already built from it under its plain data_tag takes the new tag without a rebuild: docker tag OLD "$DATA_IMAGE")
 docker buildx build --platform linux/amd64 -f web/data.Dockerfile \
-  --build-context serving=data/web-serving -t "$DATA_IMAGE" --push .
+  --build-context serving="$SERVING" -t "$DATA_IMAGE" --push .
 
 # the web image, on every code change: only the layers above the data image are pushed
 IMAGE=$REPO/web:$(git rev-parse --short HEAD)
@@ -416,7 +477,11 @@ If an alert fires and the traffic is abuse, close the public access at once:
 
 A code change needs only a new web image: build it on the current data image
 (section 3) and `gcloud run deploy` again, or let the deploy workflow do it
-(section 9). A data refresh rebuilds the export, then the data image with the
+(section 9). Moving the site to another of Europe and the US, Europe, the US
+or the demo is a change of data image: set `DAYHIKE_DATA_IMAGE` to that site's
+image (section 1) and run the workflow, which sets the memory from its tag. Every
+data image is kept (section 3), so moving back is the same change. A data
+refresh rebuilds the export, cuts it again (section 1), then the data images with the
 new `data_tag` (`facts_version` and the DEM: a Copernicus data image never takes
 the tag of the FABDEM one), then the web image on it. Keep the previous data
 image when the DEM changes: a rollback is one traffic change. Every data refresh
@@ -545,7 +610,7 @@ reviewer before each deploy.
 | `GCP_REGION` | `europe-west1` |
 | `CLOUD_RUN_SERVICE` | `dayhike` |
 | `DAYHIKE_IMAGE_REPO` | `europe-west1-docker.pkg.dev/PROJECT/dayhike` |
-| `DAYHIKE_DATA_IMAGE` | `europe-west1-docker.pkg.dev/PROJECT/dayhike/data:DATA_TAG` |
+| `DAYHIKE_DATA_IMAGE` | `europe-west1-docker.pkg.dev/PROJECT/dayhike/data:DATA_TAG-eu-us`: which site is deployed, `-eu-us`, `-eu`, `-us` or `-demo` (section 1) |
 | `DAYHIKE_PMTILES_URL` (optional) | `https://maps.hikesalike.com/europe.pmtiles` (section 10); unset or empty, the raster tiles |
 | `DAYHIKE_DOWNLOAD_URL` (optional) | `https://maps.hikesalike.com/hikes-osm.sqlite` (section 11); unset or empty, no download link |
 | `DAYHIKE_MEMORY` (optional) | `4Gi`; unset or empty, from the data image's tag (`2Gi` for `-us`, not `-eu-us`, or `-demo`; else `4Gi`) |
