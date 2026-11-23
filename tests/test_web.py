@@ -646,6 +646,21 @@ def test_drive_filter_keeps_only_reachable_hikes_with_their_hours(
     assert all(r["drive_hours"] == 1.0 for r in body["results"])
 
 
+def test_the_next_ranking_from_the_same_start_and_limit_reuses_its_drive_times(
+    client: TestClient, matrix: Matrix
+) -> None:
+    query = {"seed": RIDGE_WALK_ID, "origin": {"lat": 45.1, "lon": 15.1}, "max_hours": 2}
+    first = client.post("/api/rank", json=query).json()
+    again = client.post("/api/rank", json={**query, "weights": {"length": 100}}).json()
+
+    assert matrix.calls == 1
+    assert again["reachable"] == first["reachable"] == 3
+    assert all(r["drive_hours"] == 1.0 for r in again["results"])
+    client.post("/api/rank", json={**query, "max_hours": 3})
+    client.post("/api/rank", json={**query, "origin": {"lat": 45.2, "lon": 15.1}})
+    assert matrix.calls == 3  # another limit or start asks again
+
+
 def test_a_distance_limit_keeps_hikes_within_it_in_a_straight_line_without_a_drive_service(
     data: ServingData,
 ) -> None:
