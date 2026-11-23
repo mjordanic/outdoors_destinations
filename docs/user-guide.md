@@ -322,8 +322,8 @@ the button you pressed (Find similar, or Show 10 more beside it), with a
 from before.
 
 The server runs one search at a time for everyone, in turn. When other
-visitors' searches are ahead of yours for 25 seconds, it says "The server is
-busy with other visitors' searches: yours waited 25 s for its turn. Try again
+visitors' searches are ahead of yours for 12 seconds, it says "The server is
+busy with other visitors' searches: yours waited 12 s for its turn. Try again
 in a moment." Your search itself is quick: press **Try again**.
 
 Each browser tab runs one search at a time. If you press Find again while your

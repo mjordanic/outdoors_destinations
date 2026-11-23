@@ -103,9 +103,9 @@ MAX_BODY_BYTES = 256 * 1024  # the largest request body; a Route of ROUTE_STEPS 
 RANK_RATE = 20
 API_RATE = 300
 RATE_WINDOW_S = 60.0
-# A Ranking waits this long for its turn: with the slowest run (a 3 h drive from Munich, about 30 s on 1 vCPU, docs/deploy.md)
+# A Ranking waits this long for its turn: with the slowest run (a 3 h drive from Munich, up to about 45 s on 1 vCPU, docs/deploy.md)
 # it still ends before Cloud Run's 60 s request timeout, so a visitor gets the app's 503, not Cloud Run's 504.
-RANK_WAIT_S = 25.0
+RANK_WAIT_S = 12.0
 # The page names its tab in this header: one Ranking queued or running per tab, at most PER_ADDRESS per address.
 TAB_HEADER = "X-HikesAlike-Tab"
 TAB_NAME = re.compile(r"[A-Za-z0-9-]{1,64}")

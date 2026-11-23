@@ -19,7 +19,8 @@ Ranking from Munich would still be about 55 to 80 s there.
 The captain: "I prefer option 3. Reduce to 3 hours drive time". The API refuses `max_hours` over 3 (`422`,
 "Input should be less than or equal to 3"), `/api/info` says `max_drive_hours` 3, the page offers 0.5 to 3 h,
 and `web/smoke.py` checks 2 h and 3 h drives. A 3 h Ranking from Munich takes 8.3 s on one local CPU, an
-estimated 30 to 45 s on Cloud Run. A 3 h limit groups at 7.5 km by default (ADR-0032), not the 10 km a 4 h one
+estimated 30 to 45 s on Cloud Run, so a Ranking now waits at most 12 s for its turn (ADR-0055):
+12 s and 45 s stay under the 60 s timeout, and more concurrent searches get the busy 503 sooner. A 3 h limit groups at 7.5 km by default (ADR-0032), not the 10 km a 4 h one
 did.
 
 **Considered Options**: a longer request timeout, 2 vCPU, or keeping 4 h on the faster code alone. Rejected by

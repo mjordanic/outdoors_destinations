@@ -2634,7 +2634,7 @@ the country the hike starts in (`country`, `name`, `numbers`, `rescue`, `rescue_
 They also have `border_emergency`, the same row for the country across the border a DayHike's
 route crosses or its Trailhead is within 2 km of, or the one Natural Earth put a start the OSM borders
 moved in (`borders.npy`); null for every other hike, a
-ComposedHike, or an export without it. A Ranking that waits 25 s for its turn answers 503 with
+ComposedHike, or an export without it. A Ranking that waits 12 s for its turn answers 503 with
 `Retry-After: 5`. Detail, compose, rank and pair take
 `return_to_start` (default true; `?return_to_start=false` on `GET
 /api/hikes/{id}`): true measures every hike with its way back to its start
@@ -2669,7 +2669,7 @@ loops also start near it (ADR-0036), and with `max_hours` only loops starting
 within the drive, each with its `drive_hours`. Every row has its `line` and `versions`, the other hikes of its
 area (DayHikes or loops starting within the GroupingRadius of it, at most three hikes per
 row) in the same shape. With `max_km` only loops starting within it are listed. Loop work stops at 5 s. The GET routes also answer HEAD. Each client gets 20 Rankings and
-300 other calls a minute; one Ranking runs at a time per process, in the order they came, waiting at most 25 s
+300 other calls a minute; one Ranking runs at a time per process, in the order they came, waiting at most 12 s
 (then 503), and a client, a browser tab at an address (the page names its tab in `X-HikesAlike-Tab`), has
 at most one queued or running (another is a 409, which the page waits out), and an address at most 4 (ADR-0054). A request body over 256 KB, or one sent
 without a `Content-Length`, is refused unread (413, 411); `weights` and `excluded` name each Measure at most once,

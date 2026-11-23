@@ -1545,7 +1545,7 @@ def test_a_ranking_that_waited_its_turn_too_long_says_others_are_ahead_and_when_
         web.RankingQueue = queue
     assert response.status_code == 503 and response.headers["retry-after"] == "5"
     assert response.json()["detail"] == (
-        "The server is busy with other visitors' searches: yours waited 25 s for its turn. Try again in a moment."
+        "The server is busy with other visitors' searches: yours waited 12 s for its turn. Try again in a moment."
     )
 
 
@@ -1557,7 +1557,7 @@ def test_a_ranking_says_whether_its_multi_day_routes_come_after_its_day_hikes(cl
 
 
 def test_a_ranking_that_waited_its_longest_still_ends_before_cloud_runs_timeout() -> None:
-    slowest_run_s = 31  # a 3 h drive Ranking from Munich on 1 vCPU (docs/deploy.md)
+    slowest_run_s = 45  # a 3 h drive Ranking from Munich on 1 vCPU, upper estimate (docs/deploy.md, ADR-0083)
     assert web.RANK_WAIT_S + slowest_run_s < 60  # Cloud Run's --timeout: else the visitor gets its 504, not our 503
 
 
