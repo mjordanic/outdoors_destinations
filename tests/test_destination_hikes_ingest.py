@@ -8,7 +8,6 @@ Dom v Severu, a hut in the next valley north.
 """
 
 import math
-import os
 import shutil
 import sqlite3
 from pathlib import Path
@@ -25,6 +24,7 @@ from dayhike.destination_hikes import WALK_TAG_FILTERS, _Read, _read_walkable, _
 from dayhike.similarity import _step_m
 from dayhike.trailgraph import Route, TrailGraph
 from dem_tiles import write_dem_tile
+from open_files import open_descriptors
 
 LAT, LON = 46.3, 13.8
 KM_LAT = 1 / 111.195
@@ -135,12 +135,12 @@ def test_a_build_leaves_no_file_open(tmp_path: Path) -> None:
     """Many builds in one process (a test worker) must not run out of file handles."""
     osm, dem = _fixture(tmp_path / "planina.osm"), _dem(tmp_path / "dem")
     build_catalog(osm, tmp_path / "first.sqlite", sources=[destination_source], dem_dir=dem)
-    before = len(os.listdir("/dev/fd"))
+    before = open_descriptors()
 
     for index in range(3):
         build_catalog(osm, tmp_path / f"again-{index}.sqlite", sources=[destination_source], dem_dir=dem)
 
-    assert len(os.listdir("/dev/fd")) == before
+    assert open_descriptors() - before == set()
 
 
 def test_a_destination_hike_keeps_its_id_across_rebuilds_from_xml_or_pbf(tmp_path: Path) -> None:
