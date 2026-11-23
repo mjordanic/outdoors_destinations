@@ -1,0 +1,42 @@
+{
+  "items": [
+    {
+      "lipas-id": 100,
+      "name": "Korpi trail",
+      "status": "active",
+      "type": {"type-code": 4405},
+      "location": {
+        "geometries": {
+          "type": "FeatureCollection",
+          "features": [
+            {
+              "type": "Feature",
+              "geometry": {
+                "type": "LineString",
+                "coordinates": [[25.0, 60.0, 24.2], [25.0, 60.01, 26.0]]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "lipas-id": 400,
+      "name": "Closed trail",
+      "status": "inactive",
+      "type": {"type-code": 4405},
+      "location": {
+        "geometries": {
+          "type": "FeatureCollection",
+          "features": [
+            {
+              "type": "Feature",
+              "geometry": {"type": "LineString", "coordinates": [[24.0, 63.0], [24.0, 63.02]]}
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "pagination": {"current-page": 1, "page-size": 100, "total-items": 2, "total-pages": 2}
+}

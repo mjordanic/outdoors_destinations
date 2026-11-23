@@ -1,7 +1,10 @@
 import dataclasses
 import json
+import re
+import shutil
 import sqlite3
 import time
+import zlib
 from pathlib import Path
 
 import numpy as np
@@ -9,7 +12,8 @@ import pytest
 
 from dayhike import Catalog, build_catalog, build_similarity, rank_dayhikes
 from dayhike import serving
-from dayhike.catalog import Origin
+from dayhike.catalog import NAME_ORIGIN_OSM_NAME, NAME_ORIGIN_PLACE, Origin
+from dayhike.db import scoped
 from dayhike.regions import load_region
 from dayhike.serving import (
     ELEVATION_POINTS,
@@ -24,6 +28,7 @@ from dayhike.serving import (
     drawn,
     drawn_profile,
     encode_polyline,
+    export_name_index,
     export_serving,
     score_note,
     scored_measures,
@@ -219,11 +224,13 @@ def test_search_folds_german_ue_oe_ae_spellings() -> None:
     assert _fold("Schönau Bärental") == _fold("Schoenau Baerental")
 
 
-def test_search_relevance_puts_exact_then_prefix_then_word_starts_first() -> None:
+def test_search_relevance_puts_exact_then_prefix_then_the_query_in_order_then_word_starts_first() -> None:
     assert _relevance("triglav", "triglav", ["triglav"]) == 0
     assert _relevance("triglav north face", "triglav", ["triglav"]) == 1
-    assert _relevance("dolic - triglav", "triglav dolic", ["triglav", "dolic"]) == 2
-    assert _relevance("pod triglavom", "riglav", ["riglav"]) == 3
+    assert _relevance("tour du mont blanc", "mont blanc", ["mont", "blanc"]) == 2
+    assert _relevance("dolic - triglav", "triglav dolic", ["triglav", "dolic"]) == 3
+    assert _relevance("lac blanc from montana", "mont blanc", ["mont", "blanc"]) == 3
+    assert _relevance("pod triglavom", "riglav", ["riglav"]) == 4
 
 
 def test_search_prefix_matches_come_first(data: ServingData) -> None:
@@ -242,6 +249,37 @@ def test_search_scans_a_bounded_number_of_occurrences_of_a_word_of_two_letters_o
     assert [hit["name"] for hit in data.search("al")] == ["Ridge Walk"]
 
 
+def test_search_finds_an_exact_name_first_though_its_first_word_is_in_more_names_than_are_scanned(
+    export: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = _renamed(export, tmp_path / "wanderweg", [
+        ("Wanderweg 523 near Salla", []),
+        ("Wanderweg 24 - Neubeuern", []),
+        ("Wanderweg 52 near Salla", []),
+        ("Wanderweg 66 - Hochfelln", []),
+    ])  # fmt: skip
+    monkeypatch.setattr(serving, "SEARCH_SCAN_CAP", 2)  # Wanderweg is in more names than are scanned
+
+    assert [hit["name"] for hit in data.search("Wanderweg 52 near Salla")] == [
+        "Wanderweg 52 near Salla",
+        "Wanderweg 523 near Salla",
+    ]
+    assert [hit["name"] for hit in data.search("Wanderweg 66 - Hochfelln")] == ["Wanderweg 66 - Hochfelln"]
+    monkeypatch.setattr(serving, "SEARCH_SCAN_CAP", 1)  # every word is: the exact name is still found
+    assert [hit["name"] for hit in data.search("wanderweg 52 near salla")][:1] == ["Wanderweg 52 near Salla"]
+
+
+def test_search_puts_the_exact_name_before_the_hike_to_the_summit_named(export: Path, tmp_path: Path) -> None:
+    data = _renamed(export, tmp_path / "triglav-exact", [
+        ("Triglav via Dom Planika from Pri lesi", [("peak", "Triglav", 1)]),
+        ("Triglav", [("peak", "Triglav", 300)]),
+        ("Ridge Walk", []),
+        ("Valley Path", []),
+    ])  # fmt: skip
+
+    assert [hit["name"] for hit in data.search("Triglav")] == ["Triglav", "Triglav via Dom Planika from Pri lesi"]
+
+
 def test_search_finds_a_name_typed_with_a_typo_and_says_it_is_only_similar(data: ServingData) -> None:
     for typed in ("Valey", "Vallley", "Valkey Path", "Rdige walk"):
         assert [(hit["name"], hit["match"]) for hit in data.search(typed)][:1] in (
@@ -255,6 +293,139 @@ def test_search_finds_a_name_typed_with_a_typo_and_says_it_is_only_similar(data:
 def test_a_word_only_inside_a_longer_word_is_a_similar_name(data: ServingData) -> None:
     # As Rappenloch is only inside Krappenlochklamm: the name has no such word.
     assert [(hit["name"], hit["match"]) for hit in data.search("idge")] == [("Ridge Walk", "similar")]
+
+
+NAMES_TO_FIND = [
+    ("Mt. Whitney Trail", []),
+    ("Müllerhütte - Großglockner Rundweg", []),
+    ("Łysica przez Święta Katarzyna", []),
+    ("Koča pri Savici - Dom na Komni", []),
+]
+QUERIES = (
+    "mount whitney", "Mt Whitney", "mt. whit", "muellerhutte", "MÜLLER", "grossglockner rundweg", "glockner",
+    "lysica", "swieta katarzyna", "koca pri savici", "dom komni", "Savicі", "Grosglocknre", "Rundwge", "Whitny trail",
+    "Kocca pri", "1002", "x", "no such hike",
+)  # fmt: skip
+
+
+def test_export_writes_the_name_index_and_a_server_answers_the_same_with_or_without_it(
+    export: Path, tmp_path: Path
+) -> None:
+    indexed = _renamed(export, tmp_path / "indexed", NAMES_TO_FIND)
+    assert (indexed.directory / serving.NAME_INDEX).is_file()
+    built = tmp_path / "built"
+    shutil.copytree(indexed.directory, built)
+    (built / serving.NAME_INDEX).unlink()  # an export from before the index: built at start
+    without = ServingData(built)
+
+    assert indexed._folded == without._folded
+    assert indexed._spellings.tables().keys() == without._spellings.tables().keys()
+    for length, (words, letters, masks) in indexed._spellings.tables().items():
+        assert words == without._spellings.tables()[length][0] and all(type(word) is str for word in words)
+        assert np.array_equal(letters, without._spellings.tables()[length][1])
+        assert np.array_equal(masks, without._spellings.tables()[length][2])
+    for query in QUERIES:
+        assert indexed.search(query) == without.search(query), query
+    assert [hit["name"] for hit in indexed.search("Mt Whitney")] == ["Mt. Whitney Trail"]
+    assert [(hit["name"], hit["match"]) for hit in indexed.search("Grosglocknre")][:1] == [
+        ("Müllerhütte - Großglockner Rundweg", "similar")
+    ]
+
+
+def test_a_server_builds_the_name_index_itself_when_the_exports_is_of_other_hikes_or_another_format(
+    export: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    other = _renamed(export, tmp_path / "other", NAMES_TO_FIND)
+    ids = np.asarray(other.store.ids)
+
+    assert serving._read_name_index(other.directory, ids) is not None
+    assert serving._read_name_index(other.directory, ids + 1) is None  # other hikes: a cut, rerun without the index
+    assert serving._read_name_index(other.directory, ids[:-1]) is None
+    monkeypatch.setattr(serving, "NAME_INDEX_FORMAT", serving.NAME_INDEX_FORMAT + 1)  # an index of an older format
+    assert serving._read_name_index(other.directory, ids) is None
+    assert ServingData(other.directory)._folded[0] == "mount whitney trail"  # built again from the names
+
+
+def test_export_name_index_adds_the_index_beside_an_existing_export(export: Path, tmp_path: Path) -> None:
+    out = tmp_path / "old"
+    shutil.copytree(export, out)
+    (out / serving.NAME_INDEX).unlink()
+
+    from dayhike.cli import main
+
+    assert main(["export-name-index", "--out", str(out)]) == 0
+    assert ServingData(out)._folded == ServingData(export)._folded
+    assert not list(out.glob("*.partial"))
+
+
+def _renamed(export: Path, out: Path, hikes: list[tuple[str, list[tuple[str, str, int]]]]) -> ServingData:
+    """A copy of ``export`` whose DayHikes, in id order, have these names and named
+    points: (kind, name, metres off the line)."""
+    shutil.copytree(export, out)
+    with scoped(sqlite3.connect(out / "hikes.sqlite")) as db:
+        ids = [dayhike_id for (dayhike_id,) in db.execute("SELECT id FROM hikes ORDER BY id")]
+        for dayhike_id, (name, points) in zip(ids, hikes, strict=True):
+            rows = [[kind, "line", 45.0, 15.0, 0, off_m, point, None] for kind, point, off_m in points]
+            db.execute(
+                "UPDATE hikes SET name = ?, points = ? WHERE id = ?",
+                (name, zlib.compress(json.dumps(rows).encode()), dayhike_id),
+            )
+        db.commit()
+    export_name_index(out)  # the names changed: index them again
+    return ServingData(out)
+
+
+def test_search_puts_the_hike_to_the_summit_named_first_and_viewpoint_paths_named_after_it_last(
+    export: Path, tmp_path: Path
+) -> None:
+    data = _renamed(export, tmp_path / "triglav", [
+        ("Triglav View from Pri Cerkvi", [("viewpoint", "Triglav View", 5)]),
+        ("Triglavska jezera - Mala Tičarica", [("hut", "Koča pri Triglavskih jezerih", 33)]),
+        ("Triglav via Dom Planika pod Triglavom from Pri lesi", [("peak", "Mali Triglav", 448), ("peak", "Triglav", 1)]),
+        ("Kredarica via Triglavski dom na Kredarici from Trenta", [("peak", "Triglav", 988)]),
+    ])  # fmt: skip
+
+    assert [hit["name"] for hit in data.search("Triglav")] == [
+        "Triglav via Dom Planika pod Triglavom from Pri lesi",  # reaches the top of Triglav
+        "Triglavska jezera - Mala Tičarica",
+        "Triglav View from Pri Cerkvi",  # a view of it
+        "Kredarica via Triglavski dom na Kredarici from Trenta",  # passes 988 m from the top
+    ]
+
+
+def test_search_typed_to_part_of_a_summit_name_puts_the_hike_to_that_summit_first(export: Path, tmp_path: Path) -> None:
+    data = _renamed(export, tmp_path / "zugspitze", [
+        ("Zugspitzblick from P 10", [("viewpoint", "Zugspitzblick", 9)]),
+        ("Zugspitz-Blick from Mösern", [("viewpoint", "Zugspitz-Blick", 0)]),
+        ("Zugspitze from Ehrwalder Almbahn", [("peak", "Zugspitzeck", 591), ("peak", "Zugspitze", 0)]),
+        ("Zugspitzi am Gaisbach", []),
+    ])  # fmt: skip
+
+    assert [hit["name"] for hit in data.search("Zugspitz")] == [
+        "Zugspitze from Ehrwalder Almbahn",
+        "Zugspitzi am Gaisbach",
+        "Zugspitzblick from P 10",
+        "Zugspitz-Blick from Mösern",
+    ]
+
+
+def test_search_puts_names_holding_the_query_in_its_order_before_names_with_its_words_apart(
+    export: Path, tmp_path: Path
+) -> None:
+    # No hike reaches the top of Mont Blanc: the Tour du Mont Blanc is named after it.
+    data = _renamed(export, tmp_path / "mont-blanc", [
+        ("Lac Blanc from Montana", []),
+        ("Panorama Mont Blanc from Introd", [("viewpoint", "Panorama Mont Blanc", 0)]),
+        ("Petit Mont Blanc from Planay", [("viewpoint", "Petit Mont Blanc", 0)]),
+        ("Tour du Mont Blanc - Itinéraire principal", [("peak", "Mont Truc", 1277)]),
+    ])  # fmt: skip
+
+    assert [hit["name"] for hit in data.search("Mont Blanc")] == [
+        "Tour du Mont Blanc - Itinéraire principal",
+        "Petit Mont Blanc from Planay",
+        "Panorama Mont Blanc from Introd",
+        "Lac Blanc from Montana",
+    ]
 
 
 def test_names_spelled_like_the_query_come_after_every_name_with_its_words(
@@ -317,7 +488,12 @@ def test_rank_matches_rank_dayhikes_and_reports_every_measure(
         assert set(result["measures"]) == set(MEASURE_NAMES)
     assert results[0]["measures"]["length"]["raw"] == pytest.approx(0.5)
     assert "random hike pair" in results[0]["measures"]["length"]["note"]
-    assert results[0]["measures"]["elevation_gain"] == {"score": None, "raw": None, "note": None}
+    # No climb data where the Seed has some: raw 0 (ADR-0071); no random pair has a climb to calibrate it on.
+    assert results[0]["measures"]["elevation_gain"] == {
+        "score": None,
+        "raw": 0.0,
+        "note": "No data for this hike: counts as 0 against the hike you like",
+    }
 
 
 @pytest.mark.parametrize(
@@ -634,15 +810,65 @@ def test_a_rerun_without_tiles_or_snaps_drops_the_old_ones(catalog_path: Path, t
     assert (tiles / "valhalla_tiles.tar").read_bytes() == b"tiles"
 
 
-def test_the_export_names_the_regions_it_was_built_from(catalog_path: Path, export: Path, tmp_path: Path) -> None:
-    assert "regions" not in json.loads((export / "meta.json").read_text())  # none given: the pages say Europe
+def _region(directory: Path, name: str, label: str, continent: str, west: float, east: float):
+    """A region file of a box from ``west`` to ``east`` around the test hikes (latitude 44 to 46)."""
+    path = directory / f"{name}.toml"
+    path.write_text(
+        f'label = "{label}"\ncontinent = "{continent}"\nextracts = []\n'
+        f"bounds = {{ south = 44.0, west = {west}, north = 46.0, east = {east} }}\n"
+        f"[map]\nview = {{ west = {west}, south = 44.0, east = {east}, north = 46.0 }}\ncentre = {{ lon = {west}, lat = 45.0 }}\n"
+    )
+    return load_region(path)
 
-    out = export_serving(catalog_path, tmp_path / "out", regions=[load_region("europe"), load_region("us-colorado")])
 
-    assert json.loads((out / "meta.json").read_text())["regions"] == [
+def test_the_export_names_the_regions_its_hikes_start_in(
+    catalog_path: Path, export: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert json.loads((export / "meta.json").read_text())["regions"] == [{"label": "Europe", "continent": "Europe"}]
+    # The test hikes start at 15.0, 15.1, 15.2 and 15.5° E: two of them "in the United States", west of 15.15.
+    monkeypatch.setattr(serving, "REGION_SPLIT_LON", 15.15)
+    both = export_serving(catalog_path, tmp_path / "both")
+
+    assert json.loads((both / "meta.json").read_text())["regions"] == [
         {"label": "Europe", "continent": "Europe"},
+        {"label": "the United States", "continent": "North America"},
+    ]
+
+
+def test_the_export_names_its_hikes_regions_as_the_regions_given_and_refuses_regions_they_contradict(
+    catalog_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(serving, "REGION_SPLIT_LON", 15.15)  # two test hikes "in the United States"
+    west = _region(tmp_path, "west", "Colorado", "North America", 14.9, 15.12)
+    east = _region(tmp_path, "east", "the Alps", "Europe", 15.18, 15.6)
+
+    out = export_serving(catalog_path, tmp_path / "out", regions=[west, east])
+
+    assert json.loads((out / "meta.json").read_text())["regions"] == [  # Europe first, as the region filter lists it
+        {"label": "the Alps", "continent": "Europe"},
         {"label": "Colorado", "continent": "North America"},
     ]
+    with pytest.raises(ServingExportError, match="hikes start in the United States, which no --region names"):
+        export_serving(catalog_path, tmp_path / "east-only", regions=[east])
+    assert not (tmp_path / "east-only" / "meta.json").exists()  # refused before anything is written
+    assert not (tmp_path / "east-only" / "trailheads.npy").exists()
+    monkeypatch.setattr(serving, "REGION_SPLIT_LON", -40.0)  # every test hike in Europe
+    with pytest.raises(ServingExportError, match="no hike starts in the region us-colorado"):
+        export_serving(catalog_path, tmp_path / "us", regions=[load_region("europe"), load_region("us-colorado")])
+
+
+def test_a_server_names_the_regions_by_its_hikes_for_an_export_from_before_regions(export: Path, tmp_path: Path) -> None:
+    old = tmp_path / "old"
+    shutil.copytree(export, old)
+    meta = json.loads((old / "meta.json").read_text())
+    del meta["regions"]
+    (old / "meta.json").write_text(json.dumps(meta))
+    assert ServingData(old).covered == [{"label": "Europe", "continent": "Europe"}]  # the pages say Europe, as before
+
+    trailheads = np.load(old / "trailheads.npy")
+    trailheads[:, 1] -= 120.0
+    np.save(old / "trailheads.npy", trailheads)
+    assert ServingData(old).covered == [{"label": "the United States", "continent": "North America"}]
 
 
 CITIES = Path(__file__).parent / "fixtures" / "geonames.txt"
@@ -896,6 +1122,289 @@ def test_a_hike_says_the_town_and_country_it_starts_near(placed: ServingData, da
     assert data.search("Valley Path")[0]["region"] is None  # an export without places names none
 
 
+def _famous(
+    placed: ServingData,
+    out: Path,
+    hikes: list[tuple[str, dict]],
+    landmarks: list[tuple] = (),
+    towns: dict[str, str] | None = None,
+) -> ServingData:
+    """A copy of the placed export whose DayHikes, in id order, have these names and columns: ``points``
+    as (kind, name, metres off the line), ``parking_m`` and ``commons_contributors``. Given ``landmarks``,
+    only these: (name, kind, lat, lon, how many names, [(hike index, metres off)]); given ``towns``,
+    these towns of ``places.sqlite`` in this country."""
+    shutil.copytree(placed.directory, out)
+    with scoped(sqlite3.connect(out / "hikes.sqlite")) as db:
+        ids = [dayhike_id for (dayhike_id,) in db.execute("SELECT id FROM hikes ORDER BY id")]
+        for dayhike_id, (name, columns) in zip(ids, hikes, strict=True):
+            points = [[kind, "line", 45.0, 15.0, 0, off_m, point, None] for kind, point, off_m in columns.get("points", [])]
+            db.execute(
+                "UPDATE hikes SET name = ?, points = ?, parking_m = ?, commons_contributors = ? WHERE id = ?",
+                (name, zlib.compress(json.dumps(points).encode()), columns.get("parking_m"), columns.get("commons"), dayhike_id),
+            )
+        db.commit()
+    export_name_index(out)
+    if landmarks:
+        with scoped(sqlite3.connect(out / "landmarks.sqlite")) as db:
+            db.executescript("DELETE FROM landmarks; DELETE FROM landmark_hikes; DELETE FROM landmark_names;")
+            for landmark, (name, kind, lat, lon, names, near) in enumerate(landmarks, start=1):
+                db.execute(
+                    "INSERT INTO landmarks VALUES (?, ?, ?, NULL, ?, ?, NULL, ?, ?)", (landmark, name, kind, lat, lon, len(near), names)
+                )
+                db.executemany("INSERT INTO landmark_hikes VALUES (?, ?, ?)", [(landmark, ids[i], off_m) for i, off_m in near])
+                folded = _fold(name)
+                db.executemany(
+                    "INSERT INTO landmark_names VALUES (?, ?, ?)",
+                    [(folded[word.start() :], landmark, word.start() == 0) for word in re.finditer(r"\w+", folded)],
+                )
+            db.commit()
+    with scoped(sqlite3.connect(out / "places.sqlite")) as db:
+        for town, country in (towns or {}).items():
+            db.execute("UPDATE places SET country = ? WHERE name = ?", (country, town))
+        db.commit()
+    return ServingData(out)
+
+
+def test_a_famous_peak_named_so_leads_the_hike_names_and_its_namesakes_do_not(placed: ServingData, tmp_path: Path) -> None:
+    # "Matterhorn" listed Matterhorn Trail in Oregon first; the Swiss Matterhorn has 48 names in GeoNames.
+    data = _famous(placed, tmp_path / "matterhorn", [
+        ("Matterhorn Trail", {"points": [("peak", "Matterhorn", 0)]}),
+        ("Hörnli Ridge from Schwarzsee", {"points": [("peak", "Matterhorn", 30)]}),
+        ("Disappointment Cleaver Route", {}),
+        ("Overlook from Mount Rainier", {}),
+    ], [
+        ("Matterhorn", "peak", 45.0, 15.0, 1, [(0, 0)]),
+        ("Matterhorn", "peak", 45.2, 15.1, 48, [(1, 30)]),
+        ("Mount Rainier", "peak", 45.0, 15.0, 43, [(2, 0)]),
+        ("Mount Rainier", "town", 45.6, 15.5, 19, [(3, 900)]),  # a town known in many languages: no peak
+        ("Matterhornblick", "viewpoint", 45.0, 15.0, 30, [(0, 10)]),  # named from it, not so
+    ])  # fmt: skip
+
+    found = data.find_landmarks("Matterhorn")
+    assert [(landmark["name"], landmark["leads"], [hike["name"] for hike in landmark["hikes"]]) for landmark in found] == [
+        ("Matterhorn", True, ["Hörnli Ridge from Schwarzsee"]),
+        ("Matterhorn", False, ["Matterhorn Trail"]),
+        ("Matterhornblick", False, ["Matterhorn Trail"]),
+    ]
+    assert [(landmark["kind"], landmark["leads"]) for landmark in data.find_landmarks("Mount Rainier")] == [
+        ("peak", True), ("town", False)
+    ]
+    assert [landmark["leads"] for landmark in data.find_landmarks("Matterhorm")] == [False, False, False]  # a typo: similar
+
+
+def test_a_place_named_so_leads_when_more_photographed_than_the_hikes_named_best_like_it(
+    placed: ServingData, tmp_path: Path
+) -> None:
+    # "Grand Canyon" listed a 1.6 km walk of that name near Cairo, New York, first: no Commons photo is near it.
+    hikes = [
+        ("Grand Canyon", {"commons": 0}),
+        ("Yavapai Point from Grand Canyon Village", {"commons": 41}),
+        ("Eagle Heights from Middleton Junction", {"commons": 5}),
+        ("Valley Path", {}),
+    ]
+    landmarks = [
+        ("Grand Canyon", "town", 45.2, 15.1, 5, [(1, 800)]),
+        ("Grand Canyon", "shelter", 45.0, 15.0, 1, [(2, 10)]),  # named so too, less photographed
+    ]
+    data = _famous(placed, tmp_path / "canyon", hikes, landmarks)
+
+    assert [(landmark["kind"], landmark["leads"]) for landmark in data.find_landmarks("Grand Canyon")] == [
+        ("town", True), ("shelter", False)
+    ]
+    hikes[0] = ("Grand Canyon", {"commons": 50})  # the walk named so photographed most: it stays first
+    data = _famous(placed, tmp_path / "walk", hikes, landmarks)
+    assert [landmark["leads"] for landmark in data.find_landmarks("Grand Canyon")] == [False, False]
+
+
+def test_a_hike_to_a_summit_from_a_car_park_comes_before_one_starting_far_from_one(placed: ServingData, tmp_path: Path) -> None:
+    # "Half Dome" listed Half Dome Trail, its last 3.2 km starting 4.6 km from a car park, before the hike.
+    data = _famous(placed, tmp_path / "half-dome", [
+        ("Half Dome Trail", {"points": [("peak", "Half Dome", 0)], "parking_m": 4578}),
+        ("Half Dome via Subdome from Valley Trailhead Parking", {"points": [("peak", "Half Dome", 3)], "parking_m": 71}),
+        ("Half Dome View", {"points": [("peak", "Half Dome", 900)], "parking_m": 10}),
+        ("Valley Path", {}),
+    ], [("Half Dome", "peak", 45.0, 15.0, 35, [(0, 0), (1, 3), (2, 900)])])  # fmt: skip
+
+    assert [hit["name"] for hit in data.search("Half Dome")] == [
+        "Half Dome via Subdome from Valley Trailhead Parking",
+        "Half Dome Trail",  # reaches the top too
+        "Half Dome View",
+    ]
+    [peak] = data.find_landmarks("Half Dome")
+    assert [hike["name"] for hike in peak["hikes"]] == [
+        "Half Dome via Subdome from Valley Trailhead Parking", "Half Dome Trail", "Half Dome View"
+    ]
+
+
+def test_mt_is_mount_in_hike_and_landmark_names(placed: ServingData, tmp_path: Path) -> None:
+    # "Mt Whitney" found nothing though Mount Whitney Trail is there.
+    data = _famous(placed, tmp_path / "mount", [
+        ("Mount Whitney Trail", {}),
+        ("Mt. Hood Trail", {}),
+        ("Valley Path", {}),
+        ("Smt Walk", {}),
+    ], [
+        ("Mount Whitney", "peak", 45.0, 15.0, 47, [(0, 0)]),
+        ("Mt. Tom", "peak", 45.0, 15.0, 1, [(1, 0)]),
+        ("Mtskheta", "town", 45.0, 15.0, 30, [(2, 0)]),
+    ])  # fmt: skip
+
+    for typed, name in [
+        ("Mt Whitney", "Mount Whitney Trail"), ("mt. whitney", "Mount Whitney Trail"), ("Mount Whitney Trail", "Mount Whitney Trail"),
+        ("Mount Hood", "Mt. Hood Trail"), ("Mt Hood", "Mt. Hood Trail"),
+    ]:  # fmt: skip
+        assert [hit["name"] for hit in data.search(typed)][:1] == [name], typed
+    assert [hit["name"] for hit in data.search("smt")] == ["Smt Walk"]
+    assert [landmark["name"] for landmark in data.find_landmarks("Mt Whitney")] == ["Mount Whitney"]
+    assert [landmark["name"] for landmark in data.find_landmarks("Mount Tom")] == ["Mt. Tom"]
+    # "Mount" (on the way to "Mount Tom") finds the names spelled "Mt", not every name starting with "mt"
+    assert [landmark["name"] for landmark in data.find_landmarks("Mount")] == ["Mount Whitney", "Mt. Tom"]
+    assert serving._unshortened("mt. whitney via mt hood, mtb and smt") == "mount whitney via mount hood, mtb and smt"
+
+
+def test_a_query_ending_in_a_country_finds_the_hikes_and_landmarks_there(placed: ServingData, tmp_path: Path) -> None:
+    # "Triglav, Slovenia" found nothing though Triglav finds the hikes.
+    hikes = [
+        ("Triglav via Dom Planika from Pri lesi", {}),
+        ("Triglav View from Pri Cerkvi", {}),
+        ("Valley Path", {}),
+        ("Triglav Lake", {}),  # starts near Velikovecki Breg
+    ]
+    data = _famous(placed, tmp_path / "triglav", hikes, towns={"Ogulin": "SI"})
+
+    assert len(data.search("Triglav")) == 3
+    for typed in ("Triglav, Slovenia", "triglav,slovenia"):
+        assert {hit["name"] for hit in data.search(typed)} == {
+            "Triglav via Dom Planika from Pri lesi", "Triglav View from Pri Cerkvi"
+        }, typed
+    assert [hit["name"] for hit in data.search("Triglav, Croatia")] == ["Triglav Lake"]
+    assert [(landmark["name"], landmark["country"]) for landmark in data.find_landmarks("Vrh, Slovenia")] == [
+        ("Vrh", "SI")  # not Ridge Peak (Grebenski vrh): no town within LANDMARK_TOWN_M says its country
+    ]
+    assert data.find_landmarks("Vrh, Croatia") == [] and data.search("Triglav, Austria") == []
+
+
+def test_a_country_narrows_a_search_past_the_names_it_scans(
+    placed: ServingData, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # "Bear Lake, Utah": the first SEARCH_SCAN_CAP names with its words were all elsewhere, so it found none.
+    data = _famous(placed, tmp_path / "scan", [
+        ("Triglav Loop", {}), ("Triglav Ridge", {}), ("Valley Path", {}), ("Triglav Lake", {}),
+    ], towns={"Ogulin": "SI"})  # fmt: skip
+    monkeypatch.setattr(serving, "SEARCH_SCAN_CAP", 1)
+
+    assert [hit["name"] for hit in data.search("Triglav, Croatia")] == ["Triglav Lake"]
+
+
+def test_a_place_tail_is_a_country_after_a_comma() -> None:
+    assert serving._place_tail("triglav, slovenia") == ("triglav", "SI")
+    assert serving._place_tail("triglav slovenia") is None  # no comma: the words as typed
+    assert serving._place_tail("slovenia") is None and serving._place_tail(", slovenia") is None
+    assert serving._place_tail("valley path") is None and serving._place_tail("triglav, nowhere") is None
+
+
+def _placed_renamed(catalog_path: Path, out: Path, names: dict[int, str], origin: str = NAME_ORIGIN_OSM_NAME) -> ServingData:
+    """A placed export whose hikes have the ``names`` ingest's naming would give them, from ``origin``."""
+    directory = export_serving(catalog_path, out, geonames_path=CITIES)
+    with sqlite3.connect(directory / "hikes.sqlite") as db:
+        db.executemany(
+            "UPDATE hikes SET name = ?, name_origin = ? WHERE id = ?", [(name, origin, i) for i, name in names.items()]
+        )
+    export_name_index(directory)
+    return ServingData(directory)
+
+
+def test_a_hike_named_near_a_place_says_that_place_where_it_starts_then_the_town(
+    catalog_path: Path, tmp_path: Path
+) -> None:
+    # Ingest adds the place nearest the Trailhead to an OSM name two hikes share, a hamlet as well as a town
+    # ("Wicklow Way near Clonegal"); the town nearest it, for where the hike is, can be another (Bunclody).
+    renamed = _placed_renamed(catalog_path, tmp_path / "out", {1002: "Valley Path near Vrh", 1001: "Hike near Ogulin (3)"})
+    [valley] = [hike for hike in renamed.search("Valley Path") if hike["id"] == 1002]
+
+    assert valley["region"] == renamed.detail(1002)["region"] == "Vrh, Ogulin, HR"
+    assert renamed.search("Hike near Ogulin")[0]["region"] is None  # Ridge Walk starts near no town
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Hike near Ogulin (JK11)",  # the town it starts near, named once
+        "Hike near Planina, stage 2: Vrh – Ogulin",  # a stage of a tour that starts elsewhere
+        "Hike near Planina (P+ (P – P+))",  # a code that holds brackets of its own
+    ],
+)
+def test_a_hike_whose_name_names_no_other_start_says_the_town(catalog_path: Path, tmp_path: Path, name: str) -> None:
+    renamed = _placed_renamed(catalog_path, tmp_path / "out", {1002: name}, NAME_ORIGIN_PLACE)
+
+    assert renamed.detail(1002)["region"] == "Ogulin, HR"
+
+
+@pytest.mark.parametrize(
+    ("name", "origin", "note"),
+    [
+        (
+            "Hike near Planina (JK11)",
+            NAME_ORIGIN_PLACE,
+            "Named by this site after Planina, a place near where it starts: its source gives it no name "
+            "that says where it is. “JK11” is the name its source gives it, a code.",
+        ),
+        (
+            "Valley Path near Vrh (2)",
+            NAME_ORIGIN_OSM_NAME,
+            "“near Vrh” is added by this site: Vrh is a place near where it starts. “(2)” is its "
+            "number in its source, or tells it apart from other hikes of the same name.",
+        ),
+        ("Valley Path", NAME_ORIGIN_OSM_NAME, None),
+    ],
+)
+def test_a_name_this_site_made_says_how(
+    catalog_path: Path, tmp_path: Path, name: str, origin: str, note: str | None
+) -> None:
+    renamed = _placed_renamed(catalog_path, tmp_path / "out", {1002: name}, origin)
+
+    assert renamed.detail(1002)["name_note"] == note
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Circular walk near Ambleside",  # a place the export does not know
+        "Circular walk near Planina",  # a village 15 km from where it starts, and no town
+    ],
+)
+def test_an_osm_name_with_its_own_near_is_not_said_to_be_made_by_this_site(
+    catalog_path: Path, tmp_path: Path, name: str
+) -> None:
+    renamed = _placed_renamed(catalog_path, tmp_path / "out", {1002: name})
+    [walk] = renamed.search("Circular walk")
+
+    assert renamed.detail(1002)["name_note"] is None
+    assert walk["region"] == renamed.detail(1002)["region"] == "Ogulin, HR"
+
+
+def test_an_osm_code_renamed_to_a_placeholder_says_this_site_named_it(catalog_path: Path, tmp_path: Path) -> None:
+    renamed = _placed_renamed(catalog_path, tmp_path / "out", {1002: "Hike near Planina (JK11)"})
+
+    assert renamed.detail(1002)["name_note"] == (
+        "Named by this site after Planina, a place near where it starts: its source gives it no name "
+        "that says where it is. “JK11” is the name its source gives it, a code."
+    )
+    assert renamed.detail(1002)["region"] == "Planina, Ogulin, HR"
+
+
+def test_a_hike_says_how_far_its_start_is_from_the_nearest_car_park(data: ServingData, tmp_path: Path, export: Path) -> None:
+    # Ridge Walk's car park is 400 m due north of its Trailhead; none is within 20 km of Valley Path's.
+    assert data.detail(RIDGE_WALK_ID)["parking_m"] == pytest.approx(400, abs=1)
+    assert data.detail(1002)["parking_m"] is None
+
+    older = tmp_path / "older"
+    shutil.copytree(export, older)
+    with sqlite3.connect(older / "hikes.sqlite") as db:
+        db.execute("ALTER TABLE hikes DROP COLUMN parking_m")
+    assert ServingData(older).detail(RIDGE_WALK_ID)["parking_m"] is None  # an export from before has none
+
+
 def test_a_hike_longer_than_a_multi_day_length_one_way_is_said_to_be_multi_day(
     data: ServingData, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -966,3 +1475,20 @@ def test_every_ratio_measure_says_its_floor_in_words() -> None:
     assert set(FLOOR_TEXT) == set(ratio)
     assert FLOOR_TEXT["elevation_gain"] == "both 100 m or less"
     assert FLOOR_TEXT["climb_grade"] == "both 3 % or less"
+
+
+def test_an_open_similarity_store_holds_no_file_descriptor_for_its_arrays(export: Path) -> None:
+    import gc
+    import os
+
+    from dayhike.similarity import SimilarityStore
+
+    def open_files() -> int:
+        gc.collect()  # what the export's build left to collect is not the arrays'
+        return len(os.listdir("/dev/fd"))
+
+    before = open_files()
+    opened = [SimilarityStore.open_dir(export / "similarity") for _ in range(5)]
+
+    assert open_files() == before
+    assert all(len(held.ids) == 4 for held in opened)

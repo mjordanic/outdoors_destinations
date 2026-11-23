@@ -13,6 +13,7 @@ data/osm/
 data/dem/
 data/landcover/
 data/climate/
+data/commons/
 data/valhalla/*
 !data/valhalla/compose.yaml
 !data/valhalla/mjolnir.drive-time.json
@@ -26,6 +27,7 @@ data/*.snaps.npz
 data/baseline/
 data/web-serving/
 data/geonames/
+data/borders/
 *.geometry.sqlite
 *.trailgraph.sqlite
 *.sqlite-wal
@@ -34,10 +36,12 @@ data/geonames/
 *.sqlite.work-journal
 *.sqlite.work-wal
 *.sqlite.work-shm
+*.sqlite.work.phases/
 *.sqlite.tmp
 *.sqlite.new
 *.sqlite.new.tmp
 *.similarity/
+*.sqlite.steps/
 
 # env / secrets
 .env

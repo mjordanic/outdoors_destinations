@@ -15,10 +15,13 @@ hikes that fit.
   a lake or the sea. If you ask for more, it also looks at rain and sunshine.
 - It lists day hikes and longer tours. A long tour is also cut into day
   stages (8 to 25 km each). Hikes joined from signpost networks are included
-  too. Anything over about 25 km is usually more than a day.
-- It covers Europe wherever OpenStreetMap maps hiking routes. That is dense
-  in the Alps and central Europe, and thin in much of the east and
-  south-east.
+  too, and walks from a car park to a named peak, hut, viewpoint or lake and
+  back. Anything over about 25 km is usually more than a day.
+- It covers Europe and the contiguous United States wherever OpenStreetMap
+  maps hiking routes, plus the official trail registers some public bodies
+  publish as open data (in Ireland, Finland, Norway, France's Écrins national
+  park and Italy's South Tyrol). That is dense in the Alps and central Europe,
+  and thin in much of the east and south-east of Europe.
 - It is free: no ads, no account, no cookies, and no tips or donations asked
   for. The code is open source
   ([MIT](../LICENSE)) and the data it uses is credited
@@ -26,7 +29,9 @@ hikes that fit.
   [DATA-LICENSES.md](../DATA-LICENSES.md)).
 
 The first visit after a quiet spell can take up to about 20 seconds, while
-the server wakes up.
+the server wakes up; the page says "Waking the server…" meanwhile. If the
+server is paused or does not answer, the page says that instead, with a **Try
+again** button.
 
 ## How to search
 
@@ -35,23 +40,30 @@ the server wakes up.
 Pick one of three ways:
 
 1. **Type its name** in the search box. A small typo is fine: "Triglov"
-   finds Triglav. When no name has every word as you typed it, the list says
-   so and marks each name that is only like it "similar name". So does a name
+   finds Triglav, "Mt Whitney" finds Mount Whitney, and a country after a
+   comma keeps to the hikes there: "Triglav, Slovenia". When no name has
+   every word as you typed it, the list says so and marks each name that is only like it "similar name". So does a name
    that holds your word only inside a longer word ("Rappenloch" in
    "Krappenlochklamm"): check that it is the hike you meant. **Enter** picks a
    hike only when one is named exactly as you typed, or it is the only hike
    found; the line beside the chosen hike then says so. Otherwise the list
    stays open and says how many hikes match, so you pick one (or use the arrow
-   keys, then Enter). It works the same on a phone and a computer.
-   Once picked, the page moves to the hike's panel.
+   keys, then Enter). A one-letter or over-100-character query is not
+   searched: the list says why instead. It works the same on a phone and a
+   computer.
+   Once picked, the page moves to the hike's panel. The hike stays chosen until
+   you pick another: while you type a new name the list says so, and Escape,
+   emptying the box or leaving it puts the chosen hike's name back.
 
    You can also type a **peak, hut, viewpoint, lake, pass, ridge,
    town or village** the hike goes to or starts from, in any language the
    place has a name in: "Gardasee", "Lake Garda" and "Lago di Garda" all find
-   Lake Garda. Under the hike names the list then shows
+   Lake Garda. Under the hike names (above them for a famous place named
+   exactly as you typed, such as "Matterhorn") the list then shows
    "Hikes near Zugspitze (peak, near Ehrwald, AT)" and the closest
    few hikes there, each saying how near it comes: "reaches the top", "passes
-   300 m from it", or for a town "starts 1.2 km from it". Where several
+   300 m from it", or for a town "starts 1.2 km from it". A hike already
+   listed by its name is not listed again under the place. Where several
    places share a name, the best known comes first (the one with names in
    the most languages, then the highest): "Mont Blanc" is the summit above
    Chamonix before the small hills of that name. A big lake, or a summit no
@@ -59,7 +71,9 @@ Pick one of three ways:
    its middle, so a hike along the shore of a big lake can read several km. A
    typo is fine here too. When it lists only some of the hikes there, press
    **Show on map**: the map opens at that place, with every hike there to
-   click.
+   click. Where a place has too many hikes to draw, the map zooms in on it by
+   itself, a step at a time, until they show as lines; it stops as soon as you
+   move or zoom the map yourself.
 
    Each hike in the list says the town it starts near and its country ("near
    Igls, AT"), so hikes of one name are easy to tell apart. A route of several
@@ -78,27 +92,46 @@ Pick one of three ways:
    walk on. A click on another junction walks the shortest way there; a click
    on the green start dot walks back to the start. What each click did is said
    under the map, so the map stays still under your pointer. You can then use
-   that walk as your liked hike.
+   that walk as your liked hike. Unless you type a name for it, it is called
+   "Your hike along" the trails it follows most, "from" a named place at its
+   start, so it does not read as a catalog hike of that trail's name.
 
 Then press **Find similar**. You get 10 hikes from among the most similar
 (see "Why the list changes from visit to visit" below), and the page moves to
-the list. On a phone the list is wider than the screen: a line above it says to
-scroll it sideways for every measure's score.
+the list. The list shows each hike's score, length and climb (and its drive
+or distance when you set one); on a phone the length and climb sit under the
+hike's name, so the list fits the screen. Press **Show the score of every measure** above
+it for a column per measure, and **Hide the score of every measure** to fold
+them away again. Whenever the list is wider than the screen, a line above it
+says to scroll it sideways.
 
-If you change a setting after a search, a line under **Find similar** says
-the list is from before your change, so you see it where you are on a phone.
+If you change a setting after a search, or while it is still running, a line
+under **Find similar** says the list is from before your change, so you see it
+where you are on a phone.
 
 While **Find similar** is greyed out, the line under it says why: no hike is
-chosen yet (choose one first), a hike is still loading, or a search is still
-running. If your hike cannot be measured again after you change Return to
-start, that line says so and **Find similar** stays usable: pressing it
-measures your hike again, then finds.
+chosen yet (choose one first), a hike is still loading, a search is still
+running, every measure is at weight 0, a drive limit is out of range
+(or neither Max drive hours nor Max km is ticked), the grouping distance
+under More options is not a number from 0.1 to 50 km, or no region is ticked
+under **Hikes in**. If your hike cannot be
+measured again after you change Return to start, that line says so and
+**Find similar** stays usable: pressing it measures your hike again, then
+finds.
 
 If hikes on the list score below 0.47, what a typical pair of random hikes
 scores, a note above the list says from which row down the matches are weak,
 or that all are when even the best one is. This
 happens most with a tight distance or drive limit: there is simply nothing
 much like your hike nearby. A long tour can then show up on the list too.
+With one region ticked under **Hikes in**, the best matches there can score
+lower than the best anywhere, and the note above the list says so.
+
+If the hike you like has no data for a measure you weigh above 0 (on Svalbard,
+for example, it has no climb, top, landscape or temperature), a note above
+the list names those measures and says the results are not reliable: the
+hikes are compared only on what is known of yours, and many can score 1.000
+on length alone.
 
 ### Or describe the hike you want
 
@@ -124,7 +157,8 @@ its weight up without typing a value asks for the grey example value shown.
 A value the site cannot ask, such as a length of 0 or 99999 km, a box with
 no number, or a box emptied while its weight is above 0, shows a message
 beside its box, for example "Length must be from 1 to 2000 km". **Find
-hikes** stays greyed out, with the same reason under it, until you fix it.
+hikes** stays greyed out, with the same reason under it, until you fix it. It
+also waits, saying why, while every measure is at weight 0.
 **Reset weights** brings back the starting values. **Back to a hike you liked**
 takes you back to the normal search.
 
@@ -151,15 +185,31 @@ the hut slider to 100. Turn Length down to 30.
 - **Return to start** (on by default). Every hike is compared with its walk
   back to where it started. A hike that goes up to a summit and the same way
   down counts as there and back. Switch it off to compare every hike one way
-  only.
+  only. A multi-day route you start from is always compared one way, and so
+  is every hike compared with it: nobody walks a tour back to its start.
 - **Where from, and how far.** Give a starting place and a maximum drive (up
   to 4 hours), a maximum distance in a straight line (up to 200 km), or both.
   Only hikes that start within those limits are kept. Type the place as
   "lat, lon", use your browser's location, or use "Find place" to look up a
   town or village. The drive time is an estimate based on main roads, so
   treat it as a rough guide. The limits stay set when you open another hike
-  in the same tab, and the note above the results always names them, for
-  example "within a 2 h drive of Munich, DE". A fresh page starts with none.
+  from the results, the search box or the map in the same tab, and the note
+  above the results always names them, for example "within a 2 h drive of
+  Munich, DE". When no hike starts within the limits (a place far from
+  Europe and the contiguous United States, such as Sydney), the list says no
+  hikes are mapped there yet and what the site covers. A fresh page, or a link opened in the tab, starts with none
+  unless the link names them. Leaving a hike you described for a hike you
+  liked turns "Only hikes near a starting place" off; the place stays in its
+  box for ticking again.
+- **Hikes in.** Where the site has hikes in both Europe and the United
+  States, a checkbox for each, just above **Find similar**, keeps the list to
+  hikes starting there. Both are ticked at first: hikes anywhere. With "Only
+  hikes near a starting place" ticked and a place given, the place decides
+  instead: the boxes are greyed out, keep their ticks, and count again once
+  the place is cleared or that filter is off. With both ticked, the best
+  matches of a hike often all come from its own side of the ocean; the note
+  above the list then says so and to tick only the other region to see its
+  best matches.
 - **More options.** Under the limits, this sets how close hikes must start to
   be grouped as one area (see "Reading the results" below).
 - **Units** (top of the page). Show every length and height in km and metres,
@@ -167,7 +217,8 @@ the hut slider to 100. Turn Length down to 30.
   the values you type (a wish, the distance limit, the grouping radius) all
   switch together, and a value you typed keeps its meaning. The page starts in
   miles and feet when your browser's language is US English (or Liberian or
-  Burmese); otherwise in km and metres. A shared link keeps the units it was made with.
+  Burmese); otherwise in km and metres. Temperatures show in °F with miles
+  and feet, and in °C with km and metres. A shared link keeps the units it was made with.
 
 On a phone, "2. What similar means" starts folded away; like Advanced search and
 More options, its title has an arrow and the word "show" while it is closed.
@@ -177,11 +228,34 @@ of Bled", "Weather in Jan", "One way, without the way back", "Grouped within
 3 km". Press the × on a label to drop that filter; the list is found again
 without it.
 
+## What a hike's panel shows
+
+Open a hike and its panel shows its line on a map, its height profile, its
+landscape, trail surface and monthly weather, and the facts behind every
+measure. It also shows:
+
+- **Where it comes from.** An OpenStreetMap hike says which OpenStreetMap
+  relation or ways it is made from. A hike from an official trail register
+  names the register, its licence and the record. An OpenStreetMap hike that
+  lies on an official route, such as a day stage of a national trail, names
+  that route too: "Lies on an official route: …".
+- **Up to two photos** from Wikimedia Commons of named places along the hike,
+  each with its author and licence.
+- **Commons contributors:** how many people put geotagged photos on Wikimedia
+  Commons near the hike, a hint at how well known it is. It changes no score.
+- **Emergency numbers** and, where there is one, the mountain rescue service
+  of the country the hike starts in, with their sources. A hike that crosses a
+  national border or starts within 2 km of one shows the other country's too.
+- A note when a hike starts more than 2 km from the nearest car park: the walk
+  to its start is not counted.
+
 ## Download and share a hike
 
 Open any hike from the results. It has a **Link to this hike**, and two
 buttons. The link and Share give the same address, with your settings as
-they are now.
+they are now, except your starting place. Clicking the link copies it, and
+a line beside Share says "Link copied"; your starting place and your list
+stay as they are. To open it in a new tab, middle-click or Ctrl/Cmd-click it.
 
 - **Share** sends the link to your friends. On a phone it opens the share
   sheet, and a line beside the button says "Opening your phone's share
@@ -193,18 +267,25 @@ they are now.
 
 The link opens the same hike. A walk you drew opens the same walk, too. The
 link also carries your search settings: the month, the weights you changed,
-Advanced search being open, Return to start, Strict order, the starting place
-with its limits, and the grouping distance. Whoever opens it sees the same
-search, ready for **Find similar**. A link to a hike you described works the
-same way. The address in your browser keeps them up to date, so a reload
-keeps them too. Older links without settings still open the hike.
+Advanced search being open, Return to start, Strict order, the regions ticked
+under Hikes in, and the grouping distance. It leaves out your starting place,
+its coordinates and its drive or distance limit: they are yours, and a friend
+starts from somewhere else. Whoever opens it sees the same search, ready for
+**Find similar**. A link to a hike you described works the same way. The
+address in your browser keeps every setting up to date, your starting place
+too, so a reload keeps them. A link opened in a tab that is already open (typed, pasted,
+or gone Back or Forward to) sets every setting it does not name to its
+default, so it opens the same search as a fresh page; only the units stay as
+they are when the link does not name them. Older links without settings still open the hike.
 
 A link that has been cut short or changed by hand says "This link could not be
 opened" beside the search box. A part of a link the page does not know is
 ignored, and the hike still opens. If you edit the address to other settings,
-or go Back or Forward to one, a list found with other settings is marked "The
-query changed since this ranking". Back to the home address shows the page as
-it opens, with no hike and no list.
+or go Back or Forward to one, a list found with other settings goes, as it would
+on a reload of that address: press **Find similar** for the list of those
+settings. An address of the list's own settings keeps the list, no longer
+marked as from before. Back to the home address shows the page as it opens, with no hike and
+no list.
 
 Good to know: the GPX file holds the line of the hike as you see it on the
 map, with a height at every point. With Return to start on, it also holds the
@@ -212,8 +293,11 @@ walk back to the start as a second track, named "…: way back to the start",
 so the file matches the length the page shows. With it off, the file is the
 hike one way. The line is simplified a little, so a GPS app may measure it a
 few percent shorter, as it cuts small bends; when the gap is 1 % or more, a
-line under the buttons says how much. The route data comes from OpenStreetMap and the heights from an
-elevation map, and the file credits both. The first download of a walk back
+line under the buttons says how much. The route data comes from OpenStreetMap
+(or the official register the hike comes from) and the heights from an
+elevation map, and the file credits both. The file links back to the hike
+alone (one way when the file is), without your starting place or other search
+settings, so a file you pass on does not say where you start from. The first download of a walk back
 along the trails can take a few seconds while the server reads the trails.
 
 ## One way or with the way back
@@ -257,7 +341,7 @@ below the box's edge, the box says "More below ↓ scroll".
 - Not happy with the results? Change one slider at a time and press **Find
   similar** again. The results move with your weights.
 - A long tour is also listed as day stages. A stage's name reads "…, stage 2:
-  from – to".
+  from – to", and each stage starts where the one before it ends.
 - Planning for winter or summer? Set the **Month**.
 - Narrow with a drive limit if a result list is huge and far away.
 - The address in your browser holds your hike or your drawn walk, so you can
@@ -268,8 +352,9 @@ below the box's edge, the box says "More below ↓ scroll".
 
 ## Where the data comes from
 
-Routes, huts, water and the like come from OpenStreetMap. Heights come from
-FABDEM, land cover from ESA WorldCover and climate from CHELSA. The full
+Routes, huts, water and the like come from OpenStreetMap, and some routes from
+official trail registers published as open data. Heights come from Copernicus
+DEM GLO-30, land cover from ESA WorldCover and climate from CHELSA. The full
 credits are on the site's credits page and in
 [DATA-LICENSES.md](../DATA-LICENSES.md).
 
@@ -305,9 +390,10 @@ Each hike has a score, and each thing compared has its own score. Press the
 - "No data" means we don't know that fact for the hike. Most often it is the
   difficulty grade, which most trails don't have on OpenStreetMap; a hike with
   no grade scores 0 on difficulty against a hike that has one. Any other fact
-  we don't know is simply left out of the score. When you describe the hike
-  you want, a hike with no data for something you asked for scores 0 on it
-  instead, so it is listed below the hikes that have that data.
+  we don't know scores 0 the same way against a hike you like that has it, and
+  when you describe the hike you want, for something you asked for, so it is
+  listed below the hikes that have that data. A fact the hike you like has no
+  data for is left out of the score.
 - Open a hike to see every measure side by side with the hike you like (or
   the one you want). A greyed row is a measure that is not part of the score:
   it still shows the facts and its score, faded, and says why: "not counted
@@ -337,6 +423,9 @@ whenever the list has one.
   beside it says why.
 - Redraw and Strict order change the first 10 rows and remove the rows "Show
   10 more" added; press it again for the next ones.
+- When no listed row scores as high as the best match, the note above the
+  list names its score, such as "This draw leaves out the best match, scoring
+  0.979". The line goes once "Show 10 more" lists a row that high.
 - When the best areas score exactly the same, the note above the list says
   so. Their order among themselves means nothing.
 - A link to a hike or a wish keeps Strict order when it is ticked. Without
@@ -436,6 +525,12 @@ listed in 2 rows: #2, #5 (marked composed)". Not all 14 are listed. The others
 rank lower, are not drawn on this page (Redraw or tick Strict order shows
 them), or walk mostly the same trails as a listed hike. When none makes the
 list, the note says how the best loop found scores against the last row (below,
-level with it to three decimals, or above), and why one that scores as well is
-not listed. When the search finds none, it says "no loop found, so none is
-listed".
+level with it to three decimals, or above). When page 1 only left it out of its
+draw, or it ranks below the last row in Strict order (the note says where:
+just below it, or its place, such as #14), a "List the best loop" button lists
+it: it ticks Strict order when that lists the loop, or else draws
+page 1 again (with Strict order unticked) until the loop is in it. Otherwise
+the note says why it is not listed and that there is nothing to change. The
+note's first sentence says "and loops composed near the best of them" only
+while a loop is listed. When the search finds none, it says "no loop found, so
+none is listed".

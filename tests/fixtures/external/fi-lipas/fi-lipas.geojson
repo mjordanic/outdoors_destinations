@@ -1,0 +1,27 @@
+{"type": "FeatureCollection", "features": [
+ {"type": "Feature",
+  "properties": {"lipas-id": 100, "name": " Korpi trail ", "status": "active", "type-code": 4405},
+  "geometry": {"type": "LineString", "coordinates": [[24.0, 60.0], [24.0, 60.01], [24.01, 60.02]]}},
+ {"type": "Feature",
+  "properties": {"lipas-id": 200, "name": "Joined walk", "status": "active", "type-code": 4405},
+  "geometry": {"type": "MultiLineString", "coordinates": [
+   [[25.0, 60.0], [25.0, 60.01]],
+   [[25.0, 60.0103], [25.0, 60.02]]]}},
+ {"type": "Feature",
+  "properties": {"lipas-id": 300, "name": "Split walk", "status": "active", "type-code": 4405},
+  "geometry": {"type": "MultiLineString", "coordinates": [
+   [[24.0, 61.0], [24.0, 61.01]],
+   [[24.0, 60.0], [24.0, 60.01]]]}},
+ {"type": "Feature",
+  "properties": {"lipas-id": 400, "name": "Closed trail", "status": "inactive", "type-code": 4405},
+  "geometry": {"type": "LineString", "coordinates": [[24.0, 63.0], [24.0, 63.02]]}},
+ {"type": "Feature",
+  "properties": {"lipas-id": 500, "name": "Ski track", "status": "active", "type-code": 4401},
+  "geometry": {"type": "LineString", "coordinates": [[24.0, 63.1], [24.0, 63.12]]}},
+ {"type": "Feature",
+  "properties": {"lipas-id": 600, "name": "Pieni luontopolku", "status": "active", "type-code": 4404},
+  "geometry": {"type": "LineString", "coordinates": [[26.0, 62.0], [26.001, 62.0]]}},
+ {"type": "Feature",
+  "properties": {"lipas-id": 700, "name": "  ", "status": "active", "type-code": 4405},
+  "geometry": {"type": "LineString", "coordinates": [[24.0, 63.2], [24.0, 63.22]]}}
+]}

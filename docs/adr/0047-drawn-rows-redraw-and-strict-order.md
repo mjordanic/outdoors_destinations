@@ -55,7 +55,12 @@ best 20, as before. "Suggest loops near these hikes" keeps the shown draw number
 more". `LOOP_STARTS`, `LOOP_BUDGET_S` and the rest of the search are unchanged.
 
 **What the page says.** The note above the table reads "These 10 are picked from the best 30 areas,
-closer matches more often: Redraw for others, or tick Strict order for the exact ranking." A row that
+closer matches more often, so a better match can be left out, and # is a place in this list, not a
+rank. Each “Show 10 more” page is drawn too. Redraw for others, or tick Strict order for the exact
+ranking." When no row shown scores as high as the pool's best, it adds "This draw leaves out the best
+match, scoring 0.979: Redraw, or tick Strict order to see it." The # heading's tooltip says the same of
+a drawn page, and "Rank in the ranking" of one that is not. Visitor testers read a drawn page as the
+ranking, and missed a 0.979 the draw left out. A row that
 Strict order would not list on its page, one drawn from below the 10th, has a light "picked" mark in
 the # column. Every row is drawn, so marking every one would say nothing. When the best rows of the
 pool score exactly the same, the note says "The best 4 areas match equally well." Calibrated Wish

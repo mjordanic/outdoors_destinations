@@ -1,5 +1,5 @@
 ---
-status: accepted (supersedes ADR-0009; Round 2's line start amended by ADR-0048)
+status: accepted (supersedes ADR-0009; Round 2's line start amended by ADR-0048; pieces a left-out way joins since ADR-0077)
 ---
 
 # DayHikeGeometry is the main walk of the member-way graph

@@ -28,10 +28,13 @@ REFERENCE_DIR = (
 VALHALLA_URL = os.environ.get("DAYHIKE_VALHALLA_URL", "http://127.0.0.1:8002")
 SERVING_DIR = Path(os.environ.get("DAYHIKE_SERVING_DIR", DATA_DIR / "web-serving"))
 EUROPE_BOUNDS = (32.6, -31.3, 71.2, 46.4)  # south, west, north, east (docs/technical.md Europe walkthrough)
-# FABDEM tiles that carry vertices but are 404 on the mirror (checked 2026-10-25): Georgian
-# mountains; and open sea under the ferry gaps of the E2, E8 and E9 long-distance paths,
-# kept since ADR-0033 (checked 2026-11-02).
-KNOWN_DEM_GAPS = frozenset({"N41E043", "N41E044", "N41E046", "N49W004", "N49W005", "N52E002", "N52E003"})
+# Tiles that carry vertices but have no DEM tile, by source. FABDEM: 404 on the mirror (checked
+# 2026-10-25) for the Georgian mountains; and open sea under the ferry gaps of the E2, E8 and E9
+# long-distance paths, kept since ADR-0033 (checked 2026-11-02). Copernicus GLO-30: the tiles the Public
+# licence leaves out (``COPERNICUS_EXCLUDED_TILES``, Armenia, Azerbaijan and the Georgian border) and open sea,
+# which the bucket lacks; which of them carry vertices is not pinned (``known_dem_gaps``).
+_SEA_TILES = frozenset({"N49W004", "N49W005", "N52E002", "N52E003"})
+KNOWN_DEM_GAPS = frozenset({"N41E043", "N41E044", "N41E046"}) | _SEA_TILES
 # Geofabrik "europe" children that group other children.
 COMPOSITE_REGIONS = frozenset({"alps", "dach", "britain-and-ireland", "great-britain"})
 CHUNK = 2_000
@@ -493,6 +496,30 @@ def vertex_tiles(geometry: sqlite3.Connection) -> dict[tuple[int, int], tuple[in
         "FROM vertices GROUP BY south, west"
     ).fetchall()
     return {(south, west): tuple(rest) for south, west, *rest in rows}
+
+
+def world_dem_source(dem_dir: Path):
+    """The world ``DemSource`` (FABDEM or Copernicus GLO-30) of the tiles in ``dem_dir``: the
+    elevation map a build read, whatever its docs say (every step reads it from the tile names)."""
+    from dayhike.dem import dem_sources_of
+
+    (source,) = [source for source in dem_sources_of(dem_dir) if not source.regional]
+    return source
+
+
+def known_dem_gaps(source) -> frozenset[str]:
+    """The tiles under vertices that ``source`` may lack: FABDEM's are exactly ``KNOWN_DEM_GAPS``;
+    Copernicus GLO-30 may lack any tile it leaves out, and open sea."""
+    from dayhike.dem import COPERNICUS, COPERNICUS_EXCLUDED_TILES
+
+    return COPERNICUS_EXCLUDED_TILES | _SEA_TILES if source is COPERNICUS else KNOWN_DEM_GAPS
+
+
+def dem_attribution(source) -> dict[str, str]:
+    """The export's credit for the world source ``source``, by its key in ``meta.json``."""
+    from dayhike.dem import COPERNICUS, COPERNICUS_ATTRIBUTION, FABDEM_ATTRIBUTION
+
+    return {"copernicus": COPERNICUS_ATTRIBUTION} if source is COPERNICUS else {"fabdem": FABDEM_ATTRIBUTION}
 
 
 def corner_id(south: int, west: int) -> str:

@@ -17,10 +17,12 @@ from dayhike.catalog import (
     build_catalog,
     filter_by_drive_time,
 )
+from dayhike.destination_hikes import DEST_WORKERS_ENV
 from dayhike.dem import DEM_SOURCES, Bounds, DEFAULT_DEM_DIR, fetch_dem, sample_dem
 from dayhike.landcover import DEFAULT_LANDCOVER_DIR, fetch_worldcover, sample_landcover
 from dayhike.parallel import WORKERS_ENV
 from dayhike.climate import DEFAULT_CLIMATE_DIR, fetch_chelsa, sample_climate
+from dayhike.commons import DEFAULT_COMMONS_DIR, count_commons, fetch_commons
 from dayhike.extracts import fetch_geofabrik_extracts
 from dayhike.regions import (
     DEFAULT_MAP_REGION,
@@ -35,6 +37,8 @@ from dayhike.regions import (
     view_around,
 )
 from dayhike.highways import HighwayDriveTimeClient, HighwaySnaps
+from dayhike.ingest import PATH_LEVELS
+from dayhike.steps import STEP_READS, StepLedger, file_key, files_key
 from dayhike.similarity import (
     CORE_MEASURES,
     MEASURE_NAMES,
@@ -74,6 +78,15 @@ def main(argv: list[str] | None = None) -> int:
         help="Ignore an existing ingest work file and start from the snapshot",
     )
     ingest.add_argument(
+        "--pass-cache",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="Keep the work file the passes over the snapshot leave in DIR, and start from it when "
+        "the same snapshot files, paths levels and code come again (--fresh reads the snapshot again); "
+        "it holds one snapshot, about the size of the work file (default: none)",
+    )
+    ingest.add_argument(
         "--list",
         action="store_true",
         dest="list_dayhikes",
@@ -95,12 +108,19 @@ def main(argv: list[str] | None = None) -> int:
         "100 m starts at its lower end (ADR-0048). Without it, height orients no line",
     )
     ingest.add_argument(
+        "--previous",
+        type=Path,
+        default=None,
+        help="Catalog of an earlier build (its GeometryStore beside it): a line whose ends differ by "
+        "80 to 120 m starts where that build started it, so a few metres of height cannot turn it round (ADR-0048)",
+    )
+    ingest.add_argument(
         "--external",
         action="append",
         default=[],
         metavar="SOURCE",
-        help="Add the hikes of an external source cached by fetch-external, e.g. ie-sport-ireland "
-        "(ADR-0062); repeatable",
+        help="Add the hikes of an external source cached by fetch-external, e.g. ie-sport-ireland, "
+        "fi-lipas, no-turrutebasen, fr-ecrins-randonnees or it-odh-suedtirol (ADR-0062); repeatable",
     )
     ingest.add_argument(
         "--external-dir",
@@ -108,12 +128,38 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Directory of the external sources' caches (default: data/external)",
     )
+    ingest.add_argument(
+        "--paths",
+        action="append",
+        default=[],
+        metavar="[INPUT=]LEVEL",
+        help="Paths in no hiking relation read into the TrailGraph and the snapshot: graded (sac_scale) "
+        "paths only; also named paths, footways and bridleways, which become named-trail hikes (trails, "
+        "a US build, ADR-0066); also named tracks (named); or also unnamed paths (unnamed) (ADR-0065, "
+        "default: graded). INPUT=LEVEL sets one input file or directory's level, repeatable: "
+        "a Europe and US build reads data/osm/us=trails (ADR-0069)",
+    )
     _add_workers(ingest)
+    ingest.add_argument(
+        "--dest-workers",
+        type=_parse_workers,
+        default=None,
+        metavar="N",
+        help="Worker processes for the destination hikes' tile search, which runs before the snapshot "
+        f"loads, the same result with any number (default: ${DEST_WORKERS_ENV}, else the --workers count)",
+    )
+    _add_resume(ingest)
     fetch_ext = subparsers.add_parser(
         "fetch-external",
         help="Download an external hike source into data/external/<source> (does not ingest)",
     )
-    fetch_ext.add_argument("--source", required=True, help="Sources register id, e.g. ie-sport-ireland")
+    fetch_ext.add_argument(
+        "--source",
+        required=True,
+        help="Sources register id, e.g. ie-sport-ireland, fi-lipas (fi is that Finland source), "
+        "no-turrutebasen (no is that Norway source), fr-ecrins-randonnees or it-odh-suedtirol; fr is every French "
+        "dataset whose licence and file pass the gate (ADR-0062)",
+    )
     fetch_ext.add_argument(
         "--dest",
         type=Path,
@@ -196,6 +242,7 @@ def main(argv: list[str] | None = None) -> int:
         help="WorldCover GeoTIFFs; Copernicus GLO-30 needs them for the ground under trees (default: data/landcover)",
     )
     _add_workers(sample)
+    _add_resume(sample)
     sample_lc = subparsers.add_parser(
         "sample-landcover",
         help="Sample local LandCover rasters onto GeometryStore vertices and Catalog fractions",
@@ -213,6 +260,37 @@ def main(argv: list[str] | None = None) -> int:
         help="Directory of LandCover GeoTIFFs (default: data/landcover)",
     )
     _add_workers(sample_lc)
+    _add_resume(sample_lc)
+    fetch_cm = subparsers.add_parser(
+        "fetch-commons",
+        help="Download the Wikimedia Commons geo_tags, page and image dumps (about 27 GB) into data/commons",
+    )
+    fetch_cm.add_argument(
+        "--dest", type=Path, default=DEFAULT_COMMONS_DIR, help="Directory for the dumps (default: data/commons)"
+    )
+    count_cm = subparsers.add_parser(
+        "count-commons",
+        help="Count distinct Commons uploaders within 150 m of each DayHike into the Catalog (shown, never scored)",
+    )
+    count_cm.add_argument(
+        "--catalog",
+        type=Path,
+        default=Path("data/catalog.sqlite"),
+        help="SQLite Catalog path (default: data/catalog.sqlite)",
+    )
+    count_cm.add_argument(
+        "--commons", type=Path, default=DEFAULT_COMMONS_DIR, help="Directory of the Commons dumps (default: data/commons)"
+    )
+    count_cm.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="Keep the parsed Commons points in DIR, and read them from there while the dumps and "
+        "the Catalog's bounds are the same (default: parse the dumps every run)",
+    )
+    _add_workers(count_cm)
+    _add_resume(count_cm)
     sample_cl = subparsers.add_parser(
         "sample-climate",
         help="Sample local climate rasters into Catalog hike-level monthly means",
@@ -229,6 +307,7 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_CLIMATE_DIR,
         help="Directory of CHELSA GeoTIFFs (default: data/climate)",
     )
+    _add_resume(sample_cl)
     sample_tg = subparsers.add_parser(
         "sample-trailgraph",
         help="Sample local DEM, LandCover and climate rasters onto the TrailGraph's vertices",
@@ -247,6 +326,7 @@ def main(argv: list[str] | None = None) -> int:
         "--climate", type=Path, default=DEFAULT_CLIMATE_DIR, help="CHELSA GeoTIFFs (default: data/climate)"
     )
     _add_workers(sample_tg)
+    _add_resume(sample_tg)
     similarity = subparsers.add_parser(
         "build-similarity",
         help="Build the similarity facts and Calibration next to a Catalog",
@@ -275,6 +355,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Keep the stored facts and only recompute the Calibration",
     )
     _add_workers(similarity)
+    _add_resume(similarity)
     rank = subparsers.add_parser("rank", help="Rank DayHikes by similarity to Seeds")
     rank.add_argument("--catalog", required=True, type=Path)
     rank.add_argument(
@@ -395,15 +476,40 @@ def main(argv: list[str] | None = None) -> int:
     export.add_argument(
         "--countries",
         type=Path,
-        help="Natural Earth admin-0 countries GeoJSON: the country each hike starts in, for its emergency number",
+        help="Natural Earth 10m admin-0 countries GeoJSON: the country each hike starts in, for its emergency number",
+    )
+    export.add_argument(
+        "--borders",
+        type=Path,
+        help="Natural Earth 10m admin-0 land boundary lines GeoJSON, with --countries: a hike crossing or starting "
+        "within 2 km of a border also shows the other country's emergency number",
+    )
+    export.add_argument(
+        "--osm-borders",
+        type=Path,
+        action="append",
+        default=[],
+        help="OpenStreetMap national boundaries (osmium tags-filter <extract> r/admin_level=2), repeatable, with "
+        "--countries: a hike starting within 2 km of a border takes the country OSM puts it in and also shows the one it had",
     )
     export.add_argument(
         "--region",
         action="append",
         default=[],
         help=f"A region the Catalog covers: one of {', '.join(region_names())}, or a region .toml file; "
-        "repeatable. The site's pages name them (without it, or with only regions in Europe, they say Europe)",
+        "repeatable. The site's pages name them (with only regions in Europe, they say Europe); without it, they "
+        "name where the hikes start (Europe, the United States). Refused when hikes start on a side of 40° W (Europe or "
+        "the United States) no region given is on, or when a region given has no hikes on its side",
     )
+    export.add_argument(
+        "--external-dir",
+        type=Path,
+        default=None,
+        help="Directory of the external sources' caches (default: data/external): an OpenStreetMap hike that "
+        "lies on one of their records names it, and an external hike links its record's page as the source gives it now",
+    )
+    _add_workers(export)
+    _add_resume(export)
     countries = subparsers.add_parser(
         "export-countries",
         help="Add the country each hike starts in (for its emergency number) beside an existing serving export",
@@ -412,8 +518,28 @@ def main(argv: list[str] | None = None) -> int:
     countries.add_argument(
         "--countries",
         type=Path,
-        help="Natural Earth admin-0 countries GeoJSON; without it, the country of the place nearest each Trailhead",
+        help="Natural Earth 10m admin-0 countries GeoJSON; without it, the country of the place nearest each Trailhead",
     )
+    countries.add_argument(
+        "--borders",
+        type=Path,
+        help="Natural Earth 10m admin-0 land boundary lines GeoJSON, with --countries: a hike crossing or starting "
+        "within 2 km of a border also shows the other country's emergency number",
+    )
+    countries.add_argument(
+        "--osm-borders",
+        type=Path,
+        action="append",
+        default=[],
+        help="OpenStreetMap national boundaries (osmium tags-filter <extract> r/admin_level=2), repeatable, with "
+        "--countries: a hike starting within 2 km of a border takes the country OSM puts it in and also shows the one it had",
+    )
+    names = subparsers.add_parser(
+        "export-name-index",
+        help="Add the name search's index (names.npz) beside an existing serving export, so a server starts "
+        "without reading every hike name (export-serving writes it too)",
+    )
+    names.add_argument("--out", type=Path, default=Path("data/web-serving"))
     places = subparsers.add_parser(
         "export-places", help="Add GeoNames place search and the hike search's Landmarks beside an existing serving export"
     )
@@ -424,6 +550,52 @@ def main(argv: list[str] | None = None) -> int:
         help="GeoNames allCountries.zip; downloaded there when missing",
     )
     places.add_argument("--out", type=Path, default=Path("data/web-serving"))
+    cut = subparsers.add_parser(
+        "cut-serving",
+        help="Cut a finished serving export down to Europe, the US or a cut file's areas, as an export of its own",
+    )
+    cut.add_argument("--from", dest="source", type=Path, default=Path("data/web-serving"), help="The export to cut (read only)")
+    cut.add_argument(
+        "--keep",
+        required=True,
+        help="europe or us (the hikes east or west of 40° W), a cut file of dayhike/data/cuts by name (demo), "
+        "or a cut or region .toml file",
+    )
+    cut.add_argument("--out", required=True, type=Path, help="Where to write the cut export")
+    cut.add_argument(
+        "--geonames",
+        type=Path,
+        default=Path("data/geonames/allCountries.zip"),
+        help="The GeoNames allCountries.zip the export was made with: the cut's place search and Landmarks",
+    )
+    photos = subparsers.add_parser(
+        "export-photos",
+        help="Add up to two free Wikimedia Commons photos of each hike's named POIs to a serving export",
+    )
+    photos.add_argument("--catalog", type=Path, default=Path("data/catalog.sqlite"))
+    photos.add_argument("--out", type=Path, default=Path("data/web-serving"))
+    photos.add_argument(
+        "--cache",
+        type=Path,
+        default=Path("data/commons-cache.sqlite"),
+        help="Wikimedia API responses; a later run fetches only what this lacks",
+    )
+    photos.add_argument(
+        "--warm-only",
+        action="store_true",
+        help="Only fill --cache with the answers for POIs on a hike, from the Catalog alone (run it right after ingest, "
+        "beside the CPU steps); --out is not read",
+    )
+    osm_download = subparsers.add_parser(
+        "export-osm-download",
+        help="Write the ODbL download of the OpenStreetMap part of a serving export's hikes (hikes-osm.sqlite and a README)",
+    )
+    osm_download.add_argument("--data", type=Path, default=Path("data/web-serving"), help="Serving export directory")
+    osm_download.add_argument("--out", type=Path, default=Path("data/osm-download"))
+    osm_download.add_argument(
+        "--data-date",
+        help="Date (YYYY-MM-DD) of the OpenStreetMap data the export was built from; default: the day the export was written",
+    )
     serve = subparsers.add_parser("serve", help="Serve the web demo from a serving export")
     serve.add_argument("--data", type=Path, default=Path("data/web-serving"))
     serve.add_argument("--host", default="127.0.0.1")
@@ -462,6 +634,10 @@ def main(argv: list[str] | None = None) -> int:
         "--pmtiles-url",
         help="A vector PMTiles base map (Protomaps basemap): the maps draw it with MapLibre GL JS, raster tiles the fallback",
     )
+    serve.add_argument(
+        "--download-url",
+        help="Where the ODbL download (hikes-osm.sqlite, `dayhike export-osm-download`) is hosted: the credits page links it; empty or unset, no link",
+    )
     coverage = subparsers.add_parser(
         "coverage-map", help="Draw the SVG map of the regions (default Europe) with the covered countries shaded"
     )
@@ -482,6 +658,10 @@ def main(argv: list[str] | None = None) -> int:
             subparsers.choices[args.command].error(str(exc))
     if getattr(args, "workers", None) is not None:
         os.environ[WORKERS_ENV] = str(args.workers)  # the stage's code reads it (dayhike.parallel)
+    if getattr(args, "dest_workers", None) is not None:
+        os.environ[DEST_WORKERS_ENV] = str(args.dest_workers)
+    if args.command in STEP_READS and not _STEP_RUNNING:
+        return _run_step(args, argv)
     if args.command == "export-serving":
         try:
             regions = [load_region(name) for name in args.region]
@@ -489,16 +669,21 @@ def main(argv: list[str] | None = None) -> int:
             export.error(str(exc))
         return _export_serving(
             args.catalog, args.out, args.valhalla_tiles, args.snaps, args.valhalla_url, args.geonames, args.countries,
-            regions,
+            args.borders, regions, args.external_dir, args.osm_borders,
         )
     if args.command == "export-countries":
         from dayhike.serving import ServingExportError, export_countries
 
         try:
-            print(export_countries(args.out, args.countries))
+            print(export_countries(args.out, args.countries, args.borders, args.osm_borders))
         except ServingExportError as exc:
             print(exc, file=sys.stderr)
             return 1
+        return 0
+    if args.command == "export-name-index":
+        from dayhike.serving import export_name_index
+
+        print(export_name_index(args.out))
         return 0
     if args.command == "export-places":
         from dayhike.serving import export_landmarks, export_places, fetch_geonames
@@ -506,6 +691,50 @@ def main(argv: list[str] | None = None) -> int:
         geonames = fetch_geonames(args.geonames)
         print(export_places(geonames, args.out))
         print(export_landmarks(args.out, geonames))
+        return 0
+    if args.command == "cut-serving":
+        from dayhike.cut import CutError, cut_serving, load_keep
+        from dayhike.serving import ServingExportError
+
+        try:
+            keep = load_keep(args.keep)
+        except CutError as exc:
+            cut.error(str(exc))
+        has_places = (args.source / "places.sqlite").is_file()
+        try:
+            print(
+                cut_serving(
+                    args.source, args.out, keep, geonames_path=args.geonames if has_places else None, progress=_progress
+                )
+            )
+        except (StaleSimilarity, ServingExportError) as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        return 0
+    if args.command == "export-photos":
+        from dayhike.photos import export_photos, warm_photos
+
+        if args.warm_only:
+            try:
+                warmed = warm_photos(args.catalog, args.cache, progress=lambda line: print(line, flush=True))
+            except FileNotFoundError as exc:
+                print(exc, file=sys.stderr)
+                return 1
+            print(f"{warmed} POIs warmed")
+            return 0
+        try:
+            count = export_photos(
+                args.catalog, args.out, args.cache, progress=lambda line: print(line, flush=True)
+            )
+        except FileNotFoundError as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        print(f"{count} DayHikes with a photo")
+        return 0
+    if args.command == "export-osm-download":
+        from dayhike.osm_download import export_osm_download
+
+        print(export_osm_download(args.data, args.out, args.data_date) / "hikes-osm.sqlite")
         return 0
     if args.command == "serve":
         return _serve(
@@ -521,6 +750,7 @@ def main(argv: list[str] | None = None) -> int:
             args.tile_attribution,
             args.tile_max_zoom,
             args.pmtiles_url,
+            args.download_url,
         )
     if args.command == "coverage-map":
         from dayhike.coverage import WORLD_VIEW, coverage_map
@@ -537,6 +767,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{country}\t{count}")
         return 0
     if args.command == "ingest":
+        paths, paths_of = "graded", {}
+        for value in args.paths:
+            given, _, level = value.rpartition("=")
+            if level not in PATH_LEVELS:
+                ingest.error(f"--paths {value}: the level must be one of {', '.join(PATH_LEVELS)}")
+            if given:
+                paths_of[Path(given)] = level
+            else:
+                paths = level
         return _ingest(
             args.osm,
             args.catalog,
@@ -544,8 +783,12 @@ def main(argv: list[str] | None = None) -> int:
             list_dayhikes=args.list_dayhikes,
             snap_tolerance_m=args.snap_tolerance,
             dem_dir=args.dem,
+            previous=args.previous,
             external=args.external,
             external_dir=args.external_dir,
+            paths=paths,
+            paths_of=paths_of,
+            pass_cache=args.pass_cache,
         )
     if args.command == "sample-trailgraph":
         try:
@@ -566,10 +809,18 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             compose.error(str(exc))
     if args.command == "fetch-external":
-        from dayhike.external import EXTERNAL_DIR, fetch_external
+        from dayhike.external import EXTERNAL_DIR, fetch_external, fetch_french_datasets
 
+        root = EXTERNAL_DIR if args.dest is None else args.dest
+        if args.source == "fr":
+            paths, skipped = fetch_french_datasets(root)
+            for path in paths:
+                print(path)
+            for reason in skipped:
+                print(f"skipped {reason}", file=sys.stderr)
+            return 0
         try:
-            print(fetch_external(args.source, EXTERNAL_DIR if args.dest is None else args.dest))
+            print(fetch_external(args.source, root))
         except ValueError as exc:
             fetch_ext.error(str(exc))
         return 0
@@ -589,6 +840,13 @@ def main(argv: list[str] | None = None) -> int:
             sample.error(str(exc))
     if args.command == "sample-landcover":
         return _sample_landcover(args.catalog, args.landcover)
+    if args.command == "fetch-commons":
+        for path in fetch_commons(args.dest, progress=_progress):
+            print(path)
+        return 0
+    if args.command == "count-commons":
+        print(count_commons(args.catalog, args.commons, progress=_progress, cache_dir=args.cache_dir))
+        return 0
     if args.command == "sample-climate":
         return _sample_climate(args.catalog, args.climate)
     if args.command == "build-similarity":
@@ -629,8 +887,12 @@ def _ingest(
     list_dayhikes: bool = False,
     snap_tolerance_m: float = SNAP_TOLERANCE_M,
     dem_dir: Path | None = None,
+    previous: Path | None = None,
     external: list[str] | tuple[str, ...] = (),
     external_dir: Path | None = None,
+    paths: str = "graded",
+    paths_of: dict[Path, str] | None = None,
+    pass_cache: Path | None = None,
 ) -> int:
     catalog = build_catalog(
         osm_paths,
@@ -639,8 +901,12 @@ def _ingest(
         fresh=fresh,
         snap_tolerance_m=snap_tolerance_m,
         dem_dir=dem_dir,
+        previous=previous,
         external=external,
         external_dir=external_dir,
+        paths=paths,
+        paths_of=paths_of,
+        pass_cache=pass_cache,
     )
     print(catalog.path)
     print(catalog.ingest_report)
@@ -815,8 +1081,12 @@ def _export_serving(
     valhalla_url: str | None,
     geonames: Path | None,
     countries: Path | None,
+    borders: Path | None,
     regions: list[Region],
+    external_dir: Path | None = None,
+    osm_borders: tuple[Path, ...] | list[Path] = (),
 ) -> int:
+    from dayhike.external import EXTERNAL_DIR
     from dayhike.serving import ServingExportError, export_serving, fetch_geonames
 
     try:
@@ -829,7 +1099,10 @@ def _export_serving(
                 valhalla_url=valhalla_url,
                 geonames_path=geonames and fetch_geonames(geonames),
                 countries_path=countries,
+                borders_path=borders,
+                osm_borders_paths=osm_borders,
                 regions=regions,
+                external_dir=EXTERNAL_DIR if external_dir is None else external_dir,
                 progress=_progress,
             )
         )
@@ -852,6 +1125,7 @@ def _serve(
     tile_attribution: str | None = None,
     tile_max_zoom: int | None = None,
     pmtiles_url: str | None = None,
+    download_url: str | None = None,
 ) -> int:
     try:
         import uvicorn
@@ -884,6 +1158,7 @@ def _serve(
             cors_origins=cors_origins,
             site_url=site_url,
             basemap=BaseMap(**{key: value for key, value in tiles.items() if value is not None}),
+            download_url=download_url,
         )
     except ValueError as exc:
         print(exc, file=sys.stderr)
@@ -898,6 +1173,60 @@ def _serve(
 def _progress(message: str) -> None:
     # Each line says when it was written (UTC), so a long rebuild's log times every step.
     print(f"{time.strftime('%H:%M:%SZ', time.gmtime())} {message}", file=sys.stderr, flush=True)
+
+
+_STEP_RUNNING: list[str] = []  # the step ``_run_step`` is running: ``main`` then runs its command
+
+
+def _add_resume(command: argparse.ArgumentParser) -> None:
+    command.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip this step when it finished before with the same inputs, code and earlier steps "
+        "(its marker is beside the Catalog, in CATALOG.steps); else run it",
+    )
+
+
+# Arguments that do not decide what a step writes, or that name its own output.
+_NOT_INPUTS = {
+    "command", "catalog", "workers", "dest_workers", "resume", "fresh", "list_dayhikes", "out", "pass_cache", "cache_dir",
+    "region_default",
+}
+
+
+def _input_key(value: object) -> object:
+    if isinstance(value, Path):
+        return files_key(value) if value.is_dir() else file_key(value) or str(value)
+    if isinstance(value, (list, tuple)):
+        return [_input_key(item) for item in value]
+    return str(value)
+
+
+def _step_inputs(args: argparse.Namespace) -> dict[str, object]:
+    inputs = {"catalog_exists": args.catalog.is_file()}
+    if args.command == "export-serving":
+        inputs["exported"] = (args.out / "meta.json").is_file()
+        inputs["out"] = str(args.out)
+    inputs.update({name: _input_key(value) for name, value in sorted(vars(args).items()) if name not in _NOT_INPUTS})
+    return inputs
+
+
+def _run_step(args: argparse.Namespace, argv: list[str] | None) -> int:
+    """Run a rebuild step, or with ``--resume`` skip it when its marker says it finished with
+    these inputs; leave its marker when it succeeds (dayhike.steps)."""
+    ledger = StepLedger(args.catalog)
+    if args.resume and ledger.done(args.command, _step_inputs(args)):
+        _progress(f"{args.command}: finished before with the same inputs, skipped (--resume)")
+        return 0
+    ledger.clear(args.command)
+    _STEP_RUNNING.append(args.command)
+    try:
+        code = main(argv)
+    finally:
+        _STEP_RUNNING.pop()
+    if code == 0:
+        ledger.mark(args.command, _step_inputs(args))
+    return code
 
 
 def _add_workers(command: argparse.ArgumentParser) -> None:

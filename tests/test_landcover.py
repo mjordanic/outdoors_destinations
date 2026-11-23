@@ -482,9 +482,10 @@ def test_forested_seed_ranks_forested_neighbour_ahead_of_barer_match(
     scores = {item.dayhike.id: item.score for item in ranking.items}
 
     # PS-1 (1007) is forested like the Seed, Valley Path (1002) bare; the
-    # unsampled relation:1003 has no LandCover and is not ranked on it.
-    assert [item.dayhike.id for item in ranking.items] == [1007, 1002]
+    # unsampled relation:1003 has no LandCover and scores 0 on it (ADR-0071).
+    assert [item.dayhike.id for item in ranking.items] == [1007, 1002, 1003]
     assert scores[1007] > scores[1002]
+    assert scores[1003] == 0.0
 
 
 def test_landcover_fractions_stay_put_after_ranking(tmp_path: Path) -> None:
@@ -861,3 +862,124 @@ def test_sample_landcover_removes_similarity_facts(tmp_path: Path) -> None:
     )
     with pytest.raises(StaleSimilarity, match="build-similarity"):
         rank_dayhikes(Catalog.open(catalog_path), ["Ridge Walk"])
+
+
+def _scatter_shared_walks(store_path: Path) -> int:
+    """Every hike walks the same points in two 1° cells either side of 45°N, in an order that jumps between them,
+    with one long step so reads go along it."""
+    walk = [(45.01, 15.01), (44.995, 15.01), (45.01, 15.01), (45.03, 15.01), (44.995, 15.01), (44.995, 15.03)]
+    connection = sqlite3.connect(store_path)
+    try:
+        hikes = [row[0] for row in connection.execute("SELECT DISTINCT dayhike_id FROM vertices ORDER BY 1")]
+        connection.execute("DELETE FROM vertices")
+        connection.executemany(
+            "INSERT INTO vertices (dayhike_id, seq, node_id, latitude, longitude) VALUES (?, ?, ?, ?, ?)",
+            [(hike, seq, 1000 + seq, lat, lon) for hike in hikes for seq, (lat, lon) in enumerate(walk)],
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    return len(hikes) * len(walk)
+
+
+def _point_by_point_landcover(raster_dir: Path, walk: list[tuple[float, float]]) -> list[tuple[int | None, bytes | None]]:
+    """What each vertex of a walk gets read on its own: its class and the classes along the step after it."""
+    from dayhike.landcover import sample_landcover_classes, step_reads
+
+    out = []
+    for index, (lat, lon) in enumerate(walk):
+        nlat, nlon = walk[index + 1] if index + 1 < len(walk) else (lat, lon)
+        counts, points = step_reads([lat], [lon], [nlat], [nlon])
+        (code,) = sample_landcover_classes(raster_dir, [(lat, lon)])
+        along = sample_landcover_classes(raster_dir, [tuple(point) for point in points.tolist()])
+        blob = bytes(c or 0 for c in along) if any(c is not None for c in along) else None
+        out.append((code, blob))
+    return out
+
+
+def test_sample_landcover_reads_each_distinct_point_once_grouped_by_tile_and_matches_point_by_point(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dayhike import landcover
+
+    catalog_path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, catalog_path)
+    store_path = geometry_store_path_for(catalog_path)
+    vertex_count = _scatter_shared_walks(store_path)
+    rasters = tmp_path / "rasters"
+    rasters.mkdir()
+    grass_over_trees = np.array([[10, 30], [30, 10]], dtype="uint8")
+    _write_class_tif(rasters / "a.tif", west=14.99, south=44.99, east=15.05, north=45.05, codes=grass_over_trees)
+    sampled_points: list[tuple[float, float]] = []
+    real = landcover._sample_open_datasets
+
+    def recording(tiles, points):
+        sampled_points.extend(points)
+        return real(tiles, points)
+
+    monkeypatch.setattr(landcover, "_sample_open_datasets", recording)
+
+    sample_landcover(catalog_path, rasters)
+
+    assert len(sampled_points) == len(set(sampled_points))
+    store = sqlite3.connect(store_path)
+    try:
+        hikes = [row[0] for row in store.execute("SELECT DISTINCT dayhike_id FROM vertices ORDER BY 1")]
+        for hike in hikes:
+            walk = store.execute(
+                "SELECT latitude, longitude FROM vertices WHERE dayhike_id = ? ORDER BY seq", (hike,)
+            ).fetchall()
+            got = store.execute(
+                "SELECT landcover, landcover_along FROM vertices WHERE dayhike_id = ? ORDER BY seq", (hike,)
+            ).fetchall()
+            assert got == _point_by_point_landcover(rasters, walk)
+        assert any(blob for _code, blob in got)
+    finally:
+        store.close()
+    assert vertex_count == len(hikes) * 6
+
+
+def _landcover_snapshot(catalog_path: Path) -> tuple[list, list]:
+    store = sqlite3.connect(geometry_store_path_for(catalog_path))
+    try:
+        vertices = store.execute(
+            "SELECT dayhike_id, seq, landcover, landcover_along FROM vertices ORDER BY dayhike_id, seq"
+        ).fetchall()
+    finally:
+        store.close()
+    catalog = sqlite3.connect(catalog_path)
+    try:
+        fractions = catalog.execute(
+            f"SELECT dayhike_id, {', '.join(LANDCOVER_FRACTIONS)} FROM feature_vectors ORDER BY dayhike_id"
+        ).fetchall()
+    finally:
+        catalog.close()
+    return vertices, fractions
+
+
+def test_sample_in_small_spooled_runs_and_parts_matches_one_run_and_part(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dayhike import landcover
+
+    rasters = tmp_path / "rasters"
+    rasters.mkdir()
+    codes = np.random.default_rng(5).choice(np.array([10, 20, 30, 60, 70], dtype="uint8"), (200, 200))
+    _write_class_tif(rasters / "cover.tif", west=14.9, south=44.9, east=15.6, north=45.7, codes=codes)
+    whole = tmp_path / "whole.sqlite"
+    build_catalog(FIXTURE, whole)
+    sample_landcover(whole, rasters)
+
+    pieces = tmp_path / "pieces.sqlite"
+    build_catalog(FIXTURE, pieces)
+    # Hikes cross the runs, and each 1/7° block is a part of its own.
+    monkeypatch.setattr(landcover, "_SPOOL_ROWS", 3)
+    monkeypatch.setattr(landcover, "_PART_ROWS", 1)
+    monkeypatch.setattr(landcover, "_VERTEX_CHUNK", 2)
+    sample_landcover(pieces, rasters)
+
+    vertices, fractions = _landcover_snapshot(pieces)
+    assert (vertices, fractions) == _landcover_snapshot(whole)
+    assert {code for _id, _seq, code, _along in vertices} >= {10, 20, 30}
+    assert any(along for _id, _seq, _code, along in vertices)
+    assert all(row[1] is not None for row in fractions)

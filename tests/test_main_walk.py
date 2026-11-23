@@ -41,6 +41,7 @@ def _osm(
     tags: Mapping[str, str] = {"name": "Shape"},
     points: Sequence[tuple[float, float, Mapping[str, str]]] = (),
     way_tags: Mapping[int, Mapping[str, str]] = {},
+    other_routes: Sequence[Sequence[int]] = (),
 ) -> str:
     """Nodes by one-letter name at (x_km, y_km); ways as strings of node names.
 
@@ -49,7 +50,8 @@ def _osm(
     way to its role; every other member has role "". ``tags`` are the
     relation's tags besides type and route; ``points`` are tagged nodes
     (peaks, huts, places) at (x_km, y_km). ``way_tags`` replaces a member
-    way's tags (``highway=path`` otherwise).
+    way's tags (``highway=path`` otherwise). ``other_routes`` are the member
+    ways of other hiking relations.
     """
     node_ids = {name: 100 + index for index, name in enumerate(nodes)}
     xml = '<?xml version="1.0" encoding="UTF-8"?>\n<osm version="0.6">\n'
@@ -85,21 +87,28 @@ def _osm(
     relation_tags = "".join(f'<tag k="{k}" v="{v}"/>' for k, v in tags.items())
     xml += (
         f'<relation id="{RELATION_ID}" version="1">{listed}<tag k="type" v="route"/>'
-        f'<tag k="route" v="hiking"/>{relation_tags}</relation>\n</osm>\n'
+        f'<tag k="route" v="hiking"/>{relation_tags}</relation>\n'
     )
-    return xml
+    for number, route in enumerate(other_routes, start=1):
+        listed = "".join(f'<member type="way" ref="{way_id}" role=""/>' for way_id in route)
+        xml += (
+            f'<relation id="{RELATION_ID + number}" version="1">{listed}<tag k="type" v="route"/>'
+            '<tag k="route" v="hiking"/></relation>\n'
+        )
+    return xml + "</osm>\n"
 
 
 class Walk:
     def __init__(
         self, tmp_path: Path, nodes, ways, members, parking=(), road=None, roles={},
-        tags={"name": "Shape"}, points=(), way_tags={}, dem=None,
+        tags={"name": "Shape"}, points=(), way_tags={}, dem=None, previous=None, other_routes=(),
     ) -> None:
         tmp_path.mkdir(exist_ok=True)
         osm = tmp_path / "shape.osm"
-        osm.write_text(_osm(nodes, ways, members, parking, road, roles, tags, points, way_tags))
+        osm.write_text(_osm(nodes, ways, members, parking, road, roles, tags, points, way_tags, other_routes))
         catalog_path = tmp_path / "catalog.sqlite"
-        catalog = build_catalog(osm, catalog_path, dem_dir=dem)
+        self.catalog_path = catalog_path
+        catalog = build_catalog(osm, catalog_path, dem_dir=dem, previous=previous)
         self.hike = next((hike for hike in catalog.dayhikes if hike.id == RELATION_ID), None)
         if self.hike is None:
             return
@@ -356,6 +365,54 @@ def test_pieces_500_m_apart_leave_the_shorter_disconnected(tmp_path: Path) -> No
     assert walk.way(2) == _walked(0, 4_000.0)
     assert walk.unconnected_m == pytest.approx(2_000.0, abs=1.0)
     assert walk.jumps == []
+
+
+def test_pieces_a_way_the_relation_does_not_list_runs_between_are_joined_by_it(tmp_path: Path) -> None:
+    # Besseggen (relation 1417687): its mappers left out the 175 m way between
+    # its two pieces, which another relation lists; the walk follows it.
+    nodes = {"a": (0, 0), "b": (0, 3), "m": (0.1, 3.08), "e": (0, 3.15), "c": (0, 6)}
+    walk = Walk(tmp_path, nodes, {1: "ab", 2: "ec", 3: "bme"}, [1, 2], other_routes=[[3]])
+
+    assert walk.hike.length_m == pytest.approx(6_000.0 + 2 * math.hypot(100, 75) - 150, abs=2.0)
+    assert walk.vertices == "abmec"
+    assert walk.way(1) == _walked(0, 3_000.0)
+    assert walk.way(2) == _walked(1, 2_850.0)
+    assert walk.unconnected_m == pytest.approx(0.0, abs=0.01)
+    assert walk.jumps == []
+
+
+def test_a_way_longer_than_500_m_between_pieces_does_not_join_them(tmp_path: Path) -> None:
+    nodes = {"a": (0, 0), "b": (0, 4), "m": (0.4, 4.25), "e": (0, 4.5), "c": (0, 6.5)}
+    walk = Walk(tmp_path, nodes, {1: "ab", 2: "ec", 3: "bme"}, [1, 2], other_routes=[[3]])
+
+    assert walk.vertices == "ab"
+    assert walk.way(2) == _left("disconnected")
+    assert walk.unconnected_m == pytest.approx(2_000.0, abs=1.0)
+
+
+def test_a_way_that_crosses_a_member_way_does_not_join_pieces(tmp_path: Path) -> None:
+    # Way 3 runs from piece one through piece one's own node b to piece two:
+    # it is no missing link but another trail, so it bridges nothing.
+    nodes = {"a": (0, 0), "x": (0, 2.9), "b": (0, 3), "e": (0, 3.15), "c": (0, 6)}
+    walk = Walk(tmp_path, nodes, {1: "axb", 2: "ec", 3: "xbe"}, [1, 2], other_routes=[[3]])
+
+    assert walk.vertices == "axb"
+    assert walk.way(2) == _left("disconnected")
+
+
+def test_a_way_from_a_piece_to_a_role_leftover_does_not_join_pieces(tmp_path: Path) -> None:
+    # Way 4, another relation's, runs from the line's end b to the start f of
+    # the alternative 3, which is on no piece: it bridges nothing.
+    nodes = {"a": (0, 0), "b": (0, 3), "f": (0.2, 3), "g": (0.2, 3.8), "e": (0, 4.5), "c": (0, 6.5)}
+    walk = Walk(
+        tmp_path, nodes, {1: "ab", 2: "ec", 3: "fg", 4: "bf"}, [1, 2, 3],
+        roles={3: "alternative"}, other_routes=[[4]],
+    )
+
+    assert walk.hike.length_m == pytest.approx(3_000.0, abs=1.0)
+    assert walk.vertices == "ab"
+    assert walk.way(2) == _left("disconnected")
+    assert walk.way(3) == _left("role")
 
 
 def test_a_way_left_mid_way_by_the_route_is_walked_in_part(tmp_path: Path) -> None:
@@ -769,6 +826,49 @@ def test_a_line_whose_ends_differ_by_100_m_or_less_starts_where_parking_says(tmp
     )  # fmt: skip
 
     assert walk.vertices == "dcba"
+
+
+def _parked_line(tmp_path: Path, rise_m: float, previous: Walk | None = None) -> Walk:
+    # LINE parked at both ends, the nearer car park at the top d, a village by the bottom a (Medvednica 5).
+    return Walk(
+        tmp_path, LINE, LINE_WAYS, [1, 2, 3], parking=[(0, 6.1), (0, -0.6)], points=[BORCEC_BY_A],
+        dem=_dem_rising_to_d(tmp_path, rise_m=rise_m), previous=previous.catalog_path if previous else None,
+    )  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("before_m", "after_m", "start"),
+    [
+        (90.0, 110.0, "dcba"),  # a few metres across 100 m: the start the last build chose stays the top
+        (130.0, 92.0, "abcd"),  # ... and the bottom stays the bottom
+        (95.0, 105.0, "dcba"),
+        (105.0, 95.0, "abcd"),
+        (60.0, 130.0, "abcd"),  # a rise over the band decides again
+        (130.0, 60.0, "dcba"),  # ... and so does a fall under it
+    ],
+)
+def test_a_line_whose_ends_stay_within_the_band_around_100_m_keeps_the_start_of_the_last_build(
+    tmp_path: Path, before_m: float, after_m: float, start: str
+) -> None:
+    before = _parked_line(tmp_path / "before", before_m)
+
+    after = _parked_line(tmp_path / "after", after_m, previous=before)
+
+    assert after.vertices == start
+
+
+def test_without_a_last_build_the_ends_decide_at_100_m(tmp_path: Path) -> None:
+    assert _parked_line(tmp_path / "up", 105.0).vertices == "abcd"
+    assert _parked_line(tmp_path / "down", 95.0).vertices == "dcba"
+
+
+def test_a_last_build_that_never_held_the_line_decides_nothing(tmp_path: Path) -> None:
+    other = Walk(
+        tmp_path / "other", {"p": (3, 0), "q": (3, 2)}, {1: "pq"}, [1], parking=[(3, 2.1)],
+        dem=_dem_rising_to_d(tmp_path),
+    )  # fmt: skip
+
+    assert _parked_line(tmp_path / "after", 105.0, previous=other).vertices == "abcd"
 
 
 def test_a_descent_its_from_and_to_tags_declare_keeps_their_direction(tmp_path: Path) -> None:

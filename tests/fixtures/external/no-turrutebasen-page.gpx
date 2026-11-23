@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx xmlns="http://www.topografix.com/GPX/1/1" version="1.1">
+	<wpt lat="60.0" lon="10.0"><type>RuteInfoPunkt</type></wpt>
+	<rte>
+		<name>osl30</name>
+		<desc>Blåmerket sti</desc>
+		<src>DNT</src>
+		<type>Fotrute</type>
+		<rtept lat="60.0" lon="10.0"/>
+		<rtept lat="60.01" lon="10.0"/>
+	</rte>
+	<rte>
+		<name>ski1</name>
+		<desc>Løype</desc>
+		<src>DNT</src>
+		<type>Skiløype</type>
+		<rtept lat="61.0" lon="10.0"/>
+		<rtept lat="61.01" lon="10.0"/>
+	</rte>
+</gpx>

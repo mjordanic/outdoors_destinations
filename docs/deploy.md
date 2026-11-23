@@ -15,6 +15,124 @@ only once the deployment is approved.
 
 ## 1. Build the serving export (on the machine with the data)
 
+### Which site: Europe and the US, Europe, the US or the demo
+
+The site shows the hikes of the export in its data image, and reads everything
+else it shows from that export: the regions its pages name ("hikes across Europe
+and the contiguous United States"), whether the "Hikes in" choice shows (only with
+hikes in both), the credits, the place search and the map's opening view. So
+**whoever deploys chooses one thing, the data image**: `DAYHIKE_DATA_IMAGE` in the
+deploy workflow (section 9), or `DATA_IMAGE` by hand (section 3). There are four,
+all made from one Europe and US build (ADR-0082):
+
+| Site | Data image tag | Made with | Hikes (2026-11-22 build) | Cloud Run memory |
+| --- | --- | --- | ---: | --- |
+| **Europe and the US** | `<data_tag>-eu-us` | the export itself | 889,525 | 4Gi |
+| **Europe** | `<data_tag>-eu` | `cut-serving --keep europe` | 785,347 | 4Gi |
+| **United States** | `<data_tag>-us` | `cut-serving --keep us` | 104,178 | 2Gi |
+| **Demo** | `<data_tag>-demo` | `cut-serving --keep demo` | 109,756 | 2Gi |
+
+Build and export Europe and the US once, as below. Then cut each smaller site from
+that export; a cut needs nothing else of the build, only the GeoNames dump the
+export was made with (`--geonames`, default `data/geonames/allCountries.zip`):
+
+```bash
+uv run dayhike cut-serving --from data/web-serving --keep europe --out data/web-serving-eu
+uv run dayhike cut-serving --from data/web-serving --keep us --out data/web-serving-us
+uv run dayhike cut-serving --from data/web-serving --keep demo --out data/web-serving-demo
+```
+
+A cut reads the export without changing it and writes a complete export of its
+own; each file is written new, so an output made of hard links to the export
+(`cp -al`) leaves the export as it was. `europe` keeps the hikes starting east of
+40° W and `us` those west of it, the line the "Hikes in" choice uses (ADR-0074),
+and cuts the trail graph and highway tiles on the same line; it stops if a
+Segment or tile crosses it. A Europe cut ranks exactly as the Europe and US site
+does with only Europe ticked, and the US cut likewise: scores stay calibrated on
+the Europe and US hikes (ADR-0082). Its `meta.json` names the regions of its side,
+credits only the sources its hikes come from, and has the `data_tag` of the export
+with `-eu`, `-us` or `-demo` added, the tag of its data image (section 3); the
+deploy workflow sets the memory of the table from that tag (section 9). When the
+export has `names.npz` (below), the cut writes its own for the hikes it keeps.
+Measured on the 2026-11-22 export (M-series Mac, one cut at a time): Europe
+14 minutes, the US 5, the demo 4.5 (16 GB of RAM; at most 2.6 GB used); most of it is
+writing the trail graph and rebuilding the Landmarks.
+
+The demo is Slovenia, Austria and Switzerland, and California, Colorado, Utah and
+Washington: the areas of `src/dayhike/data/cuts/demo.toml`. Every feature works
+there (drive time, suggested loops, drawing a hike, similar hikes); outside them
+there are no hikes. Its trail graph is kept within 22 km of its hikes, and its
+highway tiles and the places its place search offers within 2° of each area's
+starts: its export is 3.5 GB against 16 GB,
+and on the Mac it opens in 1 s against 12 s and ranks in 0.14 s against 1.0 s
+(Triglava's hike, warm). For another showcase, copy that file and
+edit its `[[area]]` tables (`countries`, a `polygon` of `[lat, lon]` corners, or
+a `bounds` box; the pages name each by its `label`), then
+`--keep path/to/showcase.toml`; a region file works too, as one area of its
+`bounds` (`--keep src/dayhike/data/regions/us-colorado.toml`).
+
+### Europe only, or Europe and the US
+
+The site serves one export, so it shows the hikes of one Catalog. Two builds
+are supported (ADR-0069); a site of one region is best cut from the Europe and
+US export (above), but these builds still work. Pick one before the steps below:
+
+| Build | Ingest | `export-serving` | Cloud Run memory |
+| --- | --- | --- | --- |
+| **Europe only** | `dayhike ingest data/osm/europe-latest.osm.pbf` (paths level `graded`) | no `--region`, or `--region europe` | **4Gi** (section 3) |
+| **Europe and the US** (the last rebuild) | `dayhike ingest data/osm/europe data/osm/us --paths data/osm/us=trails` | `--region europe --region us-48` | **4Gi** |
+
+A US-only build is the same with only `data/osm/us` and `--paths trails`, and
+`--region us-48`; it fits 2Gi. The deploy workflow sets the memory from the data
+image's tag (section 9).
+
+The export names the regions its hikes start in, in `meta.json`: without
+`--region`, "Europe" for hikes east of 40° W and "the United States" for hikes
+west of it (ADR-0074), and the pages, the region filter and the smoke test
+follow. `--region` only labels them otherwise ("the contiguous United States",
+"Colorado"); `export-serving` refuses, before writing anything, a `--region`
+list that leaves out a region the hikes start in, or names one where none does.
+
+- **Europe only** is every command in this file and in
+  [technical.md](technical.md#clean-rebuild) as written. Nothing of the US is read or needed.
+- **Europe and the US** is one Catalog of both. Keep each region's extracts in a
+  directory of its own, so `--paths data/osm/us=trails` reads the US at the
+  `trails` level, which builds its named-trail hikes, while Europe stays at
+  `graded` and gets the same hikes as a Europe build; only names they share
+  gain a place (ADR-0068). The raster steps take both regions, each covering
+  its own box (CHELSA is clipped to the box around both):
+
+  ```bash
+  uv run dayhike fetch-extracts --region europe --dest data/osm/europe
+  uv run dayhike fetch-extracts --region us-48 --dest data/osm/us      # 4 Geofabrik groups, the 48 states and DC
+  uv run dayhike fetch-dem --region europe --region us-48 --source copernicus
+  uv run dayhike fetch-landcover --region europe --region us-48
+  uv run dayhike fetch-climate --region europe --region us-48
+  uv run dayhike ingest data/osm/europe data/osm/us --paths data/osm/us=trails --dem data/dem --fresh
+  # then sample-dem, sample-landcover, sample-climate, sample-trailgraph and build-similarity as for Europe
+  ```
+
+  Both regions must be read from one elevation map (export-serving refuses a
+  mix), so a combined build is a Copernicus GLO-30 build. The highway tiles
+  cover both: cut each region's highways, merge them, and build the tiles from the
+  one file, as in [Highway tiles](technical.md#highway-tiles-all-of-europe-small-server):
+
+  ```bash
+  ./data/valhalla/prepare-highways.sh data/osm/europe/europe-latest.osm.pbf /tmp/highways/europe
+  for f in data/osm/us/*-latest.osm.pbf; do
+    ./data/valhalla/prepare-highways.sh "$f" "/tmp/highways/$(basename "$f" -latest.osm.pbf)"
+  done
+  mkdir -p data/valhalla/highways-eu-us
+  osmium merge /tmp/highways/*/*.osm.pbf -o data/valhalla/highways-eu-us/europe-us-highways.osm.pbf
+  # build the tiles in data/valhalla/highways-eu-us, then export with --region europe --region us-48
+  ```
+
+  The pages then say "across Europe and the contiguous United States". The
+  preview's estimate for this build (2026-11-17, not yet built in one piece):
+  an export of about 7.4 GB, a data image of about 4.2 GB compressed, and
+  2.3–2.8 GB of app plus Valhalla at run time, hence 4Gi. Go back to Europe
+  alone by deploying a Europe data image.
+
 The export needs the Catalog, its GeometryStore, its similarity directory
 (`dayhike build-similarity`), and the highways-only Valhalla tiles ([technical docs](technical.md#highway-tiles-all-of-europe-small-server),
 **Highway tiles**). Start Valhalla on those tiles first, so every Trailhead is
@@ -38,7 +156,17 @@ current GeoNames list. An export written without it falls back to public
 Nominatim. To add place search to an export already built, without exporting
 again, run `uv run dayhike export-places --out data/web-serving` (it reads
 only `trailheads.npy` and `hikes.sqlite` and leaves `meta.json` as it is; it also writes
-`landmarks.sqlite`, the peaks, huts, lakes and towns the hike search finds hikes by, ADR-0053), then rebuild the image. Rerun the
+`landmarks.sqlite`, the peaks, huts, lakes and towns the hike search finds hikes by, ADR-0053), then rebuild the image.
+
+The export also writes `names.npz`, the name search's index, so a server starts
+without reading every hike name from the 2.2 GB `hikes.sqlite` (about 15 s of
+one CPU for 890,000 hikes, the most of a cold start). An export written before
+it still opens: the server builds the same index at start. Add it to such an
+export, without exporting again, with `uv run dayhike export-name-index --out data/web-serving`
+(about 13 s; it reads only `hikes.sqlite` and `similarity/ids.npy`), then
+rebuild the data image. The index records the hikes it was written for: a
+server ignores one of other hikes and builds its own, so rerun the command on an
+export whose hikes changed. Rerun the
 command after any rebuild of the Catalog, the similarity facts or the tiles:
 it rewrites the directory and writes `meta.json` last, so a half-written export
 never opens.
@@ -94,11 +222,17 @@ EOF
 gcloud artifacts repositories set-cleanup-policies dayhike --location=europe-west1 \
   --policy=/tmp/ar-cleanup.json --dry-run      # then again with --no-dry-run
 
-# the data image, once per data refresh: 1 to 2.4 GB compressed, a push of a couple of minutes
+# the data image of each site (section 1), once per data refresh: a push of a few minutes per GB compressed
 REPO=europe-west1-docker.pkg.dev/PROJECT/dayhike
-DATA_IMAGE=$REPO/data:$(jq -r .facts_version data/web-serving/meta.json)
+# data_tag is the export's facts_version and its elevation map(s), e.g. 3fa9…-fabdem or 3fa9…-copernicus-glo30, so the
+# same code on another DEM is another tag and the live image is kept for a rollback; a cut's data_tag ends in the
+# site it is (-eu, -us, -demo), and the uncut Europe and US export's image takes -eu-us after its own
+SERVING=data/web-serving-eu        # or data/web-serving-us, data/web-serving-demo
+DATA_IMAGE=$REPO/data:$(jq -r .data_tag "$SERVING/meta.json")
+# the uncut Europe and US export: SERVING=data/web-serving DATA_IMAGE=$REPO/data:$(jq -r .data_tag data/web-serving/meta.json)-eu-us
+# (an image already built from it under its plain data_tag takes the new tag without a rebuild: docker tag OLD "$DATA_IMAGE")
 docker buildx build --platform linux/amd64 -f web/data.Dockerfile \
-  --build-context serving=data/web-serving -t "$DATA_IMAGE" --push .
+  --build-context serving="$SERVING" -t "$DATA_IMAGE" --push .
 
 # the web image, on every code change: only the layers above the data image are pushed
 IMAGE=$REPO/web:$(git rev-parse --short HEAD)
@@ -107,7 +241,7 @@ docker buildx build --platform linux/amd64 -f web/Dockerfile \
 
 gcloud run deploy dayhike --image "$IMAGE" --region europe-west1 \
   --allow-unauthenticated \
-  --cpu 1 --memory 2Gi --execution-environment gen2 --cpu-boost \
+  --cpu 1 --memory 4Gi --execution-environment gen2 --cpu-boost \
   --min-instances 0 --max-instances 2 --concurrency 8 --timeout 60 \
   --set-env-vars DAYHIKE_FORWARDED_HOPS=1,DAYHIKE_SITE_URL=https://SERVICE.run.app
 ```
@@ -134,7 +268,7 @@ What the flags do:
 
 | Flag | Why |
 | --- | --- |
-| `--memory 2Gi` | Measured peak of app plus Valhalla in the technical docs table, **Web demo measurements** ([technical.md](technical.md#web-demo-measurements)). The trail network for the way back is memory-mapped from the export's `trailgraph.network/` (an export without it builds it once per instance, a request arriving during the build waiting for it), and the image sets `MALLOC_ARENA_MAX=2`; with both, 8 visitors on 1 vCPU peak near 1.1 GB. Raise to 4Gi if the logs show out-of-memory restarts. |
+| `--memory 4Gi` | For a Europe or a Europe and US export (section 1), the most Cloud Run gives 1 vCPU; a US-only export fits `2Gi`. The deploy workflow sets it on every deploy from the data image's tag: `2Gi` for a tag ending in `-us` (but not `-eu-us`) or `-demo`, else `4Gi`, or the `DAYHIKE_MEMORY` repository variable when set (section 9). Measured peak of app plus Valhalla in the technical docs table, **Web demo measurements** ([technical.md](technical.md#web-demo-measurements)). The trail network for the way back is memory-mapped from the export's `trailgraph.network/` (an export without it builds it once per instance, a request arriving during the build waiting for it), and the image sets `MALLOC_ARENA_MAX=2`; with both, 8 visitors on 1 vCPU peak near 1.1 GB. Raise to 4Gi if the logs show out-of-memory restarts. |
 | `--min-instances 0` | Scale to zero; the captain accepted the cold start. |
 | `--max-instances 2` | The instance cap: at most two containers ever bill at once. |
 | `--concurrency 8` | Searches and hike pages run side by side; Rankings queue one at a time per instance (in the app). |
@@ -142,11 +276,12 @@ What the flags do:
 | `DAYHIKE_FORWARDED_HOPS=1` | The rate limit keys on the last `X-Forwarded-For` entry, the one Google's front end adds. Earlier entries are client-supplied and ignored, so the limit cannot be dodged by sending a fake header. If that last entry turns out to be a Google proxy address rather than the visitor, the limit becomes one shared budget per instance: stricter, never looser. |
 | `DAYHIKE_SITE_URL=https://HOST` (optional) | The site's public address (the live site's is `https://hikesalike.com`; before a custom domain, the Cloud Run URL). Each page then names itself in `og:url` and its preview image by full address, so a shared link shows the preview, and `/robots.txt` and `/sitemap.xml` name pages at it; unset, the image address stays relative and most link previews show none. |
 | `DAYHIKE_GOATCOUNTER=CODE` (optional) | Cookieless visit counts at `https://CODE.goatcounter.com`: every page loads the self-hosted `vendor/goatcounter/count.js`, and "Find" is counted as an event. Unset, no page loads analytics. Not set yet: no GoatCounter account. |
-| `DAYHIKE_CORS_ORIGINS="https://HOST ..."` (optional) | The origins whose pages may call the API (CORS): the loading shell of section 8. Unset, no other origin may. Not set yet: no shell. |
+| `DAYHIKE_CORS_ORIGINS="https://HOST ..."` (optional) | The origins whose pages may call the API (CORS): the loading shell of section 8. Unset, no other origin may. The deploy workflow sets it from the repository variable of that name (section 9). |
 | `DAYHIKE_TILE_URL=TEMPLATE` (optional) | The raster tile URL template both maps load their base map from, with `{z}`, `{x}` and `{y}` (for example `https://tiles.example.com/{z}/{x}/{y}.png`). Unset, the maps use `tile.openstreetmap.org` (section 6). `/api/info` names it as `basemap`. |
 | `DAYHIKE_TILE_ATTRIBUTION=HTML` (optional) | The tile provider's credit, as its terms ask for it: the map corner shows it beside "© OpenStreetMap contributors", which always stays, and the Data and credits page says the tiles are served by it. |
 | `DAYHIKE_TILE_MAX_ZOOM=N` (optional) | The deepest zoom the provider serves (default 19). |
-| `DAYHIKE_PMTILES_URL=URL` (optional) | A vector base map: a PMTiles file in the [Protomaps basemap](https://docs.protomaps.com/basemaps/downloads) schema, by full address or relative to the page. Both maps then draw it with MapLibre GL JS under their overlays (ADR-0061), credited "© OpenStreetMap contributors · Protomaps", and ask no raster tiles; where the vector map cannot be shown (no WebGL 2, or the file or its tiles cannot be read, for example blocked by CORS), each map falls back to the raster tiles above for the rest of the page's life. The host must answer range requests and, on another origin, allow the site's origin by CORS with the `range` request header and the `etag` response header exposed ([Protomaps cloud storage guide](https://docs.protomaps.com/pmtiles/cloud-storage)). The live site's file is `https://maps.hikesalike.com/europe.pmtiles` on Cloudflare R2 (section 10); the deploy workflow sets it from the `DAYHIKE_PMTILES_URL` repository variable (section 9). |
+| `DAYHIKE_PMTILES_URL=URL` (optional) | A vector base map: a PMTiles file in the [Protomaps basemap](https://docs.protomaps.com/basemaps/downloads) schema, by full address or relative to the page. Both maps then draw it with MapLibre GL JS under their overlays (ADR-0061), credited "© OpenStreetMap contributors · Protomaps", and ask no raster tiles; where the vector map cannot be shown (no WebGL 2, or the file or its tiles cannot be read, for example blocked by CORS), each map falls back to the raster tiles above for the rest of the page's life. A map whose view lies wholly outside the file's bounds (a US hike on a Europe file) draws the raster tiles over the vector map until it is moved back over the file, so one Europe file serves a Europe and US site. The host must answer range requests and, on another origin, allow the site's origin by CORS with the `range` request header and the `etag` response header exposed ([Protomaps cloud storage guide](https://docs.protomaps.com/pmtiles/cloud-storage)). The live site's file is `https://maps.hikesalike.com/europe.pmtiles` on Cloudflare R2 (section 10); the deploy workflow sets it from the `DAYHIKE_PMTILES_URL` repository variable (section 9). |
+| `DAYHIKE_DOWNLOAD_URL=URL` (optional) | Where the ODbL download of the OpenStreetMap part of the hikes is hosted (section 11). The Data and credits page then shows a "Download the data" link to it, saying what the file holds and leaves out; unset or empty, no link; a localhost or loopback address (for example `http://127.0.0.1:8081/...` from a local test) is ignored with a warning in the log, since only that machine could open it. The live site's file is `https://maps.hikesalike.com/hikes-osm.sqlite`; the deploy workflow sets it from the `DAYHIKE_DOWNLOAD_URL` repository variable (section 9). |
 
 The service also carries a service-level `scaling.maxInstanceCount` of 20 in
 the Cloud Run v2 API, next to the revision-level `template.scaling.maxInstanceCount`
@@ -314,7 +449,7 @@ If an alert fires and the traffic is abuse, close the public access at once:
   MIT (`LICENSE`) and the data licences in `DATA-LICENSES.md`; keep it public,
   or change that page to offer the export another way (for example a download of `hikes.sqlite`).
 - **Tile and place-search policies.** The map uses `tile.openstreetmap.org`
-  (only as the fallback where the vector map cannot be shown once it is set, section 10), run by the OSM Foundation for low-volume use under its usage policy; if
+  (once the vector map is set, section 10, only where it cannot be shown or the view lies wholly outside its file, as for a US hike on the Europe file), run by the OSM Foundation for low-volume use under its usage policy; if
   traffic grows, switch to another tile provider with `DAYHIKE_TILE_URL` and
   `DAYHIKE_TILE_ATTRIBUTION` (section 3). Export with `--geonames` so
   the origin search reads `places.sqlite`; without it the page falls back to
@@ -330,18 +465,28 @@ If an alert fires and the traffic is abuse, close the public access at once:
 - **FABDEM is non-commercial (CC BY-NC-SA 4.0):** the demo must stay
   non-commercial (no ads, no paid tier).
   An export sampled from Copernicus GLO-30 instead (ADR-0030) lifts this
-  limit for elevation only when every DEM step (`sample-dem`,
+  limit for elevation only when every DEM step (`ingest`, `sample-dem`,
   `sample-trailgraph`, `build-similarity`) ran with the same Copernicus
-  `--dem` over tiles covering every DayHike. Otherwise some values are still
-  FABDEM: its credit and the non-commercial limit still apply, even though the
-  page credits only Copernicus (it follows the last `sample-dem`).
+  `--dem` over tiles covering every DayHike. `export-serving` refuses a build
+  whose steps recorded different sources, and its `meta.json` lists the one
+  each read (`dem_read`). The credit follows each hike's `dem_source`, which
+  only `sample-dem` records: a Catalog built before the steps recorded their
+  source is not checked, so rebuild it before relying on the credit.
 
 ## 7. Update or roll back
 
 A code change needs only a new web image: build it on the current data image
 (section 3) and `gcloud run deploy` again, or let the deploy workflow do it
-(section 9). A data refresh rebuilds the export, then the data image with the
-new `facts_version` tag, then the web image on it.
+(section 9). Moving the site to another of Europe and the US, Europe, the US
+or the demo is a change of data image: set `DAYHIKE_DATA_IMAGE` to that site's
+image (section 1) and run the workflow, which sets the memory from its tag. Every
+data image is kept (section 3), so moving back is the same change. A data
+refresh rebuilds the export, cuts it again (section 1), then the data images with the
+new `data_tag` (`facts_version` and the DEM: a Copernicus data image never takes
+the tag of the FABDEM one), then the web image on it. Keep the previous data
+image when the DEM changes: a rollback is one traffic change. Every data refresh
+also rebuilds and uploads the ODbL download (section 11), so it matches the data
+the site serves.
 `gcloud run services update-traffic dayhike --region europe-west1 --to-revisions REVISION=100`
 goes back to an earlier revision (`gcloud run revisions list --service dayhike --region europe-west1`
 lists them); the image it runs must still be kept (section 3). That pins the
@@ -349,17 +494,13 @@ traffic to the revision: a later `gcloud run deploy` by hand gets none until
 `gcloud run services update-traffic dayhike --region europe-west1 --to-latest`
 (the deploy workflow does this itself).
 
-## 8. A loading shell on a static host (not done yet)
-
-**Not set up.** The live site is served at `https://hikesalike.com`, but no
-static host or shell exists yet; the host is chosen later. Nothing below has
-been run.
+## 8. A loading shell on a static host
 
 With `--min-instances 0` the first visit after a quiet spell waits for the
 container to start, and while Cloud Run serves the page too, the browser shows
-nothing until then. A shell on a static host (for example Cloudflare Pages)
-serves the page's files at once, so the loading screen (the logo, then "Waking
-the server…") shows while Cloud Run starts, and the page then calls the API on
+nothing until then. A shell on a static host (Cloudflare Pages) serves the
+page's files at once, so the loading screen (the logo, then "Waking the
+server…") shows while Cloud Run starts, and the page then calls the API on
 Cloud Run. What is built for it:
 
 - `index.html` holds `<meta name="api-base" content="">`; empty, the page asks
@@ -373,46 +514,35 @@ Cloud Run. What is built for it:
   `503` from Cloud Run's front end), so the page asks `/api/health` once in
   `no-cors` mode: any answer says the site is paused or busy, no answer that
   the server is down.
+- `web/shell.py --url https://SERVICE.run.app --out SHELL_DIR` writes the
+  shell: the pages and `robots.txt` and `sitemap.xml` fetched from the running
+  server, so they hold what it fills in (the regions and hike count of its data,
+  the GoatCounter tag, the base map, `og:url` with `DAYHIKE_SITE_URL`), the
+  other static files, a `404.html`, and a `_headers` file with the headers the
+  server sends with its pages (`Cache-Control: no-cache`, `nosniff`, the
+  referrer policy), with `index.html` pointed at the server.
+- The deploy workflow (section 9) publishes it after every deploy, once the
+  `CLOUDFLARE_PAGES_PROJECT` variable is set, so the shell and the API stay
+  the same version; it sets `DAYHIKE_CORS_ORIGINS` from the variable of that
+  name.
 
-The steps, once there is a host account:
+The one-time setup, by the maintainer, once there is a host account:
 
-1. Deploy Cloud Run as in section 3, with
-   `DAYHIKE_CORS_ORIGINS="https://SHELL_HOST"` added to `--set-env-vars`
-   (every host the shell is served at, such as the custom domain and the
-   host's own `*.pages.dev` name).
-2. Copy the static files and point the copy at Cloud Run:
+1. Create the Cloudflare Pages project (direct upload, production branch
+   `main`), and an API token that may edit Cloudflare Pages on that account.
+2. Set the repository variables `CLOUDFLARE_PAGES_PROJECT` and
+   `CLOUDFLARE_ACCOUNT_ID`, the secret `CLOUDFLARE_API_TOKEN`, and
+   `DAYHIKE_CORS_ORIGINS` to every host the shell is served at, such as
+   `https://hikesalike.com https://PROJECT.pages.dev` (space-separated).
+3. Run the workflow; check the shell at its `*.pages.dev` address.
+4. Point the custom domain at the Pages project, and keep `DAYHIKE_SITE_URL`
+   on the custom domain.
 
-   ```bash
-   SHELL_DIR=$(mktemp -d)/shell && cp -R src/dayhike/web/static "$SHELL_DIR"
-   sed -i '' 's|<meta name="api-base" content="">|<meta name="api-base" content="https://SERVICE.run.app">|' "$SHELL_DIR/index.html"
-   ```
+By hand, without the workflow: deploy with `DAYHIKE_CORS_ORIGINS` set, then
 
-   The server fills in the GoatCounter tag (`<!--analytics-->`) and, with
-   `DAYHIKE_SITE_URL`, the pages' `og:url` and full preview image address; a
-   shell copy keeps the placeholder and the relative image, so fill them the
-   same way if those settings are on. The server also generates `/robots.txt`
-   and `/sitemap.xml`; they are not in `static`, so publish both with the
-   shell, for example fetched from the running app with `DAYHIKE_SITE_URL` set
-   to the custom domain:
-
-   ```bash
-   curl -fsS https://SERVICE.run.app/robots.txt -o "$SHELL_DIR/robots.txt"
-   curl -fsS https://SERVICE.run.app/sitemap.xml -o "$SHELL_DIR/sitemap.xml"
-   ```
-3. Publish `$SHELL_DIR` on the static host after every `gcloud run deploy`, so
-   the shell and the API stay the same version (on Cloudflare Pages:
-   `wrangler pages deploy "$SHELL_DIR" --project-name gofindmeahike`).
-4. Point the custom domain at the static host.
-
-The server sends `Cache-Control: no-cache` on the page; a static host needs the
-same, for example a Cloudflare Pages `_headers` file (an example only; no such
-file is in the repository):
-
-```text
-/*
-  Cache-Control: no-cache
-  X-Content-Type-Options: nosniff
-  Referrer-Policy: strict-origin-when-cross-origin
+```bash
+python3 web/shell.py --url https://SERVICE.run.app --out "$(mktemp -d)/shell"
+npx wrangler pages deploy SHELL_DIR --project-name PROJECT --branch main
 ```
 
 ## 9. Deploy from GitHub Actions (not set up yet)
@@ -436,12 +566,25 @@ On a push to `main`, or by hand (`workflow_dispatch` on `main`), the workflow:
    the candidate keeps its tag and no traffic, and the live revision is untouched;
 6. checks that the candidate is still the latest revision, sends all traffic to
    the latest revision (so a later `gcloud run deploy` by hand, section 7, takes
-   the traffic as usual), then removes the candidate's tag.
+   the traffic as usual), then removes the candidate's tag;
+7. with `CLOUDFLARE_PAGES_PROJECT` set, publishes the loading shell of the
+   service (section 8) to Cloudflare Pages.
 
-The deploy changes only the image and `DAYHIKE_PMTILES_URL`, which it sets from
-the repository variable of that name (empty, the variable is set empty and the
-maps keep the raster tiles): memory, CPU, scaling and the other environment
-variables stay as section 3 set them. A data refresh is still built and pushed by
+The smoke test follows the data: it reads the regions the candidate has hikes
+in (`/api/info`), checks that the page names them (only a site of Europe alone
+says "Europe"), and searches, opens and ranks the known hikes of each: in
+Slovenia and Switzerland for Europe, in California, Colorado and Utah for the
+United States, with drives from Ljubljana, Munich and Denver when the candidate
+has drive time.
+
+The deploy changes only the image, the memory, `DAYHIKE_PMTILES_URL`,
+`DAYHIKE_DOWNLOAD_URL` and `DAYHIKE_CORS_ORIGINS`, which it sets from the
+repository variables of those names (empty, the variable is set empty: the maps
+keep the raster tiles, the credits page shows no download link, and no other
+origin may call the API). The memory is `DAYHIKE_MEMORY`, or, unset, `2Gi` for
+a data image whose tag ends in `-us` (but not `-eu-us`) or `-demo` and `4Gi`
+for any other, `-eu-us` included. CPU,
+scaling and the other environment variables stay as section 3 set them. A data refresh is still built and pushed by
 hand (section 3), followed by a change of `DAYHIKE_DATA_IMAGE`; the next run
 builds on it. To roll back, move traffic to an earlier revision as in section 7,
 or re-run the workflow on an earlier commit. A failed candidate can be removed
@@ -456,7 +599,7 @@ provider below accepts only tokens for this repository's `main`.
 
 Set as repository variables, not environment variables: the job's `if` reads
 `GCP_WORKLOAD_IDENTITY_PROVIDER` before any environment applies. None is a
-secret. The deploy job runs in the `production` environment, which can require a
+secret; the one secret is `CLOUDFLARE_API_TOKEN`, for the loading shell. The deploy job runs in the `production` environment, which can require a
 reviewer before each deploy.
 
 | Variable | Example form |
@@ -467,8 +610,13 @@ reviewer before each deploy.
 | `GCP_REGION` | `europe-west1` |
 | `CLOUD_RUN_SERVICE` | `dayhike` |
 | `DAYHIKE_IMAGE_REPO` | `europe-west1-docker.pkg.dev/PROJECT/dayhike` |
-| `DAYHIKE_DATA_IMAGE` | `europe-west1-docker.pkg.dev/PROJECT/dayhike/data:FACTS_VERSION` |
+| `DAYHIKE_DATA_IMAGE` | `europe-west1-docker.pkg.dev/PROJECT/dayhike/data:DATA_TAG-eu-us`: which site is deployed, `-eu-us`, `-eu`, `-us` or `-demo` (section 1) |
 | `DAYHIKE_PMTILES_URL` (optional) | `https://maps.hikesalike.com/europe.pmtiles` (section 10); unset or empty, the raster tiles |
+| `DAYHIKE_DOWNLOAD_URL` (optional) | `https://maps.hikesalike.com/hikes-osm.sqlite` (section 11); unset or empty, no download link |
+| `DAYHIKE_MEMORY` (optional) | `4Gi`; unset or empty, from the data image's tag (`2Gi` for `-us`, not `-eu-us`, or `-demo`; else `4Gi`) |
+| `DAYHIKE_CORS_ORIGINS` (optional) | `https://hikesalike.com https://PROJECT.pages.dev` (section 8); unset or empty, none |
+| `CLOUDFLARE_PAGES_PROJECT` (optional) | the Pages project of the loading shell (section 8); unset or empty, no shell is published |
+| `CLOUDFLARE_ACCOUNT_ID` (with the project) | the Cloudflare account's id |
 
 ### One-time cloud setup (by the maintainer)
 
@@ -613,3 +761,51 @@ more as a visitor pans and zooms, so the free reads cover several hundred
 thousand map views a month; past
 them, reads cost $0.36 a million. A refresh keeps two files for a day and
 uploads a few thousand parts, both within the free tier.
+
+## 11. The ODbL download
+
+The hike database is a derivative database of OpenStreetMap, offered free under
+the ODbL ([ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/) §4.6). Only the
+part made from OpenStreetMap is offered (the OSMF
+[Collective Database guideline](https://osmfoundation.org/wiki/Licence/Community_Guidelines/Collective_Database_Guideline_Guideline):
+heights, land cover, climate and places come from other sources with their own licences,
+`DATA-LICENSES.md`). It is two files, served beside the map file from the same R2 bucket
+(section 10), so the elevation source (FABDEM or Copernicus GLO-30) does not touch it:
+
+- `hikes-osm.sqlite`: the hikes whose source is OpenStreetMap (never an external source's), with
+  their names, kind, route, line (WKT) and length, `sac_scale`, Trailhead, and in `hike_points` the OpenStreetMap
+  points along them with their names; a `licence` table holds the ODbL notice, "© OpenStreetMap contributors",
+  the data date and what is left out. No heights (a peak's `ele` tag too), land cover, climate, GeoNames
+  places or Landmarks.
+- `README.txt`: the same notice, and the tables explained.
+
+### Building it
+
+From the serving export of section 1 (read-only), once per data refresh, after `export-serving`:
+
+```bash
+uv run dayhike export-osm-download --data data/web-serving --out data/osm-download --data-date YYYY-MM-DD
+```
+
+`--data-date` is the date of the OpenStreetMap extracts the export was built from (the Geofabrik
+file date); without it the day the export was written is used, which is later than the data. Built
+from the Europe export of 2026-11-15 it is 1.13 GB (258,211 hikes, 4,660,146 points). Check the row counts with
+`sqlite3 data/osm-download/hikes-osm.sqlite 'select count(*) from hikes; select count(*) from hike_points;'`
+against `meta.json`'s `dayhikes` (the difference is the external hikes, which stay out).
+
+### Publishing it
+
+Upload both files to the bucket of section 10 beside `europe.pmtiles`, replacing the last ones.
+`hikes-osm.sqlite` (about 1.1 GB) is far past what `wrangler r2 object put` takes (about 300 MiB), so
+upload it with an S3 client, as section 10 does for the map; the README is tiny, so `wrangler` takes it:
+
+```bash
+rclone copyto data/osm-download/hikes-osm.sqlite r2:BUCKET/hikes-osm.sqlite --header-upload "Content-Type: application/vnd.sqlite3"
+wrangler r2 object put BUCKET/hikes-osm-README.txt --file data/osm-download/README.txt --content-type "text/plain; charset=utf-8" --remote
+```
+
+Then set the repository variable `DAYHIKE_DOWNLOAD_URL` to `https://maps.hikesalike.com/hikes-osm.sqlite` once
+(section 9) and deploy; the credits page then shows the "Download the data" link. The same address is
+used on every refresh (the file is replaced in place), so later refreshes need no deploy for the link. A file
+that is replaced keeps its address, but a browser may serve a cached one for a short while; that is acceptable
+for a download. Check: `curl -sI https://maps.hikesalike.com/hikes-osm.sqlite` answers `200` with a `content-length`.

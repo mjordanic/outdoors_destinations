@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from dayhike.catalog import CLIMATE_FEATURE_NAMES, ensure_column, geometry_store_path_for, remove_similarity
+from dayhike.db import writer
 from dayhike.dem import Bounds, DEFAULT_DEM_BOUNDS
 from dayhike.download import download as _download
 
@@ -30,6 +31,12 @@ CHELSA_ATTRIBUTION = (
 _UNITS = {"tas": (1.0, -273.15), "pr": (1.0, 0.0), "rsds": (86.4, 0.0)}
 _PLAUSIBLE = {"tas": (-70.0, 50.0), "pr": (0.0, 3000.0), "rsds": (0.0, 45000.0)}
 _VERTEX_CHUNK = 1_000_000
+# Clips of one source grid agree on origin only to float noise (~1e-14 degrees);
+# CHELSA cells are ~8e-3. Origins are snapped to _GRID_SNAP when written and
+# grids compare equal within _GRID_TOLERANCE when read, so clips fetched
+# before the snap still count as one grid.
+_GRID_SNAP = 9
+_GRID_TOLERANCE = 1e-9
 _CLIMATE_FILE = re.compile(r"^chelsa_(tas|pr|rsds)_(\d{2})\.tif$", re.IGNORECASE)
 
 
@@ -111,28 +118,45 @@ def sample_climate(
         raise ValueError(f"incomplete climate rasters in {raster_dir}, missing: {', '.join(missing)}")
     if progress is not None:
         progress("climate sample: vertices")
-    dayhike_ids, latitudes, longitudes = _read_vertices(store_path)
-    hike_ids, hike_index = np.unique(dayhike_ids, return_inverse=True)
-    # Each raster read once, at the distinct cells the vertices fall in: which
-    # vertices every raster covers, then per-hike sums over those vertices only.
-    grids: dict[tuple, tuple[np.ndarray, np.ndarray]] = {}
-    cells = [_raster_cells(path, latitudes, longitudes, grids) for _var, _month, path in rasters]
-    covered = np.ones(len(dayhike_ids), dtype=bool)
-    for values, vertex_cell in cells:
-        covered &= ~np.isnan(values)[vertex_cell]
-    sampled = int(covered.sum())
+    grids, grid_of = _grids_of(rasters)
+    with tempfile.TemporaryDirectory(prefix="dayhike-climate-") as spool:
+        # Each vertex's hike and cell on each grid, spooled: the vertices are
+        # never all in memory, and the distinct cells are known once all are read.
+        vertices = Path(spool) / "vertices"
+        hike_ids, grid_cells = _spool_vertex_cells(store_path, grids, vertices)
+        if not len(hike_ids):
+            return 0
+        # Each raster read once, at the distinct cells the vertices fall in:
+        # which vertices every raster covers, then per-hike sums over those
+        # vertices only, added in the order the vertices are read.
+        known = {grid: (cells, np.zeros(0, dtype=np.int64)) for grid, cells in zip(grids, grid_cells, strict=True)}
+        empty = np.zeros(0)
+        values = []
+        for var, month, path in rasters:
+            if progress is not None:
+                progress(f"climate sample: {var} {month:02d}")
+            values.append(_raster_cells(path, empty, empty, known)[0])
+        covered_cells = [
+            np.logical_and.reduce([~np.isnan(value) for value, grid in zip(values, grid_of, strict=True) if grid == index])
+            for index in range(len(grids))
+        ]
+        counts = np.zeros(len(hike_ids), dtype=np.int64)
+        sums = np.zeros((len(rasters), len(hike_ids)))
+        with open(vertices, "rb") as spooled:
+            while len(chunk := np.fromfile(spooled, _vertex_cells(len(grids)), count=_VERTEX_CHUNK)):
+                at = [np.searchsorted(cells, chunk["cell"][:, index]) for index, cells in enumerate(grid_cells)]
+                covered = np.logical_and.reduce([on[at[index]] for index, on in enumerate(covered_cells)])
+                hike = np.searchsorted(hike_ids, chunk["hike"][covered])
+                counts += np.bincount(hike, minlength=len(hike_ids))
+                for row, value, grid in zip(sums, values, grid_of, strict=True):
+                    np.add.at(row, hike, value[at[grid][covered]])
+    sampled = int(counts.sum())
     if not sampled:
         return 0
-    covered_hike = hike_index[covered]
-    covered_cells = {id(point_cell): point_cell[covered] for _cells, point_cell in grids.values()}
-    counts = np.bincount(covered_hike, minlength=len(hike_ids))
     means = np.full((len(hike_ids), 12, 3), np.nan)
-    for (var, month, _path), (values, vertex_cell) in zip(rasters, cells, strict=True):
-        if progress is not None:
-            progress(f"climate sample: {var} {month:02d}")
-        sums = np.bincount(covered_hike, weights=values[covered_cells[id(vertex_cell)]], minlength=len(hike_ids))
+    for (var, month, _path), row in zip(rasters, sums, strict=True):
         with np.errstate(invalid="ignore", divide="ignore"):
-            means[:, month - 1, CHELSA_VARIABLES.index(var)] = sums / counts
+            means[:, month - 1, CHELSA_VARIABLES.index(var)] = row / counts
     if progress is not None:
         progress(f"climate sample: {sampled} vertices")
     _drop_vertex_climate(store_path)
@@ -155,17 +179,63 @@ def _climate_rasters(raster_dir: Path) -> list[tuple[str, int, Path]]:
     return found
 
 
-def _read_vertices(store_path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _grids_of(rasters: Sequence[tuple[str, int, Path]]) -> tuple[list[tuple], list[int]]:
+    """The distinct grids (transform, height, width) of the rasters, each as
+    its first raster has it, and the index of each raster's grid."""
+    import rasterio
+
+    grids: list[tuple] = []
+    grid_of: list[int] = []
+    for _var, _month, path in rasters:
+        with rasterio.open(path) as dataset:
+            grid = (tuple(dataset.transform)[:6], dataset.height, dataset.width)
+        index = next((index for index, known in enumerate(grids) if _same_grid(known, grid)), len(grids))
+        if index == len(grids):
+            grids.append(grid)
+        grid_of.append(index)
+    return grids, grid_of
+
+
+def _vertex_cells(grid_count: int) -> np.dtype:
+    return np.dtype([("hike", "<i8"), ("cell", "<i8", (grid_count,))])
+
+
+def _spool_vertex_cells(store_path: Path, grids: list[tuple], path: Path) -> tuple[np.ndarray, list[np.ndarray]]:
+    """Spool each vertex's hike and cell on each grid (row x width + col, -1
+    off it) to ``path`` in the order the vertices are read; return the
+    distinct hikes and the distinct cells on each grid, sorted."""
+    from rasterio import Affine
+
+    hikes = [np.zeros(0, dtype=np.int64)]
+    cells = [[np.zeros(0, dtype=np.int64)] for _grid in grids]
     connection = sqlite3.connect(store_path)
     try:
         cursor = connection.execute("SELECT dayhike_id, latitude, longitude FROM vertices")
-        chunks: list[np.ndarray] = []
-        while rows := cursor.fetchmany(_VERTEX_CHUNK):
-            chunks.append(np.array(rows, dtype=np.float64))
+        with open(path, "wb") as out:
+            while rows := cursor.fetchmany(_VERTEX_CHUNK):
+                table = np.array(rows, dtype=np.float64)
+                chunk = np.empty(len(table), _vertex_cells(len(grids)))
+                chunk["hike"] = table[:, 0].astype(np.int64)
+                hikes = _add_distinct(hikes, chunk["hike"])
+                for index, (transform, height, width) in enumerate(grids):
+                    x, y = ~Affine(*transform) @ (table[:, 2], table[:, 1])
+                    row, col = np.floor(y).astype(np.int64), np.floor(x).astype(np.int64)
+                    inside = (row >= 0) & (row < height) & (col >= 0) & (col < width)
+                    chunk["cell"][:, index] = np.where(inside, row * width + col, -1)
+                    cells[index] = _add_distinct(cells[index], chunk["cell"][:, index])
+                chunk.tofile(out)
     finally:
         connection.close()
-    table = np.concatenate(chunks) if chunks else np.empty((0, 3))
-    return table[:, 0].astype(np.int64), table[:, 1], table[:, 2]
+    return np.unique(np.concatenate(hikes)), [np.unique(np.concatenate(each)) for each in cells]
+
+
+def _add_distinct(parts: list[np.ndarray], values: np.ndarray) -> list[np.ndarray]:
+    """``parts`` (the distinct values so far first) with ``values``' distinct
+    values added, merged into the first part once the others outgrow it."""
+    parts = [*parts, np.unique(values)]
+    if sum(len(part) for part in parts[1:]) > len(parts[0]):
+        parts = [np.unique(np.concatenate(parts))]
+    return parts
 
 
 def _raster_values(
@@ -195,6 +265,13 @@ def _raster_values(
     return values
 
 
+def _same_grid(first: tuple, second: tuple) -> bool:
+    """Whether two (transform, height, width) grids match, the transforms to float noise."""
+    from rasterio import Affine
+
+    return first[1:] == second[1:] and Affine(*first[0]).almost_equals(Affine(*second[0]), _GRID_TOLERANCE)
+
+
 def _raster_cells(
     path: Path, latitudes: np.ndarray, longitudes: np.ndarray, grids: dict[tuple, tuple[np.ndarray, np.ndarray]]
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -202,14 +279,17 @@ def _raster_cells(
 
     Returns the value per distinct cell (float64; NaN off the raster or on
     nodata) and, per point, the index of its cell in it. The raster is read
-    once. Rasters on one grid share the cells: ``grids`` keeps them by grid.
+    once. Rasters on one grid (to float noise) share the cells: ``grids`` keeps them by grid.
     """
     import rasterio
     from rasterio.windows import Window
 
     with rasterio.open(path) as dataset:
         grid = (tuple(dataset.transform)[:6], dataset.height, dataset.width)
-        if grid not in grids:
+        known = next((key for key in grids if _same_grid(key, grid)), None)
+        if known is not None:
+            grid = known
+        else:
             cols, rows = ~dataset.transform @ (longitudes, latitudes)
             rows = np.floor(rows).astype(np.int64)
             cols = np.floor(cols).astype(np.int64)
@@ -234,7 +314,7 @@ def _raster_cells(
 
 def _drop_vertex_climate(store_path: Path) -> None:
     """Drop the per-vertex climate older versions stored; run VACUUM to free the disk."""
-    store = sqlite3.connect(store_path)
+    store = writer(store_path)
     try:
         store.execute("DROP TABLE IF EXISTS vertex_climate")
         store.execute("DELETE FROM geometry_meta WHERE key = 'worldclim_attribution'")
@@ -251,7 +331,7 @@ def _write_catalog_climate(
     catalog_path: Path, hike_ids: np.ndarray, means: np.ndarray
 ) -> None:
     """Replace every hike's climate: covered hikes get means, the rest NULL."""
-    catalog = sqlite3.connect(catalog_path)
+    catalog = writer(catalog_path)
     try:
         for name in CLIMATE_FEATURE_NAMES:
             ensure_column(catalog, "feature_vectors", name, "REAL")
@@ -338,6 +418,13 @@ def _covers(path: Path, bounds: Bounds) -> bool:
     )
 
 
+def _snapped(transform):
+    """transform with its origin rounded, so every clip of one source grid gets the same one."""
+    from rasterio import Affine
+
+    return Affine(transform.a, transform.b, round(transform.c, _GRID_SNAP), transform.d, transform.e, round(transform.f, _GRID_SNAP))
+
+
 def _clip_and_convert(source: Path, out: Path, variable: str, bounds: Bounds) -> None:
     """Write source clipped to bounds as float32 in Measure units, NaN for nodata."""
     import rasterio
@@ -372,7 +459,7 @@ def _clip_and_convert(source: Path, out: Path, variable: str, bounds: Bounds) ->
             "count": 1,
             "dtype": "float32",
             "crs": dataset.crs,
-            "transform": dataset.window_transform(window),
+            "transform": _snapped(dataset.window_transform(window)),
             "nodata": np.nan,
             "compress": "deflate",
             "predictor": 3,

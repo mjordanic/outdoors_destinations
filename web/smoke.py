@@ -6,7 +6,9 @@
 
 With --data it starts `dayhike serve` on a free port, checks it, reports the
 server's resident memory, and stops it. Exits non-zero on the first failure.
---us checks the us-rhode-island build (tests/test_real_data_us.py) instead of Europe.
+It checks the known hikes of each region the server has hikes in (/api/info
+"regions": Europe, the United States, or both), and that the page says what the
+server covers. --us checks the us-rhode-island build (tests/test_real_data_us.py) instead.
 """
 
 from __future__ import annotations
@@ -29,22 +31,35 @@ class Build:
     known: list[tuple[str, str]]  # (search text, exact DayHike name expected among the hits); the first is the Seed
     origins: dict[str, tuple[float, float]]
     hours: tuple[float, float]  # drive-time limits
-    covers: str  # what the page says the hikes are across
     min_results: int | None = None  # rows a Ranking answers with at least; None: a full page (/api/info "results")
 
 
+# The known hikes of each region are in Slovenia and Switzerland (Europe), California, Colorado and Utah (the
+# United States), and the drives from cities near them: an export of fewer hikes than the whole region
+# (a showcase of a few countries and states) passes while it keeps those.
 EUROPE = Build(
-    min_dayhikes=100_000,
+    min_dayhikes=50_000,
     known=[
         ("Pot kralja Triglava", "Pot kralja Triglava"),
         ("Vršič - Razor", "Vršič - Razor"),
         ("koca pri savici", "Koča pri Savici - Dom na Komni"),
-        ("Mosor-Kosa", "Mosor-Kosa"),
+        ("Matterhorn-Trail", "Matterhorn-Trail"),
     ],
     origins={"Ljubljana": (46.0569, 14.5058), "Munich": (48.137, 11.575)},
     hours=(2, 4),
-    covers="Europe",
 )
+US_48 = Build(
+    min_dayhikes=10_000,
+    known=[
+        ("Mount Whitney Trail", "Mount Whitney Trail"),
+        ("mt whitney trail", "Mount Whitney Trail"),
+        ("Longs Peak Trail", "Longs Peak Trail"),
+        ("delicate arch", "Delicate Arch Trail"),
+    ],
+    origins={"Denver": (39.7392, -104.9903)},
+    hours=(2, 4),
+)
+BY_REGION = {"europe": EUROPE, "us": US_48}  # the checks of each region of /api/info "regions"
 US = Build(
     min_dayhikes=20,
     known=[
@@ -54,7 +69,6 @@ US = Build(
     ],
     origins={"Providence": (41.824, -71.4128)},
     hours=(1, 2),
-    covers="Rhode Island",
     min_results=5,  # its 23 hikes group into fewer rows than a page
 )
 
@@ -88,17 +102,31 @@ def check(condition: bool, message: str) -> None:
         raise SystemExit(1)
 
 
-def smoke(base: str, drive: bool, pid: int | None, build: Build = EUROPE) -> None:
+def smoke(base: str, drive: bool, pid: int | None, builds: list[Build] | None = None) -> None:
+    """Check the server at ``base``: the known hikes of ``builds``, else of each region it has hikes in."""
     info, ms = call(base, "/api/info")
+    regions = [region["name"] for region in info["regions"]]
+    builds = builds or [BY_REGION[name] for name in regions]
     check(
-        info["dayhikes"] > build.min_dayhikes,
-        f"info: {info['dayhikes']} DayHikes, drive_time={info['drive_time']} ({ms:.0f} ms)",
+        info["dayhikes"] > sum(build.min_dayhikes for build in builds),
+        f"info: {info['dayhikes']} DayHikes in {', '.join(regions)}, drive_time={info['drive_time']} ({ms:.0f} ms)",
     )
     if pid:
         print(f"     server RSS after start: {rss_mb(pid):.0f} MB")
+    covered = info["covered"]
+    # Only a site of hikes in Europe alone says Europe: one with US hikes names its regions.
+    check((covered == "Europe") == (regions == ["europe"]), f"covers {covered!r}, with hikes in {', '.join(regions)}")
     with urllib.request.urlopen(base + "/", timeout=120) as response:
         page = response.read().decode()
-    check(f"hikes across {build.covers}." in page, f"page: hikes across {build.covers}")
+    check(f"hikes across {covered}." in page, f"page: hikes across {covered}")
+    for build in builds:
+        check_build(base, info, drive, build)
+    if pid:
+        print(f"     server RSS at the end: {rss_mb(pid):.0f} MB")
+
+
+def check_build(base: str, info: dict, drive: bool, build: Build) -> None:
+    """Search, detail, map view and Rankings of the known hikes of one build, and its drives."""
     seeds = {}
     for query, name in build.known:
         hits, ms = call(base, "/api/search?" + urllib.parse.urlencode({"q": query}))
@@ -149,8 +177,6 @@ def smoke(base: str, drive: bool, pid: int | None, build: Build = EUROPE) -> Non
                     f"rank within {hours} h of {city}: {ranked['reachable']} reachable, "
                     f"top {ranked['results'][0]['name']!r} ({ms:.0f} ms)",
                 )
-    if pid:
-        print(f"     server RSS at the end: {rss_mb(pid):.0f} MB")
 
 
 def free_port() -> int:
@@ -164,11 +190,11 @@ def main() -> int:
     parser.add_argument("--url", help="A running server; skips starting one")
     parser.add_argument("--data", type=Path, help="Serving export to start `dayhike serve` on")
     parser.add_argument("--valhalla-url", help="Highways-only Valhalla for the drive-time checks")
-    parser.add_argument("--us", action="store_true", help="Check the one-state US build, not Europe")
+    parser.add_argument("--us", action="store_true", help="Check the one-state US build, not the regions the server has")
     args = parser.parse_args()
-    build = US if args.us else EUROPE
+    builds = [US] if args.us else None
     if args.url:
-        smoke(args.url.rstrip("/"), drive=call(args.url, "/api/info")[0]["drive_time"], pid=None, build=build)
+        smoke(args.url.rstrip("/"), drive=call(args.url, "/api/info")[0]["drive_time"], pid=None, builds=builds)
         return 0
     if args.data is None:
         parser.error("give --url or --data")
@@ -189,7 +215,7 @@ def main() -> int:
                     raise SystemExit("server did not start")
                 time.sleep(0.1)
         print(f"     server ready in {time.monotonic() - started:.1f} s")
-        smoke(base, drive=args.valhalla_url is not None, pid=server.pid, build=build)
+        smoke(base, drive=args.valhalla_url is not None, pid=server.pid, builds=builds)
     finally:
         server.terminate()
         server.wait()

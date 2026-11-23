@@ -6,6 +6,7 @@ requires-python = ">=3.13"
 license = "MIT"
 license-files = ["LICENSE"]
 dependencies = [
+    "numba>=0.68.1",
     "osmium>=4.3.1",
     "rasterio>=1.5.1",
     "scikit-learn>=1.9.1",

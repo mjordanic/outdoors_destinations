@@ -115,6 +115,10 @@ button.secondary:hover { border-color: var(--green); }
 .compose-readout.over { color: #b42318; font-weight: 600; }
 .compose-links { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
 .compose-links button { border-color: #8e44ad; color: #6b2fa3; border-style: dashed; }
+.photos { display: flex; flex-wrap: wrap; gap: 12px; margin: 8px 0 12px; }
+.hike-photo { margin: 0; flex: 1 1 200px; max-width: 320px; }
+.hike-photo img { width: 100%; height: auto; border-radius: 6px; border: 1px solid var(--line); background: #eef3ee; }
+.hike-photo figcaption { font-size: 0.78rem; color: var(--muted); margin-top: 4px; }
 .legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 0.8rem; color: var(--muted); margin: 6px 0; }
 .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; background: var(--c); vertical-align: -1px; }
 .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
@@ -144,12 +148,23 @@ svg text { font-size: 11px; fill: var(--muted); }
 #results-table th, #results-table td { padding: 5px 6px; border-bottom: 1px solid #eef0ec; white-space: nowrap; }
 #results-table thead th { background: #f3f6f2; position: sticky; top: 0; font-weight: 600; }
 #results-table th.measure { writing-mode: vertical-rl; transform: rotate(180deg); font-weight: 500; height: 160px; vertical-align: bottom; cursor: help; }
+#results-table:not(.show-measures) th.measure, #results-table:not(.show-measures) td.cell { display: none; }
 #results-table th.measure.excluded { color: var(--nodata); }
 #results-table td.name, #results-table th.name { position: sticky; left: 0; background: #fff; max-width: 220px; overflow: hidden; text-overflow: ellipsis; text-align: left; }
 #results-table thead th.name { background: #f3f6f2; }
 #results-table td.name .hike-name { display: block; overflow: hidden; text-overflow: ellipsis; }
 #results-table td.name .badge-line { display: block; white-space: normal; }
 #results-table tbody tr { cursor: pointer; }
+/* A phone shows Length and Up / down under the name, not in columns scrolled out of view. */
+#results-table .figure-line { display: none; }
+@media (max-width: 640px) {
+  #results-table th.figure, #results-table td.figure { display: none; }
+  #results-table .figure-line { display: block; white-space: normal; font-size: 0.78rem; color: var(--muted); font-weight: 400; }
+  /* A name wraps rather than ends in "…", so the table fits beside the score. */
+  #results-table td.name, #results-table th.name { max-width: 180px; white-space: normal; }
+  #results-table td.name .hike-name { overflow-wrap: anywhere; }
+  #results-table .picked { display: block; margin-left: 0; }
+}
 /* The head of a block "Show 10 more" adds: its words stay in view while the table scrolls sideways. */
 #results-table tbody tr.block-head { cursor: default; }
 #results-table tr.block-head th { background: #f3f6f2; font-weight: 500; text-align: left; white-space: normal; }
@@ -232,6 +247,10 @@ summary.panel-title, #advanced > summary, #more-options > summary { display: fle
 #advanced > summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; }
 #advanced > .hint { margin: 4px 0 0; }
 .row.limit > label.check { flex: 0 0 170px; margin: 0; }
+.regions { border: none; margin: 10px 0 0; padding: 0; min-width: 0; }
+.regions legend { padding: 0; font-weight: 600; font-size: 0.9rem; }
+#region-boxes { display: flex; flex-wrap: wrap; gap: 0 16px; }
+.regions:disabled .check { color: var(--muted); cursor: not-allowed; }
 #more-options { margin-top: 8px; font-size: 0.85rem; color: var(--muted); }
 #more-options > summary { cursor: pointer; }
 #more-options .row > label { flex: 0 0 170px; font-size: 0.85rem; }
@@ -299,4 +318,9 @@ button.help:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
   button.help:hover, button.help[aria-expanded="true"] { background: radial-gradient(circle, var(--green) 10px, transparent 10.5px); }
   .leaflet-touch .leaflet-bar a, .leaflet-bar a { width: 44px; height: 44px; line-height: 44px; font-size: 22px; }
   .compose-tools button.primary { min-height: 44px; }
+  /* No smaller tap than 32 px: a checkbox, a slider's name, a link in a sentence (its padding reaches over the lines). */
+  input[type="checkbox"], .check input[type="checkbox"], .wish-value input[type="checkbox"] { width: 32px; height: 32px; }
+  .weight label.name, label.panel-title { min-height: 32px; display: flex; align-items: center; }
+  a[href]:not(.leaflet-bar a) { padding-block: 10px; }
+  .top a.home { display: inline-block; min-height: 32px; padding-block: 0; }
 }

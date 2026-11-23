@@ -3,9 +3,10 @@
 # gets no traffic, smoke-test the candidate's URL, and only then move all traffic to it.
 #
 # Every account-specific value is a repository (or `production` environment) variable;
-# until GCP_WORKLOAD_IDENTITY_PROVIDER is set, the deploy job is skipped. There are no
-# secrets: Workload Identity Federation trades this run's GitHub OIDC token for a
-# short-lived Google token. Never add a pull_request or pull_request_target trigger: the
+# until GCP_WORKLOAD_IDENTITY_PROVIDER is set, the deploy job is skipped. Google needs no
+# secret: Workload Identity Federation trades this run's GitHub OIDC token for a
+# short-lived Google token. The one secret, CLOUDFLARE_API_TOKEN, publishes the loading
+# shell (docs/deploy.md, section 8), only once CLOUDFLARE_PAGES_PROJECT is set. Never add a pull_request or pull_request_target trigger: the
 # repository is public, and a pull request must never reach the deploy credentials.
 name: Deploy
 
@@ -39,9 +40,18 @@ jobs:
       REGION: ${{ vars.GCP_REGION }}
       SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
       IMAGE: ${{ vars.DAYHIKE_IMAGE_REPO }}/web:${{ github.sha }}
+      # The data image, and with it which hikes the site has (docs/deploy.md, section 1): the
+      # pages, the region filter and the smoke test follow from its data.
       DATA_IMAGE: ${{ vars.DAYHIKE_DATA_IMAGE }}
+      # Empty: 2 GiB for a US-only or demo data image (its tag ends in -us or -demo, not -eu-us),
+      # else 4 GiB.
+      MEMORY: ${{ vars.DAYHIKE_MEMORY }}
+      # The loading shell's origins, space-separated (docs/deploy.md, section 8); empty, none.
+      CORS_ORIGINS: ${{ vars.DAYHIKE_CORS_ORIGINS }}
       # The vector base map (docs/deploy.md, section 10); empty keeps the raster tiles.
       PMTILES_URL: ${{ vars.DAYHIKE_PMTILES_URL }}
+      # The ODbL download the credits page links (docs/deploy.md, section 11); empty, no link.
+      DOWNLOAD_URL: ${{ vars.DAYHIKE_DOWNLOAD_URL }}
     steps:
       - uses: actions/checkout@v4
 
@@ -62,15 +72,19 @@ jobs:
         id: candidate
         run: |
           tag="c-${GITHUB_SHA::12}"
+          memory="$MEMORY"
+          if [ -z "$memory" ]; then
+            case "$DATA_IMAGE" in *-eu-us) memory=4Gi ;; *-us|*-demo) memory=2Gi ;; *) memory=4Gi ;; esac
+          fi
           gcloud run deploy "$SERVICE" --project "$PROJECT" --region "$REGION" \
-            --image "$IMAGE" --no-traffic --tag "$tag" \
-            --update-env-vars "DAYHIKE_PMTILES_URL=$PMTILES_URL"
+            --image "$IMAGE" --no-traffic --tag "$tag" --memory "$memory" \
+            --update-env-vars "DAYHIKE_PMTILES_URL=$PMTILES_URL,DAYHIKE_DOWNLOAD_URL=$DOWNLOAD_URL,DAYHIKE_CORS_ORIGINS=$CORS_ORIGINS"
           described=$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format json)
           revision=$(jq -r --arg tag "$tag" '.status.traffic[] | select(.tag == $tag) | .revisionName' <<<"$described")
           url=$(jq -r --arg tag "$tag" '.status.traffic[] | select(.tag == $tag) | .url' <<<"$described")
           test -n "$revision" && test -n "$url"
           { echo "tag=$tag"; echo "revision=$revision"; echo "url=$url"; } >> "$GITHUB_OUTPUT"
-          echo "Candidate $revision at $url" >> "$GITHUB_STEP_SUMMARY"
+          echo "Candidate $revision at $url, $memory" >> "$GITHUB_STEP_SUMMARY"
 
       # A failure here ends the job: the candidate keeps its tag and no traffic.
       - name: Smoke-test the candidate
@@ -91,3 +105,19 @@ jobs:
           gcloud run services update-traffic "$SERVICE" --project "$PROJECT" --region "$REGION" \
             --remove-tags "$TAG"
           echo "Promoted $REVISION" >> "$GITHUB_STEP_SUMMARY"
+
+      # The page on a static host, calling the API on Cloud Run: it shows at once, with
+      # "Waking the server…" while Cloud Run starts (docs/deploy.md, section 8).
+      - name: Publish the loading shell
+        if: vars.CLOUDFLARE_PAGES_PROJECT != ''
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT }}
+        run: |
+          api=$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
+            --format 'value(status.url)')
+          python3 web/shell.py --url "$api" --out "$RUNNER_TEMP/shell"
+          npx --yes wrangler@3.114.17 pages deploy "$RUNNER_TEMP/shell" \
+            --project-name "$PAGES_PROJECT" --branch main --commit-dirty=true
+          echo "Published the loading shell to $PAGES_PROJECT, calling $api" >> "$GITHUB_STEP_SUMMARY"

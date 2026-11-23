@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="dayhike-fixture">
+  <!-- Paths in no relation that ingest reads only with the paths option
+       (ADR-0065). Comments give each node's (east, north) metres from A at
+       46.05, 14.05.
+
+       Valley Trail (3001): A - B - C, 2 km, parking by A.
+       Way 230: a named highway=path ("Lake Path"), no sac_scale, in no
+         relation, B - N1 - N2 - C, 3 km: with the Valley Trail it closes a loop.
+       Way 231: a named highway=track ("Forest Road"), C - R, 1.5 km south.
+       Way 232: a named sidewalk (highway=footway, footway=sidewalk), N1 - Q.
+       Way 233: an unnamed highway=path, N2 - T. -->
+  <node id="1" lat="46.0500000000" lon="14.0500000000" version="1"><!-- A (0, 0) -->
+    <tag k="ele" v="600"/>
+  </node>
+  <node id="2" lat="46.0500000000" lon="14.0629579576" version="1"><!-- B (1000, 0) -->
+    <tag k="ele" v="620"/>
+  </node>
+  <node id="3" lat="46.0500000000" lon="14.0759159152" version="1"><!-- C (2000, 0) -->
+    <tag k="ele" v="640"/>
+  </node>
+  <node id="4" lat="46.0589932161" lon="14.0629579576" version="1"><!-- N1 (1000, 1000) -->
+    <tag k="ele" v="700"/>
+  </node>
+  <node id="5" lat="46.0589932161" lon="14.0759159152" version="1"><!-- N2 (2000, 1000) -->
+    <tag k="ele" v="720"/>
+  </node>
+  <node id="6" lat="46.0679864322" lon="14.0629579576" version="1"><!-- Q (1000, 2000) -->
+    <tag k="ele" v="800"/>
+  </node>
+  <node id="7" lat="46.0679864322" lon="14.0759159152" version="1"><!-- T (2000, 2000) -->
+    <tag k="ele" v="800"/>
+  </node>
+  <node id="9" lat="46.0365101758" lon="14.0759159152" version="1"><!-- R (2000, -1500) -->
+    <tag k="ele" v="900"/>
+  </node>
+  <node id="90" lat="46.0502697965" lon="14.0500000000" version="1"><!-- (0, 30) -->
+    <tag k="amenity" v="parking"/>
+  </node>
+  <way id="201" version="1">
+    <nd ref="1"/>
+    <nd ref="2"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="202" version="1">
+    <nd ref="2"/>
+    <nd ref="3"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <way id="230" version="1">
+    <nd ref="2"/>
+    <nd ref="4"/>
+    <nd ref="5"/>
+    <nd ref="3"/>
+    <tag k="highway" v="path"/>
+    <tag k="name" v="Lake Path"/>
+  </way>
+  <way id="231" version="1">
+    <nd ref="3"/>
+    <nd ref="9"/>
+    <tag k="highway" v="track"/>
+    <tag k="name" v="Forest Road"/>
+  </way>
+  <way id="232" version="1">
+    <nd ref="4"/>
+    <nd ref="6"/>
+    <tag k="highway" v="footway"/>
+    <tag k="footway" v="sidewalk"/>
+    <tag k="name" v="Main Street"/>
+  </way>
+  <way id="233" version="1">
+    <nd ref="5"/>
+    <nd ref="7"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <relation id="3001" version="1">
+    <member type="way" ref="201" role=""/>
+    <member type="way" ref="202" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="hiking"/>
+    <tag k="name" v="Valley Trail"/>
+  </relation>
+</osm>

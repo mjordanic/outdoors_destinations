@@ -1,8 +1,10 @@
+import shutil
 import threading
 import time
 from pathlib import Path
 from xml.etree import ElementTree
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
@@ -225,7 +227,7 @@ def test_a_measure_whose_same_zone_many_hikes_share_says_it_tells_little(
 
     assert zone in descriptions[name]
     assert "it says little" in descriptions[name]
-    assert f"two hikes that match closely on a less common" in descriptions[name] and example in descriptions[name]
+    assert "two hikes that match closely on a less common" in descriptions[name] and example in descriptions[name]
 
 
 @pytest.mark.parametrize("name", ["length", "precipitation", "dry_stretch", "water_count"])
@@ -234,6 +236,17 @@ def test_a_measure_whose_same_zone_few_hikes_share_says_nothing_more(client: Tes
     descriptions = {m["name"]: m["description"] for m in client.get("/api/measures").json()["measures"]}
 
     assert "it says little" not in descriptions[name]
+
+
+def test_measure_help_is_in_plain_words_not_jargon(client: TestClient) -> None:
+    measures = client.get("/api/measures").json()["measures"]
+    descriptions = {m["name"]: m["description"] for m in measures}
+
+    for name, description in descriptions.items():
+        for jargon in ("random hike pairs", "WaterSources", "Strictest", "scored by the"):
+            assert jargon not in description, (name, jargon)
+    assert "Hardest trail grade" in descriptions["difficulty"] and "SAC" in descriptions["difficulty"]
+    assert "Water sources" in descriptions["water_count"]
 
 
 def test_every_osm_flag_says_two_hikes_without_it_are_not_compared(client: TestClient) -> None:
@@ -252,9 +265,10 @@ def test_the_score_explanation_says_what_a_score_means_and_how_it_is_made(client
     assert all(section["title"] and section["text"] for section in help_["sections"])
     assert "100,000 random pairs" in text
     # The rarity rank (ADR-0026): the share of random pairs less alike, a rare match counting for more.
-    assert "Share of random hike pairs less alike" in help_["measure"]
-    assert "0.9 means only 1 pair in 10" in help_["measure"]
-    assert "about 0.47" in help_["overall"] and "0.85 beats 99" in help_["overall"]  # under the basic set (ADR-0031)
+    assert "from 0 (nothing in common) to 1" in help_["measure"]
+    assert "0.9 means only 1 pair of hikes in 10" in help_["measure"]
+    assert "about 0.47" in help_["overall"] and "strong match" in help_["overall"]  # under the basic set (ADR-0031)
+    assert "beats" not in help_["overall"] + text  # plain words, not "0.85 beats 99 random pairs in 100"
     # Two hikes with no water source: identical, but it tells little (0.648 on the rebuild 4 Calibration).
     assert "0.65 on Water sources" in text and "35 %" in text and "pass no water source 0.65" in text
     assert "not compared" in text and "0.95" in text  # a shared absence; both passing a hut
@@ -542,6 +556,80 @@ def test_info_gives_the_trailhead_box_for_the_swapped_coordinates_warning(client
 )
 def test_rank_refuses_bad_queries(client: TestClient, body: dict, status: int) -> None:
     assert client.post("/api/rank", json=body).status_code == status
+
+
+@pytest.fixture(scope="module")
+def two_regions(data: ServingData, tmp_path_factory: pytest.TempPathFactory) -> TestClient:
+    """The test export with every hike but the Ridge Walk and the first other one moved 120° west,
+    into the United States (west of ``REGION_SPLIT_LON``), as a Europe and US build is (ADR-0069)."""
+    directory = tmp_path_factory.mktemp("two-regions") / "web-serving"
+    shutil.copytree(data.directory, directory)
+    trailheads = np.load(directory / "trailheads.npy")
+    europe = {data.row_of(RIDGE_WALK_ID), next(row for row in range(len(trailheads)) if row != data.row_of(RIDGE_WALK_ID))}
+    for row in set(range(len(trailheads))) - europe:
+        trailheads[row, 1] -= 120.0
+    np.save(directory / "trailheads.npy", trailheads)
+    return TestClient(create_app(ServingData(directory), lambda max_hours: Matrix()))
+
+
+def _regions_of(results: list[dict]) -> set[str]:
+    return {"us" if row["trailhead"][1] < serving.REGION_SPLIT_LON else "europe" for row in results}
+
+
+def test_info_lists_the_regions_a_catalog_has_hikes_in(client: TestClient, two_regions: TestClient) -> None:
+    europe = {"name": "europe", "label": "Europe", "named": "Europe"}
+    assert client.get("/api/info").json()["regions"] == [europe]
+    assert two_regions.get("/api/info").json()["regions"] == [
+        europe,
+        {"name": "us", "label": "United States", "named": "the United States"},
+    ]
+
+
+def test_rank_with_no_region_choice_ranks_every_region(two_regions: TestClient) -> None:
+    body = two_regions.post("/api/rank", json={"seed": RIDGE_WALK_ID}).json()
+
+    assert _regions_of(body["results"]) == {"europe", "us"}
+    assert body["regions"] is None and body["in_regions"] is None
+
+
+def test_rank_from_a_european_hike_with_only_the_us_ticked_lists_only_us_hikes(two_regions: TestClient) -> None:
+    every = two_regions.post("/api/rank", json={"seed": RIDGE_WALK_ID}).json()["results"]
+    us = two_regions.post("/api/rank", json={"seed": RIDGE_WALK_ID, "regions": ["us"]}).json()
+
+    assert _regions_of(us["results"]) == {"us"}
+    assert us["regions"] == ["us"] and us["in_regions"] == 2  # the US hikes, ranked before any is drawn
+    # The best US matches, ranked among themselves: those a worldwide list has, in its order.
+    assert [row["id"] for row in us["results"]] == [row["id"] for row in every if _regions_of([row]) == {"us"}]
+    europe = two_regions.post("/api/rank", json={"seed": RIDGE_WALK_ID, "regions": ["europe"]}).json()
+    assert _regions_of(europe["results"]) == {"europe"} and europe["in_regions"] == 2
+
+
+def test_a_region_choice_works_with_a_wish_too(two_regions: TestClient) -> None:
+    body = two_regions.post("/api/rank", json={"wish": {"length": 5_000}, "regions": ["us"]}).json()
+
+    assert body["results"] and _regions_of(body["results"]) == {"us"}
+
+
+@pytest.mark.parametrize(
+    "regions",
+    [[], ["asia"], ["us", "nonsense"]],
+)
+def test_rank_refuses_a_region_choice_of_no_known_region(two_regions: TestClient, regions: list) -> None:
+    assert two_regions.post("/api/rank", json={"seed": RIDGE_WALK_ID, "regions": regions}).status_code == 422
+
+
+def test_rank_refuses_a_region_the_catalog_has_no_hike_in(client: TestClient) -> None:
+    response = client.post("/api/rank", json={"seed": RIDGE_WALK_ID, "regions": ["us"]})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "this catalog has hikes in europe only"
+
+
+def test_a_starting_place_is_not_asked_with_a_region_choice(two_regions: TestClient) -> None:
+    near = {"seed": RIDGE_WALK_ID, "origin": {"lat": 45.1, "lon": 15.1}, "max_km": 50}
+
+    assert two_regions.post("/api/rank", json=near).status_code == 200
+    assert two_regions.post("/api/rank", json={**near, "regions": ["us"]}).status_code == 422
 
 
 def test_drive_filter_keeps_only_reachable_hikes_with_their_hours(
@@ -1035,7 +1123,7 @@ def test_the_credits_page_credits_every_source_with_the_fabdem_dataset(client: T
 
     for credit in (
         "OpenStreetMap", "ODbL", "Geofabrik", "Nominatim", "ESA WorldCover", "CHELSA", "FABDEM", "Copernicus",
-        "Natural Earth", "Valhalla", "Leaflet",
+        "Natural Earth", "Valhalla", "Leaflet", "Wikimedia Commons",
     ):
         assert credit in credits, credit
     assert 'href="https://doi.org/10.5523/bris.s5hqmjcdj8yo2ibzi9b4ew3sn"' in credits
@@ -1071,7 +1159,8 @@ def test_a_pmtiles_base_map_is_named_in_info_and_credited_with_the_software_that
     credits = client.get("/credits.html").text
     for credit in ("Protomaps basemap", "MapLibre GL JS", "maplibre-gl-leaflet", "PMTiles", "Noto Sans", "SIL OFL"):
         assert credit in credits, credit
-    assert "OpenStreetMap Foundation" not in credits
+    # The raster tiles drawn outside the file's bounds (a US hike on a Europe file) or when it cannot be drawn.
+    assert "where the vector map does not reach or cannot be drawn, raster tiles served by the OpenStreetMap Foundation" in credits
     for path in (
         "vendor/maplibre-gl/maplibre-gl.mjs", "vendor/maplibre-gl/maplibre-gl-worker.mjs", "vendor/maplibre-gl/LICENSE.txt",
         "vendor/maplibre-gl-leaflet/LICENSE", "vendor/pmtiles/LICENSE", "vendor/protomaps-basemaps/LICENSE.md",
@@ -1112,6 +1201,15 @@ def test_the_privacy_page_says_who_runs_the_site_what_is_kept_who_gets_it_and_wh
     assert "outside the EU" in privacy
     assert "data protection authority" in privacy
     assert "no cookies" in privacy and "no consent banner" in privacy
+
+
+def test_the_privacy_page_names_wikimedia_when_a_hike_photo_would_load(client: TestClient) -> None:
+    privacy = client.get("/privacy.html").text
+
+    assert "Wikimedia Foundation" in privacy
+    assert "upload.wikimedia.org" in privacy
+    assert "when you open a hike that has photos" in privacy
+    assert "Wikimedia Commons" in client.get("/credits.html").text
 
 
 def test_the_privacy_page_names_goatcounter_only_once_it_is_set(data: ServingData) -> None:

@@ -1,5 +1,5 @@
 ---
-status: accepted (builds on ADR-0033 and ADR-0040)
+status: accepted (builds on ADR-0033 and ADR-0040; a liked multi-day route is compared one way since ADR-0072)
 ---
 
 # Multi-day routes are marked and listed after the day hikes

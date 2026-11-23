@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Iterable, Iterator, Mapping, Protocol, Sequenc
 
 import numpy as np
 
-from dayhike.osm import OsmRelation, OsmSnapshot, OsmWay
+from dayhike.osm import OsmRelation, OsmSnapshot, OsmWay, WayEnds
 from dayhike.sources import SOURCE_OSM, osm_source_ref, require_used
 
 if TYPE_CHECKING:
@@ -30,12 +30,14 @@ MIN_LENGTH_M = 1_000  # shortest DayHike; there is no upper cap (ADR-0033)
 AMENITY_RADIUS_M = 20_000  # great-circle from Trailhead; zero counts are valid
 TRAILHEAD_ACCESS_RADIUS_M = 5_000  # parking near a line end or loop vertex
 GAP_JOIN_M = 50  # member-way ends this close join two pieces with a straight gap
+BRIDGE_M = 500  # a way the relation does not list, at most this long, joins two pieces it runs between
 SNAP_TOLERANCE_M = 20  # a TrailGraph dead-end tip this close to another way joins it (ADR-0018)
 LOOP_SHARE = 0.5  # a piece whose closed loop is at least this share of its length is a loop
 STEM_ACCESS_RADIUS_M = 200  # a loop's dead end ending this close to parking is its stem
 STEM_MIN_LENGTH_M = 1_000  # else a loop's only dead end at least this long is its stem
 END_NAME_RADIUS_M = 1_000  # a named point this close to a line end can name that end
 LOWER_START_M = 100.0  # a line whose ends differ by more than this starts at the lower one (ADR-0048) ...
+LOWER_START_BAND_M = 20.0  # ... but within this of it the last build's start stays, if there is one (ADR-0048)
 END_ACCESS_M = 300.0  # ... unless no parking or place this close, nor a road, reaches it while one reaches the top
 ACCESS_ROADS = frozenset(
     ("trunk", "primary", "secondary", "tertiary", "unclassified", "residential", "service", "living_street",
@@ -128,8 +130,9 @@ class DayHike:
     feature_vector: FeatureVector
     name_origin: str = NAME_ORIGIN_OSM_NAME
     climate_months: tuple[tuple[float, float, float] | None, ...] = (None,) * 12
-    # A built DayHike (ADR-0038) is a "network" or "stage" walk, built from
-    # the OSM relations in ``parts``, that walks its Route ``route``.
+    # A built DayHike (ADR-0038) is a "network", "stage", "trail" (ADR-0066) or "destination"
+    # (ADR-0067) walk, built from the OSM relations in ``parts`` (none for a trail or a
+    # destination), that walks its Route ``route``.
     kind: str = KIND_RELATION
     parts: tuple[int, ...] = ()
     route: str | None = None
@@ -183,9 +186,11 @@ class IngestReport:
     dropped_node_network: int = 0
     named_from_to: int = 0
     named_place: int = 0
-    # External hikes (ADR-0062): added, and dropped as a Twin of a relation DayHike,
-    # as a Twin of an external hike kept before it, or under 1 km.
+    # External hikes (ADR-0062): added (``external_stages`` of them DayStages of a long
+    # one), and dropped as a Twin of a relation DayHike or DayStage, as a Twin of an
+    # external hike kept before it, or under 1 km.
     external_added: int = 0
+    external_stages: int = 0
     dropped_external_twin: int = 0
     dropped_external_duplicate: int = 0
     dropped_external_length: int = 0
@@ -362,6 +367,7 @@ class Catalog:
                     named_from_to=report_data.get("named_from_to", 0),
                     named_place=report_data.get("named_place", 0),
                     external_added=report_data.get("external_added", 0),
+                    external_stages=report_data.get("external_stages", 0),
                     dropped_external_twin=report_data.get("dropped_external_twin", 0),
                     dropped_external_duplicate=report_data.get("dropped_external_duplicate", 0),
                     dropped_external_length=report_data.get("dropped_external_length", 0),
@@ -548,8 +554,12 @@ def build_catalog(
     snap_tolerance_m: float = SNAP_TOLERANCE_M,
     sources: Sequence[BuiltHikeSource] | None = None,
     dem_dir: Path | str | None = None,
+    previous: Path | str | None = None,
     external: Sequence[str] = (),
     external_dir: Path | str | None = None,
+    paths: str = "graded",
+    paths_of: Mapping[Path | str, str] | None = None,
+    pass_cache: Path | str | None = None,
 ) -> Catalog:
     """Ingest OSM XML or PBF snapshot(s) into a Catalog of DayHikes.
 
@@ -557,7 +567,8 @@ def build_catalog(
     amenities in a work file next to the Catalog, so the source does not need
     to fit in RAM. Re-running the same inputs resumes that work file.
     ``fresh=True`` discards it and starts again. ``progress`` receives one
-    line per stage (filter, relations, ways, nodes, assemble, write).
+    line per stage (filter, relations, ways, nodes, destinations, assemble,
+    write).
 
     Unnamed `highway=path` ways are not DayHikes; relations under 1 km,
     containers and node-network legs are counted in the ingest report and are
@@ -575,17 +586,39 @@ def build_catalog(
     give the heights of line ends that orient lines (``LowerStart``); without
     tiles there, height orients none. A ``dem_dir`` that is not a directory
     is refused, so a mistyped path does not build a Catalog without heights.
+    ``previous`` names an earlier build's Catalog: a line whose ends differ by
+    about ``LOWER_START_M`` starts where that build started it (``previous_starts``).
     ``external`` names external sources (ADR-0062) whose hikes, cached under
     ``external_dir`` (default ``data/external``) by ``dayhike fetch-external``,
     are added as DayHikes of kind ``external``; a source the register does not
-    list as used is refused.
+    list as used is refused. ``paths`` is the level of paths in no hiking
+    relation read into the TrailGraph, one of ``PATH_LEVELS`` (ADR-0065); from
+    ``trails`` up the named-trail hikes are built from them too (ADR-0066).
+    ``pass_cache`` is a directory where the work file is kept as the passes over
+    the snapshot leave it, and read from there by a later build of the same
+    snapshot files, paths levels and pass code, so that build skips the passes
+    (``fresh`` reads the snapshot again and replaces it); it holds one snapshot.
+    ``paths_of`` gives an input (a file or directory of ``osm_path``) a level
+    of its own: a Europe and US build reads Europe at ``graded`` and the US at
+    ``trails``, each as a build of it alone would (ADR-0069).
     """
-    from dayhike.dem import point_heights
+    from dayhike.dem import dem_read_by, point_heights
     from dayhike.external import EXTERNAL_DIR, read_external
-    from dayhike.ingest import BUILT_HIKE_SOURCES, _connect_work, emit_progress, remove_work, run_ingest, write_geometry_store
+    from dayhike.ingest import (
+        BUILT_HIKE_SOURCES,
+        _connect_work,
+        check_paths,
+        emit_progress,
+        remove_work,
+        run_ingest,
+        write_geometry_store,
+    )
     from dayhike.trailgraph import check_snap_tolerance, write_trailgraph
 
     check_snap_tolerance(snap_tolerance_m)
+    osm_files, levels = _osm_paths_and_levels(osm_path, paths, paths_of or {})
+    for level in dict.fromkeys(levels):
+        check_paths(level)
     catalog_path = Path(catalog_path)
     if dem_dir is not None and not Path(dem_dir).is_dir():
         raise FileNotFoundError(f"No DEM directory {dem_dir}")
@@ -593,17 +626,21 @@ def build_catalog(
         (source_id, read_external(source_id, EXTERNAL_DIR if external_dir is None else external_dir))
         for source_id in dict.fromkeys(external)
     ]
+    before = None if previous is None else previous_starts(previous)
     heights = None if dem_dir is None else point_heights(dem_dir)
     if dem_dir is not None and heights is None:
         emit_progress(progress, "assemble", f"no DEM tiles in {dem_dir}: height orients no line")
-    kept, report, work_path, snapshot = run_ingest(
-        _osm_paths(osm_path),
+    kept, report, work_path, snapshot, walks = run_ingest(
+        osm_files,
         catalog_path,
         progress=progress,
         fresh=fresh,
         sources=BUILT_HIKE_SOURCES if sources is None else sources,
         heights=heights,
         external=external_hikes,
+        previous=before,
+        paths=levels,
+        pass_cache=None if pass_cache is None else Path(pass_cache),
     )
     emit_progress(progress, "write", str(catalog_path))
     # Each file is written under a staging name and all are renamed together once
@@ -619,8 +656,17 @@ def build_catalog(
     if work_path.exists():
         work_conn = _connect_work(work_path)
         try:
-            write_geometry_store(stage(geometry_store_path_for(catalog_path)), kept, work_conn, snapshot, heights)
-            del snapshot  # the TrailGraph reads the work file on its own
+            write_geometry_store(
+                stage(geometry_store_path_for(catalog_path)),
+                kept,
+                work_conn,
+                snapshot,
+                heights,
+                dem_read_by(dem_dir),
+                before,
+                walks,
+            )
+            del snapshot, walks  # the TrailGraph reads the work file on its own
             write_trailgraph(
                 stage(trailgraph_path_for(catalog_path)),
                 work_conn,
@@ -636,25 +682,37 @@ def build_catalog(
     return Catalog.open(catalog_path)
 
 
-def _osm_paths(osm_path: Path | str | Sequence[Path | str]) -> list[Path]:
-    """The snapshot files to ingest: each path given, a directory as the OSM
-    files in it."""
-    if isinstance(osm_path, (str, Path)):
-        osm_path = [osm_path]
-    return [file for path in osm_path for file in _osm_files(Path(path))]
+def _osm_paths_and_levels(
+    osm_path: Path | str | Sequence[Path | str], paths: str, paths_of: Mapping[Path | str, str]
+) -> tuple[list[Path], list[str]]:
+    """The snapshot files to ingest (each path given, a directory as the OSM
+    files in it) and each file's paths level: its input's in ``paths_of``, else
+    ``paths``. A ``paths_of`` key that is none of the inputs is refused, so a
+    mistyped one does not quietly build without its trails."""
+    inputs = [osm_path] if isinstance(osm_path, (str, Path)) else list(osm_path)
+    given = {Path(path).resolve(): level for path, level in paths_of.items()}
+    unknown = set(given) - {Path(path).resolve() for path in inputs}
+    if unknown:
+        raise ValueError(f"paths levels for {', '.join(sorted(map(str, unknown)))}, which are not inputs")
+    files, levels = [], []
+    for path in inputs:
+        for file in _osm_files(Path(path)):
+            files.append(file)
+            levels.append(given.get(Path(path).resolve(), paths))
+    return files, levels
 
 
 def _osm_files(path: Path) -> list[Path]:
     if not path.is_dir():
         return [path]
-    # Ingest writes its osmium extract (``*.catalog.osm.pbf``, while being
-    # written ``*.writing.osm.pbf``) beside the source: not a source itself, and
+    # Ingest writes its osmium extracts (``*.catalog.osm.pbf``, ``*.walk.osm.pbf``, while
+    # being written ``*.writing.osm.pbf``) beside the source: not a source itself, and
     # listing it would change the fingerprint and stop the next run resuming.
     files = sorted(
         candidate
         for candidate in path.iterdir()
         if candidate.suffix in {".osm", ".xml", ".pbf"}
-        and not candidate.name.endswith((".catalog.osm.pbf", ".writing.osm.pbf"))
+        and not candidate.name.endswith((".catalog.osm.pbf", ".walk.osm.pbf", ".writing.osm.pbf"))
     )
     if not files:
         raise FileNotFoundError(f"No OSM files in {path}")
@@ -854,6 +912,42 @@ def declared_start(ends: tuple[str, str] | None, named: NamedPoints | None) -> E
 Heights = Callable[[Sequence[tuple[float, float]]], Sequence["float | None"]]
 
 
+PreviousStarts = Mapping[frozenset[tuple[float, float]], tuple[float, float]]
+
+
+def _end_point(point: tuple[float, float]) -> tuple[float, float]:
+    return round(point[0], 6), round(point[1], 6)
+
+
+def previous_starts(catalog_path: Path | str) -> PreviousStarts:
+    """Where each one-way line of an earlier build started, by its two ends.
+
+    Read from the GeometryStore next to ``catalog_path``: a hike's first and
+    last vertex. A pair of ends two earlier hikes walked from different ends
+    is left out, and so is every loop.
+    """
+    store = geometry_store_path_for(catalog_path)
+    if not store.is_file():
+        raise FileNotFoundError(f"No GeometryStore {store} for the previous build {catalog_path}")
+    connection = sqlite3.connect(f"file:{store}?mode=ro", uri=True)
+    try:
+        rows = connection.execute(
+            "SELECT v.dayhike_id, v.latitude, v.longitude FROM vertices v JOIN "
+            "(SELECT dayhike_id, MAX(seq) AS last FROM vertices GROUP BY dayhike_id) m ON m.dayhike_id = v.dayhike_id "
+            "WHERE v.seq = 0 OR v.seq = m.last ORDER BY v.dayhike_id, v.seq"
+        ).fetchall()
+    finally:
+        connection.close()
+    ends_of: dict[int, list[tuple[float, float]]] = {}
+    for dayhike_id, lat, lon in rows:
+        ends_of.setdefault(dayhike_id, []).append(_end_point((lat, lon)))
+    starts: dict[frozenset[tuple[float, float]], set[tuple[float, float]]] = {}
+    for start, *_, end in (ends for ends in ends_of.values() if len(ends) > 1):
+        if start != end:
+            starts.setdefault(frozenset((start, end)), set()).add(start)
+    return {ends: next(iter(found)) for ends, found in starts.items() if len(found) == 1}
+
+
 class LowerStart:
     """Where height starts a one-way line (ADR-0048): at its lower end when its
     two ends differ by more than ``LOWER_START_M``, unless nothing reaches the
@@ -862,10 +956,22 @@ class LowerStart:
     a road (``ACCESS_ROADS``) of the line's ways passes through it.
     ``heights`` gives the height of each point, None where unknown; with an
     end's height unknown, height chooses nothing.
+
+    ``previous`` says where an earlier build started the lines it held (see
+    ``previous_starts``). A line whose ends differ by within ``LOWER_START_BAND_M``
+    of ``LOWER_START_M`` starts there again, so a few metres of height between
+    two builds cannot turn it round; only a difference that crosses the whole
+    band lets height decide anew.
     """
 
-    def __init__(self, heights: Heights, access: Sequence[tuple[float, float]]) -> None:
+    def __init__(
+        self,
+        heights: Heights,
+        access: Sequence[tuple[float, float]],
+        previous: PreviousStarts | None = None,
+    ) -> None:
         self.heights = heights
+        self.previous = previous or {}
         self.tree = _access_tree(access)
 
     def choice(self, ways: Sequence[OsmWay], nodes: Mapping[int, tuple[float, float]]) -> EndChoice:
@@ -873,7 +979,13 @@ class LowerStart:
 
         def choose(a: tuple[float, float], b: tuple[float, float]) -> tuple[float, float] | None:
             height_a, height_b = self.heights([a, b])
-            if height_a is None or height_b is None or abs(height_a - height_b) <= LOWER_START_M:
+            if height_a is None or height_b is None:
+                return None
+            if abs(abs(height_a - height_b) - LOWER_START_M) < LOWER_START_BAND_M:
+                before = self.previous.get(frozenset((_end_point(a), _end_point(b))))
+                if before is not None:
+                    return a if _end_point(a) == before else b
+            if abs(height_a - height_b) <= LOWER_START_M:
                 return None
             low, high = (a, b) if height_a < height_b else (b, a)
             roads = {
@@ -1070,11 +1182,15 @@ def assemble_main_walk(
     nodes: Mapping[int, tuple[float, float]],
     access_tree: BallTree | None,
     declared: EndChoice | None = None,
+    bridges: WayEnds | None = None,
 ) -> MainWalk:
     """The one place member ways become a DayHike's line (ADR-0012).
 
     Distinct member ways form a graph split at every shared node. Way ends of
-    different pieces within ``GAP_JOIN_M`` are joined; the longest piece is
+    different pieces within ``GAP_JOIN_M`` are joined; with ``bridges``, the
+    ways of ``ways`` the relation does not list, of at most ``BRIDGE_M``, that
+    run from a node of one piece to a node of another join them too, shortest
+    first (a way its mappers left out, ADR-0077). The longest piece is
     walked, its dead-end tips within ``GAP_JOIN_M`` first joined in pairs
     (see ``_tip_gap_edges``). A piece whose closed loop, after setting aside
     dead ends and then shortcuts, is at least ``LOOP_SHARE`` of its length is
@@ -1090,6 +1206,7 @@ def assemble_main_walk(
     name, see ``declared_start`` and ``LowerStart``), else from the end
     ``_pick_trailhead`` chooses with ``access_tree``.
     """
+    snapshot_nodes = nodes
     listed: list[int] = []  # way id per member-way listing in the snapshot
     leftovers: list[str | None] = []
     first_listing: dict[int, int] = {}
@@ -1126,6 +1243,9 @@ def assemble_main_walk(
     }
     edges = _split_ways(first_listing, way_nodes, nodes)
     edges += _gap_edges(edges, way_nodes, nodes, len(listed))
+    if bridges is not None:
+        members = {member_id for member_type, member_id in relation.members if member_type == "way"}
+        edges += _bridge_edges(edges, ways, snapshot_nodes, nodes, bridges, members, len(listed) + 2)
     removed = _main_piece_removals(edges)
     alive = {index for index in range(len(edges)) if index not in removed}
     tip_gaps = _tip_gap_edges(edges, alive, nodes, len(listed) + 1)
@@ -1281,6 +1401,50 @@ def _gap_edges(
         pieces.union(first, second)
         gaps.append(_Edge(None, (gap_rank, len(gaps)), (first, second), distance_m))
     return gaps
+
+
+def _bridge_edges(
+    edges: Sequence[_Edge],
+    ways: Mapping[int, OsmWay],
+    snapshot_nodes: Mapping[int, tuple[float, float]],
+    nodes: dict[int, tuple[float, float]],
+    bridges: WayEnds,
+    members: set[int],
+    rank: int,
+) -> list[_Edge]:
+    # Join pieces by the ways the relation does not list that run from a node
+    # of one to a node of another, at most BRIDGE_M, shortest first, as long as
+    # they are still different pieces. ``nodes`` gets the bridges' nodes.
+    pieces = _UnionFind()
+    for edge in edges:
+        for node_id in edge.node_ids[1:]:
+            pieces.union(edge.node_ids[0], node_id)
+    on_edges = {node_id for edge in edges for node_id in edge.node_ids}
+    walked = sorted(on_edges)
+    if len({pieces.find(node_id) for node_id in walked}) < 2:
+        return []
+    found: list[tuple[float, int, tuple[int, ...]]] = []
+    for way_id in bridges.ways_at(walked) - members:
+        ids = tuple(node_id for node_id in ways[way_id].node_ids if node_id in snapshot_nodes)
+        # Its ends on the pieces and nothing between them: it crosses no member way.
+        if len(ids) < 2 or ids[0] == ids[-1] or ids[0] not in on_edges or ids[-1] not in on_edges:
+            continue
+        if any(node_id in nodes for node_id in ids[1:-1]):
+            continue
+        if pieces.find(ids[0]) == pieces.find(ids[-1]):
+            continue
+        length_m = _linestring_length_m([snapshot_nodes[node_id] for node_id in ids])
+        if length_m <= BRIDGE_M:
+            found.append((length_m, way_id, ids))
+    joined: list[_Edge] = []
+    for length_m, _, ids in sorted(found):
+        if pieces.find(ids[0]) == pieces.find(ids[-1]):
+            continue
+        pieces.union(ids[0], ids[-1])
+        for node_id in ids:
+            nodes.setdefault(node_id, snapshot_nodes[node_id])
+        joined.append(_Edge(None, (rank, len(joined)), ids, length_m))
+    return joined
 
 
 def _tip_gap_edges(
@@ -1916,6 +2080,7 @@ def _write_sqlite(path: Path, dayhikes: Iterable[DayHike], report: IngestReport)
                         "named_from_to": report.named_from_to,
                         "named_place": report.named_place,
                         "external_added": report.external_added,
+                        "external_stages": report.external_stages,
                         "dropped_external_twin": report.dropped_external_twin,
                         "dropped_external_duplicate": report.dropped_external_duplicate,
                         "dropped_external_length": report.dropped_external_length,

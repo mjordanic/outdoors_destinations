@@ -4,7 +4,7 @@ Setup, how to run it and how it works. For what the site does and how to use
 it, see the [README](../README.md) and the plain-language
 [user guide](user-guide.md).
 
-A local Catalog of DayHikes from OpenStreetMap, ranked by similarity to Seeds
+A local Catalog of DayHikes from OpenStreetMap and official open trail registers, ranked by similarity to Seeds
 you already know. DriveTime is an optional query-time filter from today's
 Origin. DriveTime is not a FeatureVector column.
 
@@ -53,8 +53,8 @@ uv run --extra web dayhike serve --data data/web-serving
 ```
 
 The fixture has no heights, land cover or climate, so its scores only show that
-the pipeline runs. A real Catalog (one country or all of
-Europe) needs the OSM, height, land-cover and climate downloads and the full
+the pipeline runs. A real Catalog (one country, all of Europe,
+or Europe and the contiguous US) needs the OSM, height, land-cover and climate downloads and the full
 command order: [How data is created](#how-data-is-created-command-order), then
 [Walkthrough A](#walkthrough-a--one-country-start-here) (one country, with
 download sizes and how to limit them to your region). Drive time needs Valhalla:
@@ -71,7 +71,7 @@ the demo: [Web demo](#web-demo) and [docs/deploy.md](deploy.md).
 - [Origin and max hours](#4-optional-origin-and-max-hours)
 - [Pulling a real extract](#pulling-a-real-extract): [ingest](#how-ingest-runs), [NetworkHikes](#how-networkhikes-are-chosen-at-a-start), [Valhalla](#valhalla-drivetime-only)
 - [Web demo](#web-demo): [what the page does](#what-the-page-does), [what the list leaves out](#what-the-list-leaves-out), [drawn rows](#drawn-rows-redraw-and-strict-order), [Wish](#describing-a-hike-instead-of-a-seed-wish), [serving](#serving-export-and-running-it), [site pages](#site-pages-and-settings), [export](#what-the-export-holds), [API](#api), [measurements](#web-demo-measurements), [deployment](#deployment-and-the-coverage-map)
-- [Tests](#tests), [Clean rebuild](#clean-rebuild), [Python API](#python-api), [Notebooks](#notebook-walkthrough), [Attribution](#attribution)
+- [Tests](#tests), [Clean rebuild](#clean-rebuild), [rebuild runbook](#rebuild-runbook-workers-steps-at-the-same-time-resuming-and-caches), [Python API](#python-api), [Notebooks](#notebook-walkthrough), [Attribution](#attribution)
 
 ## Install
 
@@ -90,7 +90,7 @@ Every real file under `data/` is built by a command. This is the order:
 
 ```
 1. OSM snapshot          data/osm/*.osm.pbf          fetch-extracts (or curl)
-2. DEM rasters           data/dem/*_FABDEM_V1-2.tif  dayhike fetch-dem
+2. DEM rasters           data/dem/*_FABDEM_V1-2.tif  dayhike fetch-dem (or --source copernicus)
 2b. Optional external    data/external/<source>/     dayhike fetch-external --source ie-sport-ireland (ADR-0062)
 3. Ingest                data/catalog.sqlite         dayhike ingest --dem data/dem [--external ie-sport-ireland]
                          data/catalog.geometry.sqlite     (always, same ingest)
@@ -105,6 +105,7 @@ Every real file under `data/` is built by a command. This is the order:
 10. Rank                 stdout scores               dayhike rank [--weight] [--month] [--one-way]
 11. Optional DriveTime   local Valhalla Docker       rank --origin --max-hours, nearby
 12. Web demo export      data/web-serving/           dayhike export-serving (see Web demo)
+13. Optional cut         data/web-serving-eu, -us    dayhike cut-serving --keep europe|us|demo (ADR-0082)
 ```
 
 ```bash
@@ -117,12 +118,14 @@ uv run dayhike fetch-extracts --dest data/osm
 # 2. Elevation tiles. Ingest starts a line whose ends differ by more than 100 m
 #    at its lower end (ADR-0048, lower end); without --dem, height orients no line.
 #    A --dem directory that does not exist stops ingest before it starts.
+#    --previous CATALOG keeps the start of a line whose ends differ by 80 to 120 m as that
+#    earlier build had it, so a rebuild on another DEM does not turn it round (ADR-0048).
 uv run dayhike fetch-dem          # default bbox: Alps + Dinarides, 152 tiles, about 3.2 GB;
                                   # --bounds S,W,N,E for less (Walkthrough A)
 
 # 3. Catalog + GeometryStore + TrailGraph. One command writes the three SQLite files.
-#    The files, not the folder: `dayhike ingest data/osm` fails today ("Could not
-#    detect file format"); the glob also skips the *.catalog.osm.pbf caches ingest writes.
+#    Files or a folder: a folder is read as its .osm, .xml and .pbf files, leaving out
+#    the *.catalog.osm.pbf, *.walk.osm.pbf and *.writing.osm.pbf extracts ingest writes.
 uv run dayhike ingest data/osm/*-latest.osm.pbf --catalog data/catalog.sqlite --dem data/dem
 
 # 4. Heights. Skip this if OSM ele on nodes is enough (it usually is not).
@@ -162,6 +165,8 @@ What each step **does not** do:
 | `sample-landcover` | `vertices.landcover`, `vertices.landcover_along` + Catalog fractions | download rasters; rewrite hike list |
 | `fetch-climate` | GeoTIFFs in `data/climate/` | touch SQLite; sample climate |
 | `sample-climate` | Catalog monthly means (drops an old `vertex_climate`) | download rasters; rewrite hike list |
+| `fetch-commons` | Commons `geo_tags`, `page` and `image` dumps in `data/commons/` (about 27 GB) | touch SQLite; count |
+| `count-commons` | Catalog `dayhikes.commons_contributors` (ADR-0064; shown, never scored) | download dumps; keep any uploader; touch facts or Rankings |
 | `sample-trailgraph` | per-vertex height, LandCover, climate cell, southness, LandCover along long steps and water cells in the TrailGraph | touch the Catalog or GeometryStore; download rasters |
 | `build-similarity` | `data/catalog.similarity/` (facts + Calibration, one way and with the way back) | touch any SQLite file; download anything |
 | `rank` | nothing on disk | fetch OSM or rasters; rebuild facts |
@@ -170,7 +175,7 @@ Ingest **replaces** the Catalog (it does not append). `sample-dem`,
 `sample-landcover`, and `sample-climate` do **not** replace the Catalog: they
 only overwrite sampled columns on hikes whose geometry sits on a downloaded
 tile (`sample-climate` clears every hike's climate first, so a hike off the
-downloaded rasters has none). `build-similarity` reads both SQLite files, FABDEM, the WorldCover
+downloaded rasters has none). `build-similarity` reads both SQLite files, the DEM (FABDEM or Copernicus GLO-30), the WorldCover
 tiles (for `waterside`) and the sampled TrailGraph (for each DayHike's way back) and replaces `data/catalog.similarity/`; ingest and every sample step that changes the
 Catalog or the TrailGraph delete that directory, so rerun `build-similarity` after them (Ranking
 refuses missing facts and facts built for other DayHikes, other Catalog
@@ -186,8 +191,9 @@ command. After ingest, widen raster coverage with
 What one build covers is a **region file**, not code. The packaged ones are in
 `src/dayhike/data/regions/`: `alps-dinarides` (the eight PRD extracts, the
 default of the fetch commands), `europe` (the continent extract, the default of
-`coverage-map`), `us-colorado` (one US state, an example outside Europe) and
-`us-rhode-island` (the smallest state, the [US test build](#a-us-build)).
+`coverage-map`), `us-48` (the 48 states and DC), `us-colorado` (one US state,
+an example outside Europe) and `us-rhode-island` (the smallest state, the
+[US test build](#a-us-build)).
 A region file is TOML:
 
 ```toml
@@ -217,16 +223,32 @@ uv run dayhike fetch-dem --region europe --region us-colorado    # each region's
 uv run dayhike coverage-map --countries /tmp/countries.geojson --region europe --region us-colorado --out /tmp/m.svg
 ```
 
+Named-trail hikes are on per ingest input, not per region file: a US build ingests
+with `--paths trails` ([ADR-0066](adr/0066-named-trail-hikes.md)), and the
+Europe build keeps the default `graded`, which builds none. A Europe and US
+build reads each region's extracts from a directory of its own and gives the
+US its level: `dayhike ingest data/osm/europe data/osm/us --paths data/osm/us=trails`
+([ADR-0069](adr/0069-europe-and-us-in-one-build.md)); Europe then gets the
+hikes a Europe build gives it. The packaged `us-48` region is the 48 states and
+DC. Both regions must be read from one elevation map (`export-serving` refuses
+a mix), so a Europe and US build is a Copernicus GLO-30 build.
+[deploy.md](deploy.md#europe-only-or-europe-and-the-us) has both builds and
+the memory each needs.
+
 Every box must run west to east (`west < east`) within ±180°: a region that
 crosses the 180° meridian (Alaska's Aleutians, Fiji, eastern Chukotka) is not
 supported; split it, or leave the far side out. The CHELSA clip of regions
 far apart (Europe plus the US) is the box around both, mostly ocean: large on
 disk, but nothing reads its empty cells.
 
-`export-serving --region NAME` (repeatable, the regions the Catalog was built
-from) records each region's label and continent in the export's `meta.json`, and
-the site's pages name them ([Site pages](#site-pages-and-settings)). Without it,
-or with only regions in Europe, the pages read as the Europe site always has.
+`export-serving` writes into the export's `meta.json` the regions its hikes
+start in, read from their Trailheads: Europe east of 40° W, the United States
+west of it ([ADR-0081](adr/0081-the-site-follows-its-data.md)), and the site's
+pages name them ([Site pages](#site-pages-and-settings)). `--region NAME`
+(repeatable, the regions the Catalog was built from) only relabels them with
+each region's label and continent; it is refused when hikes start on a side no
+`--region` names, or when a region it names has no hikes. With only regions in
+Europe, the pages read as the Europe site always has.
 
 ### A US build
 
@@ -239,7 +261,7 @@ of its own (`US`):
 curl -L -o $US/osm/rhode-island-latest.osm.pbf https://download.geofabrik.de/north-america/us/rhode-island-latest.osm.pbf
 B=41.1,-71.95,42.05,-71.1     # the region's bounds
 uv run dayhike fetch-dem --bounds $B --dest $US/dem
-uv run dayhike ingest $US/osm/rhode-island-latest.osm.pbf --catalog $US/catalog.sqlite --dem $US/dem
+uv run dayhike ingest $US/osm/rhode-island-latest.osm.pbf --catalog $US/catalog.sqlite --dem $US/dem --paths trails
 uv run dayhike sample-dem --catalog $US/catalog.sqlite --dem $US/dem
 uv run dayhike fetch-landcover --bounds $B --dest $US/landcover
 uv run dayhike sample-landcover --catalog $US/catalog.sqlite --landcover $US/landcover
@@ -279,8 +301,10 @@ call on your machine.
 | `data/valhalla/` | Road PBF + Valhalla routing tiles Docker builds | gitignored |
 | `data/web-serving/` | Serving export for the web demo (`export-serving`) | **gitignored** |
 | `data/geonames/` | GeoNames `allCountries.zip` for the demo's place search | gitignored |
+| `data/borders/` | OSM national boundaries (`osmium tags-filter … r/admin_level=2`) for `--osm-borders` | gitignored |
+| `src/dayhike/data/cuts/` | Cut files `cut-serving --keep` takes by name (`demo`), ADR-0082 | yes |
 | `src/dayhike/web/static/` | The demo page, its script, the About, credits, Privacy and Terms pages, the logo (mark, wordmark, touch icon and social preview) and the coverage map | yes |
-| `web/` | Data and web Dockerfiles, Cloud Build config, local compose file and smoke script of the demo | yes |
+| `web/` | Data and web Dockerfiles, Cloud Build config, local compose file, smoke script and loading-shell writer (`shell.py`) of the demo | yes |
 | `data/valhalla/compose.yaml` | How to run Valhalla | yes |
 | `data/valhalla/prepare-roads.sh` | osmium filter: car roads only, no buildings | yes |
 | `data/valhalla/prepare-highways.sh` | osmium filter: motorway/trunk/primary only | yes |
@@ -290,6 +314,7 @@ call on your machine.
 | `data/dem/` | FABDEM (or Copernicus GLO-30) 1° GeoTIFFs for elevation, and USGS 3DEP ones for the US | **gitignored** |
 | `data/landcover/` | ESA WorldCover 2021 map GeoTIFFs | **gitignored** |
 | `data/climate/` | CHELSA V2.1 monthly GeoTIFFs | **gitignored** |
+| `data/commons/` | Wikimedia Commons `geo_tags`, `page` and `image` dumps for `count-commons` (about 27 GB, November 2026) | **gitignored** |
 
 `uv sync` does **not** download OSM and does **not** install Valhalla. Tests
 never start Docker. They rebuild a Catalog in a temp directory from the
@@ -335,11 +360,11 @@ a hair over 10 km / 5 km because it is computed on the sphere):
 
 ```
 data/catalog.sqlite
-IngestReport(kept=4, dropped_unnamed=0, dropped_length=1, dropped_container=1, named_osm_name=2, named_osm_ref=1, named_synthetic=1, dropped_node_network=0, named_from_to=0, named_place=0)
+IngestReport(kept=4, dropped_unnamed=0, dropped_length=1, dropped_container=1, named_osm_name=2, named_osm_ref=1, named_synthetic=1, dropped_node_network=0, named_from_to=0, named_place=0, external_added=0, external_stages=0, dropped_external_twin=0, dropped_external_duplicate=0, dropped_external_length=0)
 ```
 
 Progress (`filter:`, `relations:`, `ways:`, `nodes:`, `assemble:`, `write:`,
-`trailgraph:`) goes to **stderr**. The same command also writes
+`named trails:`, `destinations:`, `trailgraph:`) goes to **stderr**. The same command also writes
 `data/catalog.geometry.sqlite` and `data/catalog.trailgraph.sqlite`
 (`--snap-tolerance` sets the TrailGraph's snap tolerance, above 0 and at most 50 m, checked before ingest starts). Add `--list` to print kept DayHikes as
 `id`, name, `length_m`. `--fresh` ignores a leftover work file and starts
@@ -391,7 +416,7 @@ print(resolve_seed(catalog, "ridge walk"))  # 1001; case-insensitive exact match
 
 | Table | Contents |
 | --- | --- |
-| `dayhikes` | id (the OSM relation id, a built DayHike's hashed id from 2^40 up, or an external hike's from 2^39 up), Seed label, `name_origin`, length_m, Difficulty (`sac_scale` or NULL), `kind` (`relation`, `network`, `stage`, `external`), `parts` (JSON list of the OSM relations a built DayHike is built from, else NULL), `route` (a built DayHike's Route, else NULL), `source` (a sources register id, `osm` for every OSM hike), `source_ref` (its record there: `relation/{id}`, for a NetworkHike `node/{id}` of its start, for an external hike its record id; ADR-0060), `source_url` (an external hike's record page, else NULL; ADR-0062) and `dem_source` (the register ids of the DEMs `sample-dem` read its heights from, comma-separated, NULL before; ADR-0063) |
+| `dayhikes` | id (the OSM relation id, a built DayHike's hashed id from 2^40 up, or an external hike's from 2^39 up), Seed label, `name_origin`, length_m, Difficulty (`sac_scale` or NULL), `kind` (`relation`, `network`, `stage`, `trail`, `destination`, `external`), `parts` (JSON list of the OSM relations a built DayHike is built from, else NULL), `route` (a built DayHike's Route, else NULL), `source` (a sources register id, `osm` for every OSM hike), `source_ref` (its record there: `relation/{id}`, for a NetworkHike or a DestinationHike `node/{id}` of its start, for a named-trail hike `way/{id}` of the first way it walks, for an external hike its record id; ADR-0060), `source_url` (an external hike's record page, else NULL; ADR-0062) and `dem_source` (the register ids of the DEMs `sample-dem` read its heights from, comma-separated, NULL before; ADR-0063) |
 | `trailheads` | lat/lon used for amenities and DriveTime |
 | `amenity_facts` | per DayHike: hut, parking, restaurant_cafe, drinking_water (count + nearest_m) |
 | `feature_vectors` | length, elevation min/max/gain, Difficulty ordinal, LandCover fractions, regime climate |
@@ -431,7 +456,10 @@ each way once, in walk order, with no Leftover:
 
 DayHikeGeometry is the main walk of the member-way graph: each distinct member
 way once, from the Trailhead, with no jump between consecutive ways except a
-joined gap of 50 m or less. Member ways not on the walk are Leftovers. They
+joined gap of 50 m or less. Two pieces are also joined by a way of the snapshot
+the relation does not list, of at most 500 m, that runs from a node of one to a
+node of the other (ADR-0077): the walk follows it, but it is not in `ways`.
+Member ways not on the walk are Leftovers. They
 stay in `ways` with `in_chain = 0` and a `leftover` reason (`role`, `repeat`,
 `disconnected`, `dead_end`, `shortcut`), and `dayhikes.unconnected_m` is their
 distinct length. Catalog `length_m` and `vertices` follow the walk only. See
@@ -501,7 +529,17 @@ pass. It holds the marked hiking network and graded paths: every member way of e
 it dropped (too short, node-network legs), and every graded path
 (`highway=path` with a `sac_scale`) that no such relation lists, with no
 relation id ([ADR-0037](adr/0037-graded-paths-join-the-trailgraph.md)).
-Other unmarked paths are not in it. Ways split into Segments that meet at Junctions: a node two ways share,
+Other unmarked paths are not in it by default. `dayhike ingest --paths trails`
+also reads every named `highway=path|footway|bridleway` way that no such
+relation lists (not a `footway=sidewalk|crossing`) and `highway=trailhead`
+nodes, for named-trail hikes ([ADR-0066](adr/0066-named-trail-hikes.md));
+`--paths named` named tracks too, and `--paths unnamed` every
+`highway=path` too: they join the TrailGraph like graded paths and, with the
+graded paths, also enter the ingest snapshot the built-hike sources read,
+though NetworkHikes still reach parking only over the hiking tables' ways
+([ADR-0065](adr/0065-paths-beyond-route-members-at-ingest.md)). `--paths INPUT=LEVEL`
+sets one input's level (a file or a directory; repeatable), so only that
+input's paths enter the snapshot ([ADR-0069](adr/0069-europe-and-us-in-one-build.md)). Ways split into Segments that meet at Junctions: a node two ways share,
 a dead end, a node where the relations along the trail change (a stage
 boundary), or a crossing of two same-layer ways with no node. A dead-end tip
 within `--snap-tolerance` (20 m by default, at most 50 m) of a node more than
@@ -524,14 +562,14 @@ web demo as "connect here" and never walked unless picked. See
 | `trailgraph_meta` | OSM attribution, snap tolerance, Link distance, and the CHELSA grid after `sample-trailgraph` |
 
 At ingest `ele` is OSM `ele` and the other per-vertex arrays are unset.
-`sample-trailgraph` reads the same FABDEM, WorldCover and CHELSA rasters as
+`sample-trailgraph` reads the same DEM (FABDEM or Copernicus GLO-30), WorldCover and CHELSA rasters as
 the other sample steps, so a server without rasters can compute a composed
 hike's facts with the same rules as a DayHike's. It does not touch the Catalog
 and needs rerunning after every ingest. `export-serving` refuses a TrailGraph
 it never ran on only when the similarity facts hold a raster fact (tree share,
 temperature, southness or WaterSide), and, when they hold land cover, one
 that did not read land cover along long steps (ADR-0059); otherwise the export goes through and its
-composed hikes keep OSM `ele` while the Catalog's hikes have FABDEM heights, so
+composed hikes keep OSM `ele` while the Catalog's hikes have DEM heights, so
 run it whenever you sampled heights. The way back of
 every DayHike reads these samples too (ADR-0019), so it deletes the similarity
 facts: run it before `build-similarity`. On Slovenia the
@@ -559,11 +597,13 @@ the Catalog, never the GeometryStore, and rebuilds nothing per query.
 way back to its Trailhead: the Seed, a composed Seed and every DayHike it is
 compared with alike. The way back is the shortest one: none for a loop that
 ends where it starts, a straight step for ends at most 50 m apart, else the
-shortest walk over the TrailGraph's trails when it is shorter than the hike
-itself backwards and than 50 km (`WAY_BACK_SEARCH_M`, ADR-0035), else the hike
-retraced. So a hike that ends 500 m from its
+shortest walk over the TrailGraph's trails no harder than the hike, or than
+`mountain_hiking` (T2) for an easier or ungraded hike (ADR-0076, ADR-0080),
+when it is shorter than the hike itself backwards and than 50 km
+(`WAY_BACK_SEARCH_M`, ADR-0035), else the hike retraced. So a hike that ends 500 m from its
 start adds about 500 m, and a line up to a summit is compared up and back:
-twice the length, its climb and its descent both ways. `build-similarity`
+twice the length, its climb and its descent both ways. Its Difficulty stays
+the hike's own: a harder way the way back finds does not grade it (ADR-0078). `build-similarity`
 stores a second set of facts with the way back, calibrated on its own, and
 how each DayHike gets back (`way_back.npy`: metres back, climb and descent of
 the whole walk, kind). `--one-way` (`return_to_start=False` in Python, the
@@ -605,7 +645,7 @@ way instead of with its way back.
 | `length` | Catalog length | ratio | floor 1 km |
 | `elevation_gain` | metres climbed, larger of climb and descent (direction-free); DEM spikes are dropped: walking the vertices in order, a kept vertex, or a run of kept vertices up to 60 m long, all 10 m+ above (or all below) both the kept vertex before it and the next vertex, at 25 %+ grade into it and out of it, is dropped, and the test repeats on the new last kept vertex (the ends stay); a path along a steep shore or cliff reads the water or the slope beside it that way; where the kept heights, read as a line, stray 2.5 m+ on average over 200 m either side from their 90 m moving average (less near an end, so the ends stay), they are that moving average (ADR-0062); then a change counts once it moves 10 m and the end counts what it moved; climb and descent are the means of the walk both ways (ADR-0048, lower end) | ratio | floor 100 m |
 | `difficulty` | Difficulty as SAC rank 1–6 | tolerance | D = 3 |
-| `highest`, `lowest` | highest and lowest point | tolerance | D = 400 m |
+| `highest`, `lowest` | highest and lowest point; the highest is a summited Peak's mapped `ele` when that is up to 100 m above every vertex (ADR-0078) | tolerance | D = 400 m |
 | `profile` | ProfileShape (64 points) | profile | — |
 | `landcover` | six LandCover shares (five plus the leftover) | mix | — |
 | `peak_summited` | a Peak within 50 m of the line | agree | — |
@@ -614,7 +654,7 @@ way instead of with its way back.
 | `temperature` | ClimateNormal temperature (regime or QueryMonth) | tolerance | D = 10 °C |
 | `precipitation` | ClimateNormal precipitation (regime or QueryMonth) | ratio | floor 10 mm |
 | `solar_radiation` | ClimateNormal solar radiation (regime or QueryMonth) | tolerance | D = 5,000 kJ m⁻² day⁻¹ |
-| `southness` | SolarAspect from FABDEM (1 south, 0 north, 0.5 east, west or flat) | tolerance | D = 1 |
+| `southness` | SolarAspect from the DEM (1 south, 0 north, 0.5 east, west or flat) | tolerance | D = 1 |
 | `water_count` | WaterSources in the Corridor, capped at 3 | tolerance | D = 3 |
 | `dry_stretch` | DryStretch | ratio | floor 1 km |
 | `waterside` | WaterSide: share of the walk within 200 m of sea, lake or wide river (WorldCover) | tolerance | D = 0.5, dead band 0.15 (ADR-0021); a share under it is dry, and two dry hikes are not compared (ADR-0058) |
@@ -632,13 +672,14 @@ is the shared share of fractions, `agree` is 1 when two yes/no facts agree
 (two DayHikes that both lack an OSM flag's feature are not compared; `round_trip`
 compares both values), `profile` is 1 − the mean
 absolute difference of two ProfileShapes, walked either way. A Measure whose
-fact is missing on either DayHike drops out of that pair and the other weights
-renormalize; a candidate with no weighted Measure scored is left out. One
-exception: a DayHike with no Difficulty grade scores 0 on Difficulty against a
-Seed that has one, so it ranks below a hike with the grade asked for (ADR-0043);
-against a Wish, a DayHike with no data for any Measure the Wish asks a value of
-scores 0 on it the same way, so it ranks below the hikes that have that data
-(ADR-0052, no data against a Wish).
+fact (or ProfileShape) the Seed lacks drops out of that pair and the other
+weights renormalize; a candidate with no weighted Measure scored is left out.
+A candidate with no data for a Measure the Seed has data for scores 0 on it, as
+far apart as values go, so it ranks below the hikes that have that data and
+stays listed: first for a missing Difficulty grade (ADR-0043), then for any
+Measure a Wish asks a value of (ADR-0052, no data against a Wish), and for any
+Measure of a Seed hike (ADR-0071, no data against a Seed). The
+Calibration's random pairs still leave missing data out.
 
 ### What the score means
 
@@ -691,7 +732,8 @@ Reading a score, as the web demo explains it beside every score (ADR-0025):
   their overall score is still 0.74.
 - **Where the facts come from.** OpenStreetMap (the line, SAC grade, surface,
   peaks, viewpoints, huts, shelters, water sources, restaurants, parking),
-  FABDEM (heights, climb, profile, steepness, slope aspect), ESA WorldCover
+  the DEM the export was sampled from (FABDEM, or Copernicus GLO-30 as in the
+  last build; heights, climb, profile, steepness, slope aspect), ESA WorldCover
   2021 (land cover, WaterSide), CHELSA V2.1 1981–2010 normals (temperature,
   precipitation, solar radiation). Each Measure's source is listed by
   `/api/measures`.
@@ -724,7 +766,7 @@ numbers rather than run the code.
 | Input | Version and source | Notes |
 | --- | --- | --- |
 | OpenStreetMap | Geofabrik extracts; the recorded rebuild numbers (`tests/rebuild_checks.py`) come from `europe-261031.osm.pbf`, osmosis replication timestamp 2026-10-31T21:23:06Z, 35,354,652,634 bytes, sha256 `6e2bfbfd7756ece175d5d879f5eb0b1f11536f6131260b0b234cb6840a89cd82` | `*-latest` files change daily, so record the dated file name and its sha256 when you build; `tests/test_raw_inputs.py` checks a Europe PBF against these |
-| Heights | FABDEM V1-2 (University of Bristol, CC BY-NC-SA 4.0), downloaded from a third-party mirror on Hugging Face, `https://huggingface.co/datasets/pavelzaitsau/fabdem-v12` (`FABDEM_DATASET` in `dem.py`), with no checksum against Bristol's release; or Copernicus GLO-30 from its AWS bucket (`--source copernicus`) | record which, and the tile list, with a build |
+| Heights | FABDEM V1-2 (University of Bristol, CC BY-NC-SA 4.0), downloaded from a third-party mirror on Hugging Face, `https://huggingface.co/datasets/pavelzaitsau/fabdem-v12` (`FABDEM_DATASET` in `dem.py`), with no checksum against Bristol's release; or Copernicus GLO-30 from its AWS bucket (`--source copernicus`), which every DEM step of the last build (Europe and the US, 2026-11-22) read; USGS 3DEP for the US (`--source 3dep`) is read beside either where its tiles are | record which, and the tile list, with a build (`meta.json` `dem_read`) |
 | Land cover | ESA WorldCover 2021 v200, `https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map` | |
 | Climate | CHELSA V2.1 1981–2010 monthly normals (tas, pr, rsds), `https://os.unil.cloud.switch.ch/chelsa02/chelsa/global/climatologies` | |
 | Places | GeoNames `allCountries.zip` (optional, for place search) | |
@@ -733,12 +775,14 @@ numbers rather than run the code.
 DayHikes is the Europe Catalog of late October 2026 (about 2026-10-25) that
 the timing tables were measured on; 135,588 is the export of 2026-10-28 the
 live demo serves and ADR-0031's checks used; 250,160 is what ingest keeps on
-the 2026-10-31 snapshot above with today's rules (including 55,558
-NetworkHikes and 33,646 DayStages). The README rounds the live one.
+the 2026-10-31 snapshot above with the rules of then (including 55,558
+NetworkHikes and 33,646 DayStages); 889,525 is the Europe and contiguous US
+export of 2026-11-22 (ADR-0069), every DEM step on Copernicus GLO-30, that
+`docs/deploy.md` sizes its sites by. The README rounds the last one.
 
 **Sampling choices.**
 
-- Heights are the value of the FABDEM cell under each OSM vertex: no
+- Heights are the value of the DEM cell (FABDEM or Copernicus GLO-30) under each OSM vertex: no
   interpolation, no points added between vertices (see **Elevation from
   FABDEM**). Gain, highest point and ProfileShape therefore depend on how densely
   OSM nodes a way.
@@ -782,9 +826,9 @@ NetworkHikes and 33,646 DayStages). The README rounds the live one.
   and `dayhike compose` leave it out (ADR-0022).
 
 **Calibration.** 100,000 pairs of DayHike rows drawn uniformly at random with
-seed 20261024 (`CALIBRATION_SEED`), self-pairs dropped. Each of 70 keys (the 27
-Measures, the 36 month variants of the three climate Measures, and 7 "every
-pair" keys) stores 1,024 quantiles (inverse-CDF) of its raw scores; a raw score
+seed 20261024 (`CALIBRATION_SEED`), self-pairs dropped. Each of 71 keys (the 27
+Measures, the 36 month variants of the three climate Measures, and 8 "every
+pair" keys: the seven OSM flags and WaterSide) stores 1,024 quantiles (inverse-CDF) of its raw scores; a raw score
 is calibrated by looking it up in those quantiles, which differs from the exact
 share of the 100,000 by at most about 0.0005. The rarity rank at raw 1 uses
 1,024 quantiles of each fact. One-way and way-back facts have separate tables.
@@ -876,7 +920,9 @@ Measured on the Europe Catalog of late October 2026 (161,614 DayHikes; see
 | One Seed, `allowed_ids` of 5,000 DayHikes | 0.03–0.06 s |
 | Peak memory of a ranking process | 1.0 GB (0.48 GB without `Catalog.open`) |
 
-So a ranking server fits in 2 GB and is comfortable in 4 GB. Most of its memory
+So a ranking server of that Catalog fits in 2 GB and is comfortable in 4 GB (the
+web server of the Europe and US export, app plus Valhalla, needs 4 GiB on Cloud
+Run, and its US and demo cuts 2 GiB: [deploy.md](deploy.md)). Most of its memory
 is the Python DayHike objects `Catalog.open` builds; scoring itself needs the
 about 280 MB of memory-mapped arrays plus a few hundred MB per query. Building the
 facts needs 1.7 GB (not yet re-measured) and is best run where the
@@ -951,7 +997,8 @@ the SQLite file only.
 
 Do this from the **repo root** after `uv sync`. For one country, go straight to
 [Walkthrough A](#walkthrough-a--one-country-start-here); the **Highway tiles**
-section before it is only for drive time across all of Europe. "PRD regions"
+section before it is only for drive time across all of Europe (or Europe and
+the US, from one merged highways file: [deploy.md](deploy.md#europe-only-or-europe-and-the-us)). "PRD regions"
 below are the eight regions the project started with (Croatia, Slovenia,
 Bosnia and Herzegovina, Montenegro, Austria, Switzerland, north-east Italy and
 Bavaria; PRD is the product requirements document they were named in).
@@ -1221,7 +1268,14 @@ sections are kept (ADR-0033). A missing OSM `name` is kept: the Seed label is `n
 else `ref` with `from – to` or "near" the nearest place, else `from – to`, else
 "Hike near" the nearest place (a named city, town, village or hamlet within
 5 km of the Trailhead), else `relation:{id}`, with `name_origin` recording
-which (ADR-0017). A line starts at the end its `from`/`to` tags point to when
+which (ADR-0017). Last, every label of the build is made unique, whatever its
+hike's kind (`dayhike.names`, [ADR-0068](adr/0068-every-hike-name-is-unique.md)):
+a placeholder name ("Road", "Trail", "Forest Route 2165", "392") becomes "Hike
+near {place}" with a numbered name kept in brackets, a shared name adds "near
+{place}" to each hike that has it, the place being the nearest town within
+5 km, else the nearest named peak, hut, viewpoint or lake within 5 km, else the
+nearest town; a label still shared is numbered "(1)", "(2)" in id order. A
+unique name that is no placeholder is kept, and `name_origin` is unchanged. A line starts at the end its `from`/`to` tags point to when
 they name one end; else, with `--dem`, at its lower end when its ends differ by
 more than 100 m and something reaches it (ADR-0048, lower end); else, when it lacks a
 `from` or `to` tag, at the end its dashed name points to; else parking
@@ -1272,9 +1326,9 @@ uv run dayhike build-similarity
 ```
 
 Every hike needs heights and land cover from the rasters: a hike outside the
-downloaded box has none, so those Measures drop out of its comparison and it
-can score near 1 against very different hikes. The box from step 4 covers
-every hike in the extract.
+downloaded box has none, so it scores 0 on those Measures against every hike
+that has them, and a Ranking from it compares only its other Measures. The box
+from step 4 covers every hike in the extract.
 
 **9. See which names you can use as Seeds**
 
@@ -1321,12 +1375,10 @@ ls -lh data/osm
 uv run dayhike ingest data/osm/*-latest.osm.pbf --catalog data/catalog.sqlite
 ```
 
-Pass the files, not the folder: `dayhike ingest data/osm` stops with
-`RuntimeError: Could not detect file format for filename 'data/osm'` and
-leaves `data/catalog.sqlite.work` behind (the CLI hands a folder on as one
-file; `build_catalog("data/osm")` in Python does read a folder). The
-`*-latest.osm.pbf` glob also leaves out the `*.catalog.osm.pbf` filtered copies
-that ingest writes next to each extract. The same, with the files named:
+`dayhike ingest data/osm` reads the folder the same way: its `.osm`, `.xml`
+and `.pbf` files, leaving out the `*.catalog.osm.pbf`, `*.walk.osm.pbf` and
+`*.writing.osm.pbf` extracts ingest writes next to each source, as the
+`*-latest.osm.pbf` glob does. Files can also be named one by one, here four of them:
 
 ```bash
 uv run dayhike ingest \
@@ -1398,20 +1450,39 @@ directory: every DEM step reads the source from the tile names in its
 ```bash
 uv run dayhike fetch-dem --source copernicus --dest data/dem-copernicus
 uv run dayhike fetch-landcover
+uv run dayhike ingest <pbf> --catalog data/catalog.sqlite --fresh --dem data/dem-copernicus --previous data/catalog.sqlite
 uv run dayhike sample-dem --dem data/dem-copernicus
+uv run dayhike sample-landcover
+uv run dayhike sample-climate
 uv run dayhike sample-trailgraph --dem data/dem-copernicus
 uv run dayhike build-similarity --dem data/dem-copernicus
 ```
+
+(`ingest` reads the DEM too: it orients one-way lines, and so the tours' DayStages (ADR-0072), and NetworkHikes by the heights of their ends,
+ADR-0048. Left out of the recipe, it would keep the orientation FABDEM gave. `--previous` names the FABDEM
+build, read before it is replaced, so a line whose ends differ by 80 to 120 m keeps its start.)
 
 A Copernicus `sample-dem` writes its attribution into GeometryStore
 `geometry_meta` (`copernicus_attribution`; a FABDEM run removes it). The
 serving export carries it in place of FABDEM's attribution, and the site then
 names Copernicus GLO-30 instead of FABDEM in the Measure sources, the score
-help, the credits page and the home page footer line. That credit
-follows the last `sample-dem` alone: the export is free of FABDEM's
-non-commercial limit only when all three DEM steps above ran with the same
+help, the credits page and the home page footer line. The export is free of
+FABDEM's non-commercial limit only when all four DEM steps above (`ingest`,
+`sample-dem`, `sample-trailgraph`, `build-similarity`) ran with the same
 Copernicus `--dem` over tiles covering every DayHike. Otherwise some values are
 still FABDEM, and its credit and the non-commercial limit still apply.
+
+Each of the four steps records the sources whose tiles its `--dem` directory
+holds (`dem.dem_read_by`): `ingest` and `sample-dem` in GeometryStore
+`geometry_meta` (`dem_read_ingest`, `dem_read_sample_dem`), `sample-trailgraph`
+in the TrailGraph's `trailgraph_meta` (`dem_read`), `build-similarity` in the
+similarity directory's `meta.json` (`dem_read`). `export-serving` refuses
+(`ServingExportError`, naming each step and its source) when the recorded
+sources differ, and writes them by step into its `meta.json` as `dem_read`. A
+step that read no DEM (ingest without `--dem`) records nothing and is left out;
+a Catalog built before the steps recorded their source exports as before.
+Re-run the step that differs on the build's `--dem` directory, and every step
+after it, to clear the refusal.
 
 **USGS 3DEP for the United States (ADR-0063):** `--source 3dep` downloads the
 USGS 3DEP 1 arc-second GeoTIFFs of a box from the USGS staged-products bucket
@@ -1570,10 +1641,17 @@ download tiles. `--catalog` defaults to `data/catalog.sqlite`.
 ends, so run time grows with the number of vertices sampled, not with repeated
 file opens. `sample-landcover` opens a WorldCover tile when a vertex first
 needs it and keeps at most 128 open, closing the least recently used (Europe
-has 267 tiles; the macOS default limit is 256 open files). `sample-climate`
-holds one climate raster at a time (about 170 MB as float32 for Europe) plus
-the vertex coordinates and their cell indices in memory: peak 4.4 GB for
-Europe's 42 million vertices.
+has 267 tiles; the macOS default limit is 256 open files). It puts each
+vertex's step to the next vertex in raster order, and makes the steps
+distinct, in numpy, a part of the map at a time, from runs it spools to the
+temporary directory (`TMPDIR`). That needs free disk of about 90 bytes per
+vertex while it runs (6.8 GB for 82 million vertices), and its main process
+stays under 3 GB of memory at any store size. `sample-climate` spools each
+vertex's hike and climate cell to the temporary directory (16 bytes per
+vertex), then holds one climate raster at a time (about 170 MB as float32 for
+Europe), the 36 rasters' values at the distinct cells and each DayHike's
+sums: peak 1.3 GB on 82 million vertices, where reading them all into memory
+took 5.7 GB.
 
 ```bash
 uv run dayhike sample-landcover
@@ -1713,6 +1791,41 @@ Viewpoint or lake, none a Twin of a relation DayHike or of a better chain. Named
 are read for them alone: they name destinations and signposts, and are no
 amenity and not in the GeometryStore.
 
+`named_trails` (`dayhike.named_trails`, ADR-0066) is the third. It
+builds named-trail hikes, kind `trail`, from the named
+`highway=path|footway|bridleway` ways in no hiking relation, so only from a
+snapshot read with `--paths trails` or above: a US build. At the default
+`graded` (the Europe build) it has no way to read and builds nothing. Ways of
+one name (case ignored) that share a node or whose ends lie within 50 m are one
+piece; each piece is walked as a relation's member ways are, from the end with
+a `highway=trailhead` node within 100 m when only one has one, else by the
+height rule, else from the end nearer a trailhead node or parking, and kept from
+1 km (`MIN_TRAIL_LENGTH_M`; relation hikes and DayStages keep their own rules). A walk more than half paved or lit, a snowmobile corridor not signed for
+walkers, open to motor vehicles, bike-first or a ski piste is dropped, and so
+is a Twin of a relation DayHike or of a named trail kept before it. A colour
+name ("Red Trail", "Blue") gets " near {place}" (the nearest place within 5 km
+of its start); a shared name or a placeholder such as "Trail" or "Road" is then
+renamed with every other label of the build (ADR-0068). Its `source_ref` is `way/{id}` of
+the first way it walks, and the page links the ways its Route walks.
+
+`destination_source` (`dayhike.destination_hikes`, ADR-0067) is registered last: it
+builds DestinationHikes, "{destination} from {start}" walks from a car park to
+a named hut, viewpoint, lake or notable peak, up to 8 per destination and 8 per
+car park. Its search runs as a stage of its own (`search_destinations`), after
+ingest's passes and before the snapshot loads. It cuts its own extract beside
+the source (`*.walk.osm.pbf`, every walkable way, car parks and destinations
+with their tags, its ways carrying their nodes' locations from osmium
+`add-locations-to-ways`), keeps the ways near destinations in the work file
+and searches 1° tiles in `parallel_iter` workers forked from that
+small process (`--dest-workers N` or `DAYHIKE_DEST_WORKERS`, else the
+`--workers` count). A tile whose destinations have no car park within reach
+is not read. Each tile's walks go into the work file as the tile is done, so
+a build stopped part way resumes (without `--fresh`) with the tiles not yet
+done, unless the walk extracts, the DEM folder or the search's code changed;
+the source chooses from them. The ways a kept walk takes that the snapshot
+lacks go into the snapshot and the work file's path tables, so the
+GeometryStore and the TrailGraph hold them.
+
 Last come the external hikes of each `--external` source (ADR-0062, `dayhike.external`),
 read from the cache `dayhike fetch-external` wrote under `data/external/<source>/`.
 Ingest refuses a source the sources register does not list as `used`. Each is
@@ -1720,11 +1833,21 @@ its own DayHike of kind `external`, its line the source's own with no OSM way,
 its id hashed from `(source, source_ref)` from 2^39 up to 2^40, and `source_url`
 links its record. One under 1 km is dropped, and so is one that is a Twin of a
 relation DayHike (the OSM hike is listed) or of an external hike kept before
-it; the ingest report counts `external_added`, `dropped_external_twin` (Twins
-of relation DayHikes), `dropped_external_duplicate` (Twins of an external hike
-kept before) and `dropped_external_length`. Sport Ireland's adapter (`ie-sport-ireland`) keeps the
+it; the ingest report counts `external_added`, `external_stages` (of them
+DayStages), `dropped_external_twin` (Twins of relation DayHikes and built
+DayStages), `dropped_external_duplicate` (Twins of an external hike kept
+before) and `dropped_external_length`. A record with no name of its own is
+named "Hike near {place}" after the nearest place within 5 km, else the
+adapter's fallback, else "Unnamed hike ({source short name} {source_ref})" with
+NameOrigin `synthetic` (ADR-0017, ADR-0062). A kept external hike over 25 km is also
+cut into DayStages by `dayhike.stages` as a relation DayHike is (ADR-0040): each is an
+external hike of NameOrigin `stage` with its route's `source_ref`. Sport Ireland's adapter (`ie-sport-ireland`) keeps the
 walking trails, starts each at its listed start, and keeps the longest part of a
-multi-part line with the parts that meet it within 50 m.
+multi-part line with the parts that meet it within 50 m. Lipas (`fi-lipas`,
+`fetch-external --source fi`) keeps active hiking routes (type 4405) and nature
+trails (type 4404) under that same 1 km floor. Parts that meet end to end within 50 m are
+one walk under the Lipas id; parts that do not join it, branches included, are
+pieces `{id}/{n}`. Turrutebasen (`no-turrutebasen`, `fetch-external --source no`) keeps foot routes (`Fotrute`) from the national Geonorge GPX and chains segments of one maintainer and `rutenummer` the same way (ADR-0062 has the naming and `source_ref` rules). France (`fr-ecrins-randonnees`, `fetch-external --source fr`) reads schema_randonnee GeoJSON (`read_schema_randonnee`): each dataset listed in `data/fr_randonnee.toml` is cached only when its published licence is Licence Ouverte 2.0 or ODbL and its records carry a distinct `id_local`, `nom_itineraire` and `pratique`; walks (`pratique` "A pied" or "pédestre") are read under the record's `id_local`, name and `url` (ADR-0062 has the datasets skipped and why). South Tyrol (`it-odh-suedtirol`) keeps the marked hiking trail segments of the province's open data portal (CC0) and chains segments of one trail number and name (a segment with neither stays a walk of its own); its `fetch-external` step refuses the dataset when the portal no longer lists it as cc-zero.
 
 A hike that is neither a `route=hiking` or `route=foot` relation, a built DayHike nor an external hike in this Catalog cannot be a Seed.
 Unnamed forest paths (`highway=path` without a hiking relation) never appear.
@@ -2071,8 +2194,8 @@ Link the Hiker did not take; "connect here" crosses a Link; the walk may repeat
 a Segment and is measured as drawn; while drawn, its readout estimates the
 climb from the Segments ("about"), and once it is the hike shown below (after
 "Use this hike" or "Edit on the map") it shows that hike's measured climb,
-"as measured", so the two agree; it gets a proposed name, from the trails
-walked longest (each at least 30 % of it) and a named place at the start, that the Hiker may change; its
+"as measured", so the two agree; it gets a proposed name that says it is the Hiker's own walk, "Your hike along"
+the trails walked longest (each at least 30 % of it) "from" a named place at the start, that the Hiker may change; its
 link, `#compose=1:104.11,105.13`, shares it as the OSM ways it walks from node
 to node (and `&name=…` when the Hiker named it), so it opens the same walk after
 a rebuild that adds or drops Junctions, and nothing is stored); see what
@@ -2115,12 +2238,12 @@ it is off. Clicking a result shows it the same way, next to the
 liked hike. Every shown hike has "Link to this hike" (`#hike=<id>` for a
 catalog or built hike, its `#compose=` link for a composed one, with `&oneway`
 when set, and the search settings: `&month=`, `&w=` (the weights moved from their defaults, `name:weight`
-comma-separated), `&adv`, `&from=lat,lon`, `&place=`, `&hours=`, `&km=`, `&group=` and `&units=`; a wish link carries the
-same but its own weights; ADR-0054) and two buttons: Share sends that address to a touch screen's share
+comma-separated), `&adv`, `&regions=`, `&group=` and `&units=`, but not the starting place (`&from=lat,lon`, `&place=`, `&hours=`,
+`&km=`), which only the address bar keeps (ADR-0075); a plain click on it copies it as Share does rather than opening it in the same tab, which would drop the starting place and the list; a wish link carries the same but its own weights; ADR-0054) and two buttons: Share sends that address to a touch screen's share
 sheet, or copies it on a computer or where the sheet fails (a line beside the
 button then says "Link copied", or shows the link when it cannot be copied),
 and Download GPX saves the hike as drawn (the served line, simplified to within 10 m, so 1 % or
-more shorter in a GPS app's measure says so in the panel and the GPX description) as a GPX
+more shorter in a GPS app's measure says so, in km or miles as the page shows, in the panel and the GPX description) as a GPX
 1.1 track, made in the browser, with a height per point from its
 ElevationProfile, credited to OpenStreetMap under the ODbL and to the
 elevation map; with Return to start on, its WayBack follows as a second track
@@ -2140,19 +2263,20 @@ start is typed as "lat, lon", taken from the
 browser, or found by "Find place" among the GeoNames towns and villages in the
 export, ADR-0029, ADR-0042); the note above the results names the limits and
 the place, "within a 2 h drive of Munich, DE", as they stay set when another
-hike opens in the same tab, and the limit inputs are not restored by the
+hike opens in the same tab from the page (a link opened in the tab resets them, ADR-0073), and the limit inputs are not restored by the
 browser on a reload. The DriveTime is estimated on highways-only tiles as in
 **Highway tiles** above; the distance needs no routing engine. Measures with no data for a hike show "no data".
 Most often it is the missing Difficulty grade, which scores 0 on Difficulty
-against a graded hike (ADR-0043); any other missing fact drops out of that
-pair's score (missing data for a Measure a Wish asks a value of scores 0
-instead, ADR-0052, no data against a Wish). Climb and
+against a graded hike (ADR-0043); any other missing fact scores 0 the same way
+against a Seed that has it or a Wish that asks a value of it (ADR-0052,
+ADR-0071), and a fact the Seed lacks drops out of that pair's score. Climb and
 descent say "with the way back" or "one way" in the hike's panel and the
 results table (a loop's panel says neither); the search list gives every hike one way. Every API request the
 page makes ends after 60 s with "The server did not answer within 60 s", and
 one that cannot connect says "The server could not be reached"; a failed Find
 says so above the list it leaves. Every score has a short line and a "?" beside it (in the results
-table, in each column heading); hover, focus, click or tap opens what the score
+table, in each column heading; the Measure columns are folded away until "Show the
+score of every measure" is pressed); hover, focus, click or tap opens what the score
 means, why alike hikes can score low on one measure, the data each measure
 reads and how the scores are made (ADR-0025).
 
@@ -2224,12 +2348,19 @@ FastAPI app, extra `web`) memory-maps it. No `Catalog.open` runs in the server.
 uv run dayhike export-serving --catalog data/catalog.sqlite --out data/web-serving \
   --valhalla-tiles data/valhalla/highways-eu --valhalla-url http://127.0.0.1:8002 \
   --geonames data/geonames/allCountries.zip
+# a Europe and US build: --valhalla-tiles data/valhalla/highways-eu-us and
+# --region europe --region us-48 (docs/deploy.md, section 1)
+
+# optional: cut a Europe and US export into a site of its own (ADR-0082;
+# docs/deploy.md, section 1): Europe (east of 40° W), the US, or a cut file's areas
+uv run dayhike cut-serving --from data/web-serving --keep europe --out data/web-serving-eu
 
 uv sync --extra web
 uv run dayhike serve --data data/web-serving --valhalla-url http://127.0.0.1:8002
 # http://127.0.0.1:8000 ; checks on real hikes, timings and memory (smoke.py
-# expects the full Europe export: on a smaller one its first check fails, as it
-# wants more than 100,000 DayHikes):
+# checks the known hikes of each region in /api/info "regions" and wants more
+# than 50,000 DayHikes for Europe and 10,000 for the US: on a smaller export its
+# first check fails):
 uv run python web/smoke.py --data data/web-serving --valhalla-url http://127.0.0.1:8002
 # --us checks the one-state US build instead (see "A US build")
 
@@ -2249,7 +2380,10 @@ cookieless GoatCounter tag to every page. Unset, no page loads analytics.
 `--forwarded-hops N` (`DAYHIKE_FORWARDED_HOPS`) tells the rate limit how many
 proxies sit in front of the server, so it keys on the visitor's address in
 `X-Forwarded-For` (Cloud Run sets 1; see [docs/deploy.md](deploy.md)). The
-privacy page names GoatCounter only once it is set. No page sets a cookie or writes browser storage
+privacy page names GoatCounter only once it is set. The base map's settings
+(`--tile-url`, `--tile-attribution`, `--tile-max-zoom`, `--pmtiles-url`) and
+`--download-url` (the ODbL download) are in [docs/deploy.md](deploy.md),
+sections 3, 10 and 11. No page sets a cookie or writes browser storage
 (GoatCounter's script writes localStorage only when a visitor opens a page with
 `#toggle-goatcounter` to stop counting their own visits). A code other than letters, digits, `-` and `_` is refused at start.
 `--site-url https://HOST` (`DAYHIKE_SITE_URL`) is the site's public address:
@@ -2259,13 +2393,13 @@ value other than `https://host` is refused at start. `/robots.txt` allows every
 crawler and names `/sitemap.xml`, which lists the five pages by full address at
 the site URL (unset, at the address the request came to); a Ranking is made on
 request, so no search or API address is listed.
-The pages name what the export covers from its `meta.json` regions
-(`export-serving --region`): the tagline, the share description and the About
+The pages name what the export covers from its `meta.json` regions (the
+regions its hikes start in, labelled by `export-serving --region`; ADR-0081): the tagline, the share description and the About
 page say "hikes across Europe" while every region is in Europe, or the regions'
 labels ("Europe and Colorado") once one is not. The header's coverage map, a map
-of Europe, is shown only while every region is in Europe; the About page's
-Europe coverage note and the Terms page's "112 works across the European Union"
-stay only where Europe is covered.
+of Europe, and the About page's Europe coverage note are shown only while every
+region is in Europe (otherwise the About page names the regions); the Terms
+page's "112 works across the European Union" stays wherever Europe is covered.
 
 The page opens behind a loading screen, the logo and "Loading…", which says
 "Waking the server" when the first answer is slow (a start from zero), and that
@@ -2287,7 +2421,8 @@ ElevationProfile at 128 equal steps in metres, the metres it climbs and
 descends in the walking direction (export format 2), and the amenity points the
 Measures count (WaterSources, Huts, restaurants, Shelters and Viewpoints in the
 Corridor, Peaks within 2 km, parking and restaurants within 500 m of the
-Trailhead) with their OSM names, its `source`, `source_ref` (ADR-0060) and `source_url` (ADR-0062), plus an R*Tree of each simplified line's
+Trailhead) with their OSM names, its `source`, `source_ref` (ADR-0060) and `source_url` (ADR-0062), `parking_m` (the nearest car park, ADR-0068),
+`official_source`, `official_ref` and `official_url` (the official record an OSM hike lies on, see `--external-dir` below), `commons_contributors` (ADR-0064) and, once `dayhike export-photos` has run, `photos` (up to two Wikimedia Commons photos), plus an R*Tree of each simplified line's
 bounding box for the map picker (export format 3), and, when the Catalog has a
 TrailGraph, `trailgraph.sqlite`: its Segments with a simplified line and the
 metres each climbs either way, the Junctions, amenity points and sampled
@@ -2295,26 +2430,85 @@ values, with the OSM node and way ids a shared link names (export format 4), and
 each hike's `kind`, `parts` and `route`, so the page links what a built DayHike is built from
 (export format 5; `dayhike serve` refuses an
 older export, so rerun `export-serving` once), and beside it `trailgraph.network/`, the trail network a way back
-is searched on as `.npy` arrays the server memory-maps (about 75 MB for Europe; without it the first way back
+is searched on as `.npy` arrays the server memory-maps (about 410 MB for the Europe and US export; without it the first way back
 builds the network from the Segments, reading about half of `trailgraph.sqlite`, 10-20 s). With `--valhalla-tiles` it also links the
-tile extract and writes a `valhalla.json` that serves it inside the container;
-with `--valhalla-url` it snaps every Trailhead once (`snaps.npz`). With
+tile extract and writes a `valhalla.json` that serves it inside the container (both in `valhalla/`);
+with `--valhalla-url` it snaps every Trailhead once (`snaps.npz`). It reads the caches of the Catalog's
+external sources from `--external-dir` (default `data/external`, as `fetch-external` writes them; ADR-0062),
+every record, those ingest dropped as Twins of an OSM hike too: an OSM hike with at least 80 % of its points
+(every 50 m) within 30 m of one record's line, as a Twin lies on the other, names that record
+(`official_*`; of two, the one more of it lies on), so a day stage of an official trail credits the trail's
+source as well as OpenStreetMap; and an external hike links its record's page as the source's adapter gives
+it now, not as ingest read it. A source with no cache there is named in the progress and matches nothing
+(Europe and the US: 6,015 of 874,786 OSM hikes, 381 of them DayStages; reading the caches about a minute and
+the matching about 2 minutes with 4 workers). With
 `--geonames` (GeoNames `allCountries.zip`, downloaded there when missing) it
 writes `places.sqlite`, the towns of 1,000 people or more within 2° of the
 Trailheads' box and the smaller villages within 5 km of a Trailhead for "Find
 place" (ADR-0042); `dayhike export-places --out
 data/web-serving` adds it beside an existing export, which needs no other
-change (ADR-0029). Every export also writes `landmarks.sqlite`, the Landmarks
+change (ADR-0029). Every export also writes `names.npz`, the name search's index
+(every hike name folded as search compares it, and the typo search's word tables), so
+a server starts without reading every name from `hikes.sqlite` (ADR-0081); `dayhike
+export-name-index --out data/web-serving` adds it beside an existing export, and a server
+without it, or with one of other hikes, builds it at start. Every export also writes `landmarks.sqlite`, the Landmarks
 the hike search finds hikes by (ADR-0053): the named Peaks, Huts, Shelters and
 Viewpoints on the hikes, the places of `places.sqlite` with the hikes starting
 within 5 km, and with `--geonames` the lakes, passes and mountains within 2 km
 of a hike, else 10 km, a GeoNames peak at an OSM Peak of its name adding its
 names to it, and each Landmark with how many names it has (ADR-0055);
 `export-places` rewrites it too. With `--countries` (the Natural Earth
-countries GeoJSON the coverage map reads) it writes `countries.npy`, the
-country each Trailhead is in, for the hike's emergency number;
-`dayhike export-countries --out data/web-serving --countries /tmp/countries.geojson`
-adds it beside an existing export. A Trailhead outside every (simplified)
+**10m** countries GeoJSON; the coverage map's 50m shapes put about 240 hikes
+2–50 km from a border, Borkum or Ceuta for one, in the neighbour) it writes `countries.npy`, the
+country each Trailhead is in, for the hike's emergency number. With
+`--borders` too (Natural Earth 10m land boundary lines) it writes
+`borders.npy`: for a hike whose route crosses a national border or whose
+Trailhead is within 2 km of one, the country across it (the nearest such
+border), so the hike's panel shows that country's emergency number as well
+(about 3 % of hikes; about 2 minutes for Europe and the US):
+
+```bash
+for f in ne_10m_admin_0_countries ne_10m_admin_0_boundary_lines_land; do
+  curl -L -o /tmp/$f.geojson https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/$f.geojson
+done
+uv run dayhike export-countries --out data/web-serving \
+  --countries /tmp/ne_10m_admin_0_countries.geojson --borders /tmp/ne_10m_admin_0_boundary_lines_land.geojson
+```
+
+With `--osm-borders` too (repeatable; each the national boundaries of one OSM
+extract the Catalog was built from), a Trailhead within 2 km of an
+OpenStreetMap national border takes the country OSM puts it in instead of
+Natural Earth's, so the panel leads with the country the hike starts in.
+Natural Earth's 10m lines lie up to about a kilometre off (the Rio Grande, the
+45th parallel): Boquillas Canyon Trail, starting 150 m inside the US, showed
+Mexico first. Where the extract holds every way of a country (48 of them in
+Europe: not France, Spain, the Netherlands, Norway or Russia, whose relations
+reach beyond it, nor the US, Canada or Mexico), that country's OSM shape
+decides. Elsewhere it is the side of the nearest border the Trailhead is on: a
+border is a way two admin_level=2 relations of different ISO 3166 codes share,
+other than a maritime one, and which side of it is which country is what
+Natural Earth says 2.5 km off it, summed over every way of that border. A
+Trailhead keeps Natural Earth's country where neither tells (the borders
+nearest it disagree at a tripoint, or Natural Earth cannot tell the sides of
+a border) or the country has no emergency row. A hike whose country this
+changes always shows Natural Earth's country second (`borders.npy`), flagged
+or not, so it never loses the numbers of the country it may really start in.
+OSM draws no land border in Crimea, so no Crimean hike changes. On the Europe
+and US build this moves 4,891 of 889,525 Trailheads (79 of them not flagged
+before), in about a minute more and 2.6 GB of memory:
+
+```bash
+mkdir -p data/borders  # not beside the extracts: an ingest of data/osm/europe/ would read it as one
+osmium tags-filter data/osm/europe/europe-latest.osm.pbf r/admin_level=2 -o data/borders/europe-admin2.osm.pbf  # about 4 minutes
+osmium tags-filter data/osm/us/us48-latest.osm.pbf r/admin_level=2 -o data/borders/us48-admin2.osm.pbf  # about 1.5 minutes
+uv run dayhike export-countries --out data/web-serving \
+  --countries /tmp/ne_10m_admin_0_countries.geojson --borders /tmp/ne_10m_admin_0_boundary_lines_land.geojson \
+  --osm-borders data/borders/europe-admin2.osm.pbf --osm-borders data/borders/us48-admin2.osm.pbf
+```
+
+`export-countries` adds them beside an existing export (it reads
+`trailheads.npy`, `places.sqlite`, the `--osm-borders` files and, with `--borders`, `hikes.sqlite`); without `--borders`, and with no Trailhead the OSM borders move, it drops an
+old `borders.npy`. A Trailhead outside every
 shape, on a coast, takes the country of the nearest place in `places.sqlite`;
 without places it has no country. `export-countries` stops writing nothing, and
 `export-serving --countries` stops before `meta.json`, when a Trailhead has no country or its country has no row in
@@ -2337,12 +2531,14 @@ short:
 | Method | Path | Answers |
 | --- | --- | --- |
 | GET | `/api/health` | that the server is up |
-| GET | `/api/info` | hike count, coverage box, `core` (the box of the middle 80 % of Trailheads, where the map opens), `typical_pair` (0.47: below it the page calls a list's matches weak), attribution, which features are on |
+| GET | `/api/info` | hike count, coverage box, `core` (the box of the middle 80 % of Trailheads, where the map opens), `typical_pair` (0.47: below it the page calls a list's matches weak), `covered` (what the site covers, as its pages say it), attribution, which features are on |
 | GET | `/api/measures` | the Measures, grouped, with their plain descriptions |
 | GET | `/api/search?q=` | hikes by name |
+| GET | `/api/landmarks?q=` | Landmarks (peaks, huts, lakes, towns) by name, each with its nearest hikes |
 | GET | `/api/place?q=` | places by name, for the drive-time Origin |
 | GET | `/api/hikes?south=&west=&north=&east=` | the hikes in a map box |
 | GET | `/api/hikes/{id}` | one hike: line, facts, profile |
+| GET | `/api/hikes/{id}/way-back` | a hike's way back as walked, for its GPX file |
 | GET | `/api/segments?south=&west=&north=&east=` | trail-network Segments in a map box, for drawing a hike |
 | POST | `/api/compose` | a hike drawn from Segments |
 | POST | `/api/rank` | a Ranking for a Seed or a Wish |
@@ -2350,8 +2546,13 @@ short:
 
 The details, endpoint by endpoint (JSON): `GET /api/search?q=` (every word in any order, at least one of
 two letters or more; case, accents
-and ue/oe/ae spellings ignored; the exact name first, then names starting with
-the query, then names where every word starts a word, shorter first; a number
+and ue/oe/ae spellings ignored; "Mt" read as Mount; a country after a comma ("Triglav, Slovenia")
+keeps the hikes starting there, by the words before it (ADR-0079); the exact name first, then names starting with
+the query, then names holding it from a word's start, then names where every
+word starts a word, shorter first; among the best 200, after the exact name, a
+hike reaching the top of a Peak named from the query's start comes first (one starting over 2 km from a car
+park last of those), and one named after a
+Viewpoint on it last of its group (Triglav View after Triglav); a number
 finds that id; while they are fewer than `limit`, then names with a word
 spelled one typo off a query word of 4 to 7 letters, two off a longer one, no
 digits; each hit's `match` is `similar` for these and for a name holding a word
@@ -2359,8 +2560,11 @@ only inside a longer one, else `words`), `GET /api/hikes/{id}/way-back`
 (`kind` and `m` as the detail's `way_back`, and for a trail way back its
 encoded `line` and `ele`, metres per point, found again on the TrailGraph
 between the served line's ends; else null), `GET /api/hikes/{id}` (with `built`, `{"kind", "parts",
-"route"}` for a built DayHike, else null; ADR-0038; and `source`, `{"id", "ref",
-"url"}`, its sources register id, its record there and a link to it; ADR-0060), `GET
+"route"}` for a built DayHike, else null; ADR-0038; `source`, `{"id", "ref",
+"url"}`, its sources register id, its record there and a link to it, ADR-0060;
+`official`, the same with the name, licence and licence page of the official
+record an OSM hike lies on, else null; `commons_contributors`, ADR-0064; and,
+when the export has them, `photos`), `GET
 /api/hikes?south=&west=&north=&east=` (the hikes whose line's bounding box
 meets that box, for "Select hike on map", each with its id, name, walk length,
 `multi_day` and encoded line; when the box holds more than 100, none are listed and
@@ -2369,7 +2573,9 @@ meets that box, for "Select hike on map", each with its id, name, walk length,
 (with the Trailheads' box, `coverage`, for the page's swapped "lat, lon"
 warning, `place_search`, true when the export has `places.sqlite`, `landmark_search`, true when it has
 `landmarks.sqlite`, `results`
-and `max_rows`, the rows a page and a whole list hold, `max_km`, `grouping`,
+and `max_rows`, the rows a page and a whole list hold, `max_drive_hours` and `max_km`, the limits' ranges, `basemap`,
+the tile URL, attribution, max zoom and PMTiles file the maps load, `regions`, the regions the Catalog has
+hikes in (`name`, `label`, `named` as a sentence names it), `grouping`,
 the rule of the default GroupingRadius, and `draw`, `{"pool", "t"}`: the rows a
 Ranking answers with and the temperature the page draws its `results` rows of
 them with),
@@ -2379,11 +2585,13 @@ alternate name, then the most populous; 404 without `places.sqlite`),
 `GET /api/landmarks?q=&limit=` (up to 10, default 5, Landmarks with a folded name holding the query from a
 word's start, typos as search: the one named exactly first, then the one with the most names, the highest,
 the most hikes; each with `name`, `kind`, `town` (the nearest other town within 30 km, to tell equal names
-apart) and its `country`, `lat`, `lon`, `match`, `hike_count` and
-`hikes`, its 5 nearest as search lists them with `off_m`; 404 without `landmarks.sqlite`), `POST /api/rank` with `{"seed": id, "weights": {measure: 0-100},
+apart) and its `country`, `lat`, `lon`, `match`, `hike_count`, `leads` (true when the page lists its hikes
+before the hike names: named exactly the query and famous or best photographed, ADR-0079) and
+`hikes`, its 5 nearest as search lists them with `off_m` (a Peak's from a car park first among those reaching its top); 404 without `landmarks.sqlite`), `POST /api/rank` with `{"seed": id, "weights": {measure: 0-100},
 "excluded": [measure], "month": 1-12, "origin": {"lat", "lon"}, "max_hours":
-0-4, "max_km": 0-200, "group_km": 0.1-50, "after": [{"lat", "lon"}], "draw":
-0-4294967295}` (ADR-0032:
+0-4, "max_km": 0-200, "regions": ["europe", "us"], "group_km": 0.1-50, "after": [{"lat", "lon"}], "draw":
+0-4294967295}` (ADR-0074: `regions` keeps to the hikes starting in them before ranking, the United States
+west of 40° W, Europe east of it, and is refused with an `origin`; ADR-0032:
 an `origin` needs `max_hours`, `max_km` or both, and a hike must be within each
 one given, `max_km` in a straight line to its start; `group_km` is the
 GroupingRadius, by default from the limits as `grouping` in `/api/info` says;
@@ -2395,9 +2603,10 @@ noise hashed from the draw number and each row's DayHike id or loop route text
 (`serving.drawn`, `drawNoise` in `app.js`), or the first `results` in Strict
 order; `draw`, the page's draw number, draws the loop search's 20 Trailheads
 from the best 60 DayHikes the same way, and without it they are the best 20;
-the answer echoes `max_hours`, `max_km`, `group_km`, `draw` and
-how many starts `after` had, `reachable` counts the hikes within the limits, and
-each hike has `drive_hours` and `distance_km`, null without that limit or start;
+the answer echoes `max_hours`, `max_km`, `regions`, `group_km`, `draw` and
+how many starts `after` had, `reachable` counts the hikes within the limits, `in_regions` those in `regions`, and
+each hike has `drive_hours` and `distance_km`, null without that limit or start, and `region`, the
+region (`europe` or `us`) its start is in, so the page says when a list from every region keeps to one;
 ADR-0046: each row has `more_here`, the DayHikes starting in its area that are
 not listed and score within 0.05 of it, and `in_area`, every DayHike ranked
 that starts in its area, so the page adds the areas of the rows it did not draw
@@ -2411,10 +2620,21 @@ excluded and month, giving the score a Ranking would show for `b` with `a` as
 the Seed and every Measure's score. Every hike the API lists (search, Landmarks, a map box,
 detail, compose and a Ranking's DayHike rows) has `multi_day`, longer than 40 km one way (ADR-0056), and its
 one-way `walk_m`; those of search, Landmarks, a Ranking, a detail and compose also have `region`, the nearest town
-within 30 km of its start and that town's country ("Igls, AT"; null without `places.sqlite`).
+within 30 km of its start and that town's country ("Igls, AT"; null without `places.sqlite`), after the place
+its name says it starts near when that is another ("Clonegal, Bunclody, IE", ADR-0068); an OSM name other than a
+"Hike near {place}" placeholder says such a place only when a place or Landmark of that name is within 5 km of its
+start, or is the town nearest it.
+A detail also has `name_note`, how this site made its name (null for a name as its source gives it, and
+for an OSM name whose "near" names no such place), and
+`parking_m`, metres from its Trailhead to the nearest car park in a straight line (null with none within 20 km
+or from an export before it).
 A detail and compose also have `emergency`, the row of `src/dayhike/data/emergency.csv` for
 the country the hike starts in (`country`, `name`, `numbers`, `rescue`, `rescue_url`, `how`,
-`sources`, `notes`): the Trailhead's in `countries.npy`, else the nearest town's; null with neither. A Ranking that waits 25 s for its turn answers 503 with
+`sources`, `notes`): the Trailhead's in `countries.npy`, else the nearest town's; null with neither.
+They also have `border_emergency`, the same row for the country across the border a DayHike's
+route crosses or its Trailhead is within 2 km of, or the one Natural Earth put a start the OSM borders
+moved in (`borders.npy`); null for every other hike, a
+ComposedHike, or an export without it. A Ranking that waits 25 s for its turn answers 503 with
 `Retry-After: 5`. Detail, compose, rank and pair take
 `return_to_start` (default true; `?return_to_start=false` on `GET
 /api/hikes/{id}`): true measures every hike with its way back to its start
@@ -2458,7 +2678,8 @@ and an unknown Measure name in `weights` is a 422.
 ### Web demo measurements
 
 Measured on the Europe Catalog of late October 2026 (161,614 DayHikes), 8-core Mac, the container
-limited to 2 GiB and 1 CPU like Cloud Run (`web/smoke.py`):
+limited to 2 GiB and 1 CPU, as Cloud Run then was (a Europe or a Europe and US
+image now gets 4 GiB, a US or demo image 2 GiB: [docs/deploy.md](deploy.md)) (`web/smoke.py`):
 
 | What | Measured |
 | --- | --- |
@@ -2489,7 +2710,9 @@ repository.
 The coverage map is drawn from the Catalog by `dayhike coverage-map` with
 Natural Earth country shapes (public domain): every Trailhead is placed in a
 country polygon part, and parts with enough Trailheads are shaded: at least 10
-Trailheads and 0.2 per 1,000 km². The README and the web demo show it. Rerun it
+Trailheads and 0.2 per 1,000 km². The README shows it, and the web demo
+while every region of its export is in Europe (not on a Europe and US or a US
+site). Rerun it
 after the Catalog changes. Its default `--out` is the tracked
 `src/dayhike/web/static/coverage.svg`, the image the README and the page show,
 so on a local or partial Catalog pass `--out` somewhere else unless you mean to
@@ -2542,10 +2765,11 @@ DAYHIKE_REAL_DATA=1 uv run pytest -m real_data
 | `DAYHIKE_SERVING_DIR` | `DAYHIKE_DATA_DIR/web-serving` | the serving export of that Catalog (`dayhike export-serving`) |
 | `DAYHIKE_REAL_CATALOG` | `DAYHIKE_DATA_DIR/catalog.sqlite` | another Catalog for `tests/test_real_data.py` |
 | `DAYHIKE_US_DATA_DIR` | unset | the [US build](#a-us-build) for `tests/test_real_data_us.py`; skipped without it |
+| `DAYHIKE_CUT_DIR` | unset | a cut written by `dayhike cut-serving`, for `tests/test_cut_serving_real.py`; skipped without it |
 
 | File | Checks |
 | --- | --- |
-| `test_raw_inputs.py` | the Europe PBF is the recorded snapshot (size, sha256); every 1° vertex cell has a FABDEM tile except the three known 404 tiles in Georgia; every 3° vertex cell has a WorldCover tile; 36 climate rasters on one 30″ grid cover the vertex extent; the hiking extract was cut with today's filter list |
+| `test_raw_inputs.py` | the Europe PBF is the recorded snapshot (size, sha256); every 1° vertex cell has a tile of the DEM source the build read (FABDEM, or Copernicus GLO-30) except the known gaps (FABDEM: three 404 tiles in Georgia and open sea; Copernicus: the tiles GLO-30 Public leaves out and open sea); every 3° vertex cell has a WorldCover tile; 36 climate rasters on one 30″ grid cover the vertex extent; the hiking extract was cut with today's filter list |
 | `test_catalog_invariants.py` | exact schema and no work files; the ingest report adds up (and equals the recorded one on the same snapshot); one row per DayHike in every table; values in range; NULL budgets; every Trailhead is vertex 0 |
 | `test_geometry_invariants.py` | GeometryStore DayHikes equal the Catalog's; dense `seq`; the attributions (CHELSA, not WorldClim) |
 | `test_coverage_by_country.py` | DayHikes per Geofabrik country within ±0.5% of the recorded counts (±15% on another snapshot); LandCover, climate and elevation on ≥ 99% of the DayHikes of every country with ≥ 50 (Georgia's elevation 79%). Needs `data/osm/geofabrik-index-v1.json` from https://download.geofabrik.de/index-v1.json |
@@ -2556,13 +2780,15 @@ DAYHIKE_REAL_DATA=1 uv run pytest -m real_data
 | `test_serving_export_real.py` | the serving export: same ids and Trailheads as the store, a byte copy of it; data ≤ 6 GB and tiles ≤ 900 MB; simplified lines within 10 m (+1.5 m polyline rounding) on 2,000 DayHikes; no rasters or per-vertex climate; every attribution; golden rankings from the export; the tile tar is the built one |
 | `test_real_data.py` | the main walk, WaterSources, the similarity facts, notebook 05 (which reads `data/` of its checkout and must see the Catalog under test) |
 | `test_real_data_us.py` | on the [US build](#a-us-build): known trails and their lengths, day stages, heights, land cover and climate on every hike, a Ranking, drive times from Providence, the pages naming Rhode Island and not Europe |
+| `test_cut_serving_real.py` | a cut of the Europe and US export (`DAYHIKE_CUT_DIR`) holds only what it keeps and ranks as the uncut export does with only its side ticked (a demo cut: Rankings of DayHikes only) |
 | `test_notebooks_real.py` | every notebook runs top to bottom in a Jupyter kernel on `data/` of its checkout (skipped when `DAYHIKE_DATA_DIR` points elsewhere); `02`, `04`, `04a` and `05` read the real Catalog, `01` and `03` the fixture; about 2 minutes |
 
 ## Clean rebuild
 
 Rebuild every derived file from the raw downloads into a fresh data directory,
 compare it with the old one, then replace the old one. Raw downloads are the
-Europe PBF, the FABDEM tiles and the WorldCover tiles (CHELSA is clipped
+Europe PBF, the DEM tiles (FABDEM, or Copernicus GLO-30 as in the last build)
+and the WorldCover tiles (CHELSA is clipped
 from 36 large global files and is rebuilt like derived data). Nothing is written
 into the old directory until the end. `REF` is the old `data/`, `SNAP` a
 directory for frozen copies, `NEW` the `data/` of a second checkout of the
@@ -2601,7 +2827,7 @@ at the rebuild.
    ```bash
    mkdir -p $NEW/osm $NEW/dem $NEW/landcover $NEW/climate
    ln -s $REF/osm/europe-latest.osm.pbf $NEW/osm/
-   ln -s $REF/dem/*_FABDEM_V1-2.tif $NEW/dem/
+   ln -s $REF/dem/*_FABDEM_V1-2.tif $NEW/dem/   # a Copernicus build: `*_COG_10_*_DEM.tif` instead (never both)
    ln -s $REF/landcover/*_Map.tif $NEW/landcover/
    curl -L --fail -o $NEW/osm/geofabrik-index-v1.json https://download.geofabrik.de/index-v1.json
    ```
@@ -2616,19 +2842,31 @@ at the rebuild.
    uv run dayhike ingest data/osm/europe-latest.osm.pbf --catalog data/catalog.sqlite --fresh --dem data/dem  # 2 h 42 min, 5.6 GB
    uv run dayhike sample-dem                    # 20 min
    uv run dayhike sample-landcover              # 21 min
-   uv run dayhike sample-climate                # 5 min, peak 4.4 GB; no per-vertex climate
+   uv run dayhike sample-climate                # 5 min; no per-vertex climate
+   uv run dayhike fetch-commons                 # beside ingest: 3 dumps, 27 GB; 1.5 to 2 h at the dump server's 2-5 MB/s
+   uv run dayhike count-commons                 # after ingest (ADR-0064): Slovenia 18 min, 1.8 GB; Europe about 50 min, about 3 GB (estimated)
    uv run dayhike sample-trailgraph             # not yet timed on Europe
    uv run dayhike build-similarity              # 19 min
    uv run dayhike export-serving --valhalla-tiles data/valhalla/highways-eu --valhalla-url http://127.0.0.1:8003  # 22 min
+   uv run dayhike export-photos --warm-only   # optional, right after ingest, beside the CPU steps: fills the cache for the POIs on a hike (about 5-30% of the linked ones); needs the Catalog only
+   uv run dayhike export-photos   # after export-serving; cache data/commons-cache.sqlite, so a rerun fetches only new titles (none after --warm-only)
+   # Liechtenstein (172 hikes, 65 linked POIs) is the scale check: about 1.8 s per Wikimedia request.
+   # Europe (~162,000 hikes), if linked like that: about 1 hour for Wikidata images, plus about 9 hours
+   # for Commons categories that have no free Wikidata image (one request each). The cache makes a rerun skip those.
    ```
 
-   `ingest`, `sample-dem`, `sample-landcover`, `sample-trailgraph` and
-   `build-similarity` take `--workers N` (or `DAYHIKE_WORKERS=N` for every
-   step): they run their independent work in N forked processes and write
-   the same files as with one, the default (ADR-0044). Each worker adds
-   memory, so pick N for the machine's free cores and RAM: an ingest worker
-   adds up to about 30 % of ingest's one-process peak. `sample-climate` and
-   `export-serving` run in one process whatever `DAYHIKE_WORKERS` says.
+   `ingest`, `sample-dem`, `sample-landcover`, `sample-trailgraph`,
+   `build-similarity`, `count-commons` and `export-serving` take `--workers N`
+   (or `DAYHIKE_WORKERS=N` for every step): they run their independent work in N
+   forked processes and write the same files as with one, the default
+   (ADR-0044). Each worker adds memory, so pick N for the machine's free cores
+   and RAM: an ingest worker adds up to about 30 % of ingest's one-process
+   peak. Ingest's destination search forks its workers before the snapshot
+   loads, from a small process, so it may take more: `--dest-workers N` (or
+   `DAYHIKE_DEST_WORKERS=N`), else the `--workers` count. `sample-climate`
+   runs in one process whatever `DAYHIKE_WORKERS` says.
+   Which steps may overlap, what each count costs, how to resume a stopped
+   rebuild and which caches to keep: [Rebuild runbook](#rebuild-runbook-workers-steps-at-the-same-time-resuming-and-caches).
 
    Beside the sample steps, rebuild the highway tiles ([Highway tiles](#highway-tiles-all-of-europe-small-server):
    `prepare-roads.sh`, `prepare-highways.sh`, the `build_tiles` run) and serve
@@ -2652,6 +2890,170 @@ at the rebuild.
    Compare every path and size against this list first; never glob over `REF`.
    Delete `catalog.snaps.npz` after a tile rebuild. Keep `SNAP` a week.
 
+## Rebuild runbook: workers, steps at the same time, resuming and caches
+
+This is the one place that says how many processes each step may use, which
+steps may run at the same time, what survives a stopped rebuild, and what a
+rebuild of the same snapshot can skip. The files come out the same whatever you
+choose (ADR-0044): worker counts and overlap change wall time and memory,
+nothing else. **You choose the worker count of each step for each rebuild.**
+Nothing in the code fixes one, and every step defaults to 1 (the one-process
+build).
+
+### Worker counts
+
+| Step | CPU-parallel work | Worker count |
+| --- | --- | --- |
+| `ingest` | relation DayHikes, built DayHikes, NetworkHike starts, destination tiles, GeometryStore rows, Twin pairs | `--workers N`; the destination tiles `--dest-workers N` (else the `--workers` count) |
+| `sample-dem`, `sample-landcover`, `sample-trailgraph` | chunks of vertices or Segments read from rasters | `--workers N` |
+| `build-similarity` | chunks of hikes measured for the facts, Twin pairs | `--workers N` |
+| `count-commons` | chunks of hikes counted against the Commons points (the dumps are parsed in one process) | `--workers N` |
+| `export-serving` | chunks of hikes: line, profile, points near the line | `--workers N` |
+| `sample-climate` | none: one process | none |
+| `fetch-*` | downloads: threads for the network, not CPU workers | none |
+
+`DAYHIKE_WORKERS=N` sets the count for every step run from the shell that
+exports it; `--workers N` on a command overrides it for that command. When
+steps need different counts, set it per command
+(`DAYHIKE_WORKERS=4 uv run dayhike export-serving ...`). A bad value (0, text)
+stops the step before it starts. Workers are forked from the step's process, so
+they share what it holds (raster paths, search trees, the snapshot) until they
+write to those pages: a worker costs part of the step's own memory, not all of
+it. On a machine that also does other work, measure a step's peak at 2 workers
+before going higher.
+
+Measured on Slovenia (2,240 hikes, 8-core Mac shared with other jobs, so
+the wall times are rough; the CPU seconds are not), `export-serving` with the
+hike chunk shortened to 200 so that every worker has chunks (the default 2,000
+gives Slovenia only two):
+
+| workers | hikes phase (first to last chunk) | whole step | user CPU | peak RSS |
+| --- | --- | --- | --- | --- |
+| develop, 1 | 48 s | 102 s | 36 s | 247 MB |
+| branch, 1 | 71 s | 116 s | 37 s | 343 MB |
+| branch, 2 | 13 s | 53 s | 34 s | 333 MB |
+| branch, 4 | 12 s | 56 s | 34 s | 207 MB |
+
+`hikes.sqlite` and every other file of the export are byte-identical to
+develop's at 1, 2 and 4 workers (`cmp`; `meta.json` equal but for
+`export_seconds`). Only the hikes phase is parallel: the TrailGraph copy, the
+landmarks and the places (about 40 s here) run in one process, so past 2
+workers a small region gains nothing. On Europe the hikes phase is the
+52 minutes of rebuild-5.
+
+### Steps at the same time
+
+```
+fetch-dem ─┐
+fetch-extracts ─► ingest ─┬► sample-dem ► sample-landcover ► sample-climate ─┐
+                          ├► sample-trailgraph ──────────────────────────────┼► build-similarity ─┐
+                          └► count-commons ──────────────────────────────────┴───────────────────┼► export-serving ► export-photos
+fetch-landcover, fetch-climate, fetch-commons: network only, beside ingest        │
+prepare-roads / prepare-highways and the Valhalla tile build ─────────────────────┘ (before export-serving)
+```
+
+- **Beside ingest**: every `fetch-*` (`fetch-dem` must finish first when
+  `ingest --dem` is used), and the highway tiles: `prepare-highways.sh` and the
+  Valhalla (Docker) tile build read only the PBF, so run them while ingest
+  makes its passes over the snapshot (the passes hold one process and little
+  memory; leave the snapshot load and the destination stage alone on a 16 GB
+  machine). In the combined Europe and US build the tile preparation took 7
+  minutes beside ingest.
+- **After ingest, at the same time**: `sample-trailgraph` (reads rasters,
+  writes only `catalog.trailgraph.sqlite`) and `count-commons` (reads the
+  GeometryStore's coordinates, writes one Catalog column) beside the
+  `sample-dem`, `sample-landcover` and `sample-climate` chain. The three sample
+  steps stay in that order: they write the same Catalog and GeometryStore
+  files. The writers (the sample steps and `count-commons`) wait for each
+  other's SQLite write lock for up to 30 minutes (`dayhike.db.BUSY_TIMEOUT_S`)
+  instead of failing with "database is locked"; each holds the lock only for
+  one transaction.
+- **After all of those**: `build-similarity`, then `export-serving`, then
+  `export-photos` (network bound), then from the finished export
+  `export-osm-download` and, for a smaller site, `cut-serving`
+  ([docs/deploy.md](deploy.md), sections 1 and 11).
+- Two memory-heavy steps at once only after measuring both: rebuild-5's steps
+  peaked at 5.6 to 7.4 GB at 2 workers.
+
+### Time per step
+
+Rebuild-5 (Europe, 2 workers) and the Europe and US build of 2026-11-22
+(889,525 hikes, 323 million vertices, 8-core Mac), each step at the worker
+count given.
+
+| Step | rebuild-5 Europe | Europe and US, 2026-11-22 |
+| --- | --- | --- |
+| `sample-dem` | 69 min | 2.0 h at 6 workers |
+| `sample-landcover` | 17 min | 35 min at 6 workers |
+| `sample-climate` | 3.2 min | 7.3 min (one process) |
+| `count-commons` | 42 min (17 parsing the dumps, 23 counting) | 35 min at 4 workers, the parse skipped with `--cache-dir` |
+| `sample-trailgraph` | 25 min | 55 min at 4 workers, beside the sample chain: 0 on the critical path |
+| `build-similarity` | 49 min | 85 min at 4 workers |
+| `export-serving` | 52 min | 70 min at 4 workers |
+
+With `sample-trailgraph` and `count-commons` beside the sample chain, the
+longest path after ingest (`sample-dem`, `sample-landcover`, `sample-climate`,
+`build-similarity`, `export-serving`) took about 5.3 h in the Europe and US
+build. Measure each step's peak
+memory and wall time at the count you choose, and keep the numbers in the
+rebuild's notes.
+
+### Resuming a stopped rebuild
+
+A rebuild that stops (a crash, a restart of the machine, a kill) carries on from
+the work it finished, in the build's own data folder (beside the Catalog, never
+a temporary directory):
+
+- **Ingest phases.** The passes over the snapshot (relations, ways, nodes) are
+  kept in the work file `catalog.sqlite.work` and resume inside a pass. After
+  them each finished phase is pickled in `catalog.sqlite.work.phases/`: the
+  relation DayHikes, then each built source in order (DayStages, NetworkHikes,
+  named trails, DestinationHikes). Run the same `dayhike ingest` command again
+  and it loads the phases it finished (`assemble: resumed phase ...`) and runs
+  the one it stopped in again from its start. A phase is loaded only when the
+  snapshot files, paths levels, DEM tiles, `--previous` starts and the source
+  code of `dayhike` are the same as when it was kept, and the phases before it
+  were loaded too. `--fresh` starts over. The phases go with the work file when
+  the build completes. The Catalog is byte-identical to an uninterrupted run's
+  (`tests/test_resume.py`; Slovenia, killed after its NetworkHikes phase: see the
+  PR).
+- **Steps.** Every step leaves a marker `catalog.sqlite.steps/STEP.json` when it
+  succeeds. With `--resume`, `ingest`, `sample-dem`, `sample-landcover`,
+  `sample-climate`, `sample-trailgraph`, `count-commons`, `build-similarity` and
+  `export-serving` are skipped when their marker holds the same arguments, the
+  same raster, dump and PBF files (names, sizes, modification times), the same
+  code version and the same markers of the steps they read from (an earlier
+  step that ran again makes the later ones run again). A step that was running
+  when the machine stopped has no marker and runs again from its start; the
+  sample steps and the other writers are written to be run again. A new
+  `ingest` replaces the Catalog and clears the markers. Without `--resume` a
+  step always runs (and leaves its marker). Files changed by anything other
+  than these steps are not noticed: delete `catalog.sqlite.steps/` to forget
+  what finished.
+- A script that rebuilds everything is therefore the same command list run
+  again with `--resume` on every step after a crash.
+
+### Caches across rebuilds of one snapshot
+
+Opt-in, both keyed so that a stale cache is never used:
+
+- `ingest --pass-cache DIR` keeps the work file as the passes leave it, and a
+  later build of the same snapshot files, paths levels, work-file schema and
+  pass code (`PASS_CACHE_VERSION` in `ingest.py`, bumped when a pass writes other
+  rows) starts from it, so the passes (about 1.6 h on Europe and US) are not
+  run again. It holds one snapshot and about the size of the work file; `--fresh`
+  reads the snapshot again and replaces it.
+- `count-commons --cache-dir DIR` keeps the parsed Commons points (`.npz`, 24
+  bytes a point), keyed by the dumps' sizes and modification times, the
+  Catalog's bounds and `POINTS_CACHE_VERSION`; the 17 minutes of parsing are
+  skipped on the next run with the same dumps and bounds.
+
+Measured on Slovenia: the passes, relation DayHikes and writes took 70 to 83 s
+without the pass cache and 43 s with it (byte-identical files, a 64 MB cache);
+`count-commons` over 124,000 synthetic Commons points took 55 s at 1 worker and
+24 s at 4 (hike chunk of 100; same Catalog bytes as develop's). The 17 minutes of
+parsing on the real dumps are not measured here: the synthetic dumps parse in 2 s.
+
 ## Python API
 
 The same seams the CLI wraps:
@@ -2660,7 +3062,7 @@ The same seams the CLI wraps:
   (`progress=` for stage lines, `fresh=True` to ignore a work file)
 - `Catalog.open` — load an already-built SQLite Catalog
 - `resolve_seed` — Seed name → DayHike id (must exist in the Catalog)
-- `build_similarity` / `calibrate_similarity` — Catalog + GeometryStore + FABDEM + WorldCover → similarity facts and Calibration in `{catalog}.similarity/`
+- `build_similarity` / `calibrate_similarity` — Catalog + GeometryStore + DEM (FABDEM or Copernicus GLO-30, with USGS 3DEP beside either) + WorldCover → similarity facts and Calibration in `{catalog}.similarity/`
 - `rank_dayhikes` — Catalog + Seeds → Ranking (MeasureWeights by `MEASURE_NAMES`; `month=` QueryMonth 1–12, omit for the default climate regime (June–August temperature and radiation, all-year precipitation); `allowed_ids=` to restrict the candidates; `limit=` for the best N)
 - `Catalog.similarity` / `SimilarityStore` — the memory-mapped facts and Calibration; `dayhike.similarity.score_rows` scores rows against Seeds without building a Ranking
 - `geometry_store_path_for` — sidecar path for DayHikeGeometry
@@ -2674,14 +3076,16 @@ The same seams the CLI wraps:
 - `ValhallaMatrixClient` — HTTP adapter for `/sources_to_targets`
 - `dayhike.similarity.rank_rows` — `rank_dayhikes` on store rows, for callers that know the Seed's row and have no Catalog
 - `dayhike.serving.export_serving` / `ServingData` — write and open the web demo's serving export
+- `dayhike.cut.cut_serving` — cut a serving export to Europe, the US or a cut file's areas (ADR-0082)
 - `dayhike.web.create_app` — the web demo's FastAPI app over a `ServingData`
 
-CLI: `dayhike ingest`, `dayhike fetch-extracts`, `dayhike fetch-dem`,
+CLI: `dayhike ingest`, `dayhike fetch-extracts`, `dayhike fetch-external`, `dayhike fetch-dem`,
 `dayhike sample-dem`, `dayhike fetch-landcover`, `dayhike sample-landcover`,
-`dayhike fetch-climate`, `dayhike sample-climate`, `dayhike sample-trailgraph`,
+`dayhike fetch-climate`, `dayhike sample-climate`, `dayhike fetch-commons`,
+`dayhike count-commons`, `dayhike sample-trailgraph`,
 `dayhike build-similarity` (`--calibrate-only`), `dayhike rank` (`--weight`,
 `--month`, `--limit`, `--one-way`), `dayhike compose` (the Route text of a shared link,
-`--name`, `--weight`, `--month`, `--limit`, `--one-way`; reads a serving export; a SuggestedLoop is listed by its link text, and each row's versions indented under it), `dayhike nearby`, `dayhike export-serving`, `dayhike export-places`, `dayhike export-countries`, `dayhike serve`, `dayhike coverage-map`.
+`--name`, `--weight`, `--month`, `--limit`, `--one-way`; reads a serving export; a SuggestedLoop is listed by its link text, and each row's versions indented under it), `dayhike nearby`, `dayhike export-serving`, `dayhike export-name-index`, `dayhike cut-serving` (an export cut to Europe, the US or a cut file's areas, ADR-0082), `dayhike export-places`, `dayhike export-countries`, `dayhike export-photos`, `dayhike export-osm-download`, `dayhike serve`, `dayhike coverage-map`.
 
 Docstrings on those functions use the glossary in `GLOSSARY.md`.
 Examples: [`01`](../notebooks/01_raw_data_and_ingestion.ipynb) ingest,
@@ -2733,7 +3137,14 @@ is offered under the ODbL, together with this code as the method that makes
 it. The demo's base map is by default OpenStreetMap's own tiles
 (https://operations.osmfoundation.org/policies/tiles/), used under the OSM
 Foundation's tile usage policy; `docs/deploy.md` section 3 sets another tile
-provider or a vector base map (ADR-0061). Its place search reads GeoNames towns and
+provider or a vector base map (ADR-0061). The live site draws a vector base
+map, the Protomaps basemap (an ODbL Produced Work of OpenStreetMap, Natural
+Earth and osmdata.openstreetmap.de), from one PMTiles file on Cloudflare R2
+(`docs/deploy.md` section 10); the raster tiles still draw the map where that
+file does not reach (a US hike on the Europe file) or the browser cannot draw
+it. `dayhike export-osm-download` writes the ODbL download of the OpenStreetMap
+part of the hikes, which the credits page links when `--download-url` is set
+(`docs/deploy.md` section 11). Its place search reads GeoNames towns and
 villages (GeoNames, https://www.geonames.org/, CC BY 4.0) when the
 export has `places.sqlite`, and Nominatim
 (https://operations.osmfoundation.org/policies/nominatim/, under the OSM
@@ -2744,7 +3155,15 @@ each under its own licence, credited from the sources register
 (`docs/sources.csv`): on the hike panel, on `credits.html`, in `/api/info`
 and in the export's `meta.json`. Sport Ireland Trail Routes
 (https://data.gov.ie/dataset/getirelandactive_trailroutes): CC BY 4.0, credit
-"Sport Ireland".
+"Sport Ireland". Lipas
+(https://www.jyu.fi/fi/avoimet-rajapinnat-ja-ladattavat-lipas-aineistot): CC BY 4.0, credit
+"Jyväskylän yliopisto, Lipas Liikuntapaikat.fi". Turrutebasen
+(https://kartkatalog.geonorge.no/metadata/d1422d17-6d95-4ef1-96ab-8af31744dd63): CC BY 4.0, credit
+"Kartverket". Randonnées du Parc national des Écrins
+(https://www.data.gouv.fr/fr/datasets/5bf88cf28b4c4151e7a136d2/): Licence Ouverte 2.0, credit
+"Parc national des Écrins". South Tyrol's hiking trails
+(https://data.civis.bz.it/dataset/percorsi-escursionistici): CC0 1.0, credit
+"Provincia Autonoma di Bolzano - Alto Adige" as a courtesy.
 
 FABDEM V1-2: Hawker, L., Uhe, P., Paulo, L., Sosa, J., Savage, J., Sampson, C.
 and Neal, J., 2022. A 30 m global map of elevation with forests and buildings
@@ -2757,10 +3176,12 @@ GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all
 rights reserved. The organizations in charge of the Copernicus program by law
 or by delegation do not incur any liability for any use of the Copernicus
 WorldDEM-30. The elevation values derived from it (heights, gain, profiles,
-ProfileShape, ClimbGrade, SteepestKm, SolarAspect) are adapted material: the
-web demo shares them under CC BY-NC-SA 4.0 and only non-commercially.
+ProfileShape, ClimbGrade, SteepestKm, SolarAspect) are adapted material: an
+export sampled from FABDEM (the code's default) shares them under CC BY-NC-SA
+4.0 and only non-commercially.
 
-Copernicus DEM GLO-30 (the alternative, ADR-0030): produced using Copernicus
+Copernicus DEM GLO-30 (the alternative, ADR-0030, which every DEM step of the
+last build read, so the web demo credits it instead of FABDEM): produced using Copernicus
 WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018
 provided under COPERNICUS by the European Union and ESA; all rights reserved.
 The organisations in charge of the Copernicus programme by law or by
@@ -2791,8 +3212,14 @@ https://doi.org/10.16904/envidat.228.v2.1, released under CC0 1.0 (no rights
 reserved; citation requested). Written into GeometryStore `geometry_meta` when
 climate has been sampled.
 
+Wikimedia Commons: a hike's photos are loaded from `upload.wikimedia.org`
+with the author and licence Commons records for each file (CC0, CC BY or CC BY-SA
+only); the Commons contributors count comes from the Commons database dumps
+(structured data, CC0 1.0).
+
 Natural Earth (https://www.naturalearthdata.com/, public domain): country
-shapes of the coverage map. Valhalla (MIT, https://github.com/valhalla/valhalla)
+shapes of the coverage map, and the country each hike starts in (`countries.npy`,
+`borders.npy`; near a national border OpenStreetMap's borders decide). Valhalla (MIT, https://github.com/valhalla/valhalla)
 computes DriveTime. The demo page uses Leaflet 1.9.4 (BSD-2-Clause), served from
 `src/dayhike/web/static/vendor/leaflet/` with its licence; with a vector base map
 set (ADR-0061), MapLibre GL JS 6.16.0 (BSD-3-Clause), maplibre-gl-leaflet 0.1.4
@@ -2813,10 +3240,17 @@ Bulky local files stay out of git:
 - `data/catalog.trailgraph.sqlite` — TrailGraph (the marked hiking network and graded paths)
 - `data/catalog.similarity/` — similarity facts and Calibration (`build-similarity`)
 - `data/catalog.sqlite.work` (and its `-wal` / `-shm` side files) — in-progress ingest (resume handle)
+- `data/catalog.sqlite.work.phases/` — ingest phase checkpoints (pickles beside the work file)
+- `data/catalog.sqlite.steps/` — step markers (`STEP.json`) read by `--resume`
 - `data/osm/` — Geofabrik / osmium extracts
-- `data/dem/` — FABDEM GeoTIFFs
+- `data/dem/` — DEM GeoTIFFs (FABDEM, Copernicus GLO-30, USGS 3DEP)
 - `data/landcover/` — ESA WorldCover GeoTIFFs
 - `data/climate/` — CHELSA monthly GeoTIFFs
+- `data/commons/` — Wikimedia Commons database dumps (`fetch-commons`)
+- `data/web-serving/` — the serving export
+- `data/geonames/` — GeoNames `allCountries.zip`
+- `data/borders/` — OSM national boundaries for `--osm-borders`
+- `data/baseline/`, `data/*.snaps.npz`
 - `data/valhalla/` — road PBF and routing tiles (`compose.yaml`,
   `prepare-roads.sh`, `prepare-highways.sh`, and `mjolnir.drive-time.json`
   are tracked)

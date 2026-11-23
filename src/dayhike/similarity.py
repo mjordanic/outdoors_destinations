@@ -32,10 +32,10 @@ from pathlib import Path
 
 import numpy as np
 
+from dayhike import climb_kernel
 from dayhike.catalog import (
     EARTH_RADIUS_M,
     GAP_JOIN_M,
-    SAC_SCALE_RANK,
     Catalog,
     RankedDayHike,
     Ranking,
@@ -44,7 +44,7 @@ from dayhike.catalog import (
     similarity_dir_for,
     trailgraph_path_for,
 )
-from dayhike.dem import DEFAULT_DEM_DIR, DemSource, dem_tiles, fabdem_tile_id, read_grid_cells, read_in_order
+from dayhike.dem import DEFAULT_DEM_DIR, DemSource, dem_read_by, dem_tiles, fabdem_tile_id, read_grid_cells, read_in_order
 from dayhike.landcover import (
     ALONG_MIN_M,
     ALONG_STEP_M,
@@ -53,6 +53,8 @@ from dayhike.landcover import (
     along_rows_of_vertices,
     worldcover_tile_id,
 )
+from dayhike.npy import map_npy
+from dayhike.osm import _parse_ele_m
 from dayhike.parallel import parallel_iter, parallel_map
 from dayhike.trailgraph import WAY_BACK_KINDS, ComposedWalk, TrailGraph, WayBack, round_trip, way_back
 
@@ -72,6 +74,7 @@ STEEPNESS_STEP_M = 50.0  # elevation resampled this often along the walk
 STEEPEST_KM_WINDOW_M = 1_000.0
 CORRIDOR_M = 100.0  # amenity along the DayHike (GLOSSARY.md Corridor)
 PEAK_SUMMITED_M = 50.0
+SUMMIT_TRUST_M = 100.0  # a summited Peak's mapped height counts up to this far above the DEM's highest
 PEAKS_AROUND_M = 2_000.0
 TRAILHEAD_M = 500.0  # amenity at the Trailhead (GLOSSARY.md Trailhead)
 SEARCH_STEP_M = 100.0  # line points this far apart find candidate amenities
@@ -263,6 +266,10 @@ _FACTS_VERSION = hashlib.sha256(
             "dry-stretch-every-pass",  # a WaterSource ends a DryStretch at every pass of it (``walk_facts``)
             "landcover-by-length",  # LandCover shares weigh each vertex by half its two segments (``_landcover_fractions``)
             "landcover-along-steps", ALONG_MIN_M, ALONG_STEP_M,  # ...and long steps by the classes read along them
+            "way-back-no-harder",  # a trail back walks no path graded above the hike (ADR-0076)
+            "summit-height", SUMMIT_TRUST_M,  # a summited Peak's mapped height can be the top (``summit_height``)
+            "own-difficulty",  # the way back does not grade the hike (``_add_way_back``)
+            "way-back-floor-t2",  # a trail back may always walk up to mountain_hiking (ADR-0080)
         ]
     ).encode()
 ).hexdigest()[:16]  # fmt: skip
@@ -358,7 +365,7 @@ class SimilarityStore:
             )
 
         def load(name: str) -> np.ndarray:
-            return np.load(directory / f"{name}.npy", mmap_mode="r")
+            return map_npy(directory / f"{name}.npy")
 
         ids, twins, digest = load("ids"), load("twins"), meta.get("catalog_digest")
         return cls(
@@ -582,30 +589,29 @@ def ranked_scores(
 ) -> np.ndarray:
     """Raw scores of one Measure between a Seed and ``rows`` as a Ranking weighs them.
 
-    ``measure_scores``, except that a DayHike without a Difficulty grade scores 0
-    on Difficulty (as far apart as grades go) against a Seed that has one: a
-    hike with the Seed's grade ranks above one with no grade, which stays listed.
-    Against a Wish the same holds for every Measure the Wish asks a value of: a
-    DayHike with no data for it scores 0 there (``wish_unmeasured``).
-    The Calibration's random pairs still leave a missing grade out.
+    ``measure_scores``, except that a DayHike with no data for a Measure the Seed
+    has data for (a Difficulty grade, a climb, a land cover) scores 0 there, as far
+    apart as values go (``unmeasured``): a hike with the data ranks above one
+    without, which stays listed (ADR-0043, ADR-0052, ADR-0071). A Wish has data
+    for the Measures it asks a value of. The Calibration's random pairs still
+    leave missing data out.
     """
     raw = measure_scores(store, measure, seed, rows, month=month)
-    if isinstance(seed, OutsideSeed) and seed.stated:
-        return np.where(wish_unmeasured(store, measure, seed, rows, month), 0.0, raw)
-    if measure.name != "difficulty":
-        return raw
-    (column,) = measure.columns
-    graded = ~np.isnan(_seed_value(store, seed, column))
-    return np.where(graded & np.isnan(store.column(column)[rows]), 0.0, raw)
+    return np.where(unmeasured(store, measure, seed, rows, month), 0.0, raw)
 
 
-def wish_unmeasured(
-    store: SimilarityStore, measure: Measure, wish: OutsideSeed, rows: np.ndarray, month: int | None
+def unmeasured(
+    store: SimilarityStore, measure: Measure, seed: int | OutsideSeed, rows: np.ndarray, month: int | None
 ) -> np.ndarray:
-    """Per row, whether the Wish asks a value of ``measure`` and the DayHike has no
-    data for it (a fact column NaN, such as no elevation or no climate there)."""
-    columns = _columns(measure, month) if measure.columns else []
-    if not columns or any(np.isnan(_seed_value(store, wish, column)) for column in columns):
+    """Per row, whether the Seed has data for ``measure`` and the DayHike has none
+    (a fact column or its ProfileShape NaN, such as no elevation or no climate there)."""
+    if measure.kind == "profile":
+        left = seed.profile if isinstance(seed, OutsideSeed) else store.profile[seed]
+        if np.isnan(left).any():
+            return np.zeros(len(rows), dtype=bool)
+        return np.isnan(store.profile[rows]).any(axis=-1)
+    columns = _columns(measure, month)
+    if any(np.isnan(_seed_value(store, seed, column)) for column in columns):
         return np.zeros(len(rows), dtype=bool)
     return np.isnan(np.column_stack([store.column(column)[rows] for column in columns])).any(axis=1)
 
@@ -873,6 +879,7 @@ def build_similarity(
                 "fact_columns": FACT_COLUMNS,
                 "dayhikes": len(ids),
                 "facts_seconds": round(time.monotonic() - started, 1),
+                "dem_read": dem_read_by(dem_dir),
             },
             indent=1,
         )
@@ -1025,11 +1032,11 @@ def _build_facts(
     graph = TrailGraph(graph_path) if graph_path.is_file() else None
     geo = sqlite3.connect(f"file:{geometry_store_path_for(catalog_path)}?mode=ro", uri=True)
     try:
-        kinds, amenity_points = _amenities(geo)
+        kinds, amenity_points, heights = _amenities(geo)
 
         def of_kinds(*wanted: str) -> AmenityPoints:
             keep = np.isin(kinds, wanted)
-            return AmenityPoints(amenity_points[keep], kinds[keep])
+            return AmenityPoints(amenity_points[keep], kinds[keep], heights[keep])
 
         along, peaks = of_kinds(*ALONG_KINDS), of_kinds("peak")
         trailheads = np.radians(summary[:, 1:3])
@@ -1098,7 +1105,7 @@ def _build_facts(
                     None, None, None, None, lat, lon, ele, codes,
                     np.full(len(lat), -1), np.full(len(lat), np.nan), ways, None, {}, codes_along,
                 )  # fmt: skip
-                back = way_back(lat, lon, graph)
+                back = way_back(lat, lon, graph, float(part_facts[column["difficulty_rank"], local]))
                 trip = round_trip(one_way, back)
                 for suffix, measured, target, shapes in (
                     ("", one_way, part_facts, part_profile),
@@ -1177,10 +1184,12 @@ def _add_way_back(
 ) -> None:
     """Bring the Catalog's own facts of one DayHike (its column of ``facts``)
     to the walk with its way back: ``trip``, whose first ``one_way`` vertices
-    are the DayHike's. Length adds the metres back; highest, lowest and
-    Difficulty take the way back's too; LandCover weighs every vertex of the
-    trip by length (when the GeometryStore has its classes); climate averages the
-    vertices back with the DayHike's, weighted by the vertex count.
+    are the DayHike's. Length adds the metres back; highest and lowest take
+    the way back's too; Difficulty stays the DayHike's own grade, so a harder
+    way the way back finds (a scramble beside the trail) does not grade the
+    hike (ADR-0078); LandCover weighs every vertex of the trip by length (when
+    the GeometryStore has its classes); climate averages the vertices back
+    with the DayHike's, weighted by the vertex count.
     """
     column = {name: index for index, name in enumerate(FACT_COLUMNS)}
     facts[column["length_m"]] += back.metres
@@ -1189,8 +1198,6 @@ def _add_way_back(
     if tail.size:
         facts[column["highest_m"]] = np.fmax(facts[column["highest_m"]], tail.max())
         facts[column["lowest_m"]] = np.fmin(facts[column["lowest_m"]], tail.min())
-    if back.walk is not None and back.walk.sac_scale is not None:
-        facts[column["difficulty_rank"]] = np.fmax(facts[column["difficulty_rank"]], SAC_SCALE_RANK[back.walk.sac_scale])
     if has_landcover and np.any(trip.landcover > 0):
         fractions = list(_landcover_fractions(trip.landcover, trip.lat, trip.lon, trip.landcover_along))
         fractions.append(max(1.0 - sum(fractions), 0.0))
@@ -1208,20 +1215,29 @@ def _add_way_back(
         facts[column[name]] = ((own * weight if weight else 0.0) + values.sum()) / (weight + len(values))
 
 
-def _amenities(geo: sqlite3.Connection) -> tuple[np.ndarray, np.ndarray]:
-    """Kind and (lat, lon) of every GeometryStore amenity point."""
-    rows = geo.execute("SELECT kind, latitude, longitude FROM amenities").fetchall()
-    kinds = np.array([kind for kind, _, _ in rows], dtype=object)
-    points = np.array([(lat, lon) for _, lat, lon in rows], dtype=float).reshape(-1, 2)
-    return kinds, points
+def _amenities(geo: sqlite3.Connection) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Kind, (lat, lon) and mapped height (its OSM ``ele``, NaN without one)
+    of every GeometryStore amenity point."""
+    rows = geo.execute("SELECT kind, latitude, longitude, json_extract(tags, '$.ele') FROM amenities").fetchall()
+    kinds = np.array([kind for kind, *_ in rows], dtype=object)
+    points = np.array([(lat, lon) for _, lat, lon, _ in rows], dtype=float).reshape(-1, 2)
+    return kinds, points, mapped_heights([ele for *_, ele in rows])
+
+
+def mapped_heights(tags: Sequence[object]) -> np.ndarray:
+    """Metres of OSM ``ele`` tag values (NaN for none or unreadable), as ingest reads them."""
+    heights = [_parse_ele_m(None if tag is None else str(tag)) for tag in tags]
+    return np.array([math.nan if height is None else height for height in heights], dtype=float)
 
 
 class AmenityPoints:
-    """Amenity points ((lat, lon) rows and their kinds) with a haversine BallTree."""
+    """Amenity points ((lat, lon) rows, their kinds and their mapped heights,
+    NaN unknown) with a haversine BallTree."""
 
-    def __init__(self, points: np.ndarray, kinds: Sequence[str]) -> None:
+    def __init__(self, points: np.ndarray, kinds: Sequence[str], heights: Sequence[float] | None = None) -> None:
         self.points = np.asarray(points, dtype=float).reshape(-1, 2)
         self.kinds = np.asarray(kinds, dtype=object)
+        self.heights = np.full(len(self.points), np.nan) if heights is None else np.asarray(heights, dtype=float)
         # An empty tree still answers queries: one dummy point at the South Pole.
         from sklearn.neighbors import BallTree
         self.tree = BallTree(
@@ -1334,6 +1350,8 @@ def walk_facts(
     restaurant or cafe, Shelter or Viewpoint in the ``CORRIDOR_M`` Corridor,
     a Peak within ``PEAK_SUMMITED_M``, the Peaks within ``PEAKS_AROUND_M``,
     and the WaterSources in the Corridor with the DryStretch between them.
+    The highest point is the highest vertex, or the mapped height of a Peak
+    it summits when that is higher (``highest_m``).
     Only TarmacApproach depends on the walking direction: it counts from the
     start of a line (on a loop the shorter of the two ways counts).
     """
@@ -1345,12 +1363,14 @@ def walk_facts(
         **trail_facts(walked, loop=round_trip),
     }
     kinds, distance, position, points = np.empty(0, dtype=object), np.empty(0), np.empty(0), np.empty((0, 2))
-    peak_distance = np.empty(0)
+    peak_distance, peak_heights = np.empty(0), np.empty(0)
     length = _path_length_m(lat, lon)
     if len(lat) >= 2:
         line = np.radians(_densify(lat, lon, SEARCH_STEP_M))
         kinds, distance, position, points = along.near_line(lat, lon, line, CORRIDOR_M)
-        _, peak_distance, _, _ = peaks.near_line(lat, lon, line, PEAKS_AROUND_M)
+        hits = peaks.rows_near(line, PEAKS_AROUND_M)
+        peak_distance, _ = nearest_on_line(lat, lon, peaks.points[hits, 0], peaks.points[hits, 1])
+        peak_heights = peaks.heights[hits]
 
     def within(kind: str, radius_m: float) -> np.ndarray:
         return position[(kinds == kind) & (distance <= radius_m)]
@@ -1367,10 +1387,29 @@ def walk_facts(
         viewpoint_along=float(within("viewpoint", CORRIDOR_M).size > 0),
         peak_summited=float(within("peak", PEAK_SUMMITED_M).size > 0),
         peaks_around=float((peak_distance <= PEAKS_AROUND_M).sum()),
+        highest_m=summit_height(ele, peak_heights[peak_distance <= PEAK_SUMMITED_M]),
         water_count=float(water.size) if len(lat) >= 2 else math.nan,
         dry_stretch_m=float(np.diff(edges).max()) if len(lat) >= 2 else math.nan,
     )
     return facts
+
+
+def summit_height(ele: np.ndarray, summits: np.ndarray) -> float:
+    """The highest point of a walk with vertex heights ``ele`` (NaN missing)
+    that summits Peaks of mapped heights ``summits`` (NaN unknown).
+
+    A DEM cell is 30 m wide, so it reads a sharp summit low: Copernicus GLO-30
+    reads Triglav's 2,864 m top as 2,801 m. A summited Peak's mapped height
+    is the top when it is higher than every vertex and at most
+    ``SUMMIT_TRUST_M`` above them (a height in feet read as metres, or a typo,
+    is further). Without vertex heights there is no highest point.
+    """
+    known = ele[np.isfinite(ele)]
+    if not known.size:
+        return math.nan
+    top = float(known.max())
+    trusted = summits[(summits > top) & (summits <= top + SUMMIT_TRUST_M)]
+    return float(trusted.max()) if trusted.size else top
 
 
 def nearest_on_line(
@@ -1493,8 +1532,26 @@ def climb_and_descent(lat: np.ndarray, lon: np.ndarray, ele: np.ndarray) -> tupl
     (``_one_way_climb_and_descent``), so walking the other way swaps the two
     exactly and a walk retraced climbs exactly what it descends (ADR-0048).
     Vertices without elevation are skipped; none with it gives NaN for both.
+    Where numba is installed, ``climb_kernel`` computes it, to the same bits.
     """
     lat, lon, ele = (np.asarray(values, dtype=float) for values in (lat, lon, ele))
+    if climb_kernel.COMPILED:
+        rules = (
+            SPIKE_RISE_M,
+            SPIKE_GRADE,
+            SPIKE_RUN_M,
+            GAIN_HYSTERESIS_M,
+            NOISY_MEAN_M,
+            NOISY_REACH_M,
+            NOISY_WINDOW_M,
+            NOISY_STEP_M,
+        )
+        return climb_kernel.climb_and_descent(_step_m(lat, lon), _step_m(lat[::-1], lon[::-1]), ele, rules)
+    return _numpy_climb_and_descent(lat, lon, ele)
+
+
+def _numpy_climb_and_descent(lat: np.ndarray, lon: np.ndarray, ele: np.ndarray) -> tuple[float, float]:
+    """``climb_and_descent`` in numpy and Python, where numba is not installed."""
     climb, descent = _one_way_climb_and_descent(lat, lon, ele)
     back_climb, back_descent = _one_way_climb_and_descent(lat[::-1], lon[::-1], ele[::-1])
     return (climb + back_descent) / 2, (descent + back_climb) / 2

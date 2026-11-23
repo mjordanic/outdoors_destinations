@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 import re
 from array import array
 from bisect import bisect_left
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import islice
 
@@ -147,10 +148,121 @@ class _Elevations(_SortedIds):
         return default if at < 0 else self._ele[at]
 
 
+class WayStore(_SortedIds):
+    """Ways (id, node ids, tags) as flat arrays, read like the dict of an
+    ``OsmSnapshot``: ``ways[way_id]`` is its ``OsmWay``. Every way's node ids
+    are one array cut at offsets, and ways of the same tags share one dict
+    (read only). Europe's work file holds ~5 M ways: as OsmWays of tuples and
+    dicts about 1-2 kB each, here about 8 B a node. It iterates in load order,
+    like the dict it replaces; ways ``update`` adds, ones it did not load
+    (those a source read), come after."""
+
+    def __init__(self, ids: array, offsets: array, nodes: array, tag_at: array, tags: list[dict[str, str]]) -> None:
+        loaded = np.frombuffer(ids, dtype=np.int64) if len(ids) else np.empty(0, dtype=np.int64)
+        order = np.argsort(loaded, kind="stable")
+        super().__init__(loaded[order])
+        self._position = array("q", order.astype(np.int64).tobytes())  # each sorted id's place in load order
+        self._loaded, self._offsets, self._nodes, self._tag_at, self._tags = ids, offsets, nodes, tag_at, tags
+        self._added: dict[int, OsmWay] = {}
+
+    @classmethod
+    def from_rows(cls, rows: Iterable[tuple[int, str, str]]) -> WayStore:
+        """From work-file (id, node ids JSON, tags JSON) rows, one id once."""
+        ids, offsets, nodes, tag_at = array("q"), array("q", [0]), array("q"), array("q")
+        interned: dict[str, int] = {}
+        tags: list[dict[str, str]] = []
+        for way_id, node_ids_json, tags_json in rows:
+            ids.append(way_id)
+            nodes.extend(json.loads(node_ids_json))
+            offsets.append(len(nodes))
+            at = interned.setdefault(tags_json, len(tags))
+            if at == len(tags):
+                tags.append(json.loads(tags_json))
+            tag_at.append(at)
+        return cls(ids, offsets, nodes, tag_at, tags)
+
+    def __getitem__(self, way_id) -> OsmWay:
+        at = self._at(way_id)
+        if at < 0:
+            return self._added[way_id]
+        position = self._position[at]
+        return OsmWay(
+            tuple(self._nodes[self._offsets[position] : self._offsets[position + 1]]),
+            self._tags[self._tag_at[position]],
+        )
+
+    def __contains__(self, way_id) -> bool:
+        return self._at(way_id) >= 0 or way_id in self._added
+
+    def __iter__(self) -> Iterator[int]:
+        yield from self._loaded
+        yield from self._added
+
+    def __len__(self) -> int:
+        return len(self._loaded) + len(self._added)
+
+    def update(self, ways: Mapping[int, OsmWay]) -> None:
+        self._added.update(ways)
+
+
+class WaysWithout(Mapping[int, OsmWay]):
+    """``ways`` read without the ways ``left_out``, in the same order: a way
+    is built only when it is read, none are copied."""
+
+    def __init__(self, ways: Mapping[int, OsmWay], left_out: Collection[int]) -> None:
+        self._ways, self._left_out = ways, left_out
+
+    def __getitem__(self, way_id) -> OsmWay:
+        if way_id in self._left_out:
+            raise KeyError(way_id)
+        return self._ways[way_id]
+
+    def __contains__(self, way_id) -> bool:
+        return way_id not in self._left_out and way_id in self._ways
+
+    def __iter__(self) -> Iterator[int]:
+        return (way_id for way_id in self._ways if way_id not in self._left_out)
+
+    def __len__(self) -> int:
+        return len(self._ways) - sum(1 for way_id in self._left_out if way_id in self._ways)
+
+
+class WayEnds:
+    """The ways of a snapshot by their end nodes, as two sorted arrays: about
+    16 B a way end, so Europe's ~5 M ways take ~160 MB."""
+
+    def __init__(self, ways: Mapping[int, OsmWay]) -> None:
+        if isinstance(ways, WayStore):
+            ids = np.frombuffer(ways._loaded, dtype=np.int64) if len(ways._loaded) else np.empty(0, dtype=np.int64)
+            offsets = np.frombuffer(ways._offsets, dtype=np.int64)
+            nodes = np.frombuffer(ways._nodes, dtype=np.int64) if len(ways._nodes) else np.empty(0, dtype=np.int64)
+            has_nodes = offsets[1:] > offsets[:-1]
+            ids = ids[has_nodes]
+            first, last = nodes[offsets[:-1][has_nodes]], nodes[offsets[1:][has_nodes] - 1]
+            rest = ways._added
+        else:
+            ids, first, last, rest = np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64), ways
+        extra = [(way_id, way.node_ids[0], way.node_ids[-1]) for way_id, way in rest.items() if way.node_ids]
+        if extra:
+            more = np.array(extra, dtype=np.int64)
+            ids, first, last = np.concatenate([ids, more[:, 0]]), np.concatenate([first, more[:, 1]]), np.concatenate([last, more[:, 2]])
+        ends, owners = np.concatenate([first, last]), np.concatenate([ids, ids])
+        order = np.argsort(ends, kind="stable")
+        self._ends, self._owners = ends[order], owners[order]
+
+    def ways_at(self, node_ids: Sequence[int]) -> set[int]:
+        """The ids of the ways that start or end at any of ``node_ids``."""
+        wanted = np.asarray(node_ids, dtype=np.int64)
+        starts = self._ends.searchsorted(wanted, side="left")
+        stops = self._ends.searchsorted(wanted, side="right")
+        hit = stops > starts
+        return {int(way_id) for start, stop in zip(starts[hit], stops[hit]) for way_id in self._owners[start:stop]}
+
+
 @dataclass
 class OsmSnapshot:
     nodes: Mapping[int, tuple[float, float]] = field(default_factory=dict)  # a NodeStore's, from a work file
-    ways: dict[int, OsmWay] = field(default_factory=dict)
+    ways: dict[int, OsmWay] | WayStore = field(default_factory=dict)  # a WayStore, from a work file
     relations: list[OsmRelation] = field(default_factory=list)
     amenities: list[tuple[str, tuple[tuple[float, float], ...]]] = field(
         default_factory=list
@@ -164,6 +276,13 @@ class OsmSnapshot:
     destinations: list[tuple[float, float, str]] = field(default_factory=list)
     # (lat, lon, name) of named guideposts: they name signposts (ADR-0039).
     guideposts: list[tuple[float, float, str]] = field(default_factory=list)
+    # (lat, lon) of highway=trailhead nodes, read with the paths option: where a named trail starts (ADR-0066).
+    trailheads: list[tuple[float, float]] = field(default_factory=list)
+    # Ids of the ways in ``ways`` no hiking relation lists, read with the paths option (ADR-0065):
+    # only the TrailGraph walks them, no DayHike does.
+    path_ways: frozenset[int] = frozenset()
+    # ``ways`` by their end nodes, built when a main walk first needs it (``ingest._way_ends``).
+    way_ends: WayEnds | None = field(default=None, repr=False, compare=False)
 
 
 def amenity_kind(tags: dict[str, str]) -> str | None:

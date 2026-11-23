@@ -44,7 +44,8 @@ keeps motorway–residential, other `service` ways (parking aisles, alleys),
 `trunk`, `primary` (and `_link` ramps) plus ferries. Output is
 `*-highways.osm.pbf`. Use it for long-distance European travel, not for
 DriveTime to Trailheads on its own; with `--highways` it gives an estimate for all
-of Europe ([technical docs](technical.md#highway-tiles-all-of-europe-small-server), **Highway tiles**). Turn restrictions
+of Europe, or for Europe and the US from one merged highways file
+([deploy.md](deploy.md#europe-only-or-europe-and-the-us)) ([technical docs](technical.md#highway-tiles-all-of-europe-small-server), **Highway tiles**). Turn restrictions
 are omitted so osmium does not pull small member ways into the extract.
 
 **`mjolnir.drive-time.json`** is merged into `valhalla.json` when the

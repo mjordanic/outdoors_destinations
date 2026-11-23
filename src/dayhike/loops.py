@@ -26,6 +26,7 @@ from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import dijkstra
 
 from dayhike.catalog import EARTH_RADIUS_M
+from dayhike.db import scoped
 from dayhike.similarity import PROFILE_RANGE_FLOOR_M, TWIN_SHARE
 from dayhike.trailgraph import TrailGraph, decode_coords, _haversine
 
@@ -117,7 +118,7 @@ def find_loops(
     low = max(low, LOOP_MIN_M)
     if not math.isfinite(target.length_m) or low >= high:
         return LoopSearch([], 0, False)
-    with sqlite3.connect(f"file:{graph.path}?mode=ro", uri=True) as db:
+    with scoped(sqlite3.connect(f"file:{graph.path}?mode=ro", uri=True)) as db:
         starts = _starts(db, origin, trailheads)
         hours: list[float | None] = [None] * len(starts)
         if reach is not None and starts:

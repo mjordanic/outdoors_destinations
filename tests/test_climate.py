@@ -386,7 +386,10 @@ def test_ranking_with_month_uses_july_not_june_august_regime(tmp_path: Path) -> 
     july_scores = {item.dayhike.id: item.score for item in with_july.items}
     assert without_scores[1002] == pytest.approx(without_scores[1007])
     assert july_scores[1002] > july_scores[1007]
-    assert [item.dayhike.id for item in with_july.items] == [1002, 1007]
+    # Relation 1003 has no climate and scores 0 on it (ADR-0071), tied with PS-1, as far apart in
+    # July; the tie breaks on id.
+    assert [item.dayhike.id for item in with_july.items] == [1002, 1003, 1007]
+    assert july_scores[1003] == 0.0
 
 
 def test_query_month_outside_1_to_12_fails(tmp_path: Path) -> None:
@@ -1081,3 +1084,115 @@ def test_the_regime_s_precipitation_is_a_monthly_mean_of_the_year_so_a_wet_summe
     assert min(rain) <= year <= max(rain)
     assert year == pytest.approx(sum(rain) / 12)
     assert year < min(rain[5:8])
+
+
+def _nudged_pair(tmp_path: Path) -> tuple[Path, Path]:
+    """Two rasters on the same 8x8 grid whose origins differ by float noise (4e-14)."""
+    box = {"west": 14.0, "south": 46.0, "east": 14.1, "north": 46.1}
+    first, second = tmp_path / "chelsa_pr_01.tif", tmp_path / "chelsa_tas_01.tif"
+    data = np.full((8, 8), 5.0, dtype="float32")
+    _write_tif(first, data, **box)
+    _write_tif(second, data, **{**box, "west": box["west"] + 4e-14, "north": box["north"] - 4e-14})
+    return first, second
+
+
+def test_rasters_whose_origins_differ_by_float_noise_share_one_grid_in_the_cell_cache(tmp_path: Path) -> None:
+    import rasterio
+
+    from dayhike.climate import _raster_cells
+
+    first, second = _nudged_pair(tmp_path)
+    with rasterio.open(first) as a, rasterio.open(second) as b:
+        assert tuple(a.transform) != tuple(b.transform)
+    grids: dict = {}
+    lat, lon = np.array([46.05]), np.array([14.05])
+
+    _raster_cells(first, lat, lon, grids)
+    _raster_cells(second, lat, lon, grids)
+
+    assert len(grids) == 1
+
+
+def test_rasters_on_different_grids_stay_apart_in_the_cell_cache(tmp_path: Path) -> None:
+    from dayhike.climate import _raster_cells
+
+    first, second = tmp_path / "a.tif", tmp_path / "b.tif"
+    _write_tif(first, np.ones((8, 8), dtype="float32"), west=14.0, south=46.0, east=14.1, north=46.1)
+    _write_tif(second, np.ones((8, 8), dtype="float32"), west=14.0, south=46.0, east=14.1, north=46.1 + 0.05)
+    grids: dict = {}
+    lat, lon = np.array([46.05]), np.array([14.05])
+
+    _raster_cells(first, lat, lon, grids)
+    _raster_cells(second, lat, lon, grids)
+
+    assert len(grids) == 2
+
+
+def test_fetch_chelsa_writes_every_clip_on_one_transform_even_when_sources_differ_by_float_noise(
+    tmp_path: Path,
+) -> None:
+    import rasterio
+    from rasterio import Affine
+
+    nudge = {"tas": 0.0, "pr": 3e-14, "rsds": -3e-14}
+
+    def retrieve(url: str, filename: str) -> None:
+        # Same cell size, origin off by float noise: how one CHELSA grid reads per file.
+        variable = Path(url).name.split("_")[1]
+        _retrieve_chelsa(url, filename, west=14.9, south=44.9, east=15.3, north=45.3)
+        with rasterio.open(filename, "r+") as dataset:
+            shifted = dataset.transform
+            dataset.transform = Affine(
+                shifted.a, shifted.b, shifted.c + nudge[variable], shifted.d, shifted.e, shifted.f + nudge[variable]
+            )
+
+    paths = fetch_chelsa(tmp_path, Bounds(south=45.0, west=15.0, north=45.2, east=15.2), retrieve=retrieve)
+
+    transforms = set()
+    for path in paths:
+        with rasterio.open(path) as dataset:
+            transforms.add(tuple(dataset.transform))
+    assert len(paths) == 36
+    assert len(transforms) == 1
+
+
+def _climate_snapshot(catalog_path: Path) -> tuple[list, list]:
+    catalog = sqlite3.connect(catalog_path)
+    try:
+        months = catalog.execute("SELECT * FROM climate_months ORDER BY dayhike_id, month").fetchall()
+        features = catalog.execute(
+            f"SELECT dayhike_id, {', '.join(CLIMATE_FEATURES)} FROM feature_vectors ORDER BY dayhike_id"
+        ).fetchall()
+    finally:
+        catalog.close()
+    return months, features
+
+
+def test_sample_climate_in_small_chunks_matches_one_chunk_to_the_bit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dayhike import climate
+
+    rasters = tmp_path / "rasters"
+    rasters.mkdir()
+    rng = np.random.default_rng(3)
+    for month in range(1, 13):
+        for var, low, high in (("tas", -5.0, 25.0), ("pr", 10.0, 200.0), ("rsds", 1000.0, 30000.0)):
+            data = rng.uniform(low, high, (40, 40)).astype("float32")
+            data[0, :5] = np.nan  # a few cells no raster covers
+            _write_tif(rasters / f"chelsa_{var}_{month:02d}.tif", data, west=14.9, south=44.9, east=15.6, north=45.7)
+    whole = tmp_path / "whole" / "catalog.sqlite"
+    whole.parent.mkdir()
+    build_catalog(FIXTURE, whole)
+    sampled = sample_climate(whole, rasters)
+
+    pieces = tmp_path / "pieces" / "catalog.sqlite"
+    pieces.parent.mkdir()
+    build_catalog(FIXTURE, pieces)
+    # Every hike's vertices are split over chunks, whose sums must add up in the same order.
+    monkeypatch.setattr(climate, "_VERTEX_CHUNK", 3)
+
+    assert sample_climate(pieces, rasters) == sampled > 0
+    months, features = _climate_snapshot(pieces)
+    assert (months, features) == _climate_snapshot(whole)
+    assert len({row[2] for row in months}) > 12

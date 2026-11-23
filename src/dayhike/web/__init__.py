@@ -29,16 +29,20 @@ they use none of it. With none given, no other origin may.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
+import logging
 import math
 import re
 import threading
 import time
 import unicodedata
 import urllib.error
+from typing import Literal
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from html import escape as html_escape
+from urllib.parse import urlsplit
 from pathlib import Path
 
 import numpy as np
@@ -63,6 +67,8 @@ from dayhike.serving import (
     GROUP_SHARE,
     MEASURE_GROUPS,
     MEASURE_INFO,
+    REGION_SPLIT_LON,
+    REGIONS,
     SCORE_HELP,
     TYPICAL_PAIR,
     WISH_DISPLAY,
@@ -72,9 +78,10 @@ from dayhike.serving import (
     name_dem,
 )
 from dayhike.regions import labels_text
-from dayhike.similarity import DEFAULT_WEIGHTS, MEASURES, WISHABLE, Measure
+from dayhike.similarity import DEFAULT_WEIGHTS, MEASURES, WISHABLE, Measure, climb_and_descent
 from dayhike.trailgraph import Route, RouteError
 
+logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
 RESULTS = 10  # rows a Ranking lists; "Show 10 more" asks the next ones (ADR-0032)
 POOL = 30  # rows a Ranking answers with: the page draws RESULTS of them, or shows the first in Strict order (ADR-0047)
@@ -286,6 +293,8 @@ class RankRequest(Weighted):
     origin: Place | None = None
     max_hours: float | None = Field(default=None, gt=0, le=MAX_DRIVE_HOURS)
     max_km: float | None = Field(default=None, gt=0, le=MAX_KM)  # straight line from origin to a hike's start
+    # Only hikes starting in these (a RegionChoice, ADR-0074); none: every hike. Not with an origin, which decides alone.
+    regions: list[Literal["europe", "us"]] | None = Field(default=None, min_length=1)
     loops: bool = False  # SuggestedLoops too, only on request (ADR-0028)
     # Hikes starting this near a better one are its versions; None follows the limits (ADR-0032).
     # At least 0.1 km, so the rows after those shown leave the rows shown out.
@@ -318,6 +327,8 @@ class RankRequest(Weighted):
     def _one_seed(self) -> RankRequest:
         if sum(given is not None for given in (self.seed, self.composed, self.wish)) != 1:
             raise ValueError("give one of a DayHike, a composed hike or a wish")
+        if self.regions is not None and self.origin is not None:
+            raise ValueError("give regions or an origin, not both: hikes near a starting place are wherever it is")
         return self
 
     def given_weights(self) -> dict[str, float]:
@@ -348,6 +359,26 @@ def wish_input(measure: Measure) -> dict | None:
     return {"kind": "number", "unit": unit, "min": low, "max": high, "step": step, "default": default, "display": display}
 
 
+def only_this_machine(url: str) -> bool:
+    """Whether ``url`` names this machine (localhost or a loopback or unspecified address), so no visitor can open it."""
+    host = urlsplit(url).hostname or ""
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_unspecified
+
+
+def covered_text(regions: Sequence[Mapping[str, str | None]] | None) -> str:
+    """What the site covers, as its pages say it (``site_pages``): "Europe" while every region of the export
+    is in Europe (or none is given), else their labels ("Europe and the contiguous United States")."""
+    if all(region.get("continent") == "Europe" for region in regions or []):
+        return "Europe"
+    return labels_text([str(region["label"]) for region in regions or []])
+
+
 def site_pages(
     goatcounter: str | None,
     place_search: bool = False,
@@ -360,6 +391,7 @@ def site_pages(
     basemap: BaseMap = BaseMap(),
     sources: Mapping[str, Mapping[str, str]] | None = None,
     regions: Sequence[Mapping[str, str | None]] | None = None,
+    download_url: str | None = None,
 ) -> dict[str, str]:
     """Each page's HTML with the GoatCounter tag where a code is set.
 
@@ -370,9 +402,12 @@ def site_pages(
     With ``copernicus`` (an export sampled from Copernicus GLO-30), the pages credit it instead of FABDEM.
     With ``usgs_3dep`` (hikes read from USGS 3DEP) they credit it too, or alone when neither ``copernicus``
     nor ``fabdem`` (an export none of whose hikes was read from FABDEM).
+    With a ``download_url`` (where the ODbL download of the OpenStreetMap part of the hikes is hosted,
+    ``dayhike export-osm-download``) the credits page links it and says what it holds; without, no link.
     A ``basemap`` from another provider than the OpenStreetMap Foundation's tiles is credited, between
     ``<!--basemap-->`` and ``<!--/basemap-->``, by its attribution in place of the Foundation's tile policy;
-    a vector one by the Protomaps basemap and the software that draws it.
+    a vector one by the Protomaps basemap and the software that draws it, then by the raster tiles drawn where
+    it does not reach (a view wholly outside its bounds) or cannot be drawn.
     ``sources`` (the export's external sources, ADR-0062: name, licence, licence_url and url per register id)
     are credited one item each between ``<!--external-->`` and ``<!--/external-->``.
     ``regions`` (the export's, each a label and a continent) name what the site covers between ``<!--regions-->``
@@ -398,7 +433,10 @@ def site_pages(
     )
     continents = [region.get("continent") for region in regions or [{"continent": "Europe"}]]
     europe_only = all(continent == "Europe" for continent in continents)
-    covered = "Europe" if europe_only else labels_text([str(region["label"]) for region in regions])
+    covered = covered_text(regions)
+    if download_url and only_this_machine(download_url):
+        logger.warning("the download URL %s is only reachable on this machine; the site shows no download link", download_url)
+        download_url = None  # a link only this machine can open breaks for every visitor
     pages = {}
     for name in PAGES:
         html = (STATIC_DIR / f"{name}.html").read_text(encoding="utf-8").replace("<!--analytics-->", analytics)
@@ -414,10 +452,13 @@ def site_pages(
             "eu": "Europe" in continents,
             "vector": basemap.pmtiles is not None,
             "raster": basemap.pmtiles is None,
+            "download": bool(download_url),
         }
         for setting, on in settings.items():  # text true only once it is set
             block = rf"<!--if-{setting}-->(.*?)<!--/if-{setting}-->"
             html = re.sub(block, (lambda m: m[1]) if on else "", html, flags=re.S)
+        if download_url:
+            html = html.replace("<!--download-url-->", html_escape(download_url))
         if place_search:
             credit = (
                 '<span id="place-credit">Place search: towns and villages from <a href="https://www.geonames.org/">GeoNames</a>'
@@ -434,18 +475,27 @@ def site_pages(
                 return world + joiner + credit if copernicus or fabdem else USGS_3DEP_ALONE_CREDITS.get(name, credit)
 
             html = re.sub(r"<!--elevation-->(.*?)<!--/elevation-->", elevation, html, flags=re.S)
-        if basemap.pmtiles is not None:
-            html = re.sub(r"<!--basemap-->.*?<!--/basemap-->", VECTOR_CREDIT, html, flags=re.S)
-        elif basemap.url != OSM_TILES:
+        served = None  # the raster tiles' provider, or None for the Foundation's words already on the page
+        if basemap.url != OSM_TILES:
             served = f"served by {basemap.attribution}" if basemap.attribution else "served by another tile provider"
-            html = re.sub(r"<!--basemap-->.*?<!--/basemap-->", served, html, flags=re.S)
+        if basemap.pmtiles is not None or served:
+
+            def base(block: re.Match, served: str | None = served) -> str:
+                raster = served or block[1]
+                if basemap.pmtiles is None:
+                    return raster
+                return f"{VECTOR_CREDIT}; where the vector map does not reach or cannot be drawn, raster tiles {raster}"
+
+            html = re.sub(r"<!--basemap-->(.*?)<!--/basemap-->", base, html, flags=re.S)
         if sources:
             items = "".join(
                 f'\n    <li><strong>Hiking routes from {html_escape(row["name"])}:</strong> '
                 f'<a href="{html_escape(row["url"])}">{html_escape(row["name"])}</a>, '
                 f'<a href="{html_escape(row["licence_url"])}">{html_escape(row["licence"])}</a>. '
                 "Each of these hikes is its own record with its own line, kept apart from the OpenStreetMap data "
-                "and under its own licence; its panel links the record.</li>"
+                "and under its own licence; its panel names the record, linked where the source has a page for it. "
+                "An OpenStreetMap hike that lies on one of its records, such as a day stage of an official trail, "
+                "names that record too.</li>"
                 for row in sources.values()
             )
             html = re.sub(r"<!--external-->.*?<!--/external-->", items, html, flags=re.S)
@@ -538,6 +588,7 @@ def create_app(
     cors_origins: tuple[str, ...] = (),
     site_url: str | None = None,
     basemap: BaseMap = BaseMap(),
+    download_url: str | None = None,
 ) -> FastAPI:
     """The app over one serving export.
 
@@ -549,7 +600,8 @@ def create_app(
     is not a plain name is a ValueError, and so is ``site_url``, the public origin
     (``https://host``) the pages' share previews name. ``cors_origins`` are the other origins
     (``https://host``) whose pages may call the API. ``basemap`` is where the page's maps load their
-    base tiles (``/api/info`` names it; the credits page credits it).
+    base tiles (``/api/info`` names it; the credits page credits it). ``download_url`` is where the ODbL download
+    is hosted: the credits page links it (``site_pages``).
     """
     pages = site_pages(
         goatcounter,
@@ -561,8 +613,10 @@ def create_app(
         dayhikes=data.meta["dayhikes"],
         basemap=basemap,
         sources=data.meta.get("sources"),
-        regions=data.meta.get("regions"),
+        regions=data.covered,
+        download_url=download_url,
     )
+    climb_and_descent(np.array([46.0, 46.001, 46.002]), np.array([13.0, 13.0, 13.0]), np.array([800.0, 850.0, 820.0]))
     app = FastAPI(title="HikesAlike", docs_url="/api/docs", openapi_url="/api/openapi.json")
     limiters = {"rank": RateLimiter(rank_rate, RATE_WINDOW_S), "api": RateLimiter(api_rate, RATE_WINDOW_S)}
     rankings = RankingQueue()
@@ -670,6 +724,8 @@ def create_app(
         return {
             "dayhikes": data.meta["dayhikes"],
             "coverage": coverage,
+            # What the site covers, as its pages say it: a starting place with no hike near is told so.
+            "covered": covered_text(data.covered),
             "core": core,
             # A list whose best row scores below this holds nothing much alike: the page says so.
             "typical_pair": TYPICAL_PAIR,
@@ -680,6 +736,8 @@ def create_app(
             "compose": data.trailgraph is not None,
             "max_drive_hours": MAX_DRIVE_HOURS,
             "max_km": MAX_KM,
+            # The RegionChoice: the regions this Catalog has hikes in; ``named`` is how a sentence names one (ADR-0074).
+            "regions": [{"name": name, "label": REGIONS[name][0], "named": REGIONS[name][1]} for name in data.regions],
             "results": RESULTS,
             "max_rows": MAX_ROWS,
             # The page draws its rows from a pool of this many with probability rising as exp(score / t) (ADR-0047).
@@ -796,6 +854,9 @@ def create_app(
         near = None if body.max_km is None else (origin, body.max_km * 1000)
         group_m = group_radius_m(body.max_hours, body.max_km) if body.group_km is None else body.group_km * 1000
         seed = seed_of(body.seed, body.composed) if body.wish is None else body.wish
+        if body.regions is not None and not set(body.regions) <= set(data.regions):
+            raise HTTPException(400, f"this catalog has hikes in {', '.join(data.regions)} only")
+        in_regions = None if body.regions is None else data.region_rows(body.regions)
         tab = request.headers.get(TAB_HEADER, "")
         turn = rankings.enter(client_key(request), tab if TAB_NAME.fullmatch(tab) else "", RANK_WAIT_S)
         if turn == "own":
@@ -823,7 +884,7 @@ def create_app(
                 seed,
                 weights,
                 month=body.month,
-                allowed_rows=None if hours is None else sorted(hours),
+                allowed_rows=in_regions if hours is None else sorted(hours),
                 limit=POOL,
                 return_to_start=body.return_to_start,
                 reach=reach,
@@ -844,6 +905,8 @@ def create_app(
         for result in listed:
             if result["id"] is not None:  # a SuggestedLoop has the hours to its own start
                 result["drive_hours"] = None if hours is None else hours[data.row_of(result["id"])]
+            # The RegionChoice its start is in (``ServingData.region_rows``): the page says when a list keeps to one.
+            result["region"] = "us" if result["trailhead"][1] < REGION_SPLIT_LON else "europe"
         starts = [result["trailhead"] for result in listed]
         metres = straight_line_distances_m(origin, starts) if origin is not None and starts else [None] * len(starts)
         for result, distance_m in zip(listed, metres):
@@ -861,6 +924,8 @@ def create_app(
             "loops": body.loops,
             "max_hours": body.max_hours,
             "max_km": body.max_km,
+            "regions": body.regions,
+            "in_regions": None if in_regions is None else len(in_regions),  # the hikes starting there
             "group_km": round(group_m / 1000, 3),
             "after": len(body.after),
             "draw": body.draw,

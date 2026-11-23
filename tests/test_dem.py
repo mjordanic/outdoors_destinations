@@ -496,6 +496,85 @@ def test_sample_geometry_store_writes_dem_ele_and_catalog_feature_vectors(
         connection.close()
 
 
+def test_raster_order_groups_points_by_cell_then_block_then_position() -> None:
+    from dayhike.dem import raster_order_sql
+
+    points = [(45.9, 15.9), (-0.5, -0.5), (45.1, 15.1), (45.9, 15.1), (-0.5, 0.5), (45.1, 15.11), (45.1, 15.9), (45.12, 15.1)]
+    connection = sqlite3.connect(":memory:")
+    try:
+        connection.execute("CREATE TABLE p (lat REAL, lon REAL)")
+        connection.executemany("INSERT INTO p VALUES (?, ?)", points)
+        ordered = connection.execute(f"SELECT lat, lon FROM p ORDER BY {raster_order_sql('lat', 'lon')}").fetchall()
+    finally:
+        connection.close()
+    assert ordered == [
+        (-0.5, -0.5), (-0.5, 0.5),
+        (45.1, 15.1), (45.1, 15.11), (45.12, 15.1), (45.1, 15.9),
+        (45.9, 15.1), (45.9, 15.9),
+    ]  # fmt: skip
+
+
+def _scatter_shared_vertices(store_path: Path) -> int:
+    """Every hike walks the same points in two 1° tiles, in an order that jumps between them."""
+    connection = sqlite3.connect(store_path)
+    try:
+        hikes = [row[0] for row in connection.execute("SELECT DISTINCT dayhike_id FROM vertices ORDER BY 1")]
+        connection.execute("DELETE FROM vertices")
+        walk = [(45.3, 15.4), (44.6, 14.5), (45.3, 15.4), (44.7, 14.6), (45.31, 15.41), (44.6, 14.5)]
+        connection.executemany(
+            "INSERT INTO vertices (dayhike_id, seq, node_id, latitude, longitude) VALUES (?, ?, ?, ?, ?)",
+            [(hike, seq, 1000 + seq, lat, lon) for hike in hikes for seq, (lat, lon) in enumerate(walk)],
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    return len(hikes) * len(walk)
+
+
+def test_sample_dem_reads_each_distinct_point_once_grouped_by_tile_and_matches_point_by_point(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dayhike import dem
+
+    catalog_path = tmp_path / "catalog.sqlite"
+    build_catalog(FIXTURE, catalog_path)
+    store_path = geometry_store_path_for(catalog_path)
+    vertex_count = _scatter_shared_vertices(store_path)
+    _write_constant_tif(tmp_path / "N45E015_FABDEM_V1-2.tif", west=14.99, south=44.99, east=16.01, north=46.01, z=1500.0)
+    _write_constant_tif(tmp_path / "N44E014_FABDEM_V1-2.tif", west=13.99, south=43.99, east=15.01, north=45.01, z=700.0)
+    monkeypatch.setattr(dem, "_VERTEX_CHUNK", 2)
+    sampled_points: list[tuple[float, float]] = []
+    real = dem.sample_elevations_and_sources
+
+    def recording(raster_dir, points, landcover_dir=None):
+        sampled_points.extend(points)
+        return real(raster_dir, points, landcover_dir)
+
+    monkeypatch.setattr(dem, "sample_elevations_and_sources", recording)
+
+    sampled = sample_dem(catalog_path, tmp_path)
+
+    assert sampled == vertex_count
+    assert len(sampled_points) == 4
+    assert set(sampled_points) == {(45.3, 15.4), (44.6, 14.5), (44.7, 14.6), (45.31, 15.41)}
+    tiles = [fabdem_tile_id(lat, lon) for lat, lon in sampled_points]
+    assert tiles in (["N44E014"] * 2 + ["N45E015"] * 2, ["N45E015"] * 2 + ["N44E014"] * 2)
+    connection = sqlite3.connect(store_path)
+    try:
+        rows = connection.execute("SELECT latitude, longitude, ele FROM vertices").fetchall()
+    finally:
+        connection.close()
+    assert len(rows) == vertex_count
+    assert {ele for *_, ele in rows} == {1500.0, 700.0}
+    for lat, lon, ele in rows:
+        assert ele == sample_elevations(tmp_path, [(lat, lon)])[0]
+    catalog = sqlite3.connect(catalog_path)
+    try:
+        assert {row[0] for row in catalog.execute("SELECT dem_source FROM dayhikes")} == {"fabdem"}
+    finally:
+        catalog.close()
+
+
 def _geometry_meta(catalog_path: Path) -> dict[str, str]:
     connection = sqlite3.connect(geometry_store_path_for(catalog_path))
     try:
@@ -674,3 +753,20 @@ def test_read_grid_cells_reads_each_cell_across_ragged_edge_blocks(tmp_path: Pat
     assert got.dtype == np.dtype("int16")
     assert np.array_equal(got, data[rows, cols])
     assert empty.shape == (0,) and empty.dtype == np.dtype("int16")
+
+
+def test_raster_block_then_position_is_raster_order() -> None:
+    from dayhike.dem import raster_block, raster_order_sql
+
+    rng = np.random.default_rng(7)
+    lat = np.r_[rng.uniform(-89.9, 89.9, 2000), 45.0, 45 + 1 / 7, 45 + 6.999999999 / 7, -0.0, 89.99999999999999]
+    lon = np.r_[rng.uniform(-180, 180, 2000), 15.0, 15 + 1 / 7, 15 + 6.999999999 / 7, 0.0, 179.99999999999997]
+    connection = sqlite3.connect(":memory:")
+    try:
+        connection.execute("CREATE TABLE p (lat REAL, lon REAL)")
+        connection.executemany("INSERT INTO p VALUES (?, ?)", zip(lat.tolist(), lon.tolist()))
+        ordered = connection.execute(f"SELECT lat, lon FROM p ORDER BY {raster_order_sql('lat', 'lon')}").fetchall()
+    finally:
+        connection.close()
+    order = np.lexsort((lon, lat, raster_block(lat, lon)))
+    assert list(zip(lat[order].tolist(), lon[order].tolist())) == ordered

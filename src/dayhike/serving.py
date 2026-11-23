@@ -35,8 +35,19 @@ similarity directory live. It writes a directory a server memory-maps:
   and searches hike names only.
 - ``countries.npy``: per Trailhead (``trailheads.npy`` order) the ISO 3166 code of the
   country the hike starts in, for its emergency number (``export_countries``), when
-  a Natural Earth countries file is given. ``export_countries`` writes it beside an
-  existing export too; without it a hike's country is that of the town nearest its start.
+  a Natural Earth countries file is given; a Trailhead within ``BORDER_M`` of an OpenStreetMap
+  national border takes the country OSM puts it in, when OSM boundaries are given too.
+  ``export_countries`` writes it beside an existing export too; without it a hike's country is
+  that of the town nearest its start.
+- ``borders.npy``: per Trailhead the ISO 3166 code of the country across the national border its
+  route crosses or its Trailhead is within ``BORDER_M`` of, else "", for that country's emergency
+  number too, when Natural Earth boundary lines are given with the countries file; for a Trailhead
+  the OSM borders moved, the country Natural Earth put it in, with or without the lines.
+- ``names.npz``: the name search's index (``export_name_index``): every hike name folded as search
+  compares it, and the words of them all a typo is matched against. ``export_name_index`` writes it beside an
+  existing export too: it reads only ``hikes.sqlite`` and ``similarity/ids.npy``. A server reads it in well
+  under a second; without it (an export from before, or one whose hikes it does not match) the server builds
+  the same index at start, reading every name from ``hikes.sqlite`` (about 15 s for 900,000 hikes).
 - ``meta.json``: written last, so a directory without it is incomplete.
 
 ``ServingData`` opens such a directory without ``Catalog.open``: name search,
@@ -65,9 +76,10 @@ import time
 import unicodedata
 import zipfile
 import zlib
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
+from functools import partial
 from pathlib import Path
 from urllib.request import urlretrieve as default_urlretrieve
 
@@ -79,7 +91,10 @@ from dayhike.catalog import (
     KIND_EXTERNAL,
     KIND_RELATION,
     MAX_CAR_SPEED_MS,
+    NAME_ORIGIN_OSM_NAME,
     NAME_ORIGIN_SYNTHETIC,
+    PLACE_RADIUS_M,
+    SAC_SCALE_RANK,
     MatrixClient,
     Origin,
     Trailhead,
@@ -88,9 +103,21 @@ from dayhike.catalog import (
     straight_line_distances_m,
     trailgraph_path_for,
 )
-from dayhike.dem import COPERNICUS, DEM_ATTRIBUTION_KEYS, FABDEM_ATTRIBUTION
+from dayhike.db import scoped
+from dayhike.dem import (
+    COPERNICUS,
+    DEM_ATTRIBUTION_KEYS,
+    DEM_READ_KEY,
+    DEM_SOURCES,
+    FABDEM_ATTRIBUTION,
+    DemSourceMismatch,
+    check_one_dem_source,
+)
+from dayhike.external import ExternalHike, read_external
 from dayhike.extracts import UrlRetrieve
 from dayhike.loops import LOOP_SEEDS, LOOP_TRAILHEADS, LoopTarget, find_loops
+from dayhike.npy import map_npy
+from dayhike.parallel import parallel_iter
 from dayhike.regions import Region
 from dayhike.similarity import (
     ALONG_KINDS,
@@ -98,6 +125,7 @@ from dayhike.similarity import (
     CORRIDOR_M,
     FACT_COLUMNS,
     MEASURES,
+    PEAK_SUMMITED_M,
     PEAKS_AROUND_M,
     PROFILE_POINTS,
     SEARCH_STEP_M,
@@ -127,7 +155,7 @@ from dayhike.similarity import (
     random_pair_shares,
     rank_rows,
     ranked_scores,
-    wish_unmeasured,
+    unmeasured,
     score_rows,
 )
 from dayhike.sources import SOURCE_OSM, osm_record_url, osm_source_ref, read_register
@@ -139,6 +167,7 @@ from dayhike.trailgraph import (
     TrailGraph,
     WayBack,
     _unit,
+    back_rank,
     decode_coords,
     round_trip,
     way_back,
@@ -177,9 +206,21 @@ UNNAMING_KINDS = ("restaurant_cafe", "parking")  # amenity points that name no h
 TRAILHEAD_NEAREST = 3  # parking and restaurant/cafe points kept per Trailhead
 VALHALLA_CACHE_BYTES = 256 * 1024 * 1024  # mjolnir.max_cache_size; the build default is 1 GB
 SEARCH_SCAN_CAP = 5_000  # occurrences of the scanned word a search looks at, so short queries stay fast
+SEARCH_SUMMIT_CAP = 200  # best names a search looks into for the summit or viewpoint they are named after
+FAR_PARKING_M = 2_000.0  # a hike starting further from a car park starts on the trail (Half Dome Trail, 4.6 km)
+# A Landmark of these kinds known in this many languages or more is famous: it leads the hike search (ADR-0079)
+FAMOUS_NAMES = 10
+FAMOUS_KINDS = ("peak", "lake", "pass", "ridge")
+LANDMARK_PLACE_SCAN = 500  # Landmarks a search narrowed to a country looks through for those in it
+# A word a name is often shortened to, and the word it is short for: what search compares (ADR-0079)
+SHORT_WORDS = {"mt": "mount"}
 FUZZY_MIN_LETTERS = 4  # a shorter query word is found only as typed
 FUZZY_SPELLINGS = 3  # the nearest words a word with a typo is tried as
 FUZZY_QUERIES = 6  # the respelled queries a search tries, fewest typos first
+NAME_INDEX = "names.npz"  # the name search's index, written by the export (``export_name_index``)
+# Raise when ``_fold``, ``_unshortened``, ``SHORT_WORDS``, ``FUZZY_MIN_LETTERS`` or ``_Spellings`` change what
+# the index holds: a server then builds it at start, as for an export without one, until it is rewritten.
+NAME_INDEX_FORMAT = 1
 GEONAMES_URL = "https://download.geonames.org/export/dump/allCountries.zip"
 GEONAMES_ATTRIBUTION = "GeoNames (geonames.org), CC BY 4.0"
 PLACE_MARGIN_DEG = 2.0  # places this far outside the Trailheads' box are kept: a start a drive away
@@ -198,6 +239,13 @@ LANDMARK_NEAR_M = 2_000.0  # a GeoNames Landmark is on the hikes passing this cl
 LANDMARK_FAR_M = 10_000.0  # ... else, with none, on those passing this close: a big lake's shore, a summit no trail reaches
 LANDMARK_MERGE_M = 1_500.0  # a GeoNames peak this near an OSM Peak of one of its names is that Peak, under all its names
 MULTI_DAY_M = 40_000.0  # a hike longer than this one way is a multi-day route (ADR-0056)
+# The RegionChoice a Ranking can keep to, by where a hike starts: the United States west of this
+# longitude, Europe east of it. It runs through the Atlantic, west of Europe's westernmost islands (the
+# Azores, 31° W) and east of the United States (67° W), so no hike is near it (ADR-0074).
+REGION_SPLIT_LON = -40.0
+# Name: its label, and how a sentence names it; west of the split last.
+REGIONS = {"europe": ("Europe", "Europe"), "us": ("United States", "the United States")}
+REGION_CONTINENTS = {"europe": "Europe", "us": "North America"}  # the continent the site's pages name it on
 LANDMARK_HIKES = 5  # the hikes a Landmark lists, nearest first
 LANDMARK_TOWN_M = 30_000.0  # a Landmark is told apart by the nearest town this close
 _HIKE_CHUNK = 2_000
@@ -211,33 +259,33 @@ _SIMILARITY_FILES = (
 # Groups are sections of the weights panel only; scoring knows no groups (ADR-0013). The page
 # shows the "basic" group and folds the others away behind Advanced search (ADR-0031).
 MEASURE_INFO: dict[str, tuple[str, str, str, str]] = {
-    "length": ("basic", "Length", "Walk length; scored by the shorter over the longer (floor 1 km), against random hike pairs.", "OpenStreetMap: the hike's line, from the ways of its hiking relation."),
-    "elevation_gain": ("basic", "Climbing", "Metres climbed, the larger of climb and descent; scored by the smaller over the larger (floor 100 m), against random hike pairs. Any climb of 100 m or less counts as the same: so many hikes share that, it says little, and two hikes that match closely on a less common climb, like 166 m and 167 m, are the closer match.", "FABDEM elevation along the line."),
-    "difficulty": ("effort", "Difficulty", "Strictest SAC grade, 1-6; scored by the gap against random hike pairs, lowest from 3 grades apart.", "OpenStreetMap: the sac_scale grade of the hike's ways."),
-    "highest": ("basic", "Highest point", "Highest elevation; scored by the gap against random hike pairs, lowest from 400 m apart.", "FABDEM elevation along the line."),
-    "lowest": ("altitude", "Lowest point", "Lowest elevation; scored by the gap against random hike pairs, lowest from 400 m apart.", "FABDEM elevation along the line."),
+    "length": ("basic", "Length", "Walk length; the closer the two values, the higher the score (1 km or less counts as the same).", "OpenStreetMap: the hike's line, from the ways of its hiking relation."),
+    "elevation_gain": ("basic", "Climbing", "Metres climbed, the larger of climb and descent; the closer the two values, the higher the score. Any climb of 100 m or less counts as the same: so many hikes share that, it says little, and two hikes that match closely on a less common climb, like 166 m and 167 m, are the closer match.", "FABDEM elevation along the line."),
+    "difficulty": ("effort", "Difficulty", "Hardest trail grade on the walk, from 1 (ordinary hiking path) to 6 (hard alpine route), the SAC scale; the smaller the gap, the higher the score, lowest from 3 grades apart.", "OpenStreetMap: the sac_scale grade of the hike's ways."),
+    "highest": ("basic", "Highest point", "Highest elevation; the smaller the gap, the higher the score, lowest from 400 m apart.", "FABDEM elevation along the line, or a summited peak's height as mapped in OpenStreetMap (ele)."),
+    "lowest": ("altitude", "Lowest point", "Lowest elevation; the smaller the gap, the higher the score, lowest from 400 m apart.", "FABDEM elevation along the line."),
     "profile": ("effort", "Profile shape", "Elevation profile scaled to 0-1 in length and height, walked either way.", "FABDEM elevation along the line."),
     "landcover": ("basic", "Landscape", "Shared share of tree, shrub, grass, bare, snow and other cover.", "ESA WorldCover 2021 land cover along the line."),
     "peak_summited": ("scenery", "Summit", "A Peak within 50 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap peaks."),
     "viewpoint_along": ("scenery", "Viewpoint along", "A Viewpoint within 100 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap viewpoints."),
-    "peaks_around": ("scenery", "Peaks around", "Peaks within 2 km of the line; scored by the fewer over the more (floor 1), against random hike pairs. No peak and 1 peak count as the same: so many hikes share that, it says little, and two hikes that match closely on a less common count, like 12 and 13 peaks, are the closer match.", "OpenStreetMap peaks."),
-    "temperature": ("basic", "Typical temperature", "Mean temperature (June-August, or the chosen month); scored by the gap against random hike pairs, lowest from 10 °C apart.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
-    "precipitation": ("weather", "Precipitation", "Mean monthly precipitation over the whole year, not June-August (or the chosen month's); scored by the smaller over the larger (floor 10 mm), against random hike pairs.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
-    "solar_radiation": ("weather", "Solar radiation", "Solar radiation (June-August, or the chosen month), kJ/m²/day; scored by the gap against random hike pairs, lowest from 5,000 apart.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
-    "southness": ("weather", "Sun-facing slopes", "Which way the slopes face: 1 south, 0 north, 0.5 east or west; a flat walk faces no way and counts 0.5 (from FABDEM); scored by the gap against random hike pairs.", "FABDEM slopes along the line."),
-    "water_count": ("water", "Water sources", "WaterSources within 100 m of the line, counted up to 3; scored by the gap against random hike pairs.", "OpenStreetMap drinking water, springs, taps and water points."),
-    "dry_stretch": ("water", "Dry stretch", "Longest walk between WaterSources; scored by the shorter over the longer (floor 1 km), against random hike pairs.", "OpenStreetMap drinking water, springs, taps and water points."),
-    "waterside": ("basic", "Lake or sea", "Share of the walk within 200 m of sea, lake or wide river (WorldCover); scored by the gap against random hike pairs where either is beside water, a gap under 0.15 counting as none, lowest from 0.5 apart. Any share under 15 % counts as dry, the same as none, and two dry hikes are not compared on it: so many hikes are dry, it says little, and two hikes that match closely on a less common share, like 50 % and 55 %, are the closer match.", "ESA WorldCover 2021 permanent water (sea, lakes, wide rivers)."),
+    "peaks_around": ("scenery", "Peaks around", "Peaks within 2 km of the line; the closer the two values, the higher the score. No peak and 1 peak count as the same: so many hikes share that, it says little, and two hikes that match closely on a less common count, like 12 and 13 peaks, are the closer match.", "OpenStreetMap peaks."),
+    "temperature": ("basic", "Typical temperature", "Mean temperature (June-August, or the chosen month); the smaller the gap, the higher the score, lowest from 10 °C apart.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
+    "precipitation": ("weather", "Precipitation", "Mean monthly precipitation over the whole year, not June-August (or the chosen month's); the closer the two values, the higher the score (10 mm or less counts as the same).", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
+    "solar_radiation": ("weather", "Solar radiation", "Solar radiation (June-August, or the chosen month), kJ/m²/day; the smaller the gap, the higher the score, lowest from 5,000 apart.", "CHELSA V2.1 climate normals, 1981-2010, averaged along the line."),
+    "southness": ("weather", "Sun-facing slopes", "Which way the slopes face: 1 south, 0 north, 0.5 east or west; a flat walk faces no way and counts 0.5 (from FABDEM). The smaller the gap, the higher the score.", "FABDEM slopes along the line."),
+    "water_count": ("water", "Water sources", "Water sources within 100 m of the line, counted up to 3. The smaller the gap, the higher the score.", "OpenStreetMap drinking water, springs, taps and water points."),
+    "dry_stretch": ("water", "Dry stretch", "Longest walk between water sources; the closer the two values, the higher the score (1 km or less counts as the same).", "OpenStreetMap drinking water, springs, taps and water points."),
+    "waterside": ("basic", "Lake or sea", "Share of the walk within 200 m of sea, lake or wide river (WorldCover); the smaller the gap, the higher the score, lowest from 0.5 apart (a share under 0.15 counts as none). Any share under 15 % counts as dry, the same as none, and two dry hikes are not compared on it: so many hikes are dry, it says little, and two hikes that match closely on a less common share, like 50 % and 55 %, are the closer match.", "ESA WorldCover 2021 permanent water (sea, lakes, wide rivers)."),
     "hut_along": ("facilities", "Hut along", "A Hut within 100 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap huts."),
     "restaurant_cafe_along": ("facilities", "Restaurant or cafe along", "A restaurant or cafe within 100 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap restaurants and cafes."),
     "shelter_along": ("facilities", "Shelter along", "A Shelter within 100 m of the line, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap shelters."),
     "restaurant_cafe_trailhead": ("facilities", "Restaurant at trailhead", "A restaurant or cafe within 500 m of the Trailhead, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap restaurants and cafes."),
     "parking_trailhead": ("facilities", "Parking at trailhead", "Parking within 500 m of the Trailhead, or not; two hikes that both lack it are not compared on it.", "OpenStreetMap parking."),
     "surface": ("trail", "Surface", "Shared share of paved, gravel, natural and rock surface.", "OpenStreetMap surface tags, else the kind of path or road."),
-    "tarmac_approach": ("trail", "Tarmac approach", "Paved metres before the trail leaves the road; scored by the gap against random hike pairs, lowest from 2 km apart.", "OpenStreetMap surface tags, else the kind of path or road."),
+    "tarmac_approach": ("trail", "Tarmac approach", "Paved metres before the trail leaves the road; the smaller the gap, the higher the score, lowest from 2 km apart.", "OpenStreetMap surface tags, else the kind of path or road."),
     "round_trip": ("trail", "Round trip", "Ends within 50 m of the Trailhead, or not (always, with the way back).", "OpenStreetMap: the hike's line, from the ways of its hiking relation."),
-    "climb_grade": ("effort", "Climb grade", "Gain over the length of the stretches that climb; scored by the smaller over the larger (floor 3 %), against random hike pairs. Any grade of 3 % or less counts as the same: so many hikes share that, it says little, and two hikes that match closely on a less common grade, like 12 % and 12.1 %, are the closer match.", "FABDEM elevation along the line."),
-    "steepest_km": ("effort", "Steepest km", "Largest height change over 1 km; scored by the smaller over the larger (floor 50 m), against random hike pairs. Any change of 50 m or less counts as the same: so many hikes share that, it says little, and two hikes that match closely on a less common change, like 180 m and 182 m, are the closer match.", "FABDEM elevation along the line."),
+    "climb_grade": ("effort", "Climb grade", "Gain over the length of the stretches that climb; the closer the two values, the higher the score. Any grade of 3 % or less counts as the same: so many hikes share that, it says little, and two hikes that match closely on a less common grade, like 12 % and 12.1 %, are the closer match.", "FABDEM elevation along the line."),
+    "steepest_km": ("effort", "Steepest km", "Largest height change over 1 km; the closer the two values, the higher the score. Any change of 50 m or less counts as the same: so many hikes share that, it says little, and two hikes that match closely on a less common change, like 180 m and 182 m, are the closer match.", "FABDEM elevation along the line."),
 }
 
 # The Wish form's input for each Measure that takes a number (``WISHABLE`` but yes/no): unit,
@@ -283,8 +331,10 @@ FLOOR_TEXT = {
 NOT_COMPARED = {"waterside": "both dry"}
 PRESENT_TEXT = {"waterside": "is beside water"}
 
-# A DayHike with no data for a Measure a Wish asks a value of scores 0 there (ADR-0052).
+# A DayHike with no data for a Measure a Wish asks a value of, or the Seed has data for, scores 0 there
+# (ADR-0052, ADR-0071).
 UNMEASURED_NOTE = "No data for this hike: counts as 0 against the value you asked for"
+SEED_UNMEASURED_NOTE = "No data for this hike: counts as 0 against the hike you like"
 
 
 def score_note(
@@ -332,11 +382,11 @@ def _percent(share: float) -> int:
 # scores below it holds nothing much alike (ADR-0054).
 TYPICAL_PAIR = 0.47
 SCORE_HELP = {
-    "overall": "Average of the measure scores below, under your weights. Each one is the share of random hike "
-    f"pairs less alike than these two. A typical pair scores about {TYPICAL_PAIR}; with the default weights, 0.85 beats "
-    "99 random pairs in 100.",
-    "measure": "Share of random hike pairs less alike than these two on this measure: 0.9 means only 1 pair "
-    "in 10 is as alike; 0 means nothing in common.",
+    "overall": "How alike the two hikes are, from 0 to 1: the average of the measure scores below, under your "
+    f"weights. Higher is more alike. A typical pair of hikes scores about {TYPICAL_PAIR}; 0.85 is a strong match, "
+    "closer than 99 of 100 pairs of hikes picked at random.",
+    "measure": "How alike the two hikes are on this measure, from 0 (nothing in common) to 1: 0.9 means only 1 "
+    "pair of hikes in 10 is as alike.",
     "sections": (
         {
             "title": "How alike, and how telling",
@@ -380,16 +430,16 @@ SCORE_HELP = {
             "hikes. For example, Ruta Teresiana and stage 8 of the Via Normanna climb about as much, top out "
             "near 1,170 m and are as warm in summer, but one is a 108 km pilgrim route and the other a 16 km "
             "stage. On Length they score 0.15: 85 % of random pairs are closer in length. Their overall score "
-            "is still 0.74, higher than 93 random pairs in 100, because the other measures match.",
+            "is still 0.74, higher than 93 of 100 pairs of hikes picked at random, because the other measures match.",
         },
         {
             "title": "The overall score",
             "text": "The overall score is the average of the measure scores, weighted as you set them: only "
-            "their ratios matter, and a measure with no data on either hike, or not compared, drops out; "
-            "when you describe the hike you want, a hike with no data for a measure you asked for scores 0 "
-            "on it instead. A "
-            "typical random pair of hikes scores about 0.47. With the default weights, 0.85 beats 99 random "
-            "pairs in 100, and the best match for a hike usually scores about 0.97.",
+            "their ratios matter, and a measure with no data on the hike you like, or not compared, drops "
+            "out; a hike with no data for a measure the hike you like has, or that you asked for when you "
+            "describe the hike you want, scores 0 on it instead. A "
+            "typical pair of hikes scores about 0.47. With the default weights, 0.85 is a strong match, closer "
+            "than 99 of 100 pairs of hikes picked at random, and the best match for a hike usually scores about 0.97.",
         },
         {
             "title": "Where the facts come from",
@@ -506,12 +556,21 @@ def emergency_services() -> dict[str, dict]:
         }
 
 
-def export_countries(out_dir: Path | str, countries_path: Path | str | None = None) -> Path:
+def export_countries(
+    out_dir: Path | str,
+    countries_path: Path | str | None = None,
+    borders_path: Path | str | None = None,
+    osm_borders_paths: Sequence[Path | str] = (),
+) -> Path:
     """Write ``countries.npy`` into the export ``out_dir``: per Trailhead the ISO 3166 code of the
-    country it is in, from Natural Earth admin-0 country shapes (``countries_path``, the GeoJSON
-    the coverage map reads); for a Trailhead outside every shape (an island or coast the
-    simplified shapes leave out) the country of the nearest place in ``places.sqlite``. Reads
-    only ``trailheads.npy`` and ``places.sqlite``.
+    country it is in, from Natural Earth admin-0 country shapes (``countries_path``, the 10m
+    GeoJSON); for a Trailhead outside every shape (an island or coast the shapes leave out) the
+    country of the nearest place in ``places.sqlite``. A Trailhead within ``BORDER_M`` of an
+    OpenStreetMap national border (``osm_borders_paths``, ``_osm_borders``) takes the country OSM
+    puts it in instead (``_osm_start_countries``). With Natural Earth land boundary lines
+    (``borders_path``) also ``borders.npy`` (``_across_borders``), where a Trailhead so moved has
+    Natural Earth's country, with or without them; with neither an old one is dropped. Reads only ``trailheads.npy``, ``places.sqlite``, the OSM files and, with borders,
+    ``hikes.sqlite``.
 
     Raises ServingExportError, writing nothing, when a Trailhead has no country, or its country
     no row in ``EMERGENCY_PATH``: every hike shows its emergency number.
@@ -519,8 +578,13 @@ def export_countries(out_dir: Path | str, countries_path: Path | str | None = No
     from scipy.spatial import cKDTree
 
     out = Path(out_dir)
+    if borders_path is not None and countries_path is None:
+        raise ServingExportError("border lines need the countries file: its ADM0_A3 codes name the countries either side")
+    if osm_borders_paths and countries_path is None:
+        raise ServingExportError("OSM borders need the countries file: it tells which side of each is which country")
     trailheads = np.load(out / "trailheads.npy").reshape(-1, 2)
     codes = np.full(len(trailheads), "", dtype="<U2")
+    code_of_a3: dict[str, str] = {}  # ADM0_A3, the code a boundary line names its sides by
     if countries_path is not None:
         shapes, shape_codes = [], []
         for feature in json.loads(Path(countries_path).read_text())["features"]:
@@ -529,13 +593,13 @@ def export_countries(out_dir: Path | str, countries_path: Path | str | None = No
             if code:
                 shapes.append(shapely.geometry.shape(feature["geometry"]))
                 shape_codes.append(code)
-        points = shapely.points(trailheads[:, 1], trailheads[:, 0])
+                if properties.get("ADM0_A3"):
+                    code_of_a3[properties["ADM0_A3"]] = code
         tree, shape_codes = shapely.STRtree(shapes), np.array(shape_codes, dtype="<U2")
-        at, shape = tree.query(points, predicate="within")
-        codes[at] = shape_codes[shape]
+        codes = _shape_codes(tree, shape_codes, trailheads[:, ::-1])
     places = out / "places.sqlite"
     if (codes == "").any() and places.is_file():
-        with sqlite3.connect(f"file:{places}?mode=ro", uri=True) as db:
+        with scoped(sqlite3.connect(f"file:{places}?mode=ro", uri=True)) as db:
             rows = db.execute("SELECT country, lat, lon FROM places WHERE country != ''").fetchall()
         if rows:
             where = np.array([(lat, lon) for _, lat, lon in rows])
@@ -543,12 +607,248 @@ def export_countries(out_dir: Path | str, countries_path: Path | str | None = No
             _, nearest = cKDTree(_unit(where[:, 0], where[:, 1])).query(_unit(trailheads[missing, 0], trailheads[missing, 1]))
             codes[missing] = np.array([country for country, *_ in rows], dtype="<U2")[nearest]
     known = emergency_services()
+    shown = codes  # Natural Earth's country, which a hike the OSM borders move shows second
+    if osm_borders_paths:
+        start = _osm_start_countries(trailheads, *_osm_borders(osm_borders_paths, tree, shape_codes))
+        codes = np.where(np.isin(start, list(known)), start, codes)
     unknown = {code: int((codes == code).sum()) for code in sorted(set(codes.tolist()) - set(known))}
     if unknown:
         listed = ", ".join(f"{code or 'no country'} ({count} Trailheads)" for code, count in unknown.items())
         raise ServingExportError(f"no emergency number for {listed}: add the country to {EMERGENCY_PATH}")
+    across = None if borders_path is None else _across_borders(out, trailheads, codes, borders_path, code_of_a3)
+    moved = codes != shown
+    if moved.any():  # never lose the country Natural Earth says a start is in: show it beside the new one
+        across = np.full(len(codes), "", dtype="<U2") if across is None else across
+        across[moved] = shown[moved]
     np.save(out / "countries.npy", codes)
+    if across is None:
+        (out / "borders.npy").unlink(missing_ok=True)
+    else:
+        np.save(out / "borders.npy", across)
     return out / "countries.npy"
+
+
+# A hike whose route crosses a national border, or whose Trailhead is this near one, also shows the
+# emergency services of the country across it.
+BORDER_M = 2_000
+
+
+def _across_borders(
+    out: Path, trailheads: np.ndarray, codes: np.ndarray, borders_path: Path | str, code_of_a3: Mapping[str, str]
+) -> np.ndarray:
+    """Per Trailhead the ISO 3166 code of the country across the border nearest it, of those its
+    Trailhead is within ``BORDER_M`` of and those its route (``hikes.sqlite``) crosses; "" with
+    none, or when that country has no row in ``EMERGENCY_PATH``. The borders are Natural Earth land
+    boundary lines (``borders_path``), each naming the countries left and right of it by ADM0_A3."""
+    segments, sides = [], []
+    for feature in json.loads(Path(borders_path).read_text())["features"]:
+        properties = feature["properties"]
+        side = [code_of_a3.get(properties.get(key) or "", "") for key in ("ADM0_A3_L", "ADM0_A3_R")]
+        for part in shapely.get_parts(shapely.geometry.shape(feature["geometry"])):
+            xy = shapely.get_coordinates(part)
+            segments.append(np.stack([xy[:-1], xy[1:]], axis=1))
+            sides += [side] * (len(xy) - 1)
+    across = np.full(len(trailheads), "", dtype="<U2")
+    if not sides:
+        return across
+    segments, sides = np.concatenate(segments), np.array(sides, dtype="<U2")  # (lon, lat) ends; (left, right)
+    tree = shapely.STRtree(shapely.linestrings(segments))
+    points = shapely.points(trailheads[:, 1], trailheads[:, 0])
+    rows, hit = tree.query(points, predicate="dwithin", distance=_degrees_within(trailheads[:, 0], BORDER_M))
+    # Only the routes that can reach a border are decoded: those of the hikes it is within walk_m of.
+    with scoped(sqlite3.connect(f"file:{out / 'hikes.sqlite'}?mode=ro", uri=True)) as db:
+        ids, walk_m = map(np.array, zip(*db.execute("SELECT id, coalesce(walk_m, 0) FROM hikes ORDER BY id")))
+        (of, _), degrees = tree.query_nearest(points, return_distance=True, all_matches=False)
+        reach = of[degrees <= _degrees_within(trailheads[of, 0], walk_m[of])]
+        lines = {}
+        for chunk in itertools.batched(ids[reach].tolist(), 500):
+            query = f"SELECT id, line FROM hikes WHERE line != '' AND id IN ({','.join('?' * len(chunk))})"
+            lines.update(db.execute(query, chunk))
+    routed = np.array([row for row in reach if int(ids[row]) in lines], dtype=np.int64)
+    routes = [shapely.linestrings(np.array(decode_polyline(lines[int(ids[row])]))[:, ::-1]) for row in routed]
+    route, crossed = tree.query(np.array(routes, dtype=object), predicate="intersects") if routes else ([], [])
+    crossing = np.concatenate([np.zeros(len(rows), bool), np.ones(len(route), bool)])
+    rows, hit = np.concatenate([rows, routed[route]]).astype(np.int64), np.concatenate([hit, crossed]).astype(np.int64)
+    metres = _metres_to_segments(trailheads[rows], segments[hit])
+    kept = crossing | (metres <= BORDER_M)  # the query's bound in degrees holds more than BORDER_M
+    rows, hit, metres = rows[kept], hit[kept], metres[kept]
+    order = np.lexsort((metres, rows))
+    first = order[np.unique(rows[order], return_index=True)[1]]  # each Trailhead's nearest border
+    rows, (left, right) = rows[first], sides[hit[first]].T
+    other = np.where(left != codes[rows], left, right)
+    known = emergency_services()
+    across[rows] = [code if code in known else "" for code in other.tolist()]
+    return across
+
+
+# OpenStreetMap draws national borders to the metre, where Natural Earth's 10m lines lie up to about a
+# kilometre off (the Rio Grande, the 45th parallel) and put a start just inside a country in its neighbour.
+# Which side of an OSM border is which country is what Natural Earth says this far off it, at up to
+# OSM_SIDE_SAMPLES points along each border way, summed over the ways of the whole border (``_chains``).
+OSM_SIDE_M = 2_500
+OSM_SIDE_SAMPLES = 25
+
+
+def _osm_borders(
+    paths: Sequence[Path | str], tree: shapely.STRtree, shape_codes: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, dict[str, shapely.Geometry]]:
+    """The land borders in the OpenStreetMap files ``paths`` (extracts' national boundaries, as
+    ``osmium tags-filter <extract> r/admin_level=2`` writes them): every way two admin_level=2
+    boundary relations of different ISO3166-1:alpha2 codes share, other than a maritime one, as
+    segments ((lon, lat) ends) and per segment its (left, right) country, and by code the shape of
+    every country an extract holds whole. The sides are those most of the border's samples
+    ``OSM_SIDE_M`` off it fall in among Natural Earth's shapes (``tree``, ``shape_codes``); a border
+    they do not tell apart has "" for both."""
+    import osmium
+
+    countries: dict[int, set[str]] = {}
+    for path in paths:
+        for relation in osmium.FileProcessor(str(path), osmium.osm.RELATION):
+            tags = relation.tags
+            code = tags.get("ISO3166-1:alpha2") or tags.get("ISO3166-1")
+            if tags.get("boundary") == "administrative" and tags.get("admin_level") == "2" and code:
+                for member in relation.members:
+                    if member.type == "w":
+                        countries.setdefault(member.ref, set()).add(code.upper())
+    pairs = {way: tuple(sorted(codes)) for way, codes in countries.items() if len(codes) == 2}
+    lines: dict[int, np.ndarray] = {}
+    ends: dict[int, tuple[int, int]] = {}  # each way's first and last node
+    whole: dict[str, shapely.Geometry] = {}
+    wkb = osmium.geom.WKBFactory()
+    for path in paths:
+        for obj in osmium.FileProcessor(str(path)).with_areas(osmium.filter.TagFilter(("admin_level", "2"))):
+            if obj.is_area() and not obj.from_way():  # a country an extract holds every way of
+                code = obj.tags.get("ISO3166-1:alpha2") or obj.tags.get("ISO3166-1")
+                if obj.tags.get("boundary") == "administrative" and code:
+                    try:
+                        whole[code.upper()] = shapely.from_wkb(wkb.create_multipolygon(obj))
+                    except RuntimeError:  # its rings do not close: the extract holds only part of it
+                        pass
+            if not obj.is_way() or obj.id not in pairs or obj.tags.get("maritime") == "yes":
+                continue
+            if len(obj.nodes) >= 2 and all(node.location.valid() for node in obj.nodes):
+                lines[obj.id] = np.array([(node.lon, node.lat) for node in obj.nodes])
+                ends[obj.id] = (obj.nodes[0].ref, obj.nodes[-1].ref)
+    if not lines:
+        return np.empty((0, 2, 2)), np.empty((0, 2), dtype="<U2"), whole
+    segments = np.concatenate([np.stack([xy[:-1], xy[1:]], axis=1) for xy in lines.values()])
+    of = np.repeat(np.arange(len(lines)), [len(xy) - 1 for xy in lines.values()])  # each segment's way
+    real = (segments[:, 0] != segments[:, 1]).any(axis=1)
+    segments, of = segments[real], of[real]
+    pair = np.array([pairs[way] for way in lines], dtype="<U2")
+    first = np.searchsorted(of, np.arange(len(lines)))
+    count = np.bincount(of, minlength=len(lines))
+    asked = np.unique(
+        np.concatenate([start + np.linspace(0, n - 1, min(n, OSM_SIDE_SAMPLES)).astype(int) for start, n in zip(first, count) if n])
+    )
+    a, b = segments[asked, 0], segments[asked, 1]
+    middle, cos = (a + b) / 2, np.cos(np.radians((a[:, 1] + b[:, 1]) / 2))
+    east, north = (b[:, 0] - a[:, 0]) * cos, b[:, 1] - a[:, 1]
+    reach = np.degrees(OSM_SIDE_M / EARTH_RADIUS_M) / np.hypot(east, north)
+    off = np.stack([-north * reach / cos, east * reach], axis=1)  # to the left of the segment
+    left, right = _shape_codes(tree, shape_codes, middle + off), _shape_codes(tree, shape_codes, middle - off)
+    one, other = pair[of[asked], 0], pair[of[asked], 1]
+    vote = (left == one).astype(int) + (right == other) - (left == other) - (right == one)
+    chain, sign = _chains([pairs[way] for way in lines], [ends[way] for way in lines])
+    votes = np.zeros(len(lines), dtype=np.int64)
+    np.add.at(votes, chain[of[asked]], vote * sign[of[asked]])
+    along = votes[chain] * sign  # > 0: the way has its pair's first country on its left
+    sides = np.where((along > 0)[:, None], pair, np.where((along < 0)[:, None], pair[:, ::-1], ""))
+    return segments, sides[of], whole
+
+
+def _chains(pairs: Sequence[tuple[str, str]], ends: Sequence[tuple[int, int]]) -> tuple[np.ndarray, np.ndarray]:
+    """Per way (its two countries ``pairs`` and its first and last node ``ends``) the border it is part
+    of, the first way of those of the same two countries that meet it end to end, and 1 if it runs the
+    way that one does, else -1."""
+    at: dict[tuple[tuple[str, str], int], list[tuple[int, int]]] = {}
+    for way, (pair, way_ends) in enumerate(zip(pairs, ends)):
+        for end, node in enumerate(way_ends):
+            at.setdefault((pair, node), []).append((way, end))
+    chain, sign = np.full(len(ends), -1, dtype=np.int64), np.zeros(len(ends), dtype=np.int64)
+    for first in range(len(ends)):
+        if chain[first] >= 0:
+            continue
+        chain[first], sign[first], todo = first, 1, [first]
+        while todo:
+            way = todo.pop()
+            for end, node in enumerate(ends[way]):
+                for other, other_end in at[(pairs[way], node)]:
+                    if chain[other] < 0:  # one that ends where this one ends runs against it
+                        chain[other], sign[other] = first, sign[way] * (1 if other_end != end else -1)
+                        todo.append(other)
+    return chain, sign
+
+
+def _shape_codes(tree: shapely.STRtree, shape_codes: np.ndarray, lon_lat: np.ndarray) -> np.ndarray:
+    """The code of the shape in ``tree`` each (lon, lat) point is within; "" for one in none."""
+    codes = np.full(len(lon_lat), "", dtype="<U2")
+    at, shape = tree.query(shapely.points(lon_lat[:, 0], lon_lat[:, 1]), predicate="within")
+    codes[at] = shape_codes[shape]
+    return codes
+
+
+def _osm_start_countries(
+    trailheads: np.ndarray, segments: np.ndarray, sides: np.ndarray, whole: Mapping[str, shapely.Geometry]
+) -> np.ndarray:
+    """Per Trailhead within ``BORDER_M`` of a border (``_osm_borders``' ``segments``, their (left,
+    right) ``sides`` and the ``whole`` countries' shapes) the country it is in: the whole country whose
+    shape holds it, else the country on its side of the border nearest it, or the one across that
+    when the side's own shape is whole and leaves it out; "" for every other Trailhead, when the
+    segments nearest it (those meeting at the point nearest it) disagree, or neither will do."""
+    start = np.full(len(trailheads), "", dtype="<U2")
+    if not len(segments):
+        return start
+    tree = shapely.STRtree(shapely.linestrings(segments))
+    points = shapely.points(trailheads[:, 1], trailheads[:, 0])
+    rows, hit = tree.query(points, predicate="dwithin", distance=_degrees_within(trailheads[:, 0], BORDER_M))
+    origin, step = _plane(trailheads[rows], segments[hit])
+    metres = _metres_to_segments(trailheads[rows], segments[hit])
+    nearest = np.full(len(trailheads), np.inf)
+    np.minimum.at(nearest, rows, metres)
+    tied = (metres <= BORDER_M) & (metres <= nearest[rows] + 0.01)
+    rows, hit, origin, step = rows[tied], hit[tied], origin[tied], step[tied]
+    turn = origin[:, 0] * step[:, 1] - origin[:, 1] * step[:, 0]  # > 0: the Trailhead is left of the segment
+    across = start.copy()
+    for into, (left, right) in ((start, (0, 1)), (across, (1, 0))):
+        code = np.where(turn > 0, sides[hit, left], np.where(turn < 0, sides[hit, right], ""))
+        into[rows] = code
+        into[rows[code != into[rows]]] = ""
+    # A whole country's shape is drawn from the same ways, so it says the same, also where the sides do not.
+    near, codes = np.unique(rows), list(whole)
+    within = np.full(len(near), "", dtype="<U2")
+    if whole:
+        within = _shape_codes(shapely.STRtree(list(whole.values())), np.array(codes, dtype="<U2"), trailheads[near, ::-1])
+    # Outside every whole shape a Trailhead is in no whole country: its side's, else the one across.
+    side, other = start[near], across[near]
+    outside = np.where(~np.isin(side, codes), side, np.where(~np.isin(other, codes), other, ""))
+    start[near] = np.where(within != "", within, outside)
+    return start
+
+
+def _degrees_within(lat: np.ndarray, metres: np.ndarray | float) -> np.ndarray:
+    """A radius in degrees holding every point within ``metres`` of a point at ``lat``: a bound to query by."""
+    degrees = np.degrees(np.asarray(metres, dtype=np.float64) / EARTH_RADIUS_M)
+    return degrees / np.cos(np.radians(np.minimum(np.abs(lat) + degrees, 89.0)))
+
+
+def _plane(points: np.ndarray, segments: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Each segment's ((lon, lat) ends) start and step in metres (east, north) on the plane tangent at
+    its (lat, lon) point, the point at the origin."""
+    scale = math.radians(1) * EARTH_RADIUS_M
+    x = (segments[..., 0] - points[:, 1:]) * np.cos(np.radians(points[:, :1])) * scale
+    y = (segments[..., 1] - points[:, :1]) * scale
+    return np.stack([x[:, 0], y[:, 0]], axis=-1), np.stack([x[:, 1] - x[:, 0], y[:, 1] - y[:, 0]], axis=-1)
+
+
+def _metres_to_segments(points: np.ndarray, segments: np.ndarray) -> np.ndarray:
+    """Metres from each (lat, lon) point to its segment ((lon, lat) ends), on the plane tangent at
+    the point: within a few metres for the ``BORDER_M`` a border flag needs."""
+    start, step = _plane(points, segments)
+    length2 = (step**2).sum(axis=-1)
+    along = np.divide(-(start * step).sum(axis=-1), length2, out=np.zeros_like(length2), where=length2 > 0)
+    nearest = start + np.clip(along, 0, 1)[:, None] * step
+    return np.hypot(nearest[:, 0], nearest[:, 1])
 
 
 def export_serving(
@@ -560,7 +860,10 @@ def export_serving(
     valhalla_url: str | None = None,
     geonames_path: Path | str | None = None,
     countries_path: Path | str | None = None,
+    borders_path: Path | str | None = None,
+    osm_borders_paths: Sequence[Path | str] = (),
     regions: Sequence[Region] = (),
+    external_dir: Path | str | None = None,
     progress: Progress | None = None,
 ) -> Path:
     """Write the serving export of a Catalog into ``out_dir`` (see the module doc).
@@ -572,8 +875,14 @@ def export_serving(
     existing snap cache; with ``valhalla_url`` every Trailhead not in it is
     snapped now, so a server never has to. ``geonames_path`` is a GeoNames
     dump (``allCountries``, zip or txt) for ``places.sqlite``; ``countries_path`` the Natural
-    Earth countries GeoJSON for ``countries.npy``. ``regions``, the ones the Catalog was built from, are
-    named in ``meta.json`` (label and continent) for the site's pages; none leaves them saying Europe.
+    Earth countries GeoJSON for ``countries.npy``, ``osm_borders_paths`` OpenStreetMap national
+    boundaries for the country of a Trailhead near one, ``borders_path`` Natural Earth's land boundary
+    lines for ``borders.npy`` (``export_countries``). ``regions``, the ones the Catalog was built from, are
+    named in ``meta.json`` (label and continent) for the site's pages; none names those the hikes are in
+    (``covered_regions``), and regions the hikes contradict are refused before anything is written.
+    ``external_dir`` holds the caches of the Catalog's external sources (``dayhike fetch-external``): an
+    OpenStreetMap hike that lies on one of their records names it (``OfficialRecords``), and an external
+    hike links its record's page as the source's adapter gives it now; without it, neither.
     """
     started = time.monotonic()
     catalog_path, out = Path(catalog_path), Path(out_dir)
@@ -588,16 +897,22 @@ def export_serving(
         source = "d.source, d.source_ref" if "source" in columns else "NULL, NULL"
         # An external hike's record page (ADR-0062); a Catalog from before has none.
         source_url = "d.source_url" if "source_url" in columns else "NULL"
+        # Commons contributors near the line (#170); a Catalog never counted has none.
+        commons = "d.commons_contributors" if "commons_contributors" in columns else "NULL"
         hikes = [
             (
                 *row[:9],
                 row[9] or SOURCE_OSM,
                 row[10] or osm_source_ref(row[0], row[6], json.loads(row[7] or "[]"), row[8]),
                 row[11],
+                row[12],
+                row[13],
             )
+            # The nearest car park to the Trailhead (AmenityFact), so a hike that starts on the trail, far from one, says so.
             for row in catalog.execute(
                 "SELECT d.id, d.name, d.name_origin, d.difficulty, t.latitude, t.longitude, "
-                f"{built}, {source}, {source_url} FROM dayhikes d JOIN trailheads t ON t.dayhike_id = d.id ORDER BY d.id"
+                f"{built}, {source}, {source_url}, {commons}, a.nearest_m FROM dayhikes d JOIN trailheads t ON t.dayhike_id = d.id "
+                f"LEFT JOIN amenity_facts a ON a.dayhike_id = d.id AND a.kind = 'parking' ORDER BY d.id"
             )
         ]
         attribution = dict(catalog.execute("SELECT key, value FROM catalog_meta"))["attribution"]
@@ -616,13 +931,25 @@ def export_serving(
     except StaleSimilarity as exc:
         raise ServingExportError(str(exc)) from exc
     _check_trailgraph_sampled(trailgraph_path_for(catalog_path), store)
+    similarity_meta = json.loads((similarity_dir_for(catalog_path) / "meta.json").read_text())
+    dem_read = _dem_read_by_step(catalog_path, similarity_meta)
+    try:
+        check_one_dem_source(dem_read)
+    except DemSourceMismatch as exc:
+        raise ServingExportError(str(exc)) from exc
     similarity = out / "similarity"
     similarity.mkdir(exist_ok=True)
     for name in _SIMILARITY_FILES:
         shutil.copyfile(similarity_dir_for(catalog_path) / name, similarity / name)
     trailheads = np.array([(row[4], row[5]) for row in hikes], dtype=np.float64).reshape(-1, 2)
+    covered = covered_regions(regions_in(trailheads[:, 1]), regions)  # before the long work: it may refuse
     np.save(out / "trailheads.npy", trailheads)
-    sources = _write_hikes(catalog_path, out / "hikes.sqlite", hikes, progress, dem_of if dems_used else None)
+    official = (
+        None
+        if external_dir is None
+        else OfficialRecords.read({row[9] for row in hikes} - {SOURCE_OSM}, external_dir, progress)
+    )
+    sources = _write_hikes(catalog_path, out / "hikes.sqlite", hikes, progress, dem_of if dems_used else None, official)
     external = external_sources({row[9] for row in hikes})
     compose = _write_trailgraph(trailgraph_path_for(catalog_path), out / "trailgraph.sqlite", progress)
     # A rerun without tiles or snaps drops the old ones: they may be for other tiles.
@@ -639,10 +966,12 @@ def export_serving(
     else:
         (out / "places.sqlite").unlink(missing_ok=True)
     export_landmarks(out, geonames_path)
-    if countries_path is not None:
-        export_countries(out, countries_path)
+    export_name_index(out)
+    if countries_path is not None or borders_path is not None or osm_borders_paths:  # borders alone fail: they need countries
+        export_countries(out, countries_path, borders_path, osm_borders_paths)
     else:
         (out / "countries.npy").unlink(missing_ok=True)
+        (out / "borders.npy").unlink(missing_ok=True)
     # The elevation maps in use: those the DayHikes record (ADR-0063); for a Catalog sampled before,
     # FABDEM, unless the GeometryStore was sampled from Copernicus GLO-30 (ADR-0030).
     if dems_used:
@@ -650,10 +979,15 @@ def export_serving(
         elevation = {"fabdem": FABDEM_ATTRIBUTION} if "fabdem" in dems_used else {}
     else:
         elevation = {} if "copernicus" in sources else {"fabdem": FABDEM_ATTRIBUTION}
+    facts_version = json.loads((similarity / "meta.json").read_text())["facts_version"]
     meta = {
         "format": SERVING_FORMAT,
         "dayhikes": len(ids),
-        "facts_version": json.loads((similarity / "meta.json").read_text())["facts_version"],
+        "facts_version": facts_version,
+        # The tag of the data image: the same code on another elevation map is other data (docs/deploy.md §3).
+        "data_tag": f"{facts_version}-{'_'.join(_credited_dems(dems_used, sources))}",
+        # The DEM each step read, by step (a step that read none, or ran before it was recorded, is left out).
+        "dem_read": dem_read,
         "line_tolerance_m": LINE_TOLERANCE_M,
         "elevation_points": ELEVATION_POINTS,
         "attribution": {"osm": attribution, **elevation, **sources, **external_credits(external)},
@@ -662,11 +996,73 @@ def export_serving(
         "drive_time": (out / "valhalla" / "valhalla.json").is_file() and (out / "snaps.npz").is_file(),
         "compose": compose,
         "export_seconds": round(time.monotonic() - started, 1),
+        "regions": covered,
     }
-    if regions:
-        meta["regions"] = [{"label": region.label, "continent": region.continent} for region in regions]
     (out / "meta.json").write_text(json.dumps(meta, indent=1, ensure_ascii=False))
     return out
+
+
+def regions_in(longitudes: np.ndarray) -> list[str]:
+    """The names of the ``REGIONS`` hikes start in, by their Trailheads' longitudes: the United States west of
+    ``REGION_SPLIT_LON``, Europe east of it (and Europe for an export of no hikes)."""
+    west = np.asarray(longitudes) < REGION_SPLIT_LON
+    has = {"europe": not west.all(), "us": bool(west.any())}
+    return [name for name in REGIONS if has[name]]
+
+
+def covered_regions(names: Sequence[str], regions: Sequence[Region] = ()) -> list[dict[str, str | None]]:
+    """What the site's pages say the hikes are across (``meta.json`` ``regions``, label and continent), for the
+    ``REGIONS`` the hikes start in (``regions_in``): those of ``regions`` (the ones the Catalog was built
+    from, ``--region``), else each as a sentence names it ("Europe", "the United States").
+
+    A region is on the side of ``REGION_SPLIT_LON`` its bounds' middle is on. With ``regions`` given, each
+    side the hikes start on needs one of them and each of them needs hikes on its side: raises
+    ``ServingExportError`` otherwise (a United States export named Europe would say so on every page).
+    """
+    if not regions:
+        return [{"label": REGIONS[name][1], "continent": REGION_CONTINENTS[name]} for name in names]
+    sides = ["us" if (region.bounds.west + region.bounds.east) / 2 < REGION_SPLIT_LON else "europe" for region in regions]
+    if unnamed := [REGIONS[name][1] for name in names if name not in sides]:
+        raise ServingExportError(f"hikes start in {' and '.join(unnamed)}, which no --region names")
+    if empty := [region.name for region, side in zip(regions, sides) if side not in names]:
+        raise ServingExportError(f"no hike starts in the region {', '.join(empty)}: leave it out")
+    return [
+        {"label": region.label, "continent": region.continent}
+        for name in REGIONS
+        for region, side in zip(regions, sides)
+        if side == name
+    ]
+
+
+def _credited_dems(dems_used: set[str], sources: Mapping[str, str]) -> list[str]:
+    """The register ids of the elevation maps the export credits, in ``DEM_SOURCES`` order: those the
+    DayHikes record, else (a Catalog sampled before) FABDEM or Copernicus GLO-30 by the GeometryStore."""
+    if not dems_used:
+        dems_used = {COPERNICUS.register_id if "copernicus" in sources else "fabdem"}
+    return [source.register_id for source in DEM_SOURCES.values() if source.register_id in dems_used]
+
+
+def _dem_read_by_step(catalog_path: Path, similarity_meta: Mapping[str, str]) -> dict[str, str]:
+    """The DEM each step read (``dem_read_by``), by step in build order, as recorded in the GeometryStore
+    (ingest, sample-dem), the TrailGraph (sample-trailgraph) and the similarity ``meta.json``."""
+    def meta_of(path: Path, table: str) -> dict[str, str]:
+        if not path.is_file():  # an export without a TrailGraph does not compose (ADR-0018)
+            return {}
+        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            return dict(db.execute(f"SELECT key, value FROM {table}"))
+        finally:
+            db.close()
+
+    in_geometry = meta_of(geometry_store_path_for(catalog_path), "geometry_meta")
+    in_trailgraph = meta_of(trailgraph_path_for(catalog_path), "trailgraph_meta")
+    read = {
+        "ingest": in_geometry.get(DEM_READ_KEY["ingest"]),
+        "sample-dem": in_geometry.get(DEM_READ_KEY["sample-dem"]),
+        "sample-trailgraph": in_trailgraph.get("dem_read"),
+        "build-similarity": similarity_meta.get("dem_read"),
+    }
+    return {step: source for step, source in read.items() if source}
 
 
 def _write_hikes(
@@ -675,11 +1071,14 @@ def _write_hikes(
     hikes: list[tuple],
     progress: Progress | None,
     dem_of: Mapping[int, str] | None = None,
+    official: OfficialRecords | None = None,
 ) -> dict[str, str]:
     """Write ``hikes.sqlite``; return the GeometryStore's source attributions.
 
     With ``dem_of``, each DayHike's ``dem_source`` (ADR-0063), only a hike read
-    from Copernicus GLO-30 has its profile smoothed."""
+    from Copernicus GLO-30 has its profile smoothed. With ``official``, an OSM hike
+    that lies on an official record names it (``official_*``), and an external hike
+    links its record's page as ``official`` has it."""
     path.unlink(missing_ok=True)
     geo = sqlite3.connect(f"file:{geometry_store_path_for(catalog_path)}?mode=ro", uri=True)
     db = sqlite3.connect(path)
@@ -700,44 +1099,19 @@ def _write_hikes(
             " id INTEGER PRIMARY KEY, name TEXT NOT NULL, name_origin TEXT NOT NULL,"
             " sac_scale TEXT, walk_m REAL, line TEXT, elevation BLOB, climb_m REAL, descent_m REAL,"
             " points BLOB NOT NULL, kind TEXT NOT NULL, parts TEXT, route TEXT,"
-            " source TEXT NOT NULL, source_ref TEXT NOT NULL, source_url TEXT);"
+            " source TEXT NOT NULL, source_ref TEXT NOT NULL, source_url TEXT, commons_contributors INTEGER, parking_m REAL,"
+            " official_source TEXT, official_ref TEXT, official_url TEXT);"
             "CREATE VIRTUAL TABLE hike_boxes USING rtree(id, south, north, west, east)"
         )
-        for start in range(0, len(hikes), _HIKE_CHUNK):
-            chunk = hikes[start : start + _HIKE_CHUNK]
-            walks = _vertices(geo, chunk[0][0], chunk[-1][0])
-            rows, boxes = [], []
-            for dayhike_id, name, name_origin, sac_scale, th_lat, th_lon, *built in chunk:
-                points = _trailhead_points(trailhead_kinds, th_lat, th_lon)
-                line = elevation = walk_m = climb_m = descent_m = None
-                walk = walks.get(dayhike_id)
-                if walk is not None and len(walk[0]) >= 2:
-                    lat, lon, ele = walk
-                    walk_m = float(_step_m(lat, lon).sum())
-                    kept_lat, kept_lon = simplify_line(lat, lon, LINE_TOLERANCE_M)
-                    line = encode_polyline(kept_lat, kept_lon)
-                    boxes.append((dayhike_id, kept_lat.min(), kept_lat.max(), kept_lon.min(), kept_lon.max()))
-                    smooth = (
-                        "copernicus" in sources
-                        if dem_of is None
-                        else COPERNICUS.register_id in dem_of.get(dayhike_id, "").split(",")
-                    )
-                    profile = drawn_profile(lat, lon, ele, smooth=smooth)
-                    if profile is not None:
-                        elevation = np.round(profile).astype("<i2").tobytes()
-                        climb_m, descent_m = (round(v) for v in climb_and_descent(lat, lon, ele))
-                    along = [p for kinds, radius in line_kinds for p in _line_points(kinds, lat, lon, radius)]
-                    points = sorted(along, key=lambda point: point[4]) + points
-                rows.append(
-                    (dayhike_id, name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, *built, points)
-                )
-            _name_points(geo, rows)
+        starts = range(0, len(hikes), _HIKE_CHUNK)
+        # Each chunk of hikes is built from its own read of the GeometryStore, in a worker when
+        # DAYHIKE_WORKERS says so (ADR-0044); the rows are written here, in chunk order.
+        build = partial(
+            _hike_chunk, geometry_store_path_for(catalog_path), hikes, line_kinds, trailhead_kinds, sources, dem_of, official
+        )
+        for (rows, boxes), start in zip(parallel_iter(build, starts), starts):
             db.executemany(
-                "INSERT INTO hikes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [
-                    (*row[:9], zlib.compress(json.dumps(row[-1], ensure_ascii=False).encode()), *row[9:15])
-                    for row in rows
-                ],
+                "INSERT INTO hikes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows
             )
             db.executemany("INSERT INTO hike_boxes VALUES (?, ?, ?, ?, ?)", boxes)
             if progress is not None:
@@ -747,6 +1121,67 @@ def _write_hikes(
         geo.close()
         db.close()
     return sources
+
+
+def _hike_chunk(
+    geo_path: Path,
+    hikes: list[tuple],
+    line_kinds: tuple[tuple[_Kinds, float], ...],
+    trailhead_kinds: Mapping[str, _Kinds],
+    sources: Mapping[str, str],
+    dem_of: Mapping[int, str] | None,
+    official: OfficialRecords | None,
+    start: int,
+) -> tuple[list[tuple], list[tuple]]:
+    """The ``hikes`` rows and ``hike_boxes`` rows of the chunk of ``hikes`` at ``start``,
+    as ``_write_hikes`` inserts them. It opens its own GeometryStore connection, so a
+    forked worker never uses one its parent opened."""
+    chunk = hikes[start : start + _HIKE_CHUNK]
+    geo = sqlite3.connect(f"file:{geo_path}?mode=ro", uri=True)
+    try:
+        walks = _vertices(geo, chunk[0][0], chunk[-1][0])
+        rows, boxes = [], []
+        for dayhike_id, name, name_origin, sac_scale, th_lat, th_lon, *built in chunk:
+            kind, parts, route, source, source_ref, source_url, commons, parking_m = built
+            points = _trailhead_points(trailhead_kinds, th_lat, th_lon)
+            line = elevation = walk_m = climb_m = descent_m = None
+            on_record = None
+            if official is not None and source != SOURCE_OSM:
+                source_url = official.urls.get((source, source_ref), source_url)
+            walk = walks.get(dayhike_id)
+            if walk is not None and len(walk[0]) >= 2:
+                lat, lon, ele = walk
+                walk_m = float(_step_m(lat, lon).sum())
+                kept_lat, kept_lon = simplify_line(lat, lon, LINE_TOLERANCE_M)
+                line = encode_polyline(kept_lat, kept_lon)
+                boxes.append((dayhike_id, kept_lat.min(), kept_lat.max(), kept_lon.min(), kept_lon.max()))
+                smooth = (
+                    "copernicus" in sources
+                    if dem_of is None
+                    else COPERNICUS.register_id in dem_of.get(dayhike_id, "").split(",")
+                )
+                profile = drawn_profile(lat, lon, ele, smooth=smooth)
+                if profile is not None:
+                    elevation = np.round(profile).astype("<i2").tobytes()
+                    climb_m, descent_m = (round(v) for v in climb_and_descent(lat, lon, ele))
+                along = [p for kinds, radius in line_kinds for p in _line_points(kinds, lat, lon, radius)]
+                points = sorted(along, key=lambda point: point[4]) + points
+                if official is not None and source == SOURCE_OSM:
+                    on_record = official.on(lat, lon)
+            rows.append(
+                (
+                    dayhike_id, name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m,
+                    kind, parts, route, source, source_ref, source_url, commons, parking_m,
+                    *(on_record or (None, None, None)), points,
+                )
+            )
+        _name_points(geo, rows)
+    finally:
+        geo.close()
+    return (
+        [(*row[:9], zlib.compress(json.dumps(row[-1], ensure_ascii=False).encode()), *row[9:-1]) for row in rows],
+        boxes,
+    )
 
 
 def external_sources(source_ids: set[str]) -> dict[str, dict[str, str]]:
@@ -762,6 +1197,90 @@ def external_sources(source_ids: set[str]) -> dict[str, dict[str, str]]:
 def external_credits(external: dict[str, dict[str, str]]) -> dict[str, str]:
     """The attribution line of each external source."""
     return {source_id: f"{row['name']} ({row['url']}), {row['licence']}" for source_id, row in external.items()}
+
+
+class OfficialRecords:
+    """The records of the external sources' caches (ADR-0062), those ingest dropped as Twins of an
+    OpenStreetMap hike among them, for the official record an OSM hike lies on (``on``) and each
+    record's page as its adapter gives it now (``urls``)."""
+
+    def __init__(self, records: Sequence[tuple[str, ExternalHike]]) -> None:
+        from scipy.spatial import cKDTree
+
+        self.records = [(source, hike.ref, hike.url) for source, hike in records]
+        self.urls: dict[tuple[str, str], str | None] = {}
+        for source, ref, url in self.records:
+            self.urls.setdefault((source, ref), url)
+        # Each record as a Twin compares it: a point every TWIN_STEP_M.
+        self._routes = [_even_points(*np.asarray(hike.points, dtype=float).T, TWIN_STEP_M) for _, hike in records]
+        self._tree = None
+        if self._routes:
+            points = np.concatenate(self._routes)
+            self._owner = np.repeat(np.arange(len(self._routes)), [len(route) for route in self._routes])
+            self._tree = cKDTree(_unit(points[:, 0], points[:, 1]))
+            # A point within TWIN_M of a record's line is within this of one of its points.
+            step = max(float(_step_m(route[:, 0], route[:, 1]).max()) for route in self._routes)
+            self._reach_m = TWIN_M + step / 2 + 1.0
+
+    @classmethod
+    def read(cls, sources: Collection[str], root: Path | str, progress: Progress | None = None) -> OfficialRecords:
+        """The records of ``sources`` cached under ``root``; a source with no cache there adds none."""
+        records = []
+        for source in sorted(sources):
+            try:
+                records += [(source, hike) for hike in read_external(source, root)]
+            except FileNotFoundError:
+                if progress is not None:
+                    progress(f"serving export: no cache of {source} under {root}, its records are not matched")
+        return cls(records)
+
+    def on(self, lat: np.ndarray, lon: np.ndarray) -> tuple[str, str, str | None] | None:
+        """The official record (source, ref, page) a walk lies on: at least ``TWIN_SHARE`` of its
+        points every ``TWIN_STEP_M`` within ``TWIN_M`` of the record's line, as one Twin lies on the
+        other; of two, the one more of it lies on. None when it lies on none."""
+        if self._tree is None:
+            return None
+        walk = _even_points(np.asarray(lat, dtype=float), np.asarray(lon, dtype=float), TWIN_STEP_M)
+        at = _unit(walk[:, 0], walk[:, 1])
+        chord = self._reach_m / EARTH_RADIUS_M
+        distance, _ = self._tree.query(at, distance_upper_bound=chord)
+        if np.isfinite(distance).mean() < TWIN_SHARE:
+            return None
+        near = self._tree.query_ball_point(at, chord)
+        point = np.repeat(np.arange(len(walk)), [len(samples) for samples in near])
+        owner = self._owner[np.concatenate([np.asarray(samples, dtype=np.int64) for samples in near])]
+        # Per record, how many of the walk's points have one of its points near: a bound of its share.
+        pairs = np.unique(point * len(self._routes) + owner)
+        records, counts = np.unique(pairs % len(self._routes), return_counts=True)
+        best, best_share = None, TWIN_SHARE
+        for record in records[np.lexsort((records, -counts))]:
+            if counts[records == record][0] / len(walk) < best_share:
+                break
+            share = self._share(walk, self._routes[record])
+            if share >= best_share and (best is None or share > best_share):
+                best, best_share = int(record), share
+        return None if best is None else self.records[best]
+
+    def _share(self, walk: np.ndarray, route: np.ndarray) -> float:
+        # The share of the walk's points within TWIN_M of the record's line, read on the pieces of it
+        # with a point within reach of the walk's box: no other piece can come within TWIN_M of it.
+        pad_lat = self._reach_m / 111_320
+        pad_lon = pad_lat / max(0.01, math.cos(math.radians(float(np.abs(walk[:, 0]).max()))))
+        inside = (
+            (route[:, 0] >= walk[:, 0].min() - pad_lat)
+            & (route[:, 0] <= walk[:, 0].max() + pad_lat)
+            & (route[:, 1] >= walk[:, 1].min() - pad_lon)
+            & (route[:, 1] <= walk[:, 1].max() + pad_lon)
+        )
+        keep = inside.copy()
+        keep[1:] |= inside[:-1]
+        keep[:-1] |= inside[1:]
+        rows = np.flatnonzero(keep)
+        distance = np.full(len(walk), np.inf)
+        for run in np.split(rows, np.flatnonzero(np.diff(rows) > 1) + 1):
+            if len(run) >= 2:
+                distance = np.minimum(distance, nearest_on_line(route[run, 0], route[run, 1], walk[:, 0], walk[:, 1])[0])
+        return float((distance <= TWIN_M).mean())
 
 
 def _check_trailgraph_sampled(source: Path, store: SimilarityStore) -> None:
@@ -1069,6 +1588,65 @@ def fetch_geonames(path: Path | str, urlretrieve: UrlRetrieve = default_urlretri
     return path
 
 
+def export_name_index(out_dir: Path | str) -> Path:
+    """Write ``names.npz`` into the export ``out_dir``: the name search's index of its ``hikes.sqlite``.
+
+    Holds every hike name folded and unshortened as search compares it (one line per hike, in id order),
+    the words of them all by length (``_Spellings``), ``NAME_INDEX_FORMAT`` and a checksum of the hikes'
+    ids, so a server uses it only for the hikes it was written from. Written to a temporary file first, so
+    a server never opens half of one. Reads ``hikes.sqlite`` read-only: run it again on an export whose
+    hikes changed (a cut of fewer hikes) and it indexes those.
+    """
+    out = Path(out_dir)
+    ids = np.load(out / "similarity" / "ids.npy", mmap_mode="r")
+    with scoped(sqlite3.connect(f"file:{out / 'hikes.sqlite'}?mode=ro&immutable=1", uri=True)) as db:
+        folded, spellings = _name_index(db)
+    arrays = {
+        "format": np.array(NAME_INDEX_FORMAT),
+        "ids": np.array(_ids_checksum(ids)),
+        "count": np.array(len(folded)),
+        "folded": np.frombuffer("\n".join(folded).encode(), dtype=np.uint8),
+    }
+    for length, (_, letters, masks) in spellings.tables().items():
+        arrays[f"letters_{length}"], arrays[f"masks_{length}"] = letters, masks
+    path, partial_path = out / NAME_INDEX, out / f"{NAME_INDEX}.partial"
+    with open(partial_path, "wb") as file:
+        np.savez(file, **arrays)
+    os.replace(partial_path, path)
+    return path
+
+
+def _name_index(db: sqlite3.Connection) -> tuple[list[str], _Spellings]:
+    """Every hike name of ``hikes.sqlite`` folded and unshortened, in id order, and their ``_Spellings``."""
+    # Unshortened in one pass over them all ("\n" joined), not name by name: half a second for 900,000.
+    names = [_fold(name) for (name,) in db.execute("SELECT name FROM hikes ORDER BY id")]
+    folded = _unshortened("\n".join(names)).split("\n") if names else []
+    return folded, _Spellings(folded)
+
+
+def _read_name_index(directory: Path, ids: np.ndarray) -> tuple[list[str], _Spellings] | None:
+    """The export's ``names.npz`` (``export_name_index``), or None without one, or with one of another
+    ``NAME_INDEX_FORMAT`` or of other hikes than ``ids``."""
+    path = directory / NAME_INDEX
+    if not path.is_file():
+        return None
+    with np.load(path) as index:
+        if int(index["format"]) != NAME_INDEX_FORMAT or int(index["ids"]) != _ids_checksum(ids):
+            return None
+        count = int(index["count"])
+        folded = str(memoryview(index["folded"]), "utf-8").split("\n") if count else []  # decoded without a copy
+        if len(folded) != count:
+            return None
+        lengths = sorted(int(key.removeprefix("letters_")) for key in index.files if key.startswith("letters_"))
+        tables = {length: (index[f"letters_{length}"], index[f"masks_{length}"]) for length in lengths}
+    return folded, _Spellings.of_tables(tables)
+
+
+def _ids_checksum(ids: np.ndarray) -> int:
+    """A checksum of the hikes' ids, in order: the name index holds the names of these hikes."""
+    return zlib.crc32(np.ascontiguousarray(ids, dtype=np.int64).tobytes())
+
+
 def export_places(geonames_path: Path | str, out_dir: Path | str) -> Path:
     """Write ``places.sqlite`` into the export ``out_dir`` from a GeoNames dump (zip or txt).
 
@@ -1169,7 +1747,7 @@ def export_landmarks(out_dir: Path | str, geonames_path: Path | str | None = Non
     found: dict[tuple, dict[int, float]] = {}  # (kind, name, lat, lon) -> hike id -> metres off
     names: dict[tuple, set[str]] = {}
     heights: dict[tuple, float] = {}  # a Peak's ele tag
-    with sqlite3.connect(f"file:{out / 'hikes.sqlite'}?mode=ro&immutable=1", uri=True) as db:
+    with scoped(sqlite3.connect(f"file:{out / 'hikes.sqlite'}?mode=ro&immutable=1", uri=True)) as db:
         for dayhike_id, blob in db.execute("SELECT id, points FROM hikes"):
             for kind, where, lat, lon, _, off_m, name, ele in json.loads(zlib.decompress(blob)):
                 if kind in LANDMARK_KINDS and where == "line" and name:
@@ -1188,7 +1766,7 @@ def export_landmarks(out_dir: Path | str, geonames_path: Path | str | None = Non
         ids = np.load(out / "similarity" / "ids.npy")
         near = cKDTree(_unit(trailheads[:, 0], trailheads[:, 1]))
         chord = 2 * math.sin(VILLAGE_M / (2 * EARTH_RADIUS_M))
-        with sqlite3.connect(f"file:{places}?mode=ro&immutable=1", uri=True) as db:
+        with scoped(sqlite3.connect(f"file:{places}?mode=ro&immutable=1", uri=True)) as db:
             kept = db.execute("SELECT id, name, population, lat, lon FROM places").fetchall()
             spelled: dict[int, set[str]] = {}
             for name, place in db.execute("SELECT name, place FROM place_names"):
@@ -1358,17 +1936,23 @@ class ServingData:
         self.store = SimilarityStore.open_dir(self.directory / "similarity")
         graph = self.directory / "trailgraph.sqlite"
         self.trailgraph = TrailGraph(graph) if self.meta.get("compose") and graph.is_file() else None
-        self.trailheads = np.load(self.directory / "trailheads.npy", mmap_mode="r")
+        self.trailheads = map_npy(self.directory / "trailheads.npy")
         self._db_uri = f"file:{self.directory / 'hikes.sqlite'}?mode=ro&immutable=1"
-        with self._db() as db:
-            self._folded = [_fold(name) for (name,) in db.execute("SELECT name FROM hikes ORDER BY id")]
+        index = _read_name_index(self.directory, self.store.ids)
+        with scoped(self._db()) as db:
+            # Without the export's index (or with one of other hikes), built from every name now, as it was written.
+            self._folded, self._spellings = index or _name_index(db)
             columns = {row[1] for row in db.execute("PRAGMA table_info(hikes)")}
             self._has_source = "source" in columns
             self._has_source_url = "source_url" in columns
+            # An export from before Commons photos has no column: the page shows none.
+            self._has_photos = "photos" in columns
+            self._has_commons = "commons_contributors" in columns
+            self._has_parking = "parking_m" in columns
+            self._has_official = "official_source" in columns  # an export from before names no official record
         # One string of every folded name between newlines: str.find walks it in C.
         self._haystack = "\n" + "\n".join(self._folded) + "\n"
         self._starts = np.cumsum([1] + [len(name) + 1 for name in self._folded[:-1]])
-        self._spellings = _Spellings(self._folded)
         places = self.directory / "places.sqlite"
         self.places = f"file:{places}?mode=ro&immutable=1" if places.is_file() else None
         # An export from before Landmarks (ADR-0053) opens without them: the page searches hike names only.
@@ -1376,13 +1960,19 @@ class ServingData:
         self.landmarks = f"file:{landmarks}?mode=ro&immutable=1" if landmarks.is_file() else None
         self._landmark_names = "NULL"  # how many names a Landmark has: none in a file from before ADR-0055
         if self.landmarks is not None:  # about 2 s for Europe: read beside the first requests, not in one of them
-            with sqlite3.connect(self.landmarks, uri=True) as db:
+            with scoped(sqlite3.connect(self.landmarks, uri=True)) as db:
                 if "names" in {row[1] for row in db.execute("PRAGMA table_info(landmarks)")}:
                     self._landmark_names = "l.names"
             threading.Thread(target=lambda: self._landmark_spellings, daemon=True).start()
         self._one_way_m = self.store.mode(False).column("length_m")  # what makes a hike multi-day (ADR-0056)
         countries = self.directory / "countries.npy"
         self.countries = np.load(countries) if countries.is_file() else None
+        borders = self.directory / "borders.npy"
+        self.borders = np.load(borders) if borders.is_file() else None
+        self._west = np.asarray(self.trailheads[:, 1]) < REGION_SPLIT_LON  # in the United States (REGIONS)
+        self.regions = regions_in(self.trailheads[:, 1])  # the RegionChoice's names this Catalog has hikes in
+        # What the pages say the hikes are across: as the export names it, else (an export from before) by the hikes.
+        self.covered = self.meta.get("regions") or covered_regions(self.regions)
 
     def _db(self) -> sqlite3.Connection:
         return sqlite3.connect(self._db_uri, uri=True)
@@ -1399,10 +1989,17 @@ class ServingData:
 
         Matching ignores case and accents and folds German ue/oe/ae to u/o/a.
         The best come first: the exact name, then names starting with the
-        query, then names where every word starts a word, then the rest;
-        shorter names first within each. A number also finds that DayHike id.
-        Only the first SEARCH_SCAN_CAP occurrences, in id order, of the
-        longest word (two letters or more) are considered.
+        query, then names holding it from a word's start (Tour du Mont
+        Blanc), then names where every word starts a word, then the rest;
+        shorter names first within each. Of the best SEARCH_SUMMIT_CAP, after
+        the exact name, a hike reaching the top of a Peak named so comes first,
+        and one named after a Viewpoint on it last within its group (see
+        ``_summits_first``). A number also finds that DayHike id.
+        The names looked at are those holding the longest word (two letters
+        or more) found fewer than SEARCH_SCAN_CAP times, or, when every word
+        is found more often, the first SEARCH_SCAN_CAP occurrences, in id
+        order, of the longest word and the names that are exactly the query:
+        Wanderweg 52 near Salla is found though Wanderweg is in many names.
 
         After them come the names that hold every word with up to
         ``_Spellings.typos`` of its letters wrong (a word of the names
@@ -1410,21 +2007,26 @@ class ServingData:
         names that hold a word only inside a longer one (Rappenloch in
         Krappenlochklamm), are marked ``"match": "similar"``; the others
         ``"match": "words"``.
+
+        A word of ``SHORT_WORDS`` is its long word, in the query and in the
+        names: "Mt Whitney" finds Mount Whitney Trail. A query ending in a
+        country after a comma ("Triglav, Slovenia") finds the hikes starting
+        there (``_row_countries``) by the words before it.
         """
-        needle = _fold(query.strip())
-        words = needle.split()
+        needle = _unshortened(_fold(query.strip()))
         rows: list[int] = []
         if needle.isascii() and needle.isdigit():
             try:
                 rows.append(self.row_of(int(needle)))
             except KeyError:
                 pass
-        by_name = self._rows_with_words(words, needle, set(rows))
+        needle, words, by_name, there = self._words_found(needle, rows)
+        by_name[:SEARCH_SUMMIT_CAP] = self._summits_first(by_name[:SEARCH_SUMMIT_CAP], needle, words)
         rows += by_name
-        similar = {row for row in by_name if _relevance(self._folded[row], needle, words) == 3}
+        similar = {row for row in by_name if _relevance(self._folded[row], needle, words) == 4}
         if len(rows) < limit:
             for spelled in self._spellings.respelled(words):
-                found = self._rows_with_words(spelled, " ".join(spelled), set(rows))
+                found = self._rows_with_words(spelled, " ".join(spelled), set(rows), there)
                 rows += found
                 similar.update(found)
                 if len(rows) >= limit:
@@ -1434,18 +2036,90 @@ class ServingData:
             for row, summary in zip(rows[:limit], self._summaries(rows[:limit]), strict=True)
         ]
 
-    def _rows_with_words(self, words: list[str], needle: str, skip: set[int]) -> list[int]:
-        """Rows not in ``skip`` whose name holds every word, best first (see ``search``)."""
-        scan = max(words, key=len, default="")
-        if len(scan) < 2:
+    def _words_found(
+        self, needle: str, skip: Collection[int]
+    ) -> tuple[str, list[str], list[int], np.ndarray | None]:
+        """The query ``search`` matches names by, its words, the rows not in ``skip`` holding them
+        (best first), and which rows start in the country it names (None for any): the query as
+        typed, or, ending in a country after a comma, the words before it (``_place_tail``)."""
+        tail = _place_tail(needle)
+        if tail is None or self._row_countries is None:
+            needle = tail[0] if tail else needle
+            return needle, needle.split(), self._rows_with_words(needle.split(), needle, set(skip)), None
+        head, country = tail
+        there = self._row_countries == country
+        return head, head.split(), self._rows_with_words(head.split(), head, set(skip), there), there
+
+    @functools.cached_property
+    def _row_countries(self) -> np.ndarray | None:
+        """The country each row starts in: its country in ``countries.npy``, else that of the town
+        nearest its start (``_towns``); None with neither file."""
+        towns, tree = self._towns
+        if tree is None and self.countries is None:
+            return None
+        countries = np.array(self.countries if self.countries is not None else [""] * len(self.trailheads), dtype="U3")
+        missing = np.flatnonzero(countries == "")
+        if tree is not None and len(missing):
+            points = np.asarray(self.trailheads)[missing]
+            countries[missing] = [towns[i][1] for i in tree.query(_unit(points[:, 0], points[:, 1]))[1]]
+        return countries
+
+    def _rows_with_words(self, words: list[str], needle: str, skip: set[int], there: np.ndarray | None = None) -> list[int]:
+        """Rows not in ``skip`` whose name holds every word, best first (see ``search``); only those
+        ``there`` marks when given, counted toward ``SEARCH_SCAN_CAP`` alone."""
+        scans = sorted({word for word in words if len(word) >= 2}, key=lambda word: (-len(word), word))
+        if not scans:
             return []
+        for scan in scans:
+            rows, whole = self._rows_containing(scan, there)
+            if whole:
+                break
+        else:
+            rows = self._rows_containing(scans[0], there)[0] + self._rows_named(needle)
         found = [
             row
-            for row in self._rows_containing(scan)
-            if row not in skip and all(word in self._folded[row] for word in words)
+            for row in dict.fromkeys(rows)
+            if row not in skip and (there is None or there[row]) and all(word in self._folded[row] for word in words)
         ]
         found.sort(key=lambda row: (_relevance(self._folded[row], needle, words), len(self._folded[row]), row))
         return found
+
+    def _summits_first(self, rows: list[int], needle: str, words: list[str]) -> list[int]:
+        """``rows`` (best first) with, after the exact name, those reaching the
+        top of a Peak named from the query's start first, and those named
+        after a Viewpoint on them holding every word last among names as
+        relevant: Triglav via Dom Planika before Triglav View, a path to a view
+        of Triglav. Of those reaching the top, one starting more than
+        ``FAR_PARKING_M`` from a car park comes after the rest: Half Dome via
+        Subdome from its car park before Half Dome Trail, the last 3 km of it."""
+        if not rows:
+            return rows
+        parking = "parking_m" if self._has_parking else "NULL"
+        with scoped(self._db()) as db:
+            found = {
+                dayhike_id: (points, parking_m)
+                for dayhike_id, points, parking_m in _in_chunks(
+                    db, f"SELECT id, points, {parking} FROM hikes WHERE id IN ({{}})", [int(self.store.ids[row]) for row in rows]
+                )
+            }
+        summit, viewpoint, on_trail = set(), set(), set()
+        for row in rows:
+            points, parking_m = found[int(self.store.ids[row])]
+            if parking_m is not None and parking_m > FAR_PARKING_M:
+                on_trail.add(row)
+            for kind, _, _, _, _, off_m, name, _ in json.loads(zlib.decompress(points)):
+                folded = _unshortened(_fold(name or ""))
+                if kind == "peak" and off_m <= PEAK_SUMMITED_M and folded.startswith(needle):
+                    summit.add(row)
+                elif kind == "viewpoint" and folded in self._folded[row] and all(word in folded for word in words):
+                    viewpoint.add(row)
+        relevance = {row: _relevance(self._folded[row], needle, words) for row in rows}
+        return sorted(
+            rows,
+            key=lambda row: (
+                relevance[row] > 0, row not in summit, row in summit and row in on_trail, relevance[row], row in viewpoint
+            ),
+        )
 
     def find_place(self, query: str, limit: int = 5) -> list[dict]:
         """Places with a name starting with the query, folded like ``search``.
@@ -1457,7 +2131,7 @@ class ServingData:
         needle = _fold(query).strip()
         if self.places is None or not needle:
             return []
-        with sqlite3.connect(self.places, uri=True) as db:
+        with scoped(sqlite3.connect(self.places, uri=True)) as db:
             rows = db.execute(
                 "SELECT p.name, p.country, p.lat, p.lon, p.population FROM place_names n "
                 "JOIN places p ON p.id = n.place WHERE n.name >= ? AND n.name < ? "
@@ -1482,15 +2156,28 @@ class ServingData:
         Landmarks' words, and those found are marked ``"match": "similar"``.
         Each says where it is: the nearest town other than itself (``town``) and that town's
         ``country``, from ``places.sqlite`` (without it, the town the export named and no country).
+
+        As in ``search``, "Mt" is Mount (a name spelled either way is found) and a
+        country after a comma narrows it to the Landmarks near a town there. One
+        named exactly the query ``leads`` the hike names on the page when it is
+        famous (``FAMOUS_NAMES`` names or more, of ``FAMOUS_KINDS``: the Matterhorn
+        before Matterhorn Trail in Oregon) or, of those named so, its hikes are
+        photographed by the most Commons contributors, more than any of the hikes
+        named best like the query (the Grand Canyon's before a walk named Grand
+        Canyon in New York). A Peak lists the hikes reaching its top first,
+        those from a car park before those starting further than
+        ``FAR_PARKING_M`` from one (ADR-0079).
         """
-        needle = _fold(query).strip()
+        needle = _unshortened(_fold(query).strip())
         if self.landmarks is None or len(needle) < 2:
             return []
-        with sqlite3.connect(self.landmarks, uri=True) as db:
-            found, match = self._landmarks_named(db, needle, limit, self._landmark_names), "words"
+        tail = _place_tail(needle)
+        with scoped(sqlite3.connect(self.landmarks, uri=True)) as db:
+            needle, where = tail or (needle, None)
+            found, match = self._landmarks_in(db, _shortened(needle), limit, where), "words"
             if not found:
                 for spelled in self._landmark_spellings.respelled(needle.split()):
-                    found, match = self._landmarks_named(db, " ".join(spelled), limit, self._landmark_names), "similar"
+                    found, match = self._landmarks_in(db, _shortened(" ".join(spelled)), limit, where), "similar"
                     if found:
                         break
             hikes: dict[int, list[tuple[int, int]]] = {}
@@ -1499,9 +2186,25 @@ class ServingData:
                 [row[0] for row in found],
             ):
                 hikes.setdefault(landmark, []).append((dayhike_id, off_m))
+        exact = [row for row in found if row[8] == 0 and match == "words"]
+        named = self._best_named(query) if exact and self._has_commons else []
+        parking, commons = self._parking_and_commons([*[i for listed in hikes.values() for i, _ in listed], *named])
+        photos = {row[0]: max((commons.get(i) or 0 for i, _ in hikes.get(row[0], [])), default=0) for row in exact}
+        # Photographed: the most of those named exactly the query, and more than the hikes named best like it
+        best_named = max((commons.get(i) or 0 for i in named), default=None)
+        photographed = {
+            landmark
+            for landmark, count in photos.items()
+            if best_named is not None and count > best_named and count == max(photos.values())
+        }
         results = []
-        for landmark, name, kind, town, lat, lon, count in found:
+        for landmark, name, kind, town, lat, lon, count, names, rank in found:
             nearest = hikes.get(landmark, [])
+            if kind == "peak":
+                nearest.sort(key=lambda hike: (
+                    hike[1] > PEAK_SUMMITED_M, hike[1] <= PEAK_SUMMITED_M and (parking.get(hike[0]) or 0) > FAR_PARKING_M,
+                    hike[1], hike[0],
+                ))  # fmt: skip
             summaries = self._summaries([self.row_of(dayhike_id) for dayhike_id, _ in nearest])
             country = None
             if self._towns[1] is not None:
@@ -1509,24 +2212,59 @@ class ServingData:
                 country = near and near[1]
                 itself = near and near[0] == name and near[2] <= TRAILHEAD_M  # a town is near no other
                 town = None if not near or itself else near[0]
+            famous = kind in FAMOUS_KINDS and (names or 0) >= FAMOUS_NAMES
             results.append(
                 {
                     "name": name, "kind": kind, "town": town, "country": country, "lat": lat, "lon": lon,
-                    "match": match, "hike_count": count,
+                    "match": match, "hike_count": count, "leads": rank == 0 and match == "words" and (famous or landmark in photographed),
                     "hikes": [{**summary, "off_m": off_m} for summary, (_, off_m) in zip(summaries, nearest, strict=True)],
                 }
             )  # fmt: skip
         return results
 
+    def _landmarks_in(
+        self, db: sqlite3.Connection, needles: list[str], limit: int, where: str | None
+    ) -> list[tuple]:
+        """``_landmarks_named``, of those near a town (``_near_town``) of the country ``where``
+        (``_place_tail``) when given: the first ``limit`` of the best ``LANDMARK_PLACE_SCAN`` named so;
+        all of them without towns."""
+        if where is None or self._towns[1] is None:
+            return self._landmarks_named(db, needles, limit, self._landmark_names)
+        found = self._landmarks_named(db, needles, LANDMARK_PLACE_SCAN, self._landmark_names)
+        return [row for row in found if (self._near_town(row[4], row[5]) or ("", ""))[1] == where][:limit]
+
+    def _best_named(self, query: str) -> list[int]:
+        """The ids of the hikes ``search`` finds by name as well as its first (the same ``_relevance``),
+        of its first ``SEARCH_SUMMIT_CAP``: what a Landmark named so leads only when better photographed."""
+        needle, words, rows, _ = self._words_found(_unshortened(_fold(query.strip())), ())
+        rows = rows[:SEARCH_SUMMIT_CAP]
+        best = _relevance(self._folded[rows[0]], needle, words) if rows else None
+        return [int(self.store.ids[row]) for row in rows if _relevance(self._folded[row], needle, words) == best]
+
+    def _parking_and_commons(self, ids: list[int]) -> tuple[dict[int, float | None], dict[int, int | None]]:
+        """How far each DayHike starts from a car park and how many Commons contributors its photos have,
+        by id; None in an export without them."""
+        parking = "parking_m" if self._has_parking else "NULL"
+        commons = "commons_contributors" if self._has_commons else "NULL"
+        with scoped(self._db()) as db:
+            rows = _in_chunks(db, f"SELECT id, {parking}, {commons} FROM hikes WHERE id IN ({{}})", sorted(set(ids)))
+        return {i: metres for i, metres, _ in rows}, {i: count for i, _, count in rows}
+
     @staticmethod
-    def _landmarks_named(db: sqlite3.Connection, needle: str, limit: int, names: str = "NULL") -> list[tuple]:
-        """``names``: the column of how many names each has, or NULL (a file from before ADR-0055)."""
+    def _landmarks_named(db: sqlite3.Connection, needles: str | list[str], limit: int, names: str = "NULL") -> list[tuple]:
+        """The Landmarks with a name starting with any of ``needles`` (spellings of one query),
+        best first (see ``find_landmarks``): id, name, kind, town, lat, lon, hikes, how many names
+        and how it is named (0 exactly so, 1 so as an alias, 2 and 3 from it).
+        ``names``: the column of how many names each has, or NULL (a file from before ADR-0055)."""
+        needles = [needles] if isinstance(needles, str) else needles
+        ranges = " OR ".join(["(n.name >= ? AND n.name < ?)"] * len(needles))
+        exact = ", ".join("?" * len(needles))
         return db.execute(
-            "SELECT l.id, l.name, l.kind, l.town, l.lat, l.lon, l.hikes FROM landmark_names n "
-            "JOIN landmarks l ON l.id = n.landmark WHERE n.name >= ? AND n.name < ? "
-            "GROUP BY l.id ORDER BY MIN(CASE WHEN n.name = ? THEN 1 - n.whole ELSE 3 - n.whole END), "
-            f"{names} DESC, l.ele IS NULL, l.ele DESC, l.hikes DESC, l.id LIMIT ?",
-            (needle, needle + "\U0010ffff", needle, limit),
+            f"SELECT l.id, l.name, l.kind, l.town, l.lat, l.lon, l.hikes, {names}, "
+            f"MIN(CASE WHEN n.name IN ({exact}) THEN 1 - n.whole ELSE 3 - n.whole END) AS named FROM landmark_names n "
+            f"JOIN landmarks l ON l.id = n.landmark WHERE {ranges} "
+            f"GROUP BY l.id ORDER BY named, {names} DESC, l.ele IS NULL, l.ele DESC, l.hikes DESC, l.id LIMIT ?",
+            (*needles, *[bound for needle in needles for bound in (needle, needle + "\U0010ffff")], limit),
         ).fetchall()
 
     @functools.cached_property
@@ -1537,7 +2275,7 @@ class ServingData:
 
         if self.places is None:
             return [], None
-        with sqlite3.connect(self.places, uri=True) as db:
+        with scoped(sqlite3.connect(self.places, uri=True)) as db:
             rows = db.execute(
                 "SELECT name, country, lat, lon FROM places WHERE population >= ? ORDER BY id", (TOWN_POPULATION,)
             ).fetchall()
@@ -1554,9 +2292,46 @@ class ServingData:
         chord, i = tree.query(_unit(lat, lon)[0], distance_upper_bound=2 * math.sin(LANDMARK_TOWN_M / (2 * EARTH_RADIUS_M)))
         return (*towns[i], 2 * EARTH_RADIUS_M * math.asin(chord / 2)) if math.isfinite(chord) else None
 
-    def _region(self, row: int) -> str | None:
-        """Where a hike starts, as the town nearest its Trailhead and its country ("Bovec, SI"); None with no town near."""
-        return self._place_near(*map(float, self.trailheads[row]))
+    def _region(self, row: int, named: re.Match | None) -> str | None:
+        """Where a hike starts, as the town nearest its Trailhead and its country ("Bovec, SI"); None with no town near.
+        A name that says the place it starts near (``named_place``, ADR-0068: "Wicklow Way near Clonegal") puts
+        that place first when the town is another, so the two agree ("Clonegal, Bunclody, IE")."""
+        region = self._place_near(*map(float, self.trailheads[row]))
+        if region is None or named is None or region.startswith(f"{named['place']}, "):
+            return region
+        return f"{named['place']}, {region}"
+
+    def named_place(self, row: int, name: str, origin: str) -> re.Match | None:
+        """The "near {place}" ingest gave a hike's name (ADR-0017, ADR-0066, ADR-0068), its ``place`` and the
+        ``brackets`` of codes after it ("Hike near Háj (JK11)": "Háj"), or None. An OSM name says "near" itself
+        at times ("Circular walk near Ambleside"): one that is no "Hike near {place}" placeholder counts only when
+        the place is one ``names.unique_names`` could have named it after (``_could_name``)."""
+        found = _named(name)
+        if found is None or origin != NAME_ORIGIN_OSM_NAME or name.startswith("Hike near "):
+            return found
+        return found if self._could_name(row, found["place"]) else None
+
+    def _could_name(self, row: int, place: str) -> bool:
+        """Whether a hike's start is near a place or Landmark called ``place``: within ``PLACE_RADIUS_M`` of
+        its Trailhead, or the town nearest it at any distance (from ``places.sqlite`` and ``landmarks.sqlite``,
+        what the export has of the places ingest names after); False without either file."""
+        lat, lon = map(float, self.trailheads[row])
+        folded = _fold(place).strip()
+        towns, tree = self._towns
+        if tree is not None and _fold(towns[int(tree.query(_unit(lat, lon)[0])[1])][0]).strip() == folded:
+            return True
+        points = []
+        for path, query in (
+            (self.places, "SELECT p.lat, p.lon FROM place_names n JOIN places p ON p.id = n.place WHERE n.name = ?"),
+            (
+                self.landmarks,
+                "SELECT l.lat, l.lon FROM landmark_names n JOIN landmarks l ON l.id = n.landmark WHERE n.name = ? AND n.whole",
+            ),
+        ):
+            if path is not None:
+                with scoped(sqlite3.connect(path, uri=True)) as db:
+                    points += db.execute(query, (folded,)).fetchall()
+        return any(_haversine_m(lat, lon, *point) <= PLACE_RADIUS_M for point in points)
 
     def _place_near(self, lat: float, lon: float) -> str | None:
         """The town nearest a point and its country ("Bovec, SI"); None with no town near."""
@@ -1573,6 +2348,22 @@ class ServingData:
             code = towns[int(tree.query(_unit(lat, lon)[0])[1])][1]
         return emergency_services().get(code)
 
+    def border_emergency(self, row: int) -> dict | None:
+        """The emergency numbers and mountain rescue service of the country across the border a
+        hike crosses or starts near (``borders.npy``); None for a hike near none, or without it."""
+        code = str(self.borders[row]) if self.borders is not None else ""
+        return emergency_services().get(code)
+
+    def region_rows(self, names: Collection[str]) -> np.ndarray:
+        """The rows (``trailheads.npy`` order) of the hikes starting in any of the regions ``names``
+        (``REGIONS``), for a Ranking's ``allowed_rows`` (ADR-0074)."""
+        keep = np.zeros(len(self._west), dtype=bool)
+        if "us" in names:
+            keep |= self._west
+        if "europe" in names:
+            keep |= ~self._west
+        return np.flatnonzero(keep)
+
     def multi_day(self, row: int) -> bool:
         """Whether a hike is a multi-day route: longer than ``MULTI_DAY_M`` one way (ADR-0056)."""
         return bool(self._one_way_m[row] > MULTI_DAY_M)
@@ -1580,14 +2371,28 @@ class ServingData:
     @functools.cached_property
     def _landmark_spellings(self) -> _Spellings:
         """The words of the Landmarks' names, read at the first query that needs them."""
-        with sqlite3.connect(self.landmarks, uri=True) as db:
+        with scoped(sqlite3.connect(self.landmarks, uri=True)) as db:
             return _Spellings([name for (name,) in db.execute("SELECT name FROM landmark_names WHERE whole")])
 
-    def _rows_containing(self, word: str) -> list[int]:
-        """Rows whose name holds ``word``, in id order, from its first SEARCH_SCAN_CAP occurrences."""
-        hits = itertools.islice(re.finditer(re.escape(word), self._haystack), SEARCH_SCAN_CAP)
+    def _rows_containing(self, word: str, there: np.ndarray | None = None) -> tuple[list[int], bool]:
+        """Rows whose name holds ``word``, in id order, from its first SEARCH_SCAN_CAP
+        occurrences (in rows ``there`` marks, when given), and whether those are all of them."""
+        hits = re.finditer(re.escape(word), self._haystack)
+        if there is None:
+            hits = itertools.islice(hits, SEARCH_SCAN_CAP + 1)
         offsets = np.fromiter((hit.start() for hit in hits), dtype=np.int64)
-        return np.unique(np.searchsorted(self._starts, offsets, side="right") - 1).tolist()
+        rows = np.searchsorted(self._starts, offsets, side="right") - 1
+        rows = rows[there[rows]] if there is not None else rows
+        return np.unique(rows[:SEARCH_SCAN_CAP]).tolist(), len(rows) <= SEARCH_SCAN_CAP
+
+    def _rows_named(self, name: str) -> list[int]:
+        """Rows whose whole folded name is ``name``, from its first SEARCH_SCAN_CAP occurrences."""
+        line, offsets = "\n" + name + "\n", []
+        at = self._haystack.find(line)
+        while at >= 0 and len(offsets) < SEARCH_SCAN_CAP:
+            offsets.append(at + 1)  # the name starts after its newline
+            at = self._haystack.find(line, at + 1)
+        return (np.searchsorted(self._starts, offsets, side="right") - 1).tolist()
 
     def _summaries(self, rows: list[int], return_to_start: bool = False) -> list[dict]:
         """Name and main figures per row, one way or with the way back."""
@@ -1599,7 +2404,7 @@ class ServingData:
                 "name": names[int(self.store.ids[row])][0],
                 "length_m": _value(store.column("length_m")[row]),
                 "elevation_gain_m": _value(store.column("elevation_gain_m")[row]),
-                **self._climb(row, names[int(self.store.ids[row])][1:], return_to_start),
+                **self._climb(row, names[int(self.store.ids[row])][1:3], return_to_start),
                 "highest_m": _value(store.column("highest_m")[row]),
                 "difficulty_rank": _value(store.column("difficulty_rank")[row]),
                 "round_trip": _value(store.column("round_trip")[row]),
@@ -1607,7 +2412,7 @@ class ServingData:
                 # One way, what makes it multi-day (ADR-0056), and where it starts: twins of a name told apart
                 "walk_m": _value(self._one_way_m[row]),
                 "multi_day": self.multi_day(row),
-                "region": self._region(row),
+                "region": self._region(row, self.named_place(row, *names[int(self.store.ids[row])][::3])),
             }
             for row in rows
         ]
@@ -1624,7 +2429,7 @@ class ServingData:
         name, walk length and line, and whether there are more than ``limit``;
         then none are listed.
         """
-        with self._db() as db:
+        with scoped(self._db()) as db:
             found = db.execute(
                 "SELECT h.id, h.name, h.name_origin, h.walk_m, h.line FROM hike_boxes b JOIN hikes h ON h.id = b.id "
                 "WHERE b.north >= ? AND b.south <= ? AND b.east >= ? AND b.west <= ? LIMIT ?",
@@ -1637,11 +2442,11 @@ class ServingData:
             for i, name, origin, walk_m, line in found
         ], False
 
-    def _names(self, ids: list[int]) -> dict[int, tuple[str, float | None, float | None]]:
-        """Name, climb and descent (metres, walking direction) per DayHike id."""
-        with self._db() as db:
+    def _names(self, ids: list[int]) -> dict[int, tuple[str, float | None, float | None, str]]:
+        """Name, climb, descent (metres, walking direction) and name origin per DayHike id."""
+        with scoped(self._db()) as db:
             return {
-                dayhike_id: (_shown_name(dayhike_id, name, origin), climb_m, descent_m)
+                dayhike_id: (_shown_name(dayhike_id, name, origin), climb_m, descent_m, origin)
                 for dayhike_id, name, origin, climb_m, descent_m in db.execute(
                     f"SELECT id, name, name_origin, climb_m, descent_m FROM hikes WHERE id IN ({','.join('?' * len(ids))})",
                     ids,
@@ -1655,30 +2460,46 @@ class ServingData:
         the line and ElevationProfile stay the DayHike's own."""
         row = self.row_of(dayhike_id)
         store = self.store.mode(return_to_start)
-        with self._db() as db:
+        with scoped(self._db()) as db:
             # An export made before Sources (ADR-0060) is all OpenStreetMap.
             source = "source, source_ref" if self._has_source else f"'{SOURCE_OSM}', NULL"
             source += ", source_url" if self._has_source_url else ", NULL"
-            name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points, kind, parts, route, source, source_ref, source_url = (
-                db.execute(
-                    "SELECT name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points, "
-                    f"kind, parts, route, {source} FROM hikes WHERE id = ?",
-                    (dayhike_id,),
-                ).fetchone()
-            )
+            source += ", commons_contributors" if self._has_commons else ", NULL"
+            source += ", parking_m" if self._has_parking else ", NULL"
+            source += ", official_source, official_ref, official_url" if self._has_official else ", NULL, NULL, NULL"
+            selected = db.execute(
+                "SELECT name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m, points, "
+                f"kind, parts, route, {source}{', photos' if self._has_photos else ''} FROM hikes WHERE id = ?",
+                (dayhike_id,),
+            ).fetchone()
+        photos_json = None
+        if self._has_photos:
+            *selected, photos_json = selected
+        (
+            name, name_origin, sac_scale, walk_m, line, elevation, climb_m, descent_m,
+            points, kind, parts, route, source, source_ref, source_url, commons, parking_m,
+            official_source, official_ref, official_url,
+        ) = selected
         if source_ref is None:
             source_ref = osm_source_ref(dayhike_id, kind, json.loads(parts or "[]"), route)
         profile = np.frombuffer(elevation, dtype="<i2").tolist() if elevation else None
-        return {
+        named = self.named_place(row, name, name_origin)
+        detail = {
             "id": dayhike_id,
             "name": _shown_name(dayhike_id, name, name_origin),
             "name_origin": name_origin,
+            "name_note": name_note(named),
             "sac_scale": sac_scale,
             "trailhead": [float(v) for v in self.trailheads[row]],
             "walk_m": walk_m,
             "multi_day": self.multi_day(row),
-            "region": self._region(row),
+            "region": self._region(row, named),
+            # Distinct Commons uploaders near the line (#170): shown, never scored; None if never counted.
+            "commons_contributors": commons,
+            # Metres from its Trailhead to the nearest car park in a straight line; None with none within 20 km.
+            "parking_m": parking_m,
             "emergency": self.emergency(*map(float, self.trailheads[row]), row),
+            "border_emergency": self.border_emergency(row),
             **self._climb(row, (climb_m, descent_m), return_to_start),
             "line": line,
             "elevation": None
@@ -1688,22 +2509,34 @@ class ServingData:
             "facts": {column: _value(store.facts[i, row]) for i, column in enumerate(FACT_COLUMNS)},
             "profile_shape": [_value(v) for v in store.profile[row]],
             "way_back": _way_back(*store.way_back[[0, 3], row]) if return_to_start else None,
-            # A built DayHike (ADR-0038): what kind, the OSM relations it is built from, its Route.
+            # A built DayHike (ADR-0038): what kind, the OSM relations it is built from (none for a
+            # named trail, ADR-0066, or a DestinationHike, ADR-0067), its Route.
             "built": None
             if kind in (KIND_RELATION, KIND_EXTERNAL)
-            else {"kind": kind, "parts": json.loads(parts), "route": route},
+            else {"kind": kind, "parts": json.loads(parts) if parts else [], "route": route},
             # Where the hike comes from: a sources register id, its record there and a link to it;
             # for an external source (ADR-0062) also its name, licence and licence page.
             "source": {
                 "id": source,
                 "ref": source_ref,
                 "url": osm_record_url(source_ref) if source == SOURCE_OSM else source_url,
-                **{
-                    key: value
-                    for key, value in self.meta.get("sources", {}).get(source, {}).items()
-                    if key in ("name", "licence", "licence_url")
-                },
+                **self._credit(source),
             },
+            # The official record an OSM hike lies on (ADR-0062), credited as its source is; else None.
+            "official": None
+            if official_source is None
+            else {"id": official_source, "ref": official_ref, "url": official_url, **self._credit(official_source)},
+        }
+        if photos_json:
+            detail["photos"] = json.loads(photos_json)
+        return detail
+
+    def _credit(self, source: str) -> dict[str, str]:
+        # The name, licence and licence page of an external source, from the export's meta.json.
+        return {
+            key: value
+            for key, value in self.meta.get("sources", {}).get(source, {}).items()
+            if key in ("name", "licence", "licence_url")
         }
 
     def way_back_walk(self, dayhike_id: int) -> dict:
@@ -1717,14 +2550,19 @@ class ServingData:
         back = {**_way_back(metres, kind), "line": None, "ele": None}
         if back["kind"] != "trail" or self.trailgraph is None:
             return back
-        with self._db() as db:
+        with scoped(self._db()) as db:
             (line,) = db.execute("SELECT line FROM hikes WHERE id = ?", (dayhike_id,)).fetchone()
         points = decode_polyline(line)
         ends = [self.trailgraph.vertex_near(lat, lon, LINE_END_M) for lat, lon in (points[0], points[-1])]
         if None in ends:
             return back
         (lat, lon), (end_lat, end_lon) = ends
-        trail = self.trailgraph.trail_back(np.array([lat, end_lat]), np.array([lon, end_lon]), float(metres) + 1.0)
+        trail = self.trailgraph.trail_back(
+            np.array([lat, end_lat]),
+            np.array([lon, end_lon]),
+            float(metres) + 1.0,
+            back_rank(float(self.store.column("difficulty_rank")[row])),
+        )
         return back if trail is None else {**back, **walk_line(trail.lat, trail.lon, trail.ele)}
 
     def segments_in_box(
@@ -1739,7 +2577,7 @@ class ServingData:
         from b; a Junction is ``[id, lat, lon, degree, key]``.
         """
         empty = {"junctions": [], "segments": []}
-        with sqlite3.connect(f"file:{self.trailgraph.path}?mode=ro", uri=True) as db:
+        with scoped(sqlite3.connect(f"file:{self.trailgraph.path}?mode=ro", uri=True)) as db:
             # The R*Tree alone first: a box over more than ``limit`` reads no Segment row and sorts nothing.
             ids = [
                 row[0]
@@ -1798,12 +2636,16 @@ class ServingData:
             "route": {"text": str(route), "start": walk.start, "segments": walk.segments, "steps": walk.steps},
             "name": name or self._proposed_name(walk, labels),
             "name_origin": "hiker" if name else "proposed",
+            "name_note": None,  # the Hiker's own name, or one proposed from its trails (ADR-0037)
             "sac_scale": walk.sac_scale,
             "trailhead": [float(lat[0]), float(lon[0])],
             "walk_m": walk_m,
             "multi_day": walk_m > MULTI_DAY_M,
             "region": self._place_near(float(lat[0]), float(lon[0])),
+            "commons_contributors": None,  # counted for Catalog DayHikes only (ADR-0064)
+            "parking_m": None,  # a drawn hike starts where the Hiker chose
             "emergency": self.emergency(float(lat[0]), float(lon[0])),
+            "border_emergency": None,  # borders are checked for Catalog DayHikes only
             "climb_m": climb_m,
             "descent_m": descent_m,
             "line": line,
@@ -1822,27 +2664,32 @@ class ServingData:
             "built": None,
             # Drawn from OSM trail segments, it is no record of its own (ADR-0060).
             "source": {"id": SOURCE_OSM, "ref": None, "url": None},
+            "official": None,  # drawn from trail segments, it is no hike an official record is matched to
         }
 
     def _labels(self, relation_ids: list[int]) -> dict[int, str]:
         """The name, else ref, of each OSM relation of the TrailGraph that has one."""
-        with sqlite3.connect(f"file:{self.trailgraph.path}?mode=ro", uri=True) as db:
+        with scoped(sqlite3.connect(f"file:{self.trailgraph.path}?mode=ro", uri=True)) as db:
             return dict(_in_chunks(db, "SELECT id, coalesce(name, ref) FROM relations WHERE id IN ({})", relation_ids))
 
     def _trip(self, walk: ComposedWalk, return_to_start: bool) -> tuple[ComposedWalk, WayBack | None]:
-        """The walk with its way back and the way back (ADR-0019), or the walk and None."""
+        """The walk with its way back and the way back (ADR-0019), or the walk and None.
+        The walk with its way back keeps the walk's own grade (``round_trip``, ADR-0078)."""
         if not return_to_start:
             return walk, None
-        back = way_back(walk.lat, walk.lon, self.trailgraph)
+        rank = float(SAC_SCALE_RANK[walk.sac_scale]) if walk.sac_scale is not None else math.nan
+        back = way_back(walk.lat, walk.lon, self.trailgraph, rank)
         return round_trip(walk, back), back
 
     def _proposed_name(self, walk: ComposedWalk, labels: dict[int, str]) -> str:
-        """The two trails walked longest (in name order, so a longer walk on
-        them keeps the name), and the named hiking place nearest the start
-        within ``TRAILHEAD_M``: "Lake Loop and Summit Line from Summit Hut"."""
-        trails = self._trails(walk, labels) or "Your hike"
+        """"Your hike", along the two trails walked longest (in name order, so a
+        longer walk on them keeps the name), from the named hiking place nearest
+        the start within ``TRAILHEAD_M``: "Your hike along Lake Loop and Summit
+        Line from Summit Hut". It says it is the Hiker's own walk, not a
+        catalog hike of that trail's name."""
+        trails = self._trails(walk, labels)
         near = self._places_near_start(walk, TRAILHEAD_M)
-        return f"{trails} from {near[0][1]}" if near else trails
+        return "Your hike" + (f" along {trails}" if trails else "") + (f" from {near[0][1]}" if near else "")
 
     def _trails(self, walk: ComposedWalk, labels: dict[int, str]) -> str:
         """The two trails a walk walks longest, by name, joined by "and", of
@@ -1907,7 +2754,7 @@ class ServingData:
             return []
         walk = _even_points(lat, lon, TWIN_STEP_M)
         length = _path_length_m(walk[:, 0], walk[:, 1])
-        with self._db() as db:
+        with scoped(self._db()) as db:
             found = db.execute(
                 "SELECT h.id, h.line FROM hike_boxes b JOIN hikes h ON h.id = b.id "
                 "WHERE b.north >= ? AND b.south <= ? AND b.east >= ? AND b.west <= ?",
@@ -2239,7 +3086,7 @@ class ServingData:
 
     def _served_lines(self, ids: list[int]) -> dict[int, str]:
         """DayHikes' served lines, encoded, what their Twins are found on, by id."""
-        with self._db() as db:
+        with scoped(self._db()) as db:
             return dict(_in_chunks(db, "SELECT id, line FROM hikes WHERE id IN ({})", ids))
 
     def _loop_name(self, walk: ComposedWalk) -> str:
@@ -2357,20 +3204,17 @@ def scored_measures(
         same = _sameness(store, measure, seed, rows, month, raw)
         calibrated = calibrate(store, key, raw, measure_rarity(store, measure, seed, rows, month=month))
         pairs = f"random hike pairs where either {PRESENT_TEXT.get(measure.name, 'has one')}" if key == measure.name and measure.presence else "random hike pairs"
-        unmeasured = (
-            wish_unmeasured(store, measure, seed, rows, month)
-            if isinstance(seed, OutsideSeed) and seed.stated
-            else np.zeros(len(rows), dtype=bool)
-        )
-        measures[measure.name] = (raw, calibrated, random_pair_shares(store, key, raw)[1], same, pairs, unmeasured)
+        missing = unmeasured(store, measure, seed, rows, month)
+        measures[measure.name] = (raw, calibrated, random_pair_shares(store, key, raw)[1], same, pairs, missing)
+    no_data = UNMEASURED_NOTE if isinstance(seed, OutsideSeed) and seed.stated else SEED_UNMEASURED_NOTE
     return [
         {
             name: {
                 "score": _value(calibrated[i]),
                 "raw": _value(raw[i]),
-                "note": UNMEASURED_NOTE if unmeasured[i] else score_note(_value(calibrated[i]), _value(tied[i]), same[i], pairs),
+                "note": no_data if missing[i] else score_note(_value(calibrated[i]), _value(tied[i]), same[i], pairs),
             }
-            for name, (raw, calibrated, tied, same, pairs, unmeasured) in measures.items()
+            for name, (raw, calibrated, tied, same, pairs, missing) in measures.items()
         }
         for i in range(len(rows))
     ]
@@ -2425,6 +3269,45 @@ def _fold(text: str) -> str:
     return bare.replace("ue", "u").replace("oe", "o").replace("ae", "a")
 
 
+_SHORT_WORD = re.compile(r"\b(" + "|".join(SHORT_WORDS) + r")\b(?:\.(?!\w))?")
+
+
+def _unshortened(folded: str) -> str:
+    """Folded text with each of ``SHORT_WORDS`` written out ("mt. whitney" is "mount whitney"):
+    what hike search compares, so "Mt Whitney" finds Mount Whitney Trail."""
+    return _SHORT_WORD.sub(lambda match: SHORT_WORDS[match[1]], folded)
+
+
+def _shortened(needle: str) -> list[str]:
+    """An unshortened query as a Landmark's folded name may spell it: each ``SHORT_WORDS`` word written
+    out, shortened, or shortened with a full stop ("mount whitney", "mt whitney", "mt. whitney"). As
+    the query's last word, which a name only starts with, it is shortened only as a whole word ("mt "):
+    "mount" finds no Mtskheta."""
+    spelled = {full: short for short, full in SHORT_WORDS.items()}
+    parts = re.split(r"(\w+)", needle)
+    options = [
+        (part, spelled[part] + (" " if i == len(parts) - 2 and not parts[-1] else ""), f"{spelled[part]}.")
+        if part in spelled
+        else (part,)
+        for i, part in enumerate(parts)
+    ]
+    return ["".join(choice) for choice in itertools.islice(itertools.product(*options), 9)]
+
+
+@functools.cache
+def _place_names() -> dict[str, str]:
+    """The folded names of the countries of ``emergency_services``, each with its code."""
+    return {_fold(row["name"]): code for code, row in emergency_services().items()}
+
+
+def _place_tail(needle: str) -> tuple[str, str] | None:
+    """A folded query ending in a country after a comma ("triglav, slovenia"): the words before it
+    and the country's code; None for a query ending in none, or naming only a country."""
+    head, comma, tail = needle.rpartition(",")
+    country = _place_names().get(tail.strip()) if comma else None
+    return (head.strip(), country) if country and head.strip() else None
+
+
 class _Spellings:
     """The words of every hike name, to find a query word typed with a typo.
 
@@ -2452,6 +3335,22 @@ class _Spellings:
             )
             for length, spelled in by_length.items()
         }
+
+    @classmethod
+    def of_tables(cls, tables: Mapping[int, tuple[np.ndarray, np.ndarray]]) -> _Spellings:
+        """The spellings ``tables`` gives back: per length the words' letters and masks (as written by
+        ``export_name_index``), the words read from their letters, without counting them again."""
+        spellings = cls.__new__(cls)
+        spellings._words = {
+            # A row of uint32 letters is a numpy UTF-32 string of that length.
+            length: (letters.view(f"<U{length}").ravel().tolist(), letters, masks)
+            for length, (letters, masks) in tables.items()
+        }
+        return spellings
+
+    def tables(self) -> dict[int, tuple[list[str], np.ndarray, np.ndarray]]:
+        """Per word length: the words, commonest first, their letters (uint32 per letter) and letter masks."""
+        return self._words
 
     @staticmethod
     def typos(word: str) -> int:
@@ -2530,15 +3429,18 @@ def _typos_off(word: np.ndarray, table: np.ndarray) -> np.ndarray:
 
 
 def _relevance(name: str, needle: str, words: list[str]) -> int:
-    """0 the exact name, 1 starts with the query, 2 every word starts a word, else 3."""
+    """0 the exact name, 1 starts with the query, 2 holds it from a word's start,
+    3 every word starts a word, else 4."""
     if name == needle:
         return 0
     if name.startswith(needle):
         return 1
+    if re.search(r"(?<!\w)" + re.escape(needle), name):
+        return 2
     name_words = re.split(r"\W+", name)
     if all(any(part.startswith(word) for part in name_words) for word in words):
-        return 2
-    return 3
+        return 3
+    return 4
 
 
 def _in_chunks(db: sqlite3.Connection, query: str, values: list) -> list[tuple]:
@@ -2550,10 +3452,42 @@ def _in_chunks(db: sqlite3.Connection, query: str, values: list) -> list[tuple]:
     return rows
 
 
+_NAMED_PLACE = re.compile(r"^.+ near (?P<place>[^()]+?)(?P<brackets>(?: \([^()]*\))*)$")
+
+
+def _named(name: str) -> re.Match | None:
+    found = _NAMED_PLACE.match(name)
+    # A DayStage is named after its tour ("Hike near Fidje, stage 1: to Vegusdal", ADR-0040), not its own start.
+    return found if found and ", stage " not in found["place"] else None
+
+
+def name_note(found: re.Match | None) -> str | None:
+    """How this site made a hike's name, ``found`` by ``ServingData.named_place`` (ADR-0068): "Hike near {place}" when its
+    source names it nothing that says where it is, "near {place}" added to its own name, and what the
+    brackets after hold, a code from its source or a number; None for a name as its source gives it."""
+    if found is None:
+        return None
+    place = found["place"]
+    if found.string.startswith("Hike near "):
+        note = f"Named by this site after {place}, a place near where it starts: its source gives it no name that says where it is."
+    else:
+        note = f"“near {place}” is added by this site: {place} is a place near where it starts."
+    for code in re.findall(r"\(([^()]*)\)", found["brackets"]):
+        note += (
+            f" “({code})” is its number in its source, or tells it apart from other hikes of the same name."
+            if code.isdigit()
+            else f" “{code}” is the name its source gives it, a code."
+        )
+    return note
+
+
 def _shown_name(dayhike_id: int, name: str, origin: str) -> str:
     """A DayHike's name as the page shows it: a synthetic ``relation:{id}``
-    label (no name, ref or place in OSM) reads as an unnamed hike."""
-    return f"Unnamed hike (OSM relation {dayhike_id})" if origin == NAME_ORIGIN_SYNTHETIC else name
+    label (no name, ref or place in OSM) reads as an unnamed hike. A synthetic
+    external label is already shown as one (ADR-0062)."""
+    if origin == NAME_ORIGIN_SYNTHETIC and name == f"relation:{dayhike_id}":
+        return f"Unnamed hike (OSM relation {dayhike_id})"
+    return name
 
 
 def _value(value: float) -> float | None:

@@ -9,6 +9,7 @@ from another way, a crossing with no node, a bridge, and two ways passing
 import hashlib
 import json
 import math
+import mmap
 import re
 import shutil
 import sqlite3
@@ -33,7 +34,7 @@ from dayhike import (
 )
 from dayhike.catalog import similarity_dir_for, trailgraph_path_for
 from dayhike.serving import decode_polyline
-from dayhike.similarity import FACT_COLUMNS, WAY_BACK_COLUMNS, SimilarityStore, climb_and_descent
+from dayhike.similarity import FACT_COLUMNS, WAY_BACK_COLUMNS, SimilarityStore
 from dayhike.trailgraph import (
     WAY_BACK_KINDS,
     Route,
@@ -436,7 +437,8 @@ def test_composing_a_dayhikes_own_segments_reproduces_its_facts(sampled: Path) -
             continue
         walk = graph.walk(routes[dayhike_id])
         # One way, and with the way back: a composed Seed and the Catalog are measured alike.
-        for measured, stored in ((walk, store), (round_trip(walk, way_back(walk.lat, walk.lon, graph)), store.with_way_back)):
+        rank = float(store.facts[FACT_COLUMNS.index("difficulty_rank"), row])
+        for measured, stored in ((walk, store), (round_trip(walk, way_back(walk.lat, walk.lon, graph, rank)), store.with_way_back)):
             facts, shape = graph.facts(measured)
             for index, column in enumerate(FACT_COLUMNS):
                 expected = float(stored.facts[index, row])
@@ -518,6 +520,24 @@ def test_a_retraced_way_back_reads_the_same_steps_backwards() -> None:
     # The straight step back (133 m) is not read along: its two ends share it.
     grass = _landcover_fractions(stepped.landcover, stepped.lat, stepped.lon, stepped.landcover_along)[2]
     assert grass == pytest.approx(0.001 / (0.001 + 0.0002 + 0.0012))
+
+
+def test_a_round_trip_keeps_the_walk_s_own_grade() -> None:
+    from dayhike.trailgraph import ComposedWalk, WayBack
+
+    def walk(lon: list[float], sac_scale: str | None) -> ComposedWalk:
+        n = len(lon)
+        return ComposedWalk(
+            None, None, None, None, np.zeros(n), np.array(lon), np.zeros(n), np.zeros(n, dtype=int), np.full(n, -1),
+            np.full(n, np.nan), [(100.0, None)], sac_scale, {},
+        )  # fmt: skip
+
+    hike = walk([0.0, 0.001], "hiking")
+    # A trail back on a harder path (a scramble beside the trail) does not grade the hike (ADR-0078).
+    harder = WayBack("trail", 111.0, walk([0.001, 0.0005, 0.0], "demanding_alpine_hiking"))
+    assert round_trip(hike, harder).sac_scale == "hiking"
+    assert round_trip(walk([0.0, 0.001], None), harder).sac_scale is None
+    assert round_trip(hike, WayBack("retrace", 111.0)).sac_scale == "hiking"
 
 
 def test_sampling_again_changes_nothing_but_drops_the_similarity_facts(sampled: Path, tmp_path: Path) -> None:
@@ -775,7 +795,7 @@ def test_a_composed_hike_is_named_by_its_main_trails_and_start_or_by_the_hiker(d
     named = data.compose(summit, "Grey Peak the steep way")
 
     # The Lakeside Inn, 45 m from the start A, is a restaurant: no name for a hike (ADR-0022).
-    assert (proposed["name"], proposed["name_origin"]) == ("Summit Line", "proposed")
+    assert (proposed["name"], proposed["name_origin"]) == ("Your hike along Summit Line", "proposed")
     assert (named["name"], named["name_origin"]) == ("Grey Peak the steep way", "hiker")
     assert named["facts"] == proposed["facts"]
 
@@ -793,7 +813,7 @@ def test_api_segments_compose_rank_and_pair(client, summit: Route) -> None:
     hike = client.post("/api/compose", json=composed).json()
     assert hike["route"]["text"] == str(summit) and hike["facts"]["round_trip"] == 1.0  # with its way back
     assert client.post("/api/compose", json={**composed, "return_to_start": False}).json()["facts"]["round_trip"] == 0.0
-    assert hike["name"] == "Summit Line"
+    assert hike["name"] == "Your hike along Summit Line"
     named = client.post("/api/compose", json={**composed, "name": "  Up to Grey Peak "}).json()
     assert named["name"] == "Up to Grey Peak"
     ranked = client.post("/api/rank", json={"composed": composed}).json()
@@ -991,6 +1011,23 @@ def test_a_line_takes_a_shorter_way_back_where_one_exists(data) -> None:
     assert hike["way_back"]["kind"] == "trail" and hike["way_back"]["m"] == pytest.approx(1000, abs=2)
 
 
+def test_a_harder_way_back_does_not_grade_a_composed_hike(data, monkeypatch) -> None:
+    from dayhike import serving
+
+    found = serving.way_back
+
+    def harder(lat, lon, graph, *rank):
+        back = found(lat, lon, graph, *rank)
+        return replace(back, walk=replace(back.walk, sac_scale="difficult_alpine_hiking"))
+
+    own = data.compose(Route.parse(LONG_WAY), return_to_start=False)["facts"]["difficulty_rank"]
+    monkeypatch.setattr(serving, "way_back", harder)
+    hike = data.compose(Route.parse(LONG_WAY))
+
+    assert hike["way_back"]["kind"] == "trail"
+    assert hike["facts"]["difficulty_rank"] == own
+
+
 def test_a_designed_hike_carries_its_trail_way_back_with_heights_for_its_gpx(data) -> None:
     hike = data.compose(Route.parse(LONG_WAY))
     back = hike["way_back"]
@@ -1086,11 +1123,11 @@ def test_a_step_closes_a_small_gap_and_without_a_trailgraph_a_walk_is_retraced()
     lat = np.array([46.0, 46.01, 46.0002])  # ends about 22 m north of its start
     lon = np.array([14.0, 14.0, 14.0])
 
-    step = way_back(lat, lon, None)
+    step = way_back(lat, lon, None, math.nan)
     assert step.kind == "step" and step.metres == pytest.approx(22.2, abs=0.1)
-    far = way_back(lat[:2], lon[:2], None)
+    far = way_back(lat[:2], lon[:2], None, math.nan)
     assert far.kind == "retrace" and far.metres == pytest.approx(1112, abs=1)
-    assert way_back(lat[:1], lon[:1], None).kind == "none"
+    assert way_back(lat[:1], lon[:1], None, math.nan).kind == "none"
 
 
 def test_seed_and_candidates_are_always_measured_in_one_mode(data, summit: Route) -> None:
@@ -1136,11 +1173,11 @@ def test_cli_samples_the_trailgraph_and_composes(
     assert capsys.readouterr().out.strip() == str(sum(len(s["coords"]) // 8 for s in _segments(sampled)))
     assert main(["compose", "--data", str(data.directory), "--limit", "2", str(summit)]) == 0
     lines = capsys.readouterr().out.strip().splitlines()
-    assert lines[0].startswith("Summit Line\t5456 m\t")  # up and back
+    assert lines[0].startswith("Your hike along Summit Line\t5456 m\t")  # up and back
     assert lines[0].endswith("\tway back 2728 m (retrace)")
     assert len(lines) == 3 and all(str(SUMMIT_LINE) not in line.split("\t")[0] for line in lines[1:])
     assert main(["compose", "--data", str(data.directory), "--limit", "2", "--one-way", str(summit)]) == 0
-    assert capsys.readouterr().out.startswith("Summit Line\t2728 m\t")
+    assert capsys.readouterr().out.startswith("Your hike along Summit Line\t2728 m\t")
 
 
 def _sampled_trailgraph(root: Path, workers: int, monkeypatch: pytest.MonkeyPatch) -> list[str]:
@@ -1302,7 +1339,21 @@ def test_the_export_saves_the_way_back_network_for_a_server_to_memory_map(data, 
     saved = data.trailgraph._network()
 
     assert data.trailgraph.network_dir == data.directory / "trailgraph.network"
-    assert all(isinstance(array, np.memmap) for array in saved)
+    assert all(isinstance(array.base, mmap.mmap) for array in saved)
     for array, expected in zip(saved, built, strict=True):
         assert array.dtype == expected.dtype
         np.testing.assert_array_equal(array, expected)
+
+
+def test_sample_trailgraph_accepts_climate_rasters_whose_origins_differ_by_float_noise(tmp_path: Path) -> None:
+    from dayhike.trailgraph import _climate_grid
+
+    first = tmp_path / "chelsa_pr_01.tif"
+    second = tmp_path / "chelsa_tas_01.tif"
+    data = np.full((8, 8), 5.0, dtype="float32")
+    _write_tif(first, data, **BOX)
+    _write_tif(second, data, **{**BOX, "west": BOX["west"] + 4e-14, "north": BOX["north"] - 4e-14})
+
+    grid = _climate_grid([("pr", 1, first), ("tas", 1, second)])
+
+    assert grid[1:] == (8, 8)

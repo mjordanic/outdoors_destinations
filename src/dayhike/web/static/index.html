@@ -129,6 +129,12 @@
         </div>
         <p class="hint">As the crow flies from the starting place to where the hike starts, not by road.</p>
       </div>
+      <!-- Filled from /api/info regions; shown only for a catalog of more than one (ADR-0074). -->
+      <fieldset id="regions" class="regions" hidden>
+        <legend>Hikes in</legend>
+        <span id="region-boxes"></span>
+        <p id="regions-hint" class="hint" hidden>The starting place is used instead: hikes near it, wherever it is.</p>
+      </fieldset>
       <details id="more-options">
         <summary>More options</summary>
         <div class="row">
@@ -191,15 +197,17 @@
     <section id="results" class="card" hidden>
       <h2 id="results-title">Most similar hikes</h2>
       <ul id="results-filters" class="filter-chips" aria-label="Filters on this list" hidden></ul>
+      <p class="poor-note" id="results-unmeasured" hidden></p>
       <p class="poor-note" id="results-poor" hidden></p>
-      <p class="hint"><span id="results-note"></span><span id="results-loops-note"></span></p>
+      <p class="hint"><span id="results-note"></span><span id="results-region"></span><span id="results-left-out"></span><span id="results-loops-note"></span> <button type="button" class="secondary" id="list-loop" hidden>List the best loop</button></p>
       <p id="results-draw" hidden><button type="button" class="secondary" id="redraw" title="Draw other hikes from the same results, closer matches more often">Redraw</button> <label class="check" title="List the best hikes in the exact order of their scores, with nothing drawn"><input type="checkbox" id="strict" autocomplete="off"> Strict order</label> <span class="hint" id="results-draw-note"></span></p>
       <p class="stale-note" id="results-stale" hidden>The query changed since this ranking; press Find again to update it.</p>
+      <p id="results-columns" hidden><button type="button" class="secondary" id="toggle-measures" aria-expanded="false">Show the score of every measure</button></p>
       <p class="hint swipe-cue" id="results-swipe" hidden>Scroll the table sideways for every measure's score →</p>
       <div class="table-wrap"><table id="results-table"></table></div>
       <p id="results-more" hidden><button type="button" class="secondary" id="show-more">Show 10 more</button> <span class="status" id="more-status" role="status" aria-live="polite"></span> <span class="hint" id="other-areas"></span></p>
       <p id="results-loops" hidden><button type="button" class="secondary" id="suggest-loops">Suggest loops near these hikes (takes a few seconds)</button></p>
-      <p class="hint"><span id="results-scores"></span> Only the best of hikes that follow the same route is listed. A dash is “no data”, or a hut, cafe, shelter, viewpoint, summit or parking neither hike has mapped: either way it is left out of that pair’s score.</p>
+      <p class="hint"><span id="results-scores"></span> Only the best of hikes that follow the same route is listed. A dash in a measure’s score is “no data” on the hike you like, or a hut, cafe, shelter, viewpoint, summit or parking neither hike has mapped: either way it is left out of that pair’s score. A hike with no data for a measure the hike you like has scores 0 on it; a dash in its own Length or Climb is that missing data.</p>
     </section>
 
     <article id="selected" class="card" hidden></article>
@@ -208,7 +216,7 @@
 
 <footer class="credits" id="credits">
   <p>Map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors (<a href="https://opendatacommons.org/licenses/odbl/">ODbL</a>) · elevation <!--elevation--><a href="https://doi.org/10.5523/bris.s5hqmjcdj8yo2ibzi9b4ew3sn">FABDEM</a> (<a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">CC BY-NC-SA 4.0</a>)<!--/elevation--> · <a href="credits.html">full credits</a></p>
-  <p class="hint">Climate and land cover are missing for some regions; those measures then show “no data” and drop out of the score, or count as 0 when you describe the hike you want and ask a value of them. Drive times are estimates, not routes. Check conditions and maps before you go.</p>
+  <p class="hint">Elevation, climate and land cover are missing for some regions; those measures then show “no data” and count as 0 against a hike you like that has them, or when you describe the hike you want and ask a value of them. When the hike you like has no data for one, it drops out of the score. Drive times are estimates, not routes. Check conditions and maps before you go.</p>
   <nav class="site-nav" aria-label="Site">
     <a href="/">Find hikes</a> · <a href="about.html">About</a> · <a href="credits.html">Data and credits</a> · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms and safety</a>
   </nav>

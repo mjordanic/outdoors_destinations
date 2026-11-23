@@ -1,19 +1,28 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import sqlite3
 import subprocess
 import sys
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 import osmium
 
-from dayhike.built import BuildContext, BuiltHikeSource, built_dayhike
-from dayhike.external import EXTERNAL_ID_MAX, EXTERNAL_ID_MIN, ExternalHike, external_dayhike, long_enough
+from dayhike.built import BuildContext, BuiltHikeSource, BuiltWalk, built_dayhike
+from dayhike.external import (
+    EXTERNAL_ID_MAX,
+    EXTERNAL_ID_MIN,
+    ExternalHike,
+    external_dayhike,
+    external_label,
+    long_enough,
+)
 from dayhike.catalog import (
     GAP_JOIN_M,
     KIND_RELATION,
@@ -22,11 +31,13 @@ from dayhike.catalog import (
     NAME_ORIGIN_OSM_REF,
     NAME_ORIGIN_PLACE,
     NAME_ORIGIN_SYNTHETIC,
+    PLACE_RADIUS_M,
     DayHike,
     Heights,
     IngestReport,
     LowerStart,
     MainWalk,
+    PreviousStarts,
     SAC_SCALE_RANK,
     NamedPoints,
     _access_tree,
@@ -41,23 +52,36 @@ from dayhike.catalog import (
     named_points,
     tagged_ends,
 )
+from dayhike.dem import DEM_READ_KEY
+from dayhike.destination_hikes import destination_source, search_destinations
+from dayhike.named_trails import named_trails
+from dayhike.names import unique_names
 from dayhike.network_hikes import network_source
 from dayhike.osm import (
+    HUT_TOURISM,
+    PLACE_KINDS,
+    RESTAURANT_CAFE_AMENITY,
     NodeStore,
     OsmRelation,
     OsmSnapshot,
-    OsmWay,
+    WayEnds,
+    WayStore,
     _MEMBER_TYPE,
     _parse_ele_m,
     amenity_kind,
 )
 from dayhike.parallel import parallel_iter, parallel_map
 from dayhike.similarity import TWIN_SHARE, TWIN_STEP_M, _even_points, _step_m, twin_groups
-from dayhike.stages import day_stages
+from dayhike.stages import day_stages, external_stages
+from dayhike.steps import PhaseStore, ingest_key, remove_phases
 
-INGEST_WORK_SCHEMA = 9
+INGEST_WORK_SCHEMA = 12
+# Bump when a pass writes other rows from the same snapshot, so work-file tables cached
+# by an earlier version (``pass_cache``) are not read.
+PASS_CACHE_VERSION = 1
 INGEST_CHECKPOINT_OBJECTS = 50_000
 INGEST_PROGRESS_EVERY_OBJECTS = 100_000
+ID_FILTER_CHUNK = 1_000_000  # ids handed to an osmium IdFilter per numpy slice
 WORK_CACHE_KIB = 262_144  # the work file's page cache while ingest runs
 HIKING_ROUTES = ("hiking", "foot")  # route=foot is read as hiking (ADR-0034)
 CATALOG_TAG_FILTERS = (
@@ -71,14 +95,45 @@ CATALOG_TAG_FILTERS = (
     "nwr/man_made=water_tap",
     "n/place=city,town,village,hamlet",
 )
+# What ingest reads of the paths no hiking relation lists, each level adding to the one
+# before (ADR-0065, ADR-0066): graded paths (ADR-0037), then named paths, footways and
+# bridleways (the ways of named trails), then named tracks too, then unnamed paths too.
+# Beyond ``graded`` they also enter the snapshot, with highway=trailhead nodes.
+PATH_LEVELS = ("graded", "trails", "named", "unnamed")
+# The tags an object needs for ``_point_kind`` (one scan, in file order): the passes' TagFilter drops the rest in C++.
+POINT_TAGS = (
+    *(("tourism", value) for value in (*sorted(HUT_TOURISM), "viewpoint")),
+    *(("natural", value) for value in ("peak", "spring", "water")),
+    *(("amenity", value) for value in ("parking", *sorted(RESTAURANT_CAFE_AMENITY), "drinking_water", "shelter", "water_point")),
+    ("man_made", "water_tap"),
+    *(("place", value) for value in sorted(PLACE_KINDS)),
+    ("information", "guidepost"),
+    ("highway", "trailhead"),
+)
+# What a way needs for ``_is_extra_path`` at each level: the ways pass keeps it only if it has one of these keys
+# and one of these highways.
+PATH_KEYS = {"graded": ("sac_scale",), "trails": ("sac_scale", "name"), "named": ("sac_scale", "name"), "unnamed": ("highway",)}
+TRAIL_PATH_HIGHWAYS = ("path", "footway", "bridleway")
+NAMED_PATH_HIGHWAYS = (*TRAIL_PATH_HIGHWAYS, "track")
+PATH_HIGHWAYS = {"graded": ("path",), "trails": TRAIL_PATH_HIGHWAYS, "named": NAMED_PATH_HIGHWAYS, "unnamed": NAMED_PATH_HIGHWAYS}
+NOT_A_PATH_FOOTWAYS = ("sidewalk", "crossing")
+TRAILHEAD_TAG_FILTER = "n/highway=trailhead"
 LAKE_WATER = ("lake", "reservoir", "pond")  # a named natural=water of these is a lake a NetworkHike may go to
 DESTINATION_KINDS = ("peak", "hut", "viewpoint", "lake")  # named, a NetworkHike's destinations (ADR-0039)
-# Point kinds read only for NetworkHikes: no amenity, no named point, not in the GeometryStore.
-NETWORK_ONLY_KINDS = ("lake", "guidepost")
+# Point kinds read only for built hikes, NetworkHikes and named trails (trailhead nodes, ADR-0066):
+# no amenity, no named point, not in the GeometryStore.
+NETWORK_ONLY_KINDS = ("lake", "guidepost", "trailhead")
 # Sources of DayHikes that are not one relation (ADR-0038), run after the relations are kept.
-BUILT_HIKE_SOURCES: tuple[BuiltHikeSource, ...] = (day_stages, network_source)
+# named_trails builds only from the trail ways a ``paths`` level beyond ``graded`` reads (ADR-0066).
+BUILT_HIKE_SOURCES: tuple[BuiltHikeSource, ...] = (day_stages, network_source, named_trails, destination_source)
 
 Progress = Callable[[str], None]
+
+
+def check_paths(paths: str) -> None:
+    """Refuse a paths level that is not one of ``PATH_LEVELS``."""
+    if paths not in PATH_LEVELS:
+        raise ValueError(f"paths must be one of {', '.join(PATH_LEVELS)}, got {paths!r}")
 
 
 def work_path_for(catalog_path: Path) -> Path:
@@ -99,17 +154,32 @@ def run_ingest(
     sources: Sequence[BuiltHikeSource] = BUILT_HIKE_SOURCES,
     heights: Heights | None = None,
     external: Sequence[tuple[str, Sequence[ExternalHike]]] = (),
-) -> tuple[list[DayHike], IngestReport, Path, OsmSnapshot]:
+    previous: PreviousStarts | None = None,
+    paths: str | Sequence[str] = "graded",
+    pass_cache: Path | None = None,
+) -> tuple[list[DayHike], IngestReport, Path, OsmSnapshot, dict[int, _StoredWalk]]:
+    # One paths level for every source, or one per source (a Europe and US build, ADR-0069).
+    levels = [paths] * len(source_paths) if isinstance(paths, str) else list(paths)
+    if len(levels) != len(source_paths):
+        raise ValueError(f"{len(levels)} paths levels for {len(source_paths)} sources")
+    for level in levels:
+        check_paths(level)
     catalog_path = Path(catalog_path)
     catalog_path.parent.mkdir(parents=True, exist_ok=True)
     work_path = work_path_for(catalog_path)
-    fingerprint = _fingerprint(source_paths)
+    fingerprint = _fingerprint(source_paths, levels)
     resume = not fresh and _work_is_resumable(work_path, fingerprint)
+    cached = None if pass_cache is None else _pass_cache_path(pass_cache, fingerprint, levels)
     if not resume:
         remove_work(work_path)
+        if cached is not None and not fresh and _work_is_resumable(cached, fingerprint):
+            emit_progress(progress, "passes", f"cached {cached}")
+            shutil.copyfile(cached, work_path)
+            resume = True
+            cached = None  # already there
 
     emit_progress(progress, "filter", "starting")
-    scan_paths = _scan_paths(source_paths, progress) if not resume else _stored_scan_paths(
+    scan_paths = _scan_paths(source_paths, progress, levels) if not resume else _stored_scan_paths(
         work_path, source_paths
     )
 
@@ -117,11 +187,17 @@ def run_ingest(
     try:
         if not resume:
             _init_work(conn, fingerprint, source_paths, scan_paths)
+        passes_done = resume and _pass_done(conn, "nodes", scan_paths)
         _pass_relations(conn, scan_paths, progress)
-        _pass_ways(conn, scan_paths, progress)
+        _pass_ways(conn, scan_paths, progress, levels)
         _pass_nodes(conn, scan_paths, progress)
+        if cached is not None and not passes_done:
+            _save_pass_cache(conn, cached, progress)
+        if destination_source in sources:
+            # Before the snapshot loads: the tile search forks its workers from a small process (ADR-0067).
+            search_destinations(work_path, source_paths, getattr(heights, "raster_dir", None), progress)
         emit_progress(progress, "assemble", "loading work file")
-        snapshot = _load_hiking_snapshot(conn, progress)
+        snapshot = _load_hiking_snapshot(conn, progress, with_paths=any(level != "graded" for level in levels))
         emit_progress(
             progress,
             "assemble",
@@ -134,19 +210,38 @@ def run_ingest(
         access_tree = _access_tree(snapshot.access_points)
         amenity_index = _amenity_index(snapshot.amenities)
         named = named_points(snapshot.named_points)
-        lower = _lower_start(snapshot, heights)
-        walks: dict[int, _StoredWalk] = {}
-        kept, report_counts = _keep_dayhikes(
-            snapshot,
-            access_tree,
-            amenity_index,
-            _drop_reason,
-            _dayhike_from_relation,
-            named,
-            named_points(snapshot.places),
-            walks if sources or external else None,
-            lower,
+        lower = _lower_start(snapshot, heights, previous)
+        # Each phase's result is kept beside the work file when it finishes, so a run that stops
+        # carries on after the phases it finished (dayhike.steps); a phase it stopped in runs again.
+        phases = PhaseStore(
+            work_path,
+            ingest_key(
+                fingerprint,
+                levels,
+                INGEST_WORK_SCHEMA,
+                [getattr(source, "__name__", repr(source)) for source in sources],
+                getattr(heights, "raster_dir", None),
+                previous,
+            ),
         )
+
+        def relation_hikes_phase() -> dict[str, object]:
+            stored: dict[int, _StoredWalk] = {}
+            hikes, counts = _keep_dayhikes(
+                snapshot,
+                access_tree,
+                amenity_index,
+                _drop_reason,
+                _dayhike_from_relation,
+                named,
+                named_points(snapshot.places),
+                stored if sources or external else None,
+                lower,
+            )
+            return {"kept": hikes, "counts": counts, "walks": stored}
+
+        phase = _phase(phases, "relation-hikes", relation_hikes_phase, progress)
+        kept, report_counts, walks = phase["kept"], phase["counts"], phase["walks"]
         relation_hikes = tuple(kept)
         if sources:
             emit_progress(progress, "assemble", "built DayHikes")
@@ -158,20 +253,28 @@ def run_ingest(
                 else _main_walk(relation, snapshot, access_tree, named, lower),
                 progress,
                 lower,
+                tuple(Path(path) for path in source_paths),
+                getattr(heights, "raster_dir", None),
+                work_path=work_path,
             )
-            kept += _build_hikes(conn, sources, context, amenity_index)
-        external_counts = {"added": 0, "twin": 0, "duplicate": 0, "length": 0}
+            kept += _build_hikes(conn, sources, context, amenity_index, phases, progress)
+        external_counts = {"added": 0, "stages": 0, "twin": 0, "duplicate": 0, "length": 0}
         if external:
             emit_progress(progress, "assemble", "external hikes")
-            added, external_counts = _add_external(conn, external, relation_hikes, walks, snapshot, amenity_index)
+            added, external_counts = _add_external(
+                conn, external, relation_hikes, kept[len(relation_hikes) :], walks, snapshot, amenity_index
+            )
             emit_progress(
                 progress,
                 "assemble",
-                f"external hikes: {external_counts['added']} added, {external_counts['twin']} Twins of OSM hikes, "
+                f"external hikes: {external_counts['added']} added ({external_counts['stages']} DayStages), "
+                f"{external_counts['twin']} Twins of OSM hikes, "
                 f"{external_counts['duplicate']} Twins of external hikes "
                 f"and {external_counts['length']} under 1 km dropped",
             )
             kept = sorted([*kept, *added], key=lambda hike: hike.id)
+        # Every hike name in the build is unique, and no placeholder ("Road", "Trail") names one (ADR-0068).
+        kept = unique_names(kept, snapshot.places, snapshot.destinations)
         origin_counts = Counter(hike.name_origin for hike in kept)
         report = IngestReport(
             kept=len(kept),
@@ -185,13 +288,27 @@ def run_ingest(
             named_from_to=origin_counts[NAME_ORIGIN_FROM_TO],
             named_place=origin_counts[NAME_ORIGIN_PLACE],
             external_added=external_counts["added"],
+            external_stages=external_counts["stages"],
             dropped_external_twin=external_counts["twin"],
             dropped_external_duplicate=external_counts["duplicate"],
             dropped_external_length=external_counts["length"],
         )
-        return kept, report, work_path, snapshot
+        return kept, report, work_path, snapshot, walks
     finally:
         conn.close()
+
+
+def _phase(
+    phases: PhaseStore, name: str, compute: Callable[[], dict[str, object]], progress: Progress | None
+) -> dict[str, object]:
+    """The kept result of an ingest phase, else ``compute()``, kept."""
+    phase = phases.load(name)
+    if phase is None:
+        phase = compute()
+        phases.save(name, phase)
+        return phase
+    emit_progress(progress, "assemble", f"resumed phase {name}")
+    return phase
 
 
 def _connect_work(work_path: Path) -> sqlite3.Connection:
@@ -211,6 +328,7 @@ def remove_work(work_path: Path) -> None:
     """The work file and its WAL side files, so a stale WAL never meets a new work file."""
     for path in (work_path, Path(f"{work_path}-wal"), Path(f"{work_path}-shm")):
         path.unlink(missing_ok=True)
+    remove_phases(work_path)
 
 
 class _Pending:
@@ -247,14 +365,40 @@ def _sorted_ids(conn: sqlite3.Connection, table: str) -> np.ndarray:
     return np.fromiter((row[0] for row in conn.execute(f"SELECT id FROM {table} ORDER BY id")), dtype=np.int64)
 
 
-def _fingerprint(paths: Sequence[Path]) -> str:
-    rows = []
-    for path in paths:
+def _fingerprint(paths: Sequence[Path], levels: Sequence[str]) -> str:
+    rows: list[dict] = []
+    for path, level in zip(paths, levels):
         stat = path.stat()
         rows.append(
-            {"path": str(path.resolve()), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+            {"path": str(path.resolve()), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns, "paths": level}
         )
     return json.dumps(rows)
+
+
+def _pass_cache_path(cache_dir: Path, fingerprint: str, levels: Sequence[str]) -> Path:
+    """Where the work file of the passes is kept for the same snapshot files (size, modification
+    time), paths levels, filter text, work-file schema and pass code (``PASS_CACHE_VERSION``)."""
+    key = json.dumps(
+        [PASS_CACHE_VERSION, INGEST_WORK_SCHEMA, fingerprint, [_catalog_filters_text(level) for level in levels]]
+    )
+    return cache_dir / f"passes-{hashlib.sha256(key.encode()).hexdigest()[:16]}.work"
+
+
+def _save_pass_cache(conn: sqlite3.Connection, cached: Path, progress: Progress | None) -> None:
+    """Keep a copy of the work file, as the passes left it, in ``cached``'s directory, in place of
+    any other snapshot's. A copy that cannot be made (a full disk) is left out: it only saves time."""
+    tmp = cached.with_name(cached.name + ".writing")
+    try:
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        shutil.copyfile(conn.execute("PRAGMA database_list").fetchone()[2], tmp)
+        for old in cached.parent.glob("passes-*.work"):
+            old.unlink(missing_ok=True)
+        tmp.replace(cached)
+        emit_progress(progress, "passes", f"kept in {cached}")
+    except OSError as exc:
+        tmp.unlink(missing_ok=True)
+        emit_progress(progress, "passes", f"not kept: {exc}")
 
 
 def _work_is_resumable(work_path: Path, fingerprint: str) -> bool:
@@ -321,7 +465,7 @@ def _init_work(
             node_ids TEXT NOT NULL,
             tags TEXT NOT NULL
         );
-        CREATE TABLE IF NOT EXISTS graded_ways (
+        CREATE TABLE IF NOT EXISTS path_ways (
             id INTEGER PRIMARY KEY,
             node_ids TEXT NOT NULL,
             tags TEXT NOT NULL
@@ -329,7 +473,13 @@ def _init_work(
         CREATE TABLE IF NOT EXISTS needed_nodes (
             id INTEGER PRIMARY KEY
         );
-        CREATE TABLE IF NOT EXISTS graded_needed_nodes (
+        CREATE TABLE IF NOT EXISTS path_needed_nodes (
+            id INTEGER PRIMARY KEY
+        );
+        CREATE TABLE IF NOT EXISTS snapshot_path_ways (
+            id INTEGER PRIMARY KEY
+        );
+        CREATE TABLE IF NOT EXISTS snapshot_path_nodes (
             id INTEGER PRIMARY KEY
         );
         CREATE TABLE IF NOT EXISTS nodes (
@@ -338,7 +488,7 @@ def _init_work(
             lon REAL NOT NULL,
             ele REAL
         );
-        CREATE TABLE IF NOT EXISTS graded_nodes (
+        CREATE TABLE IF NOT EXISTS path_nodes (
             id INTEGER PRIMARY KEY,
             lat REAL NOT NULL,
             lon REAL NOT NULL,
@@ -377,10 +527,10 @@ def _init_work(
     conn.commit()
 
 
-def _scan_paths(source_paths: Sequence[Path], progress: Progress | None) -> list[Path]:
+def _scan_paths(source_paths: Sequence[Path], progress: Progress | None, levels: Sequence[str]) -> list[Path]:
     osmium_bin = shutil.which("osmium")
     scan: list[Path] = []
-    for path in source_paths:
+    for path, paths in zip(source_paths, levels):
         if osmium_bin is None or not _needs_catalog_filter(path):
             scan.append(path)
             continue
@@ -389,13 +539,13 @@ def _scan_paths(source_paths: Sequence[Path], progress: Progress | None) -> list
             cache.is_file()
             and cache.stat().st_mtime_ns >= path.stat().st_mtime_ns
             and _catalog_filters_path(cache).is_file()
-            and _catalog_filters_path(cache).read_text() == _catalog_filters_text()
+            and _catalog_filters_path(cache).read_text() == _catalog_filters_text(paths)
         ):
             emit_progress(progress, "filter", f"cached {cache}")
             scan.append(cache)
             continue
         emit_progress(progress, "filter", f"{path.name} -> {cache.name}")
-        _run_osmium_tags_filter(osmium_bin, path, cache)
+        _run_osmium_tags_filter(osmium_bin, path, cache, paths)
         scan.append(cache)
     if osmium_bin is None:
         emit_progress(progress, "filter", "osmium-tool not on PATH, reading source files")
@@ -429,11 +579,19 @@ def _catalog_filters_path(cache: Path) -> Path:
     return cache.with_name(cache.name + ".filters")
 
 
-def _catalog_filters_text() -> str:
-    return "\n".join(CATALOG_TAG_FILTERS) + "\n"
+def _catalog_filters(paths: str) -> tuple[str, ...]:
+    if paths == "graded":
+        return CATALOG_TAG_FILTERS
+    # osmium cannot ask for a name too: the extract keeps every such way, the ways pass picks.
+    highways = TRAIL_PATH_HIGHWAYS if paths == "trails" else NAMED_PATH_HIGHWAYS
+    return (*CATALOG_TAG_FILTERS, "w/highway=" + ",".join(highways), TRAILHEAD_TAG_FILTER)
 
 
-def _run_osmium_tags_filter(osmium_bin: str, source: Path, dest: Path) -> None:
+def _catalog_filters_text(paths: str) -> str:
+    return "\n".join(_catalog_filters(paths)) + "\n"
+
+
+def _run_osmium_tags_filter(osmium_bin: str, source: Path, dest: Path, paths: str) -> None:
     if dest.name.endswith(".osm.pbf"):
         tmp = dest.with_name(dest.name[: -len(".osm.pbf")] + ".writing.osm.pbf")
     else:
@@ -442,7 +600,7 @@ def _run_osmium_tags_filter(osmium_bin: str, source: Path, dest: Path) -> None:
         osmium_bin,
         "tags-filter",
         str(source.resolve()),
-        *CATALOG_TAG_FILTERS,
+        *_catalog_filters(paths),
         "-o",
         str(tmp),
         "--overwrite",
@@ -451,7 +609,7 @@ def _run_osmium_tags_filter(osmium_bin: str, source: Path, dest: Path) -> None:
     try:
         subprocess.run(cmd, check=True)
         tmp.replace(dest)
-        _catalog_filters_path(dest).write_text(_catalog_filters_text())
+        _catalog_filters_path(dest).write_text(_catalog_filters_text(paths))
     finally:
         if tmp.exists():
             tmp.unlink()
@@ -503,8 +661,66 @@ def _mark_progress(
     conn.commit()
 
 
-def _iter_file(path: Path, entities: osmium.osm.osm_entity_bits):
-    yield from osmium.FileProcessor(str(path), entities)
+def _iter_file(path: Path, entities: osmium.osm.osm_entity_bits, filters: Sequence = ()):
+    processor = osmium.FileProcessor(str(path), entities)
+    for osm_filter in filters:
+        processor.with_filter(osm_filter)
+    yield from processor
+
+
+def _chunked_ids(*arrays: np.ndarray):
+    # The ids of sorted arrays for an osmium IdFilter, a numpy slice at a time (not one list of every id).
+    for ids in arrays:
+        for start in range(0, len(ids), ID_FILTER_CHUNK):
+            yield from ids[start : start + ID_FILTER_CHUNK].tolist()
+
+
+def _id_filters(*arrays: np.ndarray) -> list:
+    """An osmium IdFilter of these ids, none for a file of negative ids (a JOSM
+    file of new objects): IdFilter takes positive ids only, so every object
+    reaches the handler, which tests the ids itself."""
+    if any(len(ids) and ids[0] < 0 for ids in arrays):
+        return []
+    return [osmium.filter.IdFilter(_chunked_ids(*arrays))]
+
+
+def _scan(
+    conn: sqlite3.Connection,
+    pass_name: str,
+    paths: Sequence[Path],
+    entities: osmium.osm.osm_entity_bits,
+    filters_for: Callable[[int], Sequence],
+    handle: Callable[[osmium.osm.OSMObject, int, _Pending, int], None],
+    progress: Progress | None,
+    stage: str,
+    detail: Callable[[], str],
+) -> None:
+    """One scan of each file ``pass_name`` has not finished, through the osmium
+    filters (``filters_for(file_index)``, in C++): ``handle(obj, id, pending, file_index)`` runs only for
+    the objects that pass, and rows and progress are written at checkpoints."""
+    if _pass_done(conn, pass_name, paths):
+        return
+    seen = 0
+    pending = _Pending(conn)
+    for index, path in enumerate(paths):
+        last_id, done = _file_state(conn, pass_name, path)
+        if done:
+            continue
+        file_last = last_id
+        for obj in _iter_file(path, entities, filters_for(index)):
+            osm_id = int(obj.id)
+            if not _after(osm_id, last_id):
+                continue
+            handle(obj, osm_id, pending, index)
+            seen += 1
+            file_last = osm_id
+            if seen % INGEST_CHECKPOINT_OBJECTS == 0:
+                pending.write()
+                _mark_progress(conn, pass_name, path, file_last)
+            if seen % INGEST_PROGRESS_EVERY_OBJECTS == 0:
+                emit_progress(progress, stage, f"{seen} scanned, {detail()}, last_id={osm_id}")
+        pending.write()
+        _mark_progress(conn, pass_name, path, file_last, done=True)
 
 
 def _pass_relations(
@@ -562,74 +778,103 @@ def _pass_relations(
 
 
 def _pass_ways(
-    conn: sqlite3.Connection, paths: Sequence[Path], progress: Progress | None
+    conn: sqlite3.Connection, paths: Sequence[Path], progress: Progress | None, levels: Sequence[str]
 ) -> None:
+    """The member ways of hiking relations, amenity ways and, per file at its
+    ``levels`` entry, the paths in no relation. Those of a file read beyond
+    ``graded`` are also marked to enter the snapshot (``snapshot_path_ways``),
+    so a ``graded`` file of a mixed build (Europe beside the US) gives the
+    snapshot what a build of it alone would.
+
+    Filtering in C++, the passes scan the ways that can be a point or an extra
+    path (``ways_points``, ``ways_paths``; the listed ways
+    are left to the last scan) then the listed ways, by id (``ways``, whose end
+    marks the pass done). A way both a point and a path is read twice: the rows
+    it gives are the same."""
     emit_progress(progress, "ways", "starting")
     if _pass_done(conn, "ways", paths):
         emit_progress(progress, "ways", "resumed, already complete")
         return
     needed_ways = _sorted_ids(conn, "needed_ways")
     amenity_ways = _sorted_ids(conn, "amenity_ways")
-    seen = 0
     kept = 0
-    graded = 0
-    pending = _Pending(conn)
-    for path in paths:
-        last_id, done = _file_state(conn, "ways", path)
-        if done:
-            continue
-        file_last = last_id
-        for obj in _iter_file(path, osmium.osm.WAY):
-            if not obj.is_way() or not _after(int(obj.id), last_id):
-                continue
-            osm_id = int(obj.id)
-            node_ids = [int(node.ref) for node in obj.nodes]
-            tags = dict(obj.tags)
-            kind = _point_kind(tags)
-            if _sorted_has(needed_ways, osm_id):
-                pending.add(
-                    "INSERT OR REPLACE INTO ways (id, node_ids, tags) VALUES (?, ?, ?)",
-                    osm_id, json.dumps(node_ids), json.dumps(tags),
-                )
-                pending.add_ids("needed_nodes", node_ids)
-                kept += 1
-            elif _is_graded_path(tags):
-                pending.add(
-                    "INSERT OR REPLACE INTO graded_ways (id, node_ids, tags) VALUES (?, ?, ?)",
-                    osm_id, json.dumps(node_ids), json.dumps(tags),
-                )
-                pending.add_ids("graded_needed_nodes", node_ids)
-                graded += 1
-            if node_ids and (kind is not None or _sorted_has(amenity_ways, osm_id)):
-                pending.add(
-                    "INSERT OR REPLACE INTO pending_amenity_ways (id, kind, node_id, tags) VALUES (?, ?, ?, ?)",
-                    osm_id, kind or "", node_ids[0], json.dumps(tags),
-                )
-                pending.add_ids("needed_nodes", node_ids[:1])
-            seen += 1
-            file_last = osm_id
-            if seen % INGEST_CHECKPOINT_OBJECTS == 0:
-                pending.write()
-                _mark_progress(conn, "ways", path, file_last)
-            if seen % INGEST_PROGRESS_EVERY_OBJECTS == 0:
-                emit_progress(
-                    progress, "ways", f"{seen} scanned, {kept} hiking ways, last_id={osm_id}"
-                )
-        pending.write()
-        _mark_progress(conn, "ways", path, file_last, done=True)
-    emit_progress(progress, "ways", f"{kept} hiking ways, {graded} graded paths")
+
+    def handle(obj: osmium.osm.Way, osm_id: int, pending: _Pending, index: int) -> None:
+        nonlocal kept
+        node_ids = [int(node.ref) for node in obj.nodes]
+        tags = dict(obj.tags)
+        kind = _point_kind(tags)
+        if _sorted_has(needed_ways, osm_id):
+            pending.add(
+                "INSERT OR REPLACE INTO ways (id, node_ids, tags) VALUES (?, ?, ?)",
+                osm_id, json.dumps(node_ids), json.dumps(tags),
+            )  # fmt: skip
+            pending.add_ids("needed_nodes", node_ids)
+            kept += 1
+        elif _is_extra_path(tags, levels[index]):
+            pending.add(
+                "INSERT OR REPLACE INTO path_ways (id, node_ids, tags) VALUES (?, ?, ?)",
+                osm_id, json.dumps(node_ids), json.dumps(tags),
+            )  # fmt: skip
+            pending.add_ids("path_needed_nodes", node_ids)
+            if levels[index] != "graded":
+                pending.add_ids("snapshot_path_ways", [osm_id])
+                pending.add_ids("snapshot_path_nodes", node_ids)
+        if node_ids and (kind is not None or _sorted_has(amenity_ways, osm_id)):
+            pending.add(
+                "INSERT OR REPLACE INTO pending_amenity_ways (id, kind, node_id, tags) VALUES (?, ?, ?, ?)",
+                osm_id, kind or "", node_ids[0], json.dumps(tags),
+            )  # fmt: skip
+            pending.add_ids("needed_nodes", node_ids[:1])
+
+    def listed(osm_id: int) -> bool:
+        return _sorted_has(needed_ways, osm_id) or _sorted_has(amenity_ways, osm_id)
+
+    def handle_listed(obj: osmium.osm.Way, osm_id: int, pending: _Pending, index: int) -> None:
+        if listed(osm_id):
+            handle(obj, osm_id, pending, index)
+
+    def handle_unlisted(obj: osmium.osm.Way, osm_id: int, pending: _Pending, index: int) -> None:
+        if not listed(osm_id):
+            handle(obj, osm_id, pending, index)
+
+    def detail() -> str:
+        return f"{kept} hiking ways"
+
+    scans = (
+        ("ways_points", lambda index: [osmium.filter.TagFilter(*POINT_TAGS)]),
+        ("ways_paths", lambda index: _path_filters(levels[index])),
+    )
+    for pass_name, filters_for in scans:
+        _scan(conn, pass_name, paths, osmium.osm.WAY, filters_for, handle_unlisted, progress, "ways", detail)
+    id_filters = _id_filters(needed_ways, amenity_ways)
+    _scan(conn, "ways", paths, osmium.osm.WAY, lambda index: id_filters, handle_listed, progress, "ways", detail)
+    extra = conn.execute("SELECT count(*) FROM path_ways").fetchone()[0]
+    read = ", ".join(dict.fromkeys(levels))
+    emit_progress(progress, "ways", f"{kept} hiking ways, {extra} paths in no relation ({read})")
+
+
+def _path_filters(level: str) -> list:
+    return [
+        osmium.filter.KeyFilter(*PATH_KEYS[level]),
+        osmium.filter.TagFilter(*(("highway", highway) for highway in PATH_HIGHWAYS[level])),
+    ]
 
 
 def _point_kind(tags: dict[str, str]) -> str | None:
     """The amenity kind of an OSM object, else ``lake`` for a named lake
-    (``LAKE_WATER``) or ``guidepost`` for a named guidepost."""
+    (``LAKE_WATER``), ``guidepost`` for a named guidepost or ``trailhead``
+    for a ``highway=trailhead``."""
     kind = amenity_kind(tags)
-    if kind is not None or not tags.get("name"):
+    if kind is not None:
         return kind
-    if tags.get("natural") == "water" and tags.get("water") in LAKE_WATER:
-        return "lake"
-    if tags.get("information") == "guidepost":
-        return "guidepost"
+    if tags.get("name"):
+        if tags.get("natural") == "water" and tags.get("water") in LAKE_WATER:
+            return "lake"
+        if tags.get("information") == "guidepost":
+            return "guidepost"
+    if tags.get("highway") == "trailhead":
+        return "trailhead"
     return None
 
 
@@ -638,9 +883,23 @@ def _is_graded_path(tags: dict[str, str]) -> bool:
     return tags.get("highway") == "path" and tags.get("sac_scale") in SAC_SCALE_RANK
 
 
+def _is_extra_path(tags: dict[str, str], level: str) -> bool:
+    """A way no hiking relation lists that joins the TrailGraph at this ``PATH_LEVELS`` level (ADR-0065)."""
+    if _is_graded_path(tags):
+        return True
+    if level == "graded" or tags.get("footway") in NOT_A_PATH_FOOTWAYS:
+        return False
+    highway = tags.get("highway")
+    named = TRAIL_PATH_HIGHWAYS if level == "trails" else NAMED_PATH_HIGHWAYS
+    return (bool(tags.get("name")) and highway in named) or (level == "unnamed" and highway == "path")
+
+
 def _pass_nodes(
     conn: sqlite3.Connection, paths: Sequence[Path], progress: Progress | None
 ) -> None:
+    """The geometry nodes, by id, and the point-kind nodes, by ``POINT_TAGS``: two
+    scans that filter in C++ (``nodes_points``, then ``nodes``, whose end marks
+    the pass done). Only the point scan writes ``amenities``, in file order."""
     emit_progress(progress, "nodes", "starting")
     if _pass_done(conn, "nodes", paths):
         emit_progress(progress, "nodes", "resumed, already complete")
@@ -649,53 +908,42 @@ def _pass_nodes(
         _resolve_pending_amenities(conn)
         return
     needed_nodes = _sorted_ids(conn, "needed_nodes")
-    graded_nodes = _sorted_ids(conn, "graded_needed_nodes")
-    seen = 0
+    path_nodes = _sorted_ids(conn, "path_needed_nodes")
     kept = 0
-    pending = _Pending(conn)
-    for path in paths:
-        last_id, done = _file_state(conn, "nodes", path)
-        if done:
-            continue
-        file_last = last_id
-        for obj in _iter_file(path, osmium.osm.NODE):
-            if not obj.is_node() or not _after(int(obj.id), last_id):
-                continue
-            osm_id = int(obj.id)
-            location = obj.location
-            tags = dict(obj.tags)
-            kind = _point_kind(tags)
-            needed = _sorted_has(needed_nodes, osm_id)
-            graded = not needed and _sorted_has(graded_nodes, osm_id)
-            if location.valid() and (needed or graded or kind is not None):
-                point = (float(location.lat), float(location.lon))
-                if needed:
-                    pending.add(
-                        "INSERT OR REPLACE INTO nodes (id, lat, lon, ele) VALUES (?, ?, ?, ?)",
-                        osm_id, point[0], point[1], _parse_ele_m(tags.get("ele")),
-                    )
-                    kept += 1
-                elif graded:
-                    pending.add(
-                        "INSERT OR REPLACE INTO graded_nodes (id, lat, lon, ele) VALUES (?, ?, ?, ?)",
-                        osm_id, point[0], point[1], _parse_ele_m(tags.get("ele")),
-                    )
-                if kind is not None:
-                    pending.add(
-                        "INSERT OR REPLACE INTO amenities (osm_key, kind, lat, lon, tags) VALUES (?, ?, ?, ?, ?)",
-                        f"n{osm_id}", kind, point[0], point[1], json.dumps(tags),
-                    )
-            seen += 1
-            file_last = osm_id
-            if seen % INGEST_CHECKPOINT_OBJECTS == 0:
-                pending.write()
-                _mark_progress(conn, "nodes", path, file_last)
-            if seen % INGEST_PROGRESS_EVERY_OBJECTS == 0:
-                emit_progress(
-                    progress, "nodes", f"{seen} scanned, {kept} kept, last_id={osm_id}"
-                )
-        pending.write()
-        _mark_progress(conn, "nodes", path, file_last, done=True)
+    insert_node = "INSERT OR REPLACE INTO nodes (id, lat, lon, ele) VALUES (?, ?, ?, ?)"
+    insert_path_node = "INSERT OR REPLACE INTO path_nodes (id, lat, lon, ele) VALUES (?, ?, ?, ?)"
+
+    def handle_point(obj: osmium.osm.Node, osm_id: int, pending: _Pending, index: int) -> None:
+        tags = dict(obj.tags)
+        kind = _point_kind(tags)
+        location = obj.location
+        if kind is not None and location.valid():
+            pending.add(
+                "INSERT OR REPLACE INTO amenities (osm_key, kind, lat, lon, tags) VALUES (?, ?, ?, ?, ?)",
+                f"n{osm_id}", kind, float(location.lat), float(location.lon), json.dumps(tags),
+            )  # fmt: skip
+
+    def handle_geometry(obj: osmium.osm.Node, osm_id: int, pending: _Pending, index: int) -> None:
+        nonlocal kept
+        location = obj.location
+        if not location.valid():
+            return
+        needed = _sorted_has(needed_nodes, osm_id)
+        if not needed and not _sorted_has(path_nodes, osm_id):
+            return
+        pending.add(
+            insert_node if needed else insert_path_node,
+            osm_id, float(location.lat), float(location.lon), _parse_ele_m(obj.tags.get("ele")),
+        )  # fmt: skip
+        kept += needed
+
+    def detail() -> str:
+        return f"{kept} kept"
+
+    point_filters = [osmium.filter.TagFilter(*POINT_TAGS)]
+    _scan(conn, "nodes_points", paths, osmium.osm.NODE, lambda index: point_filters, handle_point, progress, "nodes", detail)
+    id_filters = _id_filters(needed_nodes, path_nodes)
+    _scan(conn, "nodes", paths, osmium.osm.NODE, lambda index: id_filters, handle_geometry, progress, "nodes", detail)
     _resolve_pending_amenities(conn)
     emit_progress(progress, "nodes", f"{kept} geometry nodes")
 
@@ -753,20 +1001,37 @@ def _resolve_pending_amenities(conn: sqlite3.Connection) -> None:
 
 
 def _load_hiking_snapshot(
-    conn: sqlite3.Connection, progress: Progress | None = None
+    conn: sqlite3.Connection, progress: Progress | None = None, with_paths: bool = False
 ) -> OsmSnapshot:
+    """The snapshot of the hiking tables; ``with_paths``, also of the paths in no
+    hiking relation read from a file beyond the ``graded`` level
+    (``snapshot_path_ways``) and the nodes only they use."""
     snapshot = OsmSnapshot()
     emit_progress(progress, "assemble", "loading nodes")
-    store = NodeStore.from_rows(conn.execute("SELECT id, lat, lon, ele FROM nodes ORDER BY id"))
+    nodes_sql = "SELECT id, lat, lon, ele FROM nodes"
+    if with_paths:
+        nodes_sql += (
+            " UNION ALL SELECT id, lat, lon, ele FROM path_nodes WHERE id IN (SELECT id FROM snapshot_path_nodes)"
+        )
+    store = NodeStore.from_rows(conn.execute(nodes_sql + " ORDER BY id"))
     snapshot.nodes, snapshot.node_elevations = store.points, store.elevations
-    loaded = 0
-    for way_id, node_ids_json, tags_json in conn.execute(
-        "SELECT id, node_ids, tags FROM ways"
-    ):
-        snapshot.ways[way_id] = OsmWay(tuple(json.loads(node_ids_json)), json.loads(tags_json))
-        loaded += 1
-        if loaded % INGEST_PROGRESS_EVERY_OBJECTS == 0:
-            emit_progress(progress, "assemble", f"loading ways {loaded}")
+    ways_sql = ["SELECT id, node_ids, tags FROM ways"]
+    if with_paths:
+        ways_sql.append("SELECT id, node_ids, tags FROM path_ways WHERE id IN (SELECT id FROM snapshot_path_ways)")
+
+    def way_rows():
+        # A way is in ``ways`` or in ``path_ways``, never both: a needed way is never a path.
+        loaded = 0
+        for sql in ways_sql:
+            for row in conn.execute(sql):
+                yield row
+                loaded += 1
+                if loaded % INGEST_PROGRESS_EVERY_OBJECTS == 0:
+                    emit_progress(progress, "assemble", f"loading ways {loaded}")
+
+    snapshot.ways = WayStore.from_rows(way_rows())
+    if with_paths:
+        snapshot.path_ways = frozenset(way_id for (way_id,) in conn.execute("SELECT id FROM snapshot_path_ways"))
     loaded = 0
     for rel_id, members_json, roles_json, tags_json in conn.execute(
         "SELECT id, members, roles, tags FROM relations"
@@ -787,6 +1052,8 @@ def _load_hiking_snapshot(
             snapshot.destinations.append((lat, lon, name))
         if name and kind == "guidepost":
             snapshot.guideposts.append((lat, lon, name))
+        if kind == "trailhead":
+            snapshot.trailheads.append((lat, lon))
         if kind in NETWORK_ONLY_KINDS:
             continue
         if kind == "place":
@@ -838,6 +1105,7 @@ def _keep_dayhikes(
         return hike, _store_walk(walk) if walks is not None else None
 
     kept = []
+    _way_ends(snapshot)
     # Each relation is walked in a worker; only its DayHike and stored walk come back.
     for result in parallel_map(keep, hiking):
         if isinstance(result, str):
@@ -856,17 +1124,33 @@ def _build_hikes(
     sources: Sequence[BuiltHikeSource],
     context: BuildContext,
     amenity_index,
+    phases: PhaseStore | None = None,
+    progress: Progress | None = None,
 ) -> list[DayHike]:
     """The built DayHikes of every source, a walk built twice kept once. Their
-    vertices and ways wait in the work file for the GeometryStore."""
+    vertices and ways wait in the work file for the GeometryStore. With ``phases``,
+    each source's walks and DayHikes are kept when it finishes, and a later run
+    loads them instead of building them again."""
     conn.execute(
         "CREATE TABLE IF NOT EXISTS built_walks (id INTEGER PRIMARY KEY, vertices TEXT NOT NULL, ways TEXT NOT NULL)"
     )
     conn.execute("DELETE FROM built_walks")
     built: dict[int, DayHike] = {}
-    for source in sources:
-        walks = list(source(context))
-        made = parallel_map(lambda walk: built_dayhike(walk, context.snapshot, amenity_index), walks)
+    for index, source in enumerate(sources):
+        name = f"source-{index}-{getattr(source, '__name__', 'source')}"
+        phase = None if phases is None else phases.load(name)
+        if phase is not None:
+            emit_progress(progress, "assemble", f"resumed phase {name}")
+            walks, made = phase["walks"], phase["made"]
+            _add_read_ways(conn, context.snapshot, walks)
+            context = replace(context, built=(*context.built, *walks))
+        else:
+            walks = list(source(context))
+            _add_read_ways(conn, context.snapshot, walks)
+            context = replace(context, built=(*context.built, *walks))
+            made = parallel_map(lambda walk: built_dayhike(walk, context.snapshot, amenity_index), walks)
+            if phases is not None:
+                phases.save(name, {"walks": walks, "made": list(made)})
         for walk, (hike, walked) in zip(walks, made):
             if hike.id in built:
                 continue
@@ -883,10 +1167,30 @@ def _build_hikes(
     return sorted(built.values(), key=lambda hike: hike.id)
 
 
+def _add_read_ways(conn: sqlite3.Connection, snapshot: OsmSnapshot, walks: Sequence[BuiltWalk]) -> None:
+    """The ways built walks read beyond the snapshot (DestinationHikes, ADR-0067):
+    into the snapshot, so they are built and stored like any other, and into the
+    work file's path tables, so the TrailGraph holds them for "Edit on the map"."""
+    ways = {way_id: way for walk in walks for way_id, way in walk.ways.items() if way_id not in snapshot.ways}
+    if not ways:
+        return
+    nodes = {node: point for walk in walks for node, point in walk.nodes.items() if node not in snapshot.nodes}
+    snapshot.ways.update(ways)
+    conn.executemany(
+        "INSERT OR IGNORE INTO path_ways (id, node_ids, tags) VALUES (?, ?, ?)",
+        [(way_id, json.dumps(list(way.node_ids)), json.dumps(way.tags)) for way_id, way in ways.items()],
+    )
+    conn.executemany(
+        "INSERT OR IGNORE INTO path_nodes (id, lat, lon, ele) VALUES (?, ?, ?, NULL)",
+        [(node, lat, lon) for node, (lat, lon) in nodes.items()],
+    )
+
+
 def _add_external(
     conn: sqlite3.Connection,
     external: Sequence[tuple[str, Sequence[ExternalHike]]],
     relation_hikes: Sequence[DayHike],
+    built_hikes: Sequence[DayHike],
     walks: dict[int, _StoredWalk],
     snapshot: OsmSnapshot,
     amenity_index,
@@ -894,13 +1198,21 @@ def _add_external(
     """The DayHikes of the external hikes (ADR-0062) and how many were added
     and dropped. One under 1 km is dropped, and so is a Twin of a relation
     DayHike (the Twin rule: the OSM hike is listed) or of an external hike kept
-    before it (counted apart, as a duplicate). Their lines wait in the work file for the GeometryStore."""
-    counts = {"added": 0, "twin": 0, "duplicate": 0, "length": 0}
+    before it (counted apart, as a duplicate). A record with no name of its own
+    is named after the nearest place (ADR-0017). A kept hike longer than
+    ``STAGE_SPLIT_M`` is also cut into DayStages (ADR-0040) as a relation DayHike
+    is; each stage is a hike of its own, dropped as a Twin of a relation DayHike,
+    of a built DayStage in ``built_hikes`` or of an external hike kept before it.
+    Their lines wait in the work file for the GeometryStore."""
+    counts = {"added": 0, "stages": 0, "twin": 0, "duplicate": 0, "length": 0}
+    places = named_points(snapshot.places)
     candidates: list[tuple[str, ExternalHike]] = []
     for source_id, hikes in external:
         for hike in hikes:
             if long_enough(hike):
-                candidates.append((source_id, hike))
+                place = None if places is None else places.nearest(*hike.points[0], PLACE_RADIUS_M)
+                name, name_origin = external_label(hike, place, source_id)
+                candidates.append((source_id, replace(hike, name=name, name_origin=name_origin)))
             else:
                 counts["length"] += 1
     conn.execute(
@@ -911,7 +1223,67 @@ def _add_external(
         conn.commit()
         return [], counts
     routes = [_twin_route(hike.points) for _, hike in candidates]
-    # Only relation DayHikes that start near the external hikes, with a length that allows a Twin, are compared.
+    given = _given_routes(conn, routes, relation_hikes, (), walks, snapshot)
+    # A group's root is its first row, so a group holding a relation has a root below len(given).
+    groups = twin_groups([*given, *routes])[len(given) :]
+    kept: list[tuple[str, ExternalHike]] = []
+    kept_routes: list[np.ndarray] = []
+    kept_groups: set[int] = set()
+    for (source_id, hike), route, group in zip(candidates, routes, groups):
+        if group < len(given):
+            counts["twin"] += 1
+            continue
+        if group in kept_groups:
+            counts["duplicate"] += 1
+            continue
+        kept_groups.add(int(group))
+        kept.append((source_id, hike))
+        kept_routes.append(route)
+    # DayStages of the kept hikes. Each is compared with the relation DayHikes and built DayStages near
+    # it and with the hikes kept above, in front of every stage, so a stage is dropped as a Twin of one of them
+    # and of a stage kept before it.
+    stages = external_stages(kept, snapshot, places)
+    added = list(kept)
+    if stages:
+        stage_routes = [_twin_route(stage.points) for _, stage in stages]
+        given = _given_routes(conn, stage_routes, relation_hikes, built_hikes, walks, snapshot)
+        groups = twin_groups([*given, *kept_routes, *stage_routes])[len(given) + len(kept_routes) :]
+        kept_groups = set()
+        for (source_id, stage), group in zip(stages, groups):
+            if group < len(given):
+                counts["twin"] += 1
+            elif group < len(given) + len(kept_routes) or group in kept_groups:
+                counts["duplicate"] += 1
+            else:
+                kept_groups.add(int(group))
+                added.append((source_id, stage))
+    dayhikes: dict[int, DayHike] = {}
+    for source_id, hike in added:
+        dayhike = external_dayhike(source_id, hike, snapshot, amenity_index)
+        if dayhike.id in dayhikes:
+            continue
+        dayhikes[dayhike.id] = dayhike
+        counts["stages"] += hike.stage is not None
+        conn.execute(
+            "INSERT INTO built_walks (id, vertices, ways) VALUES (?, ?, ?)",
+            (dayhike.id, json.dumps([[0, lat, lon] for lat, lon in hike.points]), json.dumps([])),
+        )
+    conn.commit()
+    counts["added"] = len(dayhikes)
+    return sorted(dayhikes.values(), key=lambda hike: hike.id), counts
+
+
+def _given_routes(
+    conn: sqlite3.Connection,
+    routes: Sequence[np.ndarray],
+    relation_hikes: Sequence[DayHike],
+    built_hikes: Sequence[DayHike],
+    walks: dict[int, _StoredWalk],
+    snapshot: OsmSnapshot,
+) -> list[np.ndarray]:
+    """The Twin-comparison routes of the relation DayHikes, and of the built
+    DayStages in ``built_hikes``, that start near ``routes`` and have a length
+    that allows a Twin of one of them: the only ones an external hike is compared with."""
     lengths = [float(_step_m(route[:, 0], route[:, 1]).sum()) for route in routes]
     reach_m = max(lengths) / TWIN_SHARE
     points = np.concatenate(routes)
@@ -919,37 +1291,24 @@ def _add_external(
     north, east = points.max(axis=0)
     pad_lat = reach_m / 111_320
     pad_lon = reach_m / (111_320 * max(0.1, np.cos(np.radians(max(abs(south), abs(north))))))
+
+    def near(hike: DayHike) -> bool:
+        return (
+            TWIN_SHARE * min(lengths) <= hike.length_m <= reach_m
+            and south - pad_lat <= hike.trailhead.latitude <= north + pad_lat
+            and west - pad_lon <= hike.trailhead.longitude <= east + pad_lon
+        )
+
     given = [
         _twin_route([point for _, point in _stored_walk(walks[hike.id], snapshot.nodes).vertices])
         for hike in relation_hikes
-        if hike.id in walks
-        and TWIN_SHARE * min(lengths) <= hike.length_m <= reach_m
-        and south - pad_lat <= hike.trailhead.latitude <= north + pad_lat
-        and west - pad_lon <= hike.trailhead.longitude <= east + pad_lon
+        if hike.id in walks and near(hike)
     ]
-    # A group's root is its first row, so a group holding a relation has a root below len(given).
-    groups = twin_groups([*given, *routes])[len(given) :]
-    added: dict[int, DayHike] = {}
-    kept_groups: set[int] = set()
-    for (source_id, hike), group in zip(candidates, groups):
-        if group < len(given):
-            counts["twin"] += 1
-            continue
-        if group in kept_groups:
-            counts["duplicate"] += 1
-            continue
-        dayhike = external_dayhike(source_id, hike, snapshot, amenity_index)
-        if dayhike.id in added:
-            continue
-        kept_groups.add(int(group))
-        added[dayhike.id] = dayhike
-        conn.execute(
-            "INSERT INTO built_walks (id, vertices, ways) VALUES (?, ?, ?)",
-            (dayhike.id, json.dumps([[0, lat, lon] for lat, lon in hike.points]), json.dumps([])),
-        )
-    conn.commit()
-    counts["added"] = len(added)
-    return sorted(added.values(), key=lambda hike: hike.id), counts
+    for hike in built_hikes:
+        if hike.kind == "stage" and near(hike):
+            (vertices,) = conn.execute("SELECT vertices FROM built_walks WHERE id = ?", (hike.id,)).fetchone()
+            given.append(_twin_route([(lat, lon) for _, lat, lon in json.loads(vertices)]))
+    return given
 
 
 def _twin_route(points: Sequence[tuple[float, float]]) -> np.ndarray:
@@ -990,11 +1349,14 @@ def _stored_walk(stored: _StoredWalk, nodes) -> MainWalk:
     )
 
 
-def _lower_start(snapshot: OsmSnapshot, heights: Heights | None) -> LowerStart | None:
+def _lower_start(
+    snapshot: OsmSnapshot, heights: Heights | None, previous: PreviousStarts | None = None
+) -> LowerStart | None:
     """The height rule of ingest's lines (ADR-0048): parking and places reach an end."""
     if heights is None:
         return None
-    return LowerStart(heights, [*snapshot.access_points, *((lat, lon) for lat, lon, _ in snapshot.places)])
+    access = [*snapshot.access_points, *((lat, lon) for lat, lon, _ in snapshot.places)]
+    return LowerStart(heights, access, previous)
 
 
 def _main_walk(
@@ -1015,7 +1377,15 @@ def _main_walk(
         None if lower is None else lower.choice(ways, snapshot.nodes),
         None if tagged else declared_start(dashed_ends(tags), named),
     )
-    return assemble_main_walk(relation, snapshot.ways, snapshot.nodes, access_tree, declared)
+    return assemble_main_walk(relation, snapshot.ways, snapshot.nodes, access_tree, declared, _way_ends(snapshot))
+
+
+def _way_ends(snapshot: OsmSnapshot) -> WayEnds:
+    """The snapshot's ways by their end nodes, built once a snapshot: the
+    ways a main walk can bridge two pieces of its relation by."""
+    if snapshot.way_ends is None:
+        snapshot.way_ends = WayEnds(snapshot.ways)
+    return snapshot.way_ends
 
 
 def write_geometry_store(
@@ -1024,12 +1394,19 @@ def write_geometry_store(
     conn: sqlite3.Connection,
     snapshot: OsmSnapshot | None = None,
     heights: Heights | None = None,
+    dem_read: str = "",
+    previous: PreviousStarts | None = None,
+    walks: Mapping[int, _StoredWalk] | None = None,
 ) -> None:
     """Write DayHikeGeometry, member ways, and raw amenity points beside the Catalog.
 
     Access points, named points and ``heights`` are those of ``run_ingest``,
     so each main walk starts at the same Trailhead as in the Catalog;
     ``snapshot`` is the one ``run_ingest`` loaded from it, else it is loaded again.
+    ``walks`` are the main walks ``run_ingest`` stored, which are read instead
+    of assembled again; a relation DayHike with none is assembled.
+    ``dem_read`` names the DEM sources ``heights`` read (``dem_read_by``); it is recorded
+    in ``geometry_meta`` unless empty.
     """
     from dayhike.catalog import OSM_ATTRIBUTION
 
@@ -1038,7 +1415,7 @@ def write_geometry_store(
     relations = {relation.id: relation for relation in snapshot.relations}
     access_tree = _access_tree(snapshot.access_points)
     named = named_points(snapshot.named_points)
-    lower = _lower_start(snapshot, heights)
+    lower = _lower_start(snapshot, heights, previous)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     if tmp.exists():
@@ -1096,10 +1473,16 @@ def write_geometry_store(
             "INSERT INTO geometry_meta (key, value) VALUES (?, ?)",
             ("attribution", OSM_ATTRIBUTION),
         )
+        if dem_read:
+            out.execute("INSERT INTO geometry_meta (key, value) VALUES (?, ?)", (DEM_READ_KEY["ingest"], dem_read))
         relation_hikes = [hike for hike in dayhikes if hike.kind == KIND_RELATION]
-        # The main walks are assembled again in the workers; the rows are written here, in hike order.
+        _way_ends(snapshot)
+        # The rows are built in the workers, from the stored main walks (assembled when one is missing);
+        # they are written here, in hike order.
         relation_rows = parallel_iter(
-            lambda hike: _relation_geometry_rows(hike, relations[hike.id], snapshot, access_tree, named, lower),
+            lambda hike: _relation_geometry_rows(
+                hike, relations[hike.id], snapshot, access_tree, named, lower, walks
+            ),
             relation_hikes,
         )
         for hike in dayhikes:
@@ -1151,10 +1534,15 @@ def _relation_geometry_rows(
     access_tree,
     named: NamedPoints | None,
     lower: LowerStart | None = None,
+    walks: Mapping[int, _StoredWalk] | None = None,
 ) -> tuple[tuple, list[tuple], list[tuple]]:
     """A relation DayHike's rows of the GeometryStore: its dayhikes row, its
-    main walk's vertices and its member ways."""
-    walk = _main_walk(relation, snapshot, access_tree, named, lower)
+    main walk's vertices and its member ways. The main walk is the stored one
+    in ``walks``, else it is assembled."""
+    if walks is not None and hike.id in walks:
+        walk = _stored_walk(walks[hike.id], snapshot.nodes)
+    else:
+        walk = _main_walk(relation, snapshot, access_tree, named, lower)
     dayhike_row = (
         hike.id,
         hike.name,
