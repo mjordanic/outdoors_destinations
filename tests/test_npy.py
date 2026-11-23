@@ -1,15 +1,12 @@
 import mmap
-import os
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+from open_files import open_under
+
 from dayhike.npy import map_npy
-
-
-def _open_files() -> int:
-    return len(os.listdir("/dev/fd"))
 
 
 @pytest.mark.parametrize(
@@ -44,11 +41,10 @@ def test_a_mapped_array_lives_in_a_memory_map(tmp_path: Path) -> None:
 
 def test_a_mapped_array_holds_no_file_descriptor(tmp_path: Path) -> None:
     np.save(tmp_path / "a.npy", np.arange(100))
-    before = _open_files()
 
     held = [map_npy(tmp_path / "a.npy") for _ in range(20)]
 
-    assert _open_files() == before
+    assert open_under(tmp_path) == []
     assert sum(int(array.sum()) for array in held) == 20 * sum(range(100))
 
 
