@@ -2,8 +2,9 @@
 
 In short: the code is free to reuse under the MIT licence. The hike data is
 built from open map, height, land-cover and climate data, and each source keeps
-its own licence, listed below. The heights (FABDEM) allow only non-commercial
-use.
+its own licence, listed below. Heights read from FABDEM allow only
+non-commercial use; the last build read every height from Copernicus DEM
+GLO-30 instead, which allows commercial use with its notice.
 
 The code in this repository is under the MIT licence ([LICENSE](LICENSE)).
 The MIT licence covers the code only. The data the code reads, and the data it
@@ -14,6 +15,7 @@ builds from those inputs, keep the licences of their sources:
 | OpenStreetMap | [ODbL 1.0](https://opendatacommons.org/licenses/odbl/) | The Catalog, the GeometryStore and the web serving export (the hike database files `dayhike` builds) are derivative databases of OpenStreetMap. Used publicly, they are offered under the ODbL; this code is the method that makes them. The OpenStreetMap part is also offered as a free download, `hikes-osm.sqlite` (`dayhike export-osm-download`, [docs/deploy.md](docs/deploy.md), section 11), linked from the Data and credits page: the OpenStreetMap hikes, their lines and the OpenStreetMap points along them. It leaves out heights and everything derived from them, land cover, climate, GeoNames places and Landmarks, and hikes from other sources, which keep their own licences below (the OSMF Collective Database guideline: those need not be shared alike). |
 | Wikimedia Commons | CC0, CC BY or CC BY-SA, per file | Photos shown when a hike is opened. The image is not copied: the browser loads it from `upload.wikimedia.org`. The serving export stores the file name, author, licence and licence URL (`dayhike export-photos`). A file with any other licence is left out. |
 | FABDEM V1-2 | [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) | University of Bristol data; `dayhike fetch-dem` downloads it from a third-party mirror on Hugging Face (`huggingface.co/datasets/pavelzaitsau/fabdem-v12`). Every elevation-derived value (heights, gain, profiles, ProfileShape, ClimbGrade, SteepestKm, SolarAspect) is adapted material, shared under CC BY-NC-SA 4.0 and only non-commercially. An export sampled from Copernicus DEM GLO-30 instead (ADR-0030) carries the Copernicus DEM licence notice in place of this row, and is free of the non-commercial limit only when every DEM step used it ([docs/deploy.md](docs/deploy.md)). |
+| Copernicus DEM GLO-30 | [Copernicus DEM licence](https://docs.sentinel-hub.com/api/latest/static/files/data/dem/resources/license/License-COPDEM-30.pdf) | The heights of every hike in the last build (its data tag ends in `copernicus-glo30`, ADR-0030), and every value derived from them; `dayhike fetch-dem --source copernicus` downloads it from AWS Open Data. Produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved. An export sampled from it carries this notice in place of FABDEM's, and is free of FABDEM's non-commercial limit only when every DEM step used it ([docs/deploy.md](docs/deploy.md)). |
 | USGS 3DEP 1 arc-second | Public domain ([USGS copyrights and credits](https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits)) | Bare-earth heights of the hikes in the United States, read where a build holds its tiles beside the world DEM (ADR-0063); `dayhike fetch-dem --source 3dep` downloads it from the USGS staged-products bucket. Credit: U.S. Geological Survey. The values derived from it carry no licence limit of their own; a hike read from FABDEM keeps FABDEM's. |
 | ESA WorldCover 2021 | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | Land-cover shares and the waterside share per hike. |
 | Sport Ireland Trail Routes | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | Ireland's official walking trails, credit "Sport Ireland" ([data.gov.ie](https://data.gov.ie/dataset/getirelandactive_trailroutes)). Each is an external hike (ADR-0062): its own row with its own line, name and record link, never merged into an OpenStreetMap hike, so it is a separate layer beside the ODbL data and keeps CC BY 4.0. `dayhike fetch-external --source ie-sport-ireland` downloads it. |
@@ -28,8 +30,12 @@ builds from those inputs, keep the licences of their sources:
 | Emergency numbers | Facts, each row citing its official source | `src/dayhike/data/emergency.csv`: per country the emergency numbers and mountain rescue service a hike's panel shows, gathered by hand from each country's government, emergency service or mountain rescue site, with the EU's 112 page or the UK government's travel advice only as an extra source (a row's `notes` says where no official source was found). |
 
 The OpenStreetMap snapshots are downloaded from Geofabrik's extracts, which
-carry the same ODbL. The web demo's base map tiles come from the OpenStreetMap tile server, under
-its [tile usage policy](https://operations.osmfoundation.org/policies/tiles/).
+carry the same ODbL. The web demo's base map is the Protomaps Basemap, a vector
+PMTiles file the site hosts (ADR-0061), distributed as an ODbL Produced Work of
+OpenStreetMap. Where it does not reach (a view wholly outside its bounds) or
+cannot be drawn, and on a site without it, the tiles come from the
+OpenStreetMap tile server, under its
+[tile usage policy](https://operations.osmfoundation.org/policies/tiles/).
 When an export has no `places.sqlite`, its place search asks Nominatim, which
 serves OpenStreetMap data.
 

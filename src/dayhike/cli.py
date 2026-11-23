@@ -498,7 +498,8 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         help=f"A region the Catalog covers: one of {', '.join(region_names())}, or a region .toml file; "
         "repeatable. The site's pages name them (with only regions in Europe, they say Europe); without it, they "
-        "name where the hikes start (Europe, the United States). Refused when the hikes start outside every region given",
+        "name where the hikes start (Europe, the United States). Refused when hikes start on a side of 40° W (Europe or "
+        "the United States) no region given is on, or when a region given has no hikes on its side",
     )
     export.add_argument(
         "--external-dir",

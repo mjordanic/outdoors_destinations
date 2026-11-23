@@ -11,8 +11,9 @@ pipeline and how everything works are in the
   GitHub's default branch is `main`, so change the base branch when you open
   the PR.
 - CI (`.github/workflows/ci.yml`) runs `uv sync --locked` and
-  `uv run pytest -n 4 -m "not real_data"` on every pull request to `develop` or
-  `main`. It does not install Playwright, so the page tests in
+  `uv run pytest -n 4 -m "not real_data"` on every pull request to `develop`,
+  `main` or a `feature/**` branch, on every push to `develop`, and before a
+  deploy. It does not install Playwright's Chromium, so the page tests in
   `tests/test_page.py` are skipped there.
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/):
   `fix(web): …`, `feat(ingest): …`, `docs: …`, with an optional scope naming
@@ -43,12 +44,13 @@ data you built. Checks on real data are opt-in:
 | --- | --- |
 | `src/dayhike/cli.py` | Every `dayhike` command and its options. |
 | `src/dayhike/osm.py`, `ingest.py`, `catalog.py` | Reading OSM, ingest (filter, assemble, write) and the Catalog: which routes are kept, the main walk, the Trailhead, names. |
-| `src/dayhike/built.py`, `stages.py`, `network_hikes.py` | Hikes that are not one OSM relation: day stages of long tours and hikes chained from signpost networks. |
+| `src/dayhike/built.py`, `stages.py`, `network_hikes.py`, `named_trails.py`, `destination_hikes.py` | Hikes that are not one OSM relation: day stages of long tours, hikes chained from signpost networks, named trails and walks from a car park to a named destination. |
+| `src/dayhike/external.py`, `sources.py` | Hikes from official trail registers, and the sources register (`docs/sources.csv`). |
 | `src/dayhike/trailgraph.py`, `loops.py` | The trail network: the way back to the start, hikes drawn from segments, suggested loops. |
 | `src/dayhike/dem.py`, `landcover.py`, `climate.py` | Downloading and sampling heights, land cover and climate. |
 | `src/dayhike/similarity.py` | The facts, the Measures, the Calibration and the Ranking. Start here for a scoring bug. |
 | `src/dayhike/valhalla.py`, `highways.py` | Drive time through Valhalla. |
-| `src/dayhike/serving.py` | The serving export the web demo reads, and the text of the score explanations. |
+| `src/dayhike/serving.py`, `cut.py` | The serving export the web demo reads, the text of the score explanations, and cutting an export into a Europe, US or demo site. |
 | `src/dayhike/web/__init__.py`, `web/static/` | The web API and the page (`app.js`, the HTML pages, `style.css`). Start here for a page bug. |
 | `src/dayhike/coverage.py`, `extracts.py`, `parallel.py` | The coverage map, the Geofabrik downloads, worker processes. |
 | `web/` | The container (data and web Dockerfiles, Cloud Build config, compose file, start script), `smoke.py` and `shell.py` (the loading shell). |
