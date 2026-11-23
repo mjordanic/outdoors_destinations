@@ -661,6 +661,18 @@ def test_the_next_ranking_from_the_same_start_and_limit_reuses_its_drive_times(
     assert matrix.calls == 3  # another limit or start asks again
 
 
+def test_a_drive_over_three_hours_is_refused_with_the_limit_named(client: TestClient, matrix: Matrix) -> None:
+    query = {"seed": RIDGE_WALK_ID, "origin": {"lat": 45.1, "lon": 15.1}}
+    response = client.post("/api/rank", json={**query, "max_hours": 3.5})
+
+    assert response.status_code == 422
+    (error,) = response.json()["detail"]
+    assert error["loc"] == ["body", "max_hours"] and error["msg"] == "Input should be less than or equal to 3"
+    assert matrix.calls == 0
+    assert client.get("/api/info").json()["max_drive_hours"] == 3
+    assert client.post("/api/rank", json={**query, "max_hours": 3}).status_code == 200
+
+
 def test_a_distance_limit_keeps_hikes_within_it_in_a_straight_line_without_a_drive_service(
     data: ServingData,
 ) -> None:
@@ -887,7 +899,7 @@ def test_a_redeploy_with_new_code_or_drive_time_settings_changes_the_etag(
     assert etag() != before
 
     monkeypatch.undo()
-    monkeypatch.setattr(web, "MAX_DRIVE_HOURS", 3.0)
+    monkeypatch.setattr(web, "MAX_DRIVE_HOURS", 2.0)
     assert etag() != before
 
 
@@ -1545,7 +1557,7 @@ def test_a_ranking_says_whether_its_multi_day_routes_come_after_its_day_hikes(cl
 
 
 def test_a_ranking_that_waited_its_longest_still_ends_before_cloud_runs_timeout() -> None:
-    slowest_run_s = 31  # a 4 h drive Ranking on 1 vCPU (docs/deploy.md)
+    slowest_run_s = 31  # a 3 h drive Ranking from Munich on 1 vCPU (docs/deploy.md)
     assert web.RANK_WAIT_S + slowest_run_s < 60  # Cloud Run's --timeout: else the visitor gets its 504, not our 503
 
 

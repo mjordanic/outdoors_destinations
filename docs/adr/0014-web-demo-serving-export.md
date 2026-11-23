@@ -1,5 +1,5 @@
 ---
-status: accepted (built DayHikes in the export since ADR-0038)
+status: accepted (built DayHikes in the export since ADR-0038; the drive filter capped at 3 hours since ADR-0083)
 ---
 
 # The web demo answers from a serving export, in one container with Valhalla

@@ -194,7 +194,7 @@ GROUP_M = 10_000.0  # hikes starting closer than this to a better one are its ve
 # of the two, at least GROUP_MIN_M; with no limit, GROUP_M.
 GROUP_SHARE = 0.05
 GROUP_MIN_M = 500.0
-GROUP_KMH = 50.0  # the 4 h longest drive (web.MAX_DRIVE_HOURS) then groups as no limit does
+GROUP_KMH = 50.0  # a 4 h drive would group as no limit does; the longest, 3 h (web.MAX_DRIVE_HOURS), at 7.5 km
 VERSIONS = 3  # versions per row, the row's own included
 VERSION_DIFFERS = 0.5  # a version walks more than this share of its length off every other one
 GOOD_MATCH = 0.05  # a hike scoring at most this below a row's leader is a good match, counted when not listed

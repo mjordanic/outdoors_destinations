@@ -86,9 +86,10 @@ STATIC_DIR = Path(__file__).parent / "static"
 RESULTS = 10  # rows a Ranking lists; "Show 10 more" asks the next ones (ADR-0032)
 POOL = 30  # rows a Ranking answers with: the page draws RESULTS of them, or shows the first in Strict order (ADR-0047)
 MAX_ROWS = 100  # the most rows a Ranking may list in all, the rows shown before included
-MAX_DRIVE_HOURS = 4.0
+# The longest drive limit (ADR-0083): a 4 h drive Ranking from a dense start (Munich) ran past Cloud Run's 60 s timeout.
+MAX_DRIVE_HOURS = 3.0
 # The drive answers (origin, max hours) kept: the next rows, a new draw or other weights from the same start
-# reuse them instead of asking Valhalla again (a 4 h drive is most of a Ranking's time); about 3 MB each.
+# reuse them instead of asking Valhalla again (a long drive is most of a Ranking's time); about 3 MB each.
 DRIVES_KEPT = 8
 MAX_KM = 200.0  # the longest straight-line distance limit: 4 h at GROUP_KMH, so it groups as no limit does
 MAX_GROUP_KM = 50.0  # the widest grouping radius a Hiker may ask
@@ -102,7 +103,7 @@ MAX_BODY_BYTES = 256 * 1024  # the largest request body; a Route of ROUTE_STEPS 
 RANK_RATE = 20
 API_RATE = 300
 RATE_WINDOW_S = 60.0
-# A Ranking waits this long for its turn: with the slowest run (a 4 h drive, about 31 s on 1 vCPU, docs/deploy.md)
+# A Ranking waits this long for its turn: with the slowest run (a 3 h drive from Munich, about 30 s on 1 vCPU, docs/deploy.md)
 # it still ends before Cloud Run's 60 s request timeout, so a visitor gets the app's 503, not Cloud Run's 504.
 RANK_WAIT_S = 25.0
 # The page names its tab in this header: one Ranking queued or running per tab, at most PER_ADDRESS per address.

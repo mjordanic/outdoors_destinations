@@ -272,7 +272,7 @@ What the flags do:
 | `--min-instances 0` | Scale to zero; the captain accepted the cold start. |
 | `--max-instances 2` | The instance cap: at most two containers ever bill at once. |
 | `--concurrency 8` | Searches and hike pages run side by side; Rankings queue one at a time per instance (in the app). |
-| `--timeout 60` | No request may run longer; a 4 h drive query from the densest origin takes 23-31 s on 1 vCPU. |
+| `--timeout 60` | No request may run longer; a 3 h drive query from the densest origin (Munich) takes about 8 s on one CPU of a Mac and an estimated 30-45 s on 1 vCPU. A 4 h one from Munich ran past 60 s, so the drive filter stops at 3 h (ADR-0083). |
 | `DAYHIKE_FORWARDED_HOPS=1` | The rate limit keys on the last `X-Forwarded-For` entry, the one Google's front end adds. Earlier entries are client-supplied and ignored, so the limit cannot be dodged by sending a fake header. If that last entry turns out to be a Google proxy address rather than the visitor, the limit becomes one shared budget per instance: stricter, never looser. |
 | `DAYHIKE_SITE_URL=https://HOST` (optional) | The site's public address (the live site's is `https://hikesalike.com`; before a custom domain, the Cloud Run URL). Each page then names itself in `og:url` and its preview image by full address, so a shared link shows the preview, and `/robots.txt` and `/sitemap.xml` name pages at it; unset, the image address stays relative and most link previews show none. |
 | `DAYHIKE_GOATCOUNTER=CODE` (optional) | Cookieless visit counts at `https://CODE.goatcounter.com`: every page loads the self-hosted `vendor/goatcounter/count.js`, and "Find" is counted as an event. Unset, no page loads analytics. Not set yet: no GoatCounter account. |
@@ -302,12 +302,12 @@ minute per instance** (`HTTP 429` past that; the counter lives in each
 instance's memory, so with `--max-instances 2` a client whose requests reach
 both instances gets up to 2x that), runs one Ranking at a time per instance, in
 the order they came (others wait up to 25 s, then get `503`; with the slowest
-4 h drive Ranking of about 31 s that still ends inside the 60 s request timeout,
+Ranking, a 3 h drive from Munich of about 30 s, that still ends inside the 60 s request timeout,
 so a visitor gets the app's `503` rather than Cloud Run's `504`; a Valhalla call
 stalled past 50 s also ends in `503` and frees the slot), lets a client (a browser
 tab at an address) have one Ranking queued or running at a time, and an address
 at most 4 (the next gets `409` until one ends, so one client cannot hold the
-Ranking for everyone, and people behind one address do not block each other), refuses a request body over 256 KB unread (`413`), and caps the drive filter at 4 hours. It keeps the drive
+Ranking for everyone, and people behind one address do not block each other), refuses a request body over 256 KB unread (`413`), and caps the drive filter at 3 hours. It keeps the drive
 times of the last 8 starts and drive limits asked, so the next rows, a new draw or other weights from the same
 start take about a second instead of asking Valhalla again. With
 `--max-instances 2` the most the service can ever bill is two instances busy

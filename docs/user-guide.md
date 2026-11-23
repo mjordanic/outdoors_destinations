@@ -188,7 +188,7 @@ the hut slider to 100. Turn Length down to 30.
   only. A multi-day route you start from is always compared one way, and so
   is every hike compared with it: nobody walks a tour back to its start.
 - **Where from, and how far.** Give a starting place and a maximum drive (up
-  to 4 hours), a maximum distance in a straight line (up to 200 km), or both.
+  to 3 hours), a maximum distance in a straight line (up to 200 km), or both.
   Only hikes that start within those limits are kept. Type the place as
   "lat, lon", use your browser's location, or use "Find place" to look up a
   town or village. The drive time is an estimate based on main roads, so

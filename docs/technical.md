@@ -2256,7 +2256,7 @@ and feet when its locale's country is the US, Liberia or Myanmar, else km and me
 `&units=imperial` while miles and feet show, and `&units=metric` only where the browser would
 default to miles; an address without it opens in the browser's default. The filters a list was
 found with (its limits and place, month, one way, grouping radius) show as
-labels above it, each with a × that drops it and finds again. An optional starting place with a maximum drive (up to 4 h), a
+labels above it, each with a × that drops it and finds again. An optional starting place with a maximum drive (up to 3 h; ADR-0083), a
 maximum straight-line distance (up to 200 km, from the start to where a hike
 starts, not by road; ADR-0032) or both keeps only hikes within those limits (the
 start is typed as "lat, lon", taken from the
@@ -2691,6 +2691,7 @@ image now gets 4 GiB, a US or demo image 2 GiB: [docs/deploy.md](deploy.md)) (`w
 | Ranking, one Seed, 3 / 27 Measures | 0.3 s / not yet re-measured (27 Measures); 3 Measures 0.07 s on the Mac without the 1-CPU cap |
 | Ranking with SuggestedLoops (`"loops": true`, ADR-0028) | about 3.3 s on average, against about 0.35 s without (hosting study). A Wish of 10 km within a 1 h drive from 10 Origins, loops near the Origin too, the 2026-10-28 export of 135,588 DayHikes, measured 2026-11-01: cold (fresh container, files out of the page cache) 5.3 s p50, 7.4 s p75; warm 2.7 s p50, 3.8 s p75 (ADR-0036) |
 | Ranking within 2 h / 4 h drive (Ljubljana, Munich) | 2.7 s / 12 s; 4 h from Paris 14 s, Berlin 8 s, Prague 8 s, Rome 3 s, Oslo 3 s |
+| Ranking within 2 h / 3 h drive, Europe and US export of 2026-11-22 (889,525 hikes), 4 GiB, 1 CPU, first query on a fresh server | Ljubljana 3.5 s / 4.2 s, Munich 4.8 s / 8.3 s (4 h from Munich took 14.9 s, over 60 s on Cloud Run: ADR-0083); the same start and limit again 0.1-0.4 s |
 | Container memory peak (cgroup, after those queries) | 1.5 GB of the 2 GiB: Valhalla 1.0–1.3 GB resident (0.46 GB its own, the rest the mapped tiles), the app 0.96 GB resident (0.82 GB its own) |
 
 The app starts at about 260 MB; the 4 h drive queries take it to about
