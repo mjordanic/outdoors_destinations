@@ -126,7 +126,7 @@ function sayFailed(host, error, again) {
 }
 
 // A request ends after this long, so a server that does not answer never leaves the page waiting:
-// a Ranking takes up to about 15 s (a 4 h drive), anything else a few.
+// a Ranking takes up to about 15 s (a 3 h drive), anything else a few.
 const TIMEOUT_S = 60;
 // This tab's name for the server's Ranking queue: one search of its own at a time, so people behind one
 // address (a home, an office) do not wait on each other's searches (web.TAB_HEADER, ADR-0054).

@@ -38,7 +38,7 @@ import time
 import unicodedata
 import urllib.error
 from typing import Literal
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from html import escape as html_escape
@@ -86,7 +86,11 @@ STATIC_DIR = Path(__file__).parent / "static"
 RESULTS = 10  # rows a Ranking lists; "Show 10 more" asks the next ones (ADR-0032)
 POOL = 30  # rows a Ranking answers with: the page draws RESULTS of them, or shows the first in Strict order (ADR-0047)
 MAX_ROWS = 100  # the most rows a Ranking may list in all, the rows shown before included
-MAX_DRIVE_HOURS = 4.0
+# The longest drive limit (ADR-0083): a 4 h drive Ranking from a dense start (Munich) ran past Cloud Run's 60 s timeout.
+MAX_DRIVE_HOURS = 3.0
+# The drive answers (origin, max hours) kept: the next rows, a new draw or other weights from the same start
+# reuse them instead of asking Valhalla again (a long drive is most of a Ranking's time); about 3 MB each.
+DRIVES_KEPT = 8
 MAX_KM = 200.0  # the longest straight-line distance limit: 4 h at GROUP_KMH, so it groups as no limit does
 MAX_GROUP_KM = 50.0  # the widest grouping radius a Hiker may ask
 MAP_HIKES = 100  # a map view shows its hikes only when it holds at most this many
@@ -99,9 +103,9 @@ MAX_BODY_BYTES = 256 * 1024  # the largest request body; a Route of ROUTE_STEPS 
 RANK_RATE = 20
 API_RATE = 300
 RATE_WINDOW_S = 60.0
-# A Ranking waits this long for its turn: with the slowest run (a 4 h drive, about 31 s on 1 vCPU, docs/deploy.md)
+# A Ranking waits this long for its turn: with the slowest run (a 3 h drive from Munich, up to about 45 s on 1 vCPU, docs/deploy.md)
 # it still ends before Cloud Run's 60 s request timeout, so a visitor gets the app's 503, not Cloud Run's 504.
-RANK_WAIT_S = 25.0
+RANK_WAIT_S = 12.0
 # The page names its tab in this header: one Ranking queued or running per tab, at most PER_ADDRESS per address.
 TAB_HEADER = "X-HikesAlike-Tab"
 TAB_NAME = re.compile(r"[A-Za-z0-9-]{1,64}")
@@ -620,6 +624,8 @@ def create_app(
     app = FastAPI(title="HikesAlike", docs_url="/api/docs", openapi_url="/api/openapi.json")
     limiters = {"rank": RateLimiter(rank_rate, RATE_WINDOW_S), "api": RateLimiter(api_rate, RATE_WINDOW_S)}
     rankings = RankingQueue()
+    drives: OrderedDict[tuple[float, float, float], tuple[np.ndarray, np.ndarray]] = OrderedDict()
+    drives_lock = threading.Lock()
     # The API reads change only with the export (its meta.json holds facts_version; places.sqlite and landmarks.sqlite
     # may come later), the code and the settings.
     settings = (
@@ -842,6 +848,23 @@ def create_app(
         except KeyError:
             raise HTTPException(404, f"no DayHike {dayhike_id}") from None
 
+    def drive_reach(origin: Origin, max_hours: float, client: MatrixClient) -> dict[int, float]:
+        """``data.reachable``, kept for the last ``DRIVES_KEPT`` origins and limits asked."""
+        key = (origin.latitude, origin.longitude, max_hours)
+        with drives_lock:
+            kept = drives.get(key)
+            if kept is not None:
+                drives.move_to_end(key)
+        if kept is None:
+            hours = data.reachable(origin, max_hours, client)
+            kept = np.fromiter(hours, dtype=np.int64), np.fromiter(hours.values(), dtype=float)
+            with drives_lock:
+                drives[key] = kept
+                while len(drives) > DRIVES_KEPT:
+                    drives.popitem(last=False)
+            return hours
+        return dict(zip(kept[0].tolist(), kept[1].tolist()))
+
     @app.post("/api/rank")
     def rank(body: RankRequest, request: Request) -> dict:
         started = time.monotonic()
@@ -875,7 +898,7 @@ def create_app(
             if body.max_hours is not None:
                 max_hours = body.max_hours
                 client = drive_client(max_hours)
-                hours = data.reachable(origin, max_hours, client)
+                hours = drive_reach(origin, max_hours, client)
 
                 def reach(places: list[tuple[float, float]]) -> list[float | None]:
                     return data.drive_hours(origin, max_hours, client, places)

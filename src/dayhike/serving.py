@@ -194,7 +194,7 @@ GROUP_M = 10_000.0  # hikes starting closer than this to a better one are its ve
 # of the two, at least GROUP_MIN_M; with no limit, GROUP_M.
 GROUP_SHARE = 0.05
 GROUP_MIN_M = 500.0
-GROUP_KMH = 50.0  # the 4 h longest drive (web.MAX_DRIVE_HOURS) then groups as no limit does
+GROUP_KMH = 50.0  # a 4 h drive would group as no limit does; the longest, 3 h (web.MAX_DRIVE_HOURS), at 7.5 km
 VERSIONS = 3  # versions per row, the row's own included
 VERSION_DIFFERS = 0.5  # a version walks more than this share of its length off every other one
 GOOD_MATCH = 0.05  # a hike scoring at most this below a row's leader is a good match, counted when not listed
@@ -3135,8 +3135,8 @@ class ServingData:
         self, origin: Origin, max_hours: float, client: MatrixClient
     ) -> dict[int, float]:
         """Rows whose Trailhead is within ``max_hours`` DriveTime, with the hours."""
-        hours = self.drive_hours(origin, max_hours, client, self.trailheads)
-        return {row: value for row, value in enumerate(hours) if value is not None}
+        rows, hours = self._within(origin, max_hours, client, self.trailheads)
+        return dict(zip(rows.tolist(), hours.tolist()))
 
     def drive_hours(
         self, origin: Origin, max_hours: float, client: MatrixClient, places: Sequence[tuple[float, float]]
@@ -3145,19 +3145,30 @@ class ServingData:
 
         Only places within the 140 km/h straight-line reach are asked.
         """
+        hours: list[float | None] = [None] * len(places)
+        for row, value in zip(*(found.tolist() for found in self._within(origin, max_hours, client, places))):
+            hours[row] = value
+        return hours
+
+    @staticmethod
+    def _within(
+        origin: Origin, max_hours: float, client: MatrixClient, places: Sequence[tuple[float, float]]
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """The indices of ``places`` within ``max_hours`` DriveTime, ascending, and their hours."""
         reach_m = max_hours * 3600 * MAX_CAR_SPEED_MS
         places = np.asarray(places, dtype=float).reshape(-1, 2)
         rows = np.flatnonzero(straight_line_distances_m(origin, places) <= reach_m)
-        hours: list[float | None] = [None] * len(places)
         if rows.size == 0:
-            return hours
-        times = client.sources_to_targets(
-            origin, [Trailhead(float(lat), float(lon), None) for lat, lon in places[rows]]
-        )
-        for row, seconds in zip(rows.tolist(), times):
-            if seconds is not None and math.isfinite(seconds) and 0 <= seconds <= max_hours * 3600:
-                hours[row] = seconds / 3600
-        return hours
+            return rows, np.zeros(0)
+        if hasattr(client, "seconds_to"):  # HighwayDriveTimeClient: arrays, not a Trailhead per place
+            seconds = client.seconds_to(origin, places[rows])
+        else:
+            times = client.sources_to_targets(
+                origin, [Trailhead(float(lat), float(lon), None) for lat, lon in places[rows]]
+            )
+            seconds = np.array([math.nan if t is None else t for t in times], dtype=float)
+        within = np.isfinite(seconds) & (seconds >= 0) & (seconds <= max_hours * 3600)
+        return rows[within], seconds[within] / 3600
 
 
 def draw_noise(draw: int, key: str) -> float:
