@@ -50,10 +50,6 @@ Snap = tuple[float, float, float]  # highway latitude, longitude, metres from th
 _UNKNOWN = object()  # a place not snapped yet
 
 
-def _approach_seconds(metres: float) -> float:
-    return metres / (APPROACH_SPEED_KMH / 3.6)
-
-
 class HighwaySnaps:
     """Where each place snaps onto the highway tiles. None: no highway within 100 km.
 
@@ -159,49 +155,60 @@ class HighwayDriveTimeClient:
     def sources_to_targets(
         self, origin: Origin, trailheads: Sequence[Trailhead]
     ) -> list[float | None]:
+        places = np.array([(t.latitude, t.longitude) for t in trailheads], dtype=float).reshape(-1, 2)
+        return [None if math.isnan(s) else s for s in self.seconds_to(origin, places).tolist()]
+
+    def seconds_to(self, origin: Origin, places: np.ndarray) -> np.ndarray:
+        """DriveTime seconds to each (lat, lon) row of `places`, NaN where `sources_to_targets` gives None.
+
+        The same estimates as `sources_to_targets` (and the same Valhalla requests), without a
+        Trailhead per place: a 4 h drive asks about half a million of them.
+        """
         start = self._snap_origin(origin)
         (start_m,) = straight_line_distances_m(origin, [start])
         budget_s = self.max_hours * 3600
-        places = list(dict.fromkeys((t.latitude, t.longitude) for t in trailheads))
-        snap_of = {p: s for p, s in zip(places, self.snaps.of(places)) if s is not None}
-        self.unreachable = [p for p in places if p not in snap_of]
-        # Seconds no highway route covers: the Origin's and the Trailhead's approach.
-        approach_s = {p: _approach_seconds(start_m + s[2]) for p, s in snap_of.items()}
-        near = [p for p in snap_of if approach_s[p] < budget_s]
-        points = [snap_of[p][:2] for p in near]
-        times: dict[Place, float | None] = {}
-        borderline: list[Place] = []
-        for place, (low_s, high_s) in zip(near, self._bands(start, points)):
-            if high_s is None:  # beyond the budget
-                continue
-            if high_s + CONTOUR_MARGIN_S + approach_s[place] <= budget_s:
-                times[place] = (low_s + high_s) / 2 + approach_s[place]
-            elif low_s - CONTOUR_MARGIN_S + approach_s[place] <= budget_s:
-                borderline.append(place)
-        if borderline:
-            highway_s = self._matrix.seconds_to_places(
-                Origin(*start), [snap_of[p][:2] for p in borderline]
-            )
-            for place in borderline:
-                found = highway_s[snap_of[place][:2]]
-                times[place] = None if found is None else found + approach_s[place]
-        return [times.get((t.latitude, t.longitude)) for t in trailheads]
+        keys = list(zip(places[:, 0].tolist(), places[:, 1].tolist()))
+        index = {p: i for i, p in enumerate(dict.fromkeys(keys))}  # each place once, first seen first
+        unique = list(index)
+        found = self.snaps.of(unique)
+        snapped = [i for i, s in enumerate(found) if s is not None]
+        self.unreachable = [p for p, s in zip(unique, found) if s is None]
+        seconds = np.full(len(unique), np.nan)
+        if snapped:
+            snaps = np.array([found[i] for i in snapped], dtype=float)
+            # Seconds no highway route covers: the Origin's and the Trailhead's approach.
+            approach_s = (start_m + snaps[:, 2]) / (APPROACH_SPEED_KMH / 3.6)
+            near = np.flatnonzero(approach_s < budget_s)
+            low_s, high_s = self._bands(start, snaps[near, :2])
+            approach_s = approach_s[near]
+            # NaN high (beyond the budget) passes neither test.
+            banded = high_s + CONTOUR_MARGIN_S + approach_s <= budget_s
+            border = ~banded & ~np.isnan(high_s) & (low_s - CONTOUR_MARGIN_S + approach_s <= budget_s)
+            at = np.asarray(snapped)[near]
+            seconds[at[banded]] = (low_s[banded] + high_s[banded]) / 2 + approach_s[banded]
+            if border.any():
+                points = [found[i][:2] for i in at[border].tolist()]
+                highway_s = self._matrix.seconds_to_places(Origin(*start), points)
+                times = [highway_s[point] for point in points]
+                seconds[at[border]] = np.array([np.nan if s is None else s for s in times]) + approach_s[border]
+        return seconds[[index[p] for p in keys]] if keys else seconds
 
-    def _bands(
-        self, start: Place, points: Sequence[Place]
-    ) -> list[tuple[float, float | None]]:
-        """(low, high) highway seconds to each point.
+    def _bands(self, start: Place, points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """(low, high) highway seconds to each (lat, lon) row of `points`.
 
-        None for high: beyond the budget. Infinite: only near enough to the edge of
+        NaN for high: beyond the budget. Infinite: only near enough to the edge of
         the largest contour that the polygon cannot be trusted; ask the matrix.
         """
-        if not points:
-            return []
+        low, high = np.zeros(len(points)), np.full(len(points), np.nan)
+        if not len(points):
+            return low, high
         minutes = [*np.arange(CONTOUR_STEP_MIN, self.max_hours * 60, CONTOUR_STEP_MIN), self.max_hours * 60]
         contours = self._isochrone(start, minutes)
-        lats, lons = np.array([p[0] for p in points]), np.array([p[1] for p in points])
+        # Many places snap to one highway point: test each point once.
+        unique, inverse = np.unique(np.ascontiguousarray(points).view(np.complex128), return_inverse=True)
+        lats, lons = unique.real, unique.imag
         edges = [0.0] + [m * 60 for m in minutes]
-        bands: list[tuple[float, float | None]] = [(0.0, None)] * len(points)
+        bands = np.full(len(unique), -1)  # the band's index in edges, 0 (the ring) to len(minutes); -1 beyond
         # Isochrones skip roads that the matrix reaches (the far side of a ferry, say),
         # so a ring around the largest contour is checked exactly too.
         # Buffered whole, a 4 h contour (50-90k vertices) took 5-7 s; simplified, it stays within
@@ -209,13 +216,16 @@ class HighwayDriveTimeClient:
         simple = shapely.simplify(contours[-1], CONTOUR_SIMPLIFY_DEG)
         ring = shapely.buffer(simple, CONTOUR_RING_DEG + CONTOUR_SIMPLIFY_DEG)
         alive = np.flatnonzero(shapely.contains_xy(ring, lons, lats))
-        for i in alive:
-            bands[i] = (0.0, math.inf)
+        bands[alive] = 0
         for index in range(len(minutes), 0, -1):
             alive = alive[shapely.contains_xy(contours[index - 1], lons[alive], lats[alive])]
-            for i in alive:
-                bands[i] = (edges[index - 1], edges[index])
-        return bands
+            bands[alive] = index
+        lows = np.array([0.0, *edges[:-1]])  # by band: the ring is (0, inf)
+        highs = np.array([math.inf, *edges[1:]])
+        band = bands[inverse.reshape(-1)]
+        within = band >= 0
+        low[within], high[within] = lows[band[within]], highs[band[within]]
+        return low, high
 
     def _isochrone(self, start: Place, minutes: Sequence[float]) -> list:
         body = post_json(

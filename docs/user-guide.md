@@ -188,7 +188,7 @@ the hut slider to 100. Turn Length down to 30.
   only. A multi-day route you start from is always compared one way, and so
   is every hike compared with it: nobody walks a tour back to its start.
 - **Where from, and how far.** Give a starting place and a maximum drive (up
-  to 4 hours), a maximum distance in a straight line (up to 200 km), or both.
+  to 3 hours), a maximum distance in a straight line (up to 200 km), or both.
   Only hikes that start within those limits are kept. Type the place as
   "lat, lon", use your browser's location, or use "Find place" to look up a
   town or village. The drive time is an estimate based on main roads, so
@@ -322,8 +322,8 @@ the button you pressed (Find similar, or Show 10 more beside it), with a
 from before.
 
 The server runs one search at a time for everyone, in turn. When other
-visitors' searches are ahead of yours for 25 seconds, it says "The server is
-busy with other visitors' searches: yours waited 25 s for its turn. Try again
+visitors' searches are ahead of yours for 12 seconds, it says "The server is
+busy with other visitors' searches: yours waited 12 s for its turn. Try again
 in a moment." Your search itself is quick: press **Try again**.
 
 Each browser tab runs one search at a time. If you press Find again while your

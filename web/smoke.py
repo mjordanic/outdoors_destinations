@@ -30,7 +30,7 @@ class Build:
     min_dayhikes: int
     known: list[tuple[str, str]]  # (search text, exact DayHike name expected among the hits); the first is the Seed
     origins: dict[str, tuple[float, float]]
-    hours: tuple[float, float]  # drive-time limits
+    hours: tuple[float, float]  # drive-time limits, at most web.MAX_DRIVE_HOURS
     min_results: int | None = None  # rows a Ranking answers with at least; None: a full page (/api/info "results")
 
 
@@ -46,7 +46,7 @@ EUROPE = Build(
         ("Matterhorn-Trail", "Matterhorn-Trail"),
     ],
     origins={"Ljubljana": (46.0569, 14.5058), "Munich": (48.137, 11.575)},
-    hours=(2, 4),
+    hours=(2, 3),
 )
 US_48 = Build(
     min_dayhikes=10_000,
@@ -57,7 +57,7 @@ US_48 = Build(
         ("delicate arch", "Delicate Arch Trail"),
     ],
     origins={"Denver": (39.7392, -104.9903)},
-    hours=(2, 4),
+    hours=(2, 3),
 )
 BY_REGION = {"europe": EUROPE, "us": US_48}  # the checks of each region of /api/info "regions"
 US = Build(
