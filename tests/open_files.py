@@ -1,4 +1,4 @@
-"""Which files under a directory this process holds open, so a leak test ignores unrelated descriptors."""
+"""Which files this process holds open, so a leak test ignores unrelated descriptors."""
 
 import fcntl
 import os
@@ -20,3 +20,16 @@ def open_under(root: Path) -> list[str]:
     prefix = str(root.resolve()) + os.sep
     targets = (_target(int(fd)) for fd in os.listdir("/dev/fd"))
     return sorted(t for t in targets if t is not None and t.startswith(prefix))
+
+
+def open_descriptors() -> set[tuple[int, str]]:
+    """Every descriptor this process holds open, as (fd number, what it points to)."""
+    pairs = set()
+    for name in os.listdir("/dev/fd"):
+        fd = int(name)
+        try:
+            stat = os.fstat(fd)
+        except OSError:
+            continue
+        pairs.add((fd, _target(fd) or f"inode {stat.st_dev}:{stat.st_ino}"))
+    return pairs
