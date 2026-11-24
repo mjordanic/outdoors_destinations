@@ -1977,7 +1977,7 @@ class ServingData:
         if (self.directory / "bases").is_dir():
             from dayhike.bases import Bases  # its build's k-means and Valhalla imports, only for an export with Bases
 
-            self.bases = Bases.open_dir(self.directory / "bases", self.store.ids)
+            self.bases = Bases.open_dir(self.directory / "bases", self.store)
 
     def _db(self) -> sqlite3.Connection:
         return sqlite3.connect(self._db_uri, uri=True)

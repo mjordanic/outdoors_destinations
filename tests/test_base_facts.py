@@ -150,3 +150,19 @@ def test_serving_data_leaves_out_bases_made_for_other_hikes(
     meta_path.write_text(json.dumps(meta))
 
     assert ServingData(out).bases is None
+
+
+def test_serving_data_leaves_out_bases_made_from_earlier_catalog_values(
+    export: Path,  # noqa: F811
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    out = _with_bases(export, tmp_path, monkeypatch)
+    assert ServingData(out).bases is not None
+    # The same DayHikes' similarity facts rebuilt from re-sampled Catalog values.
+    store_meta_path = out / "similarity" / "meta.json"
+    store_meta = json.loads(store_meta_path.read_text())
+    store_meta["catalog_digest"] = "re-sampled"
+    store_meta_path.write_text(json.dumps(store_meta))
+
+    assert ServingData(out).bases is None

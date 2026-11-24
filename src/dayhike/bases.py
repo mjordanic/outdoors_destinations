@@ -388,6 +388,7 @@ def _write_bases(
         "hike_types_version": types.version,
         "facts_version": _FACTS_VERSION,
         "dayhikes": _dayhikes_digest(store.ids),
+        "catalog_digest": store.catalog_digest,
         "reaches": list(REACHES),
         "bases": count,
         "hike_groups": len(group_types),
@@ -424,9 +425,9 @@ class Bases:
     type_table: np.ndarray
 
     @classmethod
-    def open_dir(cls, directory: Path | str, ids: np.ndarray) -> Bases | None:
+    def open_dir(cls, directory: Path | str, store: SimilarityStore) -> Bases | None:
         """The ``bases/`` folder at ``directory``, or None without a complete one, or with one
-        of another ``BASES_FORMAT``, of other hike facts or of other DayHikes than ``ids``."""
+        of another ``BASES_FORMAT``, or made from other DayHikes or Catalog values than ``store``."""
         directory = Path(directory)
         meta_path = directory / "meta.json"
         if not meta_path.is_file():
@@ -435,7 +436,8 @@ class Bases:
         if (
             meta.get("format") != BASES_FORMAT
             or meta.get("facts_version") != _FACTS_VERSION
-            or meta.get("dayhikes") != _dayhikes_digest(ids)
+            or meta.get("dayhikes") != _dayhikes_digest(store.ids)
+            or meta.get("catalog_digest") != store.catalog_digest
         ):
             return None
         arrays = {field.name: map_npy(directory / f"{field.name}.npy") for field in fields(cls) if field.name != "meta"}
