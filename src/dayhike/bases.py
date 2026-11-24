@@ -8,9 +8,10 @@ import math
 import os
 import shutil
 import sqlite3
+import warnings
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 
 import numpy as np
@@ -19,6 +20,7 @@ from sklearn.cluster import KMeans
 
 from dayhike.catalog import EARTH_RADIUS_M
 from dayhike.highways import HighwaySnaps
+from dayhike.npy import map_npy
 from dayhike.reach import APPROACH_SPEED_KMH, BAND_STEP_MIN, REACH_MIN, STRAIGHT_SPEED_KMH, reach_minutes
 from dayhike.similarity import (
     _CALIBRATION_VERSION,
@@ -43,6 +45,11 @@ CELL_M = 1_000  # a HikeGroup's Trailhead cell
 NEAR_M = 120_000  # Trailheads farther in a straight line are not asked about: an hour on a motorway
 RESUME_CHUNK = 1_000  # candidates whose Reach is kept together in the work folder
 _BASES_LAYOUT = "groups-band-major-runs-v1"
+BASES_FORMAT = 1  # what a server reads in ``bases/``; a folder of another format is left out
+_BASE_FACTS = (
+    "population-geonames-zero-unknown",  # ``base_facts``
+    "month-temperatures-median-of-hikes-twins-once",  # ``base_facts``
+)
 _REACH_ESTIMATE = (STRAIGHT_SPEED_KMH, APPROACH_SPEED_KMH, BAND_STEP_MIN, REACH_MIN)
 
 
@@ -118,6 +125,55 @@ def _version(count: int) -> str:
     ).hexdigest()[:16]  # fmt: skip
 
 
+@dataclass(frozen=True)
+class BaseFacts:
+    """What a Base is like besides its hikes, for the TownTraits.
+
+    ``population`` is each Base's GeoNames population, NaN when unknown;
+    ``month_temperatures`` (Bases, Reaches, 12) the median temperature in each
+    month of the hikes in each of ``REACHES``, NaN when none of them has one.
+    """
+
+    population: np.ndarray
+    month_temperatures: np.ndarray
+
+
+def base_facts(
+    store: SimilarityStore,
+    places_path: Path,
+    place_ids: np.ndarray,
+    reached: list[tuple[np.ndarray, np.ndarray]],
+    group_of_hike: np.ndarray,
+) -> BaseFacts:
+    """The ``BaseFacts`` of the Bases ``place_ids``, each with its HikeGroups and their minutes in ``reached``.
+
+    A population of 0 is GeoNames' unknown, as is a place ``places_path`` has no
+    population for. A HikeGroup in Reach brings all its hikes, each group of Twins
+    once (as its first row); a hike with no temperature in a month is left out of that month.
+    """
+    db = sqlite3.connect(f"file:{places_path}?mode=ro", uri=True)
+    try:
+        known = dict(db.execute("SELECT id, population FROM places WHERE population > 0"))
+    finally:
+        db.close()
+    population = np.array([known.get(int(place), np.nan) for place in place_ids], dtype=np.float64)
+    temperatures = np.column_stack([store.column(f"temperature_c_{m:02d}") for m in range(1, 13)]).astype(np.float32)
+    rows = np.flatnonzero(np.asarray(store.twins) == np.arange(len(store.ids)))
+    rows = rows[np.argsort(group_of_hike[rows], kind="stable")]
+    starts = np.r_[0, np.cumsum(np.bincount(group_of_hike[rows], minlength=int(group_of_hike.max(initial=-1)) + 1))]
+    months = np.full((len(place_ids), len(REACHES), 12), np.nan, dtype=np.float32)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # a month no hike in Reach has a temperature for
+        for base, (groups, minutes) in enumerate(reached):
+            for r, reach in enumerate(REACHES):
+                within = groups[minutes <= reach]
+                counts = starts[within + 1] - starts[within]
+                if counts.sum():
+                    at = np.repeat(starts[within] - (np.cumsum(counts) - counts), counts) + np.arange(counts.sum())
+                    months[base, r] = np.nanmedian(temperatures[rows[at]], axis=0)
+    return BaseFacts(population=population, month_temperatures=months)
+
+
 def export_bases(
     out_dir: Path | str,
     valhalla_url: str,
@@ -149,7 +205,9 @@ def export_bases(
     - ``base_runs``: the runs of band b and Base i are ``base_runs[s]:base_runs[s + 1]``,
       s = b * Bases + i.
     - ``type_table``: the score between HikeTypes (``hike_types``).
-    - ``meta.json``, written last, so a folder without it is incomplete.
+    - ``population``, ``month_temperatures``: each Base's ``BaseFacts``.
+    - ``meta.json``, written last, so a folder without it is incomplete: the folder's format,
+      the versions it was made with and of which DayHikes (``Bases.open_dir``).
 
     Each ``chunk`` candidates' Reach is kept in ``bases.work/`` as it is found, so a
     stopped run started again with the same inputs goes on from there.
@@ -215,7 +273,8 @@ def export_bases(
                 progress(f"export-bases: Reach of {len(found):,} of {len(place_ids):,} candidate places")
     kept = np.array([i for i, (groups, _) in enumerate(found) if len(groups) >= MIN_HIKE_GROUPS], dtype=int)
     reached = [found[i] for i in kept]
-    target = _write_bases(out, place_ids[kept], places[kept], reached, group_of_hike, group_types, types)
+    facts = base_facts(store, out / "places.sqlite", place_ids[kept], reached, group_of_hike)
+    target = _write_bases(out, place_ids[kept], places[kept], reached, group_of_hike, group_types, types, facts, store)
     shutil.rmtree(work)
     return target
 
@@ -283,6 +342,8 @@ def _write_bases(
     group_of_hike: np.ndarray,
     group_types: np.ndarray,
     types: HikeTypes,
+    facts: BaseFacts,
+    store: SimilarityStore,
 ) -> Path:
     """Write the ``bases/`` folder (``export_bases``) to a partial folder, then put it in place."""
     count = len(place_ids)
@@ -308,6 +369,8 @@ def _write_bases(
         "run_types": pair_types[starts].astype(np.int16),
         "base_runs": np.searchsorted(slot[starts], np.arange(len(REACHES) * count + 1)).astype(np.int64),
         "type_table": types.table,
+        "population": facts.population,
+        "month_temperatures": facts.month_temperatures,
     }
     target, partial = out / "bases", out / "bases.partial"
     shutil.rmtree(partial, ignore_errors=True)
@@ -315,12 +378,16 @@ def _write_bases(
     for name, values in arrays.items():
         np.save(partial / f"{name}.npy", values)
     meta = {
+        "format": BASES_FORMAT,
         "version": hashlib.sha256(
             json.dumps(
                 [types.version, _BASES_LAYOUT, BASE_POPULATION, MIN_HIKE_GROUPS, CELL_M, NEAR_M, _REACH_ESTIMATE]
+                + [_BASE_FACTS]
             ).encode()
         ).hexdigest()[:16],
         "hike_types_version": types.version,
+        "facts_version": _FACTS_VERSION,
+        "dayhikes": _dayhikes_digest(store.ids),
         "reaches": list(REACHES),
         "bases": count,
         "hike_groups": len(group_types),
@@ -330,3 +397,46 @@ def _write_bases(
     shutil.rmtree(target, ignore_errors=True)
     os.replace(partial, target)
     return target
+
+
+def _dayhikes_digest(ids: np.ndarray) -> str:
+    """Which DayHikes, in which row order, a ``bases/`` folder was made of."""
+    return hashlib.sha256(np.ascontiguousarray(ids, dtype=np.int64).tobytes()).hexdigest()[:16]
+
+
+@dataclass(frozen=True)
+class Bases:
+    """A serving export's ``bases/`` folder (``export_bases``), its arrays memory-mapped read-only."""
+
+    meta: dict
+    place_ids: np.ndarray
+    points: np.ndarray
+    population: np.ndarray
+    month_temperatures: np.ndarray
+    group_types: np.ndarray
+    group_starts: np.ndarray
+    group_hikes: np.ndarray
+    pair_groups: np.ndarray
+    pair_minutes: np.ndarray
+    run_offsets: np.ndarray
+    run_types: np.ndarray
+    base_runs: np.ndarray
+    type_table: np.ndarray
+
+    @classmethod
+    def open_dir(cls, directory: Path | str, ids: np.ndarray) -> Bases | None:
+        """The ``bases/`` folder at ``directory``, or None without a complete one, or with one
+        of another ``BASES_FORMAT``, of other hike facts or of other DayHikes than ``ids``."""
+        directory = Path(directory)
+        meta_path = directory / "meta.json"
+        if not meta_path.is_file():
+            return None
+        meta = json.loads(meta_path.read_text())
+        if (
+            meta.get("format") != BASES_FORMAT
+            or meta.get("facts_version") != _FACTS_VERSION
+            or meta.get("dayhikes") != _dayhikes_digest(ids)
+        ):
+            return None
+        arrays = {field.name: map_npy(directory / f"{field.name}.npy") for field in fields(cls) if field.name != "meta"}
+        return cls(meta=meta, **arrays)
