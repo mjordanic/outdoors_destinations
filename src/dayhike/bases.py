@@ -19,7 +19,7 @@ from sklearn.cluster import KMeans
 
 from dayhike.catalog import EARTH_RADIUS_M
 from dayhike.highways import HighwaySnaps
-from dayhike.reach import REACH_MIN, reach_minutes
+from dayhike.reach import APPROACH_SPEED_KMH, BAND_STEP_MIN, REACH_MIN, STRAIGHT_SPEED_KMH, reach_minutes
 from dayhike.similarity import (
     _CALIBRATION_VERSION,
     _FACTS_VERSION,
@@ -30,6 +30,7 @@ from dayhike.similarity import (
     _measured,
     score_rows,
 )
+from dayhike.steps import file_key
 
 HIKE_TYPES = 512
 HIKE_TYPES_SEED = 20261124
@@ -42,6 +43,7 @@ CELL_M = 1_000  # a HikeGroup's Trailhead cell
 NEAR_M = 120_000  # Trailheads farther in a straight line are not asked about: an hour on a motorway
 RESUME_CHUNK = 1_000  # candidates whose Reach is kept together in the work folder
 _BASES_LAYOUT = "groups-band-major-runs-v1"
+_REACH_ESTIMATE = (STRAIGHT_SPEED_KMH, APPROACH_SPEED_KMH, BAND_STEP_MIN, REACH_MIN)
 
 
 @dataclass(frozen=True)
@@ -185,7 +187,7 @@ def export_bases(
         return groups[first].astype(np.int32), np.ceil(minutes[first]).astype(np.uint8)
 
     work = out / "bases.work"
-    key = _work_key(types.version, group_of_hike, trailheads, place_ids, places)
+    key = _work_key(types.version, chunk, file_key(out / "snaps.npz"), group_of_hike, trailheads, place_ids, places)
     if not (work / "key.txt").is_file() or (work / "key.txt").read_text() != key:
         shutil.rmtree(work, ignore_errors=True)
         work.mkdir()
@@ -256,10 +258,18 @@ def _unit(points: np.ndarray) -> np.ndarray:
 
 
 def _work_key(
-    version: str, group_of_hike: np.ndarray, trailheads: np.ndarray, ids: np.ndarray, places: np.ndarray
+    version: str,
+    chunk: int,
+    snaps_key: list | None,
+    group_of_hike: np.ndarray,
+    trailheads: np.ndarray,
+    ids: np.ndarray,
+    places: np.ndarray,
 ) -> str:
     """What a kept chunk of Reach depends on, beyond the Valhalla it was asked of."""
-    digest = hashlib.sha256(json.dumps([version, REACHES, CELL_M, NEAR_M, _BASES_LAYOUT]).encode())
+    digest = hashlib.sha256(
+        json.dumps([version, chunk, snaps_key, _REACH_ESTIMATE, REACHES, CELL_M, NEAR_M, _BASES_LAYOUT]).encode()
+    )
     for array in (group_of_hike, trailheads, ids, places):
         digest.update(np.ascontiguousarray(array).tobytes())
     return digest.hexdigest()
@@ -306,7 +316,9 @@ def _write_bases(
         np.save(partial / f"{name}.npy", values)
     meta = {
         "version": hashlib.sha256(
-            json.dumps([types.version, _BASES_LAYOUT, BASE_POPULATION, MIN_HIKE_GROUPS, CELL_M, NEAR_M]).encode()
+            json.dumps(
+                [types.version, _BASES_LAYOUT, BASE_POPULATION, MIN_HIKE_GROUPS, CELL_M, NEAR_M, _REACH_ESTIMATE]
+            ).encode()
         ).hexdigest()[:16],
         "hike_types_version": types.version,
         "reaches": list(REACHES),
