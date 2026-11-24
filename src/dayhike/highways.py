@@ -203,7 +203,7 @@ class HighwayDriveTimeClient:
         if not len(points):
             return low, high
         minutes = [*np.arange(CONTOUR_STEP_MIN, self.max_hours * 60, CONTOUR_STEP_MIN), self.max_hours * 60]
-        contours = self._isochrone(start, minutes)
+        contours = isochrone_polygons(self.base_url, start, minutes)
         # Many places snap to one highway point: test each point once.
         unique, inverse = np.unique(np.ascontiguousarray(points).view(np.complex128), return_inverse=True)
         lats, lons = unique.real, unique.imag
@@ -227,25 +227,6 @@ class HighwayDriveTimeClient:
         low[within], high[within] = lows[band[within]], highs[band[within]]
         return low, high
 
-    def _isochrone(self, start: Place, minutes: Sequence[float]) -> list:
-        body = post_json(
-            self.base_url,
-            "/isochrone",
-            {
-                "locations": [{"lat": start[0], "lon": start[1]}],
-                "costing": "auto",
-                "contours": [{"time": float(m)} for m in minutes],
-                "polygons": True,
-                "denoise": 0,
-                "generalize": CONTOUR_GENERALIZE_M,
-            },
-        )
-        # Valhalla echoes each contour rounded, so match them by order, not value.
-        features = sorted(body["features"], key=lambda f: f["properties"]["contour"])  # type: ignore[index]
-        polygons = [shape(f["geometry"]) for f in features]
-        shapely.prepare(polygons)
-        return polygons
-
     def _snap_origin(self, origin: Origin) -> Place:
         place = (origin.latitude, origin.longitude)
         for cutoff in (SEARCH_CUTOFF_M, WIDE_SEARCH_CUTOFF_M):
@@ -256,3 +237,24 @@ class HighwayDriveTimeClient:
             f"no highway within {WIDE_SEARCH_CUTOFF_M // 1000} km of Origin "
             f"{origin.latitude},{origin.longitude}"
         )
+
+
+def isochrone_polygons(base_url: str, start: Place, minutes: Sequence[float]) -> list:
+    """One prepared polygon per contour of `minutes` (ascending) around `start`, smallest first."""
+    body = post_json(
+        base_url,
+        "/isochrone",
+        {
+            "locations": [{"lat": start[0], "lon": start[1]}],
+            "costing": "auto",
+            "contours": [{"time": float(m)} for m in minutes],
+            "polygons": True,
+            "denoise": 0,
+            "generalize": CONTOUR_GENERALIZE_M,
+        },
+    )
+    # Valhalla echoes each contour rounded, so match them by order, not value.
+    features = sorted(body["features"], key=lambda f: f["properties"]["contour"])  # type: ignore[index]
+    polygons = [shape(f["geometry"]) for f in features]
+    shapely.prepare(polygons)
+    return polygons
