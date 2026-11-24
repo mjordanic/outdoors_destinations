@@ -49,6 +49,7 @@ data you built. Checks on real data are opt-in:
 | `src/dayhike/trailgraph.py`, `loops.py` | The trail network: the way back to the start, hikes drawn from segments, suggested loops. |
 | `src/dayhike/dem.py`, `landcover.py`, `climate.py` | Downloading and sampling heights, land cover and climate. |
 | `src/dayhike/similarity.py` | The facts, the Measures, the Calibration and the Ranking. Start here for a scoring bug. |
+| `src/dayhike/bases.py` | "Find a base": the HikeTypes and their score table (ADR-0084). |
 | `src/dayhike/valhalla.py`, `highways.py` | Drive time through Valhalla. |
 | `src/dayhike/serving.py`, `cut.py` | The serving export the web demo reads, the text of the score explanations, and cutting an export into a Europe, US or demo site. |
 | `src/dayhike/web/__init__.py`, `web/static/` | The web API and the page (`app.js`, the HTML pages, `style.css`). Start here for a page bug. |
