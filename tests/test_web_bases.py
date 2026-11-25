@@ -48,6 +48,7 @@ def _with_bases(export: Path, out: Path) -> Path:
     db.execute("CREATE TABLE place_names (name TEXT, place INTEGER, alternate INTEGER, PRIMARY KEY (name, place))")
     db.executemany("INSERT INTO places VALUES (?, ?, ?, ?, ?, ?)", PLACES)
     db.executemany("INSERT INTO place_names VALUES (?, ?, 0)", [(_fold(name), place) for place, name, *_ in PLACES])
+    db.execute("INSERT INTO place_names VALUES ('kessa', ?, 1)", (CHAMONIX,))  # an alternate name starting "kes"
     db.commit()
     db.close()
     store = ServingData(out).store
@@ -94,8 +95,12 @@ def data(exports: tuple[Path, Path]) -> ServingData:
 
 @pytest.fixture(autouse=True)
 def _few_hikes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The fixture export has four hikes: a Base needs one HikeGroup, not ten."""
+    """The fixture export has four hikes: a Base needs one HikeGroup, not ten, one is enough to compare on,
+    and every Base reaches them, so none is left out as in the Hiker's region. Scores run from 0."""
     monkeypatch.setattr("dayhike.bases.MIN_HIKE_GROUPS", 1)
+    monkeypatch.setattr("dayhike.bases.ENOUGH_GROUPS", 1)
+    monkeypatch.setattr("dayhike.bases.OWN_REGION_SHARE", 1.0)
+    monkeypatch.setattr("dayhike.bases.SCORE_FLOOR", dict.fromkeys(REACHES, 0.0))
 
 
 @pytest.fixture
@@ -122,6 +127,7 @@ def test_info_says_whether_the_site_has_bases(exports: tuple[Path, Path], client
     assert bases["reaches"] == list(REACHES)
     assert bases["mild_c"] == list(MILD_C)
     assert bases["score_help"]["overall"]  # what a BaseRanking's score means (ADR-0025)
+    assert bases["min_hike_groups"] == 1  # the page says how many hikes too few is
     assert plain.get("/api/info").json()["bases"] is None
     assert plain.get("/api/bases/search", params={"q": "kes"}).status_code == 404
     assert plain.get("/api/bases/nearest", params={"lat": 45, "lon": 7}).status_code == 404
@@ -155,12 +161,33 @@ def test_a_changed_bases_meta_changes_the_etag(exports: tuple[Path, Path], tmp_p
     assert etag(rebuilt) != etag(exports[1])
 
 
-def test_base_search_finds_only_places_that_are_bases(client: TestClient) -> None:
-    found = client.get("/api/bases/search", params={"q": "Kes"}).json()["results"]
+def _search(client: TestClient, q: str) -> list[dict]:
+    return client.get("/api/bases/search", params={"q": q}).json()["results"]
 
-    assert found == [{"id": KESWICK, "name": "Keswick", "country": "GB", "population": 4_658, "lat": 45.0, "lon": 7.0}]
-    assert client.get("/api/bases/search", params={"q": "cham"}).json()["results"][0]["id"] == CHAMONIX
-    assert client.get("/api/bases/search", params={"q": "nowhere"}).json()["results"] == []
+
+def test_base_search_finds_only_places_that_are_bases(client: TestClient) -> None:
+    found = _search(client, "Kes")
+
+    # Keswick's own name starts "Kes": before the bigger Chamonix, which only an alternate name does; Kessel is no Base.
+    assert [place["id"] for place in found] == [KESWICK, CHAMONIX]
+    assert found[0] == {
+        "id": KESWICK, "name": "Keswick", "country": "GB", "population": 4_658, "stays": None, "eats": None,
+        "lat": 45.0, "lon": 7.0, "near": {"name": "Chamonix-Mont-Blanc", "km": 445},
+    }  # fmt: skip
+    assert _search(client, "cham")[0]["id"] == CHAMONIX
+    assert _search(client, "cham")[0]["near"] is None  # no other town of 10,000 people
+    assert _search(client, "nowhere") == []
+
+
+@pytest.mark.parametrize("typed", ["chamonix mont blanc", "Chamonix Mont", "chamonix-mont blanc", "Chamonix. Mont-Blanc"])
+def test_base_search_finds_a_name_with_its_spaces_and_hyphens_written_otherwise(client: TestClient, typed: str) -> None:
+    assert [place["id"] for place in _search(client, typed)] == [CHAMONIX]
+
+
+def test_base_search_offers_a_name_one_typo_away_when_none_starts_so(client: TestClient) -> None:
+    assert [place["id"] for place in _search(client, "keswik")] == [KESWICK]
+    assert [place["id"] for place in _search(client, "Bethseda")] == [BETHESDA]
+    assert _search(client, "kesxyz") == []
 
 
 def test_nearest_base_to_a_point_with_its_distance(client: TestClient) -> None:
@@ -168,6 +195,7 @@ def test_nearest_base_to_a_point_with_its_distance(client: TestClient) -> None:
 
     assert found["id"] == BETHESDA
     assert found["name"] == "Bethesda"
+    assert found["near"] == {"name": "Chamonix-Mont-Blanc", "km": 222}
     assert found["distance_km"] == pytest.approx(11.1, abs=0.1)
     assert client.get("/api/bases/nearest", params={"lat": 91, "lon": 7}).status_code == 422
 
@@ -190,7 +218,24 @@ def test_ranking_lists_the_bases_alike_best_first_with_the_score_explained(clien
     assert best["hike_groups"] == 4
     assert best["cuts"] == {}
     assert best["months"] == MILD
+    assert best["stays"] is None and best["eats"] is None  # the trait values, None when unknown
     assert next(row for row in rows if row["id"] == MOAB)["region"] == "us"
+
+
+def test_a_row_names_the_other_towns_of_its_area_and_how_sure_its_score_is(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("dayhike.bases.AREA_REACHES", 100)  # Bethesda and Chamonix in one area
+    monkeypatch.setattr("dayhike.bases.ENOUGH_GROUPS", 16)  # four of Keswick's hikes: half as sure
+
+    rows = _rank(client)["results"]
+
+    area = next(row for row in rows if row["id"] == BETHESDA)
+    assert area["area_bases"] == 2
+    assert area["area_towns"] == [{"id": CHAMONIX, "name": "Chamonix-Mont-Blanc", "population": 10_614}]
+    assert area["sure"] == pytest.approx(0.5)
+    assert area["score"] == pytest.approx(0.5)
+    assert next(row for row in rows if row["id"] == MOAB)["area_towns"] == []
 
 
 def test_a_shorter_reach_counts_only_the_hikes_within_it(client: TestClient) -> None:
@@ -259,7 +304,11 @@ def test_ranking_refuses_bad_requests(client: TestClient, body: dict) -> None:
 
 
 def test_ranking_from_a_place_that_is_not_a_base_is_not_found(client: TestClient) -> None:
-    assert client.post("/api/bases/rank", json={"seed": KESSEL, "reach": 30}).status_code == 404
+    response = client.post("/api/bases/rank", json={"seed": KESSEL, "reach": 30})
+
+    assert response.status_code == 404
+    assert "Base at place" not in response.json()["detail"]  # said for a visitor, not a developer
+    assert "link" in response.json()["detail"]
 
 
 def test_one_base_lists_its_passing_hikes_with_minutes(client: TestClient, data: ServingData) -> None:
@@ -276,6 +325,11 @@ def test_one_base_lists_its_passing_hikes_with_minutes(client: TestClient, data:
     assert body["base"]["hike_groups"] == len(within)
     first = body["hikes"][0]
     assert first["name"]
+    hike = data.store.ids.tolist().index(first["id"])
+    assert first["length_m"] == round(data.store.column("length_m")[hike])  # one way, as the HikeFilter takes it
+    assert first["climb_m"] is None  # the fixture has no heights: unknown
+    assert first["summit"] is bool(data.store.column("peak_summited")[hike] == 1)
+    assert isinstance(first["round_trip"], bool)
     assert first["trailhead"] == pytest.approx(data.trailheads[within[0]].tolist())
     assert client.post("/api/bases/detail", json={"base": KESSEL, "reach": 30}).status_code == 404
 
@@ -313,3 +367,30 @@ def test_a_base_ranking_does_not_wait_for_a_hike_ranking(data: ServingData, monk
         hike_ranking.join()
 
     assert response.status_code == 200, response.text
+
+
+def test_a_ranking_lists_more_than_a_hundred_rows(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from dataclasses import replace
+
+    from dayhike import bases
+
+    real = bases.rank_bases
+    monkeypatch.setattr(bases, "rank_bases", lambda *args, **kwargs: replace(ranking := real(*args, **kwargs), rows=ranking.rows * 50))
+
+    assert len(_rank(client)["results"]) == 3 * 50  # the fixture ranks three Bases
+
+
+def test_town_name_lookups_do_not_count_against_base_rankings(data: ServingData) -> None:
+    client = TestClient(create_app(data, base_rank_rate=1))
+
+    for typed in ("Ke", "Kes", "Kesw", "Keswi", "Keswic", "Keswick"):
+        assert client.get("/api/bases/search", params={"q": typed}).status_code == 200
+    assert client.post("/api/bases/detail", json={"base": KESWICK, "reach": 30}).status_code == 200
+
+    assert client.post("/api/bases/rank", json={"seed": KESWICK, "reach": 30}).status_code == 200
+
+
+def test_a_big_town_says_the_other_big_town_it_is_near(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("dayhike.bases.NEAR_TOWN_PEOPLE", 4_000)  # Keswick, Bethesda, Chamonix and Moab are big
+
+    assert _search(client, "Keswick")[0]["near"] == {"name": "Bethesda", "km": 222}  # not itself

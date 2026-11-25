@@ -345,10 +345,35 @@ button.help:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 .months li { width: 1.25em; text-align: center; font-size: 0.72rem; border-radius: 3px; background: #eef0ec; color: var(--muted); }
 .months li.mild { background: var(--green); color: #fff; }
 .months li.unknown { background: none; }
-@media (max-width: 600px) { .months { flex-wrap: wrap; max-width: 9em; } }
+@media (max-width: 600px) {
+  .months { gap: 1px; }
+  .months li { width: 1.05em; font-size: 0.68rem; }
+  /* A phone stacks each row: its number beside the town, the score and the months under it. */
+  #base-table thead { display: none; }
+  #base-table tr { display: grid; grid-template-columns: 1.8em minmax(0, 1fr); border-bottom: 1px solid #eef0ec; }
+  #base-table td { grid-column: 2; border-bottom: none; padding: 3px; }
+  #base-table td:first-child { grid-column: 1; grid-row: 1 / span 3; }
+  #base-table .score { white-space: normal; }
+}
+#base-results.stale table, #base-results.stale #base-note { opacity: 0.45; }
+#base-hikes.stale #base-hike-list { opacity: 0.45; }
+#base-problem { margin: 8px 0; }
+#base-mine { margin: 6px 0; font-size: 0.85rem; }
+#base-mine .months { display: inline-flex; vertical-align: middle; margin: 0 6px; }
+#base-mine .hint { display: block; }
+#base-more { margin-top: 8px; }
+#base-hike-list .hike-facts { display: block; color: var(--muted); font-size: 0.8rem; }
+.base-hikes-close { margin: 6px 0; }
+.base-marker { display: flex; align-items: center; justify-content: center; border-radius: 50%;
+  background: #2f7d4f; color: #fff; border: 1.5px solid #fff; font: 600 11px/1 system-ui, sans-serif; box-shadow: 0 0 2px rgba(0, 0, 0, 0.4); }
+.base-range .range-name { display: block; }
+.base-range .end { white-space: nowrap; }
+.base-range .range-error { display: block; margin-top: 2px; }
 .base-choices { margin-top: 10px; }
 .base-choices summary { cursor: pointer; }
 .base-range, .base-trait { margin-top: 8px; font-size: 0.9rem; }
-.base-range > span, .base-trait > label > span { display: inline-block; min-width: 8em; }
+.base-trait > label > span { display: inline-block; min-width: 8em; }
 .base-range input, .base-trait input[type="number"] { width: 6em; }
 .base-trait .trait-filter .check { display: inline-flex; margin: 4px 6px 0 0; }
+#base-problem, .base-range .range-error { color: #b42318; }
+#base-panel .what { color: var(--muted); font-size: 0.85em; }

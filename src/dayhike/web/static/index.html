@@ -83,7 +83,7 @@
       <p class="hint">An estimate of the drive to where each hike starts, made once for every town.</p>
       <details class="base-choices">
         <summary class="panel-title">3. Which hikes count</summary>
-        <p class="hint">Both towns are compared on the hikes that pass, and only on those.</p>
+        <p class="hint">Both towns are compared on the hikes that pass, and only on those. Each hike is measured one way, as it is mapped.</p>
         <div id="base-hike-filter"></div>
       </details>
       <details class="base-choices">
@@ -93,7 +93,7 @@
       </details>
       <button type="button" id="base-find" class="primary" disabled>Find bases</button>
       <p id="base-status" class="status" role="status" aria-live="polite"></p>
-      <button type="button" id="bases-off" class="secondary mode-switch">Back to finding hikes</button>
+      <button type="button" id="bases-off" class="secondary mode-switch">Leave Find a base: find hikes instead</button>
     </section>
     <section class="panel">
       <div id="seed-pick">
@@ -109,6 +109,7 @@
         <button type="button" id="wish-on" class="secondary mode-switch" hidden>No particular hike in mind? Describe the one you want</button>
         <!-- Shown when /api/info says the site has Bases (ADR-0084). -->
         <button type="button" id="bases-on" class="secondary mode-switch" hidden>Find a base: towns with hikes like a town you stayed in</button>
+        <button type="button" id="bases-back" class="secondary mode-switch" hidden>Back to Find a base: the town's hikes</button>
       </div>
       <div id="wish-intro" hidden>
         <h2 class="panel-title">1. The hike you want</h2>
@@ -203,17 +204,21 @@
   <section class="content">
     <section id="base-card" class="card" hidden>
       <div id="base-map" class="map pick-map"></div>
-      <p class="hint" id="base-pin-hint" role="status" aria-live="polite">Click the map near where you stayed to choose the town nearest to it.</p>
+      <p class="hint" id="base-pin-hint" role="status" aria-live="polite">Click the map near where you stayed to choose the town nearest to it; zoom in first to pick it closely. A numbered dot opens that town.</p>
+      <p id="base-problem" class="error" role="alert" hidden></p>
       <section id="base-results" hidden>
         <h2 id="base-title"></h2>
+        <p id="base-mine"></p>
         <p class="hint" id="base-note"></p>
         <div class="table-wrap"><table id="base-table"></table></div>
+        <button type="button" id="base-more" class="secondary" hidden>Show more</button>
       </section>
       <section id="base-hikes" hidden>
+        <button type="button" class="secondary base-hikes-close">Back to the list</button>
         <h2 id="base-hikes-title"></h2>
         <p class="hint" id="base-hikes-note" role="status" aria-live="polite"></p>
         <ol id="base-hike-list"></ol>
-        <button type="button" id="base-hikes-close" class="secondary">Back to the list</button>
+        <button type="button" class="secondary base-hikes-close">Return to the list</button>
       </section>
     </section>
     <section id="map-pick" class="card" hidden>

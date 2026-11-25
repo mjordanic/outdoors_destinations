@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from dayhike import build_catalog, build_similarity
+from dayhike.bases import REACHES
 from dayhike.serving import ServingData, export_serving
 from dayhike.web import create_app
 from test_page import Api, browser, open_page, serve  # noqa: F401 (browser: a fixture)
@@ -19,6 +20,9 @@ from test_page import _close_what_a_test_opened  # noqa: F401 (an autouse fixtur
 from test_web_bases import BETHESDA, KESWICK, _with_bases
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog.osm"
+# A list superseded while the server still runs it makes the next wait its turn (409, asked again every 1.5 s):
+# under a loaded test run that can outlast the default 5 s.
+SETTLE_MS = 20_000
 
 
 @pytest.fixture(scope="module")
@@ -43,8 +47,27 @@ def plain_server(exports: tuple[Path, Path]) -> Iterator[str]:
 
 @pytest.fixture(autouse=True)
 def _few_hikes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The fixture export has four hikes: a Base needs one HikeGroup, not ten."""
+    """The fixture export has four hikes: as in ``test_web_bases``, a Base needs one HikeGroup, not ten, one
+    is enough to compare on, none is left out as in the Hiker's region, and scores run from 0."""
     monkeypatch.setattr("dayhike.bases.MIN_HIKE_GROUPS", 1)
+    monkeypatch.setattr("dayhike.bases.ENOUGH_GROUPS", 1)
+    monkeypatch.setattr("dayhike.bases.OWN_REGION_SHARE", 1.0)
+    monkeypatch.setattr("dayhike.bases.SCORE_FLOOR", dict.fromkeys(REACHES, 0.0))
+
+
+def edited(change):
+    """A route handler: the server's answer, changed by ``change`` (its body, in place); one refused as it is."""
+
+    def handle(route) -> None:
+        response = route.fetch()
+        if response.status != 200:  # e.g. a 409 while the list it replaces still runs
+            route.fulfill(response=response)
+            return
+        body = response.json()
+        change(body)
+        route.fulfill(json=body)
+
+    return handle
 
 
 def open_bases(browser, server: str, **options):
@@ -63,8 +86,10 @@ def choose_base(page, typed: str, name: str) -> None:
 
 def rank(page) -> list[str]:
     """Presses Find bases: the names the list shows, best first."""
+    page.wait_for_function("() => !document.querySelector('#base-find').disabled", timeout=SETTLE_MS)  # a town chosen asks at once
     page.get_by_role("button", name="Find bases").click()
     page.locator("#base-results tbody tr").first.wait_for()
+    page.wait_for_function("() => !document.querySelector('#base-find').disabled && !bases.settling", timeout=SETTLE_MS)  # the last list asked for
     return page.locator("#base-results tbody .base-name").all_inner_texts()
 
 
@@ -84,7 +109,7 @@ def test_the_mode_is_offered_only_by_a_site_with_bases(browser, server, plain_se
 
     assert page.locator("#seed-pick").is_hidden()
     assert page.locator("#liked").is_hidden()
-    page.get_by_role("button", name="Back to finding hikes").click()
+    page.get_by_role("button", name="Leave Find a base").click()
     assert page.locator("#base-panel").is_hidden()
     assert page.locator("#seed-pick").is_visible()
     assert page.locator("#liked").is_visible()
@@ -140,9 +165,7 @@ def test_a_reach_changed_while_the_first_ranking_runs_wins(browser, server) -> N
             held.append(route)
 
     page.route("**/api/bases/rank", hold_the_first)
-    choose_base(page, "Kes", "Keswick")
-    page.get_by_role("radio", name="about 60 min").check()
-    page.get_by_role("button", name="Find bases").click()
+    choose_base(page, "Kes", "Keswick")  # asks for the list at once, at 30 min: held
     page.wait_for_function("() => bases.asked === 1")
     reach = asked(page, lambda: page.get_by_role("radio", name="about 15 min").check())["reach"]
     page.locator("#base-results tbody tr").first.wait_for()
@@ -161,7 +184,7 @@ def test_every_row_explains_its_score(browser, server) -> None:
 
     best = page.locator("#base-results tbody tr").first
     assert best.locator(".score").inner_text().startswith("1.00")
-    assert "hikes 1.00" in best.locator(".why").inner_text()
+    assert "hikes alike 1.00" in best.locator(".why").inner_text()
     best.get_by_role("button", name="What the base score means").click()
     box = page.locator("#score-help")
     assert box.is_visible()
@@ -174,17 +197,15 @@ def test_every_row_explains_its_score(browser, server) -> None:
 def test_a_trait_that_took_off_the_score_is_said_in_the_row(browser, server) -> None:
     page = open_bases(browser, server)
 
-    def with_cuts(route) -> None:
-        body = route.fetch().json()
+    def with_cuts(body: dict) -> None:
         body["results"][0].update(score=0.8, hike_score=0.9, cuts={"size": 0.11, "stays": 0.0})
-        route.fulfill(json=body)
 
-    page.route("**/api/bases/rank", with_cuts)
+    page.route("**/api/bases/rank", edited(with_cuts))
     choose_base(page, "Kes", "Keswick")
     rank(page)
 
     why = page.locator("#base-results tbody tr").first.locator(".why").inner_text()
-    assert "hikes 0.90" in why
+    assert "hikes alike 0.90" in why
     assert "town size −11 %" in why
     assert "places to stay" not in why  # nothing taken off
 
@@ -228,6 +249,7 @@ def test_a_pin_on_the_map_chooses_the_nearest_base_within_5_km(browser, server) 
     pin(47.01, 7.0)  # about 1 km from Bethesda
     page.locator("#base-chosen").get_by_text("Bethesda").wait_for()
     assert asked(page, lambda: rank(page))["seed"] == BETHESDA
+    page.wait_for_function("() => !document.querySelector('#base-find').disabled")  # the list is in: the map is fitted to it
 
     page.evaluate("() => bases.map.setView([47.5, 7.0], 12)")
     pin(47.5, 7.0)  # about 55 km from Bethesda and Chamonix
@@ -237,11 +259,11 @@ def test_a_pin_on_the_map_chooses_the_nearest_base_within_5_km(browser, server) 
 
 def test_too_few_hikes_to_compare_is_said_and_nothing_is_listed(browser, server) -> None:
     page = open_bases(browser, server)
-    page.route("**/api/bases/rank", lambda route: route.fulfill(json={**route.fetch().json(), "too_few": True, "results": []}))
+    page.route("**/api/bases/rank", edited(lambda body: body.update(too_few=True, results=[])))
     choose_base(page, "Kes", "Keswick")
     page.get_by_role("button", name="Find bases").click()
 
-    page.locator("#base-results").get_by_text("Too few of your hikes").wait_for()
+    page.locator("#base-results").get_by_text("are needed to compare towns").wait_for()
     assert page.locator("#base-results tbody tr").count() == 0
 
 
@@ -298,7 +320,7 @@ def test_a_hike_of_an_opened_base_links_into_hikes_like_it(browser, server) -> N
     open_base(page, "Bethesda")
     first = page.locator("#base-hike-list li").first
     name = first.locator(".hike-name").inner_text()
-    link = first.get_by_role("link", name="Find hikes like this")
+    link = first.get_by_role("link", name="Open this hike to find ones like it")
 
     assert (link.get_attribute("href") or "").startswith("#hike=")
     link.click()
@@ -351,11 +373,11 @@ def test_a_base_link_opened_in_a_tab_already_open_sets_every_setting(browser, se
     assert page.get_by_role("radio", name="about 30 min").is_checked()
 
 
-def test_back_to_finding_hikes_leaves_the_base_address(browser, server) -> None:
+def test_leaving_find_a_base_leaves_the_base_address(browser, server) -> None:
     page = open_bases(browser, server)
     keswick_in_60(page)
 
-    page.get_by_role("button", name="Back to finding hikes").click()
+    page.get_by_role("button", name="Leave Find a base").click()
 
     assert "base" not in page.evaluate("() => location.hash")
 

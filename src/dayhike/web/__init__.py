@@ -88,6 +88,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 RESULTS = 10  # rows a Ranking lists; "Show 10 more" asks the next ones (ADR-0032)
 POOL = 30  # rows a Ranking answers with: the page draws RESULTS of them, or shows the first in Strict order (ADR-0047)
 MAX_ROWS = 100  # the most rows a Ranking may list in all, the rows shown before included
+BASE_ROWS = 300  # the most rows a BaseRanking lists; the page shows them a hundred at a time
 # The longest drive limit (ADR-0083): a 4 h drive Ranking from a dense start (Munich) ran past Cloud Run's 60 s timeout.
 MAX_DRIVE_HOURS = 3.0
 # The drive answers (origin, max hours) kept: the next rows, a new draw or other weights from the same start
@@ -689,6 +690,9 @@ def create_app(
     base_finder = None
     if data.bases is not None:  # imported only for an export with Bases, as ``ServingData`` does
         from dayhike import bases as base_finder
+
+        # Off the first request's path: the names and towns of places.sqlite, read once (ADR-0085).
+        threading.Thread(target=base_finder.warm_bases, args=(data,), daemon=True).start()
     drives: OrderedDict[tuple[float, float, float], tuple[np.ndarray, np.ndarray]] = OrderedDict()
     drives_lock = threading.Lock()
     # The API reads change only with the export (its meta.json holds facts_version; places.sqlite and landmarks.sqlite
@@ -827,6 +831,10 @@ def create_app(
                 "reaches": list(base_finder.REACHES),
                 "mild_c": list(base_finder.MILD_C),
                 "score_help": base_finder.BASE_SCORE_HELP,
+                # Under this many of the Hiker's hikes pass, a BaseRanking is too_few: the page says how many.
+                "min_hike_groups": base_finder.MIN_HIKE_GROUPS,
+                # A best score under this is no better than a random pair of hikes': the page says so.
+                "weak_score": base_finder.CREDIT_FROM,
             },
         }
 
@@ -1054,20 +1062,26 @@ def create_app(
         try:
             return base_finder.base_row(data.bases, place)
         except KeyError:
-            raise HTTPException(404, f"no Base at place {place}") from None
+            raise HTTPException(
+                404, "No town with hikes in reach has this link's number: the link may be old or mistyped. Search for the town by its name."
+            ) from None
+
+    def described(found, rows: list[int]) -> list[dict]:
+        """``describe_bases`` with the big town each is near, to tell towns of one name apart."""
+        return [{**place, "near": near} for place, near in zip(found.describe_bases(data, rows), found.near_towns(data, rows))]
 
     # "Find a base" (ADR-0084): the Hiker's Base by its name ...
     @app.api_route("/api/bases/search", methods=["GET", "HEAD"])
     def base_search(q: str = Query(max_length=100), limit: int = Query(5, ge=1, le=20)) -> dict:
         found = finder()
-        return {"results": found.describe_bases(data, found.find_bases(data, q, limit))}
+        return {"results": described(found, found.find_bases(data, q, limit))}
 
     # ... or by a pin on the map.
     @app.api_route("/api/bases/nearest", methods=["GET", "HEAD"])
     def base_nearest(lat: float = Query(ge=-90, le=90), lon: float = Query(ge=-180, le=180)) -> dict:
         found = finder()
         row, metres = found.nearest_base(data.bases, Origin(lat, lon))
-        return {**found.describe_bases(data, [row])[0], "distance_km": round(metres / 1000, 1)}
+        return {**described(found, [row])[0], "distance_km": round(metres / 1000, 1)}
 
     # The BaseRanking: the Bases whose hikes in Reach are like the Hiker's, under the HikeFilter and TownTraits.
     @app.post("/api/bases/rank")
@@ -1082,8 +1096,10 @@ def create_app(
             ranking = found.rank_bases(data, body.seed, body.reach, mask, traits=body.town_traits(body.traits))
         finally:
             base_rankings.leave()
-        rows = ranking.rows[:MAX_ROWS]
+        rows = ranking.rows[:BASE_ROWS]
         seed, *listed = found.describe_bases(data, [me, *(row.base for row in rows)], body.reach)
+        others = sorted({town for row in rows for town in row.towns[: found.AREA_TOWNS]})
+        towns = dict(zip(others, found.describe_bases(data, others)))
         return {
             "seed": {**seed, "hike_groups": ranking.seed_groups},
             "reach": body.reach,
@@ -1103,6 +1119,12 @@ def create_app(
                     "enough": row.enough,
                     "hike_groups": row.hike_groups,
                     "area_bases": len(row.members),  # the Bases of its area, itself included
+                    # The biggest other towns of its area (ADR-0085).
+                    "area_towns": [
+                        {key: towns[town][key] for key in ("id", "name", "population")}
+                        for town in row.towns[: found.AREA_TOWNS]
+                    ],
+                    "sure": row.sure,  # the share left of the hike score when few of the Hiker's hikes compare
                     "cuts": dict(row.cuts),  # the share each "like mine" TownTrait took off the hike score
                 }
                 for place, row in zip(listed, rows)
@@ -1119,13 +1141,25 @@ def create_app(
         rows, minutes, groups = found.base_hikes(data.bases, row, body.reach, hike_mask(data.store, hike_filter))
         ids = [int(i) for i in data.store.ids[rows]]
         names = data.names(ids)
+        facts = {name: data.store.column(name)[rows] for name in ("length_m", "elevation_gain_m", "highest_m", "peak_summited", "round_trip")}
+
+        def fact(name: str, i: int) -> float | None:
+            value = float(facts[name][i])
+            return None if math.isnan(value) else round(value)
+
         return {
             "base": {**found.describe_bases(data, [row], body.reach)[0], "hike_groups": groups},
             "reach": body.reach,
             "hike_filter": hike_filter.to_mapping(),
+            # Each hike as walked one way, as a HikeFilter takes it: length, climb and highest point in metres.
             "hikes": [
-                {"id": i, "name": names.get(i, ""), "trailhead": [float(x) for x in data.trailheads[r]], "minutes": int(m)}
-                for i, r, m in zip(ids, rows, minutes)
+                {
+                    "id": i, "name": names.get(i, ""), "trailhead": [float(x) for x in data.trailheads[r]], "minutes": int(m),
+                    "length_m": fact("length_m", k), "climb_m": fact("elevation_gain_m", k),
+                    "highest_m": fact("highest_m", k), "summit": bool(facts["peak_summited"][k] == 1),
+                    "round_trip": bool(facts["round_trip"][k] == 1),
+                }  # fmt: skip
+                for k, (i, r, m) in enumerate(zip(ids, rows, minutes))
             ],
         }
 
