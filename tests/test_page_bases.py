@@ -129,6 +129,30 @@ def test_a_shorter_reach_asks_for_it(browser, server) -> None:
     assert asked(page, lambda: page.get_by_role("radio", name="about 15 min").check())["reach"] == 15
 
 
+def test_a_reach_changed_while_the_first_ranking_runs_wins(browser, server) -> None:
+    page = open_bases(browser, server)
+    held = []
+
+    def hold_the_first(route) -> None:
+        if held:
+            route.continue_()
+        else:
+            held.append(route)
+
+    page.route("**/api/bases/rank", hold_the_first)
+    choose_base(page, "Kes", "Keswick")
+    page.get_by_role("radio", name="about 60 min").check()
+    page.get_by_role("button", name="Find bases").click()
+    page.wait_for_function("() => bases.asked === 1")
+    reach = asked(page, lambda: page.get_by_role("radio", name="about 15 min").check())["reach"]
+    page.locator("#base-results tbody tr").first.wait_for()
+    held[0].fulfill(json=held[0].fetch().json())
+    page.wait_for_timeout(300)
+
+    assert reach == 15
+    assert "about 15 min" in page.locator("#base-note").inner_text()
+
+
 def test_every_row_explains_its_score(browser, server) -> None:
     page = open_bases(browser, server)
     choose_base(page, "Kes", "Keswick")

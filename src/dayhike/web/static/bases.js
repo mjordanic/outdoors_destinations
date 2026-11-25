@@ -12,8 +12,9 @@ const TRAIT_NAMES = { size: "town size", stays: "places to stay", eats: "restaur
 const bases = {
   seed: null, // the Hiker's Base: {id, name, country, lat, lon, ...}
   reach: BASE_REACH,
-  ranked: false, // a BaseRanking is shown, so a changed town or Reach asks again
+  ranked: false, // a BaseRanking is asked for or shown, so a changed town or Reach asks again
   asked: 0, // the number of the latest BaseRanking asked for; an earlier answer is dropped
+  pinned: 0, // the same for map clicks
   map: null,
   layer: null,
   markers: [], // the Hiker's Base, then each row's, in the list's order
@@ -66,8 +67,10 @@ const bases = {
     const hint = $("#base-pin-hint");
     hint.classList.remove("error");
     hint.textContent = "Looking for the nearest town…";
+    const number = ++this.pinned;
     try {
       const found = await api(`/api/bases/nearest?lat=${at.lat.toFixed(5)}&lon=${at.lng.toFixed(5)}`);
+      if (number !== this.pinned) return;
       if (found.distance_km > BASE_PIN_KM) {
         hint.textContent = `No base within ${BASE_PIN_KM} km of there: the nearest is ${found.name}, ${fmt.km(found.distance_km * 1000)} away.`;
         return;
@@ -75,7 +78,7 @@ const bases = {
       hint.textContent = `${found.name} is the nearest base, ${fmt.km(found.distance_km * 1000)} from there.`;
       this.choose(found);
     } catch (error) {
-      sayFailed(hint, error, () => this.pin(at));
+      if (number === this.pinned) sayFailed(hint, error, () => this.pin(at));
     }
   },
 
@@ -149,11 +152,11 @@ const bases = {
     status.classList.remove("error");
     status.textContent = "Finding bases…";
     $("#base-find").disabled = true;
+    this.ranked = true;
     try {
       const body = await postRank({ seed: this.seed.id, reach: this.reach }, current, "/api/bases/rank", (text) => { status.textContent = text; });
       if (!current()) return;
       status.textContent = "";
-      this.ranked = true;
       this.show(body);
     } catch (error) {
       if (current()) sayFailed(status, error, () => this.rank());
