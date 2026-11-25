@@ -689,6 +689,9 @@ def create_app(
     base_finder = None
     if data.bases is not None:  # imported only for an export with Bases, as ``ServingData`` does
         from dayhike import bases as base_finder
+
+        # Off the first request's path: the names and towns of places.sqlite, read once (ADR-0085).
+        threading.Thread(target=base_finder.warm_bases, args=(data,), daemon=True).start()
     drives: OrderedDict[tuple[float, float, float], tuple[np.ndarray, np.ndarray]] = OrderedDict()
     drives_lock = threading.Lock()
     # The API reads change only with the export (its meta.json holds facts_version; places.sqlite and landmarks.sqlite
@@ -1084,6 +1087,8 @@ def create_app(
             base_rankings.leave()
         rows = ranking.rows[:MAX_ROWS]
         seed, *listed = found.describe_bases(data, [me, *(row.base for row in rows)], body.reach)
+        others = sorted({town for row in rows for town in row.towns[: found.AREA_TOWNS]})
+        towns = dict(zip(others, found.describe_bases(data, others)))
         return {
             "seed": {**seed, "hike_groups": ranking.seed_groups},
             "reach": body.reach,
@@ -1103,6 +1108,12 @@ def create_app(
                     "enough": row.enough,
                     "hike_groups": row.hike_groups,
                     "area_bases": len(row.members),  # the Bases of its area, itself included
+                    # The biggest other towns of its area (ADR-0085).
+                    "area_towns": [
+                        {key: towns[town][key] for key in ("id", "name", "population")}
+                        for town in row.towns[: found.AREA_TOWNS]
+                    ],
+                    "sure": row.sure,  # the share left of the hike score when few of the Hiker's hikes compare
                     "cuts": dict(row.cuts),  # the share each "like mine" TownTrait took off the hike score
                 }
                 for place, row in zip(listed, rows)

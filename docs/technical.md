@@ -2705,7 +2705,8 @@ straight line with its `distance_km`. `POST /api/bases/rank` takes `{"seed": pla
 `{"at_least", "up_to"}` (size and counts) or `{"mild_in": [months]}` (months), a trait left out ignored; anything
 else is a 422, and a seed that is no Base a 404. It answers `seed` (the Base with its passing `hike_groups`),
 `too_few` (under 10 of them: no row), and up to 100 `results`, one per area, each a Base with `region`,
-`score`, `hike_score`, `mix`, `coverage`, `back`, `enough`, `hike_groups`, `area_bases` and `cuts`, the share
+`score`, `hike_score`, `mix`, `coverage`, `back`, `enough`, `sure`, `hike_groups`, `area_bases`, `area_towns`
+(up to 5 other towns of its area, biggest first, each `{"id", "name", "population"}`) and `cuts`, the share
 each "like mine" trait took off the hike score; the seed and each row have `months`, the median temperature of
 the hikes in Reach each month (null when unknown). `POST /api/bases/detail` takes `{"base": place id, "reach",
 "hike_filter"}` and answers the Base with its passing `hike_groups` and `hikes`, each `{"id", "name",
@@ -2728,6 +2729,16 @@ them, and mix stops once the next bound is under the 6,000th best worked out, so
 as with every mix worked out. Coverage, the "like mine" cuts and a row go to those 6,000. Under "like mine", a
 Base whose value is unknown counts as half alike; when the Hiker's own value is unknown, the trait costs
 nothing.
+
+After the visitor check (ADR-0085), the hike score runs from `SCORE_FLOOR`, the median score of random pairs
+of Bases at that Reach (0.36, 0.40 and 0.48 at 15, 30 and 60 min), up to 1, and a Base at 0 is no row.
+`enough` scores down a Base with under half the Hiker's HikeGroups only while it has under
+`ENOUGH_GROUPS` (30), and `sure` scores every row down when the Hiker's Base has under 30. Left out besides
+the Bases near the Hiker's: those whose nearest HikeGroups are mostly within 60 min of it (its region), those
+with 100,000 people living in the towns of `places.sqlite` within 5 km (a city), places whose name says they
+are no town (`NOT_A_TOWN`: a hut, an inn, an industrial estate, a condo, a trailer park, "(historical)"), and
+west of the Atlantic, Bases outside the United States. A row is named after the biggest Base of its area
+(population, then places to stay) within 0.05 of its best score, and rows are ordered by that Base's score.
 
 On the real Europe and US build, the preselection kept the best 20 rows of every ranking the same, for
 Keswick, Chamonix, Bohinjska Bistrica and Moab at 15, 30 and 60 min, with and without "climb up to 500 m"

@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from dayhike import build_catalog, build_similarity
+from dayhike.bases import REACHES
 from dayhike.serving import ServingData, export_serving
 from dayhike.web import create_app
 from test_page import Api, browser, open_page, serve  # noqa: F401 (browser: a fixture)
@@ -43,8 +44,12 @@ def plain_server(exports: tuple[Path, Path]) -> Iterator[str]:
 
 @pytest.fixture(autouse=True)
 def _few_hikes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The fixture export has four hikes: a Base needs one HikeGroup, not ten."""
+    """The fixture export has four hikes: as in ``test_web_bases``, a Base needs one HikeGroup, not ten, one
+    is enough to compare on, none is left out as in the Hiker's region, and scores run from 0."""
     monkeypatch.setattr("dayhike.bases.MIN_HIKE_GROUPS", 1)
+    monkeypatch.setattr("dayhike.bases.ENOUGH_GROUPS", 1)
+    monkeypatch.setattr("dayhike.bases.OWN_REGION_SHARE", 1.0)
+    monkeypatch.setattr("dayhike.bases.SCORE_FLOOR", dict.fromkeys(REACHES, 0.0))
 
 
 def open_bases(browser, server: str, **options):

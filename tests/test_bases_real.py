@@ -9,8 +9,9 @@ better row of its BaseRanking counts as ahead of it, and a Base outside the rank
 ``BEST_HIKE_MATCHES`` is behind it. A control or analogue that is no row of the ranking is below them.
 Every seed is checked at 30 minutes, Moab at 60. Many analogues lie near their seed (Ambleside for
 Keswick, Courmayeur for Chamonix, Tarvisio, Kranjska Gora and Bovec for Bohinj), within
-``OWN_AREA_REACHES`` of it, where the page hides Bases as where the Hiker has been. That rule decides
-what the page shows, not how alike two Bases are, so the known-pairs test sets it off.
+``OWN_AREA_REACHES`` of it or in its region (``OWN_REGION_SHARE``), where the page hides Bases as where
+the Hiker has been. Those rules decide what the page shows, not how alike two Bases are, so the
+known-pairs test sets them off.
 """
 
 from __future__ import annotations
@@ -145,6 +146,7 @@ def test_known_analogues_rank_among_the_best_and_controls_do_not(
     data: ServingData, all_hikes: np.ndarray, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(bases_module, "OWN_AREA_REACHES", 0)
+    monkeypatch.setattr(bases_module, "OWN_REGION_SHARE", 1.0)
     analogues, controls, report = [], [], []
     for seed in SEEDS:
         ranking = _ranking(data, seed, REACH[seed], all_hikes)
@@ -220,8 +222,17 @@ def test_mild_months_of_the_seeds_are_their_hiking_seasons(data: ServingData) ->
         assert not {1, 12} & set(mild), (seed[0], mild)
 
 
-def test_a_stays_filter_still_fills_a_page_of_rows(data: ServingData, all_hikes: np.ndarray) -> None:
+def test_a_stays_filter_still_fills_a_page_of_rows(
+    data: ServingData, all_hikes: np.ndarray, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ``BEST_HIKE_MATCHES`` best leave a page of rows, or every row a longer list would have: Moab's
+    few towns with 20 places to stay are what scores above a random pair's."""
     traits = TownTraits(stays=TraitSetting(at_least=20), eats=TraitSetting(at_least=20))
     for seed in SEEDS:
         ranking = _ranking(data, seed, 30, all_hikes, traits)
-        assert len(ranking.rows) >= 20, (seed[0], len(ranking.rows))
+        with monkeypatch.context() as longer:
+            longer.setattr(bases_module, "BEST_HIKE_MATCHES", bases_module.PRESELECT_BASES)
+            every = _ranking(data, seed, 30, all_hikes, traits)
+        assert len(ranking.rows) >= min(20, len(every.rows)), (seed[0], len(ranking.rows), len(every.rows))
+        if seed is not MOAB:
+            assert len(ranking.rows) >= 20, (seed[0], len(ranking.rows))
