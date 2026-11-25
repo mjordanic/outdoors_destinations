@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import shutil
 import sqlite3
 import warnings
@@ -34,7 +35,7 @@ from dayhike.similarity import (
     _measured,
     score_rows,
 )
-from dayhike.serving import REGION_SPLIT_LON, ServingData, _fold
+from dayhike.serving import REGION_SPLIT_LON, TOWN_POPULATION, ServingData, _fold
 from dayhike.steps import file_key
 from dayhike.town_counts import TownCounts
 from dayhike.town_traits import MILD_C, TownTraits, trait_cuts, trait_passes
@@ -322,6 +323,23 @@ PRESELECT_BASES = 20_000  # Bases, best by back times enough, that get a mix: th
 BEST_HIKE_MATCHES = 6_000  # of those, best by mix and back, that get a coverage, and a row
 AREA_REACHES = 2  # a Base this many Reaches from a better row joins it
 OWN_AREA_REACHES = 3  # Bases this many Reaches from the Hiker's are where they have been
+# ADR-0085, after the visitor check of "Find a base":
+# A raw hike score at or under this, per Reach, is no more alike than a typical pair of Bases picked
+# at random (the median of 20,000 such pairs on the real build): a row's score runs from it (0) up to 1.
+SCORE_FLOOR = {15: 0.36, 30: 0.4, 60: 0.48}
+ENOUGH_GROUPS = 30  # HikeGroups enough for a week's hiking, and to compare two towns on
+OWN_REGION_SHARE = 0.5  # a Base with more of its nearest HikeGroups than this within REACH_MIN of the Hiker's is theirs
+URBAN_PEOPLE = 100_000  # a Base with this many people living within URBAN_M is in a city
+URBAN_M = 5_000
+NAME_WITHIN = 0.05  # a row is named after the biggest town of its area scoring within this of its best
+AREA_TOWNS = 5  # the other towns of an area a row names, biggest first
+COVERED_WEST = "US"  # west of REGION_SPLIT_LON, the hikes are those of the United States alone
+# Places that are no town to stay in: a hut, an inn, an industrial estate, a condo, a trailer park, ...
+NOT_A_TOWN = re.compile(
+    r"(?i)^(rifugio|malga|gasthof|hotel|albergo|grand'albergo|collegio|cantoniera|casa cantoniera|"
+    r"(zona|area|località) (industriale|produttiva|artigianale)|industriale|industriegebiet)(\s|$)|^bar\s"
+    r"|\b(industrial|condominiums?|condo|trailer|mobile home|apartments|subdivision)\b|\(historical\)"
+)
 # What a BaseRanking's score means (ADR-0025), beside every row of "Find a base"; served in /api/info.
 BASE_SCORE_HELP = {
     "overall": "How alike the hikes in reach of this town are to those in reach of yours, from 0 to 1. Higher "
@@ -339,7 +357,9 @@ BASE_SCORE_HELP = {
             "text": f"{round(MIX_SHARE * 100)} % of the score is the mix: how far the two towns have the same kinds "
             f"of hike in the same shares, near kinds counting as partly the same. {round((1 - MIX_SHARE) * 100)} % "
             "is coverage, half each way: how many of the kinds near your town this town has too, and how many of "
-            "its kinds your town has. A town with far fewer of these hikes than yours is scored down.",
+            "its kinds your town has. 0 is as alike as two towns picked at random, and a town less alike than "
+            "that is not listed. A town with far fewer of these hikes than yours is scored down, but not one with "
+            f"{ENOUGH_GROUPS} or more, enough for a week; with fewer than {ENOUGH_GROUPS} of yours, every town is.",
         },
         {
             "title": "Your hike filters and town traits",
@@ -350,7 +370,10 @@ BASE_SCORE_HELP = {
         {
             "title": "One row per area",
             "text": "Towns close together have much the same hikes in reach, so each row is an area, named after "
-            "its best town. Towns near your own are left out: that is where you have been.",
+            "its biggest town about as alike as its best, with its other big towns beside it. Towns near your own, "
+            "and towns whose nearest hikes are mostly within an hour of yours, are left out: that is where you "
+            "have been. So are towns in a city, and places that are no town to stay in, such as a mountain hut, "
+            "an inn or an industrial estate.",
         },
     ),
 }
@@ -358,13 +381,14 @@ BASE_SCORE_HELP = {
 
 @dataclass(frozen=True)
 class BaseMatch:
-    """One row of a BaseRanking: an area, named after its best Base.
+    """One row of a BaseRanking: an area, named after its biggest town about as alike as its best.
 
-    ``hike_score`` is ``(mix, coverage, back)`` weighed 40, 30, 30, times ``enough``;
-    ``score`` the hike score after the "like mine" TownTraits, each taking its share in
-    ``cuts`` (trait name, share) off; ``hike_groups`` the Base's HikeGroups that pass;
-    ``members`` the Bases of its area, best first, ``base`` the first. Bases are rows of the
-    ``bases/`` folder.
+    ``hike_score`` is ``(mix, coverage, back)`` weighed 40, 30, 30, run from the Reach's
+    ``SCORE_FLOOR`` (0) up to 1, times ``enough`` and ``sure``; ``score`` the hike score after
+    the "like mine" TownTraits, each taking its share in ``cuts`` (trait name, share) off;
+    ``hike_groups`` the Base's HikeGroups that pass; ``members`` the Bases of its area, best
+    first, ``base`` the one it is named after, and ``towns`` the others, biggest first. Bases
+    are rows of the ``bases/`` folder.
     """
 
     base: int
@@ -380,6 +404,8 @@ class BaseMatch:
     region: str
     members: tuple[int, ...]
     cuts: tuple[tuple[str, float], ...] = ()
+    sure: float = 1.0
+    towns: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -418,13 +444,17 @@ def rank_bases(
     the Hiker's) are scored for the ``PRESELECT_BASES`` best by back times enough of the Bases
     with at least ``MIN_HIKE_GROUPS`` passing HikeGroups, kept to ``countries`` (ISO codes) and
     ``regions`` (``REGIONS`` names) when given (back for all of them); coverage (the way round) only for the ``BEST_HIKE_MATCHES`` best of them with
-    coverage taken as full. A Base with under half the Hiker's HikeGroups is scored down by
-    the square root of the ratio. Bases within ``OWN_AREA_REACHES`` of the Hiker's are left
-    out, and one within ``AREA_REACHES`` of a better row joins it, both in a straight line at
-    the Reach estimate's straight-line speed. ``traits`` (all ignored when None) leave out the
-    Bases that fail a TownTrait filter before the best are chosen, and their "like mine"
-    settings then cut the hike score of those best (``town_traits``), on which the rows are
-    ordered. Raises KeyError when ``seed`` is not a Base.
+    coverage taken as full. The hike score runs from the Reach's ``SCORE_FLOOR`` (0) up to 1
+    (ADR-0085), and a Base at 0 is no row. A Base with under half the Hiker's HikeGroups, and
+    under ``ENOUGH_GROUPS``, is scored down by the square root of the ratio to the smaller;
+    with under ``ENOUGH_GROUPS`` of the Hiker's, every Base is (``sure``). Bases within
+    ``OWN_AREA_REACHES`` of the Hiker's, or in their region (``_home_shares``), and those that
+    may be no row (``_base_places``) are left out, and one within ``AREA_REACHES`` of a better
+    row joins it, both in a straight line at the Reach estimate's straight-line speed; a row is
+    named after the biggest Base of its area within ``NAME_WITHIN`` of its best score.
+    ``traits`` (all ignored when None) leave out the Bases that fail a TownTrait filter before
+    the best are chosen, and their "like mine" settings then cut the hike score of those best
+    (``town_traits``), on which the rows are ordered. Raises KeyError when ``seed`` is not a Base.
     """
     bases = data.bases
     at = np.flatnonzero(np.asarray(bases.place_ids) == seed)
@@ -442,10 +472,11 @@ def rank_bases(
     points = np.asarray(bases.points, dtype=np.float64)
     reach_m = reach / 60 * STRAIGHT_SPEED_KMH * 1_000
     region = np.where(points[:, 1] < REGION_SPLIT_LON, "us", "europe")
-    country = _base_countries(data)
+    country, listed = _base_places(data)
 
     keep = groups >= MIN_HIKE_GROUPS
-    keep &= straight_line_distances_m(Origin(*points[me]), points) > OWN_AREA_REACHES * reach_m
+    metres = straight_line_distances_m(Origin(*points[me]), points)
+    keep &= (metres > OWN_AREA_REACHES * reach_m) & listed
     if countries is not None:
         keep &= np.isin(country, list(countries))
     if regions is not None:
@@ -461,28 +492,38 @@ def rank_bases(
     candidates = np.flatnonzero(keep)
     my_best = credit[my_types].max(axis=0)
     back = _back(candidates, starts, types, counts, groups, my_best)
-    enough = np.minimum(1.0, np.sqrt(groups[candidates] / (groups[me] / 2)))
+    enough = np.minimum(1.0, np.sqrt(groups[candidates] / min(groups[me] / 2, ENOUGH_GROUPS)))
+    sure = min(1.0, math.sqrt(groups[me] / ENOUGH_GROUPS))
     chosen = np.lexsort((candidates, -back * enough))[:PRESELECT_BASES]
     candidates, back, enough = candidates[chosen], back[chosen], enough[chosen]
     rest = (1 - MIX_SHARE) / 2
-    mix = _mix_of_the_best(candidates, starts, types, counts, groups, my_shares @ spread[my_types], spread, blocks, back, enough)
-    first = np.where(np.isnan(mix), -np.inf, (MIX_SHARE * mix + rest * back + rest) * enough)
+    floor = SCORE_FLOOR[reach]
+    my_spread = my_shares @ spread[my_types]
+    mix = _mix_of_the_best(candidates, starts, types, counts, groups, my_spread, spread, blocks, back, enough, floor)
+    first = np.where(np.isnan(mix), -np.inf, _from_floor(MIX_SHARE * mix + rest * back + rest, floor) * enough)
     best = np.lexsort((candidates, -first))[:BEST_HIKE_MATCHES]
     candidates, mix, back, enough = candidates[best], mix[best], back[best], enough[best]
     near_first = np.argsort(-credit, axis=1, kind="stable")  # each HikeType's near ones, best first
     coverage = _coverage(candidates, starts, types, my_types, my_shares, credit, near_first, (credit > 0).sum(axis=1))
-    hike_score = (MIX_SHARE * mix + rest * coverage + rest * back) * enough
+    hike_score = np.maximum(0.0, _from_floor(MIX_SHARE * mix + rest * coverage + rest * back, floor)) * enough * sure
+    near = np.flatnonzero(metres[candidates] <= 2 * NEAR_M)  # farther, no HikeGroup is in Reach of both
+    hike_score[near[_home_shares(bases, me, candidates[near]) > OWN_REGION_SHARE]] = 0.0  # the Hiker's region
     cuts = trait_cuts(traits, town, me, candidates)
     score = hike_score * np.prod([1 - cut for _, cut in cuts], axis=0) if cuts else hike_score
 
-    order = np.lexsort((candidates, -score))
+    alike = np.flatnonzero(hike_score > 0)  # no better than a random pair: no row
+    order = alike[np.lexsort((candidates[alike], -score[alike]))]
     area_of = _areas(np.radians(points[candidates[order]]), AREA_REACHES * reach_m)
     areas: list[list[int]] = [[] for _ in range(area_of.max(initial=-1) + 1)]
     for i, area in zip(order.tolist(), area_of.tolist()):
         areas[area].append(i)
+    size = np.nan_to_num(np.asarray(bases.population, dtype=np.float64), nan=-1.0)
+    stays = np.nan_to_num(np.asarray(bases.stays, dtype=np.float64), nan=-1.0)
+    bigger = lambda i: (size[candidates[i]], stays[candidates[i]], score[i], -candidates[i])  # noqa: E731
     found = []
     for area in areas:
-        i, base = area[0], int(candidates[area[0]])
+        i = max((j for j in area if score[j] >= score[area[0]] - NAME_WITHIN), key=bigger)
+        base = int(candidates[i])
         found.append(
             BaseMatch(
                 base=base, place_id=int(bases.place_ids[base]), score=float(score[i]),
@@ -490,10 +531,45 @@ def rank_bases(
                 coverage=float(coverage[i]), back=float(back[i]), enough=float(enough[i]),
                 hike_groups=int(groups[base]), country=str(country[base]), region=str(region[base]),
                 members=tuple(int(candidates[j]) for j in area),
-                cuts=tuple((name, float(cut[i])) for name, cut in cuts),
+                cuts=tuple((name, float(cut[i])) for name, cut in cuts), sure=sure,
+                towns=tuple(int(candidates[j]) for j in sorted(area, key=bigger, reverse=True) if j != i),
             )  # fmt: skip
         )
+    found.sort(key=lambda row: (-row.score, row.base))
     return BaseRanking(seed=me, reach=reach, seed_groups=int(groups[me]), rows=found)
+
+
+def _from_floor(raw: np.ndarray, floor: float) -> np.ndarray:
+    """A raw hike score run from ``floor`` (0, under it below 0) up to 1."""
+    return (raw - floor) / (1 - floor)
+
+
+def _home_shares(bases: Bases, me: int, rows: np.ndarray) -> np.ndarray:
+    """For each Base of ``rows``, the share of its nearest HikeGroups (within the shortest of
+    ``REACHES`` it has any in) that are within ``REACH_MIN`` of Base ``me``, whatever the HikeFilter."""
+    count = len(bases.place_ids)
+    runs, offsets, pairs = np.asarray(bases.base_runs), np.asarray(bases.run_offsets), np.asarray(bases.pair_groups)
+    home = np.zeros(len(bases.group_types), dtype=np.bool_)
+    for band in range(len(REACHES)):
+        home[pairs[offsets[runs[band * count + me]] : offsets[runs[band * count + me + 1]]]] = True
+    return _shares_at_home(np.asarray(rows, dtype=np.int64), len(REACHES), count, runs, offsets, pairs, home)
+
+
+@njit
+def _shares_at_home(rows, bands, count, base_runs, run_offsets, pair_groups, home):
+    """``_home_shares``'s loop over each Base's pairs, band by band until one has any."""
+    shares = np.zeros(len(rows))
+    for i in range(len(rows)):
+        inside, total = 0, 0
+        for band in range(bands):
+            slot = band * count + rows[i]
+            for pair in range(run_offsets[base_runs[slot]], run_offsets[base_runs[slot + 1]]):
+                inside += home[pair_groups[pair]]
+                total += 1
+            if total:
+                break
+        shares[i] = inside / total if total else 0.0
+    return shares
 
 
 @njit
@@ -519,24 +595,48 @@ def _areas(points, within_m):
     return area_of
 
 
-_COUNTRIES: dict[int, tuple[Bases, np.ndarray]] = {}  # by the ``Bases`` read: each Base's country code
+_PLACES: dict[int, tuple[Bases, tuple[np.ndarray, np.ndarray]]] = {}  # by the ``Bases`` read
 
 
-def _base_countries(data: ServingData) -> np.ndarray:
-    """Each Base's ISO country code from ``data.places``, "" for none; read once per ``bases/`` folder."""
-    kept = _COUNTRIES.get(id(data.bases))
+def _base_places(data: ServingData) -> tuple[np.ndarray, np.ndarray]:
+    """Each Base's ISO country code from ``data.places`` ("" for none), and whether it may be a row:
+    not a place that is no town (``NOT_A_TOWN``), not in a city (``URBAN_PEOPLE`` people living in the
+    towns of ``data.places`` within ``URBAN_M``, its own included: the file keeps every town of
+    ``TOWN_POPULATION`` people or more, but villages only near hikes) and, west of ``REGION_SPLIT_LON``,
+    in ``COVERED_WEST``. Every Base may be one without ``data.places``. Read once per ``bases/`` folder."""
+    kept = _PLACES.get(id(data.bases))
     if kept is None or kept[0] is not data.bases:
-        known = {}
+        place_ids = np.asarray(data.bases.place_ids)
+        points = np.asarray(data.bases.points, dtype=np.float64)
+        codes = np.full(len(place_ids), "", dtype="<U2")
+        listed = np.ones(len(place_ids), dtype=bool)
         if data.places is not None:
-            db = sqlite3.connect(data.places, uri=True)
-            try:
-                known = dict(db.execute("SELECT id, country FROM places"))
-            finally:
-                db.close()
-        codes = np.array([known.get(int(place)) or "" for place in data.bases.place_ids], dtype="<U2")
-        _COUNTRIES.clear()
-        _COUNTRIES[id(data.bases)] = kept = (data.bases, codes)
+            with scoped(sqlite3.connect(data.places, uri=True)) as db:
+                for place, name, country in db.execute(
+                    "SELECT id, name, country FROM places WHERE id IN (SELECT value FROM json_each(?))",
+                    (json.dumps(place_ids.tolist()),),
+                ):
+                    at = int(np.searchsorted(place_ids, place))
+                    codes[at], listed[at] = country or "", not NOT_A_TOWN.search(name or "")
+                towns = db.execute("SELECT lat, lon, population FROM places WHERE population >= ?", (TOWN_POPULATION,))
+                people = np.array(towns.fetchall())
+            listed &= (points[:, 1] >= REGION_SPLIT_LON) | (codes == COVERED_WEST)
+            if len(people):
+                pairs = cKDTree(_unit(points)).sparse_distance_matrix(
+                    cKDTree(_unit(people[:, :2])), 2 * math.sin(URBAN_M / (2 * EARTH_RADIUS_M)), output_type="ndarray"
+                )
+                living = np.bincount(pairs["i"], weights=people[pairs["j"], 2], minlength=len(place_ids))
+                listed &= living < URBAN_PEOPLE
+        _PLACES.clear()
+        _PLACES[id(data.bases)] = kept = (data.bases, (codes, listed))
     return kept[1]
+
+
+def warm_bases(data: ServingData) -> None:
+    """Read what ``rank_bases`` reads once (``_base_places``) and compile its region check, so the
+    first ranking after a start does not wait for them; the server runs it beside its start."""
+    _base_places(data)
+    _home_shares(data.bases, 0, np.zeros(0, dtype=np.int64))
 
 
 def base_row(bases: Bases, place: int) -> int:
@@ -669,9 +769,9 @@ def _credit(bases: Bases) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return kept[1]
 
 
-def _mix_of_the_best(candidates, starts, types, counts, groups, my_spread, spread, blocks, back, enough):  # fmt: skip
+def _mix_of_the_best(candidates, starts, types, counts, groups, my_spread, spread, blocks, back, enough, floor):  # fmt: skip
     """``rank_bases``'s mix of the candidates that may be among the ``BEST_HIKE_MATCHES`` best by
-    mix, back and enough; NaN for the rest, which cannot be.
+    mix, back and enough, the score run from ``floor``; NaN for the rest, which cannot be.
 
     A Base's mix is at most that of its spread shares summed in each group of ``blocks``
     against the Hiker's (the smaller of two sums is at least the sum of the smaller), so mix is
@@ -682,7 +782,7 @@ def _mix_of_the_best(candidates, starts, types, counts, groups, my_spread, sprea
     one_hot = np.zeros((len(spread), blocks.max() + 1))
     one_hot[np.arange(len(spread)), blocks] = 1.0
     bound = _mix(candidates, starts, types, counts, groups, my_spread @ one_hot, spread @ one_hot)
-    bound = (MIX_SHARE * np.minimum(bound, 1.0) + rest * back + rest) * enough + 1e-9  # past rounding
+    bound = _from_floor(MIX_SHARE * np.minimum(bound, 1.0) + rest * back + rest, floor) * enough + 1e-9  # past rounding
     order = np.argsort(-bound, kind="stable")
     mix = np.full(len(candidates), np.nan)
     done = 0
@@ -691,7 +791,8 @@ def _mix_of_the_best(candidates, starts, types, counts, groups, my_spread, sprea
         mix[take] = _mix(candidates[take], starts, types, counts, groups, my_spread, spread)
         done += len(take)
         if done >= BEST_HIKE_MATCHES and done < len(order):
-            first = (MIX_SHARE * mix[order[:done]] + rest * back[order[:done]] + rest) * enough[order[:done]]
+            worked = order[:done]
+            first = _from_floor(MIX_SHARE * mix[worked] + rest * back[worked] + rest, floor) * enough[worked]
             if bound[order[done]] < np.partition(first, done - BEST_HIKE_MATCHES)[done - BEST_HIKE_MATCHES]:
                 break
     return mix

@@ -249,7 +249,7 @@ The rows of a page as the Ranking has them, its best first, with nothing drawn: 
 _Avoid_: deterministic mode, exact mode
 
 **Base**:
-A town a Hiker stays in and hikes out from: a GeoNames place with at least 10 HikeGroups in Reach. "Find a base" takes the Hiker's own Base and lists other Bases whose hikes in Reach are alike (ADR-0084). A row stands for an area, as a Ranking's does: a Base within twice the Reach of a better row joins that row, and Bases within three Reaches of the Hiker's own are left out, since that is where they have been.
+A town a Hiker stays in and hikes out from: a GeoNames place with at least 10 HikeGroups in Reach. "Find a base" takes the Hiker's own Base and lists other Bases whose hikes in Reach are alike (ADR-0084). A row stands for an area, as a Ranking's does: a Base within twice the Reach of a better row joins that row, and the row is named after the area's biggest Base about as alike as its best. Bases within three Reaches of the Hiker's own, or whose nearest hikes are mostly within an hour of it, are left out, since that is where they have been; so are Bases in a city and places that are no town to stay in (ADR-0085).
 _Avoid_: destination (a DestinationHike is a hike kind), resort, hub, hikes like this (that is a Ranking from a Seed)
 
 **Reach**:
@@ -269,7 +269,7 @@ How many HikeGroups of each HikeType lie in a Base's Reach under a HikeFilter. I
 _Avoid_: tally, fingerprint, embedding, FeatureVector (that describes one hike)
 
 **BaseRanking**:
-An ordered list of Bases by how alike their BaseProfile is to the Hiker's own Base. The hike score is fixed: 40 % mix (how far the two profiles' shares of HikeTypes overlap, near types counting as partly the same) and 60 % coverage (30 % from the Hiker's Base to the other, 30 % back), times an enough-hikes factor; a Base under 10 HikeGroups is left out. TownTraits then re-order the best 6,000 hike matches, and none brings in a Base outside them (ADR-0084).
+An ordered list of Bases by how alike their BaseProfile is to the Hiker's own Base. The hike score is fixed: 40 % mix (how far the two profiles' shares of HikeTypes overlap, near types counting as partly the same) and 60 % coverage (30 % from the Hiker's Base to the other, 30 % back), run from a random pair's score (0) up to 1, times an enough-hikes factor; a Base under 10 HikeGroups, or at 0, is left out (ADR-0085). TownTraits then re-order the best 6,000 hike matches, and none brings in a Base outside them (ADR-0084).
 _Avoid_: Ranking (a Ranking lists hikes by similarity to Seeds), recommendation, match list
 
 **HikeFilter**:

@@ -94,8 +94,12 @@ def data(exports: tuple[Path, Path]) -> ServingData:
 
 @pytest.fixture(autouse=True)
 def _few_hikes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The fixture export has four hikes: a Base needs one HikeGroup, not ten."""
+    """The fixture export has four hikes: a Base needs one HikeGroup, not ten, one is enough to compare on,
+    and every Base reaches them, so none is left out as in the Hiker's region. Scores run from 0."""
     monkeypatch.setattr("dayhike.bases.MIN_HIKE_GROUPS", 1)
+    monkeypatch.setattr("dayhike.bases.ENOUGH_GROUPS", 1)
+    monkeypatch.setattr("dayhike.bases.OWN_REGION_SHARE", 1.0)
+    monkeypatch.setattr("dayhike.bases.SCORE_FLOOR", dict.fromkeys(REACHES, 0.0))
 
 
 @pytest.fixture
@@ -191,6 +195,22 @@ def test_ranking_lists_the_bases_alike_best_first_with_the_score_explained(clien
     assert best["cuts"] == {}
     assert best["months"] == MILD
     assert next(row for row in rows if row["id"] == MOAB)["region"] == "us"
+
+
+def test_a_row_names_the_other_towns_of_its_area_and_how_sure_its_score_is(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("dayhike.bases.AREA_REACHES", 100)  # Bethesda and Chamonix in one area
+    monkeypatch.setattr("dayhike.bases.ENOUGH_GROUPS", 16)  # four of Keswick's hikes: half as sure
+
+    rows = _rank(client)["results"]
+
+    area = next(row for row in rows if row["id"] == BETHESDA)
+    assert area["area_bases"] == 2
+    assert area["area_towns"] == [{"id": CHAMONIX, "name": "Chamonix-Mont-Blanc", "population": 10_614}]
+    assert area["sure"] == pytest.approx(0.5)
+    assert area["score"] == pytest.approx(0.5)
+    assert next(row for row in rows if row["id"] == MOAB)["area_towns"] == []
 
 
 def test_a_shorter_reach_counts_only_the_hikes_within_it(client: TestClient) -> None:

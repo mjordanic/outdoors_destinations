@@ -14,13 +14,17 @@ SEED_AT = (45.0, 7.0)
 FAR = 1.0  # degrees of latitude between Bases that are not near: 111 km, past every Reach's area
 
 
-def _data(tmp_path: Path, towns: list[dict], table: np.ndarray | None = None, types: int = 4) -> SimpleNamespace:
+def _data(
+    tmp_path: Path, towns: list[dict], table: np.ndarray | None = None, types: int = 4, places: tuple = ()
+) -> SimpleNamespace:
     """A serving export's ``bases`` and ``places`` from hand-made towns.
 
     Each town is ``{"types": {HikeType: HikeGroups}, "at": (lat, lon), "country": "GB"}``, its
     HikeGroups its own, one hike each, all 10 minutes away. Town i is Base i with place id i + 1.
     A town may give its ``population``, its 12 ``months`` (the same in every Reach) and its places
-    to ``stays`` and ``eats``; unknown without.
+    to ``stays`` and ``eats``; unknown without. It may give its ``name`` ("P" without), the
+    ``minutes`` to its own HikeGroups, and ``shares``: an earlier town whose HikeGroups it reaches
+    too, 10 minutes away. ``places`` are more places, no Base: (name, population, lat, lon).
     """
     group_types, reached, points = [], [], []
     for town in towns:
@@ -28,7 +32,12 @@ def _data(tmp_path: Path, towns: list[dict], table: np.ndarray | None = None, ty
         for kind, count in sorted(town["types"].items()):
             mine += range(len(group_types), len(group_types) + count)
             group_types += [kind] * count
-        reached.append((np.array(mine, dtype=np.int32), np.full(len(mine), 10, dtype=np.uint8)))
+        minutes = np.full(len(mine), town.get("minutes", 10), dtype=np.uint8)
+        groups = np.array(mine, dtype=np.int32)
+        if "shares" in town:
+            groups = np.r_[reached[town["shares"]][0], groups].astype(np.int32)
+            minutes = np.r_[np.full(len(reached[town["shares"]][0]), 10), minutes].astype(np.uint8)
+        reached.append((groups, minutes))
         points.append(town["at"])
     if table is None:
         table = np.eye(types, dtype=np.float32)
@@ -53,8 +62,12 @@ def _data(tmp_path: Path, towns: list[dict], table: np.ndarray | None = None, ty
     db = sqlite3.connect(out / "places.sqlite")
     db.execute("CREATE TABLE places (id INTEGER PRIMARY KEY, name TEXT, country TEXT, population INTEGER, lat REAL, lon REAL)")
     db.executemany(
-        "INSERT INTO places VALUES (?, 'P', ?, 0, ?, ?)",
-        [(int(i), t.get("country", "GB"), *t["at"]) for i, t in zip(place_ids, towns)],
+        "INSERT INTO places VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            (int(i), t.get("name", "P"), t.get("country", "GB"), int(np.nan_to_num(t.get("population", 0))), *t["at"])
+            for i, t in zip(place_ids, towns)
+        ]
+        + [(count + 1 + i, name, "GB", people, lat, lon) for i, (name, people, lat, lon) in enumerate(places)],
     )
     db.commit()
     db.close()
@@ -87,27 +100,26 @@ def test_known_order_and_parts(tmp_path):
         ],
     )
     ranking = rank_bases(data, 1, 30, _all(data))
-    assert [row.base for row in ranking.rows] == [3, 2, 1]
-    same, half, unlike = ranking.rows
+    assert [row.base for row in ranking.rows] == [3, 2]  # nothing alike is no row
+    same, half = ranking.rows
     assert (same.score, same.mix, same.coverage, same.back, same.enough) == pytest.approx((1, 1, 1, 1, 1))
     # shares (0.5, 0.5, 0) against (0.5, 0.25, 0.25): overlap 0.75; every Hiker's kind is there; 3/4 of it is theirs
     assert (half.mix, half.coverage, half.back) == pytest.approx((0.75, 1.0, 0.75))
-    assert half.score == pytest.approx(0.4 * 0.75 + 0.3 * 1.0 + 0.3 * 0.75)
-    assert unlike.score == pytest.approx(0)
+    assert half.score == pytest.approx(_stretched(0.4 * 0.75 + 0.3 * 1.0 + 0.3 * 0.75))
     assert same.place_id == 4 and same.hike_groups == 40
     assert ranking.seed == 0 and ranking.seed_groups == 40 and not ranking.too_few
 
 
-def test_near_hike_types_count_partly(tmp_path):
+def test_near_hike_types_count_partly(tmp_path, monkeypatch):
+    monkeypatch.setitem(bases_module.SCORE_FLOOR, 30, 0.0)  # the parts, every row listed
     table = np.eye(4, dtype=np.float32)
     table[0, 3] = table[3, 0] = 0.8  # credit (0.8 - 0.6) / 0.4 = 0.5
     table[0, 2] = table[2, 0] = 0.6  # a score of 0.6 is no better than a random pair: no credit
     data = _data(tmp_path, [_town({0: 20}, 0), _town({3: 20}, 1), _town({2: 20}, 2)], table)
-    near, random = rank_bases(data, 1, 30, _all(data)).rows
-    assert near.base == 1 and random.base == 2
+    (near,) = rank_bases(data, 1, 30, _all(data)).rows  # the random one scores 0: no row
+    assert near.base == 1
     # each spread over itself and the near type, 2 : 1, so (2/3, 1/3) against (1/3, 2/3)
     assert (near.mix, near.coverage, near.back) == pytest.approx((2 / 3, 0.5, 0.5))
-    assert random.score == pytest.approx(0)
 
 
 def test_enough_hikes_on_filtered_counts(tmp_path):
@@ -262,10 +274,13 @@ def test_every_row_is_scored_by_the_formula(tmp_path, seed):
 
     rows = rank_bases(data, 1, 30, _all(data)).rows
 
-    assert len(rows) == 59
+    raw = {base: np.dot((0.4, 0.3, 0.3), _formula(data, 0, base)) for base in range(1, 60)}
+    assert {row.base for row in rows} == {base for base, score in raw.items() if score > bases_module.SCORE_FLOOR[30]}
+    assert len(rows) >= 10
     assert [row.score for row in rows] == sorted((row.score for row in rows), reverse=True)
     for row in rows:
         assert (row.mix, row.coverage, row.back) == pytest.approx(_formula(data, 0, row.base), abs=1e-12)
+        assert row.score == pytest.approx(_stretched(raw[row.base]) * row.enough * row.sure, abs=1e-12)
 
 
 @pytest.mark.parametrize("seed", range(3))
@@ -291,3 +306,156 @@ def test_the_best_do_not_depend_on_the_groups_that_bound_mix(tmp_path, monkeypat
 
     assert len(found[0]) == 7
     assert found[1] == found[0] and found[2] == found[0]
+
+
+ALIKE = {0: 20, 1: 20}  # the Hiker's hikes in the tests below
+
+
+def _stretched(raw: float, reach: int = 30) -> float:
+    """A raw hike score as a row shows it: from the floor of a random pair of Bases (0) up to 1."""
+    floor = bases_module.SCORE_FLOOR[reach]
+    return max(0.0, (raw - floor) / (1 - floor))
+
+
+def test_scores_run_from_a_random_pair_s_up_to_1_and_no_better_is_no_row(tmp_path):
+    data = _data(
+        tmp_path,
+        [
+            _town(ALIKE, 0),
+            _town(ALIKE, 1),  # the same
+            _town({0: 20, 1: 10, 2: 10}, 2),  # mix 0.75, coverage 1, back 0.75
+            _town({0: 10, 2: 30}, 3),  # mix 0.25, coverage 0.5, back 0.25: less alike than a typical random pair
+        ],
+    )
+    rows = {row.base: row for row in rank_bases(data, 1, 30, _all(data)).rows}
+    assert rows[1].score == pytest.approx(1)
+    assert rows[2].score == pytest.approx(_stretched(0.4 * 0.75 + 0.3 * 1 + 0.3 * 0.75))
+    assert 0.4 * 0.25 + 0.3 * 0.5 + 0.3 * 0.25 < bases_module.SCORE_FLOOR[30] and 3 not in rows
+
+
+def test_a_town_with_hikes_enough_for_a_week_is_not_scored_down_for_having_fewer(tmp_path):
+    week = bases_module.ENOUGH_GROUPS
+    data = _data(tmp_path, [_town({0: 10 * week}, 0), _town({0: week}, 1), _town({0: week // 2}, 2)])
+    rows = {row.base: row for row in rank_bases(data, 1, 30, _all(data)).rows}
+    assert rows[1].enough == pytest.approx(1) and rows[1].score == pytest.approx(1)
+    assert rows[2].enough == pytest.approx(np.sqrt((week // 2) / week))
+
+
+def test_too_few_of_your_hikes_to_compare_on_scores_every_row_down(tmp_path):
+    few = bases_module.ENOUGH_GROUPS // 2
+    data = _data(tmp_path, [_town({0: few}, 0), _town({0: few}, 1), _town({0: 4 * few}, 2)])
+    rows = rank_bases(data, 1, 30, _all(data)).rows
+    sure = np.sqrt(few / bases_module.ENOUGH_GROUPS)
+    assert [row.sure for row in rows] == pytest.approx([sure, sure])
+    assert [row.score for row in rows] == pytest.approx([sure, sure])  # the same kinds of hike, but few of them
+
+
+@pytest.mark.parametrize("reach", REACHES)
+def test_a_town_whose_hikes_are_mostly_within_an_hour_of_yours_is_left_out(tmp_path, reach):
+    data = _data(
+        tmp_path,
+        [
+            _town(ALIKE, 0, minutes=10),
+            _town({0: 10, 1: 10}, 1, shares=0),  # 40 of its 60 HikeGroups are the Hiker's
+            _town({0: 25, 1: 25}, 2, shares=0),  # 40 of 90: under half
+            _town(ALIKE, 3),
+            # its nearest hikes, within 15 minutes, are the Hiker's
+            {"types": {0: 40, 1: 40}, "at": (SEED_AT[0], SEED_AT[1] + 2 * FAR), "shares": 0, "minutes": 50},
+        ],
+    )
+    assert {row.base for row in rank_bases(data, 1, reach, _all(data)).rows} == {2, 3}
+
+
+def test_a_town_in_a_city_is_left_out(tmp_path):
+    people = bases_module.URBAN_PEOPLE
+    data = _data(
+        tmp_path,
+        [
+            _town(ALIKE, 0),
+            _town(ALIKE, 1, population=1_000),  # a district: a city lives around it
+            _town(ALIKE, 2, population=people),  # a city itself
+            _town(ALIKE, 3, population=people // 2),  # a town, with towns around it
+        ],
+        places=(
+            ("City", people, SEED_AT[0] + FAR + 0.02, SEED_AT[1]),  # 2 km off
+            ("Town", people // 3, SEED_AT[0] + 3 * FAR + 0.02, SEED_AT[1]),
+        ),
+    )
+    assert [row.base for row in rank_bases(data, 1, 30, _all(data)).rows] == [3]
+
+
+NOT_TOWNS = (
+    "Rifugio Scalorbi", "Malga Quarazza", "Gasthof", "Bar Alpino", "Hotel Castell", "Grand'Albergo",
+    "Albergo della Posta", "Zona Industriale", "Area Produttiva", "Industriale Artigianale", "Industriegebiet Nord",
+    "Burningham Industrial", "Collegio Santa Croce", "Cantoniera della Presolana", "Continental Townhouse Condominium",
+    "Aspen Park Condo", "Gateway Trailer Park", "Camelot Mobile Home Park", "Foxcroft Apartments",
+    "Carter Subdivision", "Stobcross (historical)",
+)  # fmt: skip
+TOWNS = ("Braunau am Inn", "Potters Bar", "Bar-sur-Seine", "San Martino Buon Albergo", "Red Lodge", "Hütte")
+
+
+@pytest.mark.parametrize("name", NOT_TOWNS)
+def test_a_place_that_is_no_town_is_not_listed(tmp_path, name):
+    data = _data(tmp_path, [_town(ALIKE, 0), _town(ALIKE, 1, name=name), _town(ALIKE, 2, name="Keswick")])
+    assert [row.base for row in rank_bases(data, 1, 30, _all(data)).rows] == [2]
+
+
+@pytest.mark.parametrize("name", TOWNS)
+def test_a_town_whose_name_has_such_a_word_is_listed(tmp_path, name):
+    data = _data(tmp_path, [_town(ALIKE, 0), _town(ALIKE, 1, name=name)])
+    assert [row.base for row in rank_bases(data, 1, 30, _all(data)).rows] == [1]
+
+
+def test_a_row_is_named_after_the_biggest_town_about_as_alike_as_its_best(tmp_path):
+    north = SEED_AT[0] + 3 * FAR
+    data = _data(
+        tmp_path,
+        [
+            _town(ALIKE, 0),
+            {"types": ALIKE, "at": (north, SEED_AT[1])},  # the area's best, a hamlet of unknown size
+            {"types": {0: 20, 1: 19, 2: 1}, "at": (north + 0.1, SEED_AT[1]), "population": 3_000},  # nearly as alike
+            {"types": {0: 20, 1: 14, 2: 6}, "at": (north - 0.1, SEED_AT[1]), "population": 9_000},  # bigger, less alike
+            {"types": {0: 20, 1: 19, 2: 1}, "at": (north + 0.2, SEED_AT[1]), "population": 40},  # as alike, smaller
+        ],
+    )
+    (row,) = rank_bases(data, 1, 30, _all(data)).rows
+    assert row.base == 2 and row.place_id == 3
+    assert row.score == pytest.approx(_stretched(0.4 * 0.975 + 0.3 * 1 + 0.3 * 0.975)) and row.hike_groups == 40
+    assert set(row.members) == {1, 2, 3, 4}
+    assert row.towns == (3, 4, 1)  # the other towns of the area, biggest first
+
+
+def test_rows_are_in_the_order_of_the_towns_they_are_named_after(tmp_path):
+    north = SEED_AT[0] + 3 * FAR
+    data = _data(
+        tmp_path,
+        [
+            _town(ALIKE, 0),
+            {"types": ALIKE, "at": (north, SEED_AT[1])},
+            {"types": {0: 20, 1: 19, 2: 1}, "at": (north + 0.1, SEED_AT[1]), "population": 3_000},  # names that area
+            _town({0: 20, 1: 20, 2: 1}, 6),  # between the two: the first row
+        ],
+    )
+    rows = rank_bases(data, 1, 30, _all(data)).rows
+    assert [row.base for row in rows] == [3, 2]
+    assert [row.score for row in rows] == sorted((row.score for row in rows), reverse=True)
+
+
+def test_a_base_outside_the_united_states_west_of_the_atlantic_is_not_listed(tmp_path):
+    data = _data(
+        tmp_path,
+        [
+            {"types": ALIKE, "at": (38.6, -109.5), "country": "US"},
+            {"types": ALIKE, "at": (31.0, -110.0), "country": "MX"},  # its hikes in reach are those across the border
+            {"types": ALIKE, "at": (49.1, -114.0), "country": "CA"},
+            {"types": ALIKE, "at": (36.0, -112.0), "country": "US"},
+        ],
+    )
+    assert [row.base for row in rank_bases(data, 1, 30, _all(data)).rows] == [3]
+
+
+def test_warming_reads_the_places_before_the_first_ranking(tmp_path, monkeypatch):
+    monkeypatch.setattr(bases_module, "_PLACES", {})
+    data = _data(tmp_path, [_town(ALIKE, 0), _town(ALIKE, 1, name="Gasthof")])
+    bases_module.warm_bases(data)
+    assert bases_module._PLACES[id(data.bases)][1][1].tolist() == [True, False]
