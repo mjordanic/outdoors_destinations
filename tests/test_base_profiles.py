@@ -5,9 +5,10 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from dayhike.bases import REACHES, BaseFacts, HikeTypes, _write_bases, base_profiles
+from dayhike.bases import REACHES, BaseFacts, Bases, HikeTypes, _write_bases, base_profiles
+from dayhike.similarity import SimilarityStore
 from test_bases import KINDS, PER_KIND
-from test_export_bases import _build, _export, _load
+from test_export_bases import _build, _export
 
 HIKES = len(KINDS) * PER_KIND
 
@@ -43,7 +44,13 @@ def _as_dicts(profiles) -> list[dict[int, int]]:
     return found
 
 
-def _random_bases(tmp_path: Path, seed: int) -> dict[str, np.ndarray]:
+def _fixture_bases(tmp_path: Path) -> Bases:
+    out = _export(tmp_path)
+    _build(out)
+    return Bases.open_dir(out / "bases", SimilarityStore.open_dir(out / "similarity"))
+
+
+def _random_bases(tmp_path: Path, seed: int) -> Bases:
     """A bases/ folder of random Reach: 40 Bases, 30 HikeTypes, 400 HikeGroups of 1-4 hikes."""
     rng = np.random.default_rng(seed)
     types, groups, bases = 30, 400, 40
@@ -60,37 +67,33 @@ def _random_bases(tmp_path: Path, seed: int) -> dict[str, np.ndarray]:
     facts = BaseFacts(population=np.zeros(bases), month_temperatures=np.zeros((bases, len(REACHES), 12)))
     store = SimpleNamespace(ids=np.arange(len(group_of_hike)), catalog_digest="t")
     _write_bases(out, ids, np.zeros((bases, 2)), reached, group_of_hike, group_types, hike_types, facts, store)
-    return _load(out)
+    return Bases.open_dir(out / "bases", store)
 
 
 @pytest.mark.parametrize("reach", REACHES)
 def test_profiles_equal_a_naive_per_hike_count_on_the_fixture_export(tmp_path: Path, reach: int) -> None:
-    out = _export(tmp_path)
-    _build(out)
-    bases = _load(out)
+    bases = _fixture_bases(tmp_path)
     rng = np.random.default_rng(reach)
 
     for share in (0.0, 0.3, 0.7, 1.0):
         hike_mask = rng.random(HIKES) < share
-        assert _as_dicts(base_profiles(bases, reach, hike_mask)) == _naive(bases, reach, hike_mask)
+        assert _as_dicts(base_profiles(bases, reach, hike_mask)) == _naive(vars(bases), reach, hike_mask)
 
 
 @pytest.mark.parametrize("seed", range(5))
 def test_profiles_equal_a_naive_per_hike_count_for_random_masks_and_every_reach(tmp_path: Path, seed: int) -> None:
     bases = _random_bases(tmp_path, seed)
     rng = np.random.default_rng(seed)
-    hikes = len(bases["group_hikes"])
+    hikes = len(bases.group_hikes)
 
     for reach in REACHES:
         for share in (0.05, 0.5, 1.0):
             hike_mask = rng.random(hikes) < share
-            assert _as_dicts(base_profiles(bases, reach, hike_mask)) == _naive(bases, reach, hike_mask)
+            assert _as_dicts(base_profiles(bases, reach, hike_mask)) == _naive(vars(bases), reach, hike_mask)
 
 
 def test_a_group_counts_once_when_several_of_its_hikes_pass(tmp_path: Path) -> None:
-    out = _export(tmp_path)
-    _build(out)
-    bases = _load(out)
+    bases = _fixture_bases(tmp_path)
     one, three = np.zeros(HIKES, dtype=bool), np.zeros(HIKES, dtype=bool)
     one[0] = True
     three[[0, 1, 2]] = True  # hike 0, its Twin and a hike of its kind in its cell: one HikeGroup
@@ -104,7 +107,7 @@ def test_a_group_counts_once_when_several_of_its_hikes_pass(tmp_path: Path) -> N
 
 def test_an_unknown_reach_or_a_mask_of_the_wrong_length_is_refused(tmp_path: Path) -> None:
     bases = _random_bases(tmp_path, 0)
-    hikes = len(bases["group_hikes"])
+    hikes = len(bases.group_hikes)
 
     with pytest.raises(ValueError):
         base_profiles(bases, 45, np.ones(hikes, dtype=bool))

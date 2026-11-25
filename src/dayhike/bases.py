@@ -9,7 +9,7 @@ import os
 import shutil
 import sqlite3
 import warnings
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, fields
 from pathlib import Path
@@ -188,31 +188,30 @@ class BaseProfiles:
     counts: np.ndarray
 
 
-def base_profiles(data: Mapping[str, np.ndarray], reach: int, hike_mask: np.ndarray) -> BaseProfiles:
+def base_profiles(bases: Bases, reach: int, hike_mask: np.ndarray) -> BaseProfiles:
     """Count, for every Base, the HikeGroups of each HikeType within ``reach`` minutes that pass.
 
-    ``data`` holds the ``bases/`` arrays by file name (``export_bases``); ``hike_mask`` says
-    of each hike (similarity row) whether it passes the HikeFilter. A HikeGroup passes when
+    ``bases`` is the ``bases/`` folder (``Bases.open_dir``); ``hike_mask`` says of each
+    hike (similarity row) whether it passes the HikeFilter. A HikeGroup passes when
     any of its hikes does, and counts once. One pass over the bands up to ``reach``: a
     shorter Reach never reads a longer one's band.
     """
     if reach not in REACHES:
         raise ValueError(f"reach must be one of {REACHES} minutes, not {reach}")
     hike_mask = np.asarray(hike_mask, dtype=np.bool_)
-    if len(hike_mask) != len(data["group_hikes"]):
-        raise ValueError(f"hike_mask has {len(hike_mask)} hikes, the bases have {len(data['group_hikes'])}")
-    bases = len(data["place_ids"])
+    if len(hike_mask) != len(bases.group_hikes):
+        raise ValueError(f"hike_mask has {len(hike_mask)} hikes, the bases have {len(bases.group_hikes)}")
     starts, types, counts = _profile_pass(
         REACHES.index(reach) + 1,
-        bases,
-        len(data["type_table"]),
+        len(bases.place_ids),
+        len(bases.type_table),
         hike_mask,
-        np.asarray(data["group_starts"]),
-        np.asarray(data["group_hikes"]),
-        np.asarray(data["base_runs"]),
-        np.asarray(data["run_offsets"]),
-        np.asarray(data["run_types"]),
-        np.asarray(data["pair_groups"]),
+        np.asarray(bases.group_starts),
+        np.asarray(bases.group_hikes),
+        np.asarray(bases.base_runs),
+        np.asarray(bases.run_offsets),
+        np.asarray(bases.run_types),
+        np.asarray(bases.pair_groups),
     )
     return BaseProfiles(starts=starts, types=types, counts=counts)
 
