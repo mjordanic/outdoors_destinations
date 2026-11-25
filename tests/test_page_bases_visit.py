@@ -334,6 +334,26 @@ def test_a_range_the_wrong_way_round_is_said_beside_it_and_asks_nothing(browser,
     assert asked_for == []
 
 
+def test_a_range_typed_wrong_before_the_first_list_is_asked_for_once_it_is_put_right(browser, server) -> None:
+    page = open_bases(browser, server)
+    page.get_by_text("Which hikes count").click()
+    page.get_by_label("Climb from").fill("2000")
+    page.get_by_label("Climb up to").fill("500")
+    asked_for = requests_to(page, "/api/bases/rank")
+    choose_base(page, "Kes", "Keswick")
+    assert "more than" in page.locator("#base-problem").inner_text()
+    assert asked_for == []
+
+    page.get_by_label("Climb up to").fill("3000")
+    page.get_by_label("Climb up to").press("Tab")
+    page.wait_for_timeout(BASE_WAIT_MS)
+    settled(page)
+
+    assert len(asked_for) == 1
+    assert page.locator("#base-problem").is_hidden()
+    assert page.locator('.base-range[data-stem="climb"] .range-error').is_hidden()
+
+
 def test_a_range_the_wrong_way_round_on_a_towns_page_keeps_its_hikes_marked_and_asks_nothing(browser, server) -> None:
     page = open_bases(browser, server)
     keswick_in_60(page)
@@ -389,7 +409,7 @@ def test_fewer_hikes_is_said_as_a_cut_of_the_score_with_the_counts(browser, serv
     page = open_bases(browser, server)
 
     def fewer(body: dict) -> None:
-        body["results"][0].update(score=0.81, hike_score=0.81, enough=0.9, hike_groups=2)
+        body["results"][0].update(score=0.81, hike_score=0.81, enough=0.9, sure=1.0, hike_groups=2)
 
     page.route("**/api/bases/rank", edited(fewer))
     keswick_in_60(page)
@@ -397,6 +417,21 @@ def test_fewer_hikes_is_said_as_a_cut_of_the_score_with_the_counts(browser, serv
     why = page.locator("#base-results tbody tr").first.locator(".why").inner_text()
     assert "hikes alike 0.90" in why
     assert "fewer hikes than Keswick (2 against 4) −10 %" in why
+    assert "few of your hikes" not in why
+
+
+def test_few_of_your_hikes_to_compare_is_said_as_a_cut_of_the_score(browser, server) -> None:
+    page = open_bases(browser, server)
+
+    def unsure(body: dict) -> None:
+        body["results"][0].update(score=0.72, hike_score=0.72, enough=1.0, sure=0.8)
+
+    page.route("**/api/bases/rank", edited(unsure))
+    keswick_in_60(page)
+
+    why = page.locator("#base-results tbody tr").first.locator(".why").inner_text()
+    assert "hikes alike 0.90" in why
+    assert "few of your hikes to compare −20 %" in why
 
 
 # C3: the visitor's own months, and what mild means.
@@ -492,7 +527,10 @@ def test_an_area_row_says_its_nearby_towns_and_one_person_is_singular(browser, s
     page = open_bases(browser, server)
 
     def one(body: dict) -> None:
-        body["results"][0].update(population=1, area_bases=3)
+        body["results"][0].update(population=1, area_bases=3, area_towns=[
+            {"id": 1, "name": "Betws-y-Coed", "population": 500},
+            {"id": 2, "name": "Llanberis", "population": 400},
+        ])
 
     page.route("**/api/bases/rank", edited(one))
     keswick_in_60(page)
@@ -501,7 +539,7 @@ def test_an_area_row_says_its_nearby_towns_and_one_person_is_singular(browser, s
     assert "1 person" in row.inner_text()
     assert "1 people" not in row.inner_text()
     area = row.locator(".area")
-    assert area.inner_text() == "and 2 nearby towns with much the same hikes"
+    assert area.inner_text() == "and 2 nearby towns with much the same hikes, among them Betws-y-Coed, Llanberis"
     assert "share a row" in area.get_attribute("title")
 
 

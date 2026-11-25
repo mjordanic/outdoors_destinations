@@ -578,6 +578,7 @@ const bases = {
     if (!this.seed) return;
     const wrong = this.wrongChoices();
     if (wrong.length) {
+      this.ranked = true;
       this.asked++;
       $("#base-status").textContent = "";
       $("#base-find").disabled = false;
@@ -836,18 +837,19 @@ function unknownTrait(row, name) {
   return row[name] == null;
 }
 
-// One row of a BaseRanking, its score explained (ADR-0025): how alike the hikes are, then what fewer hikes
-// and each TownTrait took off, so the parts multiply to the score.
+// One row of a BaseRanking, its score explained (ADR-0025): how alike the hikes are, then what fewer hikes,
+// few of the Hiker's hikes to compare and each TownTrait took off, so the parts multiply to the score.
 function baseRow(row, number, seed, traits) {
   const pct = (x) => `${Math.round(x * 100)} %`;
-  const alike = row.enough > 0 ? row.hike_score / row.enough : row.hike_score;
+  const share = row.enough * row.sure, alike = share > 0 ? row.hike_score / share : row.hike_score;
   const why = [`hikes alike ${alike.toFixed(2)}: mix ${row.mix.toFixed(2)}, has ${pct(row.coverage)} of your kinds, yours has ${pct(row.back)} of its`];
   if (row.enough < 0.995) why.push(`fewer hikes than ${seed.name} (${row.hike_groups} against ${seed.hike_groups}) −${pct(1 - row.enough)}`);
+  if (row.sure < 0.995) why.push(`few of your hikes to compare −${pct(1 - row.sure)}`);
   for (const [name, cut] of Object.entries(row.cuts)) {
     if (Math.round(cut * 100) > 0) why.push(`${TRAIT_NAMES[name] ?? name} −${pct(cut)}${unknownTrait(row, name) ? " (no data)" : ""}`);
   }
   const area = row.area_bases > 1
-    ? `<span class="hint area" title="Towns close together have much the same hikes, so they share a row; which towns join it depends on your choices.">and ${row.area_bases - 1} nearby town${row.area_bases > 2 ? "s" : ""} with much the same hikes</span>`
+    ? `<span class="hint area" title="Towns close together have much the same hikes, so they share a row; which towns join it depends on your choices.">and ${row.area_bases - 1} nearby town${row.area_bases > 2 ? "s" : ""} with much the same hikes${row.area_towns.length ? `, among them ${escapeHtml(row.area_towns.map((town) => town.name).join(", "))}` : ""}</span>`
     : "";
   const counts = (traits.stays || traits.eats) && townCounts(row);
   return `<tr>
