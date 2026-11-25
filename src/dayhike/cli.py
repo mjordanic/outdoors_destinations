@@ -583,7 +583,8 @@ def main(argv: list[str] | None = None) -> int:
     town.add_argument("--places", type=Path, default=Path("data/web-serving/places.sqlite"))
     town.add_argument("--out", type=Path, required=True, help="The counts file (.npz) to write")
     town.add_argument(
-        "--workers", type=_parse_workers, required=True, metavar="N", help="Extracts read at a time"
+        "--workers", dest="extract_workers", type=_parse_workers, required=True, metavar="N",
+        help="Extracts read at a time",
     )
     cut = subparsers.add_parser(
         "cut-serving",
@@ -744,7 +745,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "count-town-amenities":
         from dayhike.town_counts import count_town_amenities
 
-        print(count_town_amenities(args.extracts, args.places, workers=args.workers).save(args.out))
+        print(count_town_amenities(args.extracts, args.places, workers=args.extract_workers).save(args.out))
         return 0
     if args.command == "cut-serving":
         from dayhike.cut import CutError, cut_serving, load_keep
