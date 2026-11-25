@@ -94,7 +94,7 @@ def test_export_bases_writes_the_base_facts_and_versions(tmp_path: Path) -> None
     assert np.load(bases / "month_temperatures.npy").shape == (2, len(REACHES), 12)
     meta = json.loads((bases / "meta.json").read_text())
     store_meta = json.loads((out / "similarity" / "meta.json").read_text())
-    assert meta["format"] == 1
+    assert meta["format"] == 2
     assert meta["facts_version"] == store_meta["facts_version"]
     assert {"version", "hike_types_version", "dayhikes"} <= meta.keys()
 

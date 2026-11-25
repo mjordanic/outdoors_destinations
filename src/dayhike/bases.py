@@ -36,6 +36,7 @@ from dayhike.similarity import (
 )
 from dayhike.serving import REGION_SPLIT_LON, ServingData, _fold
 from dayhike.steps import file_key
+from dayhike.town_counts import TownCounts
 from dayhike.town_traits import MILD_C, TownTraits, trait_cuts, trait_passes
 
 HIKE_TYPES = 512
@@ -43,16 +44,18 @@ HIKE_TYPES_SEED = 20261124
 _SPACE_PAIRS = 100_000  # random pairs that set each Measure's unit in the HikeType space
 
 REACHES = (15, 30, REACH_MIN)  # minutes; the stored pairs are in one band per Reach, the shortest first
-BASE_POPULATION = 300  # a candidate Base is a GeoNames place of at least this many people
+BASE_POPULATION = 300  # a candidate Base is a GeoNames place of at least this many people,
+BASE_STAYS = 3  # or with at least this many places to stay (``town_counts``)
 MIN_HIKE_GROUPS = 10  # a Base has at least this many HikeGroups in the longest Reach
 CELL_M = 1_000  # a HikeGroup's Trailhead cell
 NEAR_M = 120_000  # Trailheads farther in a straight line are not asked about: an hour on a motorway
 RESUME_CHUNK = 1_000  # candidates whose Reach is kept together in the work folder
 _BASES_LAYOUT = "groups-band-major-runs-v1"
-BASES_FORMAT = 1  # what a server reads in ``bases/``; a folder of another format is left out
+BASES_FORMAT = 2  # what a server reads in ``bases/``; a folder of another format is left out
 _BASE_FACTS = (
     "population-geonames-zero-unknown",  # ``base_facts``
     "month-temperatures-median-of-hikes-twins-once",  # ``base_facts``
+    "stays-eats-town-counts-nan-unknown",  # ``base_facts``
 )
 _REACH_ESTIMATE = (STRAIGHT_SPEED_KMH, APPROACH_SPEED_KMH, BAND_STEP_MIN, REACH_MIN)
 
@@ -136,10 +139,14 @@ class BaseFacts:
     ``population`` is each Base's GeoNames population, NaN when unknown;
     ``month_temperatures`` (Bases, Reaches, 12) the median temperature in each
     month of the hikes in each of ``REACHES``, NaN when none of them has one.
+    ``stays`` and ``eats`` are its places to stay and to eat (``dayhike.town_counts``), NaN when
+    not counted.
     """
 
     population: np.ndarray
     month_temperatures: np.ndarray
+    stays: np.ndarray | None = None  # None: none counted
+    eats: np.ndarray | None = None
 
 
 def base_facts(
@@ -148,12 +155,14 @@ def base_facts(
     place_ids: np.ndarray,
     reached: list[tuple[np.ndarray, np.ndarray]],
     group_of_hike: np.ndarray,
+    town: TownCounts | None = None,
 ) -> BaseFacts:
     """The ``BaseFacts`` of the Bases ``place_ids``, each with its HikeGroups and their minutes in ``reached``.
 
     A population of 0 is GeoNames' unknown, as is a place ``places_path`` has no
     population for. A HikeGroup in Reach brings all its hikes, each group of Twins
     once (as its first row); a hike with no temperature in a month is left out of that month.
+    Places to stay and eat are ``town``'s (NaN for a place it has no count of, or without it).
     """
     db = sqlite3.connect(f"file:{places_path}?mode=ro", uri=True)
     try:
@@ -175,7 +184,21 @@ def base_facts(
                 if counts.sum():
                     at = np.repeat(starts[within] - (np.cumsum(counts) - counts), counts) + np.arange(counts.sum())
                     months[base, r] = np.nanmedian(temperatures[rows[at]], axis=0)
-    return BaseFacts(population=population, month_temperatures=months)
+    stays, eats = _counted(town, place_ids)
+    return BaseFacts(population=population, month_temperatures=months, stays=stays, eats=eats)
+
+
+def _counted(counts: TownCounts | None, place_ids: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The places to stay and eat of ``place_ids`` in ``counts``, NaN where it has none."""
+    found = []
+    for values in ("stays", "eats"):
+        known = np.full(len(place_ids), np.nan)
+        if counts is not None and len(counts.place_ids):
+            at = np.minimum(np.searchsorted(counts.place_ids, place_ids), len(counts.place_ids) - 1)
+            hit = counts.place_ids[at] == place_ids
+            known[hit] = getattr(counts, values)[at[hit]]
+        found.append(known)
+    return found[0], found[1]
 
 
 @dataclass(frozen=True)
@@ -401,8 +424,8 @@ def rank_bases(
     traits = traits or TownTraits()
     town = {
         "size": np.asarray(bases.population),
-        "stays": np.full(len(points), np.nan),  # the bases/ folder counts no places to stay yet
-        "eats": np.full(len(points), np.nan),  # nor restaurants, cafes and pubs
+        "stays": np.asarray(bases.stays),
+        "eats": np.asarray(bases.eats),
         "months": np.asarray(bases.month_temperatures)[:, REACHES.index(reach)],
     }
     keep &= trait_passes(traits, town)
@@ -615,10 +638,12 @@ def export_bases(
     workers: int = 1,
     chunk: int = RESUME_CHUNK,
     progress: Callable[[str], None] | None = None,
+    town_counts: Path | str | None = None,
 ) -> Path:
     """Write ``bases/`` into the serving export ``out_dir``: the Bases and the HikeGroups in their Reach.
 
-    Candidates are the ``places.sqlite`` places of ``BASE_POPULATION`` people or more; a
+    Candidates are the ``places.sqlite`` places of ``BASE_POPULATION`` people or more, or with
+    ``BASE_STAYS`` places to stay or more in the saved ``TownCounts`` at ``town_counts``; a
     Base is one with ``MIN_HIKE_GROUPS`` HikeGroups within ``REACH_MIN`` minutes
     (``reach_minutes``, asked of the highways-only Valhalla at ``valhalla_url``, ``workers``
     candidates at a time). A HikeGroup is the hikes of one HikeType whose Trailheads start in
@@ -639,7 +664,7 @@ def export_bases(
     - ``base_runs``: the runs of band b and Base i are ``base_runs[s]:base_runs[s + 1]``,
       s = b * Bases + i.
     - ``type_table``: the score between HikeTypes (``hike_types``).
-    - ``population``, ``month_temperatures``: each Base's ``BaseFacts``.
+    - ``population``, ``month_temperatures``, ``stays``, ``eats``: each Base's ``BaseFacts``.
     - ``meta.json``, written last, so a folder without it is incomplete: the folder's format,
       the versions and build inputs it was made with and of which DayHikes (``Bases.open_dir``).
 
@@ -651,7 +676,8 @@ def export_bases(
     types = hike_types(store)
     trailheads = np.load(out / "trailheads.npy").reshape(-1, 2)
     group_of_hike, group_types = _hike_groups(types.types, store.twins, trailheads)
-    place_ids, places = _candidates(out / "places.sqlite")
+    counts = None if town_counts is None else TownCounts.load(town_counts)
+    place_ids, places = _candidates(out / "places.sqlite", counts)
     points, point_of_hike = np.unique(trailheads, axis=0, return_inverse=True)
     point_of_hike = point_of_hike.reshape(-1)
     hikes_by_point = np.argsort(point_of_hike, kind="stable")
@@ -707,10 +733,12 @@ def export_bases(
                 progress(f"export-bases: Reach of {len(found):,} of {len(place_ids):,} candidate places")
     kept = np.array([i for i, (groups, _) in enumerate(found) if len(groups) >= MIN_HIKE_GROUPS], dtype=int)
     reached = [found[i] for i in kept]
-    facts = base_facts(store, out / "places.sqlite", place_ids[kept], reached, group_of_hike)
+    facts = base_facts(store, out / "places.sqlite", place_ids[kept], reached, group_of_hike, counts)
+    town = None if counts is None else {"radius_m": counts.radius_m, "sources": list(counts.sources)}
     target = _write_bases(
-        out, place_ids[kept], places[kept], reached, group_of_hike, group_types, types, facts, store, inputs=key
-    )
+        out, place_ids[kept], places[kept], reached, group_of_hike, group_types, types, facts, store, inputs=key,
+        town_counts=town,
+    )  # fmt: skip
     shutil.rmtree(work)
     return target
 
@@ -734,17 +762,19 @@ def _hike_groups(types: np.ndarray, twins: np.ndarray, trailheads: np.ndarray) -
     return group_of_hike.reshape(-1), found[:, 0].astype(np.int16)
 
 
-def _candidates(places_path: Path) -> tuple[np.ndarray, np.ndarray]:
-    """GeoNames ids and (lat, lon) of the places of ``BASE_POPULATION`` people or more, by id."""
+def _candidates(places_path: Path, counts: TownCounts | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """GeoNames ids and (lat, lon) of the places of ``BASE_POPULATION`` people or more, or with
+    ``BASE_STAYS`` places to stay or more in ``counts``, by id."""
     db = sqlite3.connect(f"file:{places_path}?mode=ro", uri=True)
     try:
-        rows = db.execute(
-            "SELECT id, lat, lon FROM places WHERE population >= ? ORDER BY id", (BASE_POPULATION,)
-        ).fetchall()
+        rows = db.execute("SELECT id, lat, lon, population FROM places ORDER BY id").fetchall()
     finally:
         db.close()
     ids = np.array([row[0] for row in rows], dtype=np.int64)
-    return ids, np.array([row[1:] for row in rows], dtype=np.float64).reshape(-1, 2)
+    population = np.array([row[3] or 0 for row in rows], dtype=np.int64)
+    stays, _ = _counted(counts, ids)
+    keep = (population >= BASE_POPULATION) | (stays >= BASE_STAYS)
+    return ids[keep], np.array([row[1:3] for row in rows], dtype=np.float64).reshape(-1, 2)[keep]
 
 
 def _unit(points: np.ndarray) -> np.ndarray:
@@ -781,6 +811,7 @@ def _write_bases(
     facts: BaseFacts,
     store: SimilarityStore,
     inputs: str | None = None,
+    town_counts: dict | None = None,
 ) -> Path:
     """Write the ``bases/`` folder (``export_bases``) to a partial folder, then put it in place."""
     count = len(place_ids)
@@ -808,6 +839,8 @@ def _write_bases(
         "type_table": types.table,
         "population": facts.population,
         "month_temperatures": facts.month_temperatures,
+        "stays": np.full(count, np.nan) if facts.stays is None else np.asarray(facts.stays, dtype=np.float64),
+        "eats": np.full(count, np.nan) if facts.eats is None else np.asarray(facts.eats, dtype=np.float64),
     }
     target, partial = out / "bases", out / "bases.partial"
     shutil.rmtree(partial, ignore_errors=True)
@@ -818,7 +851,8 @@ def _write_bases(
         "format": BASES_FORMAT,
         "version": hashlib.sha256(
             json.dumps(
-                [types.version, _BASES_LAYOUT, BASE_POPULATION, MIN_HIKE_GROUPS, CELL_M, NEAR_M, _REACH_ESTIMATE]
+                [types.version, _BASES_LAYOUT, BASE_POPULATION, BASE_STAYS, MIN_HIKE_GROUPS, CELL_M, NEAR_M]
+                + [_REACH_ESTIMATE]
                 + [_BASE_FACTS]
             ).encode()
         ).hexdigest()[:16],
@@ -827,6 +861,7 @@ def _write_bases(
         "facts_version": _FACTS_VERSION,
         "dayhikes": _dayhikes_digest(store.ids),
         "catalog_digest": store.catalog_digest,
+        "town_counts": town_counts,
         "reaches": list(REACHES),
         "bases": count,
         "hike_groups": len(group_types),
@@ -852,6 +887,8 @@ class Bases:
     points: np.ndarray
     population: np.ndarray
     month_temperatures: np.ndarray
+    stays: np.ndarray
+    eats: np.ndarray
     group_types: np.ndarray
     group_starts: np.ndarray
     group_hikes: np.ndarray

@@ -10,6 +10,7 @@ import pytest
 from dayhike.bases import export_bases
 from dayhike.catalog import similarity_dir_for
 from dayhike.cli import main
+from dayhike.town_counts import TownCounts
 from test_bases import KINDS, PER_KIND, _columns, _store
 from test_highways import _locate, _serve, _stop
 
@@ -114,6 +115,38 @@ def test_towns_with_enough_hike_groups_are_kept_and_others_dropped(tmp_path: Pat
     assert json.loads((out / "bases" / "meta.json").read_text())["bases"] == 2
 
 
+def _town_counts(path: Path, counts: dict[int, tuple[int, int]]) -> Path:
+    """A saved ``TownCounts``: place id -> (places to stay, places to eat) within 2 km."""
+    ids = sorted(counts)
+    return TownCounts(
+        place_ids=np.array(ids, dtype=np.int64),
+        stays=np.array([counts[i][0] for i in ids], dtype=np.int32),
+        eats=np.array([counts[i][1] for i in ids], dtype=np.int32),
+        radius_m=2_000.0, points=np.zeros((0, 2)), kinds=np.zeros(0, dtype=np.uint8), sources=("fixture.osm.pbf",),
+    ).save(path)  # fmt: skip
+
+
+def test_a_small_place_with_three_places_to_stay_is_a_base_and_counts_are_kept(tmp_path: Path) -> None:
+    out = _export(tmp_path)
+    counts = _town_counts(tmp_path / "town-counts.npz", {KESWICK: (141, 76), BRAITHWAITE: (2, 0), HAMLET: (3, 1)})
+
+    _build(out, town_counts=counts)
+
+    bases = _load(out)
+    assert bases["place_ids"].tolist() == [KESWICK, BRAITHWAITE, HAMLET]
+    assert bases["stays"].tolist() == [141, 2, 3]
+    assert bases["eats"].tolist() == [76, 0, 1]
+
+
+def test_without_counts_places_to_stay_and_eat_are_unknown(tmp_path: Path) -> None:
+    out = _export(tmp_path)
+
+    _build(out)
+
+    bases = _load(out)
+    assert np.isnan(bases["stays"]).all() and np.isnan(bases["eats"]).all()
+
+
 def test_hikes_of_one_type_in_one_cell_and_their_twins_are_one_group(tmp_path: Path) -> None:
     out = _export(tmp_path)
 
@@ -188,3 +221,16 @@ def test_export_bases_command_writes_the_bases_folder(tmp_path: Path) -> None:
 
     assert code == 0
     assert (out / "bases" / "meta.json").is_file()
+
+
+def test_export_bases_command_reads_the_town_counts(tmp_path: Path) -> None:
+    out = _export(tmp_path)
+    counts = _town_counts(tmp_path / "town-counts.npz", {HAMLET: (3, 1)})
+    server, url, _ = _valhalla()
+    try:
+        code = main(["export-bases", "--out", str(out), "--valhalla-url", url, "--town-counts", str(counts)])
+    finally:
+        _stop(server)
+
+    assert code == 0
+    assert HAMLET in _load(out)["place_ids"].tolist()

@@ -29,7 +29,7 @@ from dayhike.cut import CUTS_DIR, CutError, Keep, cut_serving, kept_twins, load_
 from dayhike.hike_filter import HikeFilter, hike_mask
 from dayhike.serving import NAME_INDEX, REGION_SPLIT_LON, ServingData, _read_name_index, export_serving
 from dayhike.similarity import CORE_MEASURES
-from test_export_bases import _valhalla
+from test_export_bases import _town_counts, _valhalla
 from test_highways import _stop
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -154,9 +154,12 @@ def whole(tmp_path_factory: pytest.TempPathFactory) -> ServingData:
     (out / "meta.json").write_text(json.dumps(meta))
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr("dayhike.bases.MIN_HIKE_GROUPS", 1)  # the fixture's towns have few hikes in Reach
+        with sqlite3.connect(out / "places.sqlite") as db:
+            places = [place for (place,) in db.execute("SELECT id FROM places")]
+        counts = _town_counts(out.parent / "town-counts.npz", {p: (p % 7, p % 5) for p in places})
         server, url, _ = _valhalla()
         try:
-            export_bases(out, url)
+            export_bases(out, url, town_counts=counts)
         finally:
             _stop(server)
     data = ServingData(out)
@@ -225,6 +228,8 @@ def _base_rankings(data: ServingData, hike_ok: np.ndarray) -> dict[int, dict]:
                 "point": bases.points[i].tolist(),
                 "population": bases.population[i].tolist(),
                 "month_temperatures": bases.month_temperatures[i].tolist(),
+                "stays": bases.stays[i].tolist(),
+                "eats": bases.eats[i].tolist(),
             }
     return found
 
