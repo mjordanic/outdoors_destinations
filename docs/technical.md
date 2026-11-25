@@ -2700,9 +2700,12 @@ the hikes in Reach each month (null when unknown). `POST /api/bases/detail` take
 "trailhead", "minutes"}`, nearest first. BaseRankings have their own queue, apart from the hike Rankings' and
 with the same rules, and their own limit of 20 a minute per client. A row's town opens that Base: its
 passing hikes with their minutes, nearest first, on the map at their Trailheads, each with "Find hikes like
-this" (`#hike=<id>`, the hike as the liked one). The mode's address is `#base=<seed>&reach=<minutes>&open=<id>`
-(`#base` alone before a town is chosen); like a hike link it sets every setting it does not name to its
-default (ADR-0073), on load or in a tab already open.
+this" (`#hike=<id>`, the hike as the liked one). The mode sets the hike filter and each trait (ignore, filter,
+or "like mine" with *a little*, *matters* or *important*; town size starts as a filter up to 50,000 people, the
+others ignored). Its address is `#base=<seed>&reach=<minutes>&open=<id>` (`#base` alone before a town is
+chosen), then the hike filter's keys (`&climb_max_m=500&summit`) and each trait not at its default
+(`&size=ignore`, `&eats=like3`, `&stays=3-`, `&size=-5000`, `&months=7,8`); like a hike link it sets every
+setting it does not name to its default (ADR-0073), on load or in a tab already open.
 
 ### Web demo measurements
 
