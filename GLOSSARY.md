@@ -269,7 +269,7 @@ How many HikeGroups of each HikeType lie in a Base's Reach under a HikeFilter. I
 _Avoid_: tally, fingerprint, embedding, FeatureVector (that describes one hike)
 
 **BaseRanking**:
-An ordered list of Bases by how alike their BaseProfile is to the Hiker's own Base. The hike score is fixed: 40 % mix (how far the two profiles' shares of HikeTypes overlap, near types counting as partly the same) and 60 % coverage (30 % from the Hiker's Base to the other, 30 % back), times an enough-hikes factor; a Base under 10 HikeGroups is left out. TownTraits then re-order the best 3,000 hike matches, and none brings in a Base outside them (ADR-0084).
+An ordered list of Bases by how alike their BaseProfile is to the Hiker's own Base. The hike score is fixed: 40 % mix (how far the two profiles' shares of HikeTypes overlap, near types counting as partly the same) and 60 % coverage (30 % from the Hiker's Base to the other, 30 % back), times an enough-hikes factor; a Base under 10 HikeGroups is left out. TownTraits then re-order the best 6,000 hike matches, and none brings in a Base outside them (ADR-0084).
 _Avoid_: Ranking (a Ranking lists hikes by similarity to Seeds), recommendation, match list
 
 **HikeFilter**:
