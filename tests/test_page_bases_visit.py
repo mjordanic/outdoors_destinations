@@ -655,5 +655,49 @@ def test_a_towns_hikes_still_on_their_way_are_dropped_once_a_range_goes_wrong(br
     held[0].continue_()
     page.wait_for_timeout(500)
 
-    assert "nearest first" not in page.locator("#base-hikes-note").inner_text()  # the answer for "from 2000" is not drawn
+    note = page.locator("#base-hikes-note").inner_text()
+    assert "nearest first" not in note  # the answer for "from 2000" is not drawn
+    assert "Finding its hikes" not in note
+    assert "more than" in note
     assert "stale" in page.locator("#base-hikes").get_attribute("class")
+
+
+def test_a_list_still_on_its_way_is_dropped_once_a_range_goes_wrong(browser, server) -> None:
+    page = open_bases(browser, server)
+    keswick_in_60(page)
+    settled(page)
+    held = []
+    page.route("**/api/bases/rank", lambda route: held.append(route))
+    page.get_by_text("Which hikes count").click()
+
+    page.get_by_label("Climb from").fill("2000")
+    page.wait_for_function("() => document.querySelector('#base-status').innerText.includes('Finding bases')", timeout=SETTLE_MS)
+    page.get_by_label("Climb up to").fill("500")
+    page.get_by_label("Climb up to").press("Tab")
+    page.wait_for_timeout(BASE_WAIT_MS)
+    held[0].continue_()
+    page.wait_for_timeout(500)
+
+    assert "more than" in page.locator("#base-problem").inner_text()
+    assert "stale" in page.locator("#base-results").get_attribute("class")
+    assert page.locator("#base-find").is_enabled()
+
+
+def test_opening_a_town_while_a_range_is_wrong_says_the_range_problem(browser, server) -> None:
+    page = open_bases(browser, server)
+    keswick_in_60(page)
+    settled(page)
+    asked_for = requests_to(page, "/api/bases/detail")
+    page.get_by_text("Which hikes count").click()
+    page.get_by_label("Climb from").fill("2000")
+    page.get_by_label("Climb up to").fill("500")
+    page.get_by_label("Climb up to").press("Tab")
+    page.wait_for_timeout(BASE_WAIT_MS)
+    page.evaluate("() => { document.querySelector('#base-problem').hidden = true; }")
+
+    page.locator("#base-results tbody").get_by_role("button", name="Bethesda").click()
+
+    assert page.locator("#base-problem").is_visible()
+    assert "more than" in page.locator("#base-problem").inner_text()
+    assert page.locator("#base-hikes").is_hidden()
+    assert asked_for == []

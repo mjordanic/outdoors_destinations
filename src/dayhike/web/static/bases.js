@@ -39,7 +39,7 @@ const TRAIT_FILTERS = {
 };
 const TRAIT_DEFAULTS = { size: { up_to: 50_000 } }; // every other TownTrait is ignored
 const IMPORTANCE = [[1, "a little"], [2, "matters"], [3, "important"]];
-// "like mine" in an address: "size=like-mine-important"; "like1" to "like3" of older links are read too.
+// "like mine" in an address: "size=like-mine-important".
 const LIKE_WORDS = { 1: "like-mine-a-little", 2: "like-mine", 3: "like-mine-important" };
 
 const bases = {
@@ -578,6 +578,9 @@ const bases = {
     if (!this.seed) return;
     const wrong = this.wrongChoices();
     if (wrong.length) {
+      this.asked++;
+      $("#base-status").textContent = "";
+      $("#base-find").disabled = false;
       this.problem(wrong.join(" "));
       return;
     }
@@ -671,9 +674,16 @@ const bases = {
   // A Base's hikes in Reach, nearest first, on the map at their Trailheads; ``base``: a row, or {id} from a
   // link; ``step``: the Hiker opened it, a step of the history, the page scrolled to its top.
   async open(base, step = true) {
-    if (this.wrongChoices().length) {
+    const wrong = this.wrongChoices();
+    if (wrong.length && step) {
+      this.problem(wrong.join(" "));
+      $("#base-problem").scrollIntoView({ block: "nearest" });
+      return;
+    }
+    if (wrong.length) {
       this.opening++; // an answer still on its way was for choices since made wrong
       $("#base-hikes").classList.add("stale");
+      $("#base-hikes-note").textContent = `Not updated: ${wrong.join(" ")}`;
       return;
     }
     const number = ++this.opening, note = $("#base-hikes-note"), filter = this.hikeFilter();
