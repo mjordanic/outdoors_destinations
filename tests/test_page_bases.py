@@ -429,6 +429,13 @@ def test_a_trait_setting_changes_the_list_and_survives_a_shared_link(browser, se
     assert shared.get_by_label("Aug", exact=True).is_checked()
     assert not shared.get_by_label("Jun", exact=True).is_checked()
 
+    encoded = open_page(browser, server, Api({}), hash=f"#base={KESWICK}&reach=60&months=7%2C8&length_max_km=%36")
+    encoded.locator("#base-results").wait_for()
+    assert encoded.get_by_label("Jul", exact=True).is_checked()
+    assert encoded.get_by_label("Aug", exact=True).is_checked()
+    assert not encoded.get_by_label("Jun", exact=True).is_checked()
+    assert encoded.get_by_label("Length up to").input_value() == "6"
+
 
 def test_an_opened_base_shows_the_hikes_that_pass_and_a_link_keeps_the_choices(browser, server) -> None:
     page = open_bases(browser, server)

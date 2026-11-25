@@ -204,14 +204,15 @@ const bases = {
     const filter = {}, traits = {};
     for (const [stem, , unit] of HIKE_RANGES) {
       for (const end of ["min", "max"]) {
-        const key = `${stem}_${end}_${unit}`, value = parts.has(key) && parts.get(key) !== "" ? Number(parts.get(key)) : NaN;
+        const key = `${stem}_${end}_${unit}`, text = decoded(parts.get(key) ?? "") ?? "";
+        const value = text !== "" ? Number(text) : NaN;
         if (Number.isFinite(value) && value >= 0) filter[key] = value;
       }
     }
     for (const [key] of HIKE_TOGGLES) if (parts.has(key)) filter[key] = true;
     for (const trait of Object.keys(TRAIT_FILTERS)) {
-      const text = parts.get(trait);
-      if (text == null) continue;
+      if (!parts.has(trait)) continue;
+      const text = decoded(parts.get(trait)) ?? "";
       let choice = null, found;
       if ((found = /^like([123])$/.exec(text))) choice = { like_mine: Number(found[1]) };
       else if (trait === "months") {
