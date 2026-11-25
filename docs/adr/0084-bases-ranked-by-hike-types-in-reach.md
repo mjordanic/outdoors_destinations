@@ -22,7 +22,9 @@ analogue and still separates the controls. A town with under half the Hiker's hi
 square root of their ratio, and one with under 10 HikeGroups is left out. Mix is the slow part (on the real
 build, 2-5 s for all Bases), so it is worked out only for the 20,000 Bases best by back times that scoring
 down; back is cheap. On the four seeds, at every Reach, with and without a filter or size "like mine", this
-kept the best 20 rows as they were and missed at most 5 of the best 100 (from the 27th down). Reach is an estimate made once at
+kept the best 20 rows as they were and missed at most 5 of the best 100 (from the 27th down). The captain
+approved this preselection on 2026-11-25 after ticket 13's first real measurements (decision D1(a),
+answered "all recommended"). Reach is an estimate made once at
 build time and kept behind one function: the smaller of the highway estimate with the approach at 20 km/h and
 a straight line at 28 km/h found 90-95 % of the truly reachable hikes against the OSRM demo router, with
 precision 0.74-0.82. That is fair for a profile, which is an aggregate.
@@ -42,7 +44,8 @@ for 30 % of hikes, so a filter on it would silently drop the rest, and it is not
 first, for the best 6,000 Bases that pass every trait filter. A "like mine" trait then multiplies it by
 `1 - (w / 6) * (1 - s)`, with s the similarity of the two towns on the trait and w 1, 2 or 3 for *a little*,
 *matters*, *important*: a trait takes at most a sixth, a third or a half off, and a town like the Hiker's
-loses nothing. A Base whose value is unknown counts as half alike (s = 0.5); when the Hiker's own value is
+loses nothing. A Base whose value is unknown counts as half alike (s = 0.5), approved by the captain on
+2026-11-25 after ticket 13's first real measurements (decision D3(a), answered "all recommended"); when the Hiker's own value is
 unknown, the trait costs nothing. (At first a missing value cost nothing. But a third of the real Bases have
 no GeoNames population, the towns that are Bases for their places to stay, and size "like mine" then put
 them first: all ten of Chamonix's best rows were of unknown size.) A weighted mean of the hike score and the traits was tried
@@ -65,8 +68,10 @@ needs no new maths.
 **Consequences**:
 - Request time was estimated at 0.2-0.4 s (30 min) and 0.4-0.7 s (60 min) on Cloud Run's one vCPU, with
   about +0.4-0.6 GB of mapped files. Measured on the real build in a local image at one CPU and 4 GiB
-  (ticket 13): warm 0.6-1.2 s at 15 min, 0.9-2.0 s at 30 min and 3.2-4.8 s at 60 min, the first ranking up
-  to 8 s; the container peaked at 3.3 GB of 4 GiB. Most of the 60-minute time is the profile pass over
+  (ticket 13, Keswick, Chamonix-Mont-Blanc and Moab, with and without hike filters and traits): warm
+  0.56-1.23 s at 15 min, 0.88-2.81 s at 30 min and 3.23-8.44 s at 60 min, the first ranking after a
+  start 5.0 s at 15 min; the container peaked at 3.3 GB of 4 GiB (table in docs/deploy.md). Whether to
+  accept times over the estimate is the captain's call at the feature/bases to develop merge. Most of the 60-minute time is the profile pass over
   the pairs (about 1 s) and the mix of the 20,000 Bases. The Bases get their own lock and rate limit apart
   from the hike ranking's.
 - The export grows by 1.7 GB, not 0.5-0.6: the drive-time Reach holds 319 million Base-HikeGroup pairs

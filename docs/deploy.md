@@ -94,10 +94,21 @@ Measured on the 2026-11-22 export (16 GB M-series Mac, 4 workers, 2026-11-25):
   4.3 GB in the Python process.
 - It made 195,220 Bases and 319 million Base-HikeGroup pairs. The folder is 1.7 GB, and the data image
   grows to 9.26 GB of content (28.7 GB unpacked).
-- In that image at one CPU and 4 GiB, a warm BaseRanking takes 0.6-1.2 s at 15 min, 0.9-2.0 s at
-  30 min and 3.2-4.8 s at 60 min. The first one after a start takes up to 8 s.
-- The container peaked at 3.3 GB of its 4 GiB after rankings at every Reach, so keep the
-  Europe and US site at 4Gi and watch its memory.
+- In that image (arm64, one CPU, 4 GiB), warm BaseRanking times for Keswick, Chamonix-Mont-Blanc and
+  Moab, two runs each, against the plan's estimate:
+
+  | Reach | No filter | Climb up to 500 m | Climb up to 500 m, size like mine (important), at least 5 places to stay | Plan (Cloud Run 1 vCPU) |
+  | --- | --- | --- | --- | --- |
+  | 15 min | 0.60-1.23 s | 0.56-0.84 s | 0.64-0.80 s | - |
+  | 30 min | 0.93-2.81 s | 0.88-1.52 s | 0.91-1.97 s | 0.2-0.4 s |
+  | 60 min | 3.23-8.44 s | 3.54-4.04 s | 3.51-3.99 s | 0.4-0.7 s |
+
+  The first ranking after a start took 5.0 s at 15 min (a cold start).
+- The container peaked at 3.3 GB of its 4 GiB after rankings at every Reach (plan: +0.4-0.6 GB), so
+  keep the Europe and US site at 4Gi and watch its memory. `bases/` is 1.7 GB (plan 0.5-0.6 GB) and the
+  image 9.26 GB of content (plan about 8.5 GB).
+- Open item: these times are over the plan's estimate, and whether to accept that is the captain's
+  call at the feature/bases to develop merge.
 
 ### Europe only, or Europe and the US
 
