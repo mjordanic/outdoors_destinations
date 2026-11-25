@@ -672,6 +672,7 @@ const bases = {
   // link; ``step``: the Hiker opened it, a step of the history, the page scrolled to its top.
   async open(base, step = true) {
     if (this.wrongChoices().length) {
+      this.opening++; // an answer still on its way was for choices since made wrong
       $("#base-hikes").classList.add("stale");
       return;
     }

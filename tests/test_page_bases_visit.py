@@ -637,3 +637,23 @@ def test_every_choice_has_a_name_for_the_browser(browser, server) -> None:
     page = open_bases(browser, server)
 
     assert page.evaluate("() => [...document.querySelectorAll('#base-panel input, #base-panel select')].filter((e) => !e.name && !e.id).length") == 0
+
+
+def test_a_towns_hikes_still_on_their_way_are_dropped_once_a_range_goes_wrong(browser, server) -> None:
+    page = open_bases(browser, server)
+    keswick_in_60(page)
+    open_base(page, "Bethesda")
+    held = []
+    page.route("**/api/bases/detail", lambda route: held.append(route))
+    page.get_by_text("Which hikes count").click()
+
+    page.get_by_label("Climb from").fill("2000")
+    page.wait_for_function("() => document.querySelector('#base-hikes-note').innerText.includes('Finding its hikes')", timeout=SETTLE_MS)
+    page.get_by_label("Climb up to").fill("500")
+    page.get_by_label("Climb up to").press("Tab")
+    page.wait_for_timeout(BASE_WAIT_MS)
+    held[0].continue_()
+    page.wait_for_timeout(500)
+
+    assert "nearest first" not in page.locator("#base-hikes-note").inner_text()  # the answer for "from 2000" is not drawn
+    assert "stale" in page.locator("#base-hikes").get_attribute("class")
