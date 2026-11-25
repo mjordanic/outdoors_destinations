@@ -94,6 +94,27 @@ def test_like_mine_on_size_moves_the_same_size_town_up(tmp_path):
     assert same.cuts == (("size", pytest.approx(0)),) and same.score == pytest.approx(same.hike_score)
 
 
+def test_places_to_stay_and_eat_from_the_bases_folder(tmp_path):
+    data = _data(
+        tmp_path,
+        [
+            _town(ALIKE, 0, stays=141, eats=76),
+            _town(ALIKE, 1, stays=0, eats=3),
+            _town(NEARLY, 2, stays=94, eats=58),
+        ],
+    )
+    assert _bases(rank_bases(data, 1, 30, _all(data)).rows) == [1, 2]
+    like = TownTraits(stays=TraitSetting(like_mine=2), eats=TraitSetting(like_mine=2))
+    rows = rank_bases(data, 1, 30, _all(data), traits=like).rows
+    assert _bases(rows) == [2, 1]
+    assert rows[1].cuts == (
+        ("stays", pytest.approx(2 / 6 * (1 - (1 / 142) ** 0.5))),
+        ("eats", pytest.approx(2 / 6 * (1 - (4 / 77) ** 0.5))),
+    )
+    filtered = TownTraits(stays=TraitSetting(at_least=3), eats=TraitSetting(at_least=5))
+    assert _bases(rank_bases(data, 1, 30, _all(data), traits=filtered).rows) == [2]
+
+
 def test_months_like_mine(tmp_path):
     data = _data(
         tmp_path,

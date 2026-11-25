@@ -48,7 +48,7 @@ import tarfile
 import time
 import tomllib
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -385,7 +385,7 @@ def _cut_bases(data: ServingData, out: Path, kept: np.ndarray) -> None:
     The HikeGroups with a kept hike are kept, renumbered in their order (so still in HikeType order),
     each with its kept hikes. A Base is kept when a kept HikeGroup is in its Reach and the cut's
     ``places.sqlite`` offers it; its pairs keep their minutes, and its run index and ``BaseFacts`` are
-    rebuilt. The HikeTypes and their score table are the uncut export's.
+    rebuilt, its places to stay and eat kept. The HikeTypes and their score table are the uncut export's.
     """
     shutil.rmtree(out / "bases", ignore_errors=True)
     bases = data.bases
@@ -414,6 +414,7 @@ def _cut_bases(data: ServingData, out: Path, kept: np.ndarray) -> None:
     store = SimilarityStore.open_dir(out / "similarity")
     place_ids = np.asarray(bases.place_ids)[keep]
     facts = base_facts(store, out / "places.sqlite", place_ids, reached, group_of_hike)
+    facts = replace(facts, stays=np.asarray(bases.stays)[keep], eats=np.asarray(bases.eats)[keep])
     _write_bases(
         out,
         place_ids,
@@ -427,6 +428,7 @@ def _cut_bases(data: ServingData, out: Path, kept: np.ndarray) -> None:
         facts,
         store,
         inputs=bases.meta.get("inputs"),
+        town_counts=bases.meta.get("town_counts"),
     )
 
 
