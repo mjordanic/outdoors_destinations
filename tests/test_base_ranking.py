@@ -192,6 +192,12 @@ def test_country_and_region(tmp_path):
     assert {row.base for row in rank_bases(data, 1, 30, _all(data), regions=["us"]).rows} == {3}
 
 
+def test_no_places_no_country(tmp_path):
+    data = _data(tmp_path, [_town({0: 20}, 0), _town({0: 20}, 1, country="IT")])
+    data.places = None
+    assert [(row.base, row.country) for row in rank_bases(data, 1, 30, _all(data)).rows] == [(1, "")]
+
+
 def test_not_a_base(tmp_path):
     data = _data(tmp_path, [_town({0: 20}, 0), _town({0: 20}, 1)])
     with pytest.raises(KeyError):

@@ -401,11 +401,13 @@ def _base_countries(data: ServingData) -> np.ndarray:
     """Each Base's ISO country code from ``data.places``, "" for none; read once per ``bases/`` folder."""
     kept = _COUNTRIES.get(id(data.bases))
     if kept is None or kept[0] is not data.bases:
-        db = sqlite3.connect(data.places, uri=True)
-        try:
-            known = dict(db.execute("SELECT id, country FROM places"))
-        finally:
-            db.close()
+        known = {}
+        if data.places is not None:
+            db = sqlite3.connect(data.places, uri=True)
+            try:
+                known = dict(db.execute("SELECT id, country FROM places"))
+            finally:
+                db.close()
         codes = np.array([known.get(int(place)) or "" for place in data.bases.place_ids], dtype="<U2")
         _COUNTRIES.clear()
         _COUNTRIES[id(data.bases)] = kept = (data.bases, codes)
