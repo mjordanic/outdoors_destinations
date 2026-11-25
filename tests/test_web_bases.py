@@ -175,7 +175,7 @@ def test_base_search_finds_only_places_that_are_bases(client: TestClient) -> Non
         "lat": 45.0, "lon": 7.0, "near": {"name": "Chamonix-Mont-Blanc", "km": 445},
     }  # fmt: skip
     assert _search(client, "cham")[0]["id"] == CHAMONIX
-    assert _search(client, "cham")[0]["near"] is None  # a big town says no town it is near
+    assert _search(client, "cham")[0]["near"] is None  # no other town of 10,000 people
     assert _search(client, "nowhere") == []
 
 
@@ -388,3 +388,9 @@ def test_town_name_lookups_do_not_count_against_base_rankings(data: ServingData)
     assert client.post("/api/bases/detail", json={"base": KESWICK, "reach": 30}).status_code == 200
 
     assert client.post("/api/bases/rank", json={"seed": KESWICK, "reach": 30}).status_code == 200
+
+
+def test_a_big_town_says_the_other_big_town_it_is_near(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("dayhike.bases.NEAR_TOWN_PEOPLE", 4_000)  # Keswick, Bethesda, Chamonix and Moab are big
+
+    assert _search(client, "Keswick")[0]["near"] == {"name": "Bethesda", "km": 222}  # not itself

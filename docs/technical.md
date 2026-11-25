@@ -2702,7 +2702,7 @@ default 5) finds Bases by name as `/api/place` finds places, a Base whose own na
 one only an alternate name does, passing over places that are no Base; a query whose spaces or hyphens the name
 writes otherwise ("chamonix mont blanc", "st moritz") finds it too, and with none found it offers names one typo
 away ("keswik"). `GET /api/bases/nearest?lat=&lon=` gives the nearest Base in a straight line with its
-`distance_km`. Both say for each Base under 10,000 people the nearest Base of at least that many (`near`:
+`distance_km`. Both say for each Base the nearest other Base of at least 10,000 (`near`:
 `{"name", "km"}`, else null), so towns of one name can be told apart. `POST /api/bases/rank` takes `{"seed": place id, "reach": 15, 30 or 60,
 "hike_filter": {...}, "traits": {...}}`: `hike_filter` as `HikeFilter.to_mapping` writes it (`climb_min_m`,
 `climb_max_m`, `length_min_km`, `length_max_km`, `highest_min_m`, `highest_max_m`, and `summit`, `waterside`,

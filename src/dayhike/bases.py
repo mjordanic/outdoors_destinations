@@ -773,25 +773,26 @@ def _typo_bases(data: ServingData, db: sqlite3.Connection, needle: str, limit: i
     return found
 
 
-NEAR_TOWN_PEOPLE = 10_000  # a Base is told apart from others of its name by the nearest Base this big
+NEAR_TOWN_PEOPLE = 10_000  # a Base is told apart from others of its name by the nearest other Base this big
 
 
 def near_towns(data: ServingData, rows: Collection[int]) -> list[dict | None]:
-    """For each Base of ``rows`` smaller than ``NEAR_TOWN_PEOPLE``, the nearest Base of at least
-    that many people, ``{"name", "km"}``, so towns of one name can be told apart ("Keswick near
-    Penrith"); None for a big town, or without ``data.places``."""
+    """For each Base of ``rows``, the nearest other Base of at least ``NEAR_TOWN_PEOPLE`` people,
+    ``{"name", "km"}``, so towns of one name can be told apart ("Keswick near Penrith", "Keswick
+    near North Walsham"); None when there is none, or without ``data.places``."""
     bases = data.bases
     population = np.nan_to_num(np.asarray(bases.population, dtype=np.float64), nan=0.0)
     big = np.flatnonzero(population >= NEAR_TOWN_PEOPLE)
     points = np.asarray(bases.points, dtype=np.float64)
     nearest: list[tuple[int, float] | None] = []
     for row in rows:
-        if population[row] >= NEAR_TOWN_PEOPLE or not len(big) or data.places is None:
+        others = big[big != row]
+        if not len(others) or data.places is None:
             nearest.append(None)
             continue
-        metres = straight_line_distances_m(Origin(*points[row]), points[big])
+        metres = straight_line_distances_m(Origin(*points[row]), points[others])
         at = int(np.argmin(metres))
-        nearest.append((int(bases.place_ids[big[at]]), float(metres[at])))
+        nearest.append((int(bases.place_ids[others[at]]), float(metres[at])))
     places = sorted({found[0] for found in nearest if found})
     names = {}
     if places:
