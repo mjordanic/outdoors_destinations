@@ -124,6 +124,18 @@ def test_info_says_whether_the_site_has_bases(exports: tuple[Path, Path], client
     assert plain.post("/api/bases/detail", json={"base": KESWICK, "reach": 30}).status_code == 404
 
 
+def test_a_rebuilt_bases_folder_changes_the_etag(exports: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    def etag(data: ServingData) -> str:
+        return TestClient(create_app(data)).get("/api/bases/search", params={"q": "Kes"}).headers["etag"]
+
+    before = etag(ServingData(exports[1]))
+    rebuilt = ServingData(exports[1])
+    monkeypatch.setitem(rebuilt.bases.meta, "version", "rebuilt")
+
+    assert etag(ServingData(exports[1])) == before
+    assert etag(rebuilt) != before
+
+
 def test_base_search_finds_only_places_that_are_bases(client: TestClient) -> None:
     found = client.get("/api/bases/search", params={"q": "Kes"}).json()["results"]
 

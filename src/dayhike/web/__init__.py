@@ -695,7 +695,7 @@ def create_app(
     # may come later), the code and the settings.
     settings = (
         f"{BUILD} {drive_client is not None} {MAX_DRIVE_HOURS} {RESULTS} {POOL} {data.places is not None} "
-        f"{data.landmarks is not None} {basemap} {data.bases is not None}"
+        f"{data.landmarks is not None} {basemap} {data.bases.meta['version'] if data.bases is not None else None}"
     ).encode()
     etag = f'W/"{hashlib.sha256((data.directory / "meta.json").read_bytes() + settings).hexdigest()[:16]}"'
     attribution = data.meta["attribution"]
