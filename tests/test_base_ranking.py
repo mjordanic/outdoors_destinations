@@ -19,6 +19,7 @@ def _data(tmp_path: Path, towns: list[dict], table: np.ndarray | None = None, ty
 
     Each town is ``{"types": {HikeType: HikeGroups}, "at": (lat, lon), "country": "GB"}``, its
     HikeGroups its own, one hike each, all 10 minutes away. Town i is Base i with place id i + 1.
+    A town may give its ``population`` and its 12 ``months`` (the same in every Reach); unknown without.
     """
     group_types, reached, points = [], [], []
     for town in towns:
@@ -32,7 +33,9 @@ def _data(tmp_path: Path, towns: list[dict], table: np.ndarray | None = None, ty
         table = np.eye(types, dtype=np.float32)
     hike_types = HikeTypes(types=np.zeros(0), middles=np.zeros(0), table=table.astype(np.float32), version="t")
     count = len(towns)
-    facts = BaseFacts(population=np.zeros(count), month_temperatures=np.zeros((count, len(REACHES), 12)))
+    population = np.array([town.get("population", np.nan) for town in towns], dtype=np.float64)
+    months = np.array([town.get("months", [np.nan] * 12) for town in towns], dtype=np.float32)
+    facts = BaseFacts(population=population, month_temperatures=np.repeat(months[:, None], len(REACHES), axis=1))
     hikes = len(group_types)
     store = SimpleNamespace(ids=np.arange(hikes), catalog_digest="t")
     place_ids = np.arange(1, count + 1, dtype=np.int64)

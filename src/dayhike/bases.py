@@ -35,6 +35,7 @@ from dayhike.similarity import (
 )
 from dayhike.serving import REGION_SPLIT_LON, ServingData
 from dayhike.steps import file_key
+from dayhike.town_traits import TownTraits, trait_cuts, trait_passes
 
 HIKE_TYPES = 512
 HIKE_TYPES_SEED = 20261124
@@ -270,14 +271,17 @@ OWN_AREA_REACHES = 3  # Bases this many Reaches from the Hiker's are where they 
 class BaseMatch:
     """One row of a BaseRanking: an area, named after its best Base.
 
-    ``score`` is the hike score, ``(mix, coverage, back)`` weighed 40, 30, 30, times
-    ``enough``; ``hike_groups`` the Base's HikeGroups that pass; ``members`` the Bases of
-    its area, best first, ``base`` the first. Bases are rows of the ``bases/`` folder.
+    ``hike_score`` is ``(mix, coverage, back)`` weighed 40, 30, 30, times ``enough``;
+    ``score`` the hike score after the "like mine" TownTraits, each taking its share in
+    ``cuts`` (trait name, share) off; ``hike_groups`` the Base's HikeGroups that pass;
+    ``members`` the Bases of its area, best first, ``base`` the first. Bases are rows of the
+    ``bases/`` folder.
     """
 
     base: int
     place_id: int
     score: float
+    hike_score: float
     mix: float
     coverage: float
     back: float
@@ -286,6 +290,7 @@ class BaseMatch:
     country: str
     region: str
     members: tuple[int, ...]
+    cuts: tuple[tuple[str, float], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -314,6 +319,7 @@ def rank_bases(
     hike_mask: np.ndarray,
     countries: Collection[str] | None = None,
     regions: Collection[str] | None = None,
+    traits: TownTraits | None = None,
 ) -> BaseRanking:
     """The BaseRanking of every Base against the one at GeoNames place ``seed`` (ADR-0084).
 
@@ -326,7 +332,10 @@ def rank_bases(
     coverage taken as full. A Base with under half the Hiker's HikeGroups is scored down by
     the square root of the ratio. Bases within ``OWN_AREA_REACHES`` of the Hiker's are left
     out, and one within ``AREA_REACHES`` of a better row joins it, both in a straight line at
-    the Reach estimate's straight-line speed. Raises KeyError when ``seed`` is not a Base.
+    the Reach estimate's straight-line speed. ``traits`` (all ignored when None) leave out the
+    Bases that fail a TownTrait filter before the best are chosen, and their "like mine"
+    settings then cut the hike score of those best (``town_traits``), on which the rows are
+    ordered. Raises KeyError when ``seed`` is not a Base.
     """
     bases = data.bases
     at = np.flatnonzero(np.asarray(bases.place_ids) == seed)
@@ -356,6 +365,14 @@ def rank_bases(
         keep &= np.isin(country, list(countries))
     if regions is not None:
         keep &= np.isin(region, list(regions))
+    traits = traits or TownTraits()
+    town = {
+        "size": np.asarray(bases.population),
+        "stays": np.full(len(points), np.nan),  # the bases/ folder counts no places to stay yet
+        "eats": np.full(len(points), np.nan),  # nor restaurants, cafes and pubs
+        "months": np.asarray(bases.month_temperatures)[:, REACHES.index(reach)],
+    }
+    keep &= trait_passes(traits, town)
     candidates = np.flatnonzero(keep)
     rows, cols = np.nonzero(spread)
     indptr = np.searchsorted(rows, np.arange(len(spread) + 1))
@@ -369,7 +386,9 @@ def rank_bases(
     best = np.lexsort((candidates, -first))[:BEST_HIKE_MATCHES]
     candidates, mix, back, enough = candidates[best], mix[best], back[best], enough[best]
     coverage = _coverage(candidates, starts, types, my_types, my_shares, credit)
-    score = (MIX_SHARE * mix + rest * coverage + rest * back) * enough
+    hike_score = (MIX_SHARE * mix + rest * coverage + rest * back) * enough
+    cuts = trait_cuts(traits, town, me, candidates)
+    score = hike_score * np.prod([1 - cut for _, cut in cuts], axis=0) if cuts else hike_score
 
     areas: list[list[int]] = []
     leads = np.empty((0, 2))
@@ -385,10 +404,12 @@ def rank_bases(
         i, base = area[0], int(candidates[area[0]])
         found.append(
             BaseMatch(
-                base=base, place_id=int(bases.place_ids[base]), score=float(score[i]), mix=float(mix[i]),
+                base=base, place_id=int(bases.place_ids[base]), score=float(score[i]),
+                hike_score=float(hike_score[i]), mix=float(mix[i]),
                 coverage=float(coverage[i]), back=float(back[i]), enough=float(enough[i]),
                 hike_groups=int(groups[base]), country=str(country[base]), region=str(region[base]),
                 members=tuple(int(candidates[j]) for j in area),
+                cuts=tuple((name, float(cut[i])) for name, cut in cuts),
             )  # fmt: skip
         )
     return BaseRanking(seed=me, reach=reach, seed_groups=int(groups[me]), rows=found)
