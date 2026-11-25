@@ -44,6 +44,21 @@ def test_back_from_an_opened_town_returns_to_the_list(browser, server) -> None:
     assert page.evaluate("() => location.hash") == f"#base={KESWICK}&reach=60"
 
 
+def test_a_units_switch_after_back_from_a_town_keeps_the_lists_map(browser, server) -> None:
+    page = open_bases(browser, server)
+    keswick_in_60(page)
+    rows = len(listed(page))
+    open_base(page, "Bethesda")
+    page.go_back()
+    page.locator("#base-results tbody tr").first.wait_for()
+    settled(page)
+
+    page.locator("#units").select_option("imperial")
+
+    assert page.locator("#base-hikes").is_hidden()
+    assert page.locator(".base-marker").count() == rows
+
+
 def test_back_after_a_changed_drive_time_shows_the_list_for_the_one_before(browser, server) -> None:
     page = open_bases(browser, server)
     keswick_in_60(page)
@@ -319,6 +334,25 @@ def test_a_range_the_wrong_way_round_is_said_beside_it_and_asks_nothing(browser,
     assert asked_for == []
 
 
+def test_a_range_the_wrong_way_round_on_a_towns_page_keeps_its_hikes_marked_and_asks_nothing(browser, server) -> None:
+    page = open_bases(browser, server)
+    keswick_in_60(page)
+    open_base(page, "Bethesda")
+    hikes = page.locator("#base-hike-list li").count()
+    asked_for = requests_to(page, "/api/bases/detail")
+    page.get_by_text("Which hikes count").click()
+
+    page.get_by_label("Climb from").fill("2000")
+    page.get_by_label("Climb up to").fill("500")
+    page.get_by_label("Climb up to").press("Tab")
+    page.wait_for_timeout(BASE_WAIT_MS)
+
+    assert asked_for == []
+    assert page.locator("#base-hike-list li").count() == hikes
+    assert "stale" in page.locator("#base-hikes").get_attribute("class")
+    assert "more than" in page.locator('.base-range[data-stem="climb"] .range-error').inner_text()
+
+
 def test_a_town_not_found_by_find_bases_marks_the_list_as_for_the_town_before(browser, server) -> None:
     page = open_bases(browser, server)
     keswick_in_60(page)
@@ -393,13 +427,21 @@ def test_a_shared_link_opens_the_sections_holding_its_choices_and_says_them(brow
     assert "Your choices: reaches a summit; town size like yours (important)" in note
 
 
-def test_an_old_link_with_like3_is_read_and_the_address_says_it_in_words(browser, server) -> None:
-    page = open_page(browser, server, Api({}), hash=f"#base={KESWICK}&reach=60&eats=like3")
+def test_a_like_mine_link_is_read_and_the_address_says_it_in_words(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#base={KESWICK}&reach=60&eats=like-mine-important")
     page.locator("#base-results tbody tr").first.wait_for()
 
     assert page.get_by_label("How much restaurants, cafes and pubs matter").input_value() == "3"
     page.get_by_label("How much restaurants, cafes and pubs matter").select_option("1")
     page.wait_for_function("() => location.hash.includes('eats=like-mine-a-little')")
+
+
+def test_a_like_mine_not_in_words_is_left_out(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#base={KESWICK}&reach=60&eats=like3")
+    page.locator("#base-results tbody tr").first.wait_for()
+
+    assert page.get_by_label("Restaurants, cafes and pubs", exact=True).input_value() == "ignore"
+    assert "eats" not in page.evaluate("() => location.hash")
 
 
 # C5: back to the list is at the top of a town's page; leaving the mode is said so.

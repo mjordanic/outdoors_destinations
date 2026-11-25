@@ -135,7 +135,10 @@ const bases = {
     $("#base-search").value = base.name;
     if (via !== "map") $("#base-pin-hint").textContent = this.pinHint;
     $("#base-find").disabled = false;
+    this.opening++;
     this.opened = null;
+    this.openedBody = null;
+    this.hikeMarkers = [];
     $("#base-hikes").hidden = true;
     this.mark([]);
     this.rank({ push: true });
@@ -372,7 +375,7 @@ const bases = {
     for (const trait of Object.keys(TRAIT_FILTERS)) {
       if (!parts.has(trait)) continue;
       const text = decoded(parts.get(trait)) ?? "";
-      const like = Object.entries(LIKE_WORDS).find(([, words]) => words === text)?.[0] ?? /^like([123])$/.exec(text)?.[1];
+      const like = Object.entries(LIKE_WORDS).find(([, words]) => words === text)?.[0];
       let choice = null, found;
       if (like) choice = { like_mine: Number(like) };
       else if (trait === "months") {
@@ -433,6 +436,8 @@ const bases = {
       $("#base-search").value = "";
     }
     this.opened = this.seed && /^\d{1,17}$/.test(open) ? { id: Number(open) } : null;
+    this.openedBody = null;
+    this.hikeMarkers = [];
     this.ranked = false;
     this.rows = null;
     $("#base-find").disabled = !this.seed;
@@ -666,6 +671,10 @@ const bases = {
   // A Base's hikes in Reach, nearest first, on the map at their Trailheads; ``base``: a row, or {id} from a
   // link; ``step``: the Hiker opened it, a step of the history, the page scrolled to its top.
   async open(base, step = true) {
+    if (this.wrongChoices().length) {
+      $("#base-hikes").classList.add("stale");
+      return;
+    }
     const number = ++this.opening, note = $("#base-hikes-note"), filter = this.hikeFilter();
     if (step && !this.opened) this.listScroll = window.scrollY;
     this.opened = base;
@@ -701,6 +710,7 @@ const bases = {
   showBase(body) {
     const base = body.base, hikes = body.hikes; // nearest first
     this.openedBody = body;
+    $("#base-hikes").classList.remove("stale");
     $("#base-hikes-title").textContent = `Hikes within about ${body.reach} min of ${base.name}`;
     $("#base-hikes-note").textContent = `${hikes.length} hike${hikes.length === 1 ? "" : "s"}, nearest first; ${base.hike_groups} of them count for the score, as hikes of one kind that start close together count once. The minutes are an estimate of the drive to where each starts.`;
     $("#base-hike-list").innerHTML = hikes.map((hike) => `<li>

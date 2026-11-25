@@ -2735,9 +2735,8 @@ or "like mine" with *a little*, *matters* or *important*; town size starts as a 
 others ignored). Its address is `#base=<seed>&reach=<minutes>&open=<id>` (`#base` alone before a town is
 chosen), then the hike filter's keys (`&climb_max_m=500&summit`) and each trait not at its default
 (`&size=ignore`, `&eats=like-mine-important`, `&stays=3-`, `&size=-5000`, `&months=7,8`; "like mine" is
-`like-mine-a-little`, `like-mine` or `like-mine-important`, and the `like1` to `like3` of older links are read
-too); like a hike link it sets every setting it does not name to its default (ADR-0073), on load or in a tab
-already open, and opens the sections holding a choice not at its default.
+`like-mine-a-little`, `like-mine` or `like-mine-important`); like a hike link it sets every setting it does
+not name to its default (ADR-0073), on load or in a tab already open, and opens the sections holding a choice not at its default.
 
 A BaseRanking (`rank_bases`) counts every Base's BaseProfile under the hike filter in one numba pass over
 the stored pairs. It then scores back (cheap) for every Base with at least 10 passing HikeGroups, and mix
