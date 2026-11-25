@@ -53,8 +53,9 @@ Uddingston 115,000. So do Istanbul's Anadoluhisarı and the cities themselves (I
 Grenoble). The hiking towns stay well under it: Keswick 5,000, Glossop 29,000, Garmisch 30,000, Merano
 55,000, Flagstaff 70,000. A Base whose name says it is no town is left out too: a mountain hut, a malga, an
 inn, a hotel, an industrial estate, a college, a road-keeper's house, a condominium, a trailer or mobile
-home park, apartments, a subdivision, or "(historical)" (`NOT_A_TOWN`). Real towns such as Bar-sur-Seine,
-Braunau am Inn and San Martino Buon Albergo stay. West of the Atlantic, the hikes are the United States'
+home park, apartments, a subdivision, or "(historical)" (`NOT_A_TOWN`), and a bar ("Bar Alpino", `A_BAR`)
+outside the countries where "Bar" is an English word (`BAR_IS_A_WORD`). Real towns such as Bar-sur-Seine,
+Braunau am Inn, San Martino Buon Albergo, Bar Harbor and Bar Hill stay. West of the Atlantic, the hikes are the United States'
 alone, so the 129 Canadian and 60 Mexican Bases there are left out: their Reach holds only the hikes across
 the border. Together, 18,187 of the 195,220 Bases are never rows.
 

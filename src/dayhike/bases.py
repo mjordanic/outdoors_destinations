@@ -337,9 +337,11 @@ COVERED_WEST = "US"  # west of REGION_SPLIT_LON, the hikes are those of the Unit
 # Places that are no town to stay in: a hut, an inn, an industrial estate, a condo, a trailer park, ...
 NOT_A_TOWN = re.compile(
     r"(?i)^(rifugio|malga|gasthof|hotel|albergo|grand'albergo|collegio|cantoniera|casa cantoniera|"
-    r"(zona|area|località) (industriale|produttiva|artigianale)|industriale|industriegebiet)(\s|$)|^bar\s"
+    r"(zona|area|località) (industriale|produttiva|artigianale)|industriale|industriegebiet)(\s|$)"
     r"|\b(industrial|condominiums?|condo|trailer|mobile home|apartments|subdivision)\b|\(historical\)"
 )
+A_BAR = re.compile(r"(?i)^bar\s")  # "Bar Alpino"; no town where "Bar" is an English word: Bar Harbor, Bar Hill
+BAR_IS_A_WORD = ("US", "GB", "IE")
 # What a BaseRanking's score means (ADR-0025), beside every row of "Find a base"; served in /api/info.
 BASE_SCORE_HELP = {
     "overall": "How alike the hikes in reach of this town are to those in reach of yours, from 0 to 1. Higher "
@@ -600,10 +602,10 @@ _PLACES: dict[int, tuple[Bases, tuple[np.ndarray, np.ndarray]]] = {}  # by the `
 
 def _base_places(data: ServingData) -> tuple[np.ndarray, np.ndarray]:
     """Each Base's ISO country code from ``data.places`` ("" for none), and whether it may be a row:
-    not a place that is no town (``NOT_A_TOWN``), not in a city (``URBAN_PEOPLE`` people living in the
-    towns of ``data.places`` within ``URBAN_M``, its own included: the file keeps every town of
-    ``TOWN_POPULATION`` people or more, but villages only near hikes) and, west of ``REGION_SPLIT_LON``,
-    in ``COVERED_WEST``. Every Base may be one without ``data.places``. Read once per ``bases/`` folder."""
+    not a place that is no town (``NOT_A_TOWN``, or ``A_BAR`` outside ``BAR_IS_A_WORD``), not in a city
+    (``URBAN_PEOPLE`` people living in the towns of ``data.places`` within ``URBAN_M``, its own included:
+    the file keeps every town of ``TOWN_POPULATION`` people or more, but villages only near hikes) and,
+    west of ``REGION_SPLIT_LON``, in ``COVERED_WEST``. Every Base may be one without ``data.places``. Read once per ``bases/`` folder."""
     kept = _PLACES.get(id(data.bases))
     if kept is None or kept[0] is not data.bases:
         place_ids = np.asarray(data.bases.place_ids)
@@ -617,7 +619,9 @@ def _base_places(data: ServingData) -> tuple[np.ndarray, np.ndarray]:
                     (json.dumps(place_ids.tolist()),),
                 ):
                     at = int(np.searchsorted(place_ids, place))
-                    codes[at], listed[at] = country or "", not NOT_A_TOWN.search(name or "")
+                    codes[at], listed[at] = country or "", not NOT_A_TOWN.search(name or "") and not (
+                        country not in BAR_IS_A_WORD and A_BAR.match(name or "")
+                    )
                 towns = db.execute("SELECT lat, lon, population FROM places WHERE population >= ?", (TOWN_POPULATION,))
                 people = np.array(towns.fetchall())
             listed &= (points[:, 1] >= REGION_SPLIT_LON) | (codes == COVERED_WEST)

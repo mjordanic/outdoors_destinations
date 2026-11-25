@@ -385,24 +385,32 @@ def test_a_town_in_a_city_is_left_out(tmp_path):
 
 
 NOT_TOWNS = (
-    "Rifugio Scalorbi", "Malga Quarazza", "Gasthof", "Bar Alpino", "Hotel Castell", "Grand'Albergo",
+    "Rifugio Scalorbi", "Malga Quarazza", "Gasthof", ("Bar Alpino", "IT"), ("Bar Sport", "CH"), "Hotel Castell", "Grand'Albergo",
     "Albergo della Posta", "Zona Industriale", "Area Produttiva", "Industriale Artigianale", "Industriegebiet Nord",
     "Burningham Industrial", "Collegio Santa Croce", "Cantoniera della Presolana", "Continental Townhouse Condominium",
     "Aspen Park Condo", "Gateway Trailer Park", "Camelot Mobile Home Park", "Foxcroft Apartments",
     "Carter Subdivision", "Stobcross (historical)",
 )  # fmt: skip
-TOWNS = ("Braunau am Inn", "Potters Bar", "Bar-sur-Seine", "San Martino Buon Albergo", "Red Lodge", "Hütte")
+TOWNS = (
+    "Braunau am Inn", "Potters Bar", "Bar-sur-Seine", "San Martino Buon Albergo", "Red Lodge", "Hütte",
+    ("Bar Harbor", "US"), ("Bar Nunn", "US"), ("Bar Mills", "US"), "Bar Hill", ("Bar", "ME"),
+)  # fmt: skip
+
+
+def _named(name: str | tuple[str, str]) -> dict:
+    name, country = (name, "GB") if isinstance(name, str) else name
+    return {"name": name, "country": country}
 
 
 @pytest.mark.parametrize("name", NOT_TOWNS)
 def test_a_place_that_is_no_town_is_not_listed(tmp_path, name):
-    data = _data(tmp_path, [_town(ALIKE, 0), _town(ALIKE, 1, name=name), _town(ALIKE, 2, name="Keswick")])
+    data = _data(tmp_path, [_town(ALIKE, 0), _town(ALIKE, 1, **_named(name)), _town(ALIKE, 2, name="Keswick")])
     assert [row.base for row in rank_bases(data, 1, 30, _all(data)).rows] == [2]
 
 
 @pytest.mark.parametrize("name", TOWNS)
 def test_a_town_whose_name_has_such_a_word_is_listed(tmp_path, name):
-    data = _data(tmp_path, [_town(ALIKE, 0), _town(ALIKE, 1, name=name)])
+    data = _data(tmp_path, [_town(ALIKE, 0), _town(ALIKE, 1, **_named(name))])
     assert [row.base for row in rank_bases(data, 1, 30, _all(data)).rows] == [1]
 
 
