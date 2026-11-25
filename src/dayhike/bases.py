@@ -206,12 +206,14 @@ class BaseProfiles:
     """The BaseProfile of every Base under one HikeFilter and Reach.
 
     Base i's profile is ``types[starts[i]:starts[i + 1]]``, in HikeType order, with
-    ``counts`` its HikeGroups of each; a HikeType with none is left out.
+    ``counts`` its HikeGroups of each; a HikeType with none is left out. ``groups`` is
+    each Base's passing HikeGroups, the sum of its counts.
     """
 
     starts: np.ndarray
     types: np.ndarray
     counts: np.ndarray
+    groups: np.ndarray
 
 
 def base_profiles(bases: Bases, reach: int, hike_mask: np.ndarray) -> BaseProfiles:
@@ -220,68 +222,98 @@ def base_profiles(bases: Bases, reach: int, hike_mask: np.ndarray) -> BaseProfil
     ``bases`` is the ``bases/`` folder (``Bases.open_dir``); ``hike_mask`` says of each
     hike (similarity row) whether it passes the HikeFilter. A HikeGroup passes when
     any of its hikes does, and counts once. One pass over the bands up to ``reach``: a
-    shorter Reach never reads a longer one's band.
+    shorter Reach never reads a longer one's band. A run of a HikeType whose HikeGroups all
+    pass, or none, is counted from its length alone.
     """
     if reach not in REACHES:
         raise ValueError(f"reach must be one of {REACHES} minutes, not {reach}")
     hike_mask = np.asarray(hike_mask, dtype=np.bool_)
     if len(hike_mask) != len(bases.group_hikes):
         raise ValueError(f"hike_mask has {len(hike_mask)} hikes, the bases have {len(bases.group_hikes)}")
-    starts, types, counts = _profile_pass(
+    starts, types, counts, groups = _profile_pass(
         REACHES.index(reach) + 1,
         len(bases.place_ids),
         len(bases.type_table),
         hike_mask,
         np.asarray(bases.group_starts),
         np.asarray(bases.group_hikes),
+        np.asarray(bases.group_types),
         np.asarray(bases.base_runs),
         np.asarray(bases.run_offsets),
         np.asarray(bases.run_types),
         np.asarray(bases.pair_groups),
     )
-    return BaseProfiles(starts=starts, types=types, counts=counts)
+    return BaseProfiles(starts=starts, types=types, counts=counts, groups=groups)
 
 
 @njit
-def _profile_pass(bands, bases, type_count, hike_mask, group_starts, group_hikes, base_runs, run_offsets, run_types, pair_groups):  # fmt: skip
-    """``base_profiles``'s loop: which HikeGroups pass, then per Base the passing ones per HikeType."""
+def _profile_pass(bands, bases, type_count, hike_mask, group_starts, group_hikes, group_types, base_runs, run_offsets, run_types, pair_groups):  # fmt: skip
+    """``base_profiles``'s loop: which HikeGroups pass, then per Base the passing ones per HikeType.
+
+    A Base's bands are summed per HikeType and read back in HikeType order from a bitmap of the
+    HikeTypes seen, not sorted.
+    """
     groups = len(group_starts) - 1
-    passes = np.zeros(groups, dtype=np.bool_)
+    passes = np.zeros(groups, dtype=np.int32)
+    in_type = np.zeros(type_count, dtype=np.int64)
+    passing_in_type = np.zeros(type_count, dtype=np.int64)
     for g in range(groups):
         for at in range(group_starts[g], group_starts[g + 1]):
             if hike_mask[group_hikes[at]]:
-                passes[g] = True
+                passes[g] = 1
                 break
+        in_type[group_types[g]] += 1
+        passing_in_type[group_types[g]] += passes[g]
+    whole = np.zeros(type_count, dtype=np.int8)  # 1: every HikeGroup of the HikeType passes, -1: none, 0: some
+    for kind in range(type_count):
+        if passing_in_type[kind] == in_type[kind]:
+            whole[kind] = 1
+        elif passing_in_type[kind] == 0:
+            whole[kind] = -1
     most = base_runs[bands * bases] - base_runs[0]  # every run in Reach: at most one HikeType each
     starts = np.empty(bases + 1, dtype=np.int64)
     types = np.empty(most, dtype=np.int16)
     counts = np.empty(most, dtype=np.int32)
-    per_type = np.zeros(type_count, dtype=np.int32)
-    seen = np.empty(type_count, dtype=np.int16)
+    passing_groups = np.zeros(bases, dtype=np.int64)
+    per_type = np.zeros(type_count, dtype=np.int64)
+    words = (type_count + 63) // 64
+    seen = np.zeros(words, dtype=np.uint64)  # the HikeTypes with a run in Reach of the Base, a bit each
+    one = np.uint64(1)
     found = 0
     for base in range(bases):
         starts[base] = found
-        distinct = 0
         for band in range(bands):
             slot = band * bases + base
             for run in range(base_runs[slot], base_runs[slot + 1]):
-                passing = 0
-                for pair in range(run_offsets[run], run_offsets[run + 1]):
-                    if passes[pair_groups[pair]]:
-                        passing += 1
-                if passing:
-                    kind = run_types[run]
-                    if per_type[kind] == 0:
-                        seen[distinct] = kind
-                        distinct += 1
-                    per_type[kind] += passing
-        for kind in np.sort(seen[:distinct]):
-            types[found] = kind
-            counts[found] = per_type[kind]
-            per_type[kind] = 0
-            found += 1
+                kind = run_types[run]
+                passing = (run_offsets[run + 1] - run_offsets[run]) * (whole[kind] == 1)
+                if whole[kind] == 0:
+                    for pair in range(run_offsets[run], run_offsets[run + 1]):
+                        passing += passes[pair_groups[pair]]
+                per_type[kind] += passing
+                seen[kind >> 6] |= one << np.uint64(kind & 63)
+        for word in range(words):  # in HikeType order: lowest bit first
+            bits = seen[word]
+            seen[word] = 0
+            while bits:
+                low = bits & (~bits + one)
+                bits ^= low
+                kind = word * 64 + _DE_BRUIJN[np.int64((low * _DE_BRUIJN_MAGIC) >> np.uint64(58))]
+                types[found] = kind
+                counts[found] = per_type[kind]
+                passing_groups[base] += per_type[kind]
+                found += per_type[kind] > 0
+                per_type[kind] = 0
     starts[bases] = found
-    return starts, types[:found].copy(), counts[:found].copy()
+    return starts, types[:found], counts[:found], passing_groups
+
+
+_DE_BRUIJN_MAGIC = np.uint64(0x03F79D71B4CB0A89)  # a single bit times this, top 6 bits: its place in _DE_BRUIJN
+_DE_BRUIJN = np.array([
+    0, 1, 48, 2, 57, 49, 28, 3, 61, 58, 50, 42, 38, 29, 17, 4, 62, 55, 59, 36, 53, 51, 43, 22, 45, 39, 33, 30, 24, 18,
+    12, 5, 63, 47, 56, 27, 60, 41, 37, 16, 54, 35, 52, 21, 44, 32, 23, 11, 46, 26, 40, 15, 34, 20, 31, 10, 25, 14, 19, 9,
+    13, 8, 7, 6,
+], dtype=np.int64)  # fmt: skip
 
 
 CREDIT_FROM = 0.6  # a HikeType score at or under this is no better than a random pair's: no credit
@@ -400,15 +432,11 @@ def rank_bases(
         raise KeyError(seed)
     me = int(at[0])
     profiles = base_profiles(bases, reach, hike_mask)
-    starts, types, counts = profiles.starts, profiles.types, profiles.counts
-    groups = np.r_[0, np.cumsum(counts)][starts]
-    groups = groups[1:] - groups[:-1]
+    starts, types, counts, groups = profiles.starts, profiles.types, profiles.counts, profiles.groups
     if groups[me] < MIN_HIKE_GROUPS:
         return BaseRanking(seed=me, reach=reach, seed_groups=int(groups[me]), rows=[])
 
-    table = np.asarray(bases.type_table)  # credit in its own float32: a stored 0.6 is no better than random
-    credit = np.clip((table - table.dtype.type(CREDIT_FROM)) / (1 - CREDIT_FROM), 0, 1).astype(np.float64)
-    spread = credit / credit.sum(axis=1, keepdims=True)
+    credit, spread, blocks = _credit(bases)
     mine = slice(starts[me], starts[me + 1])
     my_types, my_shares = types[mine].astype(np.int64), counts[mine] / groups[me]
     points = np.asarray(bases.points, dtype=np.float64)
@@ -436,27 +464,22 @@ def rank_bases(
     enough = np.minimum(1.0, np.sqrt(groups[candidates] / (groups[me] / 2)))
     chosen = np.lexsort((candidates, -back * enough))[:PRESELECT_BASES]
     candidates, back, enough = candidates[chosen], back[chosen], enough[chosen]
-    rows, cols = np.nonzero(spread)
-    indptr = np.searchsorted(rows, np.arange(len(spread) + 1))
-    mix = _mix(candidates, starts, types, counts, groups, my_shares @ spread[my_types], indptr, cols, spread[rows, cols])
     rest = (1 - MIX_SHARE) / 2
-    first = (MIX_SHARE * mix + rest * back + rest) * enough
+    mix = _mix_of_the_best(candidates, starts, types, counts, groups, my_shares @ spread[my_types], spread, blocks, back, enough)
+    first = np.where(np.isnan(mix), -np.inf, (MIX_SHARE * mix + rest * back + rest) * enough)
     best = np.lexsort((candidates, -first))[:BEST_HIKE_MATCHES]
     candidates, mix, back, enough = candidates[best], mix[best], back[best], enough[best]
-    coverage = _coverage(candidates, starts, types, my_types, my_shares, credit)
+    near_first = np.argsort(-credit, axis=1, kind="stable")  # each HikeType's near ones, best first
+    coverage = _coverage(candidates, starts, types, my_types, my_shares, credit, near_first, (credit > 0).sum(axis=1))
     hike_score = (MIX_SHARE * mix + rest * coverage + rest * back) * enough
     cuts = trait_cuts(traits, town, me, candidates)
     score = hike_score * np.prod([1 - cut for _, cut in cuts], axis=0) if cuts else hike_score
 
-    areas: list[list[int]] = []
-    leads = np.empty((0, 2))
-    for i in np.lexsort((candidates, -score)):
-        near = np.flatnonzero(straight_line_distances_m(Origin(*points[candidates[i]]), leads) <= AREA_REACHES * reach_m)
-        if len(near):
-            areas[near[0]].append(int(i))
-        else:
-            areas.append([int(i)])
-            leads = np.vstack([leads, points[candidates[i]]])
+    order = np.lexsort((candidates, -score))
+    area_of = _areas(np.radians(points[candidates[order]]), AREA_REACHES * reach_m)
+    areas: list[list[int]] = [[] for _ in range(area_of.max(initial=-1) + 1)]
+    for i, area in zip(order.tolist(), area_of.tolist()):
+        areas[area].append(i)
     found = []
     for area in areas:
         i, base = area[0], int(candidates[area[0]])
@@ -471,6 +494,29 @@ def rank_bases(
             )  # fmt: skip
         )
     return BaseRanking(seed=me, reach=reach, seed_groups=int(groups[me]), rows=found)
+
+
+@njit
+def _areas(points, within_m):
+    """``rank_bases``'s area of each Base, best first, at ``points`` (lat, lon in radians): that
+    of the first earlier area lead within ``within_m`` metres in a straight line, else its own
+    (the great-circle formula of ``straight_line_distances_m``)."""
+    area_of = np.empty(len(points), dtype=np.int64)
+    leads = np.empty((len(points), 2))
+    count = 0
+    for i in range(len(points)):
+        phi0, lam0 = points[i, 0], points[i, 1]
+        area_of[i] = -1
+        for lead in range(count):
+            a = math.sin((leads[lead, 0] - phi0) / 2) ** 2 + math.cos(phi0) * math.cos(leads[lead, 0]) * math.sin((leads[lead, 1] - lam0) / 2) ** 2
+            if 2 * EARTH_RADIUS_M * math.asin(math.sqrt(a)) <= within_m:
+                area_of[i] = lead
+                break
+        if area_of[i] < 0:
+            leads[count, 0], leads[count, 1] = phi0, lam0
+            area_of[i] = count
+            count += 1
+    return area_of
 
 
 _COUNTRIES: dict[int, tuple[Bases, np.ndarray]] = {}  # by the ``Bases`` read: each Base's country code
@@ -602,43 +648,108 @@ def _back(candidates, starts, types, counts, groups, my_best):
     return back
 
 
+MIX_BLOCKS = 64  # groups of HikeTypes whose spread shares bound a Base's mix from above
+MIX_CHUNK = 2_000  # candidate Bases given a mix at a time, past the first BEST_HIKE_MATCHES
+
+_CREDIT: dict[int, tuple[Bases, tuple[np.ndarray, np.ndarray, np.ndarray]]] = {}  # by the ``Bases`` read
+
+
+def _credit(bases: Bases) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The credit between HikeTypes, each HikeType's credit spread (rows summing to 1), and
+    ``MIX_BLOCKS`` groups of HikeTypes alike in spread (a group number each); once per ``bases/`` folder."""
+    kept = _CREDIT.get(id(bases))
+    if kept is None or kept[0] is not bases:
+        table = np.asarray(bases.type_table)  # credit in its own float32: a stored 0.6 is no better than random
+        credit = np.clip((table - table.dtype.type(CREDIT_FROM)) / (1 - CREDIT_FROM), 0, 1).astype(np.float64)
+        spread = credit / credit.sum(axis=1, keepdims=True)
+        count = min(MIX_BLOCKS, len(np.unique(spread, axis=0)))
+        blocks = KMeans(n_clusters=count, n_init=1, random_state=HIKE_TYPES_SEED).fit(spread).labels_
+        _CREDIT.clear()
+        _CREDIT[id(bases)] = kept = (bases, (credit, spread, blocks.astype(np.int64)))
+    return kept[1]
+
+
+def _mix_of_the_best(candidates, starts, types, counts, groups, my_spread, spread, blocks, back, enough):  # fmt: skip
+    """``rank_bases``'s mix of the candidates that may be among the ``BEST_HIKE_MATCHES`` best by
+    mix, back and enough; NaN for the rest, which cannot be.
+
+    A Base's mix is at most that of its spread shares summed in each group of ``blocks``
+    against the Hiker's (the smaller of two sums is at least the sum of the smaller), so mix is
+    worked out best bound first, until the next bound is under the ``BEST_HIKE_MATCHES``-th
+    best worked out. Which Bases are the best does not depend on how good the groups are.
+    """
+    rest = (1 - MIX_SHARE) / 2
+    one_hot = np.zeros((len(spread), blocks.max() + 1))
+    one_hot[np.arange(len(spread)), blocks] = 1.0
+    bound = _mix(candidates, starts, types, counts, groups, my_spread @ one_hot, spread @ one_hot)
+    bound = (MIX_SHARE * np.minimum(bound, 1.0) + rest * back + rest) * enough + 1e-9  # past rounding
+    order = np.argsort(-bound, kind="stable")
+    mix = np.full(len(candidates), np.nan)
+    done = 0
+    while done < len(order):
+        take = order[done : done + (BEST_HIKE_MATCHES if done == 0 else MIX_CHUNK)]
+        mix[take] = _mix(candidates[take], starts, types, counts, groups, my_spread, spread)
+        done += len(take)
+        if done >= BEST_HIKE_MATCHES and done < len(order):
+            first = (MIX_SHARE * mix[order[:done]] + rest * back[order[:done]] + rest) * enough[order[:done]]
+            if bound[order[done]] < np.partition(first, done - BEST_HIKE_MATCHES)[done - BEST_HIKE_MATCHES]:
+                break
+    return mix
+
+
+def _mix(candidates, starts, types, counts, groups, my_spread, spread):
+    """``rank_bases``'s mix of each candidate Base against the Hiker's spread shares ``my_spread``:
+    the Base's shares, each spread onto near HikeTypes by ``spread``, against the Hiker's. Only the
+    HikeTypes in the Hiker's spread can add to it."""
+    mine = my_spread > 0
+    rows, cols = np.nonzero(spread * mine)
+    indptr = np.searchsorted(rows, np.arange(len(spread) + 1))
+    return _mix_pass(candidates, starts, types, counts, groups, my_spread, indptr, cols, spread[rows, cols], np.flatnonzero(mine))  # fmt: skip
+
+
 @njit
-def _mix(candidates, starts, types, counts, groups, my_spread, indptr, indices, values):
-    """``rank_bases``'s mix of each candidate Base against the Hiker's spread shares; the spread
-    credit is sparse, by HikeType (``indptr``)."""
+def _mix_pass(candidates, starts, types, counts, groups, my_spread, indptr, indices, values, mine):
+    """``_mix``'s loop; the spread is sparse, by HikeType (``indptr``), and ``mine`` the HikeTypes
+    of the Hiker's spread."""
     mix = np.zeros(len(candidates))
     spread = np.zeros(len(my_spread))
-    touched = np.empty(len(my_spread), dtype=np.int64)
     for i in range(len(candidates)):
         base = candidates[i]
-        found = 0
         for at in range(starts[base], starts[base + 1]):
             share = counts[at] / groups[base]
             kind = types[at]
             for k in range(indptr[kind], indptr[kind + 1]):
-                near = indices[k]
-                if spread[near] == 0.0:
-                    touched[found] = near
-                    found += 1
-                spread[near] += share * values[k]
-        for j in range(found):
-            near = touched[j]
+                spread[indices[k]] += share * values[k]
+        for near in mine:
             mix[i] += min(spread[near], my_spread[near])
-            spread[near] = 0.0
+        spread[:] = 0.0
     return mix
 
 
 @njit
-def _coverage(candidates, starts, types, my_types, my_shares, credit):
-    """``rank_bases``'s coverage: each of the Hiker's HikeTypes, by share, finds its best credit near each Base."""
+def _coverage(candidates, starts, types, my_types, my_shares, credit, near_first, near_count):
+    """``rank_bases``'s coverage: each of the Hiker's HikeTypes, by share, finds its best credit near each Base.
+
+    ``near_first`` is each HikeType's row of HikeTypes by credit, best first, of which the
+    first ``near_count`` give any: the best credit is the first of them the Base has.
+    """
     coverage = np.zeros(len(candidates))
+    has = np.zeros(len(credit), dtype=np.bool_)
     for i in range(len(candidates)):
         base = candidates[i]
+        for at in range(starts[base], starts[base + 1]):
+            has[types[at]] = True
         for j in range(len(my_types)):
+            kind = my_types[j]
             best = 0.0
-            for at in range(starts[base], starts[base + 1]):
-                best = max(best, credit[my_types[j], types[at]])
+            for k in range(near_count[kind]):
+                near = near_first[kind, k]
+                if has[near]:
+                    best = credit[kind, near]
+                    break
             coverage[i] += my_shares[j] * best
+        for at in range(starts[base], starts[base + 1]):
+            has[types[at]] = False
     return coverage
 
 
