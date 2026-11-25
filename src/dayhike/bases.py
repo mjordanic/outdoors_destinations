@@ -9,7 +9,7 @@ import os
 import shutil
 import sqlite3
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, fields
 from pathlib import Path
@@ -19,7 +19,7 @@ from numba import njit
 from scipy.spatial import cKDTree
 from sklearn.cluster import KMeans
 
-from dayhike.catalog import EARTH_RADIUS_M
+from dayhike.catalog import EARTH_RADIUS_M, Origin, straight_line_distances_m
 from dayhike.highways import HighwaySnaps
 from dayhike.npy import map_npy
 from dayhike.reach import APPROACH_SPEED_KMH, BAND_STEP_MIN, REACH_MIN, STRAIGHT_SPEED_KMH, reach_minutes
@@ -33,6 +33,7 @@ from dayhike.similarity import (
     _measured,
     score_rows,
 )
+from dayhike.serving import REGION_SPLIT_LON, ServingData
 from dayhike.steps import file_key
 
 HIKE_TYPES = 512
@@ -256,6 +257,203 @@ def _profile_pass(bands, bases, type_count, hike_mask, group_starts, group_hikes
             found += 1
     starts[bases] = found
     return starts, types[:found].copy(), counts[:found].copy()
+
+
+CREDIT_FROM = 0.6  # a HikeType score at or under this is no better than a random pair's: no credit
+MIX_SHARE = 0.4  # of the hike score; coverage is the rest, half each way (ADR-0084)
+BEST_HIKE_MATCHES = 3_000  # Bases ranked on mix and back that get a coverage, and a row
+AREA_REACHES = 2  # a Base this many Reaches from a better row joins it
+OWN_AREA_REACHES = 3  # Bases this many Reaches from the Hiker's are where they have been
+
+
+@dataclass(frozen=True)
+class BaseMatch:
+    """One row of a BaseRanking: an area, named after its best Base.
+
+    ``score`` is the hike score, ``(mix, coverage, back)`` weighed 40, 30, 30, times
+    ``enough``; ``hike_groups`` the Base's HikeGroups that pass; ``members`` the Bases of
+    its area, best first, ``base`` the first. Bases are rows of the ``bases/`` folder.
+    """
+
+    base: int
+    place_id: int
+    score: float
+    mix: float
+    coverage: float
+    back: float
+    enough: float
+    hike_groups: int
+    country: str
+    region: str
+    members: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class BaseRanking:
+    """The Bases whose hikes in ``reach`` are like those of the Hiker's Base ``seed``, best first.
+
+    ``seed_groups`` is how many of the Hiker's HikeGroups pass the HikeFilter; with
+    under ``MIN_HIKE_GROUPS`` of them there is nothing to compare and no row.
+    """
+
+    seed: int
+    reach: int
+    seed_groups: int
+    rows: list[BaseMatch]
+
+    @property
+    def too_few(self) -> bool:
+        """Too few of the Hiker's hikes pass the HikeFilter to rank."""
+        return self.seed_groups < MIN_HIKE_GROUPS
+
+
+def rank_bases(
+    data: ServingData,
+    seed: int,
+    reach: int,
+    hike_mask: np.ndarray,
+    countries: Collection[str] | None = None,
+    regions: Collection[str] | None = None,
+) -> BaseRanking:
+    """The BaseRanking of every Base against the one at GeoNames place ``seed`` (ADR-0084).
+
+    ``data`` is the ``ServingData`` (its ``bases`` and ``places``); ``hike_mask`` the HikeFilter,
+    which both Bases are described under. Mix (shares of HikeTypes overlapping, each spread
+    onto near HikeTypes by credit) and back (the other Base's HikeTypes finding a near one of
+    the Hiker's) are scored for every Base with at least ``MIN_HIKE_GROUPS`` passing
+    HikeGroups, kept to ``countries`` (ISO codes) and ``regions`` (``REGIONS`` names) when
+    given; coverage (the way round) only for the ``BEST_HIKE_MATCHES`` best of them with
+    coverage taken as full. A Base with under half the Hiker's HikeGroups is scored down by
+    the square root of the ratio. Bases within ``OWN_AREA_REACHES`` of the Hiker's are left
+    out, and one within ``AREA_REACHES`` of a better row joins it, both in a straight line at
+    the Reach estimate's straight-line speed. Raises KeyError when ``seed`` is not a Base.
+    """
+    bases = data.bases
+    at = np.flatnonzero(np.asarray(bases.place_ids) == seed)
+    if not len(at):
+        raise KeyError(seed)
+    me = int(at[0])
+    profiles = base_profiles(bases, reach, hike_mask)
+    starts, types, counts = profiles.starts, profiles.types, profiles.counts
+    groups = np.r_[0, np.cumsum(counts)][starts]
+    groups = groups[1:] - groups[:-1]
+    if groups[me] < MIN_HIKE_GROUPS:
+        return BaseRanking(seed=me, reach=reach, seed_groups=int(groups[me]), rows=[])
+
+    table = np.asarray(bases.type_table)  # credit in its own float32: a stored 0.6 is no better than random
+    credit = np.clip((table - table.dtype.type(CREDIT_FROM)) / (1 - CREDIT_FROM), 0, 1).astype(np.float64)
+    spread = credit / credit.sum(axis=1, keepdims=True)
+    mine = slice(starts[me], starts[me + 1])
+    my_types, my_shares = types[mine].astype(np.int64), counts[mine] / groups[me]
+    points = np.asarray(bases.points, dtype=np.float64)
+    reach_m = reach / 60 * STRAIGHT_SPEED_KMH * 1_000
+    region = np.where(points[:, 1] < REGION_SPLIT_LON, "us", "europe")
+    country = _base_countries(data)
+
+    keep = groups >= MIN_HIKE_GROUPS
+    keep &= straight_line_distances_m(Origin(*points[me]), points) > OWN_AREA_REACHES * reach_m
+    if countries is not None:
+        keep &= np.isin(country, list(countries))
+    if regions is not None:
+        keep &= np.isin(region, list(regions))
+    candidates = np.flatnonzero(keep)
+    rows, cols = np.nonzero(spread)
+    indptr = np.searchsorted(rows, np.arange(len(spread) + 1))
+    mix, back = _mix_back(
+        candidates, starts, types, counts, groups,
+        my_shares @ spread[my_types], credit[my_types].max(axis=0), indptr, cols, spread[rows, cols],
+    )  # fmt: skip
+    enough = np.minimum(1.0, np.sqrt(groups[candidates] / (groups[me] / 2)))
+    rest = (1 - MIX_SHARE) / 2
+    first = (MIX_SHARE * mix + rest * back + rest) * enough
+    best = np.lexsort((candidates, -first))[:BEST_HIKE_MATCHES]
+    candidates, mix, back, enough = candidates[best], mix[best], back[best], enough[best]
+    coverage = _coverage(candidates, starts, types, my_types, my_shares, credit)
+    score = (MIX_SHARE * mix + rest * coverage + rest * back) * enough
+
+    areas: list[list[int]] = []
+    leads = np.empty((0, 2))
+    for i in np.lexsort((candidates, -score)):
+        near = np.flatnonzero(straight_line_distances_m(Origin(*points[candidates[i]]), leads) <= AREA_REACHES * reach_m)
+        if len(near):
+            areas[near[0]].append(int(i))
+        else:
+            areas.append([int(i)])
+            leads = np.vstack([leads, points[candidates[i]]])
+    found = []
+    for area in areas:
+        i, base = area[0], int(candidates[area[0]])
+        found.append(
+            BaseMatch(
+                base=base, place_id=int(bases.place_ids[base]), score=float(score[i]), mix=float(mix[i]),
+                coverage=float(coverage[i]), back=float(back[i]), enough=float(enough[i]),
+                hike_groups=int(groups[base]), country=str(country[base]), region=str(region[base]),
+                members=tuple(int(candidates[j]) for j in area),
+            )  # fmt: skip
+        )
+    return BaseRanking(seed=me, reach=reach, seed_groups=int(groups[me]), rows=found)
+
+
+_COUNTRIES: dict[int, tuple[Bases, np.ndarray]] = {}  # by the ``Bases`` read: each Base's country code
+
+
+def _base_countries(data: ServingData) -> np.ndarray:
+    """Each Base's ISO country code from ``data.places``, "" for none; read once per ``bases/`` folder."""
+    kept = _COUNTRIES.get(id(data.bases))
+    if kept is None or kept[0] is not data.bases:
+        known = {}
+        if data.places is not None:
+            db = sqlite3.connect(data.places, uri=True)
+            try:
+                known = dict(db.execute("SELECT id, country FROM places"))
+            finally:
+                db.close()
+        codes = np.array([known.get(int(place)) or "" for place in data.bases.place_ids], dtype="<U2")
+        _COUNTRIES.clear()
+        _COUNTRIES[id(data.bases)] = kept = (data.bases, codes)
+    return kept[1]
+
+
+@njit
+def _mix_back(candidates, starts, types, counts, groups, my_spread, my_best, indptr, indices, values):  # fmt: skip
+    """``rank_bases``'s mix and back of each candidate Base against the Hiker's spread shares and
+    best credit per HikeType; the spread credit is sparse, by HikeType (``indptr``)."""
+    mix = np.zeros(len(candidates))
+    back = np.zeros(len(candidates))
+    spread = np.zeros(len(my_spread))
+    touched = np.empty(len(my_spread), dtype=np.int64)
+    for i in range(len(candidates)):
+        base = candidates[i]
+        found = 0
+        for at in range(starts[base], starts[base + 1]):
+            share = counts[at] / groups[base]
+            kind = types[at]
+            back[i] += share * my_best[kind]
+            for k in range(indptr[kind], indptr[kind + 1]):
+                near = indices[k]
+                if spread[near] == 0.0:
+                    touched[found] = near
+                    found += 1
+                spread[near] += share * values[k]
+        for j in range(found):
+            near = touched[j]
+            mix[i] += min(spread[near], my_spread[near])
+            spread[near] = 0.0
+    return mix, back
+
+
+@njit
+def _coverage(candidates, starts, types, my_types, my_shares, credit):
+    """``rank_bases``'s coverage: each of the Hiker's HikeTypes, by share, finds its best credit near each Base."""
+    coverage = np.zeros(len(candidates))
+    for i in range(len(candidates)):
+        base = candidates[i]
+        for j in range(len(my_types)):
+            best = 0.0
+            for at in range(starts[base], starts[base + 1]):
+                best = max(best, credit[my_types[j], types[at]])
+            coverage[i] += my_shares[j] * best
+    return coverage
 
 
 def export_bases(
