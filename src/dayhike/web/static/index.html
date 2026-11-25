@@ -81,6 +81,16 @@
         <span id="base-reaches"></span>
       </fieldset>
       <p class="hint">An estimate of the drive to where each hike starts, made once for every town.</p>
+      <details class="base-choices">
+        <summary class="panel-title">3. Which hikes count</summary>
+        <p class="hint">Both towns are compared on the hikes that pass, and only on those.</p>
+        <div id="base-hike-filter"></div>
+      </details>
+      <details class="base-choices">
+        <summary class="panel-title">4. What the town is like</summary>
+        <p class="hint">Leave a trait out, keep only towns that pass it, or prefer towns like yours on it.</p>
+        <div id="base-traits"></div>
+      </details>
       <button type="button" id="base-find" class="primary" disabled>Find bases</button>
       <p id="base-status" class="status" role="status" aria-live="polite"></p>
       <button type="button" id="bases-off" class="secondary mode-switch">Back to finding hikes</button>

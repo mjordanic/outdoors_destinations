@@ -346,3 +346,9 @@ button.help:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 .months li.mild { background: var(--green); color: #fff; }
 .months li.unknown { background: none; }
 @media (max-width: 600px) { .months { flex-wrap: wrap; max-width: 9em; } }
+.base-choices { margin-top: 10px; }
+.base-choices summary { cursor: pointer; }
+.base-range, .base-trait { margin-top: 8px; font-size: 0.9rem; }
+.base-range > span, .base-trait > label > span { display: inline-block; min-width: 8em; }
+.base-range input, .base-trait input[type="number"] { width: 6em; }
+.base-trait .trait-filter .check { display: inline-flex; margin: 4px 6px 0 0; }

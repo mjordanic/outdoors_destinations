@@ -9,6 +9,13 @@ const BASE_REACH = 30; // the Reach the mode opens with, in minutes
 const MONTH_LETTERS = "JFMAMJJASOND";
 // Each "like mine" TownTrait as a row says what it took off (ADR-0025).
 const TRAIT_NAMES = { size: "town size", stays: "places to stay", eats: "restaurants, cafes and pubs", months: "best months" };
+// The HikeFilter's ranges (link key stem, name, unit) and yes-only toggles, as dayhike.hike_filter names them.
+const HIKE_RANGES = [["climb", "Climb", "m"], ["length", "Length", "km"], ["highest", "Highest point", "m"]];
+const HIKE_TOGGLES = [["summit", "Reaches a summit"], ["waterside", "By a lake or the sea"], ["round_trip", "Round trip"]];
+// Each TownTrait's filter: "at least" and "up to" a number (``ends``), or the months a Base is mild in.
+const TRAIT_FILTERS = { size: { ends: ["at_least", "up_to"], unit: "people" }, stays: { ends: ["at_least"] }, eats: { ends: ["at_least"] }, months: {} };
+const TRAIT_DEFAULTS = { size: { up_to: 50_000 } }; // every other TownTrait is ignored
+const IMPORTANCE = [[1, "a little"], [2, "matters"], [3, "important"]];
 
 const bases = {
   seed: null, // the Hiker's Base: {id, name, country, lat, lon, ...}
@@ -49,6 +56,7 @@ const bases = {
     });
     $("#base-hikes-close").addEventListener("click", () => this.close());
     this.search();
+    this.choices();
     window.addEventListener("hashchange", () => this.follow(true));
     this.follow(false);
   },
@@ -82,13 +90,150 @@ const bases = {
     else this.mark([]);
   },
 
+  // The hike filter and TownTrait controls; a change asks again once a list or a Base is shown.
+  choices() {
+    const number = (id, label) => `<input type="number" id="${id}" min="0" step="any" inputmode="decimal" aria-label="${escapeHtml(label)}">`;
+    $("#base-hike-filter").innerHTML = HIKE_RANGES.map(([stem, name, unit]) => `<div class="base-range"><span>${name}</span>
+        from ${number(`base-${stem}-min`, `${name} from`)} up to ${number(`base-${stem}-max`, `${name} up to`)} ${unit}</div>`).join("")
+      + HIKE_TOGGLES.map(([key, name]) => `<label class="check"><input type="checkbox" id="base-${key}"> ${name}</label>`).join("");
+    $("#base-traits").innerHTML = Object.entries(TRAIT_FILTERS).map(([trait, filter]) => {
+      const name = TRAIT_NAMES[trait], label = name[0].toUpperCase() + name.slice(1);
+      const ends = trait === "months"
+        ? `mild in ${MONTHS.map((month, i) => `<label class="check"><input type="checkbox" value="${i + 1}" aria-label="${month}"> ${month}</label>`).join("")}`
+        : filter.ends.map((end) => `${end === "up_to" ? "up to" : "at least"} ${number(`base-${trait}-${end}`, `${label} ${end === "up_to" ? "up to" : "at least"}`)}`).join(" ") + (filter.unit ? ` ${filter.unit}` : "");
+      return `<div class="base-trait" data-trait="${trait}">
+        <label><span>${label}</span> <select class="setting" aria-label="${label}">
+          <option value="ignore">Ignore</option><option value="filter">Filter</option><option value="like_mine">Like mine</option></select></label>
+        <span class="trait-filter">${ends}</span>
+        <select class="importance" aria-label="How much ${name} ${trait === "size" ? "matters" : "matter"}">${IMPORTANCE.map(([w, text]) => `<option value="${w}">${text}</option>`).join("")}</select>
+      </div>`;
+    }).join("");
+    this.setChoices({}, {});
+    $("#base-hike-filter").addEventListener("change", () => {
+      this.address();
+      if (this.ranked) this.rank();
+      if (this.opened) this.open(this.opened); // its passing hikes
+    });
+    $("#base-traits").addEventListener("change", () => {
+      this.showTraits();
+      this.address();
+      if (this.ranked) this.rank();
+    });
+  },
+
+  // Each trait's filter or importance shown as its setting says.
+  showTraits() {
+    for (const row of document.querySelectorAll(".base-trait")) {
+      const setting = row.querySelector(".setting").value;
+      row.querySelector(".trait-filter").hidden = setting !== "filter";
+      row.querySelector(".importance").hidden = setting !== "like_mine";
+    }
+  },
+
+  // The HikeFilter as the API takes it (HikeFilter.from_mapping): only the limits set.
+  hikeFilter() {
+    const filter = {};
+    for (const [stem, , unit] of HIKE_RANGES) {
+      for (const end of ["min", "max"]) {
+        const value = typedNumber($(`#base-${stem}-${end}`));
+        if (value != null) filter[`${stem}_${end}_${unit}`] = value;
+      }
+    }
+    for (const [key] of HIKE_TOGGLES) if ($(`#base-${key}`).checked) filter[key] = true;
+    return filter;
+  },
+
+  // Each TownTrait not ignored, as the API takes it (TraitChoice); a filter with nothing set is ignored.
+  traits() {
+    const traits = {};
+    for (const row of document.querySelectorAll(".base-trait")) {
+      const trait = row.dataset.trait, setting = row.querySelector(".setting").value;
+      let choice = {};
+      if (setting === "like_mine") choice = { like_mine: Number(row.querySelector(".importance").value) };
+      else if (setting === "filter" && trait === "months") {
+        const mild = [...row.querySelectorAll(".trait-filter input:checked")].map((box) => Number(box.value));
+        if (mild.length) choice = { mild_in: mild };
+      } else if (setting === "filter") {
+        for (const end of TRAIT_FILTERS[trait].ends) {
+          const value = typedNumber($(`#base-${trait}-${end}`));
+          if (value != null) choice[end] = value;
+        }
+      }
+      if (Object.keys(choice).length) traits[trait] = choice;
+    }
+    return traits;
+  },
+
+  // Every control to ``filter`` and ``traits`` (as hikeFilter and traits give them); a trait left out of
+  // ``traits`` takes its default, one given as null is ignored.
+  setChoices(filter, traits) {
+    for (const [stem, , unit] of HIKE_RANGES) {
+      for (const end of ["min", "max"]) $(`#base-${stem}-${end}`).value = filter[`${stem}_${end}_${unit}`] ?? "";
+    }
+    for (const [key] of HIKE_TOGGLES) $(`#base-${key}`).checked = filter[key] === true;
+    for (const row of document.querySelectorAll(".base-trait")) {
+      const trait = row.dataset.trait, choice = trait in traits ? traits[trait] ?? {} : TRAIT_DEFAULTS[trait] ?? {};
+      row.querySelector(".setting").value = choice.like_mine ? "like_mine" : Object.keys(choice).length ? "filter" : "ignore";
+      row.querySelector(".importance").value = String(choice.like_mine || 2);
+      for (const box of row.querySelectorAll(".trait-filter input[type=checkbox]")) box.checked = (choice.mild_in ?? []).includes(Number(box.value));
+      for (const end of TRAIT_FILTERS[trait].ends ?? []) $(`#base-${trait}-${end}`).value = choice[end] ?? "";
+    }
+    this.showTraits();
+  },
+
+  // The choices as an address's parts: the hike filter's limits ("&climb_max_m=500&summit") and each
+  // TownTrait not at its default ("&size=ignore", "&eats=like3", "&stays=3-", "&size=-5000", "&months=7,8").
+  choiceHash() {
+    const parts = [];
+    for (const [key, value] of Object.entries(this.hikeFilter())) parts.push(value === true ? key : `${key}=${value}`);
+    const traits = this.traits();
+    for (const trait of Object.keys(TRAIT_FILTERS)) {
+      const choice = traits[trait] ?? {};
+      if (JSON.stringify(choice) === JSON.stringify(TRAIT_DEFAULTS[trait] ?? {})) continue;
+      if (choice.like_mine) parts.push(`${trait}=like${choice.like_mine}`);
+      else if (choice.mild_in) parts.push(`${trait}=${choice.mild_in.join(",")}`);
+      else if (Object.keys(choice).length) parts.push(`${trait}=${choice.at_least ?? ""}-${choice.up_to ?? ""}`);
+      else parts.push(`${trait}=ignore`);
+    }
+    return parts.map((part) => `&${part}`).join("");
+  },
+
+  // The choices an address's ``parts`` name, every other one at its default (ADR-0073); a part that is no
+  // valid setting is left out.
+  followChoices(parts) {
+    const filter = {}, traits = {};
+    for (const [stem, , unit] of HIKE_RANGES) {
+      for (const end of ["min", "max"]) {
+        const key = `${stem}_${end}_${unit}`, value = parts.has(key) && parts.get(key) !== "" ? Number(parts.get(key)) : NaN;
+        if (Number.isFinite(value) && value >= 0) filter[key] = value;
+      }
+    }
+    for (const [key] of HIKE_TOGGLES) if (parts.has(key)) filter[key] = true;
+    for (const trait of Object.keys(TRAIT_FILTERS)) {
+      const text = parts.get(trait);
+      if (text == null) continue;
+      let choice = null, found;
+      if ((found = /^like([123])$/.exec(text))) choice = { like_mine: Number(found[1]) };
+      else if (trait === "months") {
+        const months = text.split(",").map(Number).filter((month) => Number.isInteger(month) && month >= 1 && month <= 12);
+        if (months.length) choice = { mild_in: [...new Set(months)].sort((a, b) => a - b) };
+      } else if ((found = /^(\d*\.?\d*)-(\d*\.?\d*)$/.exec(text))) {
+        choice = {};
+        if (found[1] && TRAIT_FILTERS[trait].ends.includes("at_least")) choice.at_least = Number(found[1]);
+        if (found[2] && TRAIT_FILTERS[trait].ends.includes("up_to")) choice.up_to = Number(found[2]);
+      }
+      traits[trait] = choice;
+    }
+    this.setChoices(filter, traits);
+  },
+
   say(base) {
     $("#base-chosen").innerHTML = `Chosen: <strong>${escapeHtml(base.name)}</strong>${base.country ? `, ${escapeHtml(base.country)}` : ""}`;
   },
 
-  // "#base=1&reach=60&open=2": the mode, the Hiker's Base, the Reach and the Base opened.
+  // "#base=1&reach=60&open=2": the mode, the Hiker's Base, the Reach and the Base opened, then the choices.
   hash() {
-    return `#base${this.seed ? `=${this.seed.id}` : ""}&reach=${this.reach}${this.opened ? `&open=${this.opened.id}` : ""}`;
+    return `#base${this.seed ? `=${this.seed.id}` : ""}&reach=${this.reach}${this.opened ? `&open=${this.opened.id}` : ""}${this.choiceHash()}`;
   },
 
   // The address keeps the mode's settings as they change.
@@ -111,6 +256,7 @@ const bases = {
     this.pinned++;
     this.reach = state.info.bases.reaches.includes(reach) ? reach : this.firstReach;
     for (const radio of document.querySelectorAll('input[name="base-reach"]')) radio.checked = Number(radio.value) === this.reach;
+    this.followChoices(parts);
     this.seed = /^\d{1,17}$/.test(id) ? { id: Number(id) } : null;
     this.opened = this.seed && /^\d{1,17}$/.test(open) ? { id: Number(open) } : null;
     this.ranked = false;
@@ -218,7 +364,10 @@ const bases = {
     $("#base-find").disabled = true;
     this.ranked = true;
     try {
-      const body = await postRank({ seed: this.seed.id, reach: this.reach }, current, "/api/bases/rank", (text) => { status.textContent = text; });
+      const request = { seed: this.seed.id, reach: this.reach }, filter = this.hikeFilter(), traits = this.traits();
+      if (Object.keys(filter).length) request.hike_filter = filter;
+      if (Object.keys(traits).length) request.traits = traits;
+      const body = await postRank(request, current, "/api/bases/rank", (text) => { status.textContent = text; });
       if (!current()) return;
       status.textContent = "";
       this.show(body);
@@ -253,7 +402,7 @@ const bases = {
 
   // A Base's hikes in Reach, nearest first, on the map at their Trailheads; ``base``: a row, or {id} from a link.
   async open(base) {
-    const number = ++this.opening, note = $("#base-hikes-note");
+    const number = ++this.opening, note = $("#base-hikes-note"), filter = this.hikeFilter();
     this.opened = base;
     this.address();
     $("#base-results").hidden = true;
@@ -266,7 +415,7 @@ const bases = {
       const body = await api("/api/bases/detail", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ base: base.id, reach: this.reach }),
+        body: JSON.stringify(Object.keys(filter).length ? { base: base.id, reach: this.reach, hike_filter: filter } : { base: base.id, reach: this.reach }),
       });
       if (number !== this.opening) return;
       this.opened = body.base;
@@ -320,6 +469,12 @@ const bases = {
     else this.map.setView([seed.lat, seed.lon], Math.max(this.map.getZoom(), 9));
   },
 };
+
+// A number box's value, or null when it is empty or no number of 0 or more.
+function typedNumber(input) {
+  const value = input.value.trim() === "" ? NaN : Number(input.value);
+  return Number.isFinite(value) && value >= 0 ? value : null;
+}
 
 // "GB · 4,658 people": a Base's country and size as a list names them.
 function placeLine(base) {

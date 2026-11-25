@@ -33,7 +33,7 @@ def exports(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
 
 @pytest.fixture(scope="module")
 def server(exports: tuple[Path, Path]) -> Iterator[str]:
-    yield from serve(create_app(ServingData(exports[1]), rank_rate=1_000, api_rate=100_000))
+    yield from serve(create_app(ServingData(exports[1]), rank_rate=1_000, base_rank_rate=1_000, api_rate=100_000))
 
 
 @pytest.fixture(scope="module")
@@ -98,7 +98,7 @@ def test_a_town_searched_for_lists_the_bases_alike_best_first(browser, server) -
     page.get_by_role("radio", name="about 60 min").check()
     body = asked(page, lambda: rank(page))
 
-    assert body == {"seed": KESWICK, "reach": 60}
+    assert body == {"seed": KESWICK, "reach": 60, "traits": {"size": {"up_to": 50_000}}}  # the default
     rows = page.locator("#base-results tbody tr")
     assert rows.first.locator(".base-name").inner_text() == "Bethesda"
     assert "GB" in rows.first.inner_text()
@@ -358,3 +358,98 @@ def test_back_to_finding_hikes_leaves_the_base_address(browser, server) -> None:
     page.get_by_role("button", name="Back to finding hikes").click()
 
     assert "base" not in page.evaluate("() => location.hash")
+
+def test_the_choices_start_with_size_up_to_50000_and_every_other_trait_ignored(browser, server) -> None:
+    page = open_bases(browser, server)
+    page.get_by_text("Which hikes count").click()
+    page.get_by_text("What the town is like").click()
+
+    assert page.get_by_label("Town size", exact=True).input_value() == "filter"
+    assert page.get_by_label("Town size up to").input_value() == "50000"
+    for trait in ("Places to stay", "Restaurants, cafes and pubs", "Best months"):
+        assert page.get_by_label(trait, exact=True).input_value() == "ignore"
+    assert page.get_by_label("Climb up to").input_value() == ""
+    assert not page.get_by_label("Reaches a summit").is_checked()
+
+
+def test_a_hike_filter_changes_the_request_and_survives_a_shared_link(browser, server) -> None:
+    page = open_bases(browser, server)
+    choose_base(page, "Kes", "Keswick")
+    page.get_by_role("radio", name="about 60 min").check()
+    rank(page)
+    page.get_by_text("Which hikes count").click()
+    page.get_by_label("Length up to").fill("6")
+    assert asked(page, lambda: page.get_by_label("Length up to").press("Enter"))["hike_filter"] == {"length_max_km": 6}
+    body = asked(page, lambda: page.get_by_label("Reaches a summit").check())
+
+    assert body["hike_filter"] == {"length_max_km": 6, "summit": True}
+    link = page.url
+
+    shared = open_page(browser, server, Api({}), hash="#" + link.split("#", 1)[1])
+    shared.locator("#base-results").wait_for()  # the link asks for the list as it opens
+    assert shared.locator("#base-panel").is_visible()
+    assert "Keswick" in shared.locator("#base-chosen").inner_text()
+    assert shared.get_by_role("radio", name="about 60 min").is_checked()
+    assert shared.get_by_label("Length up to").input_value() == "6"
+    assert shared.get_by_label("Reaches a summit").is_checked()
+    assert asked(shared, lambda: shared.get_by_role("button", name="Find bases").click()) == {**body, "reach": 60}
+
+
+def test_a_trait_setting_changes_the_list_and_survives_a_shared_link(browser, server) -> None:
+    page = open_bases(browser, server)
+    choose_base(page, "Kes", "Keswick")
+    page.get_by_role("radio", name="about 60 min").check()
+    assert "Moab" in rank(page)
+    page.get_by_text("What the town is like").click()
+
+    body = asked(page, lambda: page.get_by_label("Town size up to").fill("5000") or page.get_by_label("Town size up to").press("Enter"))
+    assert body["traits"] == {"size": {"up_to": 5000}}
+    page.wait_for_function("() => !document.querySelector('#base-results tbody').innerText.includes('Moab')")  # 5,235 people
+
+    page.get_by_label("Restaurants, cafes and pubs", exact=True).select_option("like_mine")
+    page.get_by_label("How much restaurants, cafes and pubs matter").select_option("3")
+    page.get_by_label("Best months", exact=True).select_option("filter")
+    page.get_by_label("Jul", exact=True).check()
+    body = asked(page, lambda: page.get_by_label("Aug", exact=True).check())
+    assert body["traits"] == {"size": {"up_to": 5000}, "eats": {"like_mine": 3}, "months": {"mild_in": [7, 8]}}
+
+    page.get_by_label("Town size", exact=True).select_option("ignore")
+    page.get_by_label("Places to stay", exact=True).select_option("filter")
+    page.get_by_label("Places to stay at least").fill("3")
+    body = asked(page, lambda: page.get_by_label("Places to stay at least").press("Enter"))
+    traits = {"stays": {"at_least": 3}, "eats": {"like_mine": 3}, "months": {"mild_in": [7, 8]}}
+    assert body["traits"] == traits
+
+    page.wait_for_function("() => !document.querySelector('#base-find').disabled")  # its last list is in
+    shared = open_page(browser, server, Api({}), hash="#" + page.url.split("#", 1)[1])
+    shared.locator("#base-results").wait_for()  # the link asks for the list as it opens
+    assert asked(shared, lambda: shared.get_by_role("button", name="Find bases").click()) == body
+    assert shared.get_by_label("Town size", exact=True).input_value() == "ignore"
+    assert shared.get_by_label("How much restaurants, cafes and pubs matter").input_value() == "3"
+    assert shared.get_by_label("Aug", exact=True).is_checked()
+    assert not shared.get_by_label("Jun", exact=True).is_checked()
+
+
+def test_an_opened_base_shows_the_hikes_that_pass_and_a_link_keeps_the_choices(browser, server) -> None:
+    page = open_bases(browser, server)
+    keswick_in_60(page)
+    page.get_by_text("Which hikes count").click()
+    page.get_by_label("Length up to").fill("6")
+    page.get_by_label("Length up to").press("Enter")
+
+    assert open_base(page, "Bethesda") == {"base": BETHESDA, "reach": 60, "hike_filter": {"length_max_km": 6}}
+    assert page.locator("#base-hike-list li").count() == 3  # hike 0 is 10 km long
+    page.get_by_text("What the town is like").click()
+    page.get_by_label("Town size", exact=True).select_option("ignore")
+    address = page.evaluate("() => location.hash")
+    assert address == f"#base={KESWICK}&reach=60&open={BETHESDA}&length_max_km=6&size=ignore"
+
+    shared = open_page(browser, server, Api({}), hash=address)
+    shared.locator("#base-hike-list li").first.wait_for()
+    assert shared.locator("#base-hike-list li").count() == 3
+    assert shared.get_by_label("Town size", exact=True).input_value() == "ignore"
+
+    shared.evaluate(f"() => {{ location.hash = '#base={KESWICK}&reach=60'; }}")  # a link names every setting
+    shared.wait_for_function("() => document.querySelector('#base-length-max').value === ''")
+    assert shared.get_by_label("Town size", exact=True).input_value() == "filter"
+    assert shared.get_by_label("Town size up to").input_value() == "50000"
