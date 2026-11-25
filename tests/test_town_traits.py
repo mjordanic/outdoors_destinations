@@ -145,16 +145,20 @@ def test_a_trait_never_cuts_more_than_its_weight(tmp_path, weight):
     assert row.score == pytest.approx(row.hike_score * (1 - cuts["size"]) * (1 - cuts["months"]))
 
 
-def test_a_missing_value_costs_nothing(tmp_path):
+def test_a_town_of_unknown_value_counts_as_half_alike(tmp_path):
     data = _data(tmp_path, [_town(ALIKE, 0, population=4_000), _town(ALIKE, 1), _town(ALIKE, 2, population=4_000)])
+    rows = rank_bases(data, 1, 30, _all(data), traits=TownTraits(size=TraitSetting(like_mine=3))).rows
+    cuts = {base: dict(row.cuts)["size"] for base, row in zip(_bases(rows), rows)}
+    assert cuts == {1: pytest.approx(0.25), 2: 0}  # important: half of the half an unlike town loses
+    assert _bases(rows) == [2, 1]
+
+
+def test_an_unknown_value_of_the_hikers_own_costs_nothing(tmp_path):
+    data = _data(tmp_path, [_town(ALIKE, 0, population=4_000), _town(ALIKE, 1), _town(ALIKE, 2, population=300)])
     setting = TraitSetting(like_mine=3)
-    rows = rank_bases(data, 1, 30, _all(data), traits=TownTraits(size=setting, stays=setting, eats=setting)).rows
-    assert all(row.score == row.hike_score for row in rows)
-    assert dict(rows[_bases(rows).index(1)].cuts) == {"size": 0, "stays": 0, "eats": 0}
-    (tmp_path / "unknown").mkdir()
-    unknown = _data(tmp_path / "unknown", [_town(ALIKE, 0), _town(ALIKE, 1, population=300)])
-    (row,) = rank_bases(unknown, 1, 30, _all(unknown), traits=TownTraits(size=setting)).rows
-    assert row.score == row.hike_score  # the Hiker's own size is unknown
+    rows = rank_bases(data, 2, 30, _all(data), traits=TownTraits(size=setting, stays=setting, eats=setting)).rows
+    assert all(row.score == row.hike_score for row in rows)  # the Hiker's own size and counts are unknown
+    assert dict(rows[0].cuts) == {"size": 0, "stays": 0, "eats": 0}
 
 
 def test_a_trait_never_brings_in_a_town_outside_the_best(tmp_path, monkeypatch):

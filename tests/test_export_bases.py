@@ -115,6 +115,15 @@ def test_towns_with_enough_hike_groups_are_kept_and_others_dropped(tmp_path: Pat
     assert json.loads((out / "bases" / "meta.json").read_text())["bases"] == 2
 
 
+
+def test_pair_offsets_are_stored_in_four_bytes(tmp_path: Path) -> None:
+    # 319 million pairs on the real Europe and US export: int32 halves the run index, exactly
+    out = _export(tmp_path)
+
+    _build(out)
+
+    assert _load(out)["run_offsets"].dtype == np.int32
+
 def _town_counts(path: Path, counts: dict[int, tuple[int, int]]) -> Path:
     """A saved ``TownCounts``: place id -> (places to stay, places to eat) within 2 km."""
     ids = sorted(counts)

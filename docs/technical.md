@@ -2707,6 +2707,20 @@ chosen), then the hike filter's keys (`&climb_max_m=500&summit`) and each trait 
 (`&size=ignore`, `&eats=like3`, `&stays=3-`, `&size=-5000`, `&months=7,8`); like a hike link it sets every
 setting it does not name to its default (ADR-0073), on load or in a tab already open.
 
+A BaseRanking (`rank_bases`) counts every Base's BaseProfile under the hike filter in one numba pass over
+the stored pairs. It then scores back (cheap) for every Base with at least 10 passing HikeGroups, and mix
+only for the `PRESELECT_BASES` (20,000) best by back times enough, because mix is the slow step. Coverage,
+the "like mine" cuts and a row go to the `BEST_HIKE_MATCHES` (6,000) best of those. Under "like mine", a
+Base whose value is unknown counts as half alike; when the Hiker's own value is unknown, the trait costs
+nothing.
+
+On the real Europe and US build, the preselection kept the best 20 rows of every ranking the same, for
+Keswick, Chamonix, Bohinjska Bistrica and Moab at 15, 30 and 60 min, with and without "climb up to 500 m"
+or size "like mine". It missed at most 5 of the best 100 rows, from the 27th down.
+`DAYHIKE_REAL_DATA=1 uv run pytest tests/test_bases_real.py` checks the known pairs and the filtered
+seeds on such a build. Its build times, size, request times and memory are in docs/deploy.md
+("Find a base: the `bases/` folder").
+
 ### Web demo measurements
 
 Measured on the Europe Catalog of late October 2026 (161,614 DayHikes), 8-core Mac, the container

@@ -210,3 +210,20 @@ def test_not_a_base(tmp_path):
     data = _data(tmp_path, [_town({0: 20}, 0), _town({0: 20}, 1)])
     with pytest.raises(KeyError):
         rank_bases(data, 99, 30, _all(data))
+
+
+def test_mix_only_for_the_best_by_back_and_enough(tmp_path, monkeypatch):
+    data = _data(
+        tmp_path,
+        [
+            _town({0: 20, 1: 20}, 0),
+            _town({0: 40}, 1),  # all of the Hiker's first kind: back 1, mix 0.5
+            _town({0: 20, 1: 10, 2: 10}, 2),  # back 0.75, mix 0.75: better on mix and back together
+            _town({0: 5, 1: 5}, 3),  # the same kinds, but a quarter of the hikes: back 1 times enough 0.71
+        ],
+    )
+    assert [row.base for row in rank_bases(data, 1, 30, _all(data)).rows] == [2, 3, 1]
+    monkeypatch.setattr(bases_module, "PRESELECT_BASES", 1)
+    assert [row.base for row in rank_bases(data, 1, 30, _all(data)).rows] == [1]
+    monkeypatch.setattr(bases_module, "PRESELECT_BASES", 2)
+    assert [row.base for row in rank_bases(data, 1, 30, _all(data)).rows] == [2, 1]

@@ -269,7 +269,7 @@ How many HikeGroups of each HikeType lie in a Base's Reach under a HikeFilter. I
 _Avoid_: tally, fingerprint, embedding, FeatureVector (that describes one hike)
 
 **BaseRanking**:
-An ordered list of Bases by how alike their BaseProfile is to the Hiker's own Base. The hike score is fixed: 40 % mix (how far the two profiles' shares of HikeTypes overlap, near types counting as partly the same) and 60 % coverage (30 % from the Hiker's Base to the other, 30 % back), times an enough-hikes factor; a Base under 10 HikeGroups is left out. TownTraits then re-order the best 3,000 hike matches, and none brings in a Base outside them (ADR-0084).
+An ordered list of Bases by how alike their BaseProfile is to the Hiker's own Base. The hike score is fixed: 40 % mix (how far the two profiles' shares of HikeTypes overlap, near types counting as partly the same) and 60 % coverage (30 % from the Hiker's Base to the other, 30 % back), times an enough-hikes factor; a Base under 10 HikeGroups is left out. TownTraits then re-order the best 6,000 hike matches, and none brings in a Base outside them (ADR-0084).
 _Avoid_: Ranking (a Ranking lists hikes by similarity to Seeds), recommendation, match list
 
 **HikeFilter**:
@@ -277,7 +277,7 @@ The Hiker's limits on which hikes count in a BaseRanking: ranges for climb, leng
 _Avoid_: hike type filter, search filter, DistanceLimit (a limit on where a hike starts), preferences
 
 **TownTrait**:
-A fact about a Base other than its hikes: town size, places to stay, restaurants, cafes and pubs, or the months it is mild in. The Hiker gives each one of three settings. **Ignore**: it plays no part. **Filter**: a Base that fails the limit ("at least 5 restaurants", "up to 50,000 people", "mild in July") is left out. **Like mine**: with an importance of *a little*, *matters* or *important*, a Base unlike the Hiker's own on it loses at most a sixth, a third or a half of its hike score, and a missing value costs nothing. Town size starts as a filter up to 50,000 people, the others as ignore (ADR-0084).
+A fact about a Base other than its hikes: town size, places to stay, restaurants, cafes and pubs, or the months it is mild in. The Hiker gives each one of three settings. **Ignore**: it plays no part. **Filter**: a Base that fails the limit ("at least 5 restaurants", "up to 50,000 people", "mild in July") is left out. **Like mine**: with an importance of *a little*, *matters* or *important*, a Base unlike the Hiker's own on it loses at most a sixth, a third or a half of its hike score; a Base whose value is unknown counts as half alike, and when the Hiker's own value is unknown the trait costs nothing. Town size starts as a filter up to 50,000 people, the others as ignore (ADR-0084).
 _Avoid_: facet, preference, AmenityFact (that describes a Trailhead), weight (the hike score has none)
 
 **Measure**:
