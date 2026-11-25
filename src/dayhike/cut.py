@@ -391,7 +391,7 @@ def _cut_bases(data: ServingData, out: Path, kept: np.ndarray) -> None:
     bases = data.bases
     if bases is None:
         return
-    from dayhike.bases import _write_bases, base_facts  # its build's k-means imports, only for an export with Bases
+    from dayhike.bases import HikeTypes, _write_bases, base_facts  # its build's k-means imports, only for an export with Bases
     from dayhike.similarity import SimilarityStore
 
     whole_group_of_hike = np.empty(len(data.store.ids), dtype=np.int64)
@@ -421,8 +421,9 @@ def _cut_bases(data: ServingData, out: Path, kept: np.ndarray) -> None:
         reached,
         group_of_hike,
         np.asarray(bases.group_types)[kept_groups],
-        np.asarray(bases.type_table),
-        bases.meta["hike_types_version"],
+        HikeTypes(
+            types=np.zeros(0), middles=np.zeros(0), table=np.asarray(bases.type_table), version=bases.meta["hike_types_version"]
+        ),
         facts,
         store,
     )
