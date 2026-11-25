@@ -228,6 +228,30 @@ of Bled", "Weather in Jan", "One way, without the way back", "Grouped within
 3 km". Press the × on a label to drop that filter; the list is found again
 without it.
 
+### Or find a town to stay in
+
+Where the site has it, **Find a base** (under the hike search) lists towns
+whose hikes within a drive are like those of a town you stayed in.
+
+1. Type the town's name, or click the map within 5 km of it.
+2. Pick the drive to where each hike starts (about 15, 30 or 60 minutes). It
+   is an estimate, made once for every town.
+3. **Which hikes count** (optional): limit climb, length or highest point, or
+   keep only hikes that reach a summit, run by a lake or the sea, or are round
+   trips. Both towns are compared on the hikes that pass, and only on those.
+4. **What the town is like** (optional): for town size, places to stay,
+   restaurants, cafes and pubs, and the best months, leave the trait out, keep
+   only towns that pass it, or prefer towns like yours on it (*a little*,
+   *matters* or *important*). Town size starts as a filter up to 50,000
+   people.
+
+Press **Find bases**. Each row is a town with its score and the months that are
+mild for hiking there; if too few of your town's hikes are in reach, the page
+says so and suggests a longer drive. Open a town to see its hikes in reach,
+nearest first, on the map; "Find hikes like this" on one starts a hike search
+from it. **Back to finding hikes** leaves the mode. A link to the page keeps
+the town, the drive and every choice.
+
 ## What a hike's panel shows
 
 Open a hike and its panel shows its line on a map, its height profile, its
