@@ -20,6 +20,7 @@ from scipy.spatial import cKDTree
 from sklearn.cluster import KMeans
 
 from dayhike.catalog import EARTH_RADIUS_M, Origin, straight_line_distances_m
+from dayhike.db import scoped
 from dayhike.highways import HighwaySnaps
 from dayhike.npy import map_npy
 from dayhike.reach import APPROACH_SPEED_KMH, BAND_STEP_MIN, REACH_MIN, STRAIGHT_SPEED_KMH, reach_minutes
@@ -33,7 +34,7 @@ from dayhike.similarity import (
     _measured,
     score_rows,
 )
-from dayhike.serving import REGION_SPLIT_LON, ServingData
+from dayhike.serving import REGION_SPLIT_LON, ServingData, _fold
 from dayhike.steps import file_key
 from dayhike.town_traits import TownTraits, trait_cuts, trait_passes
 
@@ -433,6 +434,104 @@ def _base_countries(data: ServingData) -> np.ndarray:
         _COUNTRIES.clear()
         _COUNTRIES[id(data.bases)] = kept = (data.bases, codes)
     return kept[1]
+
+
+def base_row(bases: Bases, place: int) -> int:
+    """The row of the Base at GeoNames place ``place`` (Bases are in place id order); KeyError when none."""
+    at = int(np.searchsorted(bases.place_ids, place))
+    if at >= len(bases.place_ids) or bases.place_ids[at] != place:
+        raise KeyError(place)
+    return at
+
+
+def describe_bases(data: ServingData, rows: Collection[int], reach: int | None = None) -> list[dict]:
+    """Each Base of ``rows`` as the API names it: GeoNames place id, name and country (from
+    ``data.places``, blank without it), population (None when unknown), where it is, and with
+    ``reach`` the median temperature of its hikes within it each month (None when unknown)."""
+    bases = data.bases
+    places = [int(bases.place_ids[row]) for row in rows]
+    known = {}
+    if data.places is not None and places:
+        with scoped(sqlite3.connect(data.places, uri=True)) as db:
+            known = {
+                place: (name, country)
+                for place, name, country in db.execute(
+                    f"SELECT id, name, country FROM places WHERE id IN ({','.join('?' * len(places))})", places
+                )
+            }
+    found = []
+    for row, place in zip(rows, places):
+        name, country = known.get(place, ("", ""))
+        population = float(bases.population[row])
+        found.append(
+            {
+                "id": place,
+                "name": name,
+                "country": country or "",
+                "population": None if math.isnan(population) else int(population),
+                "lat": float(bases.points[row, 0]),
+                "lon": float(bases.points[row, 1]),
+            }
+        )
+        if reach is not None:
+            months = np.asarray(bases.month_temperatures[row, REACHES.index(reach)], dtype=np.float64)
+            found[-1]["months"] = [None if math.isnan(t) else round(float(t), 1) for t in months]
+    return found
+
+
+def find_bases(data: ServingData, query: str, limit: int) -> list[int]:
+    """The Bases (rows) whose place has a name starting with ``query``, folded and ordered as
+    ``ServingData.find_place`` does; places that are no Base are passed over."""
+    needle = _fold(query).strip()
+    if data.places is None or not needle:
+        return []
+    found = []
+    with scoped(sqlite3.connect(data.places, uri=True)) as db:
+        for (place,) in db.execute(
+            "SELECT p.id FROM place_names n JOIN places p ON p.id = n.place WHERE n.name >= ? AND n.name < ? "
+            "GROUP BY p.id ORDER BY MIN(CASE WHEN n.name = ? THEN n.alternate ELSE 2 END), p.population DESC, p.id",
+            (needle, needle + "\U0010ffff", needle),
+        ):
+            try:
+                found.append(base_row(data.bases, place))
+            except KeyError:
+                continue
+            if len(found) == limit:
+                break
+    return found
+
+
+def nearest_base(bases: Bases, origin: Origin) -> tuple[int, float]:
+    """The Base (row) nearest ``origin`` in a straight line, and how far it is in metres."""
+    metres = straight_line_distances_m(origin, np.asarray(bases.points, dtype=np.float64))
+    row = int(np.argmin(metres))
+    return row, float(metres[row])
+
+
+def base_hikes(bases: Bases, base: int, reach: int, hike_mask: np.ndarray) -> tuple[np.ndarray, np.ndarray, int]:
+    """The hikes (similarity rows) that pass ``hike_mask`` in the HikeGroups within ``reach``
+    minutes of Base ``base``, each with its HikeGroup's minutes, nearest first, and how many
+    HikeGroups pass (as ``base_profiles`` counts them)."""
+    count = len(bases.place_ids)
+    runs = np.asarray(bases.base_runs)
+    offsets = np.asarray(bases.run_offsets)
+    pairs = np.concatenate(
+        [
+            np.arange(offsets[runs[slot]], offsets[runs[slot + 1]])
+            for slot in (band * count + base for band in range(REACHES.index(reach) + 1))
+        ]
+    )
+    group_starts, group_hikes = np.asarray(bases.group_starts), np.asarray(bases.group_hikes)
+    hikes, minutes, passing = [], [], 0
+    for group, group_minutes in zip(np.asarray(bases.pair_groups)[pairs], np.asarray(bases.pair_minutes)[pairs]):
+        members = group_hikes[group_starts[group] : group_starts[group + 1]]
+        members = members[hike_mask[members]]
+        if len(members):
+            passing += 1
+            hikes += members.tolist()
+            minutes += [int(group_minutes)] * len(members)
+    order = np.lexsort((hikes, minutes))
+    return np.asarray(hikes, dtype=np.int64)[order], np.asarray(minutes, dtype=np.int64)[order], passing
 
 
 @njit
