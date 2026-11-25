@@ -2692,33 +2692,53 @@ and an unknown Measure name in `weights` is a 422.
 ### Find a base
 
 With a `bases/` folder (`bases` in `/api/info` is `{"reaches": [15, 30, 60], "mild_c": [low, high],
-"score_help": {"overall", "sections"}}`, the band in °C of a month the page marks mild and what a Base's score
-means, beside every row (ADR-0025); null without one, and the `/api/bases/` routes then answer 404), "Find a
+"score_help": {"overall", "sections"}, "min_hike_groups", "weak_score"}`, the band in °C of a month the page marks
+mild, what a Base's score means, beside every row (ADR-0025), how few of the Hiker's HikeGroups are too few, and
+the score under which the page says even the best row is not much alike; null without one, and the `/api/bases/` routes then answer 404), "Find a
 base" (ADR-0084) has its own calls and its own page mode in `bases.js`. A Base is named by its
-GeoNames place id and answers as `{"id", "name", "country", "population", "lat", "lon"}` (population null when
-unknown); `GET /api/bases/search?q=&limit=` (up to 20, default 5) finds Bases by name as `/api/place` finds
-places, passing over places that are no Base, and `GET /api/bases/nearest?lat=&lon=` gives the nearest Base in a
-straight line with its `distance_km`. `POST /api/bases/rank` takes `{"seed": place id, "reach": 15, 30 or 60,
+GeoNames place id and answers as `{"id", "name", "country", "population", "stays", "eats", "lat", "lon"}`
+(population and the places to stay and to eat null when unknown); `GET /api/bases/search?q=&limit=` (up to 20,
+default 5) finds Bases by name as `/api/place` finds places, a Base whose own name starts with the query before
+one only an alternate name does, passing over places that are no Base; a query whose spaces or hyphens the name
+writes otherwise ("chamonix mont blanc", "st moritz") finds it too, and with none found it offers names one typo
+away ("keswik"). `GET /api/bases/nearest?lat=&lon=` gives the nearest Base in a straight line with its
+`distance_km`. Both say for each Base the nearest other Base of at least 10,000 (`near`:
+`{"name", "km"}`, else null), so towns of one name can be told apart. `POST /api/bases/rank` takes `{"seed": place id, "reach": 15, 30 or 60,
 "hike_filter": {...}, "traits": {...}}`: `hike_filter` as `HikeFilter.to_mapping` writes it (`climb_min_m`,
 `climb_max_m`, `length_min_km`, `length_max_km`, `highest_min_m`, `highest_max_m`, and `summit`, `waterside`,
 `round_trip` true), `traits` per TownTrait (`size`, `stays`, `eats`, `months`) one of `{"like_mine": 1-3}`,
 `{"at_least", "up_to"}` (size and counts) or `{"mild_in": [months]}` (months), a trait left out ignored; anything
 else is a 422, and a seed that is no Base a 404. It answers `seed` (the Base with its passing `hike_groups`),
-`too_few` (under 10 of them: no row), and up to 100 `results`, one per area, each a Base with `region`,
+`too_few` (under 10 of them: no row), and up to 300 `results`, one per area, each a Base with `region`,
 `score`, `hike_score`, `mix`, `coverage`, `back`, `enough`, `sure`, `hike_groups`, `area_bases`, `area_towns`
 (up to 5 other towns of its area, biggest first, each `{"id", "name", "population"}`) and `cuts`, the share
 each "like mine" trait took off the hike score; the seed and each row have `months`, the median temperature of
 the hikes in Reach each month (null when unknown). `POST /api/bases/detail` takes `{"base": place id, "reach",
 "hike_filter"}` and answers the Base with its passing `hike_groups` and `hikes`, each `{"id", "name",
-"trailhead", "minutes"}`, nearest first. BaseRankings have their own queue, apart from the hike Rankings' and
-with the same rules, and their own limit of 20 a minute per client. A row's town opens that Base: its
-passing hikes with their minutes, nearest first, on the map at their Trailheads, each with "Find hikes like
-this" (`#hike=<id>`, the hike as the liked one). The mode sets the hike filter and each trait (ignore, filter,
+"trailhead", "minutes", "length_m", "climb_m", "highest_m", "summit", "round_trip"}` (one way, as the hike filter
+measures them; null when unknown), nearest first. A seed or Base that is no Base is a 404 that says the link may
+be old. BaseRankings have their own queue, apart from the hike Rankings' and with the same rules, and their own
+limit of 20 a minute per client; town-name lookups and a Base's hikes count against the general API limit
+instead. A row's town, or its numbered dot on the map, opens that Base: its passing hikes with their minutes,
+length, climb and highest point, nearest first, on the map at their Trailheads, each with a link into the hike
+search (`#hike=<id>`, the hike as the liked one), from which a button comes back to the Base.
+
+The page shows a hundred rows at a time ("Show more"), the Hiker's own town with its mild months and trait
+values over them, and a line under each score whose parts multiply to it: how alike the hikes are (mix, and
+how many of each town's kinds the other has), the cut for fewer hikes, the cut for few of the Hiker's hikes to
+compare (`sure`), then each "like mine" trait's; a row standing for an area names its biggest other towns
+(`area_towns`). Every step
+(entering the mode, a town chosen, the Reach or a choice changed, a Base opened or closed) is a step of the
+browser's history, so Back undoes it; the answers of the last 30 lists and Bases are kept, so going back asks the
+server nothing. Choices changed in a row ask for one list once they settle (0.6 s, 0.9 s while a number is
+typed). A refused or failed list is said above it, and the list left on screen is greyed as being for the
+earlier choices. The ranges show in the Units chosen and are sent in metres and km. The mode sets the hike filter and each trait (ignore, filter,
 or "like mine" with *a little*, *matters* or *important*; town size starts as a filter up to 50,000 people, the
 others ignored). Its address is `#base=<seed>&reach=<minutes>&open=<id>` (`#base` alone before a town is
 chosen), then the hike filter's keys (`&climb_max_m=500&summit`) and each trait not at its default
-(`&size=ignore`, `&eats=like3`, `&stays=3-`, `&size=-5000`, `&months=7,8`); like a hike link it sets every
-setting it does not name to its default (ADR-0073), on load or in a tab already open.
+(`&size=ignore`, `&eats=like-mine-important`, `&stays=3-`, `&size=-5000`, `&months=7,8`; "like mine" is
+`like-mine-a-little`, `like-mine` or `like-mine-important`); like a hike link it sets every setting it does
+not name to its default (ADR-0073), on load or in a tab already open, and opens the sections holding a choice not at its default.
 
 A BaseRanking (`rank_bases`) counts every Base's BaseProfile under the hike filter in one numba pass over
 the stored pairs. It then scores back (cheap) for every Base with at least 10 passing HikeGroups, and mix
@@ -2819,7 +2839,8 @@ whose name matches. Among them,
 `.npy` bytes, no work files left behind, and the schema in
 `tests/rebuild_checks.py`. `tests/test_rebuild_checks.py` shows the comparison
 helpers catch what they must. `tests/test_page.py` and
-`tests/test_page_bases.py` (the "Find a base" mode) drive the web page in
+`tests/test_page_bases.py` and `tests/test_page_bases_visit.py` (the "Find a base" mode, and what a visitor
+check of it found) drive the web page in
 headless Chromium; they are skipped until `uv run playwright install chromium`,
 and CI does not install it, so CI does not run the page tests.
 

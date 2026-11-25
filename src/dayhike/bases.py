@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import difflib
 import hashlib
+import itertools
 import json
 import math
 import os
@@ -344,38 +346,38 @@ A_BAR = re.compile(r"(?i)^bar\s")  # "Bar Alpino"; no town where "Bar" is an Eng
 BAR_IS_A_WORD = ("US", "GB", "IE")
 # What a BaseRanking's score means (ADR-0025), beside every row of "Find a base"; served in /api/info.
 BASE_SCORE_HELP = {
-    "overall": "How alike the hikes in reach of this town are to those in reach of yours, from 0 to 1. Higher "
-    "is more alike: 1 is the same kinds of hike in the same shares.",
+    "overall": "How alike the hikes near this town are to the hikes near yours, from 0 to 1. 1 means the same "
+    "kinds of hike in the same shares. It says alike, not good: a flat town scores high against another flat town.",
     "sections": (
         {
             "title": "Kinds of hike",
-            "text": f"Every hike is given one of {HIKE_TYPES} kinds, made from the measures that compare two hikes: "
-            "length, climb, height, landscape, water, weather and the rest. Two towns are compared on the kinds "
-            "of hike they have in reach, not hike by hike; hikes that start close together and are of one kind "
-            "count once.",
+            "text": f"Every hike is sorted into one of {HIKE_TYPES} kinds by its length, climb, height, landscape, "
+            "water, weather and the like. Towns are compared on the kinds of hike within the drive, not hike by "
+            "hike. Hikes of one kind that start close together count once, so the counts in the list can be "
+            "lower than the hikes a town's page lists.",
         },
         {
             "title": "How the score is made",
-            "text": f"{round(MIX_SHARE * 100)} % of the score is the mix: how far the two towns have the same kinds "
-            f"of hike in the same shares, near kinds counting as partly the same. {round((1 - MIX_SHARE) * 100)} % "
-            "is coverage, half each way: how many of the kinds near your town this town has too, and how many of "
-            "its kinds your town has. 0 is as alike as two towns picked at random, and a town less alike than "
-            "that is not listed. A town with far fewer of these hikes than yours is scored down, but not one with "
-            f"{ENOUGH_GROUPS} or more, enough for a week; with fewer than {ENOUGH_GROUPS} of yours, every town is.",
+            "text": f"{round(MIX_SHARE * 100)} % is the mix: do the two towns have the same kinds of hike in the "
+            f"same shares, similar kinds counting partly. {round((1 - MIX_SHARE) * 100)} % is how many of your "
+            "kinds this town has, and how many of its kinds yours has, half each. 0 is as alike as two towns "
+            "picked at random, and a town less alike than that is not listed. A town with less than half your "
+            f"number of hikes loses a little of its score, and its row says how much, but not one with "
+            f"{ENOUGH_GROUPS} or more, enough for a week; with fewer than {ENOUGH_GROUPS} of yours, every town does.",
         },
         {
-            "title": "Your hike filters and town traits",
-            "text": "Only the hikes that pass your hike filters count, for both towns. A town trait set to "
-            "“like mine” takes part of the score off a town unlike yours on it, more the more it "
-            "matters, and the row says how much; a town with no data on a trait counts as half like yours.",
+            "title": "Your choices",
+            "text": "Only the hikes that pass your hike choices count, for both towns. A town trait set to "
+            "“like mine” takes part of the score off a town unlike yours, more the more it "
+            "matters, and the row says how much; a town with no data on it counts as half like yours.",
         },
         {
             "title": "One row per area",
-            "text": "Towns close together have much the same hikes in reach, so each row is an area, named after "
-            "its biggest town about as alike as its best, with its other big towns beside it. Towns near your own, "
-            "and towns whose nearest hikes are mostly within an hour of yours, are left out: that is where you "
-            "have been. So are towns in a city, and places that are no town to stay in, such as a mountain hut, "
-            "an inn or an industrial estate.",
+            "text": "Towns close together have much the same hikes, so each row is an area of towns, named after "
+            "its biggest town about as alike as its best, with its other big towns beside it. With a longer drive "
+            "the areas are bigger, so the list can be shorter. Towns near your own, and towns whose nearest hikes "
+            "are mostly within an hour of yours, are left out: that is where you have been. So are towns in a "
+            "city, and places that are no town to stay in, such as a mountain hut, an inn or an industrial estate.",
         },
     ),
 }
@@ -653,7 +655,8 @@ def base_row(bases: Bases, place: int) -> int:
 
 def describe_bases(data: ServingData, rows: Collection[int], reach: int | None = None) -> list[dict]:
     """Each Base of ``rows`` as the API names it: GeoNames place id, name and country (from
-    ``data.places``, blank without it), population (None when unknown), where it is, and with
+    ``data.places``, blank without it), population and the places to stay and to eat (None when
+    unknown), where it is, and with
     ``reach`` the median temperature of its hikes within it each month (None when unknown)."""
     bases = data.bases
     places = [int(bases.place_ids[row]) for row in rows]
@@ -676,6 +679,8 @@ def describe_bases(data: ServingData, rows: Collection[int], reach: int | None =
                 "name": name,
                 "country": country or "",
                 "population": None if math.isnan(population) else int(population),
+                "stays": _count(bases.stays[row]),
+                "eats": _count(bases.eats[row]),
                 "lat": float(bases.points[row, 0]),
                 "lon": float(bases.points[row, 1]),
             }
@@ -686,26 +691,117 @@ def describe_bases(data: ServingData, rows: Collection[int], reach: int | None =
     return found
 
 
+def _count(value: float) -> int | None:
+    return None if math.isnan(float(value)) else int(value)
+
+
+SPELLED_GAPS = 3  # the most spaces or hyphens of a query written each other way ("st moritz" is "st. moritz")
+_GAP_SPELLINGS = (" ", "-", ". ")
+TYPO_SCAN = 20_000  # names sharing a query's first letters that are looked at for a typo
+TYPO_RATIO = 0.8  # how alike a name and a query must be (``difflib``) to be offered for a typo
+
+
 def find_bases(data: ServingData, query: str, limit: int) -> list[int]:
-    """The Bases (rows) whose place has a name starting with ``query``, folded and ordered as
-    ``ServingData.find_place`` does; places that are no Base are passed over."""
+    """The Bases (rows) whose place has a name starting with ``query``, folded as
+    ``ServingData.find_place`` does: one named exactly so first, then one whose own name (not an
+    alternate) starts so, then the most populous. A query whose spaces or hyphens the name writes
+    otherwise ("chamonix mont blanc", "st moritz") finds it too; with none found, names one typo
+    away ("keswik"). Places that are no Base are passed over."""
     needle = _fold(query).strip()
     if data.places is None or not needle:
         return []
-    found = []
+    found: list[int] = []
     with scoped(sqlite3.connect(data.places, uri=True)) as db:
-        for (place,) in db.execute(
-            "SELECT p.id FROM place_names n JOIN places p ON p.id = n.place WHERE n.name >= ? AND n.name < ? "
-            "GROUP BY p.id ORDER BY MIN(CASE WHEN n.name = ? THEN n.alternate ELSE 2 END), p.population DESC, p.id",
-            (needle, needle + "\U0010ffff", needle),
-        ):
-            try:
-                found.append(base_row(data.bases, place))
-            except KeyError:
-                continue
-            if len(found) == limit:
-                break
+        for spelled in _spellings(needle):
+            for (place,) in db.execute(
+                "SELECT p.id FROM place_names n JOIN places p ON p.id = n.place WHERE n.name >= ? AND n.name < ? "
+                "GROUP BY p.id ORDER BY MIN(CASE WHEN n.name = ? THEN n.alternate ELSE 2 END), "
+                "MIN(n.alternate), p.population DESC, p.id",
+                (spelled, spelled + "\U0010ffff", spelled),
+            ):
+                try:
+                    row = base_row(data.bases, place)
+                except KeyError:
+                    continue
+                if row not in found:
+                    found.append(row)
+                if len(found) == limit:
+                    return found
+        if not found and len(needle) >= 4:
+            found = _typo_bases(data, db, needle, limit)
     return found
+
+
+def _spellings(needle: str) -> list[str]:
+    """``needle``, then with each of its first ``SPELLED_GAPS`` spaces or hyphens written as the others."""
+    parts = needle.replace("-", " ").replace(". ", " ").split(" ")
+    if len(parts) == 1:
+        return [needle]
+    head, tail = parts[: SPELLED_GAPS + 1], parts[SPELLED_GAPS + 1 :]
+    spelled = [needle]
+    for gaps in itertools.product(_GAP_SPELLINGS, repeat=len(head) - 1):
+        text = head[0] + "".join(gap + part for gap, part in zip(gaps, head[1:]))
+        text = " ".join([text, *tail])
+        if text not in spelled:
+            spelled.append(text)
+    return spelled
+
+
+def _typo_bases(data: ServingData, db: sqlite3.Connection, needle: str, limit: int) -> list[int]:
+    """The Bases with a name sharing ``needle``'s first three letters and ``TYPO_RATIO`` alike to it
+    (as typed so far, or whole), the most alike first, then the most populous."""
+    alike: dict[int, tuple[float, float]] = {}
+    for name, place, population in db.execute(
+        "SELECT n.name, p.id, p.population FROM place_names n JOIN places p ON p.id = n.place "
+        "WHERE n.name >= ? AND n.name < ? LIMIT ?",
+        (needle[:3], needle[:3] + "\U0010ffff", TYPO_SCAN),
+    ):
+        ratio = max(
+            difflib.SequenceMatcher(None, needle, name).ratio(),
+            difflib.SequenceMatcher(None, needle, name[: len(needle)]).ratio(),
+        )
+        if ratio >= TYPO_RATIO and ratio > alike.get(place, (0.0, 0.0))[0]:
+            alike[place] = (ratio, population or 0)
+    found = []
+    for place in sorted(alike, key=lambda place: (-alike[place][0], -alike[place][1], place)):
+        try:
+            found.append(base_row(data.bases, place))
+        except KeyError:
+            continue
+        if len(found) == limit:
+            break
+    return found
+
+
+NEAR_TOWN_PEOPLE = 10_000  # a Base is told apart from others of its name by the nearest other Base this big
+
+
+def near_towns(data: ServingData, rows: Collection[int]) -> list[dict | None]:
+    """For each Base of ``rows``, the nearest other Base of at least ``NEAR_TOWN_PEOPLE`` people,
+    ``{"name", "km"}``, so towns of one name can be told apart ("Keswick near Penrith", "Keswick
+    near North Walsham"); None when there is none, or without ``data.places``."""
+    bases = data.bases
+    population = np.nan_to_num(np.asarray(bases.population, dtype=np.float64), nan=0.0)
+    big = np.flatnonzero(population >= NEAR_TOWN_PEOPLE)
+    points = np.asarray(bases.points, dtype=np.float64)
+    nearest: list[tuple[int, float] | None] = []
+    for row in rows:
+        others = big[big != row]
+        if not len(others) or data.places is None:
+            nearest.append(None)
+            continue
+        metres = straight_line_distances_m(Origin(*points[row]), points[others])
+        at = int(np.argmin(metres))
+        nearest.append((int(bases.place_ids[others[at]]), float(metres[at])))
+    places = sorted({found[0] for found in nearest if found})
+    names = {}
+    if places:
+        with scoped(sqlite3.connect(data.places, uri=True)) as db:
+            names = dict(db.execute(f"SELECT id, name FROM places WHERE id IN ({','.join('?' * len(places))})", places))
+    return [
+        {"name": names[found[0]], "km": round(found[1] / 1000)} if found and found[0] in names else None
+        for found in nearest
+    ]
 
 
 def nearest_base(bases: Bases, origin: Origin) -> tuple[int, float]:
