@@ -68,11 +68,13 @@ needs no new maths.
 **Consequences**:
 - Request time was estimated at 0.2-0.4 s (30 min) and 0.4-0.7 s (60 min) on Cloud Run's one vCPU, with
   about +0.4-0.6 GB of mapped files. Measured on the real build in a local image at one CPU and 4 GiB
-  (ticket 13, Keswick, Chamonix-Mont-Blanc and Moab, with and without hike filters and traits): warm
-  0.56-1.23 s at 15 min, 0.88-2.81 s at 30 min and 3.23-8.44 s at 60 min, the first ranking after a
-  start 5.0 s at 15 min; the container peaked at 3.3 GB of 4 GiB (table in docs/deploy.md). Whether to
-  accept times over the estimate is the captain's call at the feature/bases to develop merge. Most of the 60-minute time is the profile pass over
-  the pairs (about 1 s) and the mix of the 20,000 Bases. The Bases get their own lock and rate limit apart
+  (Keswick, Chamonix-Mont-Blanc and Moab, with and without hike filters and traits), after the exact
+  speed fix that followed ticket 13: warm 0.31-0.64 s at 15 min, 0.36-1.11 s at 30 min and 0.61-2.57 s
+  at 60 min (ticket 13: 0.56-1.23, 0.88-2.81 and 3.23-8.44 s), the first ranking after a start 3.2 s at
+  15 min; the container peaked at 1.1 GB of 4 GiB (3.3 GB at ticket 13; table in docs/deploy.md). The
+  captain accepted these times over the estimate as a known limit. Most of the 60-minute time is the
+  profile pass over the pairs (about 0.2 s, 0.5 s with a hike filter) and the mix of the 6,000 or more
+  Bases that may be among the best. The Bases get their own lock and rate limit apart
   from the hike ranking's.
 - The export grows by 1.7 GB, not 0.5-0.6: the drive-time Reach holds 319 million Base-HikeGroup pairs
   for 195,220 Bases, about four times the straight-line stand-in's. The build stage took 3 h 35 min on
