@@ -1,5 +1,6 @@
 """The "Find a base" API (ADR-0084): ``TestClient`` on the fixture export with a hand-made ``bases/`` folder."""
 
+import json
 import shutil
 import sqlite3
 import threading
@@ -134,6 +135,20 @@ def test_a_rebuilt_bases_folder_changes_the_etag(exports: tuple[Path, Path], mon
 
     assert etag(ServingData(exports[1])) == before
     assert etag(rebuilt) != before
+
+
+def test_a_changed_bases_meta_changes_the_etag(exports: tuple[Path, Path], tmp_path: Path) -> None:
+    def etag(directory: Path) -> str:
+        app = create_app(ServingData(directory))
+        return TestClient(app).get("/api/bases/search", params={"q": "Kes"}).headers["etag"]
+
+    rebuilt = shutil.copytree(exports[1], tmp_path / "rebuilt")
+    meta_path = rebuilt / "bases" / "meta.json"
+    meta = json.loads(meta_path.read_text())
+    meta["inputs"] = "new roads"
+    meta_path.write_text(json.dumps(meta))
+
+    assert etag(rebuilt) != etag(exports[1])
 
 
 def test_base_search_finds_only_places_that_are_bases(client: TestClient) -> None:

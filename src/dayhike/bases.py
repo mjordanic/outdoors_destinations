@@ -609,7 +609,7 @@ def export_bases(
     - ``type_table``: the score between HikeTypes (``hike_types``).
     - ``population``, ``month_temperatures``: each Base's ``BaseFacts``.
     - ``meta.json``, written last, so a folder without it is incomplete: the folder's format,
-      the versions it was made with and of which DayHikes (``Bases.open_dir``).
+      the versions and build inputs it was made with and of which DayHikes (``Bases.open_dir``).
 
     Each ``chunk`` candidates' Reach is kept in ``bases.work/`` as it is found, so a
     stopped run started again with the same inputs goes on from there.
@@ -676,7 +676,9 @@ def export_bases(
     kept = np.array([i for i, (groups, _) in enumerate(found) if len(groups) >= MIN_HIKE_GROUPS], dtype=int)
     reached = [found[i] for i in kept]
     facts = base_facts(store, out / "places.sqlite", place_ids[kept], reached, group_of_hike)
-    target = _write_bases(out, place_ids[kept], places[kept], reached, group_of_hike, group_types, types, facts, store)
+    target = _write_bases(
+        out, place_ids[kept], places[kept], reached, group_of_hike, group_types, types, facts, store, inputs=key
+    )
     shutil.rmtree(work)
     return target
 
@@ -746,6 +748,7 @@ def _write_bases(
     types: HikeTypes,
     facts: BaseFacts,
     store: SimilarityStore,
+    inputs: str | None = None,
 ) -> Path:
     """Write the ``bases/`` folder (``export_bases``) to a partial folder, then put it in place."""
     count = len(place_ids)
@@ -788,6 +791,7 @@ def _write_bases(
             ).encode()
         ).hexdigest()[:16],
         "hike_types_version": types.version,
+        "inputs": inputs,
         "facts_version": _FACTS_VERSION,
         "dayhikes": _dayhikes_digest(store.ids),
         "catalog_digest": store.catalog_digest,

@@ -692,11 +692,13 @@ def create_app(
     drives: OrderedDict[tuple[float, float, float], tuple[np.ndarray, np.ndarray]] = OrderedDict()
     drives_lock = threading.Lock()
     # The API reads change only with the export (its meta.json holds facts_version; places.sqlite and landmarks.sqlite
-    # may come later), the code and the settings.
+    # may come later), its bases/meta.json, the code and the settings.
     settings = (
         f"{BUILD} {drive_client is not None} {MAX_DRIVE_HOURS} {RESULTS} {POOL} {data.places is not None} "
         f"{data.landmarks is not None} {basemap} {data.bases.meta['version'] if data.bases is not None else None}"
     ).encode()
+    if data.bases is not None:
+        settings += (data.directory / "bases" / "meta.json").read_bytes()
     etag = f'W/"{hashlib.sha256((data.directory / "meta.json").read_bytes() + settings).hexdigest()[:16]}"'
     attribution = data.meta["attribution"]
     measures = [
