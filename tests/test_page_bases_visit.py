@@ -585,6 +585,10 @@ def test_the_months_strip_stays_on_one_line_on_a_phone(browser, server) -> None:
     cells = strip.locator("li")
     assert cells.first.bounding_box()["y"] == cells.last.bounding_box()["y"]
     assert page.evaluate("() => document.documentElement.scrollWidth") <= 390
+    last = cells.last.bounding_box()
+    assert last["x"] + last["width"] <= 390  # not cut off by the table's edge
+    why = page.locator("#base-results tbody tr").first.locator(".why").bounding_box()
+    assert why["width"] > 250  # the explanation reads across the row, not down a narrow column
 
 
 def test_every_choice_has_a_name_for_the_browser(browser, server) -> None:
