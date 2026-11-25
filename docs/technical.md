@@ -2725,7 +2725,9 @@ search (`#hike=<id>`, the hike as the liked one), from which a button comes back
 
 The page shows a hundred rows at a time ("Show more"), the Hiker's own town with its mild months and trait
 values over them, and a line under each score whose parts multiply to it: how alike the hikes are (mix, and
-how many of each town's kinds the other has), the cut for fewer hikes, then each "like mine" trait's. Every step
+how many of each town's kinds the other has), the cut for fewer hikes, the cut for few of the Hiker's hikes to
+compare (`sure`), then each "like mine" trait's; a row standing for an area names its biggest other towns
+(`area_towns`). Every step
 (entering the mode, a town chosen, the Reach or a choice changed, a Base opened or closed) is a step of the
 browser's history, so Back undoes it; the answers of the last 30 lists and Bases are kept, so going back asks the
 server nothing. Choices changed in a row ask for one list once they settle (0.6 s, 0.9 s while a number is
