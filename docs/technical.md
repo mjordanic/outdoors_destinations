@@ -2679,8 +2679,10 @@ at most one queued or running (another is a 409, which the page waits out), and 
 without a `Content-Length`, is refused unread (413, 411); `weights` and `excluded` name each Measure at most once,
 and an unknown Measure name in `weights` is a 422.
 
-With a `bases/` folder (`bases` in `/api/info` is `{"reaches": [15, 30, 60]}`, null without one; the
-`/api/bases/` routes then answer 404), "Find a base" (ADR-0084) has its own calls. A Base is named by its
+With a `bases/` folder (`bases` in `/api/info` is `{"reaches": [15, 30, 60], "mild_c": [low, high],
+"score_help": {"overall", "sections"}}`, the band in °C of a month the page marks mild and what a Base's score
+means, beside every row (ADR-0025); null without one, and the `/api/bases/` routes then answer 404), "Find a
+base" (ADR-0084) has its own calls and its own page mode in `bases.js`. A Base is named by its
 GeoNames place id and answers as `{"id", "name", "country", "population", "lat", "lon"}` (population null when
 unknown); `GET /api/bases/search?q=&limit=` (up to 20, default 5) finds Bases by name as `/api/place` finds
 places, passing over places that are no Base, and `GET /api/bases/nearest?lat=&lon=` gives the nearest Base in a
