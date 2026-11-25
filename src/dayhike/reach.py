@@ -9,6 +9,8 @@ module is the one place the estimate is made, so a better one can replace it.
 
 from __future__ import annotations
 
+import urllib.error
+
 import numpy as np
 import shapely
 
@@ -44,7 +46,12 @@ def _highway_minutes(base: Place, points: np.ndarray, snaps: HighwaySnaps) -> np
     near = approach < REACH_MIN
     at, snapped, approach = at[near], snapped[near], approach[near]
     edges = list(range(BAND_STEP_MIN, REACH_MIN + 1, BAND_STEP_MIN))
-    contours = isochrone_polygons(snaps.base_url, start[:2], edges)
+    try:
+        contours = isochrone_polygons(snaps.base_url, start[:2], edges)
+    except urllib.error.HTTPError as error:
+        if error.code != 400:  # Valhalla cannot spread from this highway point: as no highway
+            raise
+        return minutes
     upper = np.full(len(at), np.nan)  # the upper edge of each point's band
     alive = np.arange(len(at))
     for edge, contour in zip(reversed(edges), reversed(contours)):

@@ -97,3 +97,20 @@ def test_a_base_with_no_highway_gets_straight_line_times_only() -> None:
         _stop(server)
 
     np.testing.assert_allclose(minutes, [11.9, np.nan], atol=0.1)
+
+
+def test_a_base_whose_highway_point_valhalla_cannot_spread_from_gets_straight_line_times_only() -> None:
+    # The real Europe tiles answer 400 ("_M_range_check") to an isochrone from some snapped
+    # highway points; that Base is then as one with no highway, not the end of export-bases.
+    server, url = _serve(
+        {
+            "/locate": _locate(lambda lat, lon, cutoff: (lat, lon)),
+            "/isochrone": lambda body: (400, {"error_code": 0, "error": "vector::_M_range_check"}),
+        }
+    )
+    try:
+        minutes = reach_minutes(BASE, np.array([[0.05, 0.0], [0.28, 0.0]]), HighwaySnaps(url))
+    finally:
+        _stop(server)
+
+    np.testing.assert_allclose(minutes, [11.9, np.nan], atol=0.1)
