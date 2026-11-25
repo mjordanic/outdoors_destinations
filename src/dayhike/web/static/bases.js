@@ -105,8 +105,10 @@ const bases = {
     input.addEventListener("input", () => {
       clearTimeout(timer);
       asking?.abort();
+      found = [];
+      close();
       const q = input.value.trim();
-      if (q.length < 2) { close(); return; }
+      if (q.length < 2) return;
       timer = setTimeout(async () => {
         asking = new AbortController();
         try {
@@ -114,7 +116,7 @@ const bases = {
           active = -1;
           show();
         } catch (error) {
-          if (error.name !== "AbortError") { found = []; close(); }
+          if (error.name !== "AbortError") close();
         }
       }, 200);
     });

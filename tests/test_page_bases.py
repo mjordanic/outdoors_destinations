@@ -106,6 +106,20 @@ def test_a_town_searched_for_lists_the_bases_alike_best_first(browser, server) -
     assert "Bases with hikes like Keswick's" in page.locator("#base-results h2").inner_text()
 
 
+def test_more_letters_typed_drop_the_old_suggestions(browser, server) -> None:
+    page = open_bases(browser, server)
+    box = page.get_by_label("A town you stayed in")
+    box.fill("Kes")
+    page.get_by_role("option", name="Keswick").wait_for()
+
+    box.press("z")
+    box.press("ArrowDown")
+    box.press("Enter")
+
+    assert page.get_by_role("option", name="Keswick").is_hidden()
+    assert "No town chosen yet" in page.locator("#base-chosen").inner_text()
+
+
 def test_a_shorter_reach_asks_for_it(browser, server) -> None:
     page = open_bases(browser, server)
     choose_base(page, "Kes", "Keswick")
