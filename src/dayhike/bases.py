@@ -274,7 +274,9 @@ def export_bases(
     kept = np.array([i for i, (groups, _) in enumerate(found) if len(groups) >= MIN_HIKE_GROUPS], dtype=int)
     reached = [found[i] for i in kept]
     facts = base_facts(store, out / "places.sqlite", place_ids[kept], reached, group_of_hike)
-    target = _write_bases(out, place_ids[kept], places[kept], reached, group_of_hike, group_types, types, facts, store)
+    target = _write_bases(
+        out, place_ids[kept], places[kept], reached, group_of_hike, group_types, types.table, types.version, facts, store
+    )
     shutil.rmtree(work)
     return target
 
@@ -341,7 +343,8 @@ def _write_bases(
     reached: list[tuple[np.ndarray, np.ndarray]],
     group_of_hike: np.ndarray,
     group_types: np.ndarray,
-    types: HikeTypes,
+    type_table: np.ndarray,
+    hike_types_version: str,
     facts: BaseFacts,
     store: SimilarityStore,
 ) -> Path:
@@ -368,7 +371,7 @@ def _write_bases(
         "run_offsets": np.r_[starts, len(groups)].astype(np.int64),
         "run_types": pair_types[starts].astype(np.int16),
         "base_runs": np.searchsorted(slot[starts], np.arange(len(REACHES) * count + 1)).astype(np.int64),
-        "type_table": types.table,
+        "type_table": type_table,
         "population": facts.population,
         "month_temperatures": facts.month_temperatures,
     }
@@ -381,11 +384,11 @@ def _write_bases(
         "format": BASES_FORMAT,
         "version": hashlib.sha256(
             json.dumps(
-                [types.version, _BASES_LAYOUT, BASE_POPULATION, MIN_HIKE_GROUPS, CELL_M, NEAR_M, _REACH_ESTIMATE]
+                [hike_types_version, _BASES_LAYOUT, BASE_POPULATION, MIN_HIKE_GROUPS, CELL_M, NEAR_M, _REACH_ESTIMATE]
                 + [_BASE_FACTS]
             ).encode()
         ).hexdigest()[:16],
-        "hike_types_version": types.version,
+        "hike_types_version": hike_types_version,
         "facts_version": _FACTS_VERSION,
         "dayhikes": _dayhikes_digest(store.ids),
         "catalog_digest": store.catalog_digest,

@@ -3,7 +3,8 @@ areas, is a complete export of its own, and ranks as the uncut export with that 
 
 The test export is the web fixture twice: as it is (Croatia), and moved 120° west into the United
 States with every OSM id moved too, built into one Catalog as a Europe and US build is (ADR-0069).
-Highway snaps, a tile extract, countries and one external source are added beside it by hand.
+Highway snaps, a tile extract, countries and one external source are added beside it by hand,
+and Bases (``export-bases``, ADR-0084) asked of a fake Valhalla.
 """
 
 from __future__ import annotations
@@ -22,10 +23,14 @@ import numpy as np
 import pytest
 
 from dayhike import build_catalog, build_similarity
+from dayhike.bases import REACHES, export_bases
 from dayhike.cli import main
 from dayhike.cut import CUTS_DIR, CutError, Keep, cut_serving, kept_twins, load_keep, tile_box
+from dayhike.hike_filter import HikeFilter, hike_mask
 from dayhike.serving import NAME_INDEX, REGION_SPLIT_LON, ServingData, _read_name_index, export_serving
 from dayhike.similarity import CORE_MEASURES
+from test_export_bases import _valhalla
+from test_highways import _stop
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SHIFT = 120.0
@@ -147,8 +152,15 @@ def whole(tmp_path_factory: pytest.TempPathFactory) -> ServingData:
     ]
     meta["drive_time"] = True
     (out / "meta.json").write_text(json.dumps(meta))
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("dayhike.bases.MIN_HIKE_GROUPS", 1)  # the fixture's towns have few hikes in Reach
+        server, url, _ = _valhalla()
+        try:
+            export_bases(out, url)
+        finally:
+            _stop(server)
     data = ServingData(out)
-    assert data.regions == ["europe", "us"] and data.trailgraph is not None
+    assert data.regions == ["europe", "us"] and data.trailgraph is not None and data.bases is not None
     data.geonames = geonames  # type: ignore[attr-defined]
     return data
 
@@ -185,6 +197,79 @@ def test_a_cut_ranks_as_the_whole_export_with_only_its_side_ticked(
             assert expected, seed
             assert _same(list(found), list(expected)), (seed, loops)
             assert (found.other_areas, found.loop_search) == (expected.other_areas, expected.loop_search)
+
+
+def _base_rankings(data: ServingData, hike_ok: np.ndarray) -> dict[int, dict]:
+    """What a BaseRanking reads of each Base, by its place id, with only the hikes ``hike_ok``
+    counted: per Reach its HikeGroups with a passing hike (HikeType, minutes, the passing hikes'
+    ids), read through the run index, and its facts. A Base with none passing is left out."""
+    bases, ids = data.bases, data.store.ids
+    count = len(bases.place_ids)
+    found = {}
+    for i, place in enumerate(bases.place_ids.tolist()):
+        reached, groups = [], []
+        for band, reach in enumerate(REACHES):
+            slot = band * count + i
+            for run in range(bases.base_runs[slot], bases.base_runs[slot + 1]):
+                for pair in range(bases.run_offsets[run], bases.run_offsets[run + 1]):
+                    group, minutes = int(bases.pair_groups[pair]), int(bases.pair_minutes[pair])
+                    assert bases.group_types[group] == bases.run_types[run] and minutes <= reach
+                    hikes = bases.group_hikes[bases.group_starts[group] : bases.group_starts[group + 1]]
+                    passing = sorted(ids[hikes[hike_ok[hikes]]].tolist())
+                    if passing:
+                        groups.append((int(bases.run_types[run]), minutes, passing))
+            reached.append(sorted(groups))
+        if groups:
+            found[place] = {
+                "reached": reached,
+                "point": bases.points[i].tolist(),
+                "population": bases.population[i].tolist(),
+                "month_temperatures": bases.month_temperatures[i].tolist(),
+            }
+    return found
+
+
+@pytest.mark.parametrize("side", ["europe", "us"])
+@pytest.mark.parametrize("filtered", [False, True])
+def test_a_cut_ranks_bases_as_the_whole_export_with_only_its_side_ticked(
+    whole: ServingData, cuts: dict[str, ServingData], side: str, filtered: bool
+) -> None:
+    cut = cuts[side]
+    hike_filter = HikeFilter(length_max_km=6.0) if filtered else HikeFilter()  # each side's 10 km hike fails
+    on_side = np.isin(np.arange(len(whole.store.ids)), whole.region_rows([side]))
+
+    expected = _base_rankings(whole, hike_mask(whole.store, hike_filter) & on_side)
+    found = _base_rankings(cut, hike_mask(cut.store, hike_filter))
+
+    assert expected and _same(found, expected)
+    assert len(expected) < len(_base_rankings(whole, hike_mask(whole.store, hike_filter)))  # the other side's
+    assert cut.bases.place_ids.tolist() == sorted(_base_rankings(whole, on_side))  # every Base with a kept hike
+    np.testing.assert_array_equal(cut.bases.type_table, whole.bases.type_table)
+
+
+@pytest.mark.parametrize("side", ["europe", "us"])
+def test_a_cut_keeps_the_hike_groups_of_its_hikes_in_hike_type_order(cuts: dict[str, ServingData], side: str) -> None:
+    bases = cuts[side].bases
+
+    assert sorted(bases.group_hikes.tolist()) == list(range(len(cuts[side].store.ids)))
+    assert (np.diff(bases.group_starts) > 0).all()  # no HikeGroup is left without a hike
+    assert (np.diff(bases.group_types) >= 0).all()
+    assert bases.meta["bases"] == len(bases.place_ids) and bases.meta["hike_groups"] == len(bases.group_types)
+    assert bases.meta["pairs"] == len(bases.pair_groups)
+
+
+def test_a_cut_keeps_only_the_bases_its_place_search_offers(
+    whole: ServingData, cuts: dict[str, ServingData], tmp_path: Path
+) -> None:
+    vrh = 3186000  # a Base of 400 people in Croatia
+    geonames = tmp_path / "geonames.txt"
+    lines = whole.geonames.read_text().splitlines(keepends=True)
+    geonames.write_text("".join(line for line in lines if not line.startswith(f"{vrh}\t")))
+
+    cut = ServingData(cut_serving(whole.directory, tmp_path / "out", load_keep("europe"), geonames_path=geonames))
+
+    assert vrh in cuts["europe"].bases.place_ids.tolist()
+    assert cut.bases.place_ids.tolist() == [p for p in cuts["europe"].bases.place_ids.tolist() if p != vrh]
 
 
 @pytest.mark.parametrize("side", ["europe", "us"])
