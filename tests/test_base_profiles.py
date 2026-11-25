@@ -1,10 +1,11 @@
 from collections import Counter
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
-from dayhike.bases import REACHES, HikeTypes, _write_bases, base_profiles
+from dayhike.bases import REACHES, BaseFacts, HikeTypes, _write_bases, base_profiles
 from test_bases import KINDS, PER_KIND
 from test_export_bases import _build, _export, _load
 
@@ -56,7 +57,9 @@ def _random_bases(tmp_path: Path, seed: int) -> dict[str, np.ndarray]:
     out = tmp_path / f"random-{seed}"
     out.mkdir()
     ids = np.arange(bases, dtype=np.int64)
-    _write_bases(out, ids, np.zeros((bases, 2)), reached, group_of_hike, group_types, hike_types)
+    facts = BaseFacts(population=np.zeros(bases), month_temperatures=np.zeros((bases, len(REACHES), 12)))
+    store = SimpleNamespace(ids=np.arange(len(group_of_hike)), catalog_digest="t")
+    _write_bases(out, ids, np.zeros((bases, 2)), reached, group_of_hike, group_types, hike_types, facts, store)
     return _load(out)
 
 
