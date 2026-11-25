@@ -12,7 +12,10 @@ This is a Python package plus SQLite files on disk. There is no live Overpass
 query and no database server to start. You ingest an OSM snapshot once,
 optionally sample a DEM, LandCover, and climate onto the geometries, build the
 similarity facts once, then rank from those files. A small read-only web demo
-serves a trimmed export of them ([Web demo](#web-demo)). It runs live at
+serves a trimmed export of them ([Web demo](#web-demo)). With an optional
+`bases/` folder beside that export, the page can also rank Bases, towns to
+stay in, by how alike the hikes within a drive of them are
+([Find a base](#find-a-base), ADR-0084). It runs live at
 <https://hikesalike.com> on Google Cloud Run, which
 stops the server when idle, so the first visit after a quiet spell can take up
 to about 20 seconds ([docs/deploy.md](deploy.md)).
@@ -40,7 +43,7 @@ while the native libraries load for the first time):
 git clone https://github.com/mjordanic/outdoors_destinations.git
 cd outdoors_destinations
 uv sync                       # Python 3.13 and the packages
-uv run pytest -n 4            # optional: the test suite, about 70 to 80 seconds (see Tests)
+uv run pytest -n 4            # optional: the test suite, about 3 minutes (see Tests)
 
 mkdir -p data
 uv run dayhike ingest tests/fixtures/catalog.osm --catalog data/catalog.sqlite
@@ -53,7 +56,8 @@ uv run --extra web dayhike serve --data data/web-serving
 ```
 
 The fixture has no heights, land cover or climate, so its scores only show that
-the pipeline runs. A real Catalog (one country, all of Europe,
+the pipeline runs. Its export has no `bases/` folder, so its page offers no
+"Find a base". A real Catalog (one country, all of Europe,
 or Europe and the contiguous US) needs the OSM, height, land-cover and climate downloads and the full
 command order: [How data is created](#how-data-is-created-command-order), then
 [Walkthrough A](#walkthrough-a--one-country-start-here) (one country, with
@@ -70,7 +74,7 @@ the demo: [Web demo](#web-demo) and [docs/deploy.md](deploy.md).
 - [Rank by Seed](#3-rank-by-seed): [Measures](#measures), [what the score means](#what-the-score-means), [method details, data versions and validation](#method-details-data-versions-and-validation), [rebuilding the facts](#rebuilding-the-facts), [Europe scale](#similarity-at-europe-scale)
 - [Origin and max hours](#4-optional-origin-and-max-hours)
 - [Pulling a real extract](#pulling-a-real-extract): [ingest](#how-ingest-runs), [NetworkHikes](#how-networkhikes-are-chosen-at-a-start), [Valhalla](#valhalla-drivetime-only)
-- [Web demo](#web-demo): [what the page does](#what-the-page-does), [what the list leaves out](#what-the-list-leaves-out), [drawn rows](#drawn-rows-redraw-and-strict-order), [Wish](#describing-a-hike-instead-of-a-seed-wish), [serving](#serving-export-and-running-it), [site pages](#site-pages-and-settings), [export](#what-the-export-holds), [API](#api), [measurements](#web-demo-measurements), [deployment](#deployment-and-the-coverage-map)
+- [Web demo](#web-demo): [what the page does](#what-the-page-does), [what the list leaves out](#what-the-list-leaves-out), [drawn rows](#drawn-rows-redraw-and-strict-order), [Wish](#describing-a-hike-instead-of-a-seed-wish), [serving](#serving-export-and-running-it), [site pages](#site-pages-and-settings), [export](#what-the-export-holds), [API](#api), [Find a base](#find-a-base), [measurements](#web-demo-measurements), [deployment](#deployment-and-the-coverage-map)
 - [Tests](#tests), [Clean rebuild](#clean-rebuild), [rebuild runbook](#rebuild-runbook-workers-steps-at-the-same-time-resuming-and-caches), [Python API](#python-api), [Notebooks](#notebook-walkthrough), [Attribution](#attribution)
 
 ## Install
@@ -105,6 +109,8 @@ Every real file under `data/` is built by a command. This is the order:
 10. Rank                 stdout scores               dayhike rank [--weight] [--month] [--one-way]
 11. Optional DriveTime   local Valhalla Docker       rank --origin --max-hours, nearby
 12. Web demo export      data/web-serving/           dayhike export-serving (see Web demo)
+12b. Optional Bases      data/town-counts.npz        dayhike count-town-amenities (ADR-0084)
+                         data/web-serving/bases/     dayhike export-bases (needs Valhalla; deploy.md "Find a base")
 13. Optional cut         data/web-serving-eu, -us    dayhike cut-serving --keep europe|us|demo (ADR-0082)
 ```
 
@@ -299,7 +305,7 @@ call on your machine.
 | `data/catalog.similarity/` | Similarity facts + Calibration (numpy arrays) | **gitignored** |
 | `data/osm/` | Geofabrik / osmium extracts you download | gitignored |
 | `data/valhalla/` | Road PBF + Valhalla routing tiles Docker builds | gitignored |
-| `data/web-serving/` | Serving export for the web demo (`export-serving`) | **gitignored** |
+| `data/web-serving/` | Serving export for the web demo (`export-serving`), with the optional `bases/` folder (`export-bases`) | **gitignored** |
 | `data/geonames/` | GeoNames `allCountries.zip` for the demo's place search | gitignored |
 | `data/borders/` | OSM national boundaries (`osmium tags-filter … r/admin_level=2`) for `--osm-borders` | gitignored |
 | `src/dayhike/data/cuts/` | Cut files `cut-serving --keep` takes by name (`demo`), ADR-0082 | yes |
@@ -2280,6 +2286,10 @@ score of every measure" is pressed); hover, focus, click or tap opens what the s
 means, why alike hikes can score low on one measure, the data each measure
 reads and how the scores are made (ADR-0025).
 
+On a site whose export has a `bases/` folder, the page has a second mode,
+"Find a base", which ranks towns to stay in rather than hikes
+([Find a base](#find-a-base)).
+
 ### What the list leaves out
 
 The list also says what it leaves out (ADR-0046). A row reads, for example,
@@ -2679,6 +2689,8 @@ at most one queued or running (another is a 409, which the page waits out), and 
 without a `Content-Length`, is refused unread (413, 411); `weights` and `excluded` name each Measure at most once,
 and an unknown Measure name in `weights` is a 422.
 
+### Find a base
+
 With a `bases/` folder (`bases` in `/api/info` is `{"reaches": [15, 30, 60], "mild_c": [low, high],
 "score_help": {"overall", "sections"}}`, the band in °C of a month the page marks mild and what a Base's score
 means, beside every row (ADR-0025); null without one, and the `/api/bases/` routes then answer 404), "Find a
@@ -2784,8 +2796,8 @@ The mark (two mountains and a trail) is drawn by hand for this project.
 
 Two tiers.
 
-**Fast** (`uv run pytest -n 4`, about 70 to 80 seconds on an 8-core Mac, or
-about 2.5 minutes on one core with plain `uv run pytest`; a few
+**Fast** (`uv run pytest -n 4`, about 3 minutes on an 8-core Mac (1,992 tests, 2 min 48 s in November 2026),
+longer on one core with plain `uv run pytest`; a few
 thousand warnings, mostly Python's `fork()` DeprecationWarning, are expected):
 everything runs on the committed OSM fixture and small synthetic rasters (but
 see the `data/landcover/` exception under [Where files live](#where-files-live)).
@@ -2795,8 +2807,9 @@ whose name matches. Among them,
 `build-similarity` twice in two directories and requires identical tables and
 `.npy` bytes, no work files left behind, and the schema in
 `tests/rebuild_checks.py`. `tests/test_rebuild_checks.py` shows the comparison
-helpers catch what they must. `tests/test_page.py` drives the web page in
-headless Chromium; it is skipped until `uv run playwright install chromium`,
+helpers catch what they must. `tests/test_page.py` and
+`tests/test_page_bases.py` (the "Find a base" mode) drive the web page in
+headless Chromium; they are skipped until `uv run playwright install chromium`,
 and CI does not install it, so CI does not run the page tests.
 
 **Slow** (marker `real_data`, skipped unless `DAYHIKE_REAL_DATA=1`): checks
@@ -2830,6 +2843,7 @@ DAYHIKE_REAL_DATA=1 uv run pytest -m real_data
 | `test_serving_export_real.py` | the serving export: same ids and Trailheads as the store, a byte copy of it; data ≤ 6 GB and tiles ≤ 900 MB; simplified lines within 10 m (+1.5 m polyline rounding) on 2,000 DayHikes; no rasters or per-vertex climate; every attribution; golden rankings from the export; the tile tar is the built one |
 | `test_real_data.py` | the main walk, WaterSources, the similarity facts, notebook 05 (which reads `data/` of its checkout and must see the Catalog under test) |
 | `test_real_data_us.py` | on the [US build](#a-us-build): known trails and their lengths, day stages, heights, land cover and climate on every hike, a Ranking, drive times from Providence, the pages naming Rhode Island and not Europe |
+| `test_bases_real.py` | on the Europe and US export's `bases/` folder (`DAYHIKE_SERVING_DIR`): the known pairs rank their analogues high and their controls lower, with and without a HikeFilter ([Find a base](#find-a-base)) |
 | `test_cut_serving_real.py` | a cut of the Europe and US export (`DAYHIKE_CUT_DIR`) holds only what it keeps and ranks as the uncut export does with only its side ticked (a demo cut: Rankings of DayHikes only) |
 | `test_notebooks_real.py` | every notebook runs top to bottom in a Jupyter kernel on `data/` of its checkout (skipped when `DAYHIKE_DATA_DIR` points elsewhere); `02`, `04`, `04a` and `05` read the real Catalog, `01` and `03` the fixture; about 2 minutes |
 
@@ -2926,7 +2940,7 @@ at the rebuild.
 5. **Check**, from the new checkout:
 
    ```bash
-   uv run pytest -n 4                           # 70 to 80 s
+   uv run pytest -n 4                           # about 3 min
    DAYHIKE_REAL_DATA=1 DAYHIKE_REFERENCE_DIR=$SNAP DAYHIKE_VALHALLA_URL=http://127.0.0.1:8003 \
      uv run pytest -m real_data                 # 1 h 36 min, most of it tests/test_real_data.py
    ```
@@ -3127,6 +3141,7 @@ The same seams the CLI wraps:
 - `dayhike.similarity.rank_rows` — `rank_dayhikes` on store rows, for callers that know the Seed's row and have no Catalog
 - `dayhike.serving.export_serving` / `ServingData` — write and open the web demo's serving export
 - `dayhike.cut.cut_serving` — cut a serving export to Europe, the US or a cut file's areas (ADR-0082)
+- `dayhike.bases.export_bases` / `dayhike.bases.rank_bases` — write the `bases/` folder beside a serving export, and rank every Base against the Hiker's own under a HikeFilter's mask (`dayhike.hike_filter.hike_mask`) and `TownTraits` (ADR-0084)
 - `dayhike.web.create_app` — the web demo's FastAPI app over a `ServingData`
 
 CLI: `dayhike ingest`, `dayhike fetch-extracts`, `dayhike fetch-external`, `dayhike fetch-dem`,
