@@ -256,6 +256,7 @@ function setUnits(units) {
   const chosen = state.liked && lengthText(state.liked);
   state.units = units;
   $("#units").value = units;
+  document.dispatchEvent(new Event("hikesalike:units")); // "Find a base" (bases.js) shows its ranges in them
   if (chosen) $("#liked-name").textContent = $("#liked-name").textContent.replace(chosen, lengthText(state.liked));
   ["#km", "#group-km"].forEach((id, i) => { if (limits[i] != null) fill($(id), limits[i], String(kmShown(limits[i]))); });
   if (OPENED["#km"]) OPENED["#km"].value = String(kmShown(OPENED["#km"].km));

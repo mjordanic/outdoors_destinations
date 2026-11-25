@@ -833,6 +833,8 @@ def create_app(
                 "score_help": base_finder.BASE_SCORE_HELP,
                 # Under this many of the Hiker's hikes pass, a BaseRanking is too_few: the page says how many.
                 "min_hike_groups": base_finder.MIN_HIKE_GROUPS,
+                # A best score under this is no better than a random pair of hikes': the page says so.
+                "weak_score": base_finder.CREDIT_FROM,
             },
         }
 
