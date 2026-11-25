@@ -2447,6 +2447,10 @@ class ServingData:
             for i, name, origin, walk_m, line in found
         ], False
 
+    def names(self, ids: list[int]) -> dict[int, str]:
+        """The name the page shows for each DayHike id."""
+        return {dayhike_id: found[0] for dayhike_id, found in self._names(ids).items()} if ids else {}
+
     def _names(self, ids: list[int]) -> dict[int, tuple[str, float | None, float | None, str]]:
         """Name, climb, descent (metres, walking direction) and name origin per DayHike id."""
         with scoped(self._db()) as db:

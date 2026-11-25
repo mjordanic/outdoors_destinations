@@ -2543,6 +2543,10 @@ short:
 | POST | `/api/compose` | a hike drawn from Segments |
 | POST | `/api/rank` | a Ranking for a Seed or a Wish |
 | POST | `/api/pair` | the score of two given hikes |
+| GET | `/api/bases/search?q=` | Bases (towns to stay in) by name, for "Find a base" |
+| GET | `/api/bases/nearest?lat=&lon=` | the Base nearest a pin on the map |
+| POST | `/api/bases/rank` | a BaseRanking for the Hiker's Base, with a HikeFilter and TownTraits |
+| POST | `/api/bases/detail` | one Base: its hikes in Reach that pass the HikeFilter, with minutes |
 
 The details, endpoint by endpoint (JSON): `GET /api/search?q=` (every word in any order, at least one of
 two letters or more; case, accents
@@ -2674,6 +2678,25 @@ row) in the same shape. With `max_km` only loops starting within it are listed. 
 at most one queued or running (another is a 409, which the page waits out), and an address at most 4 (ADR-0054). A request body over 256 KB, or one sent
 without a `Content-Length`, is refused unread (413, 411); `weights` and `excluded` name each Measure at most once,
 and an unknown Measure name in `weights` is a 422.
+
+With a `bases/` folder (`bases` in `/api/info` is `{"reaches": [15, 30, 60]}`, null without one; the
+`/api/bases/` routes then answer 404), "Find a base" (ADR-0084) has its own calls. A Base is named by its
+GeoNames place id and answers as `{"id", "name", "country", "population", "lat", "lon"}` (population null when
+unknown); `GET /api/bases/search?q=&limit=` (up to 20, default 5) finds Bases by name as `/api/place` finds
+places, passing over places that are no Base, and `GET /api/bases/nearest?lat=&lon=` gives the nearest Base in a
+straight line with its `distance_km`. `POST /api/bases/rank` takes `{"seed": place id, "reach": 15, 30 or 60,
+"hike_filter": {...}, "traits": {...}}`: `hike_filter` as `HikeFilter.to_mapping` writes it (`climb_min_m`,
+`climb_max_m`, `length_min_km`, `length_max_km`, `highest_min_m`, `highest_max_m`, and `summit`, `waterside`,
+`round_trip` true), `traits` per TownTrait (`size`, `stays`, `eats`, `months`) one of `{"like_mine": 1-3}`,
+`{"at_least", "up_to"}` (size and counts) or `{"mild_in": [months]}` (months), a trait left out ignored; anything
+else is a 422, and a seed that is no Base a 404. It answers `seed` (the Base with its passing `hike_groups`),
+`too_few` (under 10 of them: no row), and up to 100 `results`, one per area, each a Base with `region`,
+`score`, `hike_score`, `mix`, `coverage`, `back`, `enough`, `hike_groups`, `area_bases` and `cuts`, the share
+each "like mine" trait took off the hike score; the seed and each row have `months`, the median temperature of
+the hikes in Reach each month (null when unknown). `POST /api/bases/detail` takes `{"base": place id, "reach",
+"hike_filter"}` and answers the Base with its passing `hike_groups` and `hikes`, each `{"id", "name",
+"trailhead", "minutes"}`, nearest first. BaseRankings have their own queue, apart from the hike Rankings' and
+with the same rules, and their own limit of 20 a minute per client.
 
 ### Web demo measurements
 

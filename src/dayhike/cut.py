@@ -426,6 +426,7 @@ def _cut_bases(data: ServingData, out: Path, kept: np.ndarray) -> None:
         ),
         facts,
         store,
+        inputs=bases.meta.get("inputs"),
     )
 
 
