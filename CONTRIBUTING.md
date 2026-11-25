@@ -23,8 +23,8 @@ pipeline and how everything works are in the
 ## Tests
 
 ```bash
-uv run pytest -n 4                # the whole fast suite on 4 cores: about 70 to 80 seconds
-uv run pytest                     # the same, on one core: about 2.5 minutes
+uv run pytest -n 4                # the whole fast suite on 4 cores: about 3 minutes
+uv run pytest                     # the same, on one core: slower
 uv run pytest tests/test_web.py   # just the file next to your change: seconds
 uv run pytest -k rank             # tests whose name matches
 uv run playwright install chromium   # once, to run tests/test_page.py locally too
