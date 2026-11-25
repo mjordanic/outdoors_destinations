@@ -2,8 +2,8 @@
 
 Each TownTrait is ignored, a filter (a Base that fails it is left out before the best hike
 matches are chosen) or "like mine" with an importance w of 1, 2 or 3, which multiplies the hike
-score by ``1 - (w / 6) * (1 - s)``, s the similarity of the two towns on it. A missing value
-costs nothing. Sizes and counts compare as the ratio Measure does, months as the tolerance
+score by ``1 - (w / 6) * (1 - s)``, s the similarity of the two towns on it. A Base whose value
+is unknown counts as half alike; an unknown value of the Hiker's own costs nothing. Sizes and counts compare as the ratio Measure does, months as the tolerance
 Measure does, month by month.
 """
 
@@ -21,6 +21,7 @@ _COUNTS = ("stays", "eats")  # compared on count + 1, so a town with none is sti
 IMPORTANCE_CUT = 1 / 6  # of the hike score, per step of importance, for a town wholly unlike
 RATIO_POWER = 0.5  # (smaller / larger) ** this: four times bigger is 0.5
 MONTHS_TOLERANCE_C = 10.0  # a month this much warmer or colder is wholly unlike
+UNKNOWN_SIMILARITY = 0.5  # "like mine": a Base whose value is unknown counts as half alike
 MILD_C = (8.0, 22.0)  # a month is mild when the median temperature of the hikes in Reach is in this
 
 
@@ -117,7 +118,8 @@ def trait_cuts(
     traits: TownTraits, values: Mapping[str, np.ndarray], me: int, bases: np.ndarray
 ) -> list[tuple[str, np.ndarray]]:
     """For each "like mine" TownTrait, in ``TRAITS`` order, the share of the hike score each of
-    ``bases`` loses against the Hiker's Base ``me``: ``(w / 6) * (1 - s)``, 0 for a missing value."""
+    ``bases`` loses against the Hiker's Base ``me``: ``(w / 6) * (1 - s)``, a Base of unknown value
+    counting as ``UNKNOWN_SIMILARITY`` alike; nothing when the Hiker's own value is unknown."""
     cuts = []
     for name, setting in traits.settings().items():
         if not setting.like_mine:
@@ -128,6 +130,9 @@ def trait_cuts(
         else:
             extra = 1 if name in _COUNTS else 0
             similarity = ratio_similarity(value[me] + extra, value[bases] + extra)
-        cut = setting.like_mine * IMPORTANCE_CUT * (1 - similarity)
-        cuts.append((name, np.nan_to_num(cut, nan=0.0)))
+        mine = value[me]
+        if np.isnan(mine).all():
+            similarity = np.ones(len(bases))
+        similarity = np.nan_to_num(similarity, nan=UNKNOWN_SIMILARITY)
+        cuts.append((name, setting.like_mine * IMPORTANCE_CUT * (1 - similarity)))
     return cuts

@@ -71,6 +71,34 @@ a `bounds` box; the pages name each by its `label`), then
 `--keep path/to/showcase.toml`; a region file works too, as one area of its
 `bounds` (`--keep src/dayhike/data/regions/us-colorado.toml`).
 
+### Find a base: the `bases/` folder
+
+"Find a base" (ADR-0084) reads the export's `bases/` folder. A site without it works as before, without
+that mode (`bases` in `/api/info` is null). The folder is built on the finished Europe and US export. No catalog rebuild is needed,
+and the cuts above keep it. First count places to stay and eat from the OSM extracts (Geofabrik Europe
+and the four US regions, about 47 GB), then estimate the Reach with the highways-only Valhalla of the
+export served on 8002:
+
+```bash
+uv run dayhike count-town-amenities --extract data/osm/europe-latest.osm.pbf --extract data/osm/us-west-latest.osm.pbf \
+  --extract data/osm/us-midwest-latest.osm.pbf --extract data/osm/us-northeast-latest.osm.pbf \
+  --extract data/osm/us-south-latest.osm.pbf --places data/web-serving/places.sqlite --out data/town-counts.npz --workers 4
+uv run dayhike export-bases --out data/web-serving --valhalla-url http://127.0.0.1:8002 --workers 4 \
+  --town-counts data/town-counts.npz
+```
+
+`export-bases` keeps its progress in `bases.work/`, so a stopped run started again goes on from there.
+Measured on the 2026-11-22 export (16 GB M-series Mac, 4 workers, 2026-11-25):
+
+- The count took 5 min 21 s. `export-bases` took 3 h 35 min for 213,003 candidate places, with at most
+  4.3 GB in the Python process.
+- It made 195,220 Bases and 319 million Base-HikeGroup pairs. The folder is 1.7 GB, and the data image
+  grows to 9.26 GB of content (28.7 GB unpacked).
+- In that image at one CPU and 4 GiB, a warm BaseRanking takes 0.6-1.2 s at 15 min, 0.9-2.0 s at
+  30 min and 3.2-4.8 s at 60 min. The first one after a start takes up to 8 s.
+- The container peaked at 3.3 GB of its 4 GiB after rankings at every Reach, so keep the
+  Europe and US site at 4Gi and watch its memory.
+
 ### Europe only, or Europe and the US
 
 The site serves one export, so it shows the hikes of one Catalog. Two builds
