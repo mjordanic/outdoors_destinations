@@ -15,6 +15,7 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 
 import numpy as np
+from numba import njit
 from scipy.spatial import cKDTree
 from sklearn.cluster import KMeans
 
@@ -172,6 +173,89 @@ def base_facts(
                     at = np.repeat(starts[within] - (np.cumsum(counts) - counts), counts) + np.arange(counts.sum())
                     months[base, r] = np.nanmedian(temperatures[rows[at]], axis=0)
     return BaseFacts(population=population, month_temperatures=months)
+
+
+@dataclass(frozen=True)
+class BaseProfiles:
+    """The BaseProfile of every Base under one HikeFilter and Reach.
+
+    Base i's profile is ``types[starts[i]:starts[i + 1]]``, in HikeType order, with
+    ``counts`` its HikeGroups of each; a HikeType with none is left out.
+    """
+
+    starts: np.ndarray
+    types: np.ndarray
+    counts: np.ndarray
+
+
+def base_profiles(bases: Bases, reach: int, hike_mask: np.ndarray) -> BaseProfiles:
+    """Count, for every Base, the HikeGroups of each HikeType within ``reach`` minutes that pass.
+
+    ``bases`` is the ``bases/`` folder (``Bases.open_dir``); ``hike_mask`` says of each
+    hike (similarity row) whether it passes the HikeFilter. A HikeGroup passes when
+    any of its hikes does, and counts once. One pass over the bands up to ``reach``: a
+    shorter Reach never reads a longer one's band.
+    """
+    if reach not in REACHES:
+        raise ValueError(f"reach must be one of {REACHES} minutes, not {reach}")
+    hike_mask = np.asarray(hike_mask, dtype=np.bool_)
+    if len(hike_mask) != len(bases.group_hikes):
+        raise ValueError(f"hike_mask has {len(hike_mask)} hikes, the bases have {len(bases.group_hikes)}")
+    starts, types, counts = _profile_pass(
+        REACHES.index(reach) + 1,
+        len(bases.place_ids),
+        len(bases.type_table),
+        hike_mask,
+        np.asarray(bases.group_starts),
+        np.asarray(bases.group_hikes),
+        np.asarray(bases.base_runs),
+        np.asarray(bases.run_offsets),
+        np.asarray(bases.run_types),
+        np.asarray(bases.pair_groups),
+    )
+    return BaseProfiles(starts=starts, types=types, counts=counts)
+
+
+@njit
+def _profile_pass(bands, bases, type_count, hike_mask, group_starts, group_hikes, base_runs, run_offsets, run_types, pair_groups):  # fmt: skip
+    """``base_profiles``'s loop: which HikeGroups pass, then per Base the passing ones per HikeType."""
+    groups = len(group_starts) - 1
+    passes = np.zeros(groups, dtype=np.bool_)
+    for g in range(groups):
+        for at in range(group_starts[g], group_starts[g + 1]):
+            if hike_mask[group_hikes[at]]:
+                passes[g] = True
+                break
+    most = base_runs[bands * bases] - base_runs[0]  # every run in Reach: at most one HikeType each
+    starts = np.empty(bases + 1, dtype=np.int64)
+    types = np.empty(most, dtype=np.int16)
+    counts = np.empty(most, dtype=np.int32)
+    per_type = np.zeros(type_count, dtype=np.int32)
+    seen = np.empty(type_count, dtype=np.int16)
+    found = 0
+    for base in range(bases):
+        starts[base] = found
+        distinct = 0
+        for band in range(bands):
+            slot = band * bases + base
+            for run in range(base_runs[slot], base_runs[slot + 1]):
+                passing = 0
+                for pair in range(run_offsets[run], run_offsets[run + 1]):
+                    if passes[pair_groups[pair]]:
+                        passing += 1
+                if passing:
+                    kind = run_types[run]
+                    if per_type[kind] == 0:
+                        seen[distinct] = kind
+                        distinct += 1
+                    per_type[kind] += passing
+        for kind in np.sort(seen[:distinct]):
+            types[found] = kind
+            counts[found] = per_type[kind]
+            per_type[kind] = 0
+            found += 1
+    starts[bases] = found
+    return starts, types[:found].copy(), counts[:found].copy()
 
 
 def export_bases(
