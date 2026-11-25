@@ -335,6 +335,11 @@ button.help:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 #base-table thead th { background: #f3f6f2; font-weight: 600; }
 #base-table .figure-line, #base-table .why { display: block; color: var(--muted); font-size: 0.78rem; }
 #base-table .score { white-space: nowrap; font-weight: 600; }
+#base-table button.base-name { border: none; background: none; padding: 0; font: inherit; font-weight: 600;
+  color: var(--green-dark); text-decoration: underline; cursor: pointer; }
+#base-hike-list { margin: 8px 0; padding-left: 1.6em; font-size: 0.9rem; }
+#base-hike-list li { margin-bottom: 4px; }
+#base-hike-list .minutes { color: var(--muted); margin-right: 6px; }
 #base-table .why { font-weight: 400; white-space: normal; }
 .months { display: flex; gap: 2px; margin: 0; padding: 0; list-style: none; }
 .months li { width: 1.25em; text-align: center; font-size: 0.72rem; border-radius: 3px; background: #eef0ec; color: var(--muted); }

@@ -4041,6 +4041,7 @@ async function start() {
   // the list (ADR-0075).
   const openLinked = (changed) => {
     const parts = readLink(location.hash);
+    if (parts.has("base")) return; // "Find a base" (bases.js) opens it
     const kind = ["hike", "compose", "wish"].find((name) => parts.has(name));
     if (!kind) {
       if (!changed) return;

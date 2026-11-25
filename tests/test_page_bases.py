@@ -243,3 +243,118 @@ def test_too_few_hikes_to_compare_is_said_and_nothing_is_listed(browser, server)
 
     page.locator("#base-results").get_by_text("Too few of your hikes").wait_for()
     assert page.locator("#base-results tbody tr").count() == 0
+
+
+def open_base(page, name: str) -> dict:
+    """Opens the row of ``name``: the body of the one Base it asks for, once its hikes are shown."""
+    with page.expect_request("**/api/bases/detail") as request:
+        page.locator("#base-results tbody").get_by_role("button", name=name).click()
+    page.locator("#base-hike-list li").first.wait_for()
+    return json.loads(request.value.post_data)
+
+
+def keswick_in_60(page) -> None:
+    choose_base(page, "Kes", "Keswick")
+    page.get_by_role("radio", name="about 60 min").check()
+    rank(page)
+
+
+def test_an_opened_base_lists_its_passing_hikes_nearest_first_and_maps_them(browser, server) -> None:
+    page = open_bases(browser, server)
+    keswick_in_60(page)
+
+    assert open_base(page, "Bethesda") == {"base": BETHESDA, "reach": 60}
+    assert "Bethesda" in page.locator("#base-hikes h2").inner_text()
+    minutes = page.locator("#base-hike-list .minutes").all_inner_texts()
+    assert minutes == ["about 5 min", "about 10 min", "about 20 min", "about 50 min"]  # REACHED, nearest first
+    assert page.locator("#base-results").is_hidden()
+    marked = page.evaluate("() => bases.hikeMarkers.map((m) => [m.getLatLng().lat, m.getLatLng().lng])")
+    assert len(marked) == 4
+    assert all(abs(lat - 47.0) < 3 for lat, _ in marked)  # at the Trailheads, [lat, lon] read the right way round
+
+    page.get_by_role("button", name="Back to the list").click()
+    assert page.locator("#base-results").is_visible()
+    assert page.locator("#base-hikes").is_hidden()
+    assert len(page.evaluate("() => bases.markers")) == 1 + page.locator("#base-results tbody tr").count()
+
+
+def test_a_shorter_reach_opens_the_base_again_with_it(browser, server) -> None:
+    page = open_bases(browser, server)
+    keswick_in_60(page)
+    open_base(page, "Bethesda")
+
+    with page.expect_request("**/api/bases/detail") as request:
+        page.get_by_role("radio", name="about 15 min").check()
+    page.locator("#base-hike-list li").nth(1).wait_for()
+    page.wait_for_function("() => document.querySelectorAll('#base-hike-list li').length === 2")
+
+    assert json.loads(request.value.post_data)["reach"] == 15
+    assert page.locator("#base-hike-list .minutes").all_inner_texts() == ["about 5 min", "about 10 min"]
+
+
+def test_a_hike_of_an_opened_base_links_into_hikes_like_it(browser, server) -> None:
+    page = open_bases(browser, server)
+    keswick_in_60(page)
+    open_base(page, "Bethesda")
+    first = page.locator("#base-hike-list li").first
+    name = first.locator(".hike-name").inner_text()
+    link = first.get_by_role("link", name="Find hikes like this")
+
+    assert (link.get_attribute("href") or "").startswith("#hike=")
+    link.click()
+
+    page.locator("#liked-name").get_by_text(name).wait_for()
+    assert page.locator("#base-panel").is_hidden()
+    assert page.locator("#seed-pick").is_visible()
+    assert "base" not in page.evaluate("() => location.hash")
+
+
+def test_the_address_carries_the_town_the_reach_and_the_opened_base(browser, server) -> None:
+    page = open_bases(browser, server)
+    assert page.evaluate("() => location.hash") == "#base&reach=30"
+    keswick_in_60(page)
+    assert page.evaluate("() => location.hash") == f"#base={KESWICK}&reach=60"
+    open_base(page, "Bethesda")
+    address = page.evaluate("() => location.hash")
+    assert address == f"#base={KESWICK}&reach=60&open={BETHESDA}"
+
+    shared = open_page(browser, server, Api({}), hash=address)
+
+    shared.locator("#base-hike-list li").first.wait_for()
+    assert shared.locator("#base-panel").is_visible()
+    assert "Keswick" in shared.locator("#base-chosen").inner_text()
+    assert shared.get_by_label("A town you stayed in").input_value() == "Keswick"
+    assert shared.get_by_role("radio", name="about 60 min").is_checked()
+    assert "Bethesda" in shared.locator("#base-hikes h2").inner_text()
+    assert shared.locator("#base-hike-list li").count() == 4
+
+    shared.get_by_role("button", name="Back to the list").click()
+    assert shared.evaluate("() => location.hash") == f"#base={KESWICK}&reach=60"
+    assert shared.locator("#base-results tbody tr").count() > 0
+
+
+def test_a_base_link_opened_in_a_tab_already_open_sets_every_setting(browser, server) -> None:
+    page = open_bases(browser, server)
+    choose_base(page, "Beth", "Bethesda")
+    page.get_by_role("radio", name="about 15 min").check()
+
+    page.evaluate(f"() => {{ location.hash = '#base={KESWICK}&reach=60'; }}")
+
+    page.locator("#base-chosen").get_by_text("Keswick").wait_for()
+    page.locator("#base-results tbody tr").first.wait_for()
+    assert page.get_by_role("radio", name="about 60 min").is_checked()
+    assert page.locator("#base-hikes").is_hidden()
+
+    page.evaluate("() => { location.hash = '#base'; }")  # a link with no town: the mode as it opens
+    page.wait_for_function("() => document.querySelector('#base-results').hidden")
+    assert "No town chosen yet" in page.locator("#base-chosen").inner_text()
+    assert page.get_by_role("radio", name="about 30 min").is_checked()
+
+
+def test_back_to_finding_hikes_leaves_the_base_address(browser, server) -> None:
+    page = open_bases(browser, server)
+    keswick_in_60(page)
+
+    page.get_by_role("button", name="Back to finding hikes").click()
+
+    assert "base" not in page.evaluate("() => location.hash")
