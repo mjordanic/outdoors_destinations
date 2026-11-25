@@ -1973,6 +1973,11 @@ class ServingData:
         self.regions = regions_in(self.trailheads[:, 1])  # the RegionChoice's names this Catalog has hikes in
         # What the pages say the hikes are across: as the export names it, else (an export from before) by the hikes.
         self.covered = self.meta.get("regions") or covered_regions(self.regions)
+        self.bases = None  # "Find a base" (ADR-0084): the export's bases/ folder, when it has one of these DayHikes
+        if (self.directory / "bases").is_dir():
+            from dayhike.bases import Bases  # its build's k-means and Valhalla imports, only for an export with Bases
+
+            self.bases = Bases.open_dir(self.directory / "bases", self.store)
 
     def _db(self) -> sqlite3.Connection:
         return sqlite3.connect(self._db_uri, uri=True)
