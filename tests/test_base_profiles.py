@@ -113,3 +113,20 @@ def test_an_unknown_reach_or_a_mask_of_the_wrong_length_is_refused(tmp_path: Pat
         base_profiles(bases, 45, np.ones(hikes, dtype=bool))
     with pytest.raises(ValueError):
         base_profiles(bases, 30, np.ones(hikes - 1, dtype=bool))
+
+
+@pytest.mark.parametrize("seed", range(3))
+def test_profiles_equal_a_naive_count_when_a_mask_passes_or_fails_whole_hike_types(tmp_path: Path, seed: int) -> None:
+    bases = _random_bases(tmp_path, seed)
+    rng = np.random.default_rng(seed)
+    kind_of_hike = np.empty(len(bases.group_hikes), dtype=np.int64)
+    for group in range(len(bases.group_starts) - 1):
+        kind_of_hike[bases.group_hikes[bases.group_starts[group] : bases.group_starts[group + 1]]] = bases.group_types[group]
+    every, none = rng.permutation(30)[:10], rng.permutation(30)[:10]  # some HikeTypes pass whole, some not at all
+    hike_mask = (rng.random(len(kind_of_hike)) < 0.5) | np.isin(kind_of_hike, every)
+    hike_mask &= ~np.isin(kind_of_hike, np.setdiff1d(none, every))
+
+    for reach in REACHES:
+        profiles = base_profiles(bases, reach, hike_mask)
+        assert _as_dicts(profiles) == _naive(vars(bases), reach, hike_mask)
+        assert profiles.groups.tolist() == [sum(found.values()) for found in _as_dicts(profiles)]

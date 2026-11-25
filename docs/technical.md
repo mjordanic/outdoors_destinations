@@ -2709,8 +2709,11 @@ setting it does not name to its default (ADR-0073), on load or in a tab already 
 
 A BaseRanking (`rank_bases`) counts every Base's BaseProfile under the hike filter in one numba pass over
 the stored pairs. It then scores back (cheap) for every Base with at least 10 passing HikeGroups, and mix
-only for the `PRESELECT_BASES` (20,000) best by back times enough, because mix is the slow step. Coverage,
-the "like mine" cuts and a row go to the `BEST_HIKE_MATCHES` (6,000) best of those. Under "like mine", a
+only for the `PRESELECT_BASES` (20,000) best by back times enough, because mix is the slow step. Of those,
+mix is worked out only for the Bases that may be among the `BEST_HIKE_MATCHES` (6,000) best: an upper
+bound on mix (spread shares summed over `MIX_BLOCKS`, 64, groups of HikeTypes alike in spread) orders
+them, and mix stops once the next bound is under the 6,000th best worked out, so the best are the same
+as with every mix worked out. Coverage, the "like mine" cuts and a row go to those 6,000. Under "like mine", a
 Base whose value is unknown counts as half alike; when the Hiker's own value is unknown, the trait costs
 nothing.
 

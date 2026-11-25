@@ -227,3 +227,67 @@ def test_mix_only_for_the_best_by_back_and_enough(tmp_path, monkeypatch):
     assert [row.base for row in rank_bases(data, 1, 30, _all(data)).rows] == [1]
     monkeypatch.setattr(bases_module, "PRESELECT_BASES", 2)
     assert [row.base for row in rank_bases(data, 1, 30, _all(data)).rows] == [2, 1]
+
+
+def _formula(data, me: int, base: int) -> tuple[float, float, float]:
+    """``(mix, coverage, back)`` of ``base`` against ``me`` straight from ADR-0084, on dense shares."""
+    table = np.asarray(data.bases.type_table)
+    credit = np.clip((table - np.float32(bases_module.CREDIT_FROM)) / (1 - bases_module.CREDIT_FROM), 0, 1)
+    credit = credit.astype(np.float64)
+    spread = credit / credit.sum(axis=1, keepdims=True)
+    shares = []
+    for town in (me, base):
+        groups, _ = data.reached[town]
+        counts = np.bincount(data.group_types[groups], minlength=len(table)).astype(np.float64)
+        shares.append(counts / counts.sum())
+    mine, theirs = shares
+    mix = np.minimum(mine @ spread, theirs @ spread).sum()
+    coverage = sum(mine[j] * credit[j, theirs > 0].max() for j in np.flatnonzero(mine))
+    back = sum(theirs[t] * credit[mine > 0, t].max() for t in np.flatnonzero(theirs))
+    return mix, coverage, back
+
+
+@pytest.mark.parametrize("seed", range(3))
+def test_every_row_is_scored_by_the_formula(tmp_path, seed):
+    rng = np.random.default_rng(seed)
+    types = 40
+    table = rng.random((types, types)).astype(np.float32)
+    table = (table + table.T) / 2
+    np.fill_diagonal(table, 1.0)
+    towns = []
+    for step in range(60):
+        kinds = rng.choice(types, rng.integers(1, 25), replace=False)
+        towns.append(_town({int(k): int(rng.integers(1, 8)) for k in kinds} | {int(kinds[0]): 10}, step))
+    data = _data(tmp_path, towns, table=table, types=types)
+
+    rows = rank_bases(data, 1, 30, _all(data)).rows
+
+    assert len(rows) == 59
+    assert [row.score for row in rows] == sorted((row.score for row in rows), reverse=True)
+    for row in rows:
+        assert (row.mix, row.coverage, row.back) == pytest.approx(_formula(data, 0, row.base), abs=1e-12)
+
+
+@pytest.mark.parametrize("seed", range(3))
+def test_the_best_do_not_depend_on_the_groups_that_bound_mix(tmp_path, monkeypatch, seed):
+    rng = np.random.default_rng(seed)
+    types = 30
+    table = rng.random((types, types)).astype(np.float32)
+    table = (table + table.T) / 2
+    np.fill_diagonal(table, 1.0)
+    towns = [
+        _town({int(k): int(rng.integers(1, 8)) for k in rng.choice(types, rng.integers(1, 20), replace=False)} | {0: 10}, step)
+        for step in range(80)
+    ]
+    data = _data(tmp_path, towns, table=table, types=types)
+    monkeypatch.setattr(bases_module, "BEST_HIKE_MATCHES", 7)
+    monkeypatch.setattr(bases_module, "MIX_CHUNK", 3)
+
+    found = []
+    for blocks in (1, 4, types):  # one group bounds mix by 1; one HikeType each, by mix itself
+        monkeypatch.setattr(bases_module, "MIX_BLOCKS", blocks)
+        monkeypatch.setattr(bases_module, "_CREDIT", {})
+        found.append([(row.base, row.members, row.score) for row in rank_bases(data, 1, 30, _all(data)).rows])
+
+    assert len(found[0]) == 7
+    assert found[1] == found[0] and found[2] == found[0]
