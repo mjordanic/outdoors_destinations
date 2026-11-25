@@ -324,3 +324,20 @@ button.help:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
   a[href]:not(.leaflet-bar a) { padding-block: 10px; }
   .top a.home { display: inline-block; min-height: 32px; padding-block: 0; }
 }
+
+/* "Find a base" (ADR-0084, bases.js): its panel and card in place of everything that finds hikes. */
+.finding-bases .controls > :not(#base-panel), .finding-bases .content > :not(#base-card) { display: none !important; }
+.reaches { border: none; margin: 8px 0 0; padding: 0; }
+.reaches .check { display: inline-flex; margin-right: 12px; }
+#base-panel .mode-switch { margin-top: 10px; }
+#base-table { border-collapse: collapse; font-size: 0.85rem; min-width: 100%; }
+#base-table th, #base-table td { padding: 5px 6px; border-bottom: 1px solid #eef0ec; text-align: left; vertical-align: top; }
+#base-table thead th { background: #f3f6f2; font-weight: 600; }
+#base-table .figure-line, #base-table .why { display: block; color: var(--muted); font-size: 0.78rem; }
+#base-table .score { white-space: nowrap; font-weight: 600; }
+#base-table .why { font-weight: 400; white-space: normal; }
+.months { display: flex; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.months li { width: 1.25em; text-align: center; font-size: 0.72rem; border-radius: 3px; background: #eef0ec; color: var(--muted); }
+.months li.mild { background: var(--green); color: #fff; }
+.months li.unknown { background: none; }
+@media (max-width: 600px) { .months { flex-wrap: wrap; max-width: 9em; } }

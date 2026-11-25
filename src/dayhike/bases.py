@@ -36,7 +36,7 @@ from dayhike.similarity import (
 )
 from dayhike.serving import REGION_SPLIT_LON, ServingData, _fold
 from dayhike.steps import file_key
-from dayhike.town_traits import TownTraits, trait_cuts, trait_passes
+from dayhike.town_traits import MILD_C, TownTraits, trait_cuts, trait_passes
 
 HIKE_TYPES = 512
 HIKE_TYPES_SEED = 20261124
@@ -266,6 +266,38 @@ MIX_SHARE = 0.4  # of the hike score; coverage is the rest, half each way (ADR-0
 BEST_HIKE_MATCHES = 3_000  # Bases ranked on mix and back that get a coverage, and a row
 AREA_REACHES = 2  # a Base this many Reaches from a better row joins it
 OWN_AREA_REACHES = 3  # Bases this many Reaches from the Hiker's are where they have been
+# What a BaseRanking's score means (ADR-0025), beside every row of "Find a base"; served in /api/info.
+BASE_SCORE_HELP = {
+    "overall": "How alike the hikes in reach of this town are to those in reach of yours, from 0 to 1. Higher "
+    "is more alike: 1 is the same kinds of hike in the same shares.",
+    "sections": (
+        {
+            "title": "Kinds of hike",
+            "text": f"Every hike is given one of {HIKE_TYPES} kinds, made from the measures that compare two hikes: "
+            "length, climb, height, landscape, water, weather and the rest. Two towns are compared on the kinds "
+            "of hike they have in reach, not hike by hike; hikes that start close together and are of one kind "
+            "count once.",
+        },
+        {
+            "title": "How the score is made",
+            "text": f"{round(MIX_SHARE * 100)} % of the score is the mix: how far the two towns have the same kinds "
+            f"of hike in the same shares, near kinds counting as partly the same. {round((1 - MIX_SHARE) * 100)} % "
+            "is coverage, half each way: how many of the kinds near your town this town has too, and how many of "
+            "its kinds your town has. A town with far fewer of these hikes than yours is scored down.",
+        },
+        {
+            "title": "Your hike filters and town traits",
+            "text": "Only the hikes that pass your hike filters count, for both towns. A town trait set to "
+            "“like mine” takes part of the score off a town unlike yours on it, more the more it "
+            "matters, and the row says how much; a trait the town has no data for costs nothing.",
+        },
+        {
+            "title": "One row per area",
+            "text": "Towns close together have much the same hikes in reach, so each row is an area, named after "
+            "its best town. Towns near your own are left out: that is where you have been.",
+        },
+    ),
+}
 
 
 @dataclass(frozen=True)

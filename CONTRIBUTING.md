@@ -53,7 +53,7 @@ data you built. Checks on real data are opt-in:
 | `src/dayhike/town_traits.py` | TownTraits: per trait ignore, filter or "like mine" with an importance, the size, count and months similarities, and the share of the hike score each "like mine" trait takes off (ADR-0084). |
 | `src/dayhike/valhalla.py`, `highways.py` | Drive time through Valhalla. |
 | `src/dayhike/serving.py`, `cut.py` | The serving export the web demo reads, the text of the score explanations, and cutting an export into a Europe, US or demo site. |
-| `src/dayhike/web/__init__.py`, `web/static/` | The web API and the page (`app.js`, the HTML pages, `style.css`). Start here for a page bug. |
+| `src/dayhike/web/__init__.py`, `web/static/` | The web API and the page (`app.js`, its "Find a base" mode in `bases.js`, the HTML pages, `style.css`). Start here for a page bug. |
 | `src/dayhike/coverage.py`, `extracts.py`, `parallel.py` | The coverage map, the Geofabrik downloads, worker processes. |
 | `web/` | The container (data and web Dockerfiles, Cloud Build config, compose file, start script), `smoke.py` and `shell.py` (the loading shell). |
 | `tests/` | The test suite and its small fixtures. |

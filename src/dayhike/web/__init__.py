@@ -819,8 +819,15 @@ def create_app(
             "grouping": {"km": GROUP_M / 1000, "share": GROUP_SHARE, "min_km": GROUP_MIN_M / 1000, "kmh": GROUP_KMH},
             # Where both maps load their base tiles; the page credits OpenStreetMap beside the provider (#120).
             "basemap": asdict(basemap),
-            # "Find a base" (ADR-0084): the Reaches, in minutes, a BaseRanking is asked for; None without Bases.
-            "bases": None if base_finder is None else {"reaches": list(base_finder.REACHES)},
+            # "Find a base" (ADR-0084): the Reaches, in minutes, a BaseRanking is asked for, the band of a mild
+            # month (the months strip marks them) and what its score means (ADR-0025); None without Bases.
+            "bases": None
+            if base_finder is None
+            else {
+                "reaches": list(base_finder.REACHES),
+                "mild_c": list(base_finder.MILD_C),
+                "score_help": base_finder.BASE_SCORE_HELP,
+            },
         }
 
     score_help = {

@@ -36,6 +36,7 @@
   <script src="vendor/leaflet/leaflet.js" defer
           integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <script src="app.js" defer></script>
+  <script src="bases.js" defer></script>
   <!--analytics-->
 </head>
 <body>
@@ -63,6 +64,27 @@
 
 <main class="layout">
   <aside class="controls" aria-label="Query">
+    <!-- "Find a base" (ADR-0084, bases.js): in place of every other panel while it is on. -->
+    <section class="panel" id="base-panel" hidden>
+      <h2 class="panel-title">Find a base</h2>
+      <p class="hint">Towns whose hikes within a drive are like those of a town you stayed in.</p>
+      <label class="panel-title" for="base-search">1. A town you stayed in</label>
+      <div class="search">
+        <input id="base-search" type="search" autocomplete="off" spellcheck="false"
+               placeholder="Type a town's name, e.g. Keswick" aria-controls="base-suggestions" aria-expanded="false" maxlength="100"
+               role="combobox" aria-autocomplete="list">
+        <ul id="base-suggestions" class="suggestions" role="listbox" hidden></ul>
+      </div>
+      <p id="base-chosen" class="hint">No town chosen yet. Search for one, or click the map near where you stayed.</p>
+      <fieldset class="reaches">
+        <legend class="panel-title">2. Hikes within a drive of</legend>
+        <span id="base-reaches"></span>
+      </fieldset>
+      <p class="hint">An estimate of the drive to where each hike starts, made once for every town.</p>
+      <button type="button" id="base-find" class="primary" disabled>Find bases</button>
+      <p id="base-status" class="status" role="status" aria-live="polite"></p>
+      <button type="button" id="bases-off" class="secondary mode-switch">Back to finding hikes</button>
+    </section>
     <section class="panel">
       <div id="seed-pick">
         <label class="panel-title" for="search">1. A hike you liked</label>
@@ -75,6 +97,8 @@
         <label class="check"><input type="checkbox" id="map-pick-on" autocomplete="off"> Select hike on map</label>
         <p id="liked-name" class="hint">No hike chosen yet.</p>
         <button type="button" id="wish-on" class="secondary mode-switch" hidden>No particular hike in mind? Describe the one you want</button>
+        <!-- Shown when /api/info says the site has Bases (ADR-0084). -->
+        <button type="button" id="bases-on" class="secondary mode-switch" hidden>Find a base: towns with hikes like a town you stayed in</button>
       </div>
       <div id="wish-intro" hidden>
         <h2 class="panel-title">1. The hike you want</h2>
@@ -167,6 +191,15 @@
   </aside>
 
   <section class="content">
+    <section id="base-card" class="card" hidden>
+      <div id="base-map" class="map pick-map"></div>
+      <p class="hint" id="base-pin-hint" role="status" aria-live="polite">Click the map near where you stayed to choose the town nearest to it.</p>
+      <section id="base-results" hidden>
+        <h2 id="base-title"></h2>
+        <p class="hint" id="base-note"></p>
+        <div class="table-wrap"><table id="base-table"></table></div>
+      </section>
+    </section>
     <section id="map-pick" class="card" hidden>
       <h2>Select a hike on the map</h2>
       <div class="compose-bar" id="compose-bar" hidden>

@@ -891,24 +891,29 @@ function scoreColor(score) {
 // ---------- score help (ADR-0025) ----------
 
 // A small "?" beside a score: hover, focus, click or tap opens what the score means.
-// ``key``: "overall", "measures", or a Measure's name.
+// ``key``: "overall", "measures", "base" (a BaseRanking's score, bases.js), or a Measure's name.
 function helpButton(key) {
   const measure = state.measures.find((m) => m.name === key);
-  const label = measure ? `What the ${measure.label} score means` : `What the ${key === "overall" ? "similarity" : "measure"} score means`;
+  const label = measure ? `What the ${measure.label} score means` : `What the ${{ overall: "similarity", base: "base" }[key] ?? "measure"} score means`;
   return `<button type="button" class="help" data-help="${escapeHtml(key)}" aria-label="${escapeHtml(label)}" aria-haspopup="dialog" aria-expanded="false" aria-controls="score-help">?</button>`;
 }
 
 function helpHtml(key) {
-  const help = state.scoreHelp;
+  const help = key === "base" ? state.info.bases.score_help : state.scoreHelp;
+  if (key === "base") return helpBox(`<h3 id="score-help-title">Base score</h3><p>${escapeHtml(help.overall)}</p>`, help.sections);
   const measure = state.measures.find((m) => m.name === key);
   const head = measure
     ? `<h3 id="score-help-title">${escapeHtml(measure.label)}</h3><p>${escapeHtml(measure.description)}</p>
        <p><strong>Data:</strong> ${escapeHtml(measure.source)}</p><p>${escapeHtml(help.measure)}</p>`
     : `<h3 id="score-help-title">${key === "overall" ? "Similarity score" : "Measure scores"}</h3>
        <p>${escapeHtml(key === "overall" ? help.overall : help.measure)}</p>`;
-  const sections = help.sections.map((s) => `<h4>${escapeHtml(s.title)}</h4><p>${escapeHtml(s.text)}</p>`).join("");
+  return helpBox(head, help.sections);
+}
+
+function helpBox(head, sections) {
+  const text = sections.map((s) => `<h4>${escapeHtml(s.title)}</h4><p>${escapeHtml(s.text)}</p>`).join("");
   // A cue while more of the text is below the box's edge (ADR-0054).
-  return `<button type="button" class="help-close" aria-label="Close">×</button>${head}${sections}<p class="help-more" aria-hidden="true">More below ↓ scroll</p>`;
+  return `<button type="button" class="help-close" aria-label="Close">×</button>${head}${text}<p class="help-more" aria-hidden="true">More below ↓ scroll</p>`;
 }
 
 // One explanation box for every "?": shown while a "?" is hovered or focused, and kept
@@ -3296,21 +3301,21 @@ async function findSimilar() {
   await rank(query, liked, false, crypto.getRandomValues(new Uint32Array(1))[0], place);
 }
 
-// POST /api/rank with this tab's name. While the server still runs this tab's previous Ranking (one the
-// page no longer waits for), it asks again every RANK_RETRY_MS, saying so, for up to TIMEOUT_S, unless
-// ``current()`` says a later request took its place (ADR-0054).
-async function postRank(request, current = () => true) {
+// POST /api/rank (or ``path``: a BaseRanking's) with this tab's name. While the server still runs this tab's
+// previous Ranking (one the page no longer waits for), it asks again every RANK_RETRY_MS, saying so with ``say``,
+// for up to TIMEOUT_S, unless ``current()`` says a later request took its place (ADR-0054).
+async function postRank(request, current = () => true, path = "/api/rank", say = setStatus) {
   const until = Date.now() + TIMEOUT_S * 1000;
   for (;;) {
     try {
-      return await api("/api/rank", {
+      return await api(path, {
         method: "POST",
         headers: { "Content-Type": "application/json", [TAB_HEADER]: TAB },
         body: JSON.stringify(request),
       });
     } catch (error) {
       if (error.status !== 409 || Date.now() > until || !current()) throw error;
-      setStatus("Waiting for your earlier search to end…");
+      say("Waiting for your earlier search to end…");
       await new Promise((resolve) => setTimeout(resolve, RANK_RETRY_MS));
       if (!current()) throw error;
     }
@@ -3895,6 +3900,7 @@ async function start() {
   $("#results-scores").innerHTML = `<strong>Score:</strong> ${escapeHtml(state.scoreHelp.overall)}
     <strong>Measure cells:</strong> ${escapeHtml(state.scoreHelp.measure)} ${helpButton("measures")}`;
   scoreHelp.listen();
+  document.dispatchEvent(new Event("hikesalike:info")); // state.info is in: "Find a base" (bases.js) starts
   buildWeights();
   buildRegions();
   $("#wish-on").hidden = !state.measures.some(wishable);

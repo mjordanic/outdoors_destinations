@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from dayhike import build_catalog, build_similarity
 from dayhike.bases import REACHES, BaseFacts, HikeTypes, _write_bases
 from dayhike.hike_filter import HikeFilter, hike_mask
+from dayhike.town_traits import MILD_C
 from dayhike.serving import ServingData, _fold, export_serving
 from dayhike.web import TAB_HEADER, create_app
 
@@ -117,7 +118,10 @@ def _passing_groups(data: ServingData, place: int, reach: int, hike_filter: dict
 def test_info_says_whether_the_site_has_bases(exports: tuple[Path, Path], client: TestClient) -> None:
     plain = TestClient(create_app(ServingData(exports[0])))
 
-    assert client.get("/api/info").json()["bases"] == {"reaches": list(REACHES)}
+    bases = client.get("/api/info").json()["bases"]
+    assert bases["reaches"] == list(REACHES)
+    assert bases["mild_c"] == list(MILD_C)
+    assert bases["score_help"]["overall"]  # what a BaseRanking's score means (ADR-0025)
     assert plain.get("/api/info").json()["bases"] is None
     assert plain.get("/api/bases/search", params={"q": "kes"}).status_code == 404
     assert plain.get("/api/bases/nearest", params={"lat": 45, "lon": 7}).status_code == 404
