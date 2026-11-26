@@ -609,7 +609,7 @@ const bases = {
           guessed = Boolean(answer.guess);
           shownFor = q;
           active = -1;
-          show();
+          if (document.activeElement === input) show(); // not over Find bases' answer once the box is left
         } catch (error) {
           if (error.name !== "AbortError") say(error.message); // a refusal is not "no town of that name"
         }
