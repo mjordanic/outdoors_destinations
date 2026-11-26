@@ -420,9 +420,14 @@ function openPart() {
   return row != null && !$("#selected").hidden && !$("#results").hidden ? `&open=${encodeURIComponent(row)}` : "";
 }
 
+// ``address`` naming no row open.
+function closed(address) {
+  return address.replace(/&open=[^&]*/g, "");
+}
+
 // ``address`` naming the row ``key`` open, in place of any it named.
 function withOpen(address, key) {
-  return `${address.replace(/&open=[^&]*/g, "")}&open=${encodeURIComponent(key)}`;
+  return `${closed(address)}&open=${encodeURIComponent(key)}`;
 }
 
 // The full address that opens ``hike`` measured as the GPX draws it, one way or with the way back, and
@@ -4337,7 +4342,9 @@ async function start() {
     advancedOpen = $("#advanced").open;
     syncFind();
   };
-  window.addEventListener("hashchange", () => openAddress(true));
+  window.addEventListener("hashchange", (event) => {
+    if (closed(new URL(event.oldURL).hash) !== closed(location.hash)) openAddress(true);
+  });
   openAddress(false);
 }
 

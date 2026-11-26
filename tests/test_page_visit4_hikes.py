@@ -47,6 +47,25 @@ def test_a_hike_opened_from_the_list_is_named_by_the_address(browser, server) ->
     assert page.evaluate("location.hash") == f"#hike={RIDGE_WALK_ID}&list"
 
 
+def test_back_from_a_row_opened_over_a_list_of_other_settings_only_closes_it(browser, server) -> None:
+    api = Api({})
+    page = open_page(browser, server, api, hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+    page.locator("#month").select_option("1")  # the list is now of other settings
+    page.locator("#results.stale").wait_for()
+    page.locator("#results-table tbody tr").first.click()
+    page.locator("#selected").wait_for()
+
+    back(page)
+
+    assert page.locator("#selected").is_hidden()
+    assert page.locator("#results").is_visible()
+    assert page.locator("#results.stale").count() == 1
+    assert page.locator("#month").input_value() == "1"
+    assert len(api.ranked) == 1
+
+
 def test_an_address_naming_an_opened_hike_opens_it_over_the_list(browser, server) -> None:
     page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}&list&open={VALLEY_PATH_ID}")
 
