@@ -26,7 +26,8 @@ or a ComposedHike on the kept side still opens.
 
 The cut rebuilds what is derived from the hikes kept: the name search's index (``export_name_index``),
 the way-back network (``TrailGraph.write_network``), ``places.sqlite`` and ``landmarks.sqlite`` (``export_places``,
-``export_landmarks``, from the GeoNames dump), and ``meta.json``: the hike count, the regions (from
+``export_landmarks``, from the GeoNames dump), the ``bases/`` folder (``_cut_bases``), and
+``meta.json``: the hike count, the regions (from
 the uncut export's, of the side kept, or the cut file's areas), the credits of the sources the kept
 hikes come from, and a ``data_tag`` ending in the cut's name (``-eu``, ``-us``, ``-demo``), the
 tag of its data image (docs/deploy.md §1).
@@ -47,7 +48,7 @@ import tarfile
 import time
 import tomllib
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -273,6 +274,8 @@ def cut_serving(
         export_landmarks(out, geonames_path)
     else:
         _fresh(out / "landmarks.sqlite")
+    report("cut: bases")
+    _cut_bases(data, out, kept)
     meta = _cut_meta(data.meta, keep, areas, out, ids, compose)
     meta["export_seconds"] = round(time.monotonic() - started, 1)
     (out / "meta.json").write_text(json.dumps(meta, indent=1, ensure_ascii=False))
@@ -374,6 +377,59 @@ def _cut_similarity(source: Path, target: Path, kept: np.ndarray) -> None:
     meta["dayhikes"] = len(kept)
     _fresh(target / "meta.json")
     (target / "meta.json").write_text(json.dumps(meta, indent=1))
+
+
+def _cut_bases(data: ServingData, out: Path, kept: np.ndarray) -> None:
+    """The ``bases/`` folder (ADR-0084) of the rows ``kept``, written after the cut's similarity and places.
+
+    The HikeGroups with a kept hike are kept, renumbered in their order (so still in HikeType order),
+    each with its kept hikes. A Base is kept when a kept HikeGroup is in its Reach and the cut's
+    ``places.sqlite`` offers it; its pairs keep their minutes, and its run index and ``BaseFacts`` are
+    rebuilt, its places to stay and eat kept. The HikeTypes and their score table are the uncut export's.
+    """
+    shutil.rmtree(out / "bases", ignore_errors=True)
+    bases = data.bases
+    if bases is None:
+        return
+    from dayhike.bases import HikeTypes, _write_bases, base_facts  # its build's k-means imports, only for an export with Bases
+    from dayhike.similarity import SimilarityStore
+
+    whole_group_of_hike = np.empty(len(data.store.ids), dtype=np.int64)
+    whole_group_of_hike[bases.group_hikes] = np.repeat(np.arange(len(bases.group_types)), np.diff(bases.group_starts))
+    kept_groups, group_of_hike = np.unique(whole_group_of_hike[kept], return_inverse=True)
+    renumber = np.full(len(bases.group_types), -1, dtype=np.int32)  # int32: the pairs are some 80 million
+    renumber[kept_groups] = np.arange(len(kept_groups))
+    count = len(bases.place_ids)
+    slot_base = (np.arange(len(bases.base_runs) - 1) % count).astype(np.int32)
+    pair_base = np.repeat(slot_base, np.diff(np.asarray(bases.run_offsets)[bases.base_runs]))
+    pair_groups = renumber[bases.pair_groups]
+    on = pair_groups >= 0
+    order = np.argsort(pair_base[on], kind="stable")
+    ends = np.cumsum(np.bincount(pair_base[on], minlength=count))[:-1]
+    reached = list(zip(np.split(pair_groups[on][order], ends), np.split(np.asarray(bases.pair_minutes)[on][order], ends)))
+    with sqlite3.connect(f"file:{out / 'places.sqlite'}?mode=ro", uri=True) as db:
+        offered = [place for (place,) in db.execute("SELECT id FROM places")]
+    keep = [i for i in np.flatnonzero(np.isin(bases.place_ids, offered)).tolist() if len(reached[i][0])]
+    reached = [reached[i] for i in keep]
+    store = SimilarityStore.open_dir(out / "similarity")
+    place_ids = np.asarray(bases.place_ids)[keep]
+    facts = base_facts(store, out / "places.sqlite", place_ids, reached, group_of_hike)
+    facts = replace(facts, stays=np.asarray(bases.stays)[keep], eats=np.asarray(bases.eats)[keep])
+    _write_bases(
+        out,
+        place_ids,
+        np.asarray(bases.points)[keep],
+        reached,
+        group_of_hike,
+        np.asarray(bases.group_types)[kept_groups],
+        HikeTypes(
+            types=np.zeros(0), middles=np.zeros(0), table=np.asarray(bases.type_table), version=bases.meta["hike_types_version"]
+        ),
+        facts,
+        store,
+        inputs=bases.meta.get("inputs"),
+        town_counts=bases.meta.get("town_counts"),
+    )
 
 
 def _cut_trailgraph(source: Path, target: Path, reach: _Reach, side: bool) -> None:

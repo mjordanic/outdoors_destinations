@@ -12,7 +12,10 @@ This is a Python package plus SQLite files on disk. There is no live Overpass
 query and no database server to start. You ingest an OSM snapshot once,
 optionally sample a DEM, LandCover, and climate onto the geometries, build the
 similarity facts once, then rank from those files. A small read-only web demo
-serves a trimmed export of them ([Web demo](#web-demo)). It runs live at
+serves a trimmed export of them ([Web demo](#web-demo)). With an optional
+`bases/` folder beside that export, the page can also rank Bases, towns to
+stay in, by how alike the hikes within a drive of them are
+([Find a base](#find-a-base), ADR-0084). It runs live at
 <https://hikesalike.com> on Google Cloud Run, which
 stops the server when idle, so the first visit after a quiet spell can take up
 to about 20 seconds ([docs/deploy.md](deploy.md)).
@@ -40,7 +43,7 @@ while the native libraries load for the first time):
 git clone https://github.com/mjordanic/outdoors_destinations.git
 cd outdoors_destinations
 uv sync                       # Python 3.13 and the packages
-uv run pytest -n 4            # optional: the test suite, about 70 to 80 seconds (see Tests)
+uv run pytest -n 4            # optional: the test suite, about 3 minutes (see Tests)
 
 mkdir -p data
 uv run dayhike ingest tests/fixtures/catalog.osm --catalog data/catalog.sqlite
@@ -53,7 +56,8 @@ uv run --extra web dayhike serve --data data/web-serving
 ```
 
 The fixture has no heights, land cover or climate, so its scores only show that
-the pipeline runs. A real Catalog (one country, all of Europe,
+the pipeline runs. Its export has no `bases/` folder, so its page offers no
+"Find a base". A real Catalog (one country, all of Europe,
 or Europe and the contiguous US) needs the OSM, height, land-cover and climate downloads and the full
 command order: [How data is created](#how-data-is-created-command-order), then
 [Walkthrough A](#walkthrough-a--one-country-start-here) (one country, with
@@ -70,7 +74,7 @@ the demo: [Web demo](#web-demo) and [docs/deploy.md](deploy.md).
 - [Rank by Seed](#3-rank-by-seed): [Measures](#measures), [what the score means](#what-the-score-means), [method details, data versions and validation](#method-details-data-versions-and-validation), [rebuilding the facts](#rebuilding-the-facts), [Europe scale](#similarity-at-europe-scale)
 - [Origin and max hours](#4-optional-origin-and-max-hours)
 - [Pulling a real extract](#pulling-a-real-extract): [ingest](#how-ingest-runs), [NetworkHikes](#how-networkhikes-are-chosen-at-a-start), [Valhalla](#valhalla-drivetime-only)
-- [Web demo](#web-demo): [what the page does](#what-the-page-does), [what the list leaves out](#what-the-list-leaves-out), [drawn rows](#drawn-rows-redraw-and-strict-order), [Wish](#describing-a-hike-instead-of-a-seed-wish), [serving](#serving-export-and-running-it), [site pages](#site-pages-and-settings), [export](#what-the-export-holds), [API](#api), [measurements](#web-demo-measurements), [deployment](#deployment-and-the-coverage-map)
+- [Web demo](#web-demo): [what the page does](#what-the-page-does), [what the list leaves out](#what-the-list-leaves-out), [drawn rows](#drawn-rows-redraw-and-strict-order), [Wish](#describing-a-hike-instead-of-a-seed-wish), [serving](#serving-export-and-running-it), [site pages](#site-pages-and-settings), [export](#what-the-export-holds), [API](#api), [Find a base](#find-a-base), [measurements](#web-demo-measurements), [deployment](#deployment-and-the-coverage-map)
 - [Tests](#tests), [Clean rebuild](#clean-rebuild), [rebuild runbook](#rebuild-runbook-workers-steps-at-the-same-time-resuming-and-caches), [Python API](#python-api), [Notebooks](#notebook-walkthrough), [Attribution](#attribution)
 
 ## Install
@@ -105,6 +109,8 @@ Every real file under `data/` is built by a command. This is the order:
 10. Rank                 stdout scores               dayhike rank [--weight] [--month] [--one-way]
 11. Optional DriveTime   local Valhalla Docker       rank --origin --max-hours, nearby
 12. Web demo export      data/web-serving/           dayhike export-serving (see Web demo)
+12b. Optional Bases      data/town-counts.npz        dayhike count-town-amenities (ADR-0084)
+                         data/web-serving/bases/     dayhike export-bases (needs Valhalla; deploy.md "Find a base")
 13. Optional cut         data/web-serving-eu, -us    dayhike cut-serving --keep europe|us|demo (ADR-0082)
 ```
 
@@ -299,7 +305,7 @@ call on your machine.
 | `data/catalog.similarity/` | Similarity facts + Calibration (numpy arrays) | **gitignored** |
 | `data/osm/` | Geofabrik / osmium extracts you download | gitignored |
 | `data/valhalla/` | Road PBF + Valhalla routing tiles Docker builds | gitignored |
-| `data/web-serving/` | Serving export for the web demo (`export-serving`) | **gitignored** |
+| `data/web-serving/` | Serving export for the web demo (`export-serving`), with the optional `bases/` folder (`export-bases`) | **gitignored** |
 | `data/geonames/` | GeoNames `allCountries.zip` for the demo's place search | gitignored |
 | `data/borders/` | OSM national boundaries (`osmium tags-filter … r/admin_level=2`) for `--osm-borders` | gitignored |
 | `src/dayhike/data/cuts/` | Cut files `cut-serving --keep` takes by name (`demo`), ADR-0082 | yes |
@@ -2229,7 +2235,7 @@ distance limit, or of the drive limit at 50 km per hour, the smaller, at least
 to 100 rows, loops included when they were asked; each added block is headed by its row numbers
 and, unless in Strict order, that its rows are drawn from the areas not listed above, in score order
 among themselves only (ADR-0047). A loop that mostly walks the liked hike again is not suggested. The "Return to start" tick
-box above "Find similar" (on by default) measures the liked hike and every hike
+box above "Find hikes" (on by default) measures the liked hike and every hike
 compared with it with its way back to its start, so a summit line is compared
 up and back; off, every hike is compared one way. While it is on, Round trip
 is left out (every hike is then a round trip; ADR-0022). Turning it changes the
@@ -2239,7 +2245,11 @@ liked hike. Every shown hike has "Link to this hike" (`#hike=<id>` for a
 catalog or built hike, its `#compose=` link for a composed one, with `&oneway`
 when set, and the search settings: `&month=`, `&w=` (the weights moved from their defaults, `name:weight`
 comma-separated), `&adv`, `&regions=`, `&group=` and `&units=`, but not the starting place (`&from=lat,lon`, `&place=`, `&hours=`,
-`&km=`), which only the address bar keeps (ADR-0075); a plain click on it copies it as Share does rather than opening it in the same tab, which would drop the starting place and the list; a wish link carries the same but its own weights; ADR-0054) and two buttons: Share sends that address to a touch screen's share
+`&km=`), which only the address bar keeps (ADR-0075); the liked hike's link, and the address bar, end in `&list` while
+its list is shown, and such an address opens with the list, kept or found again (ADR-0088), then `&open=<id>` while a
+result of it is open, which such an address opens over the list, scored against the liked hike when the list drawn
+holds it not (ADR-0089); a hike picked, a list
+found and a result opened are each a step of the history; a plain click on it copies it as Share does rather than opening it in the same tab, which would drop the starting place and the list; a wish link carries the same but its own weights; ADR-0054) and two buttons: Share sends that address to a touch screen's share
 sheet, or copies it on a computer or where the sheet fails (a line beside the
 button then says "Link copied", or shows the link when it cannot be copied),
 and Download GPX saves the hike as drawn (the served line, simplified to within 10 m, so 1 % or
@@ -2262,7 +2272,7 @@ starts, not by road; ADR-0032) or both keeps only hikes within those limits (the
 start is typed as "lat, lon", taken from the
 browser, or found by "Find place" among the GeoNames towns and villages in the
 export, ADR-0029, ADR-0042); the note above the results names the limits and
-the place, "within a 2 h drive of Munich, DE", as they stay set when another
+the place, "within a 2 h drive of Munich, Germany", as they stay set when another
 hike opens in the same tab from the page (a link opened in the tab resets them, ADR-0073), and the limit inputs are not restored by the
 browser on a reload. The DriveTime is estimated on highways-only tiles as in
 **Highway tiles** above; the distance needs no routing engine. Measures with no data for a hike show "no data".
@@ -2279,6 +2289,10 @@ table, in each column heading; the Measure columns are folded away until "Show t
 score of every measure" is pressed); hover, focus, click or tap opens what the score
 means, why alike hikes can score low on one measure, the data each measure
 reads and how the scores are made (ADR-0025).
+
+On a site whose export has a `bases/` folder, the page has a second mode,
+"Find a base", which ranks towns to stay in rather than hikes
+([Find a base](#find-a-base)).
 
 ### What the list leaves out
 
@@ -2531,7 +2545,7 @@ short:
 | Method | Path | Answers |
 | --- | --- | --- |
 | GET | `/api/health` | that the server is up |
-| GET | `/api/info` | hike count, coverage box, `core` (the box of the middle 80 % of Trailheads, where the map opens), `typical_pair` (0.47: below it the page calls a list's matches weak), `covered` (what the site covers, as its pages say it), attribution, which features are on |
+| GET | `/api/info` | hike count, coverage box, `core` (the box of the middle 80 % of Trailheads), each region's own `core` in `regions` (where a map opens: the region ticked alone, else the browser's time zone's, ADR-0088), `typical_pair` (0.47: below it the page calls a list's matches weak), `covered` (what the site covers, as its pages say it), attribution, which features are on |
 | GET | `/api/measures` | the Measures, grouped, with their plain descriptions |
 | GET | `/api/search?q=` | hikes by name |
 | GET | `/api/landmarks?q=` | Landmarks (peaks, huts, lakes, towns) by name, each with its nearest hikes |
@@ -2543,6 +2557,11 @@ short:
 | POST | `/api/compose` | a hike drawn from Segments |
 | POST | `/api/rank` | a Ranking for a Seed or a Wish |
 | POST | `/api/pair` | the score of two given hikes |
+| GET | `/api/bases/search?q=` | Bases (towns to stay in) by name, for "Find a base" |
+| GET | `/api/bases/nearest?lat=&lon=` | the Base nearest a pin on the map |
+| GET | `/api/bases/town?id=` | the Base of a link's number |
+| POST | `/api/bases/rank` | a BaseRanking for the Hiker's Base, with a HikeFilter and TownTraits |
+| POST | `/api/bases/detail` | one Base: its hikes in Reach that pass the HikeFilter, with minutes |
 
 The details, endpoint by endpoint (JSON): `GET /api/search?q=` (every word in any order, at least one of
 two letters or more; case, accents
@@ -2581,7 +2600,13 @@ Ranking answers with and the temperature the page draws its `results` rows of
 them with),
 `GET /api/place?q=&limit=` (GeoNames places with a name starting with the
 query, folded like search: the place named exactly that, then one with it as an
-alternate name, then the most populous; 404 without `places.sqlite`),
+alternate name, then the most populous; with none, for words after a comma, the places named by the words
+before it, in the country the words name or anywhere; else names one typo away, with `"guess": true`, and the
+page asks "Did you mean"; 404 without `places.sqlite`. Each place says whether a Trailhead is within 50 km of it (`covered`),
+those that are first, and places sharing a name and country say the nearest town of 10,000 people or more within
+100 km they are `near`. The page takes the one place named exactly as typed when no much bigger place's name starts
+with it, and else offers them all to choose, biggest first, with their countries in full ("Frankfurt" offers
+Frankfurt am Main), places with none near last; Find place again offers them again, ADR-0088, ADR-0089),
 `GET /api/landmarks?q=&limit=` (up to 10, default 5, Landmarks with a folded name holding the query from a
 word's start, typos as search: the one named exactly first, then the one with the most names, the highest,
 the most hikes; each with `name`, `kind`, `town` (the nearest other town within 30 km, to tell equal names
@@ -2634,8 +2659,8 @@ the country the hike starts in (`country`, `name`, `numbers`, `rescue`, `rescue_
 They also have `border_emergency`, the same row for the country across the border a DayHike's
 route crosses or its Trailhead is within 2 km of, or the one Natural Earth put a start the OSM borders
 moved in (`borders.npy`); null for every other hike, a
-ComposedHike, or an export without it. A Ranking that waits 12 s for its turn answers 503 with
-`Retry-After: 5`. Detail, compose, rank and pair take
+ComposedHike, or an export without it. A Ranking that waits 12 s for its turn, or is not answered 50 s
+after it came (it ends in the background), answers 503 with `Retry-After: 5` (ADR-0087). Detail, compose, rank and pair take
 `return_to_start` (default true; `?return_to_start=false` on `GET
 /api/hikes/{id}`): true measures every hike with its way back to its start
 (facts, `climb_m`, `descent_m` and the listed `length_m` included, with
@@ -2669,11 +2694,117 @@ loops also start near it (ADR-0036), and with `max_hours` only loops starting
 within the drive, each with its `drive_hours`. Every row has its `line` and `versions`, the other hikes of its
 area (DayHikes or loops starting within the GroupingRadius of it, at most three hikes per
 row) in the same shape. With `max_km` only loops starting within it are listed. Loop work stops at 5 s. The GET routes also answer HEAD. Each client gets 20 Rankings and
-300 other calls a minute; one Ranking runs at a time per process, in the order they came, waiting at most 12 s
-(then 503), and a client, a browser tab at an address (the page names its tab in `X-HikesAlike-Tab`), has
+300 other calls a minute; at most two Rankings run at a time per process (`RANKINGS_AT_ONCE`, BaseRankings
+included), in the order they came, waiting at most 12 s (then 503) and answered within 50 s (`RANK_DEADLINE_S`,
+then 503 while it ends in the background, keeping its turn; ADR-0087), and a client, a browser tab at an address (the page names its tab in `X-HikesAlike-Tab`), has
 at most one queued or running (another is a 409, which the page waits out), and an address at most 4 (ADR-0054). A request body over 256 KB, or one sent
 without a `Content-Length`, is refused unread (413, 411); `weights` and `excluded` name each Measure at most once,
 and an unknown Measure name in `weights` is a 422.
+
+### Find a base
+
+With a `bases/` folder (`bases` in `/api/info` is `{"reaches": [15, 30, 60], "mild_c": [low, high],
+"score_help": {"overall", "sections"}, "min_hike_groups", "weak_score"}`, the band in °C of a month the page marks
+mild, what a Base's score means, beside every row (ADR-0025), how few of the Hiker's HikeGroups are too few, and
+the score under which the page says even the best row is not much alike; null without one, and the `/api/bases/` routes then answer 404), "Find a
+base" (ADR-0084) has its own calls and its own page mode in `bases.js`. A Base is named by its
+GeoNames place id and answers as `{"id", "name", "country", "population", "stays", "eats", "lat", "lon"}`
+(population and the places to stay and to eat null when unknown); `GET /api/bases/search?q=&limit=` (up to 20,
+default 5) finds Bases by name as `/api/place` finds places: of the towns of 1,000 people and villages of 100, a
+Base named exactly so first, then towns before villages, then one whose own name starts with the query before one
+only an alternate name does, then the most places to stay, and places of fewer people last ("Alta" is the village
+before Altamura, "Cortina" is Cortina d'Ampezzo before a hamlet, and "Interlaken" the Swiss one), passing over places that are no Base; a query whose spaces or hyphens the name
+writes otherwise ("chamonix mont blanc", "st moritz") finds it too, and with none found it offers names one typo
+away ("keswik") with `guess` true, which the page asks about ("Did you mean …?") instead of taking on Enter.
+`GET /api/bases/nearest?lat=&lon=` gives the nearest Base in a straight line with its `distance_km`, and
+`GET /api/bases/town?id=` the Base of a link's number, so a link names its town whatever happens to its list.
+They say for each Base the nearest other Base of at least 10,000 people and more than its own, in its
+country and within 60 km (`near`: `{"name", "km"}`, else null, ADR-0089), so towns of one name can be told apart. `POST /api/bases/rank` takes `{"seed": place id, "reach": 15, 30 or 60,
+"hike_filter": {...}, "traits": {...}}`: `hike_filter` as `HikeFilter.to_mapping` writes it (`climb_min_m`,
+`climb_max_m`, `length_min_km`, `length_max_km`, `highest_min_m`, `highest_max_m`, and `summit`, `waterside`,
+`round_trip` true), `traits` per TownTrait (`size`, `stays`, `eats`, `months`) one of `{"like_mine": 1-3}`,
+`{"at_least", "up_to"}` (size and counts) or `{"mild_in": [months]}` (months), a trait left out ignored; anything
+else is a 422, and a seed that is no Base a 404. It answers `seed` (the Base with its passing `hike_groups`),
+`too_few` (under 10 of them: no row), `traits_leave_none` (true when there are Bases that might be rows and the
+town filters leave none of them), and up to 300 `results`, one per area, each the Base it is scored as (its
+`id`, `name` and every figure are that town's, and it names the row, ADR-0089), `region`, `score`, `hike_score`, `mix`, `coverage`, `back`, `enough`, `sure`, `hike_groups`, `area_bases`, `area_towns`
+(up to 5 other towns of its area, its best first when that is not the row's, then biggest first, each
+`{"id", "name", "population"}`), `best_town` (`{"id", "name", "score"}` of that best town when the row is scored as
+another, else null) and `cuts`, the share
+each "like mine" trait took off the hike score; the seed and each row have `months`, the median temperature of
+the hikes in Reach each month (null when unknown). `POST /api/bases/detail` takes `{"base": place id, "reach",
+"hike_filter"}` and answers the Base with its passing `hike_groups` and `hikes`, each `{"id", "name",
+"trailhead", "minutes", "length_m", "climb_m", "highest_m", "summit", "round_trip"}` (one way, as the hike filter
+measures them; null when unknown), nearest first. Both count day hikes only: a multi-day route (over 40 km one
+way, ADR-0056) is no hike of a Base (ADR-0086). A seed or Base that is no Base is a 404 that says the link may
+be old. BaseRankings share the hike Rankings' two turns with the same rules (a tab may have one of each
+queued or running; ADR-0087), and have their own limit of 20 a minute per client; town-name lookups and a Base's hikes count against the general API limit
+instead. A row's town, or its numbered dot on the map, opens that Base: its passing hikes with their minutes,
+length, climb and highest point, nearest first, on the map at their Trailheads, each with a link into the hike
+search (`#hike=<id>`, the hike as the liked one), from which a button comes back to the Base.
+
+A site with Bases opens, at its bare address, on a landing of both tools side by side, "Find a hike you like"
+and "Find a hiking base you like", each with what it does; an address naming either skips it (`#base…`, a hike,
+composed hike or wish link, or `#hikes`, the hike search with nothing chosen, which it keeps as its address
+instead of the bare one). At the top of either tool a switch opens the other as it was left, as a step of the
+history; a site without Bases opens on the hike search, with no landing and no switch.
+
+The page shows a hundred rows at a time ("Show more"), the Hiker's own town with its mild months and trait
+values over them, and a line under each score whose parts multiply to it: how alike the hikes are (mix, and
+how many of each town's kinds the other has), the cut for fewer hikes, the cut for few of the Hiker's hikes to
+compare (`sure`), then each "like mine" trait's; a row standing for an area names its biggest other towns
+(`area_towns`), all of them or "among them" the biggest, and its best town with its score when the row is scored
+as a bigger one; a line with a cut ends with the score it comes to. Every step
+(entering the mode, a town chosen, the Reach or a choice changed, a Base opened or closed) is a step of the
+browser's history, so Back undoes it; the answers of the last 30 lists and Bases are kept, so going back asks the
+server nothing. Choices changed in a row ask for one list once they settle (0.6 s, 0.9 s while a number is
+typed). A refused or failed list is said above it, and the list left on screen is greyed as being for the
+earlier choices; a range the wrong way round, or a number under 0, is said beside its field and left out of
+the address, which still names the town, Reach and town opened, and a name not found is said under the town box. The ranges show in the Units chosen and are
+sent in metres and km; a number shown keeps the metres it was set with until it is typed again. The mode sets the hike filter and each trait (ignore, filter,
+or "like mine" with *a little*, *matters* or *important*; town size starts as a filter of at least 1,000 and up to 50,000 people, a place of unknown size failing
+the "at least", both said over the list, the others ignored). Its address is `#base=<seed>&reach=<minutes>&open=<id>` (`#base` alone before a town is
+chosen), then the hike filter's keys (`&climb_max_m=500&summit`) and each trait not at its default
+(`&size=ignore`, `&eats=like-mine-important`, `&stays=3-`, `&size=-5000`, `&months=7,8`; "like mine" is
+`like-mine-a-little`, `like-mine` or `like-mine-important`), then `&units=imperial` as the hike search keeps
+it; like a hike link it sets every setting it does not name, or names with no valid value, to its default
+(ADR-0073), on load or in a tab already open, and opens the sections holding a choice not at its default. On a
+phone, the list or a linked town's page is scrolled to once it is in, and "Finding bases…" shows at the foot of
+the screen. A click on the map chooses a town only on the list, not among a town's hikes.
+
+A BaseRanking (`rank_bases`) counts every Base's BaseProfile under the hike filter in one numba pass over
+the stored pairs. It then scores back (cheap) for every Base with at least 10 passing HikeGroups, and mix
+only for the `PRESELECT_BASES` (20,000) best by back times enough, because mix is the slow step. Of those,
+mix is worked out only for the Bases that may be among the `BEST_HIKE_MATCHES` (6,000) best: an upper
+bound on mix (spread shares summed over `MIX_BLOCKS`, 64, groups of HikeTypes alike in spread) orders
+them, and mix stops once the next bound is under the 6,000th best worked out, so the best are the same
+as with every mix worked out. Coverage, the "like mine" cuts and a row go to those 6,000. Under "like mine", a
+Base whose value is unknown counts as half alike; when the Hiker's own value is unknown, the trait costs
+nothing.
+
+After the visitor check (ADR-0085), the hike score runs from `SCORE_FLOOR`, the median score of random pairs
+of Bases at that Reach (0.36, 0.40 and 0.48 at 15, 30 and 60 min), up to 1, and a Base at 0 is no row.
+`enough` scores down a Base with under half the Hiker's HikeGroups only while it has under
+`ENOUGH_GROUPS` (30), and `sure` scores every row down when the Hiker's Base has under 30. Left out besides
+the Bases near the Hiker's: those whose nearest HikeGroups are mostly within 60 min of it (its region), those
+in a city (100,000 people living in the towns of `places.sqlite` within 5 km or 150,000 within 8 km, or within
+a city of 100,000's own reach of its point, 5 km times the square root of its people over 100,000), towns of
+20,000 people with under 3 places to stay (where people live, not where visitors stay), places whose
+name says they are no town (`NOT_A_TOWN`: a hut, an inn, an industrial estate, a condo, a trailer park, an air
+force base, a holiday or caravan park, "(historical)"), and west of the Atlantic, Bases outside the United
+States. After the second visitor check (ADR-0086), areas form around the best towns of 1,000 people first, then
+villages of 100, then the rest; a row is scored as the biggest Base (population, then places to stay) of its
+best's kind within 0.05 of its score, with that Base's figures, rows are ordered by that score, and a row under
+0.1 is none. After the third (ADR-0088), the row was named after the biggest town or village of its area, saying whose
+figures it showed; after the fourth (ADR-0089) it is named after the Base it is scored as again, and the default
+town size of at least 1,000 people keeps hamlets out.
+
+On the real Europe and US build, the preselection kept the best 20 rows of every ranking the same, for
+Keswick, Chamonix, Bohinjska Bistrica and Moab at 15, 30 and 60 min, with and without "climb up to 500 m"
+or size "like mine". It missed at most 5 of the best 100 rows, from the 27th down.
+`DAYHIKE_REAL_DATA=1 uv run pytest tests/test_bases_real.py` checks the known pairs and the filtered
+seeds on such a build. Its build times, size, request times and memory are in docs/deploy.md
+("Find a base: the `bases/` folder").
 
 ### Web demo measurements
 
@@ -2735,8 +2866,8 @@ The mark (two mountains and a trail) is drawn by hand for this project.
 
 Two tiers.
 
-**Fast** (`uv run pytest -n 4`, about 70 to 80 seconds on an 8-core Mac, or
-about 2.5 minutes on one core with plain `uv run pytest`; a few
+**Fast** (`uv run pytest -n 4`, about 3 minutes on an 8-core Mac (1,992 tests, 2 min 48 s in November 2026),
+longer on one core with plain `uv run pytest`; a few
 thousand warnings, mostly Python's `fork()` DeprecationWarning, are expected):
 everything runs on the committed OSM fixture and small synthetic rasters (but
 see the `data/landcover/` exception under [Where files live](#where-files-live)).
@@ -2746,8 +2877,10 @@ whose name matches. Among them,
 `build-similarity` twice in two directories and requires identical tables and
 `.npy` bytes, no work files left behind, and the schema in
 `tests/rebuild_checks.py`. `tests/test_rebuild_checks.py` shows the comparison
-helpers catch what they must. `tests/test_page.py` drives the web page in
-headless Chromium; it is skipped until `uv run playwright install chromium`,
+helpers catch what they must. `tests/test_page.py` and
+`tests/test_page_bases.py` and `tests/test_page_bases_visit.py` (the "Find a base" mode, and what a visitor
+check of it found) drive the web page in
+headless Chromium; they are skipped until `uv run playwright install chromium`,
 and CI does not install it, so CI does not run the page tests.
 
 **Slow** (marker `real_data`, skipped unless `DAYHIKE_REAL_DATA=1`): checks
@@ -2781,6 +2914,7 @@ DAYHIKE_REAL_DATA=1 uv run pytest -m real_data
 | `test_serving_export_real.py` | the serving export: same ids and Trailheads as the store, a byte copy of it; data ≤ 6 GB and tiles ≤ 900 MB; simplified lines within 10 m (+1.5 m polyline rounding) on 2,000 DayHikes; no rasters or per-vertex climate; every attribution; golden rankings from the export; the tile tar is the built one |
 | `test_real_data.py` | the main walk, WaterSources, the similarity facts, notebook 05 (which reads `data/` of its checkout and must see the Catalog under test) |
 | `test_real_data_us.py` | on the [US build](#a-us-build): known trails and their lengths, day stages, heights, land cover and climate on every hike, a Ranking, drive times from Providence, the pages naming Rhode Island and not Europe |
+| `test_bases_real.py` | on the Europe and US export's `bases/` folder (`DAYHIKE_SERVING_DIR`): the known pairs rank their analogues high and their controls lower, with and without a HikeFilter ([Find a base](#find-a-base)) |
 | `test_cut_serving_real.py` | a cut of the Europe and US export (`DAYHIKE_CUT_DIR`) holds only what it keeps and ranks as the uncut export does with only its side ticked (a demo cut: Rankings of DayHikes only) |
 | `test_notebooks_real.py` | every notebook runs top to bottom in a Jupyter kernel on `data/` of its checkout (skipped when `DAYHIKE_DATA_DIR` points elsewhere); `02`, `04`, `04a` and `05` read the real Catalog, `01` and `03` the fixture; about 2 minutes |
 
@@ -2877,7 +3011,7 @@ at the rebuild.
 5. **Check**, from the new checkout:
 
    ```bash
-   uv run pytest -n 4                           # 70 to 80 s
+   uv run pytest -n 4                           # about 3 min
    DAYHIKE_REAL_DATA=1 DAYHIKE_REFERENCE_DIR=$SNAP DAYHIKE_VALHALLA_URL=http://127.0.0.1:8003 \
      uv run pytest -m real_data                 # 1 h 36 min, most of it tests/test_real_data.py
    ```
@@ -3078,6 +3212,7 @@ The same seams the CLI wraps:
 - `dayhike.similarity.rank_rows` — `rank_dayhikes` on store rows, for callers that know the Seed's row and have no Catalog
 - `dayhike.serving.export_serving` / `ServingData` — write and open the web demo's serving export
 - `dayhike.cut.cut_serving` — cut a serving export to Europe, the US or a cut file's areas (ADR-0082)
+- `dayhike.bases.export_bases` / `dayhike.bases.rank_bases` — write the `bases/` folder beside a serving export, and rank every Base against the Hiker's own under a HikeFilter's mask (`dayhike.hike_filter.hike_mask`) and `TownTraits` (ADR-0084)
 - `dayhike.web.create_app` — the web demo's FastAPI app over a `ServingData`
 
 CLI: `dayhike ingest`, `dayhike fetch-extracts`, `dayhike fetch-external`, `dayhike fetch-dem`,
@@ -3086,7 +3221,7 @@ CLI: `dayhike ingest`, `dayhike fetch-extracts`, `dayhike fetch-external`, `dayh
 `dayhike count-commons`, `dayhike sample-trailgraph`,
 `dayhike build-similarity` (`--calibrate-only`), `dayhike rank` (`--weight`,
 `--month`, `--limit`, `--one-way`), `dayhike compose` (the Route text of a shared link,
-`--name`, `--weight`, `--month`, `--limit`, `--one-way`; reads a serving export; a SuggestedLoop is listed by its link text, and each row's versions indented under it), `dayhike nearby`, `dayhike export-serving`, `dayhike export-name-index`, `dayhike cut-serving` (an export cut to Europe, the US or a cut file's areas, ADR-0082), `dayhike export-places`, `dayhike export-countries`, `dayhike export-photos`, `dayhike export-osm-download`, `dayhike serve`, `dayhike coverage-map`.
+`--name`, `--weight`, `--month`, `--limit`, `--one-way`; reads a serving export; a SuggestedLoop is listed by its link text, and each row's versions indented under it), `dayhike nearby`, `dayhike export-serving`, `dayhike export-name-index`, `dayhike cut-serving` (an export cut to Europe, the US or a cut file's areas, ADR-0082), `dayhike export-places`, `dayhike count-town-amenities` (OSM places to stay and eat within 2 km of each place, read by `export-bases --town-counts`, ADR-0084), `dayhike export-bases` (the Bases and the HikeGroups in their Reach, resumable, ADR-0084), `dayhike export-countries`, `dayhike export-photos`, `dayhike export-osm-download`, `dayhike serve`, `dayhike coverage-map`.
 
 Docstrings on those functions use the glossary in `GLOSSARY.md`.
 Examples: [`01`](../notebooks/01_raw_data_and_ingestion.ipynb) ingest,

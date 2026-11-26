@@ -248,6 +248,38 @@ _Avoid_: shuffle, random results, sample
 The rows of a page as the Ranking has them, its best first, with nothing drawn: the Ranking before ADR-0047.
 _Avoid_: deterministic mode, exact mode
 
+**Base**:
+A town a Hiker stays in and hikes out from: a GeoNames place with at least 10 HikeGroups in Reach. "Find a base" takes the Hiker's own Base and lists other Bases whose hikes in Reach are alike (ADR-0084). A row stands for an area, as a Ranking's does: areas form around the best towns of 1,000 people first, then villages of 100, then the rest, a Base within twice the Reach of a better one's joining it, and the row is scored as the area's biggest Base about as alike as that best one, with that Base's figures (ADR-0086), and named after it: the row is that Base, and the area's other towns are listed under it, biggest first (ADR-0089, undoing ADR-0088's naming). Bases within three Reaches of the Hiker's own, or whose nearest hikes are mostly within an hour of it, are left out, since that is where they have been; so are Bases in a city and places that are no town to stay in (ADR-0085).
+_Avoid_: destination (a DestinationHike is a hike kind), resort, hub, hikes like this (that is a Ranking from a Seed)
+
+**Reach**:
+How far by car a Hiker will go from a Base to a hike: 15, 30 or 60 minutes. A hike is in Reach when the estimated minutes from the Base to its Trailhead are within it. The estimate is made once at build time, one value per Base and HikeGroup, and kept behind one function so a better one can replace it (ADR-0084). It is not DriveTime, which a Ranking asks the routing engine for at query time.
+_Avoid_: DriveTime, catchment, radius, isochrone (how it is built, not what it is)
+
+**HikeType**:
+One of 512 clusters of the Catalog's hikes, found by k-means with a fixed seed over the six core Measures, each scaled as the Measure compares it. The score between two HikeTypes is the site's own score of their middle hikes, a 512 × 512 table. A HikeType only describes a Base's hiking in a BaseProfile; it never decides whether a hike passes a HikeFilter.
+_Avoid_: kind, category, class, cluster (the method, not the thing)
+
+**HikeGroup**:
+What a Base counts: the hikes of one HikeType that start in one 1 km Trailhead cell, each group of Twins counted once. Eight walks from one car park to one peak are one HikeGroup. Its minutes from a Base are the smallest over its Trailheads.
+_Avoid_: distinct hike, cluster, area (an area is a Ranking row's), Twin (Twins fold inside a HikeGroup)
+
+**BaseProfile**:
+How many HikeGroups of each HikeType lie in a Base's Reach under a HikeFilter. It is counted per request from the Base's stored HikeGroups, not stored per Base, so it is exact for any filter.
+_Avoid_: tally, fingerprint, embedding, FeatureVector (that describes one hike)
+
+**BaseRanking**:
+An ordered list of Bases by how alike their BaseProfile is to the Hiker's own Base. The hike score is fixed: 40 % mix (how far the two profiles' shares of HikeTypes overlap, near types counting as partly the same) and 60 % coverage (30 % from the Hiker's Base to the other, 30 % back), run from a random pair's score (0) up to 1, times an enough-hikes factor; a Base under 10 HikeGroups, or at 0, is left out (ADR-0085). TownTraits then re-order the best 6,000 hike matches, and none brings in a Base outside them (ADR-0084).
+_Avoid_: Ranking (a Ranking lists hikes by similarity to Seeds), recommendation, match list
+
+**HikeFilter**:
+The Hiker's limits on which hikes count in a BaseRanking: ranges for climb, length and highest point, and yes-only toggles for reaches a summit, by a lake or the sea, and round trip. It applies to both Bases and to each hike, not to its HikeType; a HikeGroup counts when any of its hikes passes. Difficulty is not offered, as most hikes have none (ADR-0084).
+_Avoid_: hike type filter, search filter, DistanceLimit (a limit on where a hike starts), preferences
+
+**TownTrait**:
+A fact about a Base other than its hikes: town size, places to stay, restaurants, cafes and pubs, or the months it is mild in. The Hiker gives each one of three settings. **Ignore**: it plays no part. **Filter**: a Base that fails the limit ("at least 5 restaurants", "up to 50,000 people", "mild in July") is left out. **Like mine**: with an importance of *a little*, *matters* or *important*, a Base unlike the Hiker's own on it loses at most a sixth, a third or a half of its hike score; a Base whose value is unknown counts as half alike, and when the Hiker's own value is unknown the trait costs nothing. Town size starts as a filter of at least 1,000 and up to 50,000 people, a place of unknown size failing the "at least", the others as ignore (ADR-0084, ADR-0089).
+_Avoid_: facet, preference, AmenityFact (that describes a Trailhead), weight (the hike score has none)
+
 **Measure**:
 One fact compared between two DayHikes, giving 1 (alike) to 0 (unlike), or nothing when either DayHike lacks the fact: length, the Hut along the way, the ProfileShape, and 24 more. Each has a kind (ratio, tolerance, mix, agree, profile) and is the unit the Hiker weights. There is no grouping of Measures into themes.
 _Avoid_: Facet, feature, dimension, criterion

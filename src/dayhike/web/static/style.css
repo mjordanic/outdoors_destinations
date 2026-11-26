@@ -160,10 +160,15 @@ svg text { font-size: 11px; fill: var(--muted); }
 @media (max-width: 640px) {
   #results-table th.figure, #results-table td.figure { display: none; }
   #results-table .figure-line { display: block; white-space: normal; font-size: 0.78rem; color: var(--muted); font-weight: 400; }
-  /* A name wraps rather than ends in "…", so the table fits beside the score. */
-  #results-table td.name, #results-table th.name { max-width: 180px; white-space: normal; }
-  #results-table td.name .hike-name { overflow-wrap: anywhere; }
+  /* A name wraps rather than ends in "…", so the table fits beside the score; between words, and never
+     narrower than a short name, whatever the measure columns ask (visitor check round 4, P3). */
+  #results-table td.name, #results-table th.name { max-width: 180px; min-width: 120px; white-space: normal; }
+  #results-table td.name .hike-name { overflow-wrap: break-word; }
   #results-table .picked { display: block; margin-left: 0; }
+  /* Each measure's score in a narrow column: its "?" is in the hike's own table, a tap away. */
+  #results-table th.measure button.help { display: none; }
+  #results-table td.cell { min-width: 24px; padding-left: 3px; padding-right: 3px; }
+  #results-table th.measure { padding-left: 3px; padding-right: 3px; }
 }
 /* The head of a block "Show 10 more" adds: its words stay in view while the table scrolls sideways. */
 #results-table tbody tr.block-head { cursor: default; }
@@ -179,7 +184,6 @@ svg text { font-size: 11px; fill: var(--muted); }
 .poor-note { margin: 8px 0 0; padding: 6px 10px; border-left: 3px solid #b45309; background: #fff7ed; color: #7c2d12; font-size: 0.86rem; }
 .poor-note[hidden], .swipe-cue[hidden] { display: none; }
 .swipe-cue { margin: 4px 0; text-align: right; }
-.suggestions li.enter-note { color: var(--muted); font-size: 0.85rem; }
 .pick-offer { display: flex; flex-direction: column; gap: 4px; }
 .pick-offer button { text-align: left; }
 .page .lede { text-align: center; margin: -4px auto 14px; color: var(--ink); }
@@ -256,7 +260,8 @@ summary.panel-title, #advanced > summary, #more-options > summary { display: fle
 #more-options .row > label { flex: 0 0 170px; font-size: 0.85rem; }
 .facts td:first-child, .facts thead th:first-child { width: 190px; }
 .facts thead th { color: var(--muted); font-weight: 600; }
-.mode-switch { margin-top: 8px; width: 100%; text-align: left; }
+/* A switch of mode reads as a button, not as a box to type in (visitor check round 4, P10). */
+.mode-switch { margin-top: 8px; width: 100%; text-align: left; background: #eef3ee; border-color: #cfe0d3; color: var(--green-dark); font-weight: 600; }
 .weight .wish-value { display: none; }
 .wishing .weight { grid-template-columns: minmax(0, 1fr) 128px 56px 24px; }
 .wishing .weight .wish-value { display: flex; gap: 3px; align-items: center; font-size: 0.85rem; }
@@ -286,7 +291,9 @@ button.help:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 .score-help h3 { margin: 0 24px 6px 0; }
 .score-help h4 { margin: 10px 0 2px; font-size: 0.84rem; }
 .score-help p { margin: 4px 0; }
-.score-help .help-close { position: absolute; top: 6px; right: 6px; padding: 0 6px; border: none; font-size: 1.1rem; line-height: 1.2; }
+/* The × stays in view as the help scrolls, beside the title, not over the text (P6). */
+.score-help .help-close { position: sticky; top: 0; float: right; margin: -4px -8px 0 8px; padding: 0 6px; border: none;
+  background: #fff; font-size: 1.1rem; line-height: 1.2; z-index: 1; }
 .score-help .help-more { display: none; position: sticky; bottom: -10px; margin: 6px -14px -10px; padding: 22px 0 6px;
   text-align: center; font-weight: 600; color: var(--green-dark); background: linear-gradient(rgba(255, 255, 255, 0), var(--card) 55%); }
 .score-help.more .help-more { display: block; }
@@ -302,7 +309,7 @@ button.help:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 /* Phones and touch screens: every control a finger aims at is at least 44 px each way (WCAG 2.5.5). */
 @media (max-width: 900px), (pointer: coarse) {
   button:not(.help), select, input[type="text"], input[type="search"], input[type="number"] { min-height: 44px; }
-  .check, .panel-title.check, #advanced > summary, #more-options > summary, summary.panel-title { min-height: 44px; display: flex; align-items: center; }
+  .check, .panel-title.check, #advanced > summary, #more-options > summary, summary.panel-title, #results-how > summary, .loops-done summary { min-height: 44px; display: flex; align-items: center; }
   .check input[type="checkbox"] { width: 22px; height: 22px; margin: 0 4px 0 0; flex: none; }
   .wish-value input[type="checkbox"] { width: 22px; height: 22px; }
   .weight input[type="range"] { height: 44px; }
@@ -324,3 +331,113 @@ button.help:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
   a[href]:not(.leaflet-bar a) { padding-block: 10px; }
   .top a.home { display: inline-block; min-height: 32px; padding-block: 0; }
 }
+
+/* "Find a base" (ADR-0084, bases.js): its panel and card in place of everything that finds hikes. */
+.finding-bases .controls > :not(#base-panel), .finding-bases .content > :not(#base-card):not(#base-intro) { display: none !important; }
+.reaches { border: none; margin: 8px 0 0; padding: 0; }
+.reaches .check { display: inline-flex; margin-right: 12px; }
+#base-table { border-collapse: collapse; font-size: 0.85rem; min-width: 100%; }
+#base-table th, #base-table td { padding: 5px 6px; border-bottom: 1px solid #eef0ec; text-align: left; vertical-align: top; }
+#base-table thead th { background: #f3f6f2; font-weight: 600; }
+#base-table .figure-line, #base-table .why { display: block; color: var(--muted); font-size: 0.78rem; }
+#base-table .score { white-space: nowrap; font-weight: 600; }
+#base-table button.base-name { border: none; background: none; padding: 0; font: inherit; font-weight: 600;
+  color: var(--green-dark); text-decoration: underline; cursor: pointer; }
+#base-hike-list { margin: 8px 0; padding-left: 1.6em; font-size: 0.9rem; }
+#base-hike-list li { margin-bottom: 4px; }
+#base-hike-list .minutes { color: var(--muted); margin-right: 6px; }
+#base-table .why { font-weight: 400; white-space: normal; }
+.months { display: flex; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.months li { width: 1.25em; text-align: center; font-size: 0.72rem; border-radius: 3px; background: #eef0ec; color: var(--muted); }
+.months li.mild { background: var(--green); color: #fff; }
+.months li.unknown { background: none; }
+@media (max-width: 600px) {
+  .months { gap: 1px; }
+  .months li { width: 1.05em; font-size: 0.68rem; }
+  /* A phone stacks each row: its number beside the town, the score and the months under it. */
+  #base-table thead { display: none; }
+  #base-table tr { display: grid; grid-template-columns: 1.8em minmax(0, 1fr); border-bottom: 1px solid #eef0ec; }
+  #base-table td { grid-column: 2; border-bottom: none; padding: 3px; }
+  #base-table td:first-child { grid-column: 1; grid-row: 1 / span 3; }
+  #base-table .score { white-space: normal; }
+}
+#base-results.stale table, #base-results.stale #base-note { opacity: 0.45; }
+#base-results.stale #base-chips, #base-results.stale #base-mine { opacity: 0.45; }
+#base-hikes.stale #base-hike-list { opacity: 0.45; }
+#base-hike-list:empty + .base-hikes-close { display: none; } /* one button back with no hikes listed (B14) */
+#base-problem { margin: 8px 0; }
+#base-mine { margin: 6px 0; font-size: 0.85rem; }
+#base-mine .months { display: inline-flex; vertical-align: middle; margin: 0 6px; }
+#base-mine .hint { display: block; }
+#base-more { margin-top: 8px; }
+#base-hike-list .hike-facts { display: block; color: var(--muted); font-size: 0.8rem; }
+.base-hikes-close { margin: 6px 0; }
+.base-marker { display: flex; align-items: center; justify-content: center; border-radius: 50%;
+  background: #2f7d4f; color: #fff; border: 1.5px solid #fff; font: 600 11px/1 system-ui, sans-serif; box-shadow: 0 0 2px rgba(0, 0, 0, 0.4); }
+.base-range .range-name { display: block; }
+.base-range .end { white-space: nowrap; }
+.base-range .range-error { display: block; margin-top: 2px; }
+.base-choices { margin-top: 10px; }
+.base-choices summary { cursor: pointer; }
+.base-range, .base-trait { margin-top: 8px; font-size: 0.9rem; }
+.base-trait > label > span { display: inline-block; min-width: 8em; }
+.base-range input, .base-trait input[type="number"] { width: 6em; }
+.base-trait .trait-filter .check { display: inline-flex; margin: 4px 6px 0 0; }
+#base-problem, .base-range .range-error, .base-trait .trait-error, #base-search-problem { color: #b42318; }
+#base-search-problem button { margin: 0 4px; }
+.base-trait .month-boxes { display: inline; }
+.months-said { display: block; }
+#base-hike-list li.picked { background: #fff4d6; }
+/* Second visitor check (ADR-0086). A phone: the tall tap targets reach over the lines around them instead of
+   making their own line tall (P3); the months in two rows of six (P23); a list being found said at the
+   screen's foot, wherever the page is scrolled (P35). */
+@media (max-width: 900px), (pointer: coarse) {
+  #base-table button.base-name { padding-block: 12px; margin-block: -12px; }
+  #base-table .score button.help { margin-block: -12px; vertical-align: middle; }
+}
+@media (max-width: 600px) {
+  .base-trait .month-boxes { display: grid; grid-template-columns: repeat(6, minmax(0, 3em)); gap: 2px 4px; }
+  .base-trait .month-boxes .check { flex-direction: column; margin: 0; font-size: 0.8rem; }
+  .base-trait .month-boxes .check input[type="checkbox"] { margin: 0; }
+  #base-status:not(:empty) { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1000; margin: 0; padding: 10px 16px;
+    background: #fff; border-top: 1px solid #d0d5cd; box-shadow: 0 -2px 6px rgba(0, 0, 0, 0.1); }
+}
+.base-trait .trait-error { display: block; margin-top: 2px; }
+#base-panel .what { color: var(--muted); font-size: 0.85em; }
+
+/* A site with Bases (bases.js): it opens on a landing of both tools, each with a switch to the other at the top. */
+.on-landing .layout { display: none; }
+.landing { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding: 16px; max-width: 1100px; margin: 0 auto; }
+.landing[hidden] { display: none; }
+.tool-card { display: flex; flex-direction: column; padding: 20px; }
+.tool-card h2 { font-size: 1.3rem; color: var(--green-dark); margin-bottom: 4px; }
+.tool-card p { margin: 6px 0; }
+.tool-card .start { align-self: flex-start; margin-top: auto; padding: 10px 18px; border-radius: 6px; background: var(--green);
+  color: #fff; font-weight: 600; text-decoration: none; }
+.tool-card .start:hover { background: var(--green-dark); }
+.tool-card p:last-of-type { margin-bottom: 16px; }
+.tool-switch { display: flex; border: 1px solid var(--green); border-radius: 6px; overflow: hidden; }
+.tool-switch[hidden] { display: none; }
+.tool-switch a { padding: 6px 14px; color: var(--green-dark); font-size: 0.9rem; font-weight: 600; text-decoration: none; white-space: nowrap; }
+.tool-switch a + a { border-left: 1px solid var(--green); }
+.tool-switch a:hover { background: #e8f1ea; }
+.tool-switch a[aria-current="page"] { background: var(--green); color: #fff; }
+@media (max-width: 700px) {
+  .landing { grid-template-columns: minmax(0, 1fr); padding: 10px; gap: 10px; }
+  .top { flex-wrap: wrap; }
+  .tool-switch { order: 1; flex-basis: 100%; }
+  .tool-switch a { flex: 1; text-align: center; }
+  /* A phone: each tool's button right under its name, its words below (C10). */
+  .tool-card { padding: 14px; }
+  .tool-card .start { order: 1; margin: 6px 0 8px; }
+  .tool-card p { order: 2; font-size: 0.92rem; }
+  .tool-card p:last-of-type { margin-bottom: 0; }
+}
+/* "Find place" with several places of one name, or one typo away: each to choose, with its country (B3). */
+.place-choices { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+.place-choices[hidden] { display: none; }
+.place-choice .meta { color: var(--muted); font-size: 0.8rem; font-weight: 400; }
+/* A phone's Find hikes beside the liked hike, as the one in the panel is screens above it (C17). */
+.find-here { display: none; margin: 8px 0; }
+@media (max-width: 900px) { .find-here { display: block; } }
+.score-help summary { cursor: pointer; font-weight: 600; margin: 6px 0; }

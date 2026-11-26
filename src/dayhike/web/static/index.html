@@ -36,6 +36,7 @@
   <script src="vendor/leaflet/leaflet.js" defer
           integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <script src="app.js" defer></script>
+  <script src="bases.js" defer></script>
   <!--analytics-->
 </head>
 <body>
@@ -53,16 +54,67 @@
   <a class="home" href="/" tabindex="-1" aria-hidden="true"><img class="mark" src="mark.svg" alt="" width="44" height="44"></a>
   <div class="brand">
     <h1><a class="home" href="/">HikesAlike</a></h1>
-    <p class="tagline">Hikes like the ones you love, out of <span id="count"><!--dayhikes-->160,000<!--/dayhikes--></span> hikes across <!--regions-->Europe<!--/regions-->.</p>
+    <p class="tagline">Hikes like the ones you love<!--if-bases-->, and towns to hike from<!--/if-bases-->, out of <span id="count"><!--dayhikes-->160,000<!--/dayhikes--></span> hikes across <!--regions-->Europe<!--/regions-->.</p>
   </div>
+  <!-- Shown in either tool of a site with Bases (bases.js): the way to the other one. -->
+  <nav id="tool-switch" class="tool-switch" aria-label="Tools" hidden>
+    <a id="switch-hike" href="#hikes">Find a hike</a><a id="switch-base" href="#base">Find a base</a>
+  </nav>
   <label class="units-switch" title="Show lengths and heights in km and metres, or in miles and feet">Units
     <select id="units" autocomplete="off"><option value="metric">km, m</option><option value="imperial">mi, ft</option></select></label>
   <!--if-europe--><img class="coverage" src="coverage.svg" alt="Map of Europe with the covered countries shaded" width="120" height="68"
        title="Shaded: the countries this demo covers"><!--/if-europe-->
 </header>
 
+<!-- A site with Bases opens here, on both tools (bases.js); a link into either skips it. -->
+<main id="landing" class="landing" hidden>
+  <section class="card tool-card" aria-labelledby="landing-hike">
+    <h2 id="landing-hike">Find a hike you like</h2>
+    <p>Guidebooks list hikes by region, but a great day out is about the kind of hike: how steep, how long, how wild, how high. HikesAlike starts from a hike you already know and finds others that feel the same, wherever they are.</p>
+    <p>Search for a hike by name, or select one on the map, and see its route, elevation, water, huts, landscape and weather — everything the similarity looks at. Adjust what “similar” means, and limit it to hikes within driving distance if you like.</p>
+    <a class="start" href="#hikes">Start with a hike</a>
+  </section>
+  <section class="card tool-card" aria-labelledby="landing-base">
+    <h2 id="landing-base">Find a hiking base you like</h2>
+    <p>A good hiking holiday depends on where you stay. Some towns have dozens of great hikes within an easy drive; others look perfect on the map but leave you in the car all week. HikesAlike starts from a town you already know works for you and finds other towns that offer the same: the same kinds of hike, enough of them for a week, within the same drive — and, if you want, similar places to stay and eat, town size and mild months.</p>
+    <p>Type your town's name, or pick it on the map, and see the towns whose hikes within that drive are most like yours, with what makes each a good base. Set how far you are willing to drive each day, and choose what matters to you.</p>
+    <a class="start" href="#base">Start with a town</a>
+  </section>
+</main>
+
 <main class="layout">
   <aside class="controls" aria-label="Query">
+    <!-- "Find a base" (ADR-0084, bases.js): in place of every other panel while it is on. -->
+    <section class="panel" id="base-panel" hidden>
+      <h2 class="panel-title">Find a base</h2>
+      <p class="hint">Towns whose hikes within a drive are like those of a town you stayed in.</p>
+      <label class="panel-title" for="base-search">1. A town you stayed in</label>
+      <div class="search">
+        <input id="base-search" type="search" autocomplete="off" spellcheck="false"
+               placeholder="Type a town's name, e.g. Keswick" aria-controls="base-suggestions" aria-expanded="false" maxlength="100"
+               role="combobox" aria-autocomplete="list">
+        <ul id="base-suggestions" class="suggestions" role="listbox" hidden></ul>
+      </div>
+      <p id="base-search-problem" class="error" role="alert" hidden></p>
+      <p id="base-chosen" class="hint">No town chosen yet. Search for one, or click the map near where you stayed.</p>
+      <fieldset class="reaches">
+        <legend class="panel-title">2. Hikes within a drive of</legend>
+        <span id="base-reaches"></span>
+      </fieldset>
+      <p class="hint">An estimate of the drive to where each hike starts, made once for every town.</p>
+      <details class="base-choices">
+        <summary class="panel-title">3. Which hikes count</summary>
+        <p class="hint">Both towns are compared on the hikes that pass, and only on those. Each hike is measured one way, as it is mapped.</p>
+        <div id="base-hike-filter"></div>
+      </details>
+      <details class="base-choices">
+        <summary class="panel-title">4. What the town is like</summary>
+        <p class="hint">Leave a trait out, keep only towns that pass it, or prefer towns like yours on it.</p>
+        <div id="base-traits"></div>
+      </details>
+      <button type="button" id="base-find" class="primary" disabled>Find bases</button>
+      <p id="base-status" class="status" role="status" aria-live="polite"></p>
+    </section>
     <section class="panel">
       <div id="seed-pick">
         <label class="panel-title" for="search">1. A hike you liked</label>
@@ -75,6 +127,7 @@
         <label class="check"><input type="checkbox" id="map-pick-on" autocomplete="off"> Select hike on map</label>
         <p id="liked-name" class="hint">No hike chosen yet.</p>
         <button type="button" id="wish-on" class="secondary mode-switch" hidden>No particular hike in mind? Describe the one you want</button>
+        <button type="button" id="bases-back" class="secondary mode-switch" hidden>Back to Find a base: the town's hikes</button>
       </div>
       <div id="wish-intro" hidden>
         <h2 class="panel-title">1. The hike you want</h2>
@@ -116,13 +169,14 @@
           <button type="button" id="origin-find" class="secondary">Find place</button>
           <button type="button" id="origin-here" class="secondary">Use my location</button>
         </div>
-        <p id="origin-found" class="hint"></p>
+        <p id="origin-found" class="hint" role="status" aria-live="polite"></p>
+        <div id="origin-choices" class="place-choices" hidden></div>
         <div class="row limit">
           <label class="check"><input type="checkbox" id="hours-on" checked autocomplete="off"> Max drive hours</label>
           <input id="hours" type="number" autocomplete="off" min="0.5" max="3" step="0.5" value="2" aria-label="Max drive hours value">
         </div>
         <p class="hint" id="drive-hint">An estimate: motorway, trunk and primary roads, plus a straight line at 35 km/h to and from them. Good to about ±10 min; a 3 h limit is 3 h ± 30 min.</p>
-        <p id="drive-off" class="hint" hidden>The drive-time limit is not available on this server.</p>
+        <p id="drive-off" class="hint" hidden>The drive-time limit is not available on this copy of the site; the straight-line limit below works.</p>
         <div class="row limit">
           <label class="check"><input type="checkbox" id="km-on" autocomplete="off"> Max <span class="limit-unit">km</span>, straight line</label>
           <input id="km" type="number" autocomplete="off" min="1" max="200" step="1" value="50" aria-label="Max km value">
@@ -150,7 +204,7 @@
       <input type="checkbox" id="return-on" checked autocomplete="off">
       Return to start: compare every hike with its way back (untick to compare them one way)
     </label>
-    <button type="button" id="find" class="primary" disabled aria-describedby="find-why status">Find similar</button>
+    <button type="button" id="find" class="primary" disabled aria-describedby="find-why status">Find hikes</button>
     <p id="find-why" class="hint find-why">Choose a hike first: search for one by name or select one on the map.</p>
     <p id="status" class="status" role="status" aria-live="polite"></p>
 
@@ -167,6 +221,31 @@
   </aside>
 
   <section class="content">
+    <!-- Find a base before a town is chosen: what it does, the landing's first words (bases.js), then its steps. -->
+    <article id="base-intro" class="card empty" hidden>
+      <p>Type your town's name in step 1, or pick it on the map. Towns whose hikes within that drive are most like yours appear here, with what makes each a good base. Set how far you are willing to drive each day in step 2, and choose what matters to you in steps 3 and 4.</p>
+    </article>
+    <section id="base-card" class="card" hidden>
+      <div id="base-map" class="map pick-map"></div>
+      <p class="hint" id="base-pin-hint" role="status" aria-live="polite">Click the map near where you stayed to choose the town nearest to it; zoom in first to pick it closely. A numbered dot opens that town.</p>
+      <p id="base-problem" class="error" role="alert" hidden></p>
+      <section id="base-results" hidden>
+        <h2 id="base-title"></h2>
+        <p id="base-updating" class="stale-note" role="status" aria-live="polite" hidden></p>
+        <p id="base-mine"></p>
+        <ul id="base-chips" class="filter-chips" aria-label="Your choices (steps 3 and 4)" hidden></ul>
+        <p class="hint" id="base-note"></p>
+        <div class="table-wrap"><table id="base-table"></table></div>
+        <button type="button" id="base-more" class="secondary" hidden>Show more</button>
+      </section>
+      <section id="base-hikes" hidden>
+        <button type="button" class="secondary base-hikes-close">Back to the list</button>
+        <h2 id="base-hikes-title"></h2>
+        <p class="hint" id="base-hikes-note" role="status" aria-live="polite"></p>
+        <ol id="base-hike-list"></ol>
+        <button type="button" class="secondary base-hikes-close">Return to the list</button>
+      </section>
+    </section>
     <section id="map-pick" class="card" hidden>
       <h2>Select a hike on the map</h2>
       <div class="compose-bar" id="compose-bar" hidden>
@@ -199,7 +278,13 @@
       <ul id="results-filters" class="filter-chips" aria-label="Filters on this list" hidden></ul>
       <p class="poor-note" id="results-unmeasured" hidden></p>
       <p class="poor-note" id="results-poor" hidden></p>
-      <p class="hint"><span id="results-note"></span><span id="results-region"></span><span id="results-left-out"></span><span id="results-loops-note"></span> <button type="button" class="secondary" id="list-loop" hidden>List the best loop</button></p>
+      <p class="hint"><span id="results-note"></span><span id="results-region"></span><span id="results-left-out"></span></p>
+      <!-- The rest of what the list is, folded (visitor check round 4, P4). -->
+      <details id="results-how" class="results-how">
+        <summary>How to read this list</summary>
+        <p class="hint" id="results-details"></p>
+        <p class="hint" id="results-words">“3 versions” are other routes of one hike, shown as var 1, var 2 and var 3 when you click its row; “picked” marks a hike drawn in for variety from just below the best (Redraw draws others, and Strict order lists only the best, in the order of their scores); “more good matches start here” are hikes starting near that one that score almost as well.</p>
+      </details>
       <p id="results-draw" hidden><button type="button" class="secondary" id="redraw" title="Draw other hikes from the same results, closer matches more often">Redraw</button> <label class="check" title="List the best hikes in the exact order of their scores, with nothing drawn"><input type="checkbox" id="strict" autocomplete="off"> Strict order</label> <span class="hint" id="results-draw-note"></span></p>
       <p class="stale-note" id="results-stale" hidden>The query changed since this ranking; press Find again to update it.</p>
       <p id="results-columns" hidden><button type="button" class="secondary" id="toggle-measures" aria-expanded="false">Show the score of every measure</button></p>
@@ -207,6 +292,11 @@
       <div class="table-wrap"><table id="results-table"></table></div>
       <p id="results-more" hidden><button type="button" class="secondary" id="show-more">Show 10 more</button> <span class="status" id="more-status" role="status" aria-live="polite"></span> <span class="hint" id="other-areas"></span></p>
       <p id="results-loops" hidden><button type="button" class="secondary" id="suggest-loops">Suggest loops near these hikes (takes a few seconds)</button></p>
+      <!-- What the loop search found, in a sentence where its button was; how it went, folded (round 4, H17). -->
+      <div id="results-loops-done" class="loops-done" hidden>
+        <p class="hint"><span id="results-loops-says"></span> <button type="button" class="secondary" id="list-loop" hidden>List the best loop</button></p>
+        <details><summary>How the loop search went</summary><p class="hint" id="results-loops-note"></p></details>
+      </div>
       <p class="hint"><span id="results-scores"></span> Only the best of hikes that follow the same route is listed. A dash in a measure’s score is “no data” on the hike you like, or a hut, cafe, shelter, viewpoint, summit or parking neither hike has mapped: either way it is left out of that pair’s score. A hike with no data for a measure the hike you like has scores 0 on it; a dash in its own Length or Climb is that missing data.</p>
     </section>
 
@@ -218,7 +308,7 @@
   <p>Map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors (<a href="https://opendatacommons.org/licenses/odbl/">ODbL</a>) · elevation <!--elevation--><a href="https://doi.org/10.5523/bris.s5hqmjcdj8yo2ibzi9b4ew3sn">FABDEM</a> (<a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">CC BY-NC-SA 4.0</a>)<!--/elevation--> · <a href="credits.html">full credits</a></p>
   <p class="hint">Elevation, climate and land cover are missing for some regions; those measures then show “no data” and count as 0 against a hike you like that has them, or when you describe the hike you want and ask a value of them. When the hike you like has no data for one, it drops out of the score. Drive times are estimates, not routes. Check conditions and maps before you go.</p>
   <nav class="site-nav" aria-label="Site">
-    <a href="/">Find hikes</a> · <a href="about.html">About</a> · <a href="credits.html">Data and credits</a> · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms and safety</a>
+    <a class="home" href="/">Home</a> · <a href="about.html">About</a> · <a href="credits.html">Data and credits</a> · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms and safety</a>
   </nav>
 </footer>
 <div id="score-help" class="score-help" role="dialog" aria-labelledby="score-help-title" tabindex="-1" hidden></div>

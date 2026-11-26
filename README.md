@@ -20,6 +20,10 @@ United States. A score
 of 1 would mean exactly alike; the green cells show how alike each hike is on
 length and on climbing, out of 100.*
 
+- **Find a base.** Loved a town you stayed in for its hikes? Pick it and a
+  drive of 15, 30 or 60 minutes, and HikesAlike lists other towns whose hikes
+  within that drive are alike. You can also ask for towns of a similar size,
+  with places to stay and eat, or mild in the months you travel.
 - **Day hikes and longer tours.** Long tours are also cut into day stages of
   8 to 25 km.
 - **Where:** Europe and the contiguous United States, wherever volunteers

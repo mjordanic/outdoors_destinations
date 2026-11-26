@@ -13,6 +13,7 @@ to its own snap point.
 from __future__ import annotations
 
 import math
+import threading
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -57,6 +58,8 @@ class HighwaySnaps:
     to `path` when one is given. With `keep`, at most that many places beyond those
     read from `path` are kept, the least recently asked dropped first: for a cache
     held only in memory (`path` None), so a long-running server does not grow it without bound.
+    Safe to share between threads (a server runs two Rankings at once, ADR-0087): the answers kept
+    are read, changed and written under one lock, and Valhalla is asked outside it.
     """
 
     def __init__(self, base_url: str = DEFAULT_VALHALLA_URL, path: Path | None = None, keep: int | None = None) -> None:
@@ -65,6 +68,7 @@ class HighwaySnaps:
         self.keep = keep
         self._known: dict[Place, Snap | None] = {}  # read from path
         self._learned: OrderedDict[Place, Snap | None] = OrderedDict()  # asked of Valhalla since, least recent first
+        self._lock = threading.Lock()  # held while the answers kept are read, changed or written
         if path is not None and path.exists():
             with np.load(path) as saved:
                 for row in zip(*(saved[name] for name in ("lat", "lon", "snap_lat", "snap_lon", "metres"))):
@@ -72,17 +76,19 @@ class HighwaySnaps:
                     self._known[(lat, lon)] = None if math.isnan(snap_lat) else (snap_lat, snap_lon, metres)
 
     def of(self, places: Sequence[Place]) -> list[Snap | None]:
-        answers = {p: self._lookup(p) for p in dict.fromkeys(places)}
+        with self._lock:
+            answers = {p: self._lookup(p) for p in dict.fromkeys(places)}
         missing = [p for p, snap in answers.items() if snap is _UNKNOWN]
         if missing:
             batches = [missing[i : i + LOCATE_BATCH_SIZE] for i in range(0, len(missing), LOCATE_BATCH_SIZE)]
             with ThreadPoolExecutor(LOCATE_WORKERS) as pool:
                 for batch, snapped in zip(batches, pool.map(self._snap, batches)):
                     answers.update(zip(batch, snapped))
-            self._learned.update((p, answers[p]) for p in missing)
-            while self.keep is not None and len(self._learned) > self.keep:
-                self._learned.popitem(last=False)
-            self._save()
+            with self._lock:
+                self._learned.update((p, answers[p]) for p in missing)
+                while self.keep is not None and len(self._learned) > self.keep:
+                    self._learned.popitem(last=False)
+                self._save()
         return [answers[p] for p in places]
 
     def _lookup(self, place: Place) -> Snap | None | object:
@@ -203,7 +209,7 @@ class HighwayDriveTimeClient:
         if not len(points):
             return low, high
         minutes = [*np.arange(CONTOUR_STEP_MIN, self.max_hours * 60, CONTOUR_STEP_MIN), self.max_hours * 60]
-        contours = self._isochrone(start, minutes)
+        contours = isochrone_polygons(self.base_url, start, minutes)
         # Many places snap to one highway point: test each point once.
         unique, inverse = np.unique(np.ascontiguousarray(points).view(np.complex128), return_inverse=True)
         lats, lons = unique.real, unique.imag
@@ -227,25 +233,6 @@ class HighwayDriveTimeClient:
         low[within], high[within] = lows[band[within]], highs[band[within]]
         return low, high
 
-    def _isochrone(self, start: Place, minutes: Sequence[float]) -> list:
-        body = post_json(
-            self.base_url,
-            "/isochrone",
-            {
-                "locations": [{"lat": start[0], "lon": start[1]}],
-                "costing": "auto",
-                "contours": [{"time": float(m)} for m in minutes],
-                "polygons": True,
-                "denoise": 0,
-                "generalize": CONTOUR_GENERALIZE_M,
-            },
-        )
-        # Valhalla echoes each contour rounded, so match them by order, not value.
-        features = sorted(body["features"], key=lambda f: f["properties"]["contour"])  # type: ignore[index]
-        polygons = [shape(f["geometry"]) for f in features]
-        shapely.prepare(polygons)
-        return polygons
-
     def _snap_origin(self, origin: Origin) -> Place:
         place = (origin.latitude, origin.longitude)
         for cutoff in (SEARCH_CUTOFF_M, WIDE_SEARCH_CUTOFF_M):
@@ -256,3 +243,24 @@ class HighwayDriveTimeClient:
             f"no highway within {WIDE_SEARCH_CUTOFF_M // 1000} km of Origin "
             f"{origin.latitude},{origin.longitude}"
         )
+
+
+def isochrone_polygons(base_url: str, start: Place, minutes: Sequence[float]) -> list:
+    """One prepared polygon per contour of `minutes` (ascending) around `start`, smallest first."""
+    body = post_json(
+        base_url,
+        "/isochrone",
+        {
+            "locations": [{"lat": start[0], "lon": start[1]}],
+            "costing": "auto",
+            "contours": [{"time": float(m)} for m in minutes],
+            "polygons": True,
+            "denoise": 0,
+            "generalize": CONTOUR_GENERALIZE_M,
+        },
+    )
+    # Valhalla echoes each contour rounded, so match them by order, not value.
+    features = sorted(body["features"], key=lambda f: f["properties"]["contour"])  # type: ignore[index]
+    polygons = [shape(f["geometry"]) for f in features]
+    shapely.prepare(polygons)
+    return polygons

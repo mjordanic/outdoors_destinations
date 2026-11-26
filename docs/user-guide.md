@@ -10,6 +10,12 @@ You give it a hike you liked. It finds the hikes most like it.
 Don't have a hike in mind? Describe the one you want instead, and it finds
 hikes that fit.
 
+The site opens on a choice of two: **Find a hike you like**, and **Find a
+hiking base you like**, which starts from a town you stayed in and finds
+other towns with hikes like those within a drive of it. The switch at the top
+of every page goes from one to the other, and the site's name or **Home**
+goes back to the choice; each tool opens as you left it.
+
 - It looks at length, climbing, the highest point, the landscape, the
   typical temperature in the month you pick, and whether the hike runs beside
   a lake or the sea. If you ask for more, it also looks at rain and sunshine.
@@ -44,11 +50,11 @@ Pick one of three ways:
    comma keeps to the hikes there: "Triglav, Slovenia". When no name has
    every word as you typed it, the list says so and marks each name that is only like it "similar name". So does a name
    that holds your word only inside a longer word ("Rappenloch" in
-   "Krappenlochklamm"): check that it is the hike you meant. **Enter** picks a
-   hike only when one is named exactly as you typed, or it is the only hike
-   found; the line beside the chosen hike then says so. Otherwise the list
-   stays open and says how many hikes match, so you pick one (or use the arrow
-   keys, then Enter). A one-letter or over-100-character query is not
+   "Krappenlochklamm"): check that it is the hike you meant. **Enter** picks the
+   hike named exactly as you typed, else the top suggestion (or the one you
+   moved to with the arrow keys), as the town box of Find a base does; the
+   line beside the chosen hike then says so. Day hikes are suggested before
+   multi-day routes. A one-letter or over-100-character query is not
    searched: the list says why instead. It works the same on a phone and a
    computer.
    Once picked, the page moves to the hike's panel. The hike stays chosen until
@@ -96,7 +102,7 @@ Pick one of three ways:
    "Your hike along" the trails it follows most, "from" a named place at its
    start, so it does not read as a catalog hike of that trail's name.
 
-Then press **Find similar**. You get 10 hikes from among the most similar
+Then press **Find hikes**. You get 10 hikes from among the most similar
 (see "Why the list changes from visit to visit" below), and the page moves to
 the list. The list shows each hike's score, length and climb (and its drive
 or distance when you set one); on a phone the length and climb sit under the
@@ -106,17 +112,17 @@ them away again. Whenever the list is wider than the screen, a line above it
 says to scroll it sideways.
 
 If you change a setting after a search, or while it is still running, a line
-under **Find similar** says the list is from before your change, so you see it
+under **Find hikes** says the list is from before your change, so you see it
 where you are on a phone.
 
-While **Find similar** is greyed out, the line under it says why: no hike is
+While **Find hikes** is greyed out, the line under it says why: no hike is
 chosen yet (choose one first), a hike is still loading, a search is still
 running, every measure is at weight 0, a drive limit is out of range
 (or neither Max drive hours nor Max km is ticked), the grouping distance
 under More options is not a number from 0.1 to 50 km, or no region is ticked
 under **Hikes in**. If your hike cannot be
 measured again after you change Return to start, that line says so and
-**Find similar** stays usable: pressing it measures your hike again, then
+**Find hikes** stays usable: pressing it measures your hike again, then
 finds.
 
 If hikes on the list score below 0.47, what a typical pair of random hikes
@@ -191,18 +197,24 @@ the hut slider to 100. Turn Length down to 30.
   to 3 hours), a maximum distance in a straight line (up to 200 km), or both.
   Only hikes that start within those limits are kept. Type the place as
   "lat, lon", use your browser's location, or use "Find place" to look up a
-  town or village. The drive time is an estimate based on main roads, so
+  town or village. When several places have that name ("Keswick" is in
+  England, Canada and the United States; there are many Springfields in the
+  United States), a much bigger place starts with it ("Frankfurt am Main" for
+  "Frankfurt"), or none has it but one is a letter off, it lists them, biggest
+  first, with their countries in full and, for several in one country, the
+  bigger town each is near, for you to choose one. Places with no hike mapped within
+  50 km come last and say so. "Find place" again lists them again. The drive time is an estimate based on main roads, so
   treat it as a rough guide. The limits stay set when you open another hike
   from the results, the search box or the map in the same tab, and the note
   above the results always names them, for example "within a 2 h drive of
-  Munich, DE". When no hike starts within the limits (a place far from
+  Munich, Germany". When no hike starts within the limits (a place far from
   Europe and the contiguous United States, such as Sydney), the list says no
   hikes are mapped there yet and what the site covers. A fresh page, or a link opened in the tab, starts with none
   unless the link names them. Leaving a hike you described for a hike you
   liked turns "Only hikes near a starting place" off; the place stays in its
   box for ticking again.
 - **Hikes in.** Where the site has hikes in both Europe and the United
-  States, a checkbox for each, just above **Find similar**, keeps the list to
+  States, a checkbox for each, just above **Find hikes**, keeps the list to
   hikes starting there. Both are ticked at first: hikes anywhere. With "Only
   hikes near a starting place" ticked and a place given, the place decides
   instead: the boxes are greyed out, keep their ticks, and count again once
@@ -227,6 +239,35 @@ The filters a list was found with show as labels just above it: "Within 50 km
 of Bled", "Weather in Jan", "One way, without the way back", "Grouped within
 3 km". Press the × on a label to drop that filter; the list is found again
 without it.
+
+### Or find a town to stay in
+
+Where the site has it, **Find a base** (the second choice the site opens on, or
+the switch at the top of the page) lists towns
+whose hikes within a drive are like those of a town you stayed in.
+
+1. Type the town's name, or click the map near it. Picking it lists towns
+   at once; changing a choice later lists them again.
+2. Pick the drive to where each hike starts (about 15, 30 or 60 minutes). It
+   is an estimate, made once for every town.
+3. **Which hikes count** (optional): limit climb, length or highest point, or
+   keep only hikes that reach a summit, run by a lake or the sea, or are round
+   trips. Both towns are compared on the hikes that pass, and only on those.
+4. **What the town is like** (optional): for town size, places to stay,
+   restaurants, cafes and pubs, and the best months, leave the trait out, keep
+   only towns that pass it, or prefer towns like yours on it (*a little*,
+   *matters* or *important*). Town size starts as a filter up to 50,000
+   people.
+
+**Find bases** is greyed out while the box holds a name not picked from the
+list: pick one, or press Enter to look the name up. Each row is a town with
+its score, its hikes counted beside yours ("12 hikes counted (yours: 40)")
+and the months that are mild for hiking there; if too few of
+your town's hikes are in reach, the page says so and suggests loosening the
+hike choices or a longer drive. Open a town to see its hikes in reach,
+nearest first, on the map; "Find hikes like this" on one starts a hike search
+from it. The switch at the top goes back to **Find a hike**. A link to the page keeps
+the town, the drive and every choice.
 
 ## What a hike's panel shows
 
@@ -271,7 +312,11 @@ Advanced search being open, Return to start, Strict order, the regions ticked
 under Hikes in, and the grouping distance. It leaves out your starting place,
 its coordinates and its drive or distance limit: they are yours, and a friend
 starts from somewhere else. Whoever opens it sees the same search, ready for
-**Find similar**. A link to a hike you described works the same way. The
+**Find hikes**; once you have found the list, the link of the hike you like
+opens with the list too (its address ends in "&list"); with a hike of the
+list opened, the address also names it ("&open=…"), so a link copied then
+opens that hike over the list. A link to a hike you
+described works the same way. The
 address in your browser keeps every setting up to date, your starting place
 too, so a reload keeps them. A link opened in a tab that is already open (typed, pasted,
 or gone Back or Forward to) sets every setting it does not name to its
@@ -282,10 +327,13 @@ A link that has been cut short or changed by hand says "This link could not be
 opened" beside the search box. A part of a link the page does not know is
 ignored, and the hike still opens. If you edit the address to other settings,
 or go Back or Forward to one, a list found with other settings goes, as it would
-on a reload of that address: press **Find similar** for the list of those
+on a reload of that address: press **Find hikes** for the list of those
 settings. An address of the list's own settings keeps the list, no longer
-marked as from before. Back to the home address shows the page as it opens, with no hike and
-no list.
+marked as from before. Each step is a step of your browser's history: Back
+closes a hike of the list you opened, then hides the list, then drops the hike
+you picked. On a site with both tools, going back to the front page keeps
+each tool as you left it; elsewhere, Back to the home address shows the page
+as it opens, with no hike and no list.
 
 Good to know: the GPX file holds the line of the hike as you see it on the
 map, with a height at every point. With Return to start on, it also holds the
@@ -317,14 +365,18 @@ hike's panel ("↑ 54 m ↓ 59 m, as measured").
 
 If the server does not answer within a minute, or cannot be reached, the
 page says so instead of waiting forever. A search that fails says so under
-the button you pressed (Find similar, or Show 10 more beside it), with a
+the button you pressed (Find hikes, or Show 10 more beside it), with a
 **Try again** button, and above the list it leaves, which is still the list
 from before.
 
-The server runs one search at a time for everyone, in turn. When other
+The server runs two searches at a time for everyone, in turn. When other
 visitors' searches are ahead of yours for 12 seconds, it says "The server is
 busy with other visitors' searches: yours waited 12 s for its turn. Try again
-in a moment." Your search itself is quick: press **Try again**.
+in a moment." Your search itself is quick: press **Try again**. A long search,
+such as a 3 h drive from a busy region, that has not finished within 50 seconds
+says "The server is busy with other visitors' searches, and yours did not
+finish in time. Try again in a moment." It keeps running on the server, so try
+again a little later.
 
 Each browser tab runs one search at a time. If you press Find again while your
 earlier search is still running on the server, the page says "Waiting for your
@@ -492,7 +544,7 @@ it. The designer opens zoomed in on the loop. Your liked hike and the list stay
 as they are until you press **Use this hike**, which measures the drawing and
 makes it your hike. **Undo** takes back only your own clicks, never a segment of
 the loop you opened; **Clear** starts over. When the drawing is your liked hike
-itself, Clear removes that hike too, so Find similar never uses a walk that is
+itself, Clear removes that hike too, so Find hikes never uses a walk that is
 no longer drawn.
 
 A loop that mostly walks your liked hike again is not suggested.
@@ -516,11 +568,12 @@ they are the 20 best.
   3.5 of them, so the rest is left to measure the loops it found; if it hits
   that limit, it lists the best of what it found so far.
 
-So the loops are a good list of ideas, not every loop there is. A note above
-the list says this too, and tells you how many starts it searched from, how
-many loops it found and how many are listed.
+So the loops are a good list of ideas, not every loop there is. A sentence
+where the Suggest loops button was says what it found, and "How the loop
+search went" under it folds a note that tells you how many starts it searched
+from, how many loops it found and how many are listed.
 
-Example: "Loops: searched from 31 starts near the best hikes, 14 found, 3
+Example of that note: "Loops: searched from 31 starts near the best hikes, 14 found, 3
 listed in 2 rows: #2, #5 (marked composed)". Not all 14 are listed. The others
 rank lower, are not drawn on this page (Redraw or tick Strict order shows
 them), or walk mostly the same trails as a listed hike. When none makes the

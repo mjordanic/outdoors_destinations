@@ -62,6 +62,7 @@ lists them among them (``dayhike.loops``, ADR-0020).
 from __future__ import annotations
 
 import csv
+import difflib
 import functools
 import heapq
 import itertools
@@ -215,6 +216,15 @@ LANDMARK_PLACE_SCAN = 500  # Landmarks a search narrowed to a country looks thro
 # A word a name is often shortened to, and the word it is short for: what search compares (ADR-0079)
 SHORT_WORDS = {"mt": "mount"}
 FUZZY_MIN_LETTERS = 4  # a shorter query word is found only as typed
+PLACE_SCAN = 20_000  # names a place choice looks at, for a country after a comma or for a typo
+PLACE_TYPO_START = 3  # a place name typed with a typo is looked for among those starting with its first letters
+PLACE_TYPO_RATIO = 0.8  # and as alike to it as this (``difflib``), as Find a base's town box does
+# Places of one name in one country are told apart by the nearest town bigger than each, of this many people
+# or more, within this far (visitor check round 4: "Springfield" fits five in the United States).
+PLACE_NEAR_PEOPLE = 10_000
+PLACE_NEAR_M = 100_000
+PLACE_COVERED_M = 50_000  # a place with a Trailhead this close has hikes near it ("Find place"'s default limit)
+JOINED_PART = 3  # a word typed as two run together ("catbells" for Cat Bells) splits into parts this long or longer
 FUZZY_SPELLINGS = 3  # the nearest words a word with a typo is tried as
 FUZZY_QUERIES = 6  # the respelled queries a search tries, fewest typos first
 NAME_INDEX = "names.npz"  # the name search's index, written by the export (``export_name_index``)
@@ -1927,7 +1937,7 @@ class ServingData:
         meta_path = self.directory / "meta.json"
         if not meta_path.is_file():
             raise ServingExportError(f"{self.directory}: no complete serving export; run `dayhike export-serving`")
-        self.meta = json.loads(meta_path.read_text())
+        self.meta = json.loads(meta_path.read_text(encoding="utf-8"))
         if self.meta["format"] != SERVING_FORMAT:
             raise ServingExportError(
                 f"{self.directory}: export format {self.meta['format']}, expected {SERVING_FORMAT}; "
@@ -1973,6 +1983,11 @@ class ServingData:
         self.regions = regions_in(self.trailheads[:, 1])  # the RegionChoice's names this Catalog has hikes in
         # What the pages say the hikes are across: as the export names it, else (an export from before) by the hikes.
         self.covered = self.meta.get("regions") or covered_regions(self.regions)
+        self.bases = None  # "Find a base" (ADR-0084): the export's bases/ folder, when it has one of these DayHikes
+        if (self.directory / "bases").is_dir():
+            from dayhike.bases import Bases  # its build's k-means and Valhalla imports, only for an export with Bases
+
+            self.bases = Bases.open_dir(self.directory / "bases", self.store)
 
     def _db(self) -> sqlite3.Connection:
         return sqlite3.connect(self._db_uri, uri=True)
@@ -2024,6 +2039,8 @@ class ServingData:
         by_name[:SEARCH_SUMMIT_CAP] = self._summits_first(by_name[:SEARCH_SUMMIT_CAP], needle, words)
         rows += by_name
         similar = {row for row in by_name if _relevance(self._folded[row], needle, words) == 4}
+        if not by_name and (joined := self._joined(words)):  # "Catbells" is Cat Bells: a name, not a typo
+            rows += self._rows_with_words(joined, " ".join(joined), set(rows), there)
         if len(rows) < limit:
             for spelled in self._spellings.respelled(words):
                 found = self._rows_with_words(spelled, " ".join(spelled), set(rows), there)
@@ -2084,6 +2101,21 @@ class ServingData:
         found.sort(key=lambda row: (_relevance(self._folded[row], needle, words), len(self._folded[row]), row))
         return found
 
+    def _joined(self, words: list[str]) -> list[str] | None:
+        """``words`` with one of them written as the two words names hold most often run together
+        ("catbells": cat bells), each part ``JOINED_PART`` letters or more; None when no name holds any."""
+        for i, word in enumerate(words):
+            splits = [f"{word[:at]} {word[at:]}" for at in range(JOINED_PART, len(word) - JOINED_PART + 1)]
+            if not splits:
+                continue
+            hits = re.finditer("|".join(map(re.escape, splits)), self._haystack)
+            counts: dict[str, int] = {}
+            for hit in itertools.islice(hits, SEARCH_SCAN_CAP):
+                counts[hit.group()] = counts.get(hit.group(), 0) + 1
+            if counts:
+                return [*words[:i], *max(counts, key=counts.__getitem__).split(), *words[i + 1 :]]
+        return None
+
     def _summits_first(self, rows: list[int], needle: str, words: list[str]) -> list[int]:
         """``rows`` (best first) with, after the exact name, those reaching the
         top of a Peak named from the query's start first, and those named
@@ -2141,6 +2173,117 @@ class ServingData:
             ).fetchall()
         return [dict(zip(("name", "country", "lat", "lon", "population"), row)) for row in rows]
 
+    def place_choices(self, query: str, limit: int = 5) -> tuple[list[dict], bool]:
+        """The places "Find place" offers for ``query``, and whether they are only guesses.
+
+        Those ``find_place`` finds; else, for words after a comma, those named by the words before it, in
+        the country the words name when they name one ("Keswick, United Kingdom"), anywhere when they name
+        none (a county or a region: "Keswick, Cumbria" offers every Keswick); else the places whose name
+        shares its first ``PLACE_TYPO_START`` letters and is ``PLACE_TYPO_RATIO`` alike to it ("Innsbruk"),
+        in that country when one is named ("Innsbruk, Austria"), the most alike first, then the most
+        populous, said to be guesses.
+        """
+        found = self.find_place(query, limit)
+        needle = _fold(query).strip()
+        if found or self.places is None or not needle:
+            return self._told_apart(found), False
+        head, comma, tail = needle.rpartition(",")
+        country = None
+        if comma and head.strip():
+            needle, country = head.strip(), _place_names().get(tail.strip())
+            found = self.find_place(needle, PLACE_SCAN if country else limit)
+            found = [place for place in found if not country or place["country"] == country][:limit]
+            if found:
+                return self._told_apart(found), False
+        if len(needle) <= PLACE_TYPO_START:
+            return [], False
+        alike: dict[int, tuple[float, int]] = {}
+        start = (needle[:PLACE_TYPO_START], needle[:PLACE_TYPO_START] + "\U0010ffff")
+        with scoped(sqlite3.connect(self.places, uri=True)) as db:
+            for name, place, population in db.execute(
+                "SELECT n.name, p.id, p.population FROM place_names n JOIN places p ON p.id = n.place "
+                f"WHERE n.name >= ? AND n.name < ?{' AND p.country = ?' if country else ''} LIMIT ?",
+                (*start, *([country] if country else []), PLACE_SCAN),
+            ):
+                ratio = difflib.SequenceMatcher(None, needle, name).ratio()
+                if ratio >= PLACE_TYPO_RATIO and ratio > alike.get(place, (0.0, 0))[0]:
+                    alike[place] = (ratio, population or 0)
+            best = sorted(alike, key=lambda place: (-alike[place][0], -alike[place][1], place))[:limit]
+            rows = {row[0]: row[1:] for row in db.execute(
+                f"SELECT id, name, country, lat, lon, population FROM places WHERE id IN ({','.join('?' * len(best))})", best
+            )} if best else {}
+        found = [dict(zip(("name", "country", "lat", "lon", "population"), rows[place])) for place in best]
+        return self._told_apart(found), bool(found)
+
+    def _told_apart(self, found: list[dict]) -> list[dict]:
+        """``found`` as "Find place" offers them (visitor check round 4): each marked ``covered``, whether a
+        Trailhead is within ``PLACE_COVERED_M`` of it, those that are first (Keswick, Ontario has none near,
+        though Canada has hikes along the border); and, where places of one name share a country, each with the
+        nearest bigger town (``near``, ``PLACE_NEAR_PEOPLE`` people or more within ``PLACE_NEAR_M``) to tell them apart."""
+        shared: dict[tuple[str, str], int] = {}
+        for place in found:
+            key = (_fold(place["name"]).strip(), place["country"])
+            shared[key] = shared.get(key, 0) + 1
+        told = []
+        for place in found:
+            place = {**place, "covered": self._hikes_near(place)}
+            if shared[(_fold(place["name"]).strip(), place["country"])] > 1:
+                near = self._bigger_near(place)
+                if near:
+                    place["near"] = near
+            told.append(place)
+        return sorted(told, key=lambda place: not place["covered"])
+
+    @functools.cached_property
+    def _trailhead_tree(self) -> object | None:
+        """A tree of where the Trailheads are, for ``_hikes_near``."""
+        from scipy.spatial import cKDTree
+
+        points = np.asarray(self.trailheads, dtype=np.float64)
+        return cKDTree(_unit(points[:, 0], points[:, 1])) if len(points) else None
+
+    def _hikes_near(self, place: Mapping) -> bool:
+        """Whether a Trailhead is within ``PLACE_COVERED_M`` of ``place``."""
+        tree = self._trailhead_tree
+        if tree is None:
+            return False
+        chord, _ = tree.query(
+            _unit(place["lat"], place["lon"])[0], distance_upper_bound=2 * math.sin(PLACE_COVERED_M / (2 * EARTH_RADIUS_M))
+        )
+        return bool(math.isfinite(chord))
+
+    @functools.cached_property
+    def _big_towns(self) -> tuple[list[tuple[str, int]], object | None]:
+        """The places of ``PLACE_NEAR_PEOPLE`` people or more, name and population, and a tree of where they are."""
+        from scipy.spatial import cKDTree
+
+        with scoped(sqlite3.connect(self.places, uri=True)) as db:
+            rows = db.execute(
+                "SELECT name, population, lat, lon FROM places WHERE population >= ? ORDER BY id", (PLACE_NEAR_PEOPLE,)
+            ).fetchall()
+        if not rows:
+            return [], None
+        where = np.array([(lat, lon) for *_, lat, lon in rows])
+        return [(name, population) for name, population, *_ in rows], cKDTree(_unit(where[:, 0], where[:, 1]))
+
+    def _bigger_near(self, place: Mapping) -> str | None:
+        """The name of the town nearest ``place`` with more people than it and another name; None with none."""
+        towns, tree = self._big_towns
+        if tree is None:
+            return None
+        chords, found = tree.query(
+            _unit(place["lat"], place["lon"])[0], k=min(len(towns), 20),
+            distance_upper_bound=2 * math.sin(PLACE_NEAR_M / (2 * EARTH_RADIUS_M)),
+        )
+        own = _fold(place["name"]).strip()
+        for chord, i in zip(np.atleast_1d(chords), np.atleast_1d(found)):
+            if not math.isfinite(chord):
+                break
+            name, population = towns[i]
+            if population > (place["population"] or 0) and _fold(name).strip() != own:
+                return name
+        return None
+
     def find_landmarks(self, query: str, limit: int = 5) -> list[dict]:
         """Landmarks (peaks, huts, lakes, towns ...) with a name holding the
         query from a word's start, each with its nearest hikes (ADR-0053).
@@ -2175,6 +2318,9 @@ class ServingData:
         with scoped(sqlite3.connect(self.landmarks, uri=True)) as db:
             needle, where = tail or (needle, None)
             found, match = self._landmarks_in(db, _shortened(needle), limit, where), "words"
+            if not found and " " not in needle:  # a name of two words typed as one ("catbells")
+                joined = [f"{needle[:at]} {needle[at:]}" for at in range(JOINED_PART, len(needle) - JOINED_PART + 1)]
+                found = self._landmarks_in(db, [short for spelled in joined for short in _shortened(spelled)], limit, where) if joined else []
             if not found:
                 for spelled in self._landmark_spellings.respelled(needle.split()):
                     found, match = self._landmarks_in(db, _shortened(" ".join(spelled)), limit, where), "similar"
@@ -2364,6 +2510,10 @@ class ServingData:
             keep |= ~self._west
         return np.flatnonzero(keep)
 
+    def day_hikes(self) -> np.ndarray:
+        """Whether each hike (similarity row) is a day hike, not a multi-day route (``multi_day``)."""
+        return ~(self._one_way_m > MULTI_DAY_M)
+
     def multi_day(self, row: int) -> bool:
         """Whether a hike is a multi-day route: longer than ``MULTI_DAY_M`` one way (ADR-0056)."""
         return bool(self._one_way_m[row] > MULTI_DAY_M)
@@ -2441,6 +2591,10 @@ class ServingData:
             {"id": i, "name": _shown_name(i, name, origin), "walk_m": walk_m, "multi_day": self.multi_day(self.row_of(i)), "line": line}
             for i, name, origin, walk_m, line in found
         ], False
+
+    def names(self, ids: list[int]) -> dict[int, str]:
+        """The name the page shows for each DayHike id."""
+        return {dayhike_id: found[0] for dayhike_id, found in self._names(ids).items()} if ids else {}
 
     def _names(self, ids: list[int]) -> dict[int, tuple[str, float | None, float | None, str]]:
         """Name, climb, descent (metres, walking direction) and name origin per DayHike id."""

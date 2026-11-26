@@ -160,6 +160,18 @@ def test_the_shell_holds_the_pages_as_the_server_fills_them_in_and_asks_the_serv
 def test_the_deploy_sets_the_memory_from_the_data_image(
     tmp_path: Path, data_image: str, memory_variable: str, memory: str
 ) -> None:
+    arguments = _candidate_deploy(tmp_path, data_image, memory_variable)
+    assert arguments[arguments.index("--memory") + 1] == memory
+
+
+def test_the_deploy_scales_to_zero_and_at_most_four_instances(tmp_path: Path) -> None:
+    arguments = _candidate_deploy(tmp_path, "r/dayhike-data:abc-eu-us", "")
+    assert arguments[arguments.index("--min-instances") + 1] == "0"
+    assert arguments[arguments.index("--max-instances") + 1] == "4"
+
+
+def _candidate_deploy(tmp_path: Path, data_image: str, memory_variable: str) -> list[str]:
+    """The arguments the workflow's candidate step gives `gcloud run deploy`, run with a stub gcloud."""
     if shutil.which("jq") is None:
         pytest.skip("jq not on PATH")
     workflow = yaml.safe_load((Path(__file__).parents[1] / ".github" / "workflows" / "deploy.yml").read_text())
@@ -184,5 +196,4 @@ def test_the_deploy_sets_the_memory_from_the_data_image(
         "MEMORY": memory_variable,
     }
     subprocess.run(["bash", "-e", "-c", script], env=env, check=True)
-    arguments = (tmp_path / "calls").read_text().splitlines()
-    assert arguments[arguments.index("--memory") + 1] == memory
+    return (tmp_path / "calls").read_text().splitlines()
