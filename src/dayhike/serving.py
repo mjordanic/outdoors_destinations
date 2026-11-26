@@ -1927,7 +1927,7 @@ class ServingData:
         meta_path = self.directory / "meta.json"
         if not meta_path.is_file():
             raise ServingExportError(f"{self.directory}: no complete serving export; run `dayhike export-serving`")
-        self.meta = json.loads(meta_path.read_text())
+        self.meta = json.loads(meta_path.read_text(encoding="utf-8"))
         if self.meta["format"] != SERVING_FORMAT:
             raise ServingExportError(
                 f"{self.directory}: export format {self.meta['format']}, expected {SERVING_FORMAT}; "

@@ -1232,7 +1232,7 @@ class Bases:
         meta_path = directory / "meta.json"
         if not meta_path.is_file():
             return None
-        meta = json.loads(meta_path.read_text())
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
         if (
             meta.get("format") != BASES_FORMAT
             or meta.get("facts_version") != _FACTS_VERSION
