@@ -50,11 +50,11 @@ Pick one of three ways:
    comma keeps to the hikes there: "Triglav, Slovenia". When no name has
    every word as you typed it, the list says so and marks each name that is only like it "similar name". So does a name
    that holds your word only inside a longer word ("Rappenloch" in
-   "Krappenlochklamm"): check that it is the hike you meant. **Enter** picks a
-   hike only when one is named exactly as you typed, or it is the only hike
-   found; the line beside the chosen hike then says so. Otherwise the list
-   stays open and says how many hikes match, so you pick one (or use the arrow
-   keys, then Enter). A one-letter or over-100-character query is not
+   "Krappenlochklamm"): check that it is the hike you meant. **Enter** picks the
+   hike named exactly as you typed, else the top suggestion (or the one you
+   moved to with the arrow keys), as the town box of Find a base does; the
+   line beside the chosen hike then says so. Day hikes are suggested before
+   multi-day routes. A one-letter or over-100-character query is not
    searched: the list says why instead. It works the same on a phone and a
    computer.
    Once picked, the page moves to the hike's panel. The hike stays chosen until
@@ -198,12 +198,16 @@ the hut slider to 100. Turn Length down to 30.
   Only hikes that start within those limits are kept. Type the place as
   "lat, lon", use your browser's location, or use "Find place" to look up a
   town or village. When several places have that name ("Keswick" is in
-  England, Canada and the United States), or none has it but one is a letter
-  off, it lists them with their countries for you to choose one. The drive time is an estimate based on main roads, so
+  England, Canada and the United States; there are many Springfields in the
+  United States), a much bigger place starts with it ("Frankfurt am Main" for
+  "Frankfurt"), or none has it but one is a letter off, it lists them, biggest
+  first, with their countries in full and, for several in one country, the
+  bigger town each is near, for you to choose one. Places with no hike mapped within
+  50 km come last and say so. "Find place" again lists them again. The drive time is an estimate based on main roads, so
   treat it as a rough guide. The limits stay set when you open another hike
   from the results, the search box or the map in the same tab, and the note
   above the results always names them, for example "within a 2 h drive of
-  Munich, DE". When no hike starts within the limits (a place far from
+  Munich, Germany". When no hike starts within the limits (a place far from
   Europe and the contiguous United States, such as Sydney), the list says no
   hikes are mapped there yet and what the site covers. A fresh page, or a link opened in the tab, starts with none
   unless the link names them. Leaving a hike you described for a hike you
@@ -309,7 +313,9 @@ under Hikes in, and the grouping distance. It leaves out your starting place,
 its coordinates and its drive or distance limit: they are yours, and a friend
 starts from somewhere else. Whoever opens it sees the same search, ready for
 **Find hikes**; once you have found the list, the link of the hike you like
-opens with the list too (its address ends in "&list"). A link to a hike you
+opens with the list too (its address ends in "&list"); with a hike of the
+list opened, the address also names it ("&open=…"), so a link copied then
+opens that hike over the list. A link to a hike you
 described works the same way. The
 address in your browser keeps every setting up to date, your starting place
 too, so a reload keeps them. A link opened in a tab that is already open (typed, pasted,
@@ -562,11 +568,12 @@ they are the 20 best.
   3.5 of them, so the rest is left to measure the loops it found; if it hits
   that limit, it lists the best of what it found so far.
 
-So the loops are a good list of ideas, not every loop there is. A note above
-the list says this too, and tells you how many starts it searched from, how
-many loops it found and how many are listed.
+So the loops are a good list of ideas, not every loop there is. A sentence
+where the Suggest loops button was says what it found, and "How the loop
+search went" under it folds a note that tells you how many starts it searched
+from, how many loops it found and how many are listed.
 
-Example: "Loops: searched from 31 starts near the best hikes, 14 found, 3
+Example of that note: "Loops: searched from 31 starts near the best hikes, 14 found, 3
 listed in 2 rows: #2, #5 (marked composed)". Not all 14 are listed. The others
 rank lower, are not drawn on this page (Redraw or tick Strict order shows
 them), or walk mostly the same trails as a listed hike. When none makes the

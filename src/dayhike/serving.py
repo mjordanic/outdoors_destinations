@@ -219,6 +219,11 @@ FUZZY_MIN_LETTERS = 4  # a shorter query word is found only as typed
 PLACE_SCAN = 20_000  # names a place choice looks at, for a country after a comma or for a typo
 PLACE_TYPO_START = 3  # a place name typed with a typo is looked for among those starting with its first letters
 PLACE_TYPO_RATIO = 0.8  # and as alike to it as this (``difflib``), as Find a base's town box does
+# Places of one name in one country are told apart by the nearest town bigger than each, of this many people
+# or more, within this far (visitor check round 4: "Springfield" fits five in the United States).
+PLACE_NEAR_PEOPLE = 10_000
+PLACE_NEAR_M = 100_000
+PLACE_COVERED_M = 50_000  # a place with a Trailhead this close has hikes near it ("Find place"'s default limit)
 JOINED_PART = 3  # a word typed as two run together ("catbells" for Cat Bells) splits into parts this long or longer
 FUZZY_SPELLINGS = 3  # the nearest words a word with a typo is tried as
 FUZZY_QUERIES = 6  # the respelled queries a search tries, fewest typos first
@@ -2181,7 +2186,7 @@ class ServingData:
         found = self.find_place(query, limit)
         needle = _fold(query).strip()
         if found or self.places is None or not needle:
-            return found, False
+            return self._told_apart(found), False
         head, comma, tail = needle.rpartition(",")
         country = None
         if comma and head.strip():
@@ -2189,7 +2194,7 @@ class ServingData:
             found = self.find_place(needle, PLACE_SCAN if country else limit)
             found = [place for place in found if not country or place["country"] == country][:limit]
             if found:
-                return found, False
+                return self._told_apart(found), False
         if len(needle) <= PLACE_TYPO_START:
             return [], False
         alike: dict[int, tuple[float, int]] = {}
@@ -2208,7 +2213,76 @@ class ServingData:
                 f"SELECT id, name, country, lat, lon, population FROM places WHERE id IN ({','.join('?' * len(best))})", best
             )} if best else {}
         found = [dict(zip(("name", "country", "lat", "lon", "population"), rows[place])) for place in best]
-        return found, bool(found)
+        return self._told_apart(found), bool(found)
+
+    def _told_apart(self, found: list[dict]) -> list[dict]:
+        """``found`` as "Find place" offers them (visitor check round 4): each marked ``covered``, whether a
+        Trailhead is within ``PLACE_COVERED_M`` of it, those that are first (Keswick, Ontario has none near,
+        though Canada has hikes along the border); and, where places of one name share a country, each with the
+        nearest bigger town (``near``, ``PLACE_NEAR_PEOPLE`` people or more within ``PLACE_NEAR_M``) to tell them apart."""
+        shared: dict[tuple[str, str], int] = {}
+        for place in found:
+            key = (_fold(place["name"]).strip(), place["country"])
+            shared[key] = shared.get(key, 0) + 1
+        told = []
+        for place in found:
+            place = {**place, "covered": self._hikes_near(place)}
+            if shared[(_fold(place["name"]).strip(), place["country"])] > 1:
+                near = self._bigger_near(place)
+                if near:
+                    place["near"] = near
+            told.append(place)
+        return sorted(told, key=lambda place: not place["covered"])
+
+    @functools.cached_property
+    def _trailhead_tree(self) -> object | None:
+        """A tree of where the Trailheads are, for ``_hikes_near``."""
+        from scipy.spatial import cKDTree
+
+        points = np.asarray(self.trailheads, dtype=np.float64)
+        return cKDTree(_unit(points[:, 0], points[:, 1])) if len(points) else None
+
+    def _hikes_near(self, place: Mapping) -> bool:
+        """Whether a Trailhead is within ``PLACE_COVERED_M`` of ``place``."""
+        tree = self._trailhead_tree
+        if tree is None:
+            return False
+        chord, _ = tree.query(
+            _unit(place["lat"], place["lon"])[0], distance_upper_bound=2 * math.sin(PLACE_COVERED_M / (2 * EARTH_RADIUS_M))
+        )
+        return bool(math.isfinite(chord))
+
+    @functools.cached_property
+    def _big_towns(self) -> tuple[list[tuple[str, int]], object | None]:
+        """The places of ``PLACE_NEAR_PEOPLE`` people or more, name and population, and a tree of where they are."""
+        from scipy.spatial import cKDTree
+
+        with scoped(sqlite3.connect(self.places, uri=True)) as db:
+            rows = db.execute(
+                "SELECT name, population, lat, lon FROM places WHERE population >= ? ORDER BY id", (PLACE_NEAR_PEOPLE,)
+            ).fetchall()
+        if not rows:
+            return [], None
+        where = np.array([(lat, lon) for *_, lat, lon in rows])
+        return [(name, population) for name, population, *_ in rows], cKDTree(_unit(where[:, 0], where[:, 1]))
+
+    def _bigger_near(self, place: Mapping) -> str | None:
+        """The name of the town nearest ``place`` with more people than it and another name; None with none."""
+        towns, tree = self._big_towns
+        if tree is None:
+            return None
+        chords, found = tree.query(
+            _unit(place["lat"], place["lon"])[0], k=min(len(towns), 20),
+            distance_upper_bound=2 * math.sin(PLACE_NEAR_M / (2 * EARTH_RADIUS_M)),
+        )
+        own = _fold(place["name"]).strip()
+        for chord, i in zip(np.atleast_1d(chords), np.atleast_1d(found)):
+            if not math.isfinite(chord):
+                break
+            name, population = towns[i]
+            if population > (place["population"] or 0) and _fold(name).strip() != own:
+                return name
+        return None
 
     def find_landmarks(self, query: str, limit: int = 5) -> list[dict]:
         """Landmarks (peaks, huts, lakes, towns ...) with a name holding the

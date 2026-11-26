@@ -2246,7 +2246,9 @@ catalog or built hike, its `#compose=` link for a composed one, with `&oneway`
 when set, and the search settings: `&month=`, `&w=` (the weights moved from their defaults, `name:weight`
 comma-separated), `&adv`, `&regions=`, `&group=` and `&units=`, but not the starting place (`&from=lat,lon`, `&place=`, `&hours=`,
 `&km=`), which only the address bar keeps (ADR-0075); the liked hike's link, and the address bar, end in `&list` while
-its list is shown, and such an address opens with the list, kept or found again (ADR-0088); a hike picked, a list
+its list is shown, and such an address opens with the list, kept or found again (ADR-0088), then `&open=<id>` while a
+result of it is open, which such an address opens over the list, scored against the liked hike when the list drawn
+holds it not (ADR-0089); a hike picked, a list
 found and a result opened are each a step of the history; a plain click on it copies it as Share does rather than opening it in the same tab, which would drop the starting place and the list; a wish link carries the same but its own weights; ADR-0054) and two buttons: Share sends that address to a touch screen's share
 sheet, or copies it on a computer or where the sheet fails (a line beside the
 button then says "Link copied", or shows the link when it cannot be copied),
@@ -2270,7 +2272,7 @@ starts, not by road; ADR-0032) or both keeps only hikes within those limits (the
 start is typed as "lat, lon", taken from the
 browser, or found by "Find place" among the GeoNames towns and villages in the
 export, ADR-0029, ADR-0042); the note above the results names the limits and
-the place, "within a 2 h drive of Munich, DE", as they stay set when another
+the place, "within a 2 h drive of Munich, Germany", as they stay set when another
 hike opens in the same tab from the page (a link opened in the tab resets them, ADR-0073), and the limit inputs are not restored by the
 browser on a reload. The DriveTime is estimated on highways-only tiles as in
 **Highway tiles** above; the distance needs no routing engine. Measures with no data for a hike show "no data".
@@ -2600,8 +2602,11 @@ them with),
 query, folded like search: the place named exactly that, then one with it as an
 alternate name, then the most populous; with none, for words after a comma, the places named by the words
 before it, in the country the words name or anywhere; else names one typo away, with `"guess": true`, and the
-page asks "Did you mean"; 404 without `places.sqlite`. The page takes the one place named exactly as typed, and
-offers several to choose, with their countries, ADR-0088),
+page asks "Did you mean"; 404 without `places.sqlite`. Each place says whether a Trailhead is within 50 km of it (`covered`),
+those that are first, and places sharing a name and country say the nearest town of 10,000 people or more within
+100 km they are `near`. The page takes the one place named exactly as typed when no much bigger place's name starts
+with it, and else offers them all to choose, biggest first, with their countries in full ("Frankfurt" offers
+Frankfurt am Main), places with none near last; Find place again offers them again, ADR-0088, ADR-0089),
 `GET /api/landmarks?q=&limit=` (up to 10, default 5, Landmarks with a folded name holding the query from a
 word's start, typos as search: the one named exactly first, then the one with the most names, the highest,
 the most hikes; each with `name`, `kind`, `town` (the nearest other town within 30 km, to tell equal names
@@ -2713,9 +2718,8 @@ writes otherwise ("chamonix mont blanc", "st moritz") finds it too, and with non
 away ("keswik") with `guess` true, which the page asks about ("Did you mean …?") instead of taking on Enter.
 `GET /api/bases/nearest?lat=&lon=` gives the nearest Base in a straight line with its `distance_km`, and
 `GET /api/bases/town?id=` the Base of a link's number, so a link names its town whatever happens to its list.
-They say for each Base the nearest other Base of at least 10,000 people and more than its own (`near`:
-`{"name", "km"}`, else null; for a Base of 10,000 itself only one within 250 km), so towns of one name can be
-told apart. `POST /api/bases/rank` takes `{"seed": place id, "reach": 15, 30 or 60,
+They say for each Base the nearest other Base of at least 10,000 people and more than its own, in its
+country and within 60 km (`near`: `{"name", "km"}`, else null, ADR-0089), so towns of one name can be told apart. `POST /api/bases/rank` takes `{"seed": place id, "reach": 15, 30 or 60,
 "hike_filter": {...}, "traits": {...}}`: `hike_filter` as `HikeFilter.to_mapping` writes it (`climb_min_m`,
 `climb_max_m`, `length_min_km`, `length_max_km`, `highest_min_m`, `highest_max_m`, and `summit`, `waterside`,
 `round_trip` true), `traits` per TownTrait (`size`, `stays`, `eats`, `months`) one of `{"like_mine": 1-3}`,
@@ -2723,8 +2727,7 @@ told apart. `POST /api/bases/rank` takes `{"seed": place id, "reach": 15, 30 or 
 else is a 422, and a seed that is no Base a 404. It answers `seed` (the Base with its passing `hike_groups`),
 `too_few` (under 10 of them: no row), `traits_leave_none` (true when there are Bases that might be rows and the
 town filters leave none of them), and up to 300 `results`, one per area, each the Base it is scored as (its
-`id`, `name` and every figure are that town's) with `named` (`{"id", "name"}` of the area's biggest town,
-which names the row, when that is not the scored one, else null), `region`, `score`, `hike_score`, `mix`, `coverage`, `back`, `enough`, `sure`, `hike_groups`, `area_bases`, `area_towns`
+`id`, `name` and every figure are that town's, and it names the row, ADR-0089), `region`, `score`, `hike_score`, `mix`, `coverage`, `back`, `enough`, `sure`, `hike_groups`, `area_bases`, `area_towns`
 (up to 5 other towns of its area, its best first when that is not the row's, then biggest first, each
 `{"id", "name", "population"}`), `best_town` (`{"id", "name", "score"}` of that best town when the row is scored as
 another, else null) and `cuts`, the share
@@ -2751,8 +2754,7 @@ values over them, and a line under each score whose parts multiply to it: how al
 how many of each town's kinds the other has), the cut for fewer hikes, the cut for few of the Hiker's hikes to
 compare (`sure`), then each "like mine" trait's; a row standing for an area names its biggest other towns
 (`area_towns`), all of them or "among them" the biggest, and its best town with its score when the row is scored
-as a bigger one; a row named after a bigger town than the one it is scored as says "figures for" that one on
-its place line and on its dot on the map; a line with a cut ends with the score it comes to. Every step
+as a bigger one; a line with a cut ends with the score it comes to. Every step
 (entering the mode, a town chosen, the Reach or a choice changed, a Base opened or closed) is a step of the
 browser's history, so Back undoes it; the answers of the last 30 lists and Bases are kept, so going back asks the
 server nothing. Choices changed in a row ask for one list once they settle (0.6 s, 0.9 s while a number is
@@ -2760,8 +2762,8 @@ typed). A refused or failed list is said above it, and the list left on screen i
 earlier choices; a range the wrong way round, or a number under 0, is said beside its field and left out of
 the address, which still names the town, Reach and town opened, and a name not found is said under the town box. The ranges show in the Units chosen and are
 sent in metres and km; a number shown keeps the metres it was set with until it is typed again. The mode sets the hike filter and each trait (ignore, filter,
-or "like mine" with *a little*, *matters* or *important*; town size starts as a filter up to 50,000 people, the
-others ignored). Its address is `#base=<seed>&reach=<minutes>&open=<id>` (`#base` alone before a town is
+or "like mine" with *a little*, *matters* or *important*; town size starts as a filter of at least 1,000 and up to 50,000 people, a place of unknown size failing
+the "at least", both said over the list, the others ignored). Its address is `#base=<seed>&reach=<minutes>&open=<id>` (`#base` alone before a town is
 chosen), then the hike filter's keys (`&climb_max_m=500&summit`) and each trait not at its default
 (`&size=ignore`, `&eats=like-mine-important`, `&stays=3-`, `&size=-5000`, `&months=7,8`; "like mine" is
 `like-mine-a-little`, `like-mine` or `like-mine-important`), then `&units=imperial` as the hike search keeps
@@ -2793,8 +2795,9 @@ force base, a holiday or caravan park, "(historical)"), and west of the Atlantic
 States. After the second visitor check (ADR-0086), areas form around the best towns of 1,000 people first, then
 villages of 100, then the rest; a row is scored as the biggest Base (population, then places to stay) of its
 best's kind within 0.05 of its score, with that Base's figures, rows are ordered by that score, and a row under
-0.1 is none. After the third (ADR-0088), the row is named after the biggest town or village of its area (100
-people or more; else after the Base it is scored as), and says whose figures it shows when the two differ.
+0.1 is none. After the third (ADR-0088), the row was named after the biggest town or village of its area, saying whose
+figures it showed; after the fourth (ADR-0089) it is named after the Base it is scored as again, and the default
+town size of at least 1,000 people keeps hamlets out.
 
 On the real Europe and US build, the preselection kept the best 20 rows of every ranking the same, for
 Keswick, Chamonix, Bohinjska Bistrica and Moab at 15, 30 and 60 min, with and without "climb up to 500 m"

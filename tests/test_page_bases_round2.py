@@ -34,7 +34,8 @@ def opened_link(browser, server: str, hash: str, **options):
 # B20: a range the wrong way round is left out of the address, which keeps its town.
 
 
-def test_a_range_the_wrong_way_round_is_left_out_of_the_address(browser, server) -> None:
+def test_a_range_the_wrong_way_round_leaves_the_address_of_the_list_shown(browser, server) -> None:
+    """B20 left the range out; round 4 (B17, ADR-0089) keeps the address naming the list shown, which reloads."""
     page = open_bases(browser, server)
     keswick_in_60(page)
     hike_choices(page)
@@ -47,7 +48,7 @@ def test_a_range_the_wrong_way_round_is_left_out_of_the_address(browser, server)
     page.locator(".base-range .range-error").first.get_by_text("is more than").wait_for()
     page.wait_for_timeout(1_200)  # past the typing wait
 
-    assert page.evaluate("() => location.hash") == before.replace("&climb_max_m=500", "")
+    assert page.evaluate("() => location.hash") == before
     page.reload()
     page.locator("#base-results tbody tr").first.wait_for(timeout=SETTLE_MS)
     assert "Keswick" in page.locator("#base-chosen").inner_text()
@@ -114,12 +115,14 @@ def test_a_negative_number_of_places_to_stay_is_said(browser, server) -> None:
 # B9: a shared link names its town while rankings are refused.
 
 
-def test_a_shared_link_names_its_town_while_rankings_are_refused(browser, server) -> None:
+def test_a_shared_link_names_its_town_while_rankings_are_refused(browser, server, monkeypatch) -> None:
+    monkeypatch.setattr("dayhike.bases.NEAR_TOWN_PEOPLE", 4_000)  # Keswick is near Bethesda,
+    monkeypatch.setattr("dayhike.bases.NEAR_TOWN_M", 300_000)  # 222 km off in the fixture
     page = open_page(browser, server, Api({}))
     page.route("**/api/bases/rank", lambda route: route.fulfill(status=429, json={"detail": "Too many requests"}))
     page.goto(f"{server}/#base={KESWICK}&reach=60")
 
-    page.locator("#base-problem").get_by_text("Too many requests").wait_for()
+    page.locator("#base-problem").get_by_text("busy").wait_for()
     page.locator("#base-chosen").get_by_text("Keswick").wait_for()
     assert "near" in page.locator("#base-chosen").inner_text()  # C1: the "near" part is kept after a reload
 

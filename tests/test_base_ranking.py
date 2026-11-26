@@ -426,8 +426,9 @@ def test_a_town_whose_name_has_such_a_word_is_listed(tmp_path, name):
     assert [row.base for row in rank_bases(data, 1, 30, _all(data)).rows] == [1]
 
 
-def test_a_row_is_named_after_its_biggest_town_and_scored_as_the_biggest_about_as_alike_as_its_best(tmp_path):
-    """Round 3 of the visitor check (ADR-0088): the name is the area's biggest town, the figures unchanged."""
+def test_a_row_is_named_after_the_town_it_is_scored_as_with_the_bigger_towns_under_it(tmp_path):
+    """Round 4 of the visitor check undid round 3's "Colwyn Bay figures for Bethesda" (ADR-0089): a row is named
+    after the town whose figures it shows, the biggest about as alike as its best, and a bigger town is listed under it."""
     north = SEED_AT[0] + 3 * FAR
     data = _data(
         tmp_path,
@@ -440,10 +441,10 @@ def test_a_row_is_named_after_its_biggest_town_and_scored_as_the_biggest_about_a
         ],
     )
     (row,) = rank_bases(data, 1, 30, _all(data)).rows
-    assert row.named == 3 and row.base == 2 and row.place_id == 3
+    assert row.base == 2 and row.place_id == 3 and not hasattr(row, "named")
     assert row.score == pytest.approx(_stretched(0.4 * 0.975 + 0.3 * 1 + 0.3 * 0.975)) and row.hike_groups == 40
     assert set(row.members) == {1, 2, 3, 4}
-    assert row.best == 2 and row.towns == (2, 4, 1)  # the other towns of the area, its best town first, then the biggest
+    assert row.towns == (3, 4, 1)  # the other towns of the area, biggest first
 
 
 def test_a_row_with_no_village_in_its_area_keeps_the_name_it_is_scored_as(tmp_path):
@@ -458,7 +459,7 @@ def test_a_row_with_no_village_in_its_area_keeps_the_name_it_is_scored_as(tmp_pa
         ],
     )
     (row,) = rank_bases(data, 1, 30, _all(data)).rows
-    assert row.base == 2 and row.named == -1
+    assert row.base == 2
     assert row.towns == (1, 3)
 
 
@@ -643,6 +644,24 @@ def test_a_town_is_said_to_be_near_a_bigger_town_not_a_district_of_its_own(tmp_p
     assert near[0] is None  # no bigger town anywhere near Munich
     assert near[1] == {"name": "Munich", "km": 3}
     assert near[2] == {"name": "Midtown", "km": 33}
+
+
+def test_a_town_is_said_to_be_near_only_a_bigger_town_of_its_country_close_by(tmp_path):
+    """Round 4 (H10, B7): "Garmisch-Partenkirchen near Hötting" (in Austria), "Moab near Fruita, 96 km",
+    "Portland near Seattle, 233 km": a town far off, or across a border, tells no one where a town is."""
+    data = _data(
+        tmp_path,
+        [
+            _town(ALIKE, 0, name="Garmisch-Partenkirchen", population=27_000, country="DE"),
+            {"types": ALIKE, "at": (SEED_AT[0] + 0.25, SEED_AT[1]), "name": "Hötting", "population": 30_000, "country": "AT"},
+            {"types": ALIKE, "at": (SEED_AT[0] + 0.45, SEED_AT[1]), "name": "Weilheim", "population": 40_000, "country": "DE"},
+            _town(ALIKE, 3, name="Moab", population=5_000, country="US"),
+            {"types": ALIKE, "at": (SEED_AT[0] + 3 * FAR + 0.86, SEED_AT[1]), "name": "Fruita", "population": 13_000, "country": "US"},
+        ],
+    )
+    near = near_towns(data, [0, 3])
+    assert near[0] == {"name": "Weilheim", "km": 50}  # not Hötting, nearer but in another country
+    assert near[1] is None  # Fruita is 96 km off
 
 
 def test_a_row_named_after_a_bigger_town_says_which_town_of_it_is_the_best(tmp_path):
