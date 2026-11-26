@@ -1,3 +1,4 @@
+import concurrent.futures
 import shutil
 import threading
 import time
@@ -1506,6 +1507,64 @@ def test_two_rankings_run_at_once_and_a_third_waits_for_one_of_them_to_end() -> 
     assert queue.enter("third", "", 0.01) == "run"
 
 
+class _WakeOrderLock:
+    """A reentrant lock that, once armed, holds ``first``'s wake-up until ``second`` has woken and waited again."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self.first: int | None = None
+        self.second: int | None = None
+        self.armed = False
+        self.second_waits = threading.Event()
+
+    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+        if blocking and self.armed and threading.get_ident() == self.first:
+            self.second_waits.wait(5)
+        return self._lock.acquire(blocking, timeout)
+
+    def release(self) -> None:
+        self._lock.release()
+        if self.armed and threading.get_ident() == self.second:
+            self.second_waits.set()
+
+    def _is_owned(self) -> bool:
+        return self._lock._is_owned()
+
+    def __enter__(self) -> bool:
+        return self.acquire()
+
+    def __exit__(self, *exc: object) -> None:
+        self.release()
+
+
+def test_when_both_running_rankings_end_together_both_waiting_ones_run() -> None:
+    queue = web.RankingQueue(at_once=2)
+    lock = _WakeOrderLock()
+    queue._turn = threading.Condition(lock)
+    assert queue.enter("one", "", 5.0) == "run" and queue.enter("two", "", 5.0) == "run"
+    turns: dict[str, str] = {}
+
+    def wait(key: str) -> None:
+        turns[key] = queue.enter(key, "", 30.0)
+
+    first, second = (threading.Thread(target=wait, args=(key,), daemon=True) for key in ("A", "B"))
+    first.start()
+    while ("A", "") not in queue._queue:
+        time.sleep(0.001)
+    second.start()
+    while len(queue._queue) < 2:
+        time.sleep(0.001)
+    lock.first, lock.second = first.ident, second.ident
+    with queue._turn:  # both end before either waiting one wakes; B wakes first and sees A still ahead
+        lock.armed = True
+        queue.leave("one", "")
+        queue.leave("two", "")
+    first.join(5)
+    second.join(5)  # the slot A left free is B's at once, not when B's wait runs out
+
+    assert turns == {"A": "run", "B": "run"}
+
+
 def test_tabs_behind_one_address_each_take_their_own_turn_up_to_a_few() -> None:
     # Visitors behind one address (a home, an office, a test machine) do not wait on each other's
     # searches, but one address cannot fill the line (ADR-0054).
@@ -1641,6 +1700,31 @@ def test_a_ranking_still_running_near_cloud_runs_timeout_is_answered_busy_and_en
             break
         time.sleep(0.01)
     assert after.status_code == 200
+
+
+def test_a_ranking_that_ends_just_after_its_deadline_is_answered_with_its_results(
+    data: ServingData, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Late(web.ThreadPoolExecutor):
+        def submit(self, fn, /, *args, **kwargs):
+            future = super().submit(fn, *args, **kwargs)
+            result = future.result
+
+            def late(timeout: float | None = None):
+                if timeout is None:
+                    return result()
+                concurrent.futures.wait([future])  # it ends just after the wait for it gave up
+                raise TimeoutError
+
+            future.result = late
+            return future
+
+    monkeypatch.setattr(web, "ThreadPoolExecutor", Late)
+    client = TestClient(create_app(data), raise_server_exceptions=False)
+
+    response = client.post("/api/rank", json={"seed": 1001})
+
+    assert response.status_code == 200 and response.json()["results"]
 
 
 def test_with_the_site_url_each_page_names_itself_and_its_preview_image_by_full_address(data: ServingData) -> None:

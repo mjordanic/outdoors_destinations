@@ -635,6 +635,7 @@ class RankingQueue:
             self._queue.append(key)
             if self._turn.wait_for(lambda: len(self._running) < self.at_once and self._queue[0] == key, timeout):
                 self._running.append(self._queue.popleft())
+                self._turn.notify_all()
                 return "run"
             self._queue.remove(key)
             self._turn.notify_all()  # it may have been first in line
@@ -989,8 +990,8 @@ def create_app(
         try:
             return future.result(timeout=max(0.0, started + RANK_DEADLINE_S - time.monotonic()))
         except TimeoutError:
-            if future.done():  # the work's own TimeoutError
-                raise
+            if future.done():
+                return future.result()
             # Still running: Cloud Run would cut it off with its own 504.
             raise HTTPException(
                 503,
