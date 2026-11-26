@@ -397,7 +397,18 @@ function routeHash(hike) {
 // ``place``: with the starting place and its limits too, as the address bar keeps them. A link to share
 // leaves them out: they are the Hiker's own, and a friend starts from elsewhere.
 function likedHash(hike, place = true) {
-  return `${hike.route ? routeHash(hike) : `#hike=${hike.id}`}${modeHash(place)}`;
+  return `${hike.route ? routeHash(hike) : `#hike=${hike.id}`}${modeHash(place)}${hike === state.liked ? listPart() : ""}`;
+}
+
+// "&list" while the list of hikes is shown: the address of the liked hike or the wish then opens it with
+// its list, as a Base's address opens its list (visitor check round 3, B2). A link without it shows none.
+function listPart() {
+  return $("#results").hidden ? "" : "&list";
+}
+
+// An address without its "&list", to compare the settings two addresses name.
+function unlisted(address) {
+  return (address ?? "").replace(/&list(?=&|$)/g, "");
 }
 
 // The full address that opens ``hike`` measured as the GPX draws it, one way or with the way back, and
@@ -634,16 +645,17 @@ function linkBase(hash) {
 // The address keeps the search settings as they change, so a reload or a shared link opens them again.
 function syncAddress() {
   refreshHikeLinks();
-  if (state.wishing) { history.replaceState(null, "", wishHash()); return; }
+  // history.state: a result row opened, as a step of its own, stays one (``showResult``).
+  if (state.wishing) { history.replaceState(history.state, "", wishHash()); return; }
   const base = linkBase(location.hash);
-  if (base) history.replaceState(null, "", base + modeHash());
+  if (base) history.replaceState(history.state, "", base + modeHash() + listPart());
 }
 
 // Every "Link to this hike" shown carries the search settings as they are now but the starting place,
 // the same address Share sends (ADR-0055, ADR-0075).
 function refreshHikeLinks() {
   for (const card of [$("#liked"), $("#selected")]) {
-    for (const link of card.querySelectorAll("a.hike-link")) link.setAttribute("href", likedHash(card._hike, false));
+    for (const link of card.querySelectorAll("a.hike-link")) link.setAttribute("href", likedHash(card._hike, false)); // with its list, for the liked hike
   }
 }
 
@@ -721,6 +733,7 @@ function resetSettings() {
   placed++; // drops a place lookup still running
   $("#origin").value = $("#origin-found").textContent = "";
   state.origin = state.missed = null;
+  $("#origin-choices").hidden = true;
   for (const [id, { value, checked, km }] of Object.entries(OPENED)) {
     if (km != null) fill($(id), km, value);
     else $(id).value = value;
@@ -907,7 +920,7 @@ function helpButton(key) {
 
 function helpHtml(key) {
   const help = key === "base" ? state.info.bases.score_help : state.scoreHelp;
-  if (key === "base") return helpBox(`<h3 id="score-help-title">Base score</h3><p>${escapeHtml(help.overall)}</p>`, help.sections);
+  if (key === "base") return helpBox(`<h3 id="score-help-title">Base score</h3><p>${escapeHtml(help.overall)}</p>`, help.sections, true);
   const measure = state.measures.find((m) => m.name === key);
   const head = measure
     ? `<h3 id="score-help-title">${escapeHtml(measure.label)}</h3><p>${escapeHtml(measure.description)}</p>
@@ -917,8 +930,11 @@ function helpHtml(key) {
   return helpBox(head, help.sections);
 }
 
-function helpBox(head, sections) {
-  const text = sections.map((s) => `<h4>${escapeHtml(s.title)}</h4><p>${escapeHtml(s.text)}</p>`).join("");
+// ``folded``: each section opens on its title, so the box starts short on a phone (visitor check round 3, C17).
+function helpBox(head, sections, folded = false) {
+  const text = sections.map((s) => (folded
+    ? `<details><summary>${escapeHtml(s.title)}</summary><p>${escapeHtml(s.text)}</p></details>`
+    : `<h4>${escapeHtml(s.title)}</h4><p>${escapeHtml(s.text)}</p>`)).join("");
   // A cue while more of the text is below the box's edge (ADR-0054).
   return `<button type="button" class="help-close" aria-label="Close">×</button>${head}${text}<p class="help-more" aria-hidden="true">More below ↓ scroll</p>`;
 }
@@ -1283,6 +1299,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     </div>
     ${hike.name_note ? `<p class="hint name-note">${escapeHtml(hike.name_note)}</p>` : ""}
     ${hike.parking_m > FAR_PARKING_M ? `<p class="hint parking-note">It starts ${fmt.km(hike.parking_m)} from the nearest car park in a straight line, on the trail: the walk to its start is not counted.</p>` : ""}
+    ${role === "Liked hike" || role === "Your hike" ? `<p class="find-here"><button type="button" class="primary"${$("#find").disabled ? " disabled" : ""}>Find hikes</button></p>` : ""}
     ${hike.line ? '<p class="hike-actions"><button type="button" class="secondary share-hike">Share</button> <button type="button" class="secondary download-gpx">Download GPX</button> <span class="share-note" role="status" hidden></span></p>' : ""}
     ${gap ? `<p class="hint gpx-note">${escapeHtml(gap)}</p>` : ""}
     ${scoreLine}
@@ -1303,6 +1320,7 @@ function renderDetail(card, hike, { role, compare = null, result = null, query =
     <p class="hint uncounted-note" hidden></p>
     <div class="table-wrap"><table class="facts"></table></div>`;
   card.querySelector(".share-hike")?.addEventListener("click", (event) => shareHike(hike, event.currentTarget, card.querySelector(".share-note")));
+  card.querySelector(".find-here button")?.addEventListener("click", () => $("#find").click());
   // A plain click copies the link rather than opening it here, which would drop the Hiker's starting place
   // and list (ADR-0075); a click to open it in a new tab or window opens it.
   for (const link of card.querySelectorAll("a.hike-link")) {
@@ -1733,7 +1751,7 @@ function wishHash() {
     if (folded(row) || !(Number(number.value) > 0)) continue;
     parts.push(`${row.dataset.measure}:${value.type === "checkbox" ? Number(value.checked) : typedFact(row, value)}:${number.value}`);
   }
-  return `#wish=${parts.join(",")}${modeHash()}`;
+  return `#wish=${parts.join(",")}${modeHash()}${listPart()}`;
 }
 
 // A wish box's number in its Measure's fact units, or the text as typed when it is no number.
@@ -1810,9 +1828,10 @@ function setWishing(on, { keepPlace = false } = {}) {
   $("#liked").hidden = on;
   $("#wish-card").hidden = !on;
   $("#results").hidden = $("#selected").hidden = true;
-  $("#find").textContent = on ? "Find hikes" : "Find similar";
+  $("#find").textContent = "Find hikes"; // one name in both modes (visitor check round 3, R21)
   checkWishes();
   $("#return-bar").hidden = !on && !state.liked;
+  $(".controls").scrollTop = 0; // the panel scrolls on its own: the mode opens at its step 1 (B5)
   if (on) {
     $("#weights-panel").open = true;
     $("#map-pick-on").checked = false;
@@ -1934,7 +1953,7 @@ function nameSearch(input, list, onPick, onLandmark = null, resting = () => null
     }
     const rest = resting();
     if (rest && list.childElementCount && input.value.trim() !== rest) { // a drawn hike rests as "": no name to say
-      list.prepend(note(`<span class="meta">Until you pick one, Find similar uses “${escapeHtml(rest)}”; Escape puts its name back.</span>`));
+      list.prepend(note(`<span class="meta">Until you pick one, Find hikes uses “${escapeHtml(rest)}”; Escape puts its name back.</span>`));
     }
     list.hidden = items.length === 0 && !nothingFor;
     input.setAttribute("aria-expanded", String(!list.hidden));
@@ -2063,6 +2082,7 @@ let chosen = 0, shown = 0, ranked = 0, paired = 0, boxed = 0, placed = 0; // the
 let selecting = 0; // the latest request to fill the hike card, a result or a compared hike: only it fills it
 let loading = 0, held = 0; // the hike request in flight (0: none), and the one Find waits for
 let ranking = false; // a Ranking runs: Find waits for it
+let linked = 0; // the latest address opened: a list it names is shown only while it is the latest
 
 // Find is greyed out while there is nothing to rank or the page is busy; each time, the line beside it
 // says why: no hike chosen in its own words, a hike loading or a search running in the status line.
@@ -2078,6 +2098,7 @@ function syncFind() {
   const region = regionProblem();
   if (region) wrong.push(region);
   $("#find").disabled = none || ranking || (busy && held === chosen) || wrong.length > 0;
+  for (const button of document.querySelectorAll(".find-here button")) button.disabled = $("#find").disabled;
   $("#find-why").textContent = none && !busy && !ranking
     ? `Choose a hike first: search for one by name or select one on the map${$("#wish-on").hidden ? "" : ", or describe the one you want"}.`
     : wrong.join(" ");
@@ -2117,10 +2138,11 @@ async function choose(id, { from = null, note = null } = {}) {
     $("#liked-name").classList.remove("error-text");
     $("#pair-search").disabled = false;
     $("#return-bar").hidden = false;
-    history.replaceState(null, "", `#hike=${id}${modeHash()}`);
-    renderDetail($("#liked"), hike, { role: "Liked hike" });
     $("#results").hidden = true;
     $("#selected").hidden = true;
+    // A hike picked by the Hiker is a step of the history, so Back undoes it (visitor check round 3, B1).
+    history[from === "search" || from === "map" ? "pushState" : "replaceState"](null, "", `#hike=${id}${modeHash()}`);
+    renderDetail($("#liked"), hike, { role: "Liked hike" });
     pick.restyle();
     pick.drawLoops();
     if (from !== "map") pick.follow();
@@ -2139,7 +2161,7 @@ async function choose(id, { from = null, note = null } = {}) {
 
 // Why a hike was not loaded; for the liked hike measured again, that Find tries again.
 const notMeasured = (error, request) => request === held
-  ? `Your hike could not be measured again for Return to start: ${(error.reason ?? error.message).replace(/\.$/, "")}. Press Find similar to try again.`
+  ? `Your hike could not be measured again for Return to start: ${(error.reason ?? error.message).replace(/\.$/, "")}. Press Find hikes to try again.`
   : error.message;
 
 // The server read the request and found no such hike; not a dropped connection or a busy server.
@@ -2220,7 +2242,9 @@ async function chooseComposed(route, name, from = null) {
     compose.source = hike; // the drawing is the liked hike now: Clear clears it
     $("#pair-search").disabled = false;
     $("#return-bar").hidden = false;
-    history.replaceState(null, "", routeHash(hike) + modeHash());
+    $("#results").hidden = true;
+    $("#selected").hidden = true;
+    history[from === "compose" ? "pushState" : "replaceState"](null, "", routeHash(hike) + modeHash());
     renderDetail($("#liked"), hike, { role: "Your hike" });
     if (compose.on) compose.readout(); // measured now: the same figures as the card
     // Said beside the button pressed: a change that keeps the length and name still shows it was used.
@@ -2274,6 +2298,16 @@ async function editComposed(hike) {
 // ---------- select on map ----------
 
 // The centre and zoom that show ``hike``'s line on ``map``, at least ``least`` zoomed in (else on its start).
+// Where a map opens with nothing to show: where most hikes of the visitor's region are, the region ticked
+// alone, else the one of the browser's time zone; not one box of Europe and the US, mostly sea (B6).
+function homeBox() {
+  const regions = state.info.regions ?? [], ticked = regionBoxes().filter((box) => box.checked).map((box) => box.value);
+  let zone = "";
+  try { zone = Intl.DateTimeFormat().resolvedOptions().timeZone ?? ""; } catch { /* no time zone: Europe */ }
+  const guess = ticked.length === 1 ? ticked[0] : zone.startsWith("America/") ? "us" : "europe";
+  return (regions.find((region) => region.name === guess) ?? regions[0])?.core ?? state.info.core ?? state.info.coverage;
+}
+
 function viewOf(map, hike, least) {
   const bounds = hike.line ? L.latLngBounds(decodePolyline(hike.line)).pad(0.1) : null;
   const zoom = bounds ? map.getBoundsZoom(bounds) : 0;
@@ -2305,7 +2339,7 @@ const pick = {
       addBaseLayer(this.map);
       this.map.createPane(START_PANE).style.zIndex = 450;
       // Where most hikes are, until there is a hike or a starting place to show (ADR-0054).
-      const [south, west, north, east] = state.info.core ?? state.info.coverage;
+      const [south, west, north, east] = homeBox();
       this.map.fitBounds([[south, west], [north, east]]);
       this.map.on("moveend", () => this.load());
       // The Hiker takes the map over: it stops zooming in by itself.
@@ -2624,7 +2658,7 @@ const compose = {
   hintNext() {
     if (this.start == null && this.cannot) { pick.hint(this.cannot); return; }
     const kept = this.source && this.source !== state.liked && state.liked
-      ? ` Until then Find similar still uses ${state.liked.name}.` : "";
+      ? ` Until then Find hikes still uses ${state.liked.name}.` : "";
     pick.hint(this.start == null
       ? "Click a junction or a trail segment to start your hike there. Only marked trails and graded paths are segments, and a hike starts and ends at a junction."
       : `Click a segment to walk on it; Undo takes your last click back. Use this hike measures it and makes it your hike.${kept}`);
@@ -2863,7 +2897,7 @@ const compose = {
     this.changed();
   },
 
-  // Starts over. A drawing of the liked hike clears that hike too, so Find similar never uses a hike no
+  // Starts over. A drawing of the liked hike clears that hike too, so Find hikes never uses a hike no
   // longer drawn; a drawing of a hike from the list leaves the liked hike be.
   clear() {
     const liked = this.source && this.source === state.liked;
@@ -2983,7 +3017,7 @@ async function comparePair(id) {
       role: "Compared with the liked hike", compare: liked, result: { ...pair, drive_hours: null },
       query: { weights: pair.weights, month: pair.month, return_to_start: pair.return_to_start, uncounted },
     });
-    card.scrollIntoView({ behavior: "smooth", block: "start" });
+    card.scrollIntoView({ block: "start" }); // instant: a smooth scroll can be cut short, below the fold (C17)
     setStatus("");
   } catch (error) {
     if (request === paired && filling === selecting && liked === state.liked) setStatus(error.message, true);
@@ -3007,8 +3041,37 @@ function swappedWarning(origin) {
   return `${origin.lat}, ${origin.lon} is outside the area with hikes; did you mean ${origin.lon}, ${origin.lat}? Type latitude first.`;
 }
 
+const PLACE_CHOICES = 8; // places "Find place" may offer to choose from
+
+// A country's name from its code ("GB": United Kingdom), to tell places of one name apart.
+function countryName(code) {
+  try { return new Intl.DisplayNames(["en"], { type: "region" }).of(code) ?? code; } catch { return code; }
+}
+
+// The places a lookup found, to choose one of under the box, after ``text`` ("Which place …?", "Did you mean:").
+function offerPlaces(places, text, typed) {
+  const host = $("#origin-choices");
+  host.innerHTML = "";
+  for (const place of places) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary place-choice";
+    const people = place.population ? ` · ${place.population.toLocaleString("en")} people` : "";
+    button.innerHTML = `${escapeHtml(place.name)} <span class="meta">${escapeHtml(countryName(place.country))}${people}</span>`;
+    button.addEventListener("click", () => {
+      const origin = { lat: place.lat, lon: place.lon, label: `${place.name}, ${place.country}` };
+      state.geocoded.set(typed, origin);
+      setOrigin(origin, true);
+    });
+    host.append(button);
+  }
+  host.hidden = false;
+  $("#origin-found").textContent = text;
+}
+
 async function findPlace() {
   const text = $("#origin").value.trim(), request = ++placed;
+  $("#origin-choices").hidden = true;
   if (!text) { $("#origin-found").textContent = "Type a town name or lat, lon first."; return; }
   // The box no longer names the start found before: a failed lookup must not leave it in place.
   state.origin = null;
@@ -3024,8 +3087,23 @@ async function findPlace() {
   try {
     let origin;
     if (state.info.place_search) {
-      const { results: [place] } = await api(`/api/place?limit=1&q=${encodeURIComponent(text)}`);
-      if (place) origin = { lat: place.lat, lon: place.lon, label: `${place.name}, ${place.country}` };
+      // One place named so is taken; several, or names one typo away, are offered to choose from, with
+      // their countries: "Keswick" is in Cumbria, Ontario and California (visitor check round 3, B3).
+      const answer = await api(`/api/place?limit=${PLACE_CHOICES}&q=${encodeURIComponent(text)}`);
+      if (request !== placed) return;
+      // Of the places of one name in one country, the most populous (the server's first): three
+      // "Keswick, United Kingdom" could not be told apart.
+      const seen = new Set(), found = answer.results.filter((place) => {
+        const key = `${foldName(place.name)} ${place.country}`;
+        return !seen.has(key) && seen.add(key);
+      });
+      const named = found.filter((place) => foldName(place.name) === foldName(text));
+      const one = answer.guess ? null : found.length === 1 ? found[0] : named.length === 1 ? named[0] : null;
+      if (one) origin = { lat: one.lat, lon: one.lon, label: `${one.name}, ${one.country}` };
+      else if (found.length) {
+        offerPlaces(named.length > 1 ? named : found, answer.guess ? `No place named “${text}”. Did you mean:` : `Which place named “${text}”? Choose one:`, text);
+        return;
+      }
     } else {
       // An export without GeoNames places: one request per click (Nominatim usage policy: no autocomplete, cache results).
       const response = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(text)}`);
@@ -3035,7 +3113,7 @@ async function findPlace() {
     if (request !== placed) return; // the box changed, or another lookup started, meanwhile
     if (!origin) {
       state.missed = text;
-      $("#origin-found").textContent = "Place not found; try a town name or lat, lon.";
+      $("#origin-found").textContent = `No place named “${text}”. Check the spelling, or type lat, lon.`;
       return;
     }
     state.geocoded.set(text, origin);
@@ -3048,6 +3126,8 @@ async function findPlace() {
 // ``found``: found by the Hiker now, so the address and every "Link to this hike" name it (not one an address names).
 function setOrigin(origin, found = false) {
   state.origin = origin;
+  state.missed = null;
+  $("#origin-choices").hidden = true;
   pick.focus({ center: [origin.lat, origin.lon] });
   $("#origin-found").textContent = `Start: ${origin.label} (${origin.lat.toFixed(4)}, ${origin.lon.toFixed(4)})`;
   markStale();
@@ -3250,7 +3330,13 @@ function groupProblem() {
   return km >= 0.1 && km <= 50 ? null : `Group hikes starting within ${kmShown(0.1)} to ${limitText(50)}.`;
 }
 
+// Set while an address naming a list asks for it (``showListed``), or a list shown is found again for Return
+// to start: its Ranking is no step of the history.
+let listing = false;
+
 async function findSimilar() {
+  const step = !listing;
+  listing = false;
   const was = state.liked;
   if (!state.wishing && was && (was.way_back != null) !== measuredBack(was)) { // its measuring again failed
     await remeasure(was);
@@ -3276,6 +3362,7 @@ async function findSimilar() {
       if (warning) throw new Error(warning);
       const origin = typed || state.origin;
       if (!origin) {
+        if (!$("#origin-choices").hidden) throw new Error("Choose one of the places under the box first.");
         throw new Error(state.missed ? `No start: ${state.missed} was not found.` : "Set a starting place.");
       }
       const wrong = driveProblem();
@@ -3305,7 +3392,7 @@ async function findSimilar() {
   }
   // A GoatCounter event when the server set analytics up; without them there is no goatcounter.
   window.goatcounter?.count?.({ path: "find", event: true });
-  await rank(query, liked, false, crypto.getRandomValues(new Uint32Array(1))[0], place);
+  await rank(query, liked, false, crypto.getRandomValues(new Uint32Array(1))[0], place, 0, step);
 }
 
 // POST /api/rank (or ``path``: a BaseRanking's) with this tab's name. While the server still runs this tab's
@@ -3333,7 +3420,8 @@ async function postRank(request, current = () => true, path = "/api/rank", say =
 // ``stale``: the query on the left is no longer this one; ``draw``: the draw number of its rows;
 // ``place``: the name of the starting place the limits are from; ``rows``: list as many rows as this,
 // with "Show 10 more" asked for the rows past the first page (Suggest loops keeps the rows shown).
-async function rank(query, liked, stale = false, draw = state.draw, place = state.asked?.place, rows = 0) {
+// ``step``: the list's address is a step of the history, unless the address already names a list.
+async function rank(query, liked, stale = false, draw = state.draw, place = state.asked?.place, rows = 0, step = true) {
   const request = ++ranked;
   // The settings it is asked with: those on the left now, or a stale query's own (Suggest loops); a setting
   // changed before it answers marks its list as from before (``changes``).
@@ -3357,6 +3445,11 @@ async function rank(query, liked, stale = false, draw = state.draw, place = stat
     state.draw = draw;
     state.pools = [body.results];
     relist();
+    const listed = shownAddress(); // with "&list": Back hides the list, and the address opens it again (B1, B2)
+    if (listed && $("#base-panel").hidden && listed !== location.hash) {
+      history[step && !readLink(location.hash).has("list") ? "pushState" : "replaceState"](null, "", listed);
+      refreshHikeLinks();
+    }
     // Instant: a smooth scroll can be cut short, and the list may be screens below the button.
     $("#results").scrollIntoView({ block: "start" });
     setStatus(`Done in ${(body.elapsed_ms / 1000).toFixed(1)} s.`);
@@ -3637,7 +3730,7 @@ function listRows(from) {
   }
   state.results.slice(from).forEach((result, k) => {
     const i = from + k;
-    const row = resultRow(result, i + 1, () => showResult(i));
+    const row = resultRow(result, i + 1, () => showResult(i, 0, true));
     row.dataset.index = i;
     tbody.appendChild(row);
   });
@@ -3804,7 +3897,7 @@ function expandVersions(index) {
   after.dataset.version = `${index}-0`;
   after.querySelector(".number").textContent = `${index + 1}, var 1`;
   result.versions.forEach((version, k) => {
-    const row = resultRow(version, `var ${k + 2}`, () => showResult(index, k + 1));
+    const row = resultRow(version, `var ${k + 2}`, () => showResult(index, k + 1, true));
     row.classList.add("version");
     row.dataset.version = `${index}-${k + 1}`;
     after.after(row);
@@ -3827,10 +3920,15 @@ function reopenSelected(selected) {
   });
 }
 
-// Show result ``index`` (its version ``version`` when it has several) against the liked hike.
-async function showResult(index, version = 0) {
+// Show result ``index`` (its version ``version`` when it has several) against the liked hike; ``step``: the
+// Hiker opened it, a step of the history (one for a row opened over another), so Back closes it (B1).
+async function showResult(index, version = 0, step = false) {
   const { results } = state, liked = rankBasis();
   const versions = results[index].versions?.length ? [results[index], ...results[index].versions] : null;
+  if (step) {
+    const key = resultKey(versions ? versions[version] : results[index]);
+    history[history.state?.row != null ? "replaceState" : "pushState"]({ row: key }, "", location.hash);
+  }
   if (versions && state.expanded !== index) expandVersions(index);
   const result = versions ? versions[version] : results[index];
   document.querySelectorAll("#results-table tr.active").forEach((r) => r.classList.remove("active"));
@@ -3983,7 +4081,7 @@ async function start() {
     syncFind(); // a wish box folded away asks nothing
   });
   $("#drive-on").addEventListener("change", (event) => { $("#drive").hidden = !event.target.checked; markStale(); });
-  $("#origin").addEventListener("input", () => { placed++; state.origin = null; state.missed = null; $("#origin-found").textContent = ""; markStale(); syncFind(); });
+  $("#origin").addEventListener("input", () => { placed++; state.origin = null; state.missed = null; $("#origin-found").textContent = ""; $("#origin-choices").hidden = true; markStale(); syncFind(); });
   $("#region-boxes").addEventListener("change", () => { markStale(); syncFind(); syncAddress(); });
   for (const limit of ["#drive-on", "#hours-on", "#hours", "#km-on", "#km"]) {
     $(limit).addEventListener("input", markStale);
@@ -4039,7 +4137,10 @@ async function start() {
       else await choose(liked.id);
       if (state.liked === liked) return;
     }
-    if (shown) await findSimilar();
+    if (shown) {
+      listing = true; // the list shown, found again: no step of its own
+      await findSimilar();
+    }
     if (selected && (!shown || !$("#results").hidden)) reopenSelected(selected);
   });
   // An address opens its hike, composed hike or wish with the search settings it carries; a part the
@@ -4051,6 +4152,8 @@ async function start() {
     const parts = readLink(location.hash);
     if (parts.has("base")) return; // "Find a base" (bases.js) opens it
     const kind = ["hike", "compose", "wish"].find((name) => parts.has(name));
+    // The landing of a site with Bases keeps each tool as it was left, for its buttons to go back to (C12).
+    if (!kind && state.info.bases && !location.hash) return;
     if (!kind) {
       if (!changed) return;
       chosen++; // drops a hike still loading
@@ -4076,7 +4179,8 @@ async function start() {
     }
     // An address of other settings opens as in a new tab (ADR-0073): with no list, not one found for others.
     // An address of the list's own settings keeps it as their answer, not from before, though setting them marked it so.
-    if (changed && !$("#results").hidden && state.asked?.address !== shownAddress()) {
+    const listed = parts.has("list"), opened = ++linked;
+    if (changed && !$("#results").hidden && (!listed || unlisted(state.asked?.address) !== unlisted(shownAddress()))) {
       $("#results").hidden = $("#selected").hidden = true;
       pick.drawLoops();
       if (!ranking) setStatus(""); // what it said was of that list; a hike to load says so next
@@ -4092,17 +4196,18 @@ async function start() {
     const redraw = () => {
       if ($("#month").value !== month) renderDetail($("#liked"), state.liked, { role: state.liked.route ? "Your hike" : "Liked hike" });
     };
+    let loaded = null; // the hike the address names, loading
     if (kind === "hike") {
       const id = (decoded(parts.get("hike")) ?? "").trim();
       if (!/^\d{1,17}$/.test(id)) broken(true);
-      else if (modeChanged || state.wishing || Number(id) !== state.liked?.id) choose(Number(id), { from: "link" });
+      else if (modeChanged || state.wishing || Number(id) !== state.liked?.id) loaded = choose(Number(id), { from: "link" });
       else redraw();
     } else if (kind === "compose") {
       const route = parts.get("compose"), name = parts.has("name") ? decoded(parts.get("name")) : null;
       if (!state.info.compose) return;
       if (!/^[\w:.,-]+$/.test(route)) broken(true);
       else if (modeChanged || state.wishing || state.liked?.route?.text !== route) {
-        chooseComposed(route, name?.slice(0, NAME_LENGTH), "link"); // a hand-made long name is cut, not refused
+        loaded = chooseComposed(route, name?.slice(0, NAME_LENGTH), "link"); // a hand-made long name is cut, not refused
       } else redraw();
     } else if (state.measures.some(wishable)) {
       chosen++; // drops a hike still loading
@@ -4111,7 +4216,31 @@ async function start() {
       history.replaceState(null, "", wishHash());
     }
     refreshHikeLinks();
+    if (listed) Promise.resolve(loaded).then(() => showListed(opened));
   };
+  // An address naming a list shows it once its hike is in: the list kept, when it is of these settings
+  // (Forward, or a tool gone back to), else found again, as a reload or a shared link asks (B2).
+  const showListed = (opened) => {
+    if (opened !== linked || !$("#results").hidden || !rankBasis() || !$("#base-panel").hidden) return;
+    if (state.answer && state.asked?.basis === rankBasis() && unlisted(state.asked.address) === unlisted(shownAddress())) {
+      relist();
+      history.replaceState(history.state, "", shownAddress());
+      refreshHikeLinks();
+      return;
+    }
+    listing = true;
+    findSimilar();
+  };
+  // Back from a result row opened closes it; Forward opens it again (B1).
+  window.addEventListener("popstate", (event) => {
+    const row = event.state?.row;
+    if (row != null && !$("#results").hidden) reopenSelected({ key: row });
+    else if (row == null && state.selected?.key != null && !$("#selected").hidden) {
+      $("#selected").hidden = true;
+      document.querySelectorAll("#results-table tr.active").forEach((r) => r.classList.remove("active"));
+      if (!$("#results").hidden) $("#results").scrollIntoView({ block: "start" });
+    }
+  });
   const openAddress = (changed) => {
     openLinked(changed);
     advancedOpen = $("#advanced").open;
