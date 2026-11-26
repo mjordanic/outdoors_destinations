@@ -3657,7 +3657,7 @@ def test_a_map_the_hiker_has_touched_is_not_zoomed_in_by_itself(browser, server)
     spans = dense_hikes(server, page, drawable_span=0.0)  # never drawable
     page.locator("#search").fill("Ridge Lake")
     page.locator("#suggestions li.landmark").get_by_role("button", name="Show on map").dispatch_event("mousedown")
-    page.wait_for_function("() => pick.fitting")
+    page.wait_for_function("() => pick.fitting && pick.map.getZoom() >= PICK_ZOOM")  # the zoom animation is over
     zoom = page.evaluate("pick.map.getZoom()")
 
     page.locator("#map-pick .pick-map").dispatch_event("pointerdown")
