@@ -238,7 +238,7 @@ def test_a_name_one_typo_away_is_asked_about_not_taken(browser, server) -> None:
 def test_find_bases_with_a_name_one_typo_away_asks_did_you_mean(browser, server) -> None:
     page = open_bases(browser, server)
     page.get_by_label("A town you stayed in").fill("Keswik")
-    page.get_by_role("button", name="Find bases").click()
+    page.get_by_label("A town you stayed in").press("Enter")  # Find bases waits for a town chosen (ADR-0088)
 
     asked = page.locator("#base-search-problem")
     asked.get_by_text("Did you mean").wait_for(timeout=SETTLE_MS)
@@ -252,7 +252,7 @@ def test_find_bases_with_a_name_one_typo_away_asks_did_you_mean(browser, server)
 def test_a_name_not_found_is_said_under_the_box(browser, server) -> None:
     page = open_bases(browser, server, width=390)
     page.get_by_label("A town you stayed in").fill("Qwxzzy")
-    page.get_by_role("button", name="Find bases").click()
+    page.get_by_label("A town you stayed in").press("Enter")  # Find bases waits for a town chosen (ADR-0088)
 
     said = page.locator("#base-search-problem")
     said.get_by_text("No town found named “Qwxzzy”").wait_for()

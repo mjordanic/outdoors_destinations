@@ -426,7 +426,8 @@ def test_a_town_whose_name_has_such_a_word_is_listed(tmp_path, name):
     assert [row.base for row in rank_bases(data, 1, 30, _all(data)).rows] == [1]
 
 
-def test_a_row_is_named_after_the_biggest_town_about_as_alike_as_its_best(tmp_path):
+def test_a_row_is_named_after_its_biggest_town_and_scored_as_the_biggest_about_as_alike_as_its_best(tmp_path):
+    """Round 3 of the visitor check (ADR-0088): the name is the area's biggest town, the figures unchanged."""
     north = SEED_AT[0] + 3 * FAR
     data = _data(
         tmp_path,
@@ -439,10 +440,26 @@ def test_a_row_is_named_after_the_biggest_town_about_as_alike_as_its_best(tmp_pa
         ],
     )
     (row,) = rank_bases(data, 1, 30, _all(data)).rows
-    assert row.base == 2 and row.place_id == 3
+    assert row.named == 3 and row.base == 2 and row.place_id == 3
     assert row.score == pytest.approx(_stretched(0.4 * 0.975 + 0.3 * 1 + 0.3 * 0.975)) and row.hike_groups == 40
     assert set(row.members) == {1, 2, 3, 4}
-    assert row.towns == (3, 4, 1)  # the other towns of the area, biggest first
+    assert row.best == 2 and row.towns == (2, 4, 1)  # the other towns of the area, its best town first, then the biggest
+
+
+def test_a_row_with_no_village_in_its_area_keeps_the_name_it_is_scored_as(tmp_path):
+    north = SEED_AT[0] + 3 * FAR
+    data = _data(
+        tmp_path,
+        [
+            _town(ALIKE, 0),
+            {"types": ALIKE, "at": (north, SEED_AT[1])},  # the area's best, a hamlet of unknown size
+            {"types": {0: 20, 1: 19, 2: 1}, "at": (north + 0.1, SEED_AT[1]), "population": 40},  # nearly as alike
+            {"types": {0: 20, 1: 14, 2: 6}, "at": (north - 0.1, SEED_AT[1]), "population": 60},  # bigger, less alike
+        ],
+    )
+    (row,) = rank_bases(data, 1, 30, _all(data)).rows
+    assert row.base == 2 and row.named == -1
+    assert row.towns == (1, 3)
 
 
 def test_rows_are_in_the_order_of_the_towns_they_are_named_after(tmp_path):

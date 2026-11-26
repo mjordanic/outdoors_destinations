@@ -440,6 +440,21 @@ def only_this_machine(url: str) -> bool:
     return address.is_loopback or address.is_unspecified
 
 
+def core_box(points: np.ndarray) -> list[float]:
+    """The box (south, west, north, east) of the middle ``CORE_SHARE`` of ``points`` (lat, lon): where most are."""
+    edge = (1 - CORE_SHARE) / 2 * 100
+    low, high = np.percentile(points, [edge, 100 - edge], axis=0) if len(points) else ([0, 0], [0, 0])
+    return [*map(float, low), *map(float, high)]
+
+
+def region_cores(trailheads: np.ndarray) -> dict[str, list[float]]:
+    """Each region's ``core_box``, of the Trailheads on its side of ``REGION_SPLIT_LON`` (``regions_in``):
+    a map opened on one region shows land, where one box of Europe and the US is mostly sea."""
+    west = trailheads[:, 1] < REGION_SPLIT_LON if len(trailheads) else np.zeros(0, dtype=bool)
+    sides = {"us": trailheads[west], "europe": trailheads[~west]}
+    return {name: core_box(points) for name, points in sides.items() if len(points)}
+
+
 def covered_text(regions: Sequence[Mapping[str, str | None]] | None) -> str:
     """What the site covers, as its pages say it (``site_pages``): "Europe" while every region of the export
     is in Europe (or none is given), else their labels ("Europe and the contiguous United States")."""
@@ -461,6 +476,7 @@ def site_pages(
     sources: Mapping[str, Mapping[str, str]] | None = None,
     regions: Sequence[Mapping[str, str | None]] | None = None,
     download_url: str | None = None,
+    bases: bool = False,
 ) -> dict[str, str]:
     """Each page's HTML with the GoatCounter tag where a code is set.
 
@@ -486,7 +502,9 @@ def site_pages(
     With ``site_url`` (the public origin, ``https://host``) each page names its own address (``og:url``) and its
     share preview image by full address, as link previews need; else the image stays relative.
 
-    Text between ``<!--if-goatcounter-->`` and ``<!--/if-goatcounter-->`` (or ``places``,
+    With ``bases`` (a site with "Find a base", ADR-0084) every page has the switch to both tools and names them.
+
+    Text between ``<!--if-goatcounter-->`` and ``<!--/if-goatcounter-->`` (or ``places``, ``bases``,
     ``nominatim``, ``europe``, ``elsewhere``, ``eu``, ``vector`` (a PMTiles base map) and ``raster`` (none))
     is kept only when that setting is on.
 
@@ -522,6 +540,7 @@ def site_pages(
             "vector": basemap.pmtiles is not None,
             "raster": basemap.pmtiles is None,
             "download": bool(download_url),
+            "bases": bases,
         }
         for setting, on in settings.items():  # text true only once it is set
             block = rf"<!--if-{setting}-->(.*?)<!--/if-{setting}-->"
@@ -687,6 +706,7 @@ def create_app(
         sources=data.meta.get("sources"),
         regions=data.covered,
         download_url=download_url,
+        bases=data.bases is not None,
     )
     climb_and_descent(np.array([46.0, 46.001, 46.002]), np.array([13.0, 13.0, 13.0]), np.array([800.0, 850.0, 820.0]))
     app = FastAPI(title="HikesAlike", docs_url="/api/docs", openapi_url="/api/openapi.json")
@@ -803,10 +823,9 @@ def create_app(
     # The Trailheads' box (south, west, north, east): the page warns when a typed
     # "lat, lon" is outside it but its swap is inside.
     coverage = [*map(float, data.trailheads.min(axis=0)), *map(float, data.trailheads.max(axis=0))]
-    # Where most hikes are: the page's map of hikes opens on it when it has no hike or place to show.
-    edge = (1 - CORE_SHARE) / 2 * 100
-    low, high = np.percentile(data.trailheads, [edge, 100 - edge], axis=0) if len(data.trailheads) else ([0, 0], [0, 0])
-    core = [*map(float, low), *map(float, high)]
+    # Where most hikes are, and most of each region's: the page's maps open on one when they have no hike or place to show.
+    core = core_box(data.trailheads)
+    cores = region_cores(np.asarray(data.trailheads))
 
     @app.api_route("/api/info", methods=["GET", "HEAD"])
     def info() -> dict:
@@ -826,7 +845,11 @@ def create_app(
             "max_drive_hours": MAX_DRIVE_HOURS,
             "max_km": MAX_KM,
             # The RegionChoice: the regions this Catalog has hikes in; ``named`` is how a sentence names one (ADR-0074).
-            "regions": [{"name": name, "label": REGIONS[name][0], "named": REGIONS[name][1]} for name in data.regions],
+            # ``core``: where most of its hikes are, the box a map opens on for a visitor there.
+            "regions": [
+                {"name": name, "label": REGIONS[name][0], "named": REGIONS[name][1], "core": cores.get(name, core)}
+                for name in data.regions
+            ],
             "results": RESULTS,
             "max_rows": MAX_ROWS,
             # The page draws its rows from a pool of this many with probability rising as exp(score / t) (ADR-0047).
@@ -870,12 +893,15 @@ def create_app(
             raise HTTPException(404, "no landmark search in this export")
         return {"results": data.find_landmarks(q, limit)}
 
-    # The page's "Find place": a start for the drive filter, without asking Nominatim.
+    # The page's "Find place": a start for the drive filter, without asking Nominatim; the page offers a
+    # choice when more than one place is named so.
     @app.api_route("/api/place", methods=["GET", "HEAD"])
     def place(q: str = Query(max_length=100), limit: int = Query(5, ge=1, le=20)) -> dict:
         if data.places is None:
             raise HTTPException(404, "no place search in this export")
-        return {"results": data.find_place(q, limit)}
+        found, guess = data.place_choices(q, limit)
+        # guess: no place is named so, and these are names one typo away: the page asks "Did you mean …?"
+        return {"results": found, "guess": guess}
 
     @app.api_route("/api/hikes", methods=["GET", "HEAD"])
     def hikes_in_box(
@@ -1139,7 +1165,10 @@ def create_app(
         ranking = ranked(request, "bases", started, lambda: found.rank_bases(data, body.seed, body.reach, mask, traits=traits))
         rows = ranking.rows[:BASE_ROWS]
         seed, *listed = found.describe_bases(data, [me, *(row.base for row in rows)], body.reach)
-        others = sorted({town for row in rows for town in row.towns[: found.AREA_TOWNS]} | {row.best for row in rows if row.best >= 0})
+        others = sorted(
+            {town for row in rows for town in row.towns[: found.AREA_TOWNS]}
+            | {town for row in rows for town in (row.best, row.named) if town >= 0}
+        )
         towns = dict(zip(others, found.describe_bases(data, others)))
         return {
             "seed": {**seed, "hike_groups": ranking.seed_groups},
@@ -1171,6 +1200,8 @@ def create_app(
                     "best_town": None
                     if row.best in (row.base, -1)
                     else {"id": towns[row.best]["id"], "name": towns[row.best]["name"], "score": row.best_score},
+                    # The area's biggest town, which names the row, when that is not the town of its figures (ADR-0088).
+                    "named": None if row.named < 0 else {key: towns[row.named][key] for key in ("id", "name")},
                     "sure": row.sure,  # the share left of the hike score when few of the Hiker's hikes compare
                     "cuts": dict(row.cuts),  # the share each "like mine" TownTrait took off the hike score
                 }

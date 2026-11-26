@@ -420,4 +420,17 @@ button.help:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
   .top { flex-wrap: wrap; }
   .tool-switch { order: 1; flex-basis: 100%; }
   .tool-switch a { flex: 1; text-align: center; }
+  /* A phone: each tool's button right under its name, its words below (C10). */
+  .tool-card { padding: 14px; }
+  .tool-card .start { order: 1; margin: 6px 0 8px; }
+  .tool-card p { order: 2; font-size: 0.92rem; }
+  .tool-card p:last-of-type { margin-bottom: 0; }
 }
+/* "Find place" with several places of one name, or one typo away: each to choose, with its country (B3). */
+.place-choices { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+.place-choices[hidden] { display: none; }
+.place-choice .meta { color: var(--muted); font-size: 0.8rem; font-weight: 400; }
+/* A phone's Find hikes beside the liked hike, as the one in the panel is screens above it (C17). */
+.find-here { display: none; margin: 8px 0; }
+@media (max-width: 900px) { .find-here { display: block; } }
+.score-help summary { cursor: pointer; font-weight: 600; margin: 6px 0; }

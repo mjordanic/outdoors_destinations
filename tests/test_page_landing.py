@@ -32,7 +32,8 @@ def test_a_site_with_bases_opens_on_a_landing_of_both_tools(browser, server) -> 
     assert BASE_TEXT in page.locator("#landing").inner_text()
     assert page.locator("#seed-pick").is_hidden()
     assert page.locator("#base-panel").is_hidden()
-    assert page.locator("#tool-switch").is_hidden()  # the landing is itself the choice
+    assert page.locator("#tool-switch").is_visible()  # on the landing too, naming neither (ADR-0088)
+    assert page.locator("#tool-switch a[aria-current]").count() == 0
 
 
 def test_the_landing_opens_find_a_base_and_back_returns_to_it(browser, server) -> None:

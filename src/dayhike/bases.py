@@ -336,10 +336,11 @@ URBAN_M = 5_000
 SPRAWL_PEOPLE = 150_000  # or this many within SPRAWL_M, a city of suburbs (ADR-0086)
 SPRAWL_M = 8_000
 DORMITORY = (20_000, 3)  # a Base of this many people with fewer places to stay is where people live, not stay
-# ADR-0086, after the second visitor check: a row is named after the best town of its area of this many
-# people, else its best village of this many, else its best place; a row scoring under MIN_ROW_SCORE is none.
+# ADR-0086, after the second visitor check: an area is formed around its best town of this many people,
+# else its best village of this many, else its best place; a row scoring under MIN_ROW_SCORE is none.
+# ADR-0088: a row is named after its biggest town or village, else as it is scored.
 NAME_PEOPLE = (1_000, 100)
-NAME_WITHIN = 0.05  # and named after the biggest of those scoring within this of that best one
+NAME_WITHIN = 0.05  # and scored as the biggest of those scoring within this of that best one
 MIN_ROW_SCORE = 0.1
 AREA_TOWNS = 5  # the other towns of an area a row names, biggest first
 COVERED_WEST = "US"  # west of REGION_SPLIT_LON, the hikes are those of the United States alone
@@ -384,7 +385,7 @@ BASE_SCORE_HELP = {
             "title": "One row per area",
             "text": "Towns close together have much the same hikes, so each row is an area of towns, formed around "
             f"its best town of {NAME_PEOPLE[0]:,} people or more (else village of {NAME_PEOPLE[1]}, else place), "
-            "named after the biggest town about as alike as that one, with its score, and with its other big "
+            "scored as the biggest town about as alike as that one, named after its biggest town, and with its other big "
             "towns and its best beside it. With a longer drive the areas are bigger, so the list can be shorter. "
             "Towns near your own, and towns whose nearest hikes are mostly within an hour of yours, are left "
             "out: that is where you have been. So are towns in a city, big towns with almost no places to stay, "
@@ -397,14 +398,16 @@ BASE_SCORE_HELP = {
 
 @dataclass(frozen=True)
 class BaseMatch:
-    """One row of a BaseRanking: an area, named after its best town (ADR-0086).
+    """One row of a BaseRanking: an area, named after its biggest town (ADR-0086, ADR-0088).
 
     ``hike_score`` is ``(mix, coverage, back)`` weighed 40, 30, 30, run from the Reach's
     ``SCORE_FLOOR`` (0) up to 1, times ``enough`` and ``sure``; ``score`` the hike score after
-    the "like mine" TownTraits, each taking its share in ``cuts`` (trait name, share) off;
-    ``hike_groups`` the Base's HikeGroups that pass; ``members`` the Bases of its area, best
-    first, ``base`` the one it is named after, and ``towns`` the others, its ``best`` first
-    (with ``best_score``) when that is not ``base``, then biggest first. Bases are rows of the
+    the "like mine" TownTraits, each taking its share in ``cuts`` (trait name, share) off, all
+    those of ``base``, the area's biggest Base about as alike as its best; ``hike_groups`` the
+    HikeGroups of ``base`` that pass; ``members`` the Bases of its area, best
+    first, ``named`` the bigger one the row is named after when that is not ``base`` (else -1),
+    and ``towns`` the others than the one it is named after, its ``best`` first (with
+    ``best_score``) when that is not ``base``, then biggest first. Bases are rows of the
     ``bases/`` folder.
     """
 
@@ -425,6 +428,7 @@ class BaseMatch:
     towns: tuple[int, ...] = ()
     best: int = -1  # the area's best town, which the area is formed around, and its score
     best_score: float = 0.0
+    named: int = -1  # the area's biggest town, which the row is named after, when that is not ``base``
 
 
 @dataclass(frozen=True)
@@ -472,7 +476,8 @@ def rank_bases(
     ``OWN_AREA_REACHES`` of the Hiker's, or in their region (``_home_shares``), and those that
     may be no row (``_base_places``) are left out, and one within ``AREA_REACHES`` of a better
     row joins it, both in a straight line at the Reach estimate's straight-line speed; a row is
-    named after the biggest Base of its area within ``NAME_WITHIN`` of its best score.
+    scored as the biggest Base of its area within ``NAME_WITHIN`` of its best score, and named
+    after its biggest Base of ``NAME_PEOPLE[1]`` people or more (else after that scored one).
     ``traits`` (all ignored when None) leave out the Bases that fail a TownTrait filter before
     the best are chosen, and their "like mine" settings then cut the hike score of those best
     (``town_traits``), on which the rows are ordered. Raises KeyError when ``seed`` is not a Base.
@@ -550,6 +555,9 @@ def rank_bases(
     for area in areas:
         lead = area[0]  # the area's best town (or village, or place)
         i = max((j for j in area if tier[j] == tier[lead] and score[j] >= score[lead] - NAME_WITHIN), key=bigger)
+        named = max(area, key=bigger)
+        if size[candidates[named]] < NAME_PEOPLE[1]:
+            named = i
         area = sorted(area, key=lambda j: (-score[j], candidates[j]))
         base = int(candidates[i])
         found.append(
@@ -560,8 +568,9 @@ def rank_bases(
                 hike_groups=int(groups[base]), country=str(country[base]), region=str(region[base]),
                 members=tuple(int(candidates[j]) for j in area),
                 cuts=tuple((name, float(cut[i])) for name, cut in cuts), sure=sure,
-                towns=tuple(int(candidates[j]) for j in sorted(area, key=lambda j: (j == lead, *bigger(j)), reverse=True) if j != i),
+                towns=tuple(int(candidates[j]) for j in sorted(area, key=lambda j: (j == lead, *bigger(j)), reverse=True) if j != named),
                 best=int(candidates[lead]), best_score=float(score[lead]),
+                named=-1 if named == i else int(candidates[named]),
             )  # fmt: skip
         )
     found.sort(key=lambda row: (-row.score, row.base))

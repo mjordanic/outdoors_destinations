@@ -245,9 +245,11 @@ def test_a_row_names_the_other_towns_of_its_area_and_how_sure_its_score_is(
 
     rows = _rank(client)["results"]
 
-    area = next(row for row in rows if row["id"] == BETHESDA)
+    area = next(row for row in rows if row["id"] == BETHESDA)  # the figures of Bethesda, the best town
+    assert area["named"] == {"id": CHAMONIX, "name": "Chamonix-Mont-Blanc"}  # named after the bigger of the two
+    assert (area["name"], area["population"], area["hike_groups"]) == ("Bethesda", 4_735, 4)
     assert area["area_bases"] == 2
-    assert area["area_towns"] == [{"id": CHAMONIX, "name": "Chamonix-Mont-Blanc", "population": 10_614}]
+    assert area["area_towns"] == [{"id": BETHESDA, "name": "Bethesda", "population": 4_735}]
     assert area["sure"] == pytest.approx(0.5)
     assert area["score"] == pytest.approx(0.5)
     assert next(row for row in rows if row["id"] == MOAB)["area_towns"] == []
@@ -257,11 +259,12 @@ def test_a_row_named_after_a_bigger_town_names_its_best_town_and_score(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr("dayhike.bases.AREA_REACHES", 100)  # Bethesda and Chamonix in one area
-    monkeypatch.setattr("dayhike.bases.NAME_WITHIN", 1.0)  # named after Chamonix, the bigger
+    monkeypatch.setattr("dayhike.bases.NAME_WITHIN", 1.0)  # scored as Chamonix, the bigger
 
     rows = _rank(client)["results"]
 
     area = next(row for row in rows if row["id"] == CHAMONIX)
+    assert area["named"] is None
     assert area["best_town"] == {"id": BETHESDA, "name": "Bethesda", "score": pytest.approx(1)}
     assert area["area_towns"][0]["id"] == BETHESDA
     assert next(row for row in rows if row["id"] == MOAB)["best_town"] is None
@@ -450,6 +453,45 @@ def test_a_base_ranking_waits_its_turn_behind_two_hike_rankings(data: ServingDat
 
     assert response.status_code == 503, response.text
     assert response.json()["detail"].startswith("The server is busy with other visitors' searches")
+
+
+def test_a_third_heavy_base_ranking_at_once_is_told_the_server_is_busy(data: ServingData, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Visitor check round 3: 14 tabs of 60-min BaseRankings never saw "busy". The limit is on: each locally took
+    # 1-2 s, so every one got its turn within RANK_WAIT_S. Held running, two take the turns and a third waits, then is told.
+    from dayhike import bases
+
+    monkeypatch.setattr("dayhike.web.RANK_WAIT_S", 0.05)
+    client = TestClient(create_app(data))
+    started, release = threading.Semaphore(0), threading.Event()
+    real = bases.rank_bases
+
+    def held(*args, **kwargs):
+        started.release()
+        release.wait(10)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(bases, "rank_bases", held)
+    answers: list[int] = []
+    running = [
+        threading.Thread(
+            target=lambda tab=tab: answers.append(
+                client.post("/api/bases/rank", json={"seed": KESWICK, "reach": 60}, headers={TAB_HEADER: tab}).status_code
+            )
+        )
+        for tab in ("tab-1", "tab-2")
+    ]
+    for thread in running:
+        thread.start()
+    try:
+        assert started.acquire(timeout=10) and started.acquire(timeout=10)
+        third = client.post("/api/bases/rank", json={"seed": KESWICK, "reach": 60}, headers={TAB_HEADER: "tab-3"})
+    finally:
+        release.set()
+        for thread in running:
+            thread.join()
+
+    assert third.status_code == 503 and third.json()["detail"].startswith("The server is busy with other visitors' searches")
+    assert answers == [200, 200]
 
 
 def test_a_ranking_lists_more_than_a_hundred_rows(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
