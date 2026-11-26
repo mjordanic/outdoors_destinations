@@ -282,7 +282,7 @@ docker buildx build --platform linux/amd64 -f web/Dockerfile \
 gcloud run deploy dayhike --image "$IMAGE" --region europe-west1 \
   --allow-unauthenticated \
   --cpu 1 --memory 4Gi --execution-environment gen2 --cpu-boost \
-  --min-instances 0 --max-instances 2 --concurrency 8 --timeout 60 \
+  --min-instances 0 --max-instances 4 --concurrency 8 --timeout 60 \
   --set-env-vars DAYHIKE_FORWARDED_HOPS=1,DAYHIKE_SITE_URL=https://SERVICE.run.app
 ```
 
@@ -310,7 +310,7 @@ What the flags do:
 | --- | --- |
 | `--memory 4Gi` | For a Europe or a Europe and US export (section 1), the most Cloud Run gives 1 vCPU; a US-only export fits `2Gi`. The deploy workflow sets it on every deploy from the data image's tag: `2Gi` for a tag ending in `-us` (but not `-eu-us`) or `-demo`, else `4Gi`, or the `DAYHIKE_MEMORY` repository variable when set (section 9). Measured peak of app plus Valhalla in the technical docs table, **Web demo measurements** ([technical.md](technical.md#web-demo-measurements)). The trail network for the way back is memory-mapped from the export's `trailgraph.network/` (an export without it builds it once per instance, a request arriving during the build waiting for it), and the image sets `MALLOC_ARENA_MAX=2`; with both, 8 visitors on 1 vCPU peak near 1.1 GB. Raise to 4Gi if the logs show out-of-memory restarts. |
 | `--min-instances 0` | Scale to zero; the captain accepted the cold start. |
-| `--max-instances 2` | The instance cap: at most two containers ever bill at once. |
+| `--max-instances 4` | The instance cap: at most four containers ever bill at once. With Rankings two at a time per instance (`RANKINGS_AT_ONCE`), four instances run at most eight at once. The deploy workflow sets it, and `--min-instances 0`, on every deploy (section 9). |
 | `--concurrency 8` | Searches and hike pages run side by side; Rankings and BaseRankings run at most two at a time per instance (`RANKINGS_AT_ONCE`, in the app, ADR-0087). |
 | `--timeout 60` | No request may run longer; a 3 h drive query from the densest origin (Munich) takes about 8 s on one CPU of a Mac and an estimated 30-45 s on 1 vCPU; two Rankings at once each run slower, so the app answers a Ranking busy (`503`) 50 s after it came (`RANK_DEADLINE_S`) if it has not finished (ADR-0087). A 4 h one from Munich ran past 60 s, so the drive filter stops at 3 h (ADR-0083). |
 | `DAYHIKE_FORWARDED_HOPS=1` | The rate limit keys on the last `X-Forwarded-For` entry, the one Google's front end adds. Earlier entries are client-supplied and ignored, so the limit cannot be dodged by sending a fake header. If that last entry turns out to be a Google proxy address rather than the visitor, the limit becomes one shared budget per instance: stricter, never looser. |
@@ -325,8 +325,8 @@ What the flags do:
 
 The service also carries a service-level `scaling.maxInstanceCount` of 20 in
 the Cloud Run v2 API, next to the revision-level `template.scaling.maxInstanceCount`
-of 2 that `--max-instances 2` sets. Nobody set the 20 on purpose. The revision
-cap of 2 is the one that limits instances, so the 20 is harmless today; check
+of 4 that `--max-instances 4` sets. Nobody set the 20 on purpose. The revision
+cap of 4 is the one that limits instances, so the 20 is harmless today; check
 both after any change to scaling:
 
 ```bash
@@ -339,8 +339,8 @@ curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
 
 The app limits each client to **20 Rankings and 300 other API calls per
 minute per instance** (`HTTP 429` past that; the counter lives in each
-instance's memory, so with `--max-instances 2` a client whose requests reach
-both instances gets up to 2x that), runs at most two Rankings (hike Rankings and BaseRankings together,
+instance's memory, so with `--max-instances 4` a client whose requests reach
+all four instances gets up to 4x that), runs at most two Rankings (hike Rankings and BaseRankings together,
 `RANKINGS_AT_ONCE`) at a time per instance, in
 the order they came (others wait up to 12 s, then get `503`; a Ranking not finished 50 s after it came,
 such as a 3 h drive from Munich of up to about 45 s alone running beside another, is answered `503` then and
@@ -353,9 +353,9 @@ at most 4 (the next gets `409` until one ends, so one client cannot hold the
 Ranking for everyone, and people behind one address do not block each other), refuses a request body over 256 KB unread (`413`), and caps the drive filter at 3 hours. It keeps the drive
 times of the last 8 starts and drive limits asked, so the next rows, a new draw or other weights from the same
 start take about a second instead of asking Valhalla again. With
-`--max-instances 2` the most the service can ever bill is two instances busy
-around the clock: about 5.3 million vCPU-seconds and 10.5 million GiB-seconds a
-month, roughly **$150 per month at list price** after the free tier (verify the
+`--max-instances 4` and 4Gi the most the service can ever bill is four instances busy
+around the clock: about 10.5 million vCPU-seconds and 42 million GiB-seconds a
+month, roughly **$350 per month at list price** after the free tier (verify the
 europe-west1 rates). Normal demo traffic stays inside the free tier
 (180,000 vCPU-seconds and 360,000 GiB-seconds a month); the images in Artifact
 Registry cost about $0.10 per GB-month past the 0.5 GB free tier. The cleanup
@@ -628,8 +628,8 @@ repository variables of those names (empty, the variable is set empty: the maps
 keep the raster tiles, the credits page shows no download link, and no other
 origin may call the API). The memory is `DAYHIKE_MEMORY`, or, unset, `2Gi` for
 a data image whose tag ends in `-us` (but not `-eu-us`) or `-demo` and `4Gi`
-for any other, `-eu-us` included. CPU,
-scaling and the other environment variables stay as section 3 set them. A data refresh is still built and pushed by
+for any other, `-eu-us` included. Scaling is set on every deploy too, `--min-instances 0 --max-instances 4`
+(section 3). CPU and the other environment variables stay as section 3 set them. A data refresh is still built and pushed by
 hand (section 3), followed by a change of `DAYHIKE_DATA_IMAGE`; the next run
 builds on it. To roll back, move traffic to an earlier revision as in section 7,
 or re-run the workflow on an earlier commit. A failed candidate can be removed

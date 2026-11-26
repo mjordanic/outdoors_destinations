@@ -78,6 +78,7 @@ jobs:
           fi
           gcloud run deploy "$SERVICE" --project "$PROJECT" --region "$REGION" \
             --image "$IMAGE" --no-traffic --tag "$tag" --memory "$memory" \
+            --min-instances 0 --max-instances 4 \
             --update-env-vars "DAYHIKE_PMTILES_URL=$PMTILES_URL,DAYHIKE_DOWNLOAD_URL=$DOWNLOAD_URL,DAYHIKE_CORS_ORIGINS=$CORS_ORIGINS"
           described=$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format json)
           revision=$(jq -r --arg tag "$tag" '.status.traffic[] | select(.tag == $tag) | .revisionName' <<<"$described")
