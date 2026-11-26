@@ -40,7 +40,8 @@ const TRAIT_FILTERS = {
   eats: { ends: ["at_least"], unit: "places" },
   months: {},
 };
-const TRAIT_DEFAULTS = { size: { up_to: 50_000 } }; // every other TownTrait is ignored
+// Hamlets, and places of unknown size, are left out by default (ADR-0089); every other TownTrait is ignored.
+const TRAIT_DEFAULTS = { size: { at_least: 1_000, up_to: 50_000 } };
 const IMPORTANCE = [[1, "a little"], [2, "matters"], [3, "important"]];
 // "like mine" in an address: "size=like-mine-important".
 const LIKE_WORDS = { 1: "like-mine-a-little", 2: "like-mine", 3: "like-mine-important" };
@@ -110,7 +111,10 @@ const bases = {
     $("#base-more").addEventListener("click", () => this.more());
     for (const button of document.querySelectorAll(".base-hikes-close")) button.addEventListener("click", () => this.close());
     $("#base-hike-list").addEventListener("click", (event) => {
-      if (event.target.closest("a[href^='#hike=']")) this.leaveFor(location.hash);
+      if (!event.target.closest("a[href^='#hike=']")) return;
+      this.leaveFor(location.hash);
+      // The hike search opens at its top, not where the town's list was scrolled (P24).
+      window.addEventListener("hashchange", () => { if (location.hash.startsWith("#hike=")) window.scrollTo(0, 0); }, { once: true });
     });
     $("#bases-back").addEventListener("click", () => this.comeBack());
     // A month tapped says its temperature, which a touch screen shows no tooltip for (P24).
@@ -268,8 +272,8 @@ const bases = {
   changed(wait = BASE_SETTLE_MS) {
     this.showTraits();
     const shown = this.ranked || Boolean(this.opened);
-    this.wrongChoices(); // said beside the field at once; the address leaves it out (ADR-0086)
-    this.address(shown && !this.settling);
+    // Said beside the field at once; the address keeps naming the list shown until it is right (B17, ADR-0089).
+    if (!this.wrongChoices().length) this.address(shown && !this.settling);
     if (!shown) return;
     $("#base-results").classList.add("stale");
     clearTimeout(this.settling);
@@ -515,7 +519,7 @@ const bases = {
 
   say(base) {
     const near = base.near ? `, near ${escapeHtml(base.near.name)}` : "";
-    $("#base-chosen").innerHTML = `Chosen: <strong>${escapeHtml(base.name)}</strong>${base.country ? `, ${escapeHtml(base.country)}` : ""}${near}`;
+    $("#base-chosen").innerHTML = `Chosen: <strong>${escapeHtml(base.name)}</strong>${base.country ? `, ${escapeHtml(countryName(base.country))}` : ""}${near}`;
   },
 
   // "#base=1&reach=60&open=2": the mode, the Hiker's Base, the Reach and the Base opened, then the choices.
@@ -611,8 +615,22 @@ const bases = {
         hint.textContent = `No base within ${fmt.long(within * 1000)} of there: the nearest is ${found.name}, ${fmt.km(found.distance_km * 1000)} away. Zoom in, or click nearer a town.`;
         return;
       }
-      hint.textContent = `${found.name} is the nearest base, ${fmt.km(found.distance_km * 1000)} from there.`;
-      this.choose(found, "map");
+      const said = `${found.name} is the nearest base, ${fmt.km(found.distance_km * 1000)} from there.`;
+      hint.textContent = said;
+      if (!this.rows) {
+        this.choose(found, "map");
+        return;
+      }
+      // Over a list, a click may be a look around: the town is offered, not taken (H9).
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "secondary";
+      button.textContent = `Choose ${found.name}`;
+      button.addEventListener("click", () => {
+        hint.textContent = said;
+        this.choose(found, "map");
+      });
+      hint.append(" ", button, ` (the list is still for ${this.seed.name}).`);
     } catch (error) {
       if (number === this.pinned) sayFailed(hint, error, () => this.pin(at));
     }
@@ -727,8 +745,8 @@ const bases = {
   // step of its own; ``back``: the list as it was left, scrolled where it was.
   async rank({ push = false, fresh = false, back = false } = {}) {
     if (!this.seed) return;
-    this.address(push);
     const wrong = this.wrongChoices();
+    if (push || !wrong.length) this.address(push); // a new town is a step; wrong choices leave the address (B17)
     if (wrong.length) {
       this.ranked = true;
       this.asked++;
@@ -748,14 +766,34 @@ const bases = {
     if (Object.keys(traits).length) request.traits = traits;
     const key = JSON.stringify(request);
     try {
-      const body = (!fresh && this.answers.get(key)) || await postRank(request, current, "/api/bases/rank", (text) => { status.textContent = text; });
+      let body = !fresh && this.answers.get(key);
+      if (!body) {
+        this.updating(`Updating the list for ${this.seed.name ?? "your town"}, about ${this.reach} min…`);
+        // One ranking of this tab at a time: a change made while one runs waits for it, and only the latest
+        // is sent, so quick changes neither run into the rate limit nor are refused as still running (H2, B11).
+        while (this.running) {
+          await this.running.catch(() => {});
+          if (!current()) return;
+        }
+        body = !fresh && this.answers.get(key);
+      }
+      if (!body) {
+        const sent = postRank(request, current, "/api/bases/rank", (text) => { status.textContent = text; });
+        this.running = sent;
+        try {
+          body = await sent;
+        } finally {
+          if (this.running === sent) this.running = null;
+        }
+        this.keep(this.answers, key, body); // kept even when no longer wanted: Back may want it
+      }
       if (!current()) return;
-      this.keep(this.answers, key, body);
       status.textContent = "";
       this.problem("");
       this.show(body, back);
     } catch (error) {
       if (!current()) return;
+      this.updating("");
       // Only beside a list it leaves; a link to no town has none (B4).
       status.textContent = this.rows && error.status !== 404 ? "Not updated: see the list." : "";
       if (error.status === 404) {
@@ -766,6 +804,15 @@ const bases = {
     } finally {
       if (current()) this.syncFind();
     }
+  },
+
+  // The list shown greyed, and over it what is being found in its place (``text``); "" when it is the one asked for
+  // (H4, B19: a 30-min list stayed as it was, its header saying 30 min, while the 60-min one was found).
+  updating(text) {
+    const line = $("#base-updating");
+    line.textContent = text;
+    line.hidden = !text || !this.rows;
+    $("#base-results").classList.toggle("stale", Boolean(text) && Boolean(this.rows));
   },
 
   keep(answers, key, body) {
@@ -785,7 +832,7 @@ const bases = {
     this.rows = body.too_few ? [] : body.results;
     if (!back) this.shownRows = BASE_PAGE;
     $("#base-results").hidden = Boolean(this.opened);
-    $("#base-results").classList.remove("stale");
+    this.updating("");
     $("#base-title").textContent = `Bases with hikes like ${seed.name}'s`;
     $("#base-mine").innerHTML = mineLine(seed, body);
     const choices = this.choiceWords();
@@ -817,12 +864,12 @@ const bases = {
   },
 
   // The choices the list is for, over it, a default in use too: "Town size up to 50,000 people (the
-  // default)" was said nowhere while step 4 was folded away (C15).
+  // default)" was said nowhere while step 4 was folded away (C15), and the smallest towns kept out (ADR-0089).
   chips(choices) {
     const words = [...choices];
-    const size = this.traits().size;
+    const size = this.traits().size, { at_least: least, up_to: most } = TRAIT_DEFAULTS.size;
     if (size && JSON.stringify(size) === JSON.stringify(TRAIT_DEFAULTS.size)) {
-      words.unshift(`town size up to ${TRAIT_DEFAULTS.size.up_to.toLocaleString("en")} people (the default)`);
+      words.unshift(`town size at least ${least.toLocaleString("en")} people (the default)`, `town size up to ${most.toLocaleString("en")} people (the default)`);
     }
     $("#base-chips").innerHTML = words.map((text) => `<li>${escapeHtml(text[0].toUpperCase() + text.slice(1))}</li>`).join("");
     $("#base-chips").hidden = !words.length;
@@ -967,7 +1014,7 @@ const bases = {
         icon: L.divIcon({ className: "base-marker", html: `<span>${i + 1}</span>`, iconSize: narrow ? [18, 18] : [22, 22] }),
         keyboard: false,
         zIndexOffset: (rows.length - i) * 1000, // the best on top
-      }).bindTooltip(`${i + 1}. ${escapeHtml(row.named ? `${row.named.name} (figures for ${row.name})` : row.name)} · ${row.score.toFixed(2)}`)
+      }).bindTooltip(`${i + 1}. ${escapeHtml(row.name)} · ${row.score.toFixed(2)}`)
         .on("click", () => this.open(row))),
     ];
     L.featureGroup(this.markers).addTo(this.layer);
@@ -1009,10 +1056,11 @@ function toMetric(value, unit, units) {
   return Math.round((unit === "m" ? value * FOOT_M : (value * MILE_M) / 1000) * 10) / 10;
 }
 
-// "GB · 4,658 people": a Base's country and size as a list names them; ``near``: and the big town it is near.
+// "United Kingdom · 4,658 people": a Base's country, named as Find a hike names it (app.js's countryName), and
+// size as a list names them; ``near``: and the big town it is near.
 function placeLine(base, near = false) {
   const people = base.population != null ? `${base.population.toLocaleString("en")} ${base.population === 1 ? "person" : "people"}` : "";
-  return [base.country, people, near && base.near && `near ${base.near.name}, ${base.near.km.toLocaleString("en")} km`].filter(Boolean).join(" · ");
+  return [base.country && countryName(base.country), people, near && base.near && `near ${base.near.name}, ${base.near.km.toLocaleString("en")} km`].filter(Boolean).join(" · ");
 }
 
 // "12 places to stay · 40 to eat": the counts a TownTrait looks at, when known.
@@ -1052,7 +1100,7 @@ function unknownTrait(row, name) {
 function baseRow(row, number, seed, traits) {
   const pct = (x) => `${Math.round(x * 100)} %`;
   const share = row.enough * row.sure, alike = share > 0 ? row.hike_score / share : row.hike_score;
-  const why = [`hikes alike ${alike.toFixed(2)}: same kinds of hike in the same shares ${row.mix.toFixed(2)}, this town has ${pct(row.coverage)} of your kinds, yours has ${pct(row.back)} of its kinds`];
+  const why = [`hikes alike ${alike.toFixed(2)}: ${pct(row.coverage)} of your kinds of hike are here, ${pct(row.back)} of its kinds are near you, in shares ${row.mix.toFixed(2)} alike`];
   if (row.enough < 0.995) why.push(`fewer hikes than ${seed.name} (${row.hike_groups} against ${seed.hike_groups}) −${pct(1 - row.enough)}`);
   if (row.sure < 0.995) why.push(`few of your hikes to compare −${pct(1 - row.sure)}`);
   for (const [name, cut] of Object.entries(row.cuts)) {
@@ -1068,7 +1116,7 @@ function baseRow(row, number, seed, traits) {
   const counts = (traits.stays || traits.eats) && townCounts(row);
   return `<tr>
     <td><span class="number">${number}</span></td>
-    <td class="name"><button type="button" class="base-name" data-base="${row.id}">${escapeHtml(row.named?.name ?? row.name)}</button> <span class="hint place">${escapeHtml([row.named && `figures for ${row.name}`, placeLine(row), row.population == null && "population not known"].filter(Boolean).join(" · "))}</span> ${area}
+    <td class="name"><button type="button" class="base-name" data-base="${row.id}">${escapeHtml(row.name)}</button> <span class="hint place">${escapeHtml([placeLine(row), row.population == null && "population not known"].filter(Boolean).join(" · "))}</span> ${area}
       <span class="figure-line">${row.hike_groups} hikes counted (yours: ${seed.hike_groups})${counts ? ` · ${escapeHtml(counts)}` : ""}</span></td>
     <td class="score">${row.score.toFixed(2)} ${helpButton("base")}<span class="why">${escapeHtml(why.join("; ") + total)}</span></td>
     <td>${monthsStrip(row.months)}</td>

@@ -1347,7 +1347,7 @@ def test_loops_are_suggested_only_when_the_hiker_asks_for_them(browser, server) 
 
     assert api.ranked[-1] == {**api.ranked[-2], "loops": True}
     # Searched from a few starts only (ADR-0045), so the page says the loops are not all there are.
-    assert "not every loop there is and can change when the catalog is rebuilt" in page.locator("#results-note").inner_text()
+    assert "not every loop there is and can change when the catalog is rebuilt" in page.locator("#results-details").text_content()
     assert page.locator("#results-table tbody tr").count() > 0
     assert page.locator("#results-stale").is_visible()  # still not the query on the left
     assert not suggest.is_visible()
@@ -1494,7 +1494,7 @@ def test_the_page_lists_hikes_drawn_by_score_from_the_answer_and_marks_those_str
     marks = page.locator("#results-table tbody tr td:first-child").evaluate_all(
         "cells => cells.map(c => Boolean(c.querySelector('.picked')))")  # fmt: skip
     assert marks == [i >= 2 for i in shown]
-    note = page.locator("#results-note").inner_text()
+    note = page.locator("#results-details").text_content()  # folded under "How to read this list" (round 4)
     assert "picked from the best 3 areas, closer matches more often, so a better match can be left out" in note
     assert "# is a place in this list, not a rank" in note
     assert "Each “Show 2 more” page is drawn too" in note
@@ -1553,7 +1553,7 @@ def test_strict_order_lists_the_ranking_as_it_is_without_asking_again(browser, s
 
     assert _names(page) == pool.names([0, 1]) and len(pool.asked) == 1
     assert page.get_by_role("button", name="Redraw").is_disabled()
-    assert "picked" not in page.locator("#results-note").inner_text()
+    assert "picked" not in page.locator("#results-details").text_content()
     assert page.locator("#results-table thead th").first.get_attribute("title") == "Rank in the ranking"
     assert page.locator("#results-table .picked").count() == 0
     assert page.evaluate("location.hash") == f"#hike={RIDGE_WALK_ID}&strict&list"
@@ -1704,7 +1704,7 @@ def test_the_page_says_what_the_ranking_does_not_list(browser, server) -> None:
     assert count.inner_text() == "12 more good matches start here"
     assert "later pages do not show them" in count.get_attribute("title")
     assert page.locator("#other-areas").inner_text() == "24,113 more hikes start in other areas."
-    note = page.locator("#results-loops-note").inner_text()
+    note = page.locator("#results-loops-note").text_content()
     assert "Loops: searched from 31 starts near the best hikes, 14 found, none listed: each walks" in note
     assert "stopped at its time limit" in note
 
@@ -1727,18 +1727,18 @@ def test_the_loop_note_counts_the_loops_in_the_rows_shown(browser, server, monke
     note = page.locator("#results-loops-note")
     # Two loops in one row: the count before the row numbers is the count of rows.
     fewer = "Loops: searched from 20 starts near the best hikes, 4 found, 2 listed in 1 row: #1 (marked composed); the others rank lower"
-    assert fewer in note.inner_text()
+    assert fewer in note.text_content()
 
     with page.expect_response(f"{server}/api/rank"):
         page.get_by_role("button", name="Show 1 more").click()
     page.locator("#results-table tbody tr:not(.version)").nth(1).wait_for()
-    assert "4 found, 4 listed in 2 rows: #1, #2 (marked composed)." in note.inner_text()
+    assert "4 found, 4 listed in 2 rows: #1, #2 (marked composed)." in note.text_content()
 
     page.get_by_label("Strict order").uncheck()  # page 1 again, drawn, later pages dropped
-    assert fewer in note.inner_text()
-    assert "rank lower, are not drawn on this page (Redraw or tick Strict order), or walk" in note.inner_text()
+    assert fewer in note.text_content()
+    assert "rank lower, are not drawn on this page (Redraw or tick Strict order), or walk" in note.text_content()
     page.get_by_role("button", name="Redraw").click()
-    assert fewer in note.inner_text()
+    assert fewer in note.text_content()
 
 
 # Whether every line of an element lies inside its cell, and a pointer on its first line finds it (its tooltip shows).
@@ -1845,7 +1845,7 @@ def test_the_grouping_radius_waits_under_more_options_and_follows_the_limits(bro
 
     radius.fill("20")
     page.get_by_role("button", name="Find hikes").click()
-    page.wait_for_function("() => document.querySelector('#results-note').textContent.includes('within 20 km')")
+    page.wait_for_function("() => document.querySelector('#results-details').textContent.includes('within 20 km')")
     assert api.ranked[-1]["group_km"] == 20
     assert page.locator("#results-table tbody tr").count() == 2  # 1002 and 1003, 14 km apart, share a row
 
@@ -1867,8 +1867,8 @@ def test_a_row_whose_version_is_a_loop_is_marked_composed(browser, server) -> No
     row = page.locator("#results-table tbody tr").first
     assert row.locator(".composed-tag").count() == 0  # the row itself is a catalog hike
     assert row.locator(".composed-var").inner_text() == "composed var 2"
-    assert "1 listed: #1 (marked composed)" in page.locator("#results-loops-note").inner_text()
-    assert "Rows marked composed are loops" in page.locator("#results-note").inner_text()
+    assert "1 listed: #1 (marked composed)" in page.locator("#results-loops-note").text_content()
+    assert "Rows marked composed are loops" in page.locator("#results-details").text_content()
     assert "and loops composed near the best of them" in page.locator("#results-note").inner_text()
 
 
@@ -1917,7 +1917,7 @@ def test_the_loop_note_says_plainly_when_no_loop_is_listed(browser, server, sear
     page.get_by_text("Chosen: Ridge Walk").wait_for()
     _find(page)
 
-    note = page.locator("#results-loops-note").inner_text()
+    note = page.locator("#results-loops-note").text_content()
     assert f"Loops: searched from 31 starts near the best hikes{says.format(**shown)}" in note
     # The headline names no loops the list does not show, and no loop is there to list.
     assert "loops composed" not in page.locator("#results-note").inner_text()
@@ -1959,12 +1959,12 @@ def test_a_loop_above_the_rows_drawn_says_why_it_is_not_listed(browser, server, 
     _find(page)
 
     note = page.locator("#results-loops-note")
-    assert f"14 found, none listed: the best scores 0.600, above #1's 0.500{why}" in note.inner_text()
+    assert f"14 found, none listed: the best scores 0.600, above #1's 0.500{why}" in note.text_content()
     button = page.get_by_role("button", name="List the best loop")
     assert button.is_visible() == (loop == 0.6)
     if loop == 0.6:  # the button lists it, its row's version marked composed
         button.click()
-        assert "1 listed: #1 (marked composed)" in note.inner_text()
+        assert "1 listed: #1 (marked composed)" in note.text_content()
         assert page.locator("#results-table .composed-var").count() == 1
         assert not button.is_visible()
 
@@ -1994,7 +1994,7 @@ def test_the_best_loop_strict_order_lists_is_listed_by_ticking_it(browser, serve
 
     page.get_by_role("button", name="List the best loop").click()
     assert page.get_by_label("Strict order").is_checked()
-    assert "1 listed: #1 (marked composed)" in page.locator("#results-loops-note").inner_text()
+    assert "1 listed: #1 (marked composed)" in page.locator("#results-loops-note").text_content()
 
 
 def test_a_loop_tied_with_the_last_row_past_the_page_ranks_just_below_it(browser, server, monkeypatch) -> None:
@@ -2015,10 +2015,10 @@ def test_a_loop_tied_with_the_last_row_past_the_page_ranks_just_below_it(browser
     _find(page)
 
     note = page.locator("#results-loops-note")
-    assert "14 found, none listed: the best scores 0.500, level with #1's 0.500; it ranks just below #1." in note.inner_text()
+    assert "14 found, none listed: the best scores 0.500, level with #1's 0.500; it ranks just below #1." in note.text_content()
     # Strict order cannot list it: the button draws a page that does, with Strict order unticked.
     page.get_by_role("button", name="List the best loop").click()
-    assert "1 listed: #1 (marked composed)" in note.inner_text()
+    assert "1 listed: #1 (marked composed)" in note.text_content()
     assert not page.get_by_label("Strict order").is_checked()
 
 
@@ -2040,7 +2040,7 @@ def test_a_loop_further_down_in_strict_order_says_its_place_not_just_below(brows
     _find(page)
 
     note = page.locator("#results-loops-note")
-    assert "the best scores 0.500, level with #1's 0.500; it ranks #3." in note.inner_text()
+    assert "the best scores 0.500, level with #1's 0.500; it ranks #3." in note.text_content()
     assert page.get_by_role("button", name="List the best loop").is_visible()
 
 
@@ -2090,7 +2090,7 @@ def test_finding_a_place_asks_the_export_not_nominatim(browser, server) -> None:
 
     page.get_by_label("From").fill("agram")
     page.get_by_role("button", name="Find place").click()
-    page.get_by_text("Start: Zagreb, HR (45.8144, 15.9780)").wait_for()
+    page.get_by_text("Start: Zagreb, Croatia (45.8144, 15.9780)").wait_for()
 
     assert [url for url in asked if "place" in url] == [f"{server}/api/place?limit=8&q=agram"]
 
@@ -2102,7 +2102,7 @@ def test_a_place_not_found_clears_the_previous_start_and_finding_hikes_says_why(
     page.get_by_label("Only hikes near a starting place").check()
     page.get_by_label("From", exact=True).fill("agram")
     page.get_by_role("button", name="Find place").click()
-    page.get_by_text("Start: Zagreb, HR (45.8144, 15.9780)").wait_for()
+    page.get_by_text("Start: Zagreb, Croatia (45.8144, 15.9780)").wait_for()
 
     # Set as autofill or a restored form sets it: no input event clears the start found before.
     page.eval_on_selector("#origin", "box => { box.value = 'Nevache'; }")
@@ -2160,7 +2160,7 @@ def test_a_server_that_answers_too_many_requests_shows_its_own_message(browser, 
     page.goto(server)
 
     page.locator("#loading-text.error").wait_for()
-    assert page.locator("#loading-text").text_content() == "Too many requests; wait a minute and try again."
+    assert page.locator("#loading-text").text_content() == "The site is busy right now; try again in a moment."  # round 4: H2, B11
 
 
 def test_an_api_on_another_origin_whose_answer_the_page_cannot_read_says_paused_or_busy(browser, server) -> None:
@@ -2601,10 +2601,10 @@ def test_the_list_names_the_starting_place_and_limit_another_hikes_link_does_not
     page.get_by_label("Only hikes near a starting place").check()
     page.get_by_label("From", exact=True).fill("agram")
     page.get_by_role("button", name="Find place").click()
-    page.get_by_text("Start: Zagreb, HR (45.8144, 15.9780)").wait_for()
+    page.get_by_text("Start: Zagreb, Croatia (45.8144, 15.9780)").wait_for()
     _find(page)
 
-    assert "within a 2 h drive of Zagreb, HR" in page.locator("#results-note").inner_text()
+    assert "within a 2 h drive of Zagreb, Croatia" in page.locator("#results-note").inner_text()
 
     # Another hike's link in the same tab names no limit, so it opens with none (ADR-0073).
     other = page.evaluate("state.results[0].id")
@@ -3728,7 +3728,7 @@ def test_a_shared_hike_link_carries_the_search_settings_but_not_the_starting_pla
     page.get_by_label("Only hikes near a starting place").check()
     page.get_by_label("From", exact=True).fill("agram")
     page.get_by_role("button", name="Find place").click()
-    page.get_by_text("Start: Zagreb, HR (45.8144, 15.9780)").wait_for()
+    page.get_by_text("Start: Zagreb, Croatia (45.8144, 15.9780)").wait_for()
     page.get_by_label("Max km, straight line").check()
     page.get_by_label("Max km value").fill("200")
     page.get_by_label("Max km value").dispatch_event("change")
@@ -3739,7 +3739,7 @@ def test_a_shared_hike_link_carries_the_search_settings_but_not_the_starting_pla
     assert link == f"{server}/#hike={RIDGE_WALK_ID}&month=1&w=length:50"  # no place, coordinates or limit (ADR-0075)
     assert page.locator("#liked").get_by_role("link", name="Link to this hike").get_attribute("href") == link.removeprefix(server + "/")
     # The page's own address keeps them, so a reload opens the Hiker's own search.
-    assert "from=45.81444,15.97798&place=Zagreb%2C%20HR&hours=2&km=200" in page.evaluate("location.hash")
+    assert "from=45.81444,15.97798&place=Zagreb%2C%20Croatia&hours=2&km=200" in page.evaluate("location.hash")
 
     friend = open_page(browser, server, Api({}), hash=link.removeprefix(server + "/"))
     friend.get_by_text("Chosen: Ridge Walk").wait_for()
@@ -3782,7 +3782,8 @@ SEARCHED = [
 
 
 @pytest.mark.parametrize("touch", [False, True])
-def test_enter_picks_only_an_exact_name_and_else_leaves_the_list_open_saying_so(browser, server, touch) -> None:
+def test_enter_picks_an_exact_name_and_else_the_top_suggestion(browser, server, touch) -> None:
+    # Visitor check round 4 (H7): Enter with several found picks the top one, as the town box does.
     page = open_page(browser, server, Api({}), touch=touch, width=390 if touch else 1280)
     page.route(f"{server}/api/search?*", lambda route: route.fulfill(json={"results": SEARCHED}))
     page.route(f"{server}/api/landmarks?*", lambda route: route.fulfill(json={"results": []}))
@@ -3791,14 +3792,13 @@ def test_enter_picks_only_an_exact_name_and_else_leaves_the_list_open_saying_so(
     search.fill("ridge")
     search.press("Enter")  # pressed before the list is in: it is decided once it is
 
-    page.get_by_text("2 hikes match; pick one (or use ↑ ↓, then Enter).").wait_for()
-    assert page.locator("#liked-name").inner_text() == "No hike chosen yet."
+    page.locator("#liked-name").get_by_text("(Enter picked the top suggestion)").wait_for()
+    assert page.locator("#liked-name").inner_text().startswith("Chosen: Ridge Walk,")
 
     search.fill("ridge walk")
     search.press("Enter")
 
-    page.get_by_text("Chosen: Ridge Walk").wait_for()
-    assert "(Enter picked the hike with exactly that name)" in page.locator("#liked-name").inner_text()
+    page.locator("#liked-name").get_by_text("(Enter picked the hike with exactly that name)").wait_for()
 
 
 @pytest.mark.parametrize(
@@ -4011,7 +4011,7 @@ def test_suggest_loops_keeps_the_rows_shown_and_says_where_the_loops_are(browser
 
     page.wait_for_function("() => state.answer.loops && state.results.length === 4")
     assert [asked.get("loops") for asked in api.ranked[-2:]] == [True, False]  # later rows search no loops
-    note = page.locator("#results-loops-note").inner_text()
+    note = page.locator("#results-loops-note").text_content()
     assert re.search(r"listed: #\d", note) or "none listed" in note
 
 

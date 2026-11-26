@@ -771,7 +771,7 @@ def create_app(
             limiter = limiters[{"/api/rank": "rank", "/api/bases/rank": "bases"}.get(path, "api")]
             if not limiter.allow(client_key(request)):
                 return JSONResponse(
-                    {"detail": "Too many requests; wait a minute."},
+                    {"detail": "The site is busy right now; try again in a moment."},
                     status_code=429,
                     headers={"Retry-After": str(int(RATE_WINDOW_S))},
                 )
@@ -1164,10 +1164,7 @@ def create_app(
         ranking = ranked(request, "bases", started, lambda: found.rank_bases(data, body.seed, body.reach, mask, traits=traits))
         rows = ranking.rows[:BASE_ROWS]
         seed, *listed = found.describe_bases(data, [me, *(row.base for row in rows)], body.reach)
-        others = sorted(
-            {town for row in rows for town in row.towns[: found.AREA_TOWNS]}
-            | {town for row in rows for town in (row.best, row.named) if town >= 0}
-        )
+        others = sorted({town for row in rows for town in row.towns[: found.AREA_TOWNS]} | {row.best for row in rows if row.best >= 0})
         towns = dict(zip(others, found.describe_bases(data, others)))
         return {
             "seed": {**seed, "hike_groups": ranking.seed_groups},
@@ -1199,8 +1196,6 @@ def create_app(
                     "best_town": None
                     if row.best in (row.base, -1)
                     else {"id": towns[row.best]["id"], "name": towns[row.best]["name"], "score": row.best_score},
-                    # The area's biggest town, which names the row, when that is not the town of its figures (ADR-0088).
-                    "named": None if row.named < 0 else {key: towns[row.named][key] for key in ("id", "name")},
                     "sure": row.sure,  # the share left of the hike score when few of the Hiker's hikes compare
                     "cuts": dict(row.cuts),  # the share each "like mine" TownTrait took off the hike score
                 }

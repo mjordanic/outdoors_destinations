@@ -96,7 +96,7 @@ def test_a_refused_ranking_is_said_above_the_list_which_is_marked_as_for_earlier
     page.get_by_role("radio", name="about 15 min").check()
 
     problem = page.locator("#base-problem")
-    problem.get_by_text("Too many requests").wait_for()
+    problem.get_by_text("The site is busy right now").wait_for()
     assert "earlier choices" in problem.inner_text()
     assert problem.get_by_role("button", name="Try again").is_visible()
     assert "stale" in page.locator("#base-results").get_attribute("class")
@@ -114,7 +114,7 @@ def test_a_refused_town_lookup_is_not_said_as_no_town_of_that_name(browser, serv
     page.get_by_label("A town you stayed in").fill("Keswick")
 
     suggestions = page.locator("#base-suggestions")
-    suggestions.get_by_text("Too many requests").wait_for()
+    suggestions.get_by_text("The site is busy right now").wait_for()
     assert "No town" not in suggestions.inner_text()
 
 
@@ -393,14 +393,16 @@ BASE_WAIT_MS = 1_200  # longer than bases.js waits for choices to settle
 # C1: towns of one name can be told apart.
 
 
-def test_a_suggestion_and_the_chosen_town_say_the_big_town_it_is_near(browser, server) -> None:
+def test_a_suggestion_and_the_chosen_town_say_the_big_town_it_is_near(browser, server, monkeypatch) -> None:
+    monkeypatch.setattr("dayhike.bases.NEAR_TOWN_PEOPLE", 4_000)  # Bethesda, in Keswick's country,
+    monkeypatch.setattr("dayhike.bases.NEAR_TOWN_M", 300_000)  # is near enough in the fixture (ADR-0089)
     page = open_bases(browser, server)
     page.get_by_label("A town you stayed in").fill("Kes")
 
     option = page.get_by_role("option", name="Keswick")
-    assert "near Chamonix-Mont-Blanc, 445 km" in option.inner_text()
+    assert "near Bethesda, 222 km" in option.inner_text()
     option.click()
-    page.locator("#base-chosen").get_by_text("near Chamonix-Mont-Blanc").wait_for()
+    page.locator("#base-chosen").get_by_text("near Bethesda").wait_for()
 
 
 # C2: the explanation adds up to the score.

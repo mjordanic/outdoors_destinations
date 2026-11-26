@@ -94,8 +94,8 @@ def rank(page) -> list[str]:
 
 
 def asked(page, action) -> dict:
-    """The body of the BaseRanking ``action`` asks for."""
-    with page.expect_request("**/api/bases/rank") as request:
+    """The body of the BaseRanking ``action`` asks for: sent once the tab's last one ends, as one runs at a time."""
+    with page.expect_request("**/api/bases/rank", timeout=SETTLE_MS) as request:
         action()
     return json.loads(request.value.post_data)
 
@@ -123,10 +123,10 @@ def test_a_town_searched_for_lists_the_bases_alike_best_first(browser, server) -
     page.get_by_role("radio", name="about 60 min").check()
     body = asked(page, lambda: rank(page))
 
-    assert body == {"seed": KESWICK, "reach": 60, "traits": {"size": {"up_to": 50_000}}}  # the default
+    assert body == {"seed": KESWICK, "reach": 60, "traits": {"size": {"at_least": 1_000, "up_to": 50_000}}}  # the default
     rows = page.locator("#base-results tbody tr")
     assert rows.first.locator(".base-name").inner_text() == "Bethesda"
-    assert "GB" in rows.first.inner_text()
+    assert "United Kingdom" in rows.first.inner_text()
     assert "Keswick" not in page.locator("#base-results tbody").inner_text()  # the Hiker's own Base
     assert "Bases with hikes like Keswick's" in page.locator("#base-results h2").inner_text()
 
@@ -167,9 +167,10 @@ def test_a_reach_changed_while_the_first_ranking_runs_wins(browser, server) -> N
     page.route("**/api/bases/rank", hold_the_first)
     choose_base(page, "Kes", "Keswick")  # asks for the list at once, at 30 min: held
     page.wait_for_function("() => bases.asked === 1")
-    reach = asked(page, lambda: page.get_by_role("radio", name="about 15 min").check())["reach"]
+    page.get_by_role("radio", name="about 15 min").check()
+    page.wait_for_function("() => bases.asked === 2")  # waiting for the first to end: one of a tab's at a time (ADR-0089)
+    reach = asked(page, lambda: held[0].fulfill(json=held[0].fetch().json()))["reach"]
     page.locator("#base-results tbody tr").first.wait_for()
-    held[0].fulfill(json=held[0].fetch().json())
     page.wait_for_timeout(300)
 
     assert reach == 15
@@ -426,7 +427,7 @@ def test_a_trait_setting_changes_the_list_and_survives_a_shared_link(browser, se
     page.get_by_text("What the town is like").click()
 
     body = asked(page, lambda: page.get_by_label("Town size up to").fill("5000") or page.get_by_label("Town size up to").press("Enter"))
-    assert body["traits"] == {"size": {"up_to": 5000}}
+    assert body["traits"] == {"size": {"at_least": 1_000, "up_to": 5000}}
     page.wait_for_function("() => !document.querySelector('#base-results tbody').innerText.includes('Moab')")  # 5,235 people
 
     page.get_by_label("Restaurants, cafes and pubs", exact=True).select_option("like_mine")
@@ -434,7 +435,7 @@ def test_a_trait_setting_changes_the_list_and_survives_a_shared_link(browser, se
     page.get_by_label("Best months", exact=True).select_option("filter")
     page.get_by_label("Jul", exact=True).check()
     body = asked(page, lambda: page.get_by_label("Aug", exact=True).check())
-    assert body["traits"] == {"size": {"up_to": 5000}, "eats": {"like_mine": 3}, "months": {"mild_in": [7, 8]}}
+    assert body["traits"] == {"size": {"at_least": 1_000, "up_to": 5000}, "eats": {"like_mine": 3}, "months": {"mild_in": [7, 8]}}
 
     page.get_by_label("Town size", exact=True).select_option("ignore")
     page.get_by_label("Places to stay", exact=True).select_option("filter")
