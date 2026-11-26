@@ -16,6 +16,8 @@ const BASE_TYPING_MS = 900; // the same for a number being typed
 const BASE_FEW_HIKES = 30; // under this many of the Hiker's hikes, the list says the scores rest on few
 const BASE_CACHE = 30; // answers kept, so going back to a list or a town asks the server nothing
 const MONTH_LETTERS = "JFMAMJJASOND";
+const BASE_NARROW = "(max-width: 600px)"; // a phone: the card is below the panel
+const BASE_TOWN_HINT = "The dots are this town's hikes; go back to the list to choose another town on the map.";
 // Each "like mine" TownTrait as a row says what it took off (ADR-0025).
 const TRAIT_NAMES = { size: "town size", stays: "places to stay", eats: "restaurants, cafes and pubs", months: "best months" };
 // The HikeFilter's ranges (link key stem, name, metric unit, what it measures) and yes-only toggles, as
@@ -90,6 +92,19 @@ const bases = {
       if (event.target.closest("a[href^='#hike=']")) this.leaveFor(location.hash);
     });
     $("#bases-back").addEventListener("click", () => this.comeBack());
+    // A month tapped says its temperature, which a touch screen shows no tooltip for (P24).
+    $("#base-card").addEventListener("click", (event) => {
+      const month = event.target.closest(".months li");
+      if (!month) return;
+      const strip = month.closest(".months");
+      let said = strip.nextElementSibling;
+      if (!said?.classList.contains("months-said")) {
+        said = document.createElement("span");
+        said.className = "hint months-said";
+        strip.after(said);
+      }
+      said.textContent = month.title;
+    });
     document.addEventListener("hikesalike:units", () => this.relabel());
     this.search();
     this.choices();
@@ -120,6 +135,7 @@ const bases = {
   // A hike of an opened Base was followed into the hike search: a button there comes back to it.
   leaveFor(address) {
     this.returnTo = address;
+    this.returnScroll = window.scrollY; // Back comes to the town's page where it was (P31)
     $("#bases-back").hidden = false;
   },
 
@@ -131,6 +147,7 @@ const bases = {
   // ``base`` is the Hiker's: the list is asked for at once.
   choose(base, via = "search") {
     this.seed = base;
+    this.searchProblem("");
     this.say(base);
     $("#base-search").value = base.name;
     if (via !== "map") $("#base-pin-hint").textContent = this.pinHint;
@@ -141,6 +158,7 @@ const bases = {
     this.hikeMarkers = [];
     $("#base-hikes").hidden = true;
     this.mark([]);
+    this.toList = true; // P2: on a phone the list is far below the form
     this.rank({ push: true });
   },
 
@@ -155,19 +173,37 @@ const bases = {
     clearTimeout(this.settling);
     this.settling = null;
     this.rank({ push: true, fresh: true });
-    if (window.matchMedia("(max-width: 600px)").matches) $("#base-card").scrollIntoView({ block: "start" });
+    this.toList = true;
   },
 
-  // The best town named ``typed``, or null, said where the list is, when there is none.
+  // The best town named ``typed``, or null, said under the box and where the list is, when there is none;
+  // a name only like it is asked about, not taken (B5).
   async lookUp(typed) {
     try {
-      const found = (await api(`/api/bases/search?q=${encodeURIComponent(typed)}&limit=1`)).results[0];
-      if (!found) this.problem(`No town found named “${typed}”. Check the spelling, or click the map near it.`);
-      return found ?? null;
+      const answer = await api(`/api/bases/search?q=${encodeURIComponent(typed)}&limit=1`), found = answer.results[0];
+      if (found && !answer.guess) return found;
+      const text = `No town found named “${typed}”.`;
+      this.problem(`${text} Check the spelling, or click the map near it.`);
+      this.searchProblem(found ? `${text} Did you mean ` : `${text} Check the spelling, or click the map near it.`, found);
+      return null;
     } catch (error) {
       this.problem(error.message);
       return null;
     }
+  },
+
+  // A problem with the town typed, said under its box (P14); ``guess``: a town it may have meant, to pick.
+  searchProblem(text, guess = null) {
+    const host = $("#base-search-problem");
+    host.hidden = !text;
+    host.textContent = text;
+    if (!guess) return;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary";
+    button.textContent = guess.name;
+    button.addEventListener("click", () => this.choose(guess));
+    host.append(button, "?");
   },
 
   // A choice changed: the address says it at once, as one step for every change made in a row, and the
@@ -175,6 +211,7 @@ const bases = {
   changed(wait = BASE_SETTLE_MS) {
     this.showTraits();
     const shown = this.ranked || Boolean(this.opened);
+    this.wrongChoices(); // said beside the field at once; the address leaves it out (ADR-0086)
     this.address(shown && !this.settling);
     if (!shown) return;
     $("#base-results").classList.add("stale");
@@ -198,13 +235,15 @@ const bases = {
     $("#base-traits").innerHTML = Object.entries(TRAIT_FILTERS).map(([trait, filter]) => {
       const name = TRAIT_NAMES[trait], label = name[0].toUpperCase() + name.slice(1);
       const ends = trait === "months"
-        ? `mild in ${MONTHS.map((month, i) => `<label class="check"><input type="checkbox" name="base-months" value="${i + 1}" aria-label="${month}"> ${month}</label>`).join("")}
+        ? `<span class="months-say">mild in all of</span><span class="month-boxes">${MONTHS.map((month, i) => `<label class="check"><input type="checkbox" name="base-months" value="${i + 1}" aria-label="${month}"> ${month}</label>`).join("")}</span>
            <span class="hint months-none">Tick the months it must be mild in.</span>`
-        : filter.ends.map((end) => `${end === "up_to" ? "up to" : "at least"} ${number(`base-${trait}-${end}`, `${label} ${end === "up_to" ? "up to" : "at least"}`, trait === "size" ? "any" : "e.g. 5")}`).join(" ") + (filter.unit ? ` ${filter.unit}` : "");
+        : filter.ends.map((end) => `${end === "up_to" ? "up to" : "at least"} ${number(`base-${trait}-${end}`, `${label} ${end === "up_to" ? "up to" : "at least"}`, trait === "size" ? "any" : "e.g. 5")}`).join(" ") + (filter.unit ? ` ${filter.unit}` : "")
+          + ` <span class="hint filter-none">Type a number to filter by.</span>`;
       return `<div class="base-trait" data-trait="${trait}">
         <label><span>${label}</span> <select class="setting" name="base-${trait}" aria-label="${label}">
           <option value="ignore">Ignore</option><option value="filter">Filter</option><option value="like_mine">Like mine</option></select></label>
         <span class="trait-filter">${ends}</span>
+        <span class="trait-error error" hidden></span>
         <select class="importance" name="base-${trait}-importance" aria-label="How much ${name} ${trait === "size" ? "matters" : "matter"}">${IMPORTANCE.map(([w, text]) => `<option value="${w}">${text}</option>`).join("")}</select>
       </div>`;
     }).join("");
@@ -224,6 +263,7 @@ const bases = {
       $(`.base-range[data-stem="${stem}"] .unit`).textContent = shownRangeUnit(unit);
     }
     this.setRanges(filter);
+    this.address();
     if (this.openedBody) this.showBase(this.openedBody);
     else if (this.body && this.rows) { // the temperatures in the units shown
       $("#base-mine").innerHTML = mineLine(this.body.seed, this.body);
@@ -239,6 +279,8 @@ const bases = {
       row.querySelector(".importance").hidden = setting !== "like_mine";
       const none = row.querySelector(".months-none");
       if (none) none.hidden = Boolean(row.querySelector(".trait-filter input:checked"));
+      const empty = row.querySelector(".filter-none"); // N15: a filter with nothing typed does nothing
+      if (empty) empty.hidden = [...row.querySelectorAll(".trait-filter input[type=number]")].some((input) => input.value.trim() !== "");
     }
   },
 
@@ -248,27 +290,42 @@ const bases = {
     for (const [stem, , unit] of HIKE_RANGES) {
       for (const end of ["min", "max"]) {
         const input = $(`#base-${stem}-${end}`), value = input && typedNumber(input);
-        if (value != null) filter[`${stem}_${end}_${unit}`] = toMetric(value, unit, input.dataset.units);
+        if (value == null) continue;
+        // while the box shows what it was filled with, it means that number, not one converted back (A11)
+        const exact = input.dataset.metric !== undefined && input.dataset.shown === input.value;
+        filter[`${stem}_${end}_${unit}`] = exact ? Number(input.dataset.metric) : toMetric(value, unit, input.dataset.units);
       }
     }
     for (const [key] of HIKE_TOGGLES) if ($(`#base-${key}`)?.checked) filter[key] = true;
     return filter;
   },
 
-  // What is wrong with the choices typed, for each range: a number under 0, or a range the wrong way round.
-  wrongChoices() {
+  // What is wrong with the choices typed, for each hike range and each town filter in use: a number under
+  // 0, or a range the wrong way round; ``show``: said beside each field too.
+  wrongChoices(show = true) {
     const wrong = [];
+    const check = (host, name, low, high, words) => {
+      let text = "";
+      if ([low, high].some((input) => input && input.value.trim() !== "" && typedNumber(input) == null)) text = `${name}: type a number of 0 or more.`;
+      else if (low && high && typedNumber(low) != null && typedNumber(high) != null && typedNumber(low) > typedNumber(high)) {
+        text = `${name}: “${words[0]} ${low.value.trim()}” is more than “${words[1]} ${high.value.trim()}”.`;
+      }
+      if (show) {
+        host.textContent = text;
+        host.hidden = !text;
+      }
+      if (text) wrong.push(text);
+    };
     for (const row of document.querySelectorAll(".base-range")) {
       const stem = row.dataset.stem, name = HIKE_RANGES.find(([s]) => s === stem)[1];
-      const [low, high] = ["min", "max"].map((end) => $(`#base-${stem}-${end}`));
-      let text = "";
-      if ([low, high].some((input) => input.value.trim() !== "" && typedNumber(input) == null)) text = `${name}: type a number of 0 or more.`;
-      else if (typedNumber(low) != null && typedNumber(high) != null && typedNumber(low) > typedNumber(high)) {
-        text = `${name}: “from ${low.value}” is more than “up to ${high.value}”.`;
-      }
-      row.querySelector(".range-error").textContent = text;
-      row.querySelector(".range-error").hidden = !text;
-      if (text) wrong.push(text);
+      check(row.querySelector(".range-error"), name, $(`#base-${stem}-min`), $(`#base-${stem}-max`), ["from", "up to"]);
+    }
+    for (const row of document.querySelectorAll(".base-trait")) {
+      const trait = row.dataset.trait, ends = TRAIT_FILTERS[trait].ends;
+      if (!ends) continue;
+      const used = row.querySelector(".setting").value === "filter", name = TRAIT_NAMES[trait];
+      const [low, high] = ["at_least", "up_to"].map((end) => (used && ends.includes(end) ? $(`#base-${trait}-${end}`) : null));
+      check(row.querySelector(".trait-error"), name[0].toUpperCase() + name.slice(1), low, high, ["at least", "up to"]);
     }
     return wrong;
   },
@@ -299,7 +356,9 @@ const bases = {
     for (const [stem, , unit] of HIKE_RANGES) {
       for (const end of ["min", "max"]) {
         const input = $(`#base-${stem}-${end}`), value = filter[`${stem}_${end}_${unit}`];
-        input.value = value == null ? "" : String(fromMetric(value, unit));
+        input.value = input.dataset.shown = value == null ? "" : String(fromMetric(value, unit));
+        if (value == null) delete input.dataset.metric;
+        else input.dataset.metric = String(value);
         input.dataset.units = state.units;
       }
     }
@@ -333,12 +392,11 @@ const bases = {
       if (low != null || high != null) words.push(`${name.toLowerCase()} ${[low != null && `from ${shown(low)}`, high != null && `up to ${shown(high)}`].filter(Boolean).join(" ")}`);
     }
     for (const [key, name] of HIKE_TOGGLES) if (filter[key]) words.push(name.toLowerCase());
-    for (const [trait, choice] of Object.entries(this.traits())) {
+    const traits = this.traits();
+    for (const trait of Object.keys(TRAIT_DEFAULTS)) if (!(trait in traits)) words.push(`any ${TRAIT_NAMES[trait]}`); // B12
+    for (const [trait, choice] of Object.entries(traits)) {
       if (JSON.stringify(choice) === JSON.stringify(TRAIT_DEFAULTS[trait] ?? {})) continue;
-      const name = TRAIT_NAMES[trait];
-      if (choice.like_mine) words.push(`${name} like yours (${IMPORTANCE.find(([w]) => w === choice.like_mine)[1]})`);
-      else if (choice.mild_in) words.push(`mild in ${choice.mild_in.map((month) => MONTHS[month - 1]).join(", ")}`);
-      else words.push(`${name} ${[choice.at_least != null && `at least ${choice.at_least.toLocaleString("en")}`, choice.up_to != null && `up to ${choice.up_to.toLocaleString("en")}`].filter(Boolean).join(" ")}`);
+      words.push(traitWords(trait, choice));
     }
     return words;
   },
@@ -346,12 +404,19 @@ const bases = {
   // The choices as an address's parts: the hike filter's limits ("&climb_max_m=500&summit") and each
   // TownTrait not at its default ("&size=ignore", "&eats=like-mine-important", "&stays=3-", "&size=-5000", "&months=7,8").
   choiceHash() {
-    const parts = [];
-    for (const [key, value] of Object.entries(this.hikeFilter())) parts.push(value === true ? key : `${key}=${value}`);
+    const parts = [], filter = this.hikeFilter();
+    for (const [stem, , unit] of HIKE_RANGES) { // a range the wrong way round is left out (B20)
+      const [low, high] = ["min", "max"].map((end) => `${stem}_${end}_${unit}`);
+      if (filter[low] > filter[high]) {
+        delete filter[low];
+        delete filter[high];
+      }
+    }
+    for (const [key, value] of Object.entries(filter)) parts.push(value === true ? key : `${key}=${value}`);
     const traits = this.traits();
     for (const trait of Object.keys(TRAIT_FILTERS)) {
       const choice = traits[trait] ?? {};
-      if (JSON.stringify(choice) === JSON.stringify(TRAIT_DEFAULTS[trait] ?? {})) continue;
+      if (JSON.stringify(choice) === JSON.stringify(TRAIT_DEFAULTS[trait] ?? {}) || choice.at_least > choice.up_to) continue;
       if (choice.like_mine) parts.push(`${trait}=${LIKE_WORDS[choice.like_mine]}`);
       else if (choice.mild_in) parts.push(`${trait}=${choice.mild_in.join(",")}`);
       else if (Object.keys(choice).length) parts.push(`${trait}=${choice.at_least ?? ""}-${choice.up_to ?? ""}`);
@@ -386,7 +451,7 @@ const bases = {
         if (found[1] && TRAIT_FILTERS[trait].ends.includes("at_least")) choice.at_least = Number(found[1]);
         if (found[2] && TRAIT_FILTERS[trait].ends.includes("up_to")) choice.up_to = Number(found[2]);
       }
-      traits[trait] = choice;
+      if (choice || text === "ignore") traits[trait] = choice; // a value that is no setting keeps the default (B12)
     }
     this.setChoices(filter, traits);
   },
@@ -398,7 +463,8 @@ const bases = {
 
   // "#base=1&reach=60&open=2": the mode, the Hiker's Base, the Reach and the Base opened, then the choices.
   hash() {
-    return `#base${this.seed ? `=${this.seed.id}` : ""}&reach=${this.reach}${this.opened ? `&open=${this.opened.id}` : ""}${this.choiceHash()}`;
+    const units = imperial() || state.units !== localeUnits() ? `&units=${state.units}` : ""; // as app.js keeps them (B11)
+    return `#base${this.seed ? `=${this.seed.id}` : ""}&reach=${this.reach}${this.opened ? `&open=${this.opened.id}` : ""}${this.choiceHash()}${units}`;
   },
 
   // The address keeps the mode's settings as they change; ``push``: as a step of the history of its own.
@@ -434,12 +500,14 @@ const bases = {
       this.seed = seed == null ? null : { id: seed };
       $("#base-chosen").innerHTML = this.unchosen;
       $("#base-search").value = "";
+      if (seed != null) this.nameSeed(seed);
     }
     this.opened = this.seed && /^\d{1,17}$/.test(open) ? { id: Number(open) } : null;
     this.openedBody = null;
     this.hikeMarkers = [];
     this.ranked = false;
     this.rows = null;
+    if (["metric", "imperial"].includes(parts.get("units"))) setUnits(parts.get("units"));
     $("#base-find").disabled = !this.seed;
     $("#base-status").textContent = "";
     $("#base-pin-hint").textContent = this.pinHint;
@@ -448,11 +516,29 @@ const bases = {
     this.toggle(true, false);
     this.layer.clearLayers();
     if (this.seed) this.rank({ back: wasOpen && !this.opened });
+    this.toList = !changed; // a link opened: the list or the town is what it is for
     if (this.opened) this.open(this.opened, false);
+  },
+
+  // The town a link names, said at once, whatever happens to its list (B9, B20).
+  async nameSeed(id) {
+    try {
+      const town = await api(`/api/bases/town?id=${id}`);
+      if (this.seed?.id !== id) return;
+      const known = this.seed.lat != null;
+      this.seed = { ...town, ...(known ? this.seed : {}), near: town.near };
+      this.say(this.seed);
+      if (!$("#base-search").value) $("#base-search").value = town.name;
+      if (!known && !this.opened) this.mark([]);
+    } catch (error) {
+      // A link to no town says so where the town is said (H36, N11); the ranking says any other trouble.
+      if (error.status === 404 && this.seed?.id === id) $("#base-chosen").textContent = error.message;
+    }
   },
 
   // A click on the map: the nearest Base, when one is close enough at the map's zoom.
   async pin(at) {
+    if (this.opened) return; // a tap among a town's hikes keeps the visitor's town (B6, P29)
     const hint = $("#base-pin-hint");
     hint.classList.remove("error");
     hint.textContent = "Looking for the nearest town…";
@@ -477,7 +563,7 @@ const bases = {
   // highlighted, else the first; Enter before they are in looks the name up.
   search() {
     const input = $("#base-search"), list = $("#base-suggestions");
-    let found = [], active = -1, timer = null, asking = null, shownFor = null;
+    let found = [], active = -1, timer = null, asking = null, shownFor = null, guessed = false;
     const close = () => {
       list.hidden = true;
       input.setAttribute("aria-expanded", "false");
@@ -494,7 +580,8 @@ const bases = {
         say(`No town found by that name. Check the spelling, or click the map near it.${still}`);
         return;
       }
-      list.innerHTML = found.map((base, i) => `<li role="option" id="base-option-${i}" aria-selected="${i === active}" data-index="${i}">${escapeHtml(base.name)}<span class="meta">${escapeHtml(placeLine(base, true))}</span></li>`).join("");
+      const asked = guessed ? `<li class="nothing">No town named “${escapeHtml(shownFor)}”. Did you mean:</li>` : "";
+      list.innerHTML = asked + found.map((base, i) => `<li role="option" id="base-option-${i}" aria-selected="${i === active}" data-index="${i}">${escapeHtml(base.name)}<span class="meta">${escapeHtml(placeLine(base, true))}</span></li>`).join("");
       list.hidden = false;
       input.setAttribute("aria-expanded", "true");
       if (active >= 0) input.setAttribute("aria-activedescendant", `base-option-${active}`);
@@ -510,16 +597,19 @@ const bases = {
       found = [];
       shownFor = null;
       close();
+      this.searchProblem("");
       const q = input.value.trim();
       $("#base-find").disabled = !this.seed && !q; // Find bases looks a typed name up
       if (q.length < 2) return;
       timer = setTimeout(async () => {
         asking = new AbortController();
         try {
-          found = (await api(`/api/bases/search?q=${encodeURIComponent(q)}&limit=10`, { signal: asking.signal })).results;
+          const answer = await api(`/api/bases/search?q=${encodeURIComponent(q)}&limit=10`, { signal: asking.signal });
+          found = answer.results;
+          guessed = Boolean(answer.guess);
           shownFor = q;
           active = -1;
-          show();
+          if (document.activeElement === input) show(); // not over Find bases' answer once the box is left
         } catch (error) {
           if (error.name !== "AbortError") say(error.message); // a refusal is not "no town of that name"
         }
@@ -528,8 +618,9 @@ const bases = {
     input.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         event.preventDefault();
-        if (found.length && shownFor === input.value.trim()) pick(Math.max(active, 0));
-        else if (input.value.trim()) {
+        if (found.length && shownFor === input.value.trim()) {
+          if (!guessed || active >= 0) pick(Math.max(active, 0)); // a guess only when chosen (B5)
+        } else if (input.value.trim()) {
           clearTimeout(timer);
           asking?.abort();
           close();
@@ -576,6 +667,7 @@ const bases = {
   // step of its own; ``back``: the list as it was left, scrolled where it was.
   async rank({ push = false, fresh = false, back = false } = {}) {
     if (!this.seed) return;
+    this.address(push);
     const wrong = this.wrongChoices();
     if (wrong.length) {
       this.ranked = true;
@@ -585,7 +677,6 @@ const bases = {
       this.problem(wrong.join(" "));
       return;
     }
-    this.address(push);
     const number = ++this.asked, current = () => number === this.asked;
     const status = $("#base-status");
     status.classList.remove("error");
@@ -625,8 +716,8 @@ const bases = {
   show(body, back = false) {
     const seed = body.seed;
     if (seed.id === this.seed.id && this.seed.lat == null) { // from a link: the town is known now
-      this.seed = seed;
-      this.say(seed);
+      this.seed = { ...seed, near: this.seed.near };
+      this.say(this.seed);
       if (!$("#base-search").value) $("#base-search").value = seed.name;
     }
     this.body = body;
@@ -643,16 +734,33 @@ const bases = {
       $("#base-table").innerHTML = "";
       $("#base-more").hidden = true;
       if (!this.opened) this.mark([]);
+      if (!this.opened) this.scrollTo("#base-results");
       return;
     }
-    const rows = body.results, notes = [];
-    notes.push(`${rows.length ? "Best first" : "No town is alike"}: hikes within about ${body.reach} min by car, ${seed.hike_groups} of them counted near ${seed.name} (hikes of one kind that start close together count once).${choiceLine}`);
+    const rows = body.results, notes = [], traits = this.traits();
+    const filters = Object.entries(traits).filter(([, choice]) => !choice.like_mine).map(([trait, choice]) => traitWords(trait, choice));
+    const blocked = !rows.length && body.traits_leave_none && filters.length > 0; // B4: the town filters leave no town
+    if (blocked) notes.push(`No town passes your town choices (${filters.join("; ")}): loosen them to get a list.`);
+    notes.push(`${rows.length ? "Best first" : blocked ? "Your town" : "No town is alike"}: hikes within about ${body.reach} min by car, ${seed.hike_groups} of them counted near ${seed.name} (hikes of one kind that start close together count once).${choiceLine}`);
     if (seed.hike_groups < BASE_FEW_HIKES) notes.push(`Only ${seed.hike_groups} of your hikes count, so the scores rest on few hikes.`);
+    for (const [trait, choice] of Object.entries(traits)) { // A9: "like mine" with nothing of the visitor's to go by
+      if (choice.like_mine && unknownTrait(seed, trait)) notes.push(`${seed.name} has no data on ${TRAIT_NAMES[trait]}, so “like mine” on it changes nothing.`);
+    }
     if (rows.length && rows[0].score < state.info.bases.weak_score) notes.push(`Even the best town is not much alike (${rows[0].score.toFixed(2)}): try other choices.`);
-    if (rows.length && rows.length < BASE_PAGE) notes.push(`${rows.length} area${rows.length === 1 ? "" : "s"}: with a longer drive more towns share their hikes and join one row, so the list can be short.`);
+    if (rows.length && rows.length < BASE_PAGE) notes.push(`${rows.length} area${rows.length === 1 ? "" : "s"}: towns close together share a row, and a town hardly more alike than two picked at random is not listed, so the list can be short.`);
     notes.push(state.info.bases.score_help.overall);
     $("#base-note").textContent = notes.join(" ");
     this.table(back);
+    if (!this.opened) this.scrollTo("#base-results");
+  },
+
+  // On a phone, once a list asked for by picking a town or Find bases is in, or a town's page from a
+  // link, the page scrolls to it when it lies out of view below (P2, P28).
+  scrollTo(selector) {
+    const asked = this.toList;
+    this.toList = false;
+    if (!asked || !window.matchMedia(BASE_NARROW).matches) return;
+    if ($(selector).getBoundingClientRect().top > window.innerHeight / 2) $(selector).scrollIntoView({ block: "start" });
   },
 
   // The rows shown so far, a hundred at a time; the map marks them.
@@ -688,9 +796,11 @@ const bases = {
       return;
     }
     const number = ++this.opening, note = $("#base-hikes-note"), filter = this.hikeFilter();
-    if (step && !this.opened) this.listScroll = window.scrollY;
+    const replacing = Boolean(this.opened); // a town opened over one still opening is the same step (B8)
+    if (step && !replacing) this.listScroll = window.scrollY;
     this.opened = base;
-    if (step) this.address(true);
+    if (step) this.address(!replacing);
+    $("#base-pin-hint").textContent = BASE_TOWN_HINT;
     $("#base-results").hidden = true;
     $("#base-hikes").hidden = false;
     if (step) {
@@ -724,20 +834,36 @@ const bases = {
     this.openedBody = body;
     $("#base-hikes").classList.remove("stale");
     $("#base-hikes-title").textContent = `Hikes within about ${body.reach} min of ${base.name}`;
-    $("#base-hikes-note").textContent = `${hikes.length} hike${hikes.length === 1 ? "" : "s"}, nearest first; ${base.hike_groups} of them count for the score, as hikes of one kind that start close together count once. The minutes are an estimate of the drive to where each starts.`;
+    const choices = this.choiceWords();
+    $("#base-hikes-note").textContent = `${hikes.length} hike${hikes.length === 1 ? "" : "s"}, nearest first; ${base.hike_groups} of them count for the score, as hikes of one kind that start close together count once. The minutes are an estimate of the drive to where each starts.${choices.length ? ` Your choices: ${choices.join("; ")}.` : ""}`;
     $("#base-hike-list").innerHTML = hikes.map((hike) => `<li>
       <span class="hike-name">${escapeHtml(hike.name || "A hike without a name")}</span> <span class="minutes">about ${hike.minutes} min</span>
       <span class="hike-facts">${escapeHtml(hikeFacts(hike))}</span>
-      <a href="#hike=${hike.id}">Open this hike to find ones like it</a></li>`).join("");
+      <a href="#hike=${hike.id}">Find hikes like this</a></li>`).join("");
     this.layer.clearLayers();
-    this.hikeMarkers = hikes.map((hike) => L.circleMarker(hike.trailhead, { radius: 5, color: "#fff", weight: 1, fillColor: "#1d4ed8", fillOpacity: 0.9, bubblingMouseEvents: false })
-      .bindTooltip(`${escapeHtml(hike.name || "A hike")} · about ${hike.minutes} min`));
+    // Each dot numbered as the list, and a tap on it shows its hike there (B18, P30).
+    const touch = window.matchMedia("(pointer: coarse)").matches;
+    this.hikeMarkers = hikes.map((hike, i) => L.circleMarker(hike.trailhead, { radius: touch ? 8 : 5, color: "#fff", weight: 1, fillColor: "#1d4ed8", fillOpacity: 0.9, bubblingMouseEvents: false })
+      .bindTooltip(`${i + 1}. ${escapeHtml(hike.name || "A hike")} · about ${hike.minutes} min`)
+      .on("click", () => this.showHike(i)));
     const marked = [
       L.circleMarker([base.lat, base.lon], { radius: 8, color: "#fff", weight: 2, fillColor: "#2f7d4f", fillOpacity: 1, bubblingMouseEvents: false }).bindTooltip(escapeHtml(base.name)),
       ...this.hikeMarkers,
     ];
     const group = L.featureGroup(marked).addTo(this.layer);
     this.map.fitBounds(group.getBounds(), { padding: [24, 24], maxZoom: 12 });
+    if (this.returnTo === location.hash && this.returnScroll != null) { // back from one of its hikes
+      window.scrollTo(0, this.returnScroll);
+      this.returnScroll = null;
+    } else this.scrollTo("#base-hikes");
+  },
+
+  // The ``i``-th hike of the town's list, picked on the map: shown and marked in the list.
+  showHike(i) {
+    const items = document.querySelectorAll("#base-hike-list li");
+    for (const item of items) item.classList.remove("picked");
+    items[i]?.classList.add("picked");
+    items[i]?.scrollIntoView({ block: "nearest" });
   },
 
   // Back to the list from an opened Base, scrolled where it was.
@@ -747,6 +873,7 @@ const bases = {
     this.openedBody = null;
     this.hikeMarkers = [];
     this.address(true);
+    $("#base-pin-hint").textContent = this.pinHint;
     $("#base-hikes").hidden = true;
     $("#base-results").hidden = !this.rows;
     if (this.seed?.lat != null) this.mark(this.rows?.slice(0, this.shownRows) ?? [], false);
@@ -757,13 +884,13 @@ const bases = {
   // shows the Hiker's Base and the best rows.
   mark(rows, fit = true) {
     this.layer.clearLayers();
-    const seed = this.seed;
+    const seed = this.seed, narrow = window.matchMedia(BASE_NARROW).matches; // smaller dots overlap less (P4)
     if (seed?.lat == null) return;
     this.markers = [
       L.circleMarker([seed.lat, seed.lon], { radius: 9, color: "#fff", weight: 2, fillColor: "#c2410c", fillOpacity: 1, bubblingMouseEvents: false })
         .bindTooltip(`Your base: ${escapeHtml(seed.name)}`),
       ...rows.map((row, i) => L.marker([row.lat, row.lon], {
-        icon: L.divIcon({ className: "base-marker", html: `<span>${i + 1}</span>`, iconSize: [22, 22] }),
+        icon: L.divIcon({ className: "base-marker", html: `<span>${i + 1}</span>`, iconSize: narrow ? [18, 18] : [22, 22] }),
         keyboard: false,
         zIndexOffset: (rows.length - i) * 1000, // the best on top
       }).bindTooltip(`${i + 1}. ${escapeHtml(row.name)} · ${row.score.toFixed(2)}`)
@@ -775,6 +902,15 @@ const bases = {
     else this.map.setView([seed.lat, seed.lon], Math.max(this.map.getZoom(), 9));
   },
 };
+
+// One TownTrait's setting in words: "town size like yours (important)", "mild in all of Jan, Feb" (B13),
+// "places to stay at least 20".
+function traitWords(trait, choice) {
+  const name = TRAIT_NAMES[trait];
+  if (choice.like_mine) return `${name} like yours (${IMPORTANCE.find(([w]) => w === choice.like_mine)[1]})`;
+  if (choice.mild_in) return `mild in ${choice.mild_in.length > 1 ? "all of " : ""}${choice.mild_in.map((month) => MONTHS[month - 1]).join(", ")}`;
+  return `${name} ${[choice.at_least != null && `at least ${choice.at_least.toLocaleString("en")}`, choice.up_to != null && `up to ${choice.up_to.toLocaleString("en")}`].filter(Boolean).join(" ")}`;
+}
 
 // A number box's value, or null when it is empty or no number of 0 or more.
 function typedNumber(input) {
@@ -826,7 +962,7 @@ function tooFewText(seed, body, filtered) {
   const longest = Math.max(...state.info.bases.reaches), need = state.info.bases.min_hike_groups;
   const ways = [filtered && "loosen your hike choices", body.reach < longest && "try a longer drive"].filter(Boolean);
   const count = seed.hike_groups === 0 ? "None" : `Only ${seed.hike_groups}`;
-  return `${count} of your hikes within about ${body.reach} min of ${seed.name} count${filtered ? " under your hike choices" : ""}: `
+  return `${count} of your hikes within about ${body.reach} min of ${seed.name} count${seed.hike_groups === 1 ? "s" : ""}${filtered ? " under your hike choices" : ""}: `
     + `at least ${need} are needed to compare towns on them.${ways.length ? ` To get a list, ${ways.join(", or ")}.` : " There are too few hikes mapped near this town."}`;
 }
 
@@ -842,29 +978,35 @@ function unknownTrait(row, name) {
 function baseRow(row, number, seed, traits) {
   const pct = (x) => `${Math.round(x * 100)} %`;
   const share = row.enough * row.sure, alike = share > 0 ? row.hike_score / share : row.hike_score;
-  const why = [`hikes alike ${alike.toFixed(2)}: mix ${row.mix.toFixed(2)}, has ${pct(row.coverage)} of your kinds, yours has ${pct(row.back)} of its`];
+  const why = [`hikes alike ${alike.toFixed(2)}: same kinds of hike in the same shares ${row.mix.toFixed(2)}, this town has ${pct(row.coverage)} of your kinds, yours has ${pct(row.back)} of its kinds`];
   if (row.enough < 0.995) why.push(`fewer hikes than ${seed.name} (${row.hike_groups} against ${seed.hike_groups}) −${pct(1 - row.enough)}`);
   if (row.sure < 0.995) why.push(`few of your hikes to compare −${pct(1 - row.sure)}`);
   for (const [name, cut] of Object.entries(row.cuts)) {
     if (Math.round(cut * 100) > 0) why.push(`${TRAIT_NAMES[name] ?? name} −${pct(cut)}${unknownTrait(row, name) ? " (no data)" : ""}`);
   }
+  const total = why.length > 1 ? ` = ${row.score.toFixed(2)}` : ""; // the parts come to the score shown (H14, N3)
+  // The area's other towns: all of them, or "among them" the biggest; its best town marked (A4, P19).
+  const towns = row.area_towns.map((town) => (row.best_town?.id === town.id ? `${town.name} (the best of them, ${row.best_town.score.toFixed(2)})` : town.name));
+  const named = towns.length ? `${towns.length === row.area_bases - 1 ? ":" : ", among them"} ${towns.join(", ")}` : "";
   const area = row.area_bases > 1
-    ? `<span class="hint area" title="Towns close together have much the same hikes, so they share a row; which towns join it depends on your choices.">and ${row.area_bases - 1} nearby town${row.area_bases > 2 ? "s" : ""} with much the same hikes${row.area_towns.length ? `, among them ${escapeHtml(row.area_towns.map((town) => town.name).join(", "))}` : ""}</span>`
+    ? `<span class="hint area" title="Towns close together have much the same hikes, so they share a row; which towns join it depends on your choices.">and ${row.area_bases - 1} nearby town${row.area_bases > 2 ? "s" : ""} with much the same hikes${escapeHtml(named)}</span>`
     : "";
   const counts = (traits.stays || traits.eats) && townCounts(row);
   return `<tr>
     <td><span class="number">${number}</span></td>
     <td class="name"><button type="button" class="base-name" data-base="${row.id}">${escapeHtml(row.name)}</button> <span class="hint place">${escapeHtml(placeLine(row))}</span> ${area}
       <span class="figure-line">${row.hike_groups} hikes counted${counts ? ` · ${escapeHtml(counts)}` : ""}</span></td>
-    <td class="score">${row.score.toFixed(2)} ${helpButton("base")}<span class="why">${escapeHtml(why.join("; "))}</span></td>
+    <td class="score">${row.score.toFixed(2)} ${helpButton("base")}<span class="why">${escapeHtml(why.join("; ") + total)}</span></td>
     <td>${monthsStrip(row.months)}</td>
   </tr>`;
 }
 
-// "6.2 km · ↑ 540 m · top 1,100 m · summit · round trip": what a hike of an opened Base is like, one way.
+// "one way: 6.2 km · ↑ 540 m · top 1,100 m · summit · round trip": what a hike of an opened Base is like,
+// one way as the hike choices measure it (a hike's own page adds the way back, A2).
 function hikeFacts(hike) {
-  return [hike.length_m != null && fmt.km(hike.length_m), hike.climb_m != null && `↑ ${fmt.m(hike.climb_m)}`,
+  const facts = [hike.length_m != null && fmt.km(hike.length_m), hike.climb_m != null && `↑ ${fmt.m(hike.climb_m)}`,
     hike.highest_m != null && `top ${fmt.m(hike.highest_m)}`, hike.summit && "summit", hike.round_trip && "round trip"].filter(Boolean).join(" · ");
+  return facts && `one way: ${facts}`;
 }
 
 // Twelve months, the mild ones marked: the median temperature of the hikes in reach in the mild band.

@@ -333,7 +333,14 @@ ENOUGH_GROUPS = 30  # HikeGroups enough for a week's hiking, and to compare two 
 OWN_REGION_SHARE = 0.5  # a Base with more of its nearest HikeGroups than this within REACH_MIN of the Hiker's is theirs
 URBAN_PEOPLE = 100_000  # a Base with this many people living within URBAN_M is in a city
 URBAN_M = 5_000
-NAME_WITHIN = 0.05  # a row is named after the biggest town of its area scoring within this of its best
+SPRAWL_PEOPLE = 150_000  # or this many within SPRAWL_M, a city of suburbs (ADR-0086)
+SPRAWL_M = 8_000
+DORMITORY = (20_000, 3)  # a Base of this many people with fewer places to stay is where people live, not stay
+# ADR-0086, after the second visitor check: a row is named after the best town of its area of this many
+# people, else its best village of this many, else its best place; a row scoring under MIN_ROW_SCORE is none.
+NAME_PEOPLE = (1_000, 100)
+NAME_WITHIN = 0.05  # and named after the biggest of those scoring within this of that best one
+MIN_ROW_SCORE = 0.1
 AREA_TOWNS = 5  # the other towns of an area a row names, biggest first
 COVERED_WEST = "US"  # west of REGION_SPLIT_LON, the hikes are those of the United States alone
 # Places that are no town to stay in: a hut, an inn, an industrial estate, a condo, a trailer park, ...
@@ -341,6 +348,7 @@ NOT_A_TOWN = re.compile(
     r"(?i)^(rifugio|malga|gasthof|hotel|albergo|grand'albergo|collegio|cantoniera|casa cantoniera|"
     r"(zona|area|località) (industriale|produttiva|artigianale)|industriale|industriegebiet)(\s|$)"
     r"|\b(industrial|condominiums?|condo|trailer|mobile home|apartments|subdivision)\b|\(historical\)"
+    r"|\b(air force base|summer home area|holiday park|caravan park|lodges)$"
 )
 A_BAR = re.compile(r"(?i)^bar\s")  # "Bar Alpino"; no town where "Bar" is an English word: Bar Harbor, Bar Hill
 BAR_IS_A_WORD = ("US", "GB", "IE")
@@ -361,7 +369,8 @@ BASE_SCORE_HELP = {
             "text": f"{round(MIX_SHARE * 100)} % is the mix: do the two towns have the same kinds of hike in the "
             f"same shares, similar kinds counting partly. {round((1 - MIX_SHARE) * 100)} % is how many of your "
             "kinds this town has, and how many of its kinds yours has, half each. 0 is as alike as two towns "
-            "picked at random, and a town less alike than that is not listed. A town with less than half your "
+            f"picked at random, and a town scoring under {MIN_ROW_SCORE}, hardly more alike, is not listed. A town "
+            "with less than half your "
             f"number of hikes loses a little of its score, and its row says how much, but not one with "
             f"{ENOUGH_GROUPS} or more, enough for a week; with fewer than {ENOUGH_GROUPS} of yours, every town does.",
         },
@@ -373,11 +382,14 @@ BASE_SCORE_HELP = {
         },
         {
             "title": "One row per area",
-            "text": "Towns close together have much the same hikes, so each row is an area of towns, named after "
-            "its biggest town about as alike as its best, with its other big towns beside it. With a longer drive "
-            "the areas are bigger, so the list can be shorter. Towns near your own, and towns whose nearest hikes "
-            "are mostly within an hour of yours, are left out: that is where you have been. So are towns in a "
-            "city, and places that are no town to stay in, such as a mountain hut, an inn or an industrial estate.",
+            "text": "Towns close together have much the same hikes, so each row is an area of towns, formed around "
+            f"its best town of {NAME_PEOPLE[0]:,} people or more (else village of {NAME_PEOPLE[1]}, else place), "
+            "named after the biggest town about as alike as that one, with its score, and with its other big "
+            "towns and its best beside it. With a longer drive the areas are bigger, so the list can be shorter. "
+            "Towns near your own, and towns whose nearest hikes are mostly within an hour of yours, are left "
+            "out: that is where you have been. So are towns in a city, big towns with almost no places to stay, "
+            "places that are no town to stay in, such "
+            "as a mountain hut, an inn or an industrial estate, and hikes of more than a day.",
         },
     ),
 }
@@ -385,14 +397,15 @@ BASE_SCORE_HELP = {
 
 @dataclass(frozen=True)
 class BaseMatch:
-    """One row of a BaseRanking: an area, named after its biggest town about as alike as its best.
+    """One row of a BaseRanking: an area, named after its best town (ADR-0086).
 
     ``hike_score`` is ``(mix, coverage, back)`` weighed 40, 30, 30, run from the Reach's
     ``SCORE_FLOOR`` (0) up to 1, times ``enough`` and ``sure``; ``score`` the hike score after
     the "like mine" TownTraits, each taking its share in ``cuts`` (trait name, share) off;
     ``hike_groups`` the Base's HikeGroups that pass; ``members`` the Bases of its area, best
-    first, ``base`` the one it is named after, and ``towns`` the others, biggest first. Bases
-    are rows of the ``bases/`` folder.
+    first, ``base`` the one it is named after, and ``towns`` the others, its ``best`` first
+    (with ``best_score``) when that is not ``base``, then biggest first. Bases are rows of the
+    ``bases/`` folder.
     """
 
     base: int
@@ -410,6 +423,8 @@ class BaseMatch:
     cuts: tuple[tuple[str, float], ...] = ()
     sure: float = 1.0
     towns: tuple[int, ...] = ()
+    best: int = -1  # the area's best town, which the area is formed around, and its score
+    best_score: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -417,13 +432,15 @@ class BaseRanking:
     """The Bases whose hikes in ``reach`` are like those of the Hiker's Base ``seed``, best first.
 
     ``seed_groups`` is how many of the Hiker's HikeGroups pass the HikeFilter; with
-    under ``MIN_HIKE_GROUPS`` of them there is nothing to compare and no row.
+    under ``MIN_HIKE_GROUPS`` of them there is nothing to compare and no row. ``traits_leave_none``:
+    there are Bases that might be rows, and the TownTrait filters leave none of them.
     """
 
     seed: int
     reach: int
     seed_groups: int
     rows: list[BaseMatch]
+    traits_leave_none: bool = False  # the TownTrait filters, and nothing else, leave no Base (ADR-0086)
 
     @property
     def too_few(self) -> bool:
@@ -492,8 +509,10 @@ def rank_bases(
         "eats": np.asarray(bases.eats),
         "months": np.asarray(bases.month_temperatures)[:, REACHES.index(reach)],
     }
+    might = keep.any()
     keep &= trait_passes(traits, town)
     candidates = np.flatnonzero(keep)
+    leave_none = bool(might and not len(candidates))
     my_best = credit[my_types].max(axis=0)
     back = _back(candidates, starts, types, counts, groups, my_best)
     enough = np.minimum(1.0, np.sqrt(groups[candidates] / min(groups[me] / 2, ENOUGH_GROUPS)))
@@ -515,18 +534,23 @@ def rank_bases(
     cuts = trait_cuts(traits, town, me, candidates)
     score = hike_score * np.prod([1 - cut for _, cut in cuts], axis=0) if cuts else hike_score
 
-    alike = np.flatnonzero(hike_score > 0)  # no better than a random pair: no row
-    order = alike[np.lexsort((candidates[alike], -score[alike]))]
+    alike = np.flatnonzero((hike_score > 0) & (score >= MIN_ROW_SCORE))  # no better than a random pair: no row
+    size = np.nan_to_num(np.asarray(bases.population, dtype=np.float64), nan=-1.0)
+    people = size[candidates]
+    tier = np.where(people >= NAME_PEOPLE[0], 0, np.where(people >= NAME_PEOPLE[1], 1, 2))
+    # Towns first, then villages, then the rest, each best first: an area is around its best town.
+    order = alike[np.lexsort((candidates[alike], -score[alike], tier[alike]))]
     area_of = _areas(np.radians(points[candidates[order]]), AREA_REACHES * reach_m)
     areas: list[list[int]] = [[] for _ in range(area_of.max(initial=-1) + 1)]
     for i, area in zip(order.tolist(), area_of.tolist()):
         areas[area].append(i)
-    size = np.nan_to_num(np.asarray(bases.population, dtype=np.float64), nan=-1.0)
     stays = np.nan_to_num(np.asarray(bases.stays, dtype=np.float64), nan=-1.0)
     bigger = lambda i: (size[candidates[i]], stays[candidates[i]], score[i], -candidates[i])  # noqa: E731
     found = []
     for area in areas:
-        i = max((j for j in area if score[j] >= score[area[0]] - NAME_WITHIN), key=bigger)
+        lead = area[0]  # the area's best town (or village, or place)
+        i = max((j for j in area if tier[j] == tier[lead] and score[j] >= score[lead] - NAME_WITHIN), key=bigger)
+        area = sorted(area, key=lambda j: (-score[j], candidates[j]))
         base = int(candidates[i])
         found.append(
             BaseMatch(
@@ -536,11 +560,12 @@ def rank_bases(
                 hike_groups=int(groups[base]), country=str(country[base]), region=str(region[base]),
                 members=tuple(int(candidates[j]) for j in area),
                 cuts=tuple((name, float(cut[i])) for name, cut in cuts), sure=sure,
-                towns=tuple(int(candidates[j]) for j in sorted(area, key=bigger, reverse=True) if j != i),
+                towns=tuple(int(candidates[j]) for j in sorted(area, key=lambda j: (j == lead, *bigger(j)), reverse=True) if j != i),
+                best=int(candidates[lead]), best_score=float(score[lead]),
             )  # fmt: skip
         )
     found.sort(key=lambda row: (-row.score, row.base))
-    return BaseRanking(seed=me, reach=reach, seed_groups=int(groups[me]), rows=found)
+    return BaseRanking(seed=me, reach=reach, seed_groups=int(groups[me]), rows=found, traits_leave_none=leave_none)
 
 
 def _from_floor(raw: np.ndarray, floor: float) -> np.ndarray:
@@ -605,8 +630,9 @@ _PLACES: dict[int, tuple[Bases, tuple[np.ndarray, np.ndarray]]] = {}  # by the `
 def _base_places(data: ServingData) -> tuple[np.ndarray, np.ndarray]:
     """Each Base's ISO country code from ``data.places`` ("" for none), and whether it may be a row:
     not a place that is no town (``NOT_A_TOWN``, or ``A_BAR`` outside ``BAR_IS_A_WORD``), not in a city
-    (``URBAN_PEOPLE`` people living in the towns of ``data.places`` within ``URBAN_M``, its own included:
-    the file keeps every town of ``TOWN_POPULATION`` people or more, but villages only near hikes) and,
+    (``_in_a_city``, by the people living in the towns of ``data.places``, its own included: the file
+    keeps every town of ``TOWN_POPULATION`` people or more, but villages only near hikes), not a town of
+    ``DORMITORY`` people with fewer places to stay than it says (a suburb, ADR-0086) and,
     west of ``REGION_SPLIT_LON``, in ``COVERED_WEST``. Every Base may be one without ``data.places``. Read once per ``bases/`` folder."""
     kept = _PLACES.get(id(data.bases))
     if kept is None or kept[0] is not data.bases:
@@ -627,15 +653,29 @@ def _base_places(data: ServingData) -> tuple[np.ndarray, np.ndarray]:
                 towns = db.execute("SELECT lat, lon, population FROM places WHERE population >= ?", (TOWN_POPULATION,))
                 people = np.array(towns.fetchall())
             listed &= (points[:, 1] >= REGION_SPLIT_LON) | (codes == COVERED_WEST)
+            people_here, stays_here = np.asarray(data.bases.population), np.asarray(data.bases.stays)
+            listed &= ~((people_here >= DORMITORY[0]) & (stays_here < DORMITORY[1]))  # unknown (NaN) is no dormitory
             if len(people):
-                pairs = cKDTree(_unit(points)).sparse_distance_matrix(
-                    cKDTree(_unit(people[:, :2])), 2 * math.sin(URBAN_M / (2 * EARTH_RADIUS_M)), output_type="ndarray"
-                )
-                living = np.bincount(pairs["i"], weights=people[pairs["j"], 2], minlength=len(place_ids))
-                listed &= living < URBAN_PEOPLE
+                listed &= ~_in_a_city(points, people)
         _PLACES.clear()
         _PLACES[id(data.bases)] = kept = (data.bases, (codes, listed))
     return kept[1]
+
+
+def _in_a_city(points: np.ndarray, towns: np.ndarray) -> np.ndarray:
+    """Whether each of ``points`` (lat, lon) is in a city, by ``towns`` (lat, lon, people): with
+    ``URBAN_PEOPLE`` living within ``URBAN_M`` or ``SPRAWL_PEOPLE`` within ``SPRAWL_M``, or within a
+    city's own reach of its point, ``URBAN_M`` times the square root of its people over ``URBAN_PEOPLE``."""
+    chord = lambda metres: 2 * np.sin(np.asarray(metres) / (2 * EARTH_RADIUS_M))  # noqa: E731
+    here, there = cKDTree(_unit(points)), cKDTree(_unit(towns[:, :2]))
+    city = np.zeros(len(points), dtype=bool)
+    for people, metres in ((URBAN_PEOPLE, URBAN_M), (SPRAWL_PEOPLE, SPRAWL_M)):
+        pairs = here.sparse_distance_matrix(there, chord(metres), output_type="ndarray")
+        city |= np.bincount(pairs["i"], weights=towns[pairs["j"], 2], minlength=len(points)) >= people
+    big = towns[towns[:, 2] >= URBAN_PEOPLE]
+    for inside in here.query_ball_point(_unit(big[:, :2]), chord(URBAN_M * np.sqrt(big[:, 2] / URBAN_PEOPLE))):
+        city[inside] = True
+    return city
 
 
 def warm_bases(data: ServingData) -> None:
@@ -701,35 +741,44 @@ TYPO_SCAN = 20_000  # names sharing a query's first letters that are looked at f
 TYPO_RATIO = 0.8  # how alike a name and a query must be (``difflib``) to be offered for a typo
 
 
-def find_bases(data: ServingData, query: str, limit: int) -> list[int]:
+SEARCH_SCAN = 2_000  # names starting with a query that are looked at to put the best first
+
+
+def find_bases(data: ServingData, query: str, limit: int) -> tuple[list[int], bool]:
     """The Bases (rows) whose place has a name starting with ``query``, folded as
-    ``ServingData.find_place`` does: one named exactly so first, then one whose own name (not an
-    alternate) starts so, then the most populous. A query whose spaces or hyphens the name writes
-    otherwise ("chamonix mont blanc", "st moritz") finds it too; with none found, names one typo
-    away ("keswik"). Places that are no Base are passed over."""
+    ``ServingData.find_place`` does, and whether they are only guesses. Of the towns and villages,
+    one named exactly so before the rest, then towns before villages (``NAME_PEOPLE``, ADR-0086), then one whose
+    own name (not an alternate) starts so, then the most places to stay, then the most populous; places
+    under a village's people come last: so "Alta" is the village of that name before Altamura, "Cortina"
+    is Cortina d'Ampezzo before a hamlet of that name, and "Interlaken" the Swiss one. A
+    query whose spaces or hyphens the name writes otherwise ("chamonix mont blanc", "st moritz")
+    finds it too; with none found, names one typo away ("keswik"), said to be guesses. Places that
+    are no Base are passed over."""
     needle = _fold(query).strip()
     if data.places is None or not needle:
-        return []
-    found: list[int] = []
+        return [], False
+    best: dict[int, tuple] = {}
+    population = np.nan_to_num(np.asarray(data.bases.population, dtype=np.float64), nan=-1.0)
+    stays = np.nan_to_num(np.asarray(data.bases.stays, dtype=np.float64), nan=-1.0)
     with scoped(sqlite3.connect(data.places, uri=True)) as db:
         for spelled in _spellings(needle):
-            for (place,) in db.execute(
-                "SELECT p.id FROM place_names n JOIN places p ON p.id = n.place WHERE n.name >= ? AND n.name < ? "
-                "GROUP BY p.id ORDER BY MIN(CASE WHEN n.name = ? THEN n.alternate ELSE 2 END), "
-                "MIN(n.alternate), p.population DESC, p.id",
-                (spelled, spelled + "\U0010ffff", spelled),
+            for place, exact, own in db.execute(
+                "SELECT p.id, MIN(CASE WHEN n.name = ? THEN n.alternate ELSE 2 END), MIN(n.alternate) "
+                "FROM place_names n JOIN places p ON p.id = n.place WHERE n.name >= ? AND n.name < ? "
+                "GROUP BY p.id ORDER BY 2, 3, p.population DESC, p.id LIMIT ?",
+                (spelled, spelled, spelled + "\U0010ffff", SEARCH_SCAN),
             ):
                 try:
                     row = base_row(data.bases, place)
                 except KeyError:
                     continue
-                if row not in found:
-                    found.append(row)
-                if len(found) == limit:
-                    return found
-        if not found and len(needle) >= 4:
-            found = _typo_bases(data, db, needle, limit)
-    return found
+                people = population[row]
+                tier = 0 if people >= NAME_PEOPLE[0] else 1 if people >= NAME_PEOPLE[1] else 2
+                key = (tier == 2, exact, tier, own, -stays[row], -people, row)
+                best[row] = min(key, best.get(row, key))
+        if not best and len(needle) >= 4:
+            return _typo_bases(data, db, needle, limit), True
+    return sorted(best, key=best.__getitem__)[:limit], False
 
 
 def _spellings(needle: str) -> list[str]:
@@ -774,24 +823,30 @@ def _typo_bases(data: ServingData, db: sqlite3.Connection, needle: str, limit: i
 
 
 NEAR_TOWN_PEOPLE = 10_000  # a Base is told apart from others of its name by the nearest other Base this big
+NEAR_TOWN_M = 250_000  # and bigger than it; a Base this big itself, only by one this close (ADR-0086)
 
 
 def near_towns(data: ServingData, rows: Collection[int]) -> list[dict | None]:
-    """For each Base of ``rows``, the nearest other Base of at least ``NEAR_TOWN_PEOPLE`` people,
-    ``{"name", "km"}``, so towns of one name can be told apart ("Keswick near Penrith", "Keswick
-    near North Walsham"); None when there is none, or without ``data.places``."""
+    """For each Base of ``rows``, the nearest other Base of at least ``NEAR_TOWN_PEOPLE`` people and
+    more than its own, ``{"name", "km"}``, so towns of one name can be told apart ("Keswick near
+    Penrith", "Keswick near North Walsham"); for a Base of ``NEAR_TOWN_PEOPLE`` itself, only one
+    within ``NEAR_TOWN_M`` (Munich is near no district of its own). None when there is none, or
+    without ``data.places``."""
     bases = data.bases
     population = np.nan_to_num(np.asarray(bases.population, dtype=np.float64), nan=0.0)
     big = np.flatnonzero(population >= NEAR_TOWN_PEOPLE)
     points = np.asarray(bases.points, dtype=np.float64)
     nearest: list[tuple[int, float] | None] = []
     for row in rows:
-        others = big[big != row]
+        others = big[(big != row) & (population[big] > population[row])]
         if not len(others) or data.places is None:
             nearest.append(None)
             continue
         metres = straight_line_distances_m(Origin(*points[row]), points[others])
         at = int(np.argmin(metres))
+        if population[row] >= NEAR_TOWN_PEOPLE and metres[at] > NEAR_TOWN_M:
+            nearest.append(None)
+            continue
         nearest.append((int(bases.place_ids[others[at]]), float(metres[at])))
     places = sorted({found[0] for found in nearest if found})
     names = {}

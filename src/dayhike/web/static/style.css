@@ -286,7 +286,9 @@ button.help:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 .score-help h3 { margin: 0 24px 6px 0; }
 .score-help h4 { margin: 10px 0 2px; font-size: 0.84rem; }
 .score-help p { margin: 4px 0; }
-.score-help .help-close { position: absolute; top: 6px; right: 6px; padding: 0 6px; border: none; font-size: 1.1rem; line-height: 1.2; }
+/* The × stays in view as the help scrolls, beside the title, not over the text (P6). */
+.score-help .help-close { position: sticky; top: 0; float: right; margin: -4px -8px 0 8px; padding: 0 6px; border: none;
+  background: #fff; font-size: 1.1rem; line-height: 1.2; z-index: 1; }
 .score-help .help-more { display: none; position: sticky; bottom: -10px; margin: 6px -14px -10px; padding: 22px 0 6px;
   text-align: center; font-weight: 600; color: var(--green-dark); background: linear-gradient(rgba(255, 255, 255, 0), var(--card) 55%); }
 .score-help.more .help-more { display: block; }
@@ -375,5 +377,24 @@ button.help:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 .base-trait > label > span { display: inline-block; min-width: 8em; }
 .base-range input, .base-trait input[type="number"] { width: 6em; }
 .base-trait .trait-filter .check { display: inline-flex; margin: 4px 6px 0 0; }
-#base-problem, .base-range .range-error { color: #b42318; }
+#base-problem, .base-range .range-error, .base-trait .trait-error, #base-search-problem { color: #b42318; }
+#base-search-problem button { margin: 0 4px; }
+.base-trait .month-boxes { display: inline; }
+.months-said { display: block; }
+#base-hike-list li.picked { background: #fff4d6; }
+/* Second visitor check (ADR-0086). A phone: the tall tap targets reach over the lines around them instead of
+   making their own line tall (P3); the months in two rows of six (P23); a list being found said at the
+   screen's foot, wherever the page is scrolled (P35). */
+@media (max-width: 900px), (pointer: coarse) {
+  #base-table button.base-name { padding-block: 12px; margin-block: -12px; }
+  #base-table .score button.help { margin-block: -12px; vertical-align: middle; }
+}
+@media (max-width: 600px) {
+  .base-trait .month-boxes { display: grid; grid-template-columns: repeat(6, minmax(0, 3em)); gap: 2px 4px; }
+  .base-trait .month-boxes .check { flex-direction: column; margin: 0; font-size: 0.8rem; }
+  .base-trait .month-boxes .check input[type="checkbox"] { margin: 0; }
+  #base-status:not(:empty) { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1000; margin: 0; padding: 10px 16px;
+    background: #fff; border-top: 1px solid #d0d5cd; box-shadow: 0 -2px 6px rgba(0, 0, 0, 0.1); }
+}
+.base-trait .trait-error { display: block; margin-top: 2px; }
 #base-panel .what { color: var(--muted); font-size: 0.85em; }

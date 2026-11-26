@@ -320,7 +320,7 @@ def test_a_hike_of_an_opened_base_links_into_hikes_like_it(browser, server) -> N
     open_base(page, "Bethesda")
     first = page.locator("#base-hike-list li").first
     name = first.locator(".hike-name").inner_text()
-    link = first.get_by_role("link", name="Open this hike to find ones like it")
+    link = first.get_by_role("link", name="Find hikes like this")  # the name the site gives it (ADR-0086)
 
     assert (link.get_attribute("href") or "").startswith("#hike=")
     link.click()

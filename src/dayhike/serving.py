@@ -2369,6 +2369,10 @@ class ServingData:
             keep |= ~self._west
         return np.flatnonzero(keep)
 
+    def day_hikes(self) -> np.ndarray:
+        """Whether each hike (similarity row) is a day hike, not a multi-day route (``multi_day``)."""
+        return ~(self._one_way_m > MULTI_DAY_M)
+
     def multi_day(self, row: int) -> bool:
         """Whether a hike is a multi-day route: longer than ``MULTI_DAY_M`` one way (ADR-0056)."""
         return bool(self._one_way_m[row] > MULTI_DAY_M)
