@@ -1,5 +1,5 @@
 ---
-status: accepted (amends ADR-0014: the drive filter is capped at 3 hours, not 4)
+status: accepted (amends ADR-0014: the drive filter is capped at 3 hours, not 4; amended by ADR-0087: two Rankings at once, each answered within 50 s)
 ---
 
 # The drive filter stops at three hours

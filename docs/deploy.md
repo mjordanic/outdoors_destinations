@@ -311,8 +311,8 @@ What the flags do:
 | `--memory 4Gi` | For a Europe or a Europe and US export (section 1), the most Cloud Run gives 1 vCPU; a US-only export fits `2Gi`. The deploy workflow sets it on every deploy from the data image's tag: `2Gi` for a tag ending in `-us` (but not `-eu-us`) or `-demo`, else `4Gi`, or the `DAYHIKE_MEMORY` repository variable when set (section 9). Measured peak of app plus Valhalla in the technical docs table, **Web demo measurements** ([technical.md](technical.md#web-demo-measurements)). The trail network for the way back is memory-mapped from the export's `trailgraph.network/` (an export without it builds it once per instance, a request arriving during the build waiting for it), and the image sets `MALLOC_ARENA_MAX=2`; with both, 8 visitors on 1 vCPU peak near 1.1 GB. Raise to 4Gi if the logs show out-of-memory restarts. |
 | `--min-instances 0` | Scale to zero; the captain accepted the cold start. |
 | `--max-instances 2` | The instance cap: at most two containers ever bill at once. |
-| `--concurrency 8` | Searches and hike pages run side by side; Rankings queue one at a time per instance (in the app). |
-| `--timeout 60` | No request may run longer; a 3 h drive query from the densest origin (Munich) takes about 8 s on one CPU of a Mac and an estimated 30-45 s on 1 vCPU; a Ranking waits at most 12 s for its turn, so the two stay under 60 s. A 4 h one from Munich ran past 60 s, so the drive filter stops at 3 h (ADR-0083). |
+| `--concurrency 8` | Searches and hike pages run side by side; Rankings and BaseRankings run at most two at a time per instance (`RANKINGS_AT_ONCE`, in the app, ADR-0087). |
+| `--timeout 60` | No request may run longer; a 3 h drive query from the densest origin (Munich) takes about 8 s on one CPU of a Mac and an estimated 30-45 s on 1 vCPU; two Rankings at once each run slower, so the app answers a Ranking busy (`503`) 50 s after it came (`RANK_DEADLINE_S`) if it has not finished (ADR-0087). A 4 h one from Munich ran past 60 s, so the drive filter stops at 3 h (ADR-0083). |
 | `DAYHIKE_FORWARDED_HOPS=1` | The rate limit keys on the last `X-Forwarded-For` entry, the one Google's front end adds. Earlier entries are client-supplied and ignored, so the limit cannot be dodged by sending a fake header. If that last entry turns out to be a Google proxy address rather than the visitor, the limit becomes one shared budget per instance: stricter, never looser. |
 | `DAYHIKE_SITE_URL=https://HOST` (optional) | The site's public address (the live site's is `https://hikesalike.com`; before a custom domain, the Cloud Run URL). Each page then names itself in `og:url` and its preview image by full address, so a shared link shows the preview, and `/robots.txt` and `/sitemap.xml` name pages at it; unset, the image address stays relative and most link previews show none. |
 | `DAYHIKE_GOATCOUNTER=CODE` (optional) | Cookieless visit counts at `https://CODE.goatcounter.com`: every page loads the self-hosted `vendor/goatcounter/count.js`, and "Find" is counted as an event. Unset, no page loads analytics. Not set yet: no GoatCounter account. |
@@ -340,10 +340,12 @@ curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
 The app limits each client to **20 Rankings and 300 other API calls per
 minute per instance** (`HTTP 429` past that; the counter lives in each
 instance's memory, so with `--max-instances 2` a client whose requests reach
-both instances gets up to 2x that), runs one Ranking at a time per instance, in
-the order they came (others wait up to 12 s, then get `503`; with the slowest
-Ranking, a 3 h drive from Munich of up to about 45 s, that still ends inside the 60 s request timeout,
-so a visitor gets the app's `503` rather than Cloud Run's `504`; with this short wait, more
+both instances gets up to 2x that), runs at most two Rankings (hike Rankings and BaseRankings together,
+`RANKINGS_AT_ONCE`) at a time per instance, in
+the order they came (others wait up to 12 s, then get `503`; a Ranking not finished 50 s after it came,
+such as a 3 h drive from Munich of up to about 45 s alone running beside another, is answered `503` then and
+ends in the background, keeping its turn, so a visitor gets the app's `503` rather than Cloud Run's `504`
+(ADR-0087); with this short wait, more
 concurrent searches get the busy `503` message sooner; a Valhalla call
 stalled past 50 s also ends in `503` and frees the slot), lets a client (a browser
 tab at an address) have one Ranking queued or running at a time, and an address
