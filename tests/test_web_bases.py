@@ -302,14 +302,16 @@ def test_a_town_trait_filter_leaves_out_the_bases_that_fail_it(client: TestClien
     assert MOAB not in [row["id"] for row in mild["results"]]
 
 
-def test_a_ranking_says_how_many_towns_pass_the_town_choices(client: TestClient) -> None:
+def test_a_ranking_says_when_the_town_choices_leave_no_town(client: TestClient) -> None:
     """A town filter no town passes is said as that, not as no town being alike (ADR-0086)."""
     none = _rank(client, traits={"stays": {"at_least": 99_999}})
     some = _rank(client, traits={"size": {"at_least": 5_000}})
+    no_hikes = _rank(client, hike_filter={"climb_min_m": 100_000}, traits={"stays": {"at_least": 99_999}})
 
-    assert none["results"] == [] and none["towns_passing"] == 0
-    assert some["towns_passing"] == 2  # Chamonix and Moab
-    assert _rank(client)["towns_passing"] == 3
+    assert none["results"] == [] and none["traits_leave_none"] is True
+    assert some["traits_leave_none"] is False
+    assert _rank(client)["traits_leave_none"] is False
+    assert no_hikes["too_few"] is True and no_hikes["traits_leave_none"] is False
 
 
 def test_a_multi_day_route_is_no_hike_of_a_base(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1115,8 +1115,8 @@ def create_app(
             "traits": {name: choice.model_dump(exclude_defaults=True) for name, choice in body.traits.items()},
             # Too few of the Hiker's hikes pass the HikeFilter to compare: no row.
             "too_few": ranking.too_few,
-            # The Bases that might be rows and pass the town filters: 0 says the filters leave none.
-            "towns_passing": ranking.towns_passing,
+            # The town filters, and nothing else, leave no town that might be a row.
+            "traits_leave_none": ranking.traits_leave_none,
             "results": [
                 {
                     **place,

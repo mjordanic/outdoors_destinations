@@ -31,10 +31,10 @@ def opened_link(browser, server: str, hash: str, **options):
     return page
 
 
-# B20: a range the wrong way round is not written into the address, and a link holding one keeps its town.
+# B20: a range the wrong way round is left out of the address, which keeps its town.
 
 
-def test_a_range_the_wrong_way_round_leaves_the_address_as_it_was(browser, server) -> None:
+def test_a_range_the_wrong_way_round_is_left_out_of_the_address(browser, server) -> None:
     page = open_bases(browser, server)
     keswick_in_60(page)
     hike_choices(page)
@@ -47,10 +47,37 @@ def test_a_range_the_wrong_way_round_leaves_the_address_as_it_was(browser, serve
     page.locator(".base-range .range-error").first.get_by_text("is more than").wait_for()
     page.wait_for_timeout(1_200)  # past the typing wait
 
-    assert page.evaluate("() => location.hash") == before
+    assert page.evaluate("() => location.hash") == before.replace("&climb_max_m=500", "")
     page.reload()
     page.locator("#base-results tbody tr").first.wait_for(timeout=SETTLE_MS)
     assert "Keswick" in page.locator("#base-chosen").inner_text()
+
+
+def test_a_town_picked_after_a_range_the_wrong_way_round_is_in_the_address(browser, server) -> None:
+    page = open_bases(browser, server)
+    hike_choices(page)
+    page.locator("#base-climb-min").fill("2000")
+    page.locator("#base-climb-max").fill("500")
+    page.locator(".base-range .range-error").first.get_by_text("is more than").wait_for()
+
+    choose_base(page, "Kes", "Keswick")
+
+    page.wait_for_function(f"() => location.hash.includes('base={KESWICK}&')")
+    assert "climb_" not in page.evaluate("() => location.hash")
+    page.reload()
+    page.locator("#base-chosen").get_by_text("Keswick").wait_for()
+
+
+def test_a_link_to_another_town_in_other_units_with_a_wrong_range_keeps_its_town(browser, server) -> None:
+    page = open_bases(browser, server)
+    keswick_in_60(page)
+    other = page.evaluate("() => state.units === 'metric' ? 'imperial' : 'metric'")
+
+    page.evaluate(f"() => {{ location.hash = '#base={BETHESDA}&reach=60&climb_min_m=2000&climb_max_m=500&units={other}'; }}")
+    page.locator("#base-chosen").get_by_text("Bethesda").wait_for()
+    page.wait_for_timeout(500)
+
+    assert f"base={BETHESDA}&" in page.evaluate("() => location.hash")
 
 
 def test_a_link_with_a_range_the_wrong_way_round_still_names_its_town(browser, server) -> None:
@@ -176,6 +203,17 @@ def test_a_town_filter_no_town_passes_says_so_and_names_it(browser, server) -> N
     note.get_by_text("No town passes your town choices").wait_for()
     assert "places to stay at least 99,999" in note.inner_text()
     assert "No town is alike" not in note.inner_text()
+
+
+def test_no_row_for_another_reason_does_not_blame_the_town_choices(browser, server) -> None:
+    """A strict hike filter, not the town size up to 50,000 always on, can leave no row (ADR-0086)."""
+    page = open_bases(browser, server)
+    page.route("**/api/bases/rank", edited(lambda body: body.update(results=[], traits_leave_none=False)))
+    choose_base(page, "Kes", "Keswick")
+
+    note = page.locator("#base-note")
+    note.get_by_text("No town is alike").wait_for(timeout=SETTLE_MS)
+    assert "No town passes your town choices" not in note.inner_text()
 
 
 # B5: a guess at a name one typo away is offered as one, not taken on Enter.

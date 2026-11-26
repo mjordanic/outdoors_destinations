@@ -432,15 +432,15 @@ class BaseRanking:
     """The Bases whose hikes in ``reach`` are like those of the Hiker's Base ``seed``, best first.
 
     ``seed_groups`` is how many of the Hiker's HikeGroups pass the HikeFilter; with
-    under ``MIN_HIKE_GROUPS`` of them there is nothing to compare and no row. ``towns_passing``
-    is how many Bases might be rows and pass the TownTrait filters, 0 when they leave none.
+    under ``MIN_HIKE_GROUPS`` of them there is nothing to compare and no row. ``traits_leave_none``:
+    there are Bases that might be rows, and the TownTrait filters leave none of them.
     """
 
     seed: int
     reach: int
     seed_groups: int
     rows: list[BaseMatch]
-    towns_passing: int = 0  # the Bases that might be rows and pass the TownTrait filters (ADR-0086)
+    traits_leave_none: bool = False  # the TownTrait filters, and nothing else, leave no Base (ADR-0086)
 
     @property
     def too_few(self) -> bool:
@@ -509,9 +509,10 @@ def rank_bases(
         "eats": np.asarray(bases.eats),
         "months": np.asarray(bases.month_temperatures)[:, REACHES.index(reach)],
     }
+    might = keep.any()
     keep &= trait_passes(traits, town)
     candidates = np.flatnonzero(keep)
-    passing = len(candidates)
+    leave_none = bool(might and not len(candidates))
     my_best = credit[my_types].max(axis=0)
     back = _back(candidates, starts, types, counts, groups, my_best)
     enough = np.minimum(1.0, np.sqrt(groups[candidates] / min(groups[me] / 2, ENOUGH_GROUPS)))
@@ -564,7 +565,7 @@ def rank_bases(
             )  # fmt: skip
         )
     found.sort(key=lambda row: (-row.score, row.base))
-    return BaseRanking(seed=me, reach=reach, seed_groups=int(groups[me]), rows=found, towns_passing=passing)
+    return BaseRanking(seed=me, reach=reach, seed_groups=int(groups[me]), rows=found, traits_leave_none=leave_none)
 
 
 def _from_floor(raw: np.ndarray, floor: float) -> np.ndarray:
@@ -745,10 +746,11 @@ SEARCH_SCAN = 2_000  # names starting with a query that are looked at to put the
 
 def find_bases(data: ServingData, query: str, limit: int) -> tuple[list[int], bool]:
     """The Bases (rows) whose place has a name starting with ``query``, folded as
-    ``ServingData.find_place`` does, and whether they are only guesses. Towns first, then villages,
-    then the rest (``NAME_PEOPLE``, ADR-0086), and in each one named exactly so first, then one whose
-    own name (not an alternate) starts so, then the most places to stay, then the most populous: so
-    "Cortina" is Cortina d'Ampezzo before a hamlet of that name, and "Interlaken" the Swiss one. A
+    ``ServingData.find_place`` does, and whether they are only guesses. Of the towns and villages,
+    one named exactly so before the rest, then towns before villages (``NAME_PEOPLE``, ADR-0086), then one whose
+    own name (not an alternate) starts so, then the most places to stay, then the most populous; places
+    under a village's people come last: so "Alta" is the village of that name before Altamura, "Cortina"
+    is Cortina d'Ampezzo before a hamlet of that name, and "Interlaken" the Swiss one. A
     query whose spaces or hyphens the name writes otherwise ("chamonix mont blanc", "st moritz")
     finds it too; with none found, names one typo away ("keswik"), said to be guesses. Places that
     are no Base are passed over."""
@@ -772,7 +774,7 @@ def find_bases(data: ServingData, query: str, limit: int) -> tuple[list[int], bo
                     continue
                 people = population[row]
                 tier = 0 if people >= NAME_PEOPLE[0] else 1 if people >= NAME_PEOPLE[1] else 2
-                key = (tier, exact, own, -stays[row], -people, row)
+                key = (tier == 2, exact, tier, own, -stays[row], -people, row)
                 best[row] = min(key, best.get(row, key))
         if not best and len(needle) >= 4:
             return _typo_bases(data, db, needle, limit), True

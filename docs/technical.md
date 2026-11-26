@@ -2698,10 +2698,10 @@ the score under which the page says even the best row is not much alike; null wi
 base" (ADR-0084) has its own calls and its own page mode in `bases.js`. A Base is named by its
 GeoNames place id and answers as `{"id", "name", "country", "population", "stays", "eats", "lat", "lon"}`
 (population and the places to stay and to eat null when unknown); `GET /api/bases/search?q=&limit=` (up to 20,
-default 5) finds Bases by name as `/api/place` finds places: towns of 1,000 people first, then villages of 100,
-then the rest, and in each a Base named exactly so, then one whose own name starts with the query before one
-only an alternate name does, then the most places to stay ("Cortina" is Cortina d'Ampezzo before a hamlet, and
-"Interlaken" the Swiss one), passing over places that are no Base; a query whose spaces or hyphens the name
+default 5) finds Bases by name as `/api/place` finds places: of the towns of 1,000 people and villages of 100, a
+Base named exactly so first, then towns before villages, then one whose own name starts with the query before one
+only an alternate name does, then the most places to stay, and places of fewer people last ("Alta" is the village
+before Altamura, "Cortina" is Cortina d'Ampezzo before a hamlet, and "Interlaken" the Swiss one), passing over places that are no Base; a query whose spaces or hyphens the name
 writes otherwise ("chamonix mont blanc", "st moritz") finds it too, and with none found it offers names one typo
 away ("keswik") with `guess` true, which the page asks about ("Did you mean …?") instead of taking on Enter.
 `GET /api/bases/nearest?lat=&lon=` gives the nearest Base in a straight line with its `distance_km`, and
@@ -2714,8 +2714,8 @@ told apart. `POST /api/bases/rank` takes `{"seed": place id, "reach": 15, 30 or 
 `round_trip` true), `traits` per TownTrait (`size`, `stays`, `eats`, `months`) one of `{"like_mine": 1-3}`,
 `{"at_least", "up_to"}` (size and counts) or `{"mild_in": [months]}` (months), a trait left out ignored; anything
 else is a 422, and a seed that is no Base a 404. It answers `seed` (the Base with its passing `hike_groups`),
-`too_few` (under 10 of them: no row), `towns_passing` (how many Bases pass the town filters: 0 when they leave
-none), and up to 300 `results`, one per area, each a Base with `region`,
+`too_few` (under 10 of them: no row), `traits_leave_none` (true when there are Bases that might be rows and the
+town filters leave none of them), and up to 300 `results`, one per area, each a Base with `region`,
 `score`, `hike_score`, `mix`, `coverage`, `back`, `enough`, `sure`, `hike_groups`, `area_bases`, `area_towns`
 (up to 5 other towns of its area, its best first when that is not the row's, then biggest first, each
 `{"id", "name", "population"}`), `best_town` (`{"id", "name", "score"}` of that best town, else null) and `cuts`, the share
@@ -2741,8 +2741,8 @@ after a bigger one; a line with a cut ends with the score it comes to. Every ste
 browser's history, so Back undoes it; the answers of the last 30 lists and Bases are kept, so going back asks the
 server nothing. Choices changed in a row ask for one list once they settle (0.6 s, 0.9 s while a number is
 typed). A refused or failed list is said above it, and the list left on screen is greyed as being for the
-earlier choices; a range the wrong way round, or a number under 0, is said beside its field and never written
-into the address, and a name not found is said under the town box. The ranges show in the Units chosen and are
+earlier choices; a range the wrong way round, or a number under 0, is said beside its field and left out of
+the address, which still names the town, Reach and town opened, and a name not found is said under the town box. The ranges show in the Units chosen and are
 sent in metres and km; a number shown keeps the metres it was set with until it is typed again. The mode sets the hike filter and each trait (ignore, filter,
 or "like mine" with *a little*, *matters* or *important*; town size starts as a filter up to 50,000 people, the
 others ignored). Its address is `#base=<seed>&reach=<minutes>&open=<id>` (`#base` alone before a town is

@@ -211,7 +211,7 @@ const bases = {
   changed(wait = BASE_SETTLE_MS) {
     this.showTraits();
     const shown = this.ranked || Boolean(this.opened);
-    this.wrongChoices(); // said beside the field at once; the address keeps the choices before (ADR-0086)
+    this.wrongChoices(); // said beside the field at once; the address leaves it out (ADR-0086)
     this.address(shown && !this.settling);
     if (!shown) return;
     $("#base-results").classList.add("stale");
@@ -404,12 +404,19 @@ const bases = {
   // The choices as an address's parts: the hike filter's limits ("&climb_max_m=500&summit") and each
   // TownTrait not at its default ("&size=ignore", "&eats=like-mine-important", "&stays=3-", "&size=-5000", "&months=7,8").
   choiceHash() {
-    const parts = [];
-    for (const [key, value] of Object.entries(this.hikeFilter())) parts.push(value === true ? key : `${key}=${value}`);
+    const parts = [], filter = this.hikeFilter();
+    for (const [stem, , unit] of HIKE_RANGES) { // a range the wrong way round is left out (B20)
+      const [low, high] = ["min", "max"].map((end) => `${stem}_${end}_${unit}`);
+      if (filter[low] > filter[high]) {
+        delete filter[low];
+        delete filter[high];
+      }
+    }
+    for (const [key, value] of Object.entries(filter)) parts.push(value === true ? key : `${key}=${value}`);
     const traits = this.traits();
     for (const trait of Object.keys(TRAIT_FILTERS)) {
       const choice = traits[trait] ?? {};
-      if (JSON.stringify(choice) === JSON.stringify(TRAIT_DEFAULTS[trait] ?? {})) continue;
+      if (JSON.stringify(choice) === JSON.stringify(TRAIT_DEFAULTS[trait] ?? {}) || choice.at_least > choice.up_to) continue;
       if (choice.like_mine) parts.push(`${trait}=${LIKE_WORDS[choice.like_mine]}`);
       else if (choice.mild_in) parts.push(`${trait}=${choice.mild_in.join(",")}`);
       else if (Object.keys(choice).length) parts.push(`${trait}=${choice.at_least ?? ""}-${choice.up_to ?? ""}`);
@@ -462,7 +469,7 @@ const bases = {
 
   // The address keeps the mode's settings as they change; ``push``: as a step of the history of its own.
   address(push = false) {
-    if ($("#base-panel").hidden || this.wrongChoices(false).length) return; // never a choice that is wrong (B20)
+    if ($("#base-panel").hidden) return;
     const hash = this.hash();
     if (hash === location.hash) return;
     if (push) history.pushState(null, "", hash);
@@ -487,7 +494,6 @@ const bases = {
     this.settling = null;
     this.reach = state.info.bases.reaches.includes(reach) ? reach : this.firstReach;
     for (const radio of document.querySelectorAll('input[name="base-reach"]')) radio.checked = Number(radio.value) === this.reach;
-    if (["metric", "imperial"].includes(parts.get("units"))) setUnits(parts.get("units"));
     this.followChoices(parts);
     const seed = /^\d{1,17}$/.test(id) ? Number(id) : null;
     if (seed !== this.seed?.id) {
@@ -501,6 +507,7 @@ const bases = {
     this.hikeMarkers = [];
     this.ranked = false;
     this.rows = null;
+    if (["metric", "imperial"].includes(parts.get("units"))) setUnits(parts.get("units"));
     $("#base-find").disabled = !this.seed;
     $("#base-status").textContent = "";
     $("#base-pin-hint").textContent = this.pinHint;
@@ -660,6 +667,7 @@ const bases = {
   // step of its own; ``back``: the list as it was left, scrolled where it was.
   async rank({ push = false, fresh = false, back = false } = {}) {
     if (!this.seed) return;
+    this.address(push);
     const wrong = this.wrongChoices();
     if (wrong.length) {
       this.ranked = true;
@@ -669,7 +677,6 @@ const bases = {
       this.problem(wrong.join(" "));
       return;
     }
-    this.address(push);
     const number = ++this.asked, current = () => number === this.asked;
     const status = $("#base-status");
     status.classList.remove("error");
@@ -732,7 +739,7 @@ const bases = {
     }
     const rows = body.results, notes = [], traits = this.traits();
     const filters = Object.entries(traits).filter(([, choice]) => !choice.like_mine).map(([trait, choice]) => traitWords(trait, choice));
-    const blocked = !rows.length && body.towns_passing === 0 && filters.length > 0; // B4: the town filters leave no town
+    const blocked = !rows.length && body.traits_leave_none && filters.length > 0; // B4: the town filters leave no town
     if (blocked) notes.push(`No town passes your town choices (${filters.join("; ")}): loosen them to get a list.`);
     notes.push(`${rows.length ? "Best first" : blocked ? "Your town" : "No town is alike"}: hikes within about ${body.reach} min by car, ${seed.hike_groups} of them counted near ${seed.name} (hikes of one kind that start close together count once).${choiceLine}`);
     if (seed.hike_groups < BASE_FEW_HIKES) notes.push(`Only ${seed.hike_groups} of your hikes count, so the scores rest on few hikes.`);
@@ -971,7 +978,7 @@ function unknownTrait(row, name) {
 function baseRow(row, number, seed, traits) {
   const pct = (x) => `${Math.round(x * 100)} %`;
   const share = row.enough * row.sure, alike = share > 0 ? row.hike_score / share : row.hike_score;
-  const why = [`hikes alike ${alike.toFixed(2)}: mix ${row.mix.toFixed(2)}, has ${pct(row.coverage)} of your kinds, yours has ${pct(row.back)} of its`];
+  const why = [`hikes alike ${alike.toFixed(2)}: same kinds of hike in the same shares ${row.mix.toFixed(2)}, this town has ${pct(row.coverage)} of your kinds, yours has ${pct(row.back)} of its kinds`];
   if (row.enough < 0.995) why.push(`fewer hikes than ${seed.name} (${row.hike_groups} against ${seed.hike_groups}) −${pct(1 - row.enough)}`);
   if (row.sure < 0.995) why.push(`few of your hikes to compare −${pct(1 - row.sure)}`);
   for (const [name, cut] of Object.entries(row.cuts)) {

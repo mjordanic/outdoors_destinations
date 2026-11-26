@@ -10,6 +10,7 @@ import pytest
 import dayhike.bases as bases_module
 from dayhike.bases import REACHES, BaseFacts, Bases, HikeTypes, _write_bases, find_bases, near_towns, rank_bases
 from dayhike.serving import _fold
+from dayhike.town_traits import TownTraits, TraitSetting
 
 SEED_AT = (45.0, 7.0)
 FAR = 1.0  # degrees of latitude between Bases that are not near: 111 km, past every Reach's area
@@ -588,6 +589,22 @@ def test_a_town_typed_is_found_before_a_hamlet_of_its_name_and_the_one_with_beds
     assert find_bases(data, "interlaken", 5) == ([3, 2], False)
 
 
+def test_a_village_typed_exactly_is_found_before_bigger_towns_its_name_starts(tmp_path):
+    """"Alta" (Utah, about 380 people, a hiking and ski base) came after Altamura, Altadena and the like."""
+    data = _data(
+        tmp_path,
+        [
+            _town(ALIKE, 0, name="Altamura", population=70_000, stays=40, country="IT"),
+            _town(ALIKE, 1, name="Altadena", population=42_000, stays=5, country="US"),
+            _town(ALIKE, 2, name="Altaussee", population=1_800, stays=60, country="AT"),
+            _town(ALIKE, 3, name="Alta", population=383, stays=12, country="US"),
+        ],
+    )
+    found, guess = find_bases(data, "Alta", 5)
+    assert found[0] == 3 and not guess
+    assert find_bases(data, "Alta", 1) == ([3], False)
+
+
 def test_a_name_one_typo_away_is_said_to_be_a_guess(tmp_path):
     data = _data(tmp_path, [_town(ALIKE, 0, name="Keswick", population=4_658), _town(ALIKE, 1, name="Kendal")])
     assert find_bases(data, "keswik", 5) == ([0], True)
@@ -641,3 +658,17 @@ def test_a_big_town_with_almost_no_places_to_stay_is_left_out(tmp_path):
         ],
     )
     assert sorted(row.base for row in rank_bases(data, 1, 30, _all(data)).rows) == [2, 3, 4]
+
+
+def test_the_town_choices_are_said_to_leave_no_town_only_when_they_do(tmp_path):
+    """A hike filter that leaves no other town enough hikes is no fault of the town choices (ADR-0086)."""
+    data = _data(tmp_path, [_town(ALIKE, 0, population=4_000), _town(ALIKE, 1, population=4_000)])
+    mine = np.zeros(data.hikes, dtype=bool)
+    mine[: sum(ALIKE.values())] = True  # only the Hiker's own hikes pass
+    default = TownTraits(size=TraitSetting(up_to=50_000))
+
+    strict = rank_bases(data, 1, 30, mine, traits=default)
+    assert strict.rows == [] and not strict.traits_leave_none
+    none = rank_bases(data, 1, 30, _all(data), traits=TownTraits(size=TraitSetting(at_least=99_999)))
+    assert none.rows == [] and none.traits_leave_none
+    assert not rank_bases(data, 1, 30, _all(data), traits=default).traits_leave_none
