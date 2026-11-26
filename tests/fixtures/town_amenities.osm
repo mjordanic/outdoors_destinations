@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="dayhike-fixture">
+  <!-- Town at (45, 15). Distances due north (+) or south (-) of it unless noted. -->
+  <node id="1" lat="45.0044966" lon="15.0000000" version="1"><tag k="tourism" v="hotel"/></node>
+  <node id="2" lat="45.0170871" lon="15.0000000" version="1"><tag k="tourism" v="guest_house"/></node>
+  <!-- 2.1 km: past the 2 km boundary -->
+  <node id="3" lat="45.0188857" lon="15.0000000" version="1"><tag k="tourism" v="hotel"/></node>
+  <!-- not a place to stay nor to eat -->
+  <node id="4" lat="45.0026980" lon="15.0000000" version="1"><tag k="tourism" v="museum"/></node>
+  <node id="5" lat="45.0008993" lon="15.0000000" version="1"><tag k="amenity" v="bank"/></node>
+  <node id="6" lat="44.9982014" lon="15.0000000" version="1"><tag k="amenity" v="cafe"/></node>
+  <node id="7" lat="44.9910068" lon="15.0000000" version="1"><tag k="amenity" v="pub"/></node>
+  <!-- -400 m: a hotel with its restaurant, one of each -->
+  <node id="8" lat="44.9964027" lon="15.0000000" version="1"><tag k="tourism" v="hotel"/><tag k="amenity" v="restaurant"/></node>
+  <!-- a chalet mapped as a building, centred 1 km north -->
+  <node id="20" lat="45.0087932" lon="14.9998000" version="1"/>
+  <node id="21" lat="45.0087932" lon="15.0002000" version="1"/>
+  <node id="22" lat="45.0091932" lon="15.0002000" version="1"/>
+  <node id="23" lat="45.0091932" lon="14.9998000" version="1"/>
+  <way id="201" version="1">
+    <nd ref="20"/><nd ref="21"/><nd ref="22"/><nd ref="23"/><nd ref="20"/>
+    <tag k="building" v="yes"/><tag k="tourism" v="chalet"/>
+  </way>
+  <!-- a camp site mapped as a multipolygon, centred 1.5 km east -->
+  <node id="30" lat="44.9998000" lon="15.0188775" version="1"/>
+  <node id="31" lat="44.9998000" lon="15.0192775" version="1"/>
+  <node id="32" lat="45.0002000" lon="15.0192775" version="1"/>
+  <node id="33" lat="45.0002000" lon="15.0188775" version="1"/>
+  <way id="301" version="1">
+    <nd ref="30"/><nd ref="31"/><nd ref="32"/><nd ref="33"/><nd ref="30"/>
+  </way>
+  <relation id="3001" version="1">
+    <member type="way" ref="301" role="outer"/>
+    <tag k="type" v="multipolygon"/><tag k="tourism" v="camp_site"/>
+  </relation>
+</osm>

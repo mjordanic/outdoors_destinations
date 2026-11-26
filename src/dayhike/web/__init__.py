@@ -3,8 +3,9 @@
 ``create_app`` serves ``ServingData`` (``dayhike.serving``): name search, place
 search when the export has GeoNames places (ADR-0029), the hikes in a map view,
 hike detail, the Measure list, the score of any two hikes, and Ranking with an
-optional highways-only DriveTime pre-filter and a straight-line distance limit, ten rows at a time (ADR-0032). Every client gets a request budget per minute, and one Ranking
-runs at a time per instance, so a small container holds its memory, first come first served and at most one
+optional highways-only DriveTime pre-filter and a straight-line distance limit, ten rows at a time (ADR-0032). Every client gets a request budget per minute, and at most
+``RANKINGS_AT_ONCE`` Rankings and BaseRankings run at a time per instance, so a small container holds its memory,
+first come first served, each answered within ``RANK_DEADLINE_S`` (ADR-0087), and at most one of each
 per browser tab queued or running (a few per address, so people behind one address do not wait on each other
 and no address holds it for everyone); the trail network the way back is
 searched on is memory-mapped from the export (built once, a request arriving during that build waiting for it, in an export without it). When the export has a TrailGraph,
@@ -37,6 +38,7 @@ import threading
 import time
 import unicodedata
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor
 from typing import Literal
 from collections import OrderedDict, deque
 from collections.abc import Callable, Mapping, Sequence
@@ -78,7 +80,9 @@ from dayhike.serving import (
     name_dem,
 )
 from dayhike.regions import labels_text
+from dayhike.hike_filter import HikeFilter, hike_mask
 from dayhike.similarity import DEFAULT_WEIGHTS, MEASURES, WISHABLE, Measure, climb_and_descent
+from dayhike.town_traits import TRAITS, TownTraits, TraitSetting
 from dayhike.trailgraph import Route, RouteError
 
 logger = logging.getLogger(__name__)
@@ -86,6 +90,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 RESULTS = 10  # rows a Ranking lists; "Show 10 more" asks the next ones (ADR-0032)
 POOL = 30  # rows a Ranking answers with: the page draws RESULTS of them, or shows the first in Strict order (ADR-0047)
 MAX_ROWS = 100  # the most rows a Ranking may list in all, the rows shown before included
+BASE_ROWS = 300  # the most rows a BaseRanking lists; the page shows them a hundred at a time
 # The longest drive limit (ADR-0083): a 4 h drive Ranking from a dense start (Munich) ran past Cloud Run's 60 s timeout.
 MAX_DRIVE_HOURS = 3.0
 # The drive answers (origin, max hours) kept: the next rows, a new draw or other weights from the same start
@@ -99,13 +104,20 @@ MAP_SEGMENT_DEGREES = 2.0  # and only in a box at most this many degrees each wa
 ROUTE_STEPS = 2_000  # the most steps (OSM ways walked) a ComposedHike may have
 NAME_LENGTH = 120  # the longest name a Hiker may give a ComposedHike
 MAX_BODY_BYTES = 256 * 1024  # the largest request body; a Route of ROUTE_STEPS steps is about 100 KB
-# Requests per client per RATE_WINDOW_S: Ranking, and everything else under /api.
+# Requests per client per RATE_WINDOW_S: Ranking, BaseRanking, and everything else under /api.
 RANK_RATE = 20
+BASE_RANK_RATE = 20
 API_RATE = 300
 RATE_WINDOW_S = 60.0
-# A Ranking waits this long for its turn: with the slowest run (a 3 h drive from Munich, up to about 45 s on 1 vCPU, docs/deploy.md)
-# it still ends before Cloud Run's 60 s request timeout, so a visitor gets the app's 503, not Cloud Run's 504.
+# The most Rankings and BaseRankings that run at once per instance (ADR-0087): the heavy ones (a 3 h drive from Munich,
+# up to about 45 s alone on 1 vCPU, docs/deploy.md; a BaseRanking, a few seconds) wait for one of them to end.
+RANKINGS_AT_ONCE = 2
+# A Ranking waits this long for its turn, then the visitor is told the server is busy (ADR-0055).
 RANK_WAIT_S = 12.0
+# A Ranking not answered this long after its request came, waiting and running, is answered busy instead, well before
+# Cloud Run's 60 s request timeout, so the visitor gets the app's message, not Cloud Run's 504. Two heavy Rankings
+# side by side on 1 vCPU each run slower than one alone; the late one ends in the background and keeps its turn.
+RANK_DEADLINE_S = 50.0
 # The page names its tab in this header: one Ranking queued or running per tab, at most PER_ADDRESS per address.
 TAB_HEADER = "X-HikesAlike-Tab"
 TAB_NAME = re.compile(r"[A-Za-z0-9-]{1,64}")
@@ -113,7 +125,10 @@ PER_ADDRESS = 4
 # The page opens its map of hikes on the box of the middle CORE_SHARE of Trailheads, where most hikes are.
 CORE_SHARE = 0.8
 # The API reads a browser keeps API_MAX_AGE_S seconds; after that the ETag revalidates them.
-CACHED_READS = ("/api/info", "/api/measures", "/api/search", "/api/landmarks", "/api/hikes", "/api/segments")
+CACHED_READS = (
+    "/api/info", "/api/measures", "/api/search", "/api/landmarks", "/api/hikes", "/api/segments",
+    "/api/bases/search", "/api/bases/nearest", "/api/bases/town",
+)  # fmt: skip
 # The metadata the page's shape depends on: a browser revalidates it every time, so new code never reads old metadata.
 REVALIDATED_READS = ("/api/info", "/api/measures")
 API_MAX_AGE_S = 3600
@@ -345,6 +360,56 @@ class RankRequest(Weighted):
         return {name: weight if name in self.wish else 0.0 for name, weight in self.weights.items()}
 
 
+class TraitChoice(BaseModel):
+    """One TownTrait's setting as a link carries it (``TraitSetting``): left out is ignored."""
+
+    model_config = {"extra": "forbid"}
+    like_mine: int = 0
+    at_least: float | None = None
+    up_to: float | None = None
+    mild_in: list[int] = Field(default=[], max_length=12)
+
+
+class BaseFiltered(BaseModel):
+    """A Reach in minutes and the HikeFilter (``HikeFilter.from_mapping``), which a Base's hikes are counted under."""
+
+    reach: int
+    hike_filter: dict[str, object] = Field(default={}, max_length=16)
+
+    @field_validator("hike_filter")
+    @classmethod
+    def _hike_filter(cls, mapping: dict[str, object]) -> dict[str, object]:
+        HikeFilter.from_mapping(mapping)
+        return mapping
+
+    def parsed_filter(self) -> HikeFilter:
+        return HikeFilter.from_mapping(self.hike_filter)
+
+
+class BaseRankRequest(BaseFiltered):
+    seed: int  # the Hiker's Base, a GeoNames place id
+    traits: dict[str, TraitChoice] = Field(default={}, max_length=len(TRAITS))  # TownTrait name to setting
+
+    @field_validator("traits")
+    @classmethod
+    def _traits(cls, traits: dict[str, TraitChoice]) -> dict[str, TraitChoice]:
+        unknown = sorted(set(traits) - set(TRAITS))
+        if unknown:
+            raise ValueError(f"unknown town trait(s): {_shown(unknown)}")
+        cls.town_traits(traits)
+        return traits
+
+    @staticmethod
+    def town_traits(traits: dict[str, TraitChoice]) -> TownTraits:
+        return TownTraits(
+            **{name: TraitSetting(**{**choice.model_dump(), "mild_in": tuple(choice.mild_in)}) for name, choice in traits.items()}
+        )
+
+
+class BaseDetailRequest(BaseFiltered):
+    base: int  # a GeoNames place id
+
+
 class PairRequest(Weighted):
     a: int | None = None
     composed: Composed | None = None
@@ -375,6 +440,21 @@ def only_this_machine(url: str) -> bool:
     return address.is_loopback or address.is_unspecified
 
 
+def core_box(points: np.ndarray) -> list[float]:
+    """The box (south, west, north, east) of the middle ``CORE_SHARE`` of ``points`` (lat, lon): where most are."""
+    edge = (1 - CORE_SHARE) / 2 * 100
+    low, high = np.percentile(points, [edge, 100 - edge], axis=0) if len(points) else ([0, 0], [0, 0])
+    return [*map(float, low), *map(float, high)]
+
+
+def region_cores(trailheads: np.ndarray) -> dict[str, list[float]]:
+    """Each region's ``core_box``, of the Trailheads on its side of ``REGION_SPLIT_LON`` (``regions_in``):
+    a map opened on one region shows land, where one box of Europe and the US is mostly sea."""
+    west = trailheads[:, 1] < REGION_SPLIT_LON if len(trailheads) else np.zeros(0, dtype=bool)
+    sides = {"us": trailheads[west], "europe": trailheads[~west]}
+    return {name: core_box(points) for name, points in sides.items() if len(points)}
+
+
 def covered_text(regions: Sequence[Mapping[str, str | None]] | None) -> str:
     """What the site covers, as its pages say it (``site_pages``): "Europe" while every region of the export
     is in Europe (or none is given), else their labels ("Europe and the contiguous United States")."""
@@ -396,6 +476,7 @@ def site_pages(
     sources: Mapping[str, Mapping[str, str]] | None = None,
     regions: Sequence[Mapping[str, str | None]] | None = None,
     download_url: str | None = None,
+    bases: bool = False,
 ) -> dict[str, str]:
     """Each page's HTML with the GoatCounter tag where a code is set.
 
@@ -421,7 +502,9 @@ def site_pages(
     With ``site_url`` (the public origin, ``https://host``) each page names its own address (``og:url``) and its
     share preview image by full address, as link previews need; else the image stays relative.
 
-    Text between ``<!--if-goatcounter-->`` and ``<!--/if-goatcounter-->`` (or ``places``,
+    With ``bases`` (a site with "Find a base", ADR-0084) every page has the switch to both tools and names them.
+
+    Text between ``<!--if-goatcounter-->`` and ``<!--/if-goatcounter-->`` (or ``places``, ``bases``,
     ``nominatim``, ``europe``, ``elsewhere``, ``eu``, ``vector`` (a PMTiles base map) and ``raster`` (none))
     is kept only when that setting is on.
 
@@ -457,6 +540,7 @@ def site_pages(
             "vector": basemap.pmtiles is not None,
             "raster": basemap.pmtiles is None,
             "download": bool(download_url),
+            "bases": bases,
         }
         for setting, on in settings.items():  # text true only once it is set
             block = rf"<!--if-{setting}-->(.*?)<!--/if-{setting}-->"
@@ -541,19 +625,20 @@ class RateLimiter:
 
 
 class RankingQueue:
-    """One Ranking runs at a time, in the order they came; a client (a browser tab at an address) has at
-    most one queued or running, and an address at most ``per_address``.
+    """At most ``at_once`` Rankings run at a time, in the order they came; a client (a browser tab at an
+    address) has at most one queued or running, and an address at most ``per_address``.
 
     So a client within its rate limit cannot keep the Ranking busy for everyone: it waits its turn
     behind every other client queued before its next Ranking. People behind one address (a home, an
     office, a phone network) each have their own turn, up to ``per_address`` at once.
     """
 
-    def __init__(self, per_address: int = PER_ADDRESS) -> None:
+    def __init__(self, per_address: int = PER_ADDRESS, at_once: int = RANKINGS_AT_ONCE) -> None:
         self.per_address = per_address
+        self.at_once = at_once
         self._turn = threading.Condition()
         self._queue: deque[tuple[str, str]] = deque()  # the (address, tab) clients waiting, first in line first
-        self._running: tuple[str, str] | None = None  # the client whose Ranking runs
+        self._running: list[tuple[str, str]] = []  # the clients whose Rankings run
 
     def enter(self, address: str, tab: str, timeout: float) -> str:
         """Wait for this client's turn: "run" once it runs, "timeout" after ``timeout`` seconds; at once
@@ -561,23 +646,24 @@ class RankingQueue:
         ``per_address``."""
         key = (address, tab)
         with self._turn:
-            if key in self._queue or key == self._running:
+            if key in self._queue or key in self._running:
                 return "own"
-            held = [client for client in (*self._queue, self._running) if client is not None and client[0] == address]
+            held = [client for client in (*self._queue, *self._running) if client[0] == address]
             if len(held) >= self.per_address:
                 return "address"
             self._queue.append(key)
-            if self._turn.wait_for(lambda: self._running is None and self._queue[0] == key, timeout):
-                self._running = self._queue.popleft()
+            if self._turn.wait_for(lambda: len(self._running) < self.at_once and self._queue[0] == key, timeout):
+                self._running.append(self._queue.popleft())
+                self._turn.notify_all()
                 return "run"
             self._queue.remove(key)
             self._turn.notify_all()  # it may have been first in line
             return "timeout"
 
-    def leave(self) -> None:
-        """The running Ranking ended: the next in line runs."""
+    def leave(self, address: str, tab: str) -> None:
+        """This client's Ranking ended: the next in line runs."""
         with self._turn:
-            self._running = None
+            self._running.remove((address, tab))
             self._turn.notify_all()
 
 
@@ -587,6 +673,7 @@ def create_app(
     *,
     forwarded_hops: int = 0,
     rank_rate: int = RANK_RATE,
+    base_rank_rate: int = BASE_RANK_RATE,
     api_rate: int = API_RATE,
     goatcounter: str | None = None,
     cors_origins: tuple[str, ...] = (),
@@ -619,19 +706,35 @@ def create_app(
         sources=data.meta.get("sources"),
         regions=data.covered,
         download_url=download_url,
+        bases=data.bases is not None,
     )
     climb_and_descent(np.array([46.0, 46.001, 46.002]), np.array([13.0, 13.0, 13.0]), np.array([800.0, 850.0, 820.0]))
     app = FastAPI(title="HikesAlike", docs_url="/api/docs", openapi_url="/api/openapi.json")
-    limiters = {"rank": RateLimiter(rank_rate, RATE_WINDOW_S), "api": RateLimiter(api_rate, RATE_WINDOW_S)}
-    rankings = RankingQueue()
+    limiters = {
+        "rank": RateLimiter(rank_rate, RATE_WINDOW_S),
+        "bases": RateLimiter(base_rank_rate, RATE_WINDOW_S),
+        "api": RateLimiter(api_rate, RATE_WINDOW_S),
+    }
+    # Hike Rankings and BaseRankings share the turns (ADR-0087); a tab may have one of each.
+    rankings = RankingQueue(at_once=RANKINGS_AT_ONCE)
+    # Runs each Ranking off the request's thread, so the request can be answered at RANK_DEADLINE_S while it ends.
+    runner = ThreadPoolExecutor(max_workers=RANKINGS_AT_ONCE, thread_name_prefix="ranking")
+    base_finder = None
+    if data.bases is not None:  # imported only for an export with Bases, as ``ServingData`` does
+        from dayhike import bases as base_finder
+
+        # Off the first request's path: the names and towns of places.sqlite, read once (ADR-0085).
+        threading.Thread(target=base_finder.warm_bases, args=(data,), daemon=True).start()
     drives: OrderedDict[tuple[float, float, float], tuple[np.ndarray, np.ndarray]] = OrderedDict()
     drives_lock = threading.Lock()
     # The API reads change only with the export (its meta.json holds facts_version; places.sqlite and landmarks.sqlite
-    # may come later), the code and the settings.
+    # may come later), its bases/meta.json, the code and the settings.
     settings = (
         f"{BUILD} {drive_client is not None} {MAX_DRIVE_HOURS} {RESULTS} {POOL} {data.places is not None} "
-        f"{data.landmarks is not None} {basemap}"
+        f"{data.landmarks is not None} {basemap} {data.bases.meta['version'] if data.bases is not None else None}"
     ).encode()
+    if data.bases is not None:
+        settings += (data.directory / "bases" / "meta.json").read_bytes()
     etag = f'W/"{hashlib.sha256((data.directory / "meta.json").read_bytes() + settings).hexdigest()[:16]}"'
     attribution = data.meta["attribution"]
     measures = [
@@ -666,10 +769,10 @@ def create_app(
         if length is not None and (not length.isdigit() or int(length) > MAX_BODY_BYTES):
             return JSONResponse({"detail": f"The request body is over {MAX_BODY_BYTES // 1024} KB."}, status_code=413)
         if path.startswith("/api/") and path != "/api/health":
-            limiter = limiters["rank" if path == "/api/rank" else "api"]
+            limiter = limiters[{"/api/rank": "rank", "/api/bases/rank": "bases"}.get(path, "api")]
             if not limiter.allow(client_key(request)):
                 return JSONResponse(
-                    {"detail": "Too many requests; wait a minute."},
+                    {"detail": "The site is busy right now; try again in a moment."},
                     status_code=429,
                     headers={"Retry-After": str(int(RATE_WINDOW_S))},
                 )
@@ -720,10 +823,9 @@ def create_app(
     # The Trailheads' box (south, west, north, east): the page warns when a typed
     # "lat, lon" is outside it but its swap is inside.
     coverage = [*map(float, data.trailheads.min(axis=0)), *map(float, data.trailheads.max(axis=0))]
-    # Where most hikes are: the page's map of hikes opens on it when it has no hike or place to show.
-    edge = (1 - CORE_SHARE) / 2 * 100
-    low, high = np.percentile(data.trailheads, [edge, 100 - edge], axis=0) if len(data.trailheads) else ([0, 0], [0, 0])
-    core = [*map(float, low), *map(float, high)]
+    # Where most hikes are, and most of each region's: the page's maps open on one when they have no hike or place to show.
+    core = core_box(data.trailheads)
+    cores = region_cores(np.asarray(data.trailheads))
 
     @app.api_route("/api/info", methods=["GET", "HEAD"])
     def info() -> dict:
@@ -743,7 +845,11 @@ def create_app(
             "max_drive_hours": MAX_DRIVE_HOURS,
             "max_km": MAX_KM,
             # The RegionChoice: the regions this Catalog has hikes in; ``named`` is how a sentence names one (ADR-0074).
-            "regions": [{"name": name, "label": REGIONS[name][0], "named": REGIONS[name][1]} for name in data.regions],
+            # ``core``: where most of its hikes are, the box a map opens on for a visitor there.
+            "regions": [
+                {"name": name, "label": REGIONS[name][0], "named": REGIONS[name][1], "core": cores.get(name, core)}
+                for name in data.regions
+            ],
             "results": RESULTS,
             "max_rows": MAX_ROWS,
             # The page draws its rows from a pool of this many with probability rising as exp(score / t) (ADR-0047).
@@ -752,6 +858,19 @@ def create_app(
             "grouping": {"km": GROUP_M / 1000, "share": GROUP_SHARE, "min_km": GROUP_MIN_M / 1000, "kmh": GROUP_KMH},
             # Where both maps load their base tiles; the page credits OpenStreetMap beside the provider (#120).
             "basemap": asdict(basemap),
+            # "Find a base" (ADR-0084): the Reaches, in minutes, a BaseRanking is asked for, the band of a mild
+            # month (the months strip marks them) and what its score means (ADR-0025); None without Bases.
+            "bases": None
+            if base_finder is None
+            else {
+                "reaches": list(base_finder.REACHES),
+                "mild_c": list(base_finder.MILD_C),
+                "score_help": base_finder.BASE_SCORE_HELP,
+                # Under this many of the Hiker's hikes pass, a BaseRanking is too_few: the page says how many.
+                "min_hike_groups": base_finder.MIN_HIKE_GROUPS,
+                # A best score under this is no better than a random pair of hikes': the page says so.
+                "weak_score": base_finder.CREDIT_FROM,
+            },
         }
 
     score_help = {
@@ -774,12 +893,15 @@ def create_app(
             raise HTTPException(404, "no landmark search in this export")
         return {"results": data.find_landmarks(q, limit)}
 
-    # The page's "Find place": a start for the drive filter, without asking Nominatim.
+    # The page's "Find place": a start for the drive filter, without asking Nominatim; the page offers a
+    # choice when more than one place is named so.
     @app.api_route("/api/place", methods=["GET", "HEAD"])
     def place(q: str = Query(max_length=100), limit: int = Query(5, ge=1, le=20)) -> dict:
         if data.places is None:
             raise HTTPException(404, "no place search in this export")
-        return {"results": data.find_place(q, limit)}
+        found, guess = data.place_choices(q, limit)
+        # guess: no place is named so, and these are names one typo away: the page asks "Did you mean …?"
+        return {"results": found, "guess": guess}
 
     @app.api_route("/api/hikes", methods=["GET", "HEAD"])
     def hikes_in_box(
@@ -865,6 +987,44 @@ def create_app(
             return hours
         return dict(zip(kept[0].tolist(), kept[1].tolist()))
 
+    def ranked[T](request: Request, kind: str, started: float, work: Callable[[], T]) -> T:
+        """``work`` run in this client's turn (``kind`` "rank" or "bases": a tab may have one of each);
+        refused at once or after ``RANK_WAIT_S`` (ADR-0055), and answered busy at ``RANK_DEADLINE_S`` after
+        ``started`` while it ends in the background, keeping its turn until then (ADR-0087)."""
+        tab = request.headers.get(TAB_HEADER, "")
+        client = (client_key(request), f"{tab if TAB_NAME.fullmatch(tab) else ''}/{kind}")
+        turn = rankings.enter(*client, RANK_WAIT_S)
+        if turn == "own":
+            raise HTTPException(409, "Your previous search is still running; try again when it ends.")
+        if turn == "address":
+            raise HTTPException(409, f"{PER_ADDRESS} searches from your network are already waiting; try again when they end.")
+        if turn == "timeout":  # other visitors' searches ahead of it took RANK_WAIT_S (ADR-0055)
+            raise HTTPException(
+                503,
+                f"The server is busy with other visitors' searches: yours waited {RANK_WAIT_S:.0f} s for its turn. "
+                "Try again in a moment.",
+                headers={"Retry-After": "5"},
+            )
+
+        def run() -> T:
+            try:
+                return work()
+            finally:
+                rankings.leave(*client)
+
+        future = runner.submit(run)
+        try:
+            return future.result(timeout=max(0.0, started + RANK_DEADLINE_S - time.monotonic()))
+        except TimeoutError:
+            if future.done():
+                return future.result()
+            # Still running: Cloud Run would cut it off with its own 504.
+            raise HTTPException(
+                503,
+                "The server is busy with other visitors' searches, and yours did not finish in time. Try again in a moment.",
+                headers={"Retry-After": "5"},
+            ) from None
+
     @app.post("/api/rank")
     def rank(body: RankRequest, request: Request) -> dict:
         started = time.monotonic()
@@ -880,50 +1040,40 @@ def create_app(
         if body.regions is not None and not set(body.regions) <= set(data.regions):
             raise HTTPException(400, f"this catalog has hikes in {', '.join(data.regions)} only")
         in_regions = None if body.regions is None else data.region_rows(body.regions)
-        tab = request.headers.get(TAB_HEADER, "")
-        turn = rankings.enter(client_key(request), tab if TAB_NAME.fullmatch(tab) else "", RANK_WAIT_S)
-        if turn == "own":
-            raise HTTPException(409, "Your previous search is still running; try again when it ends.")
-        if turn == "address":
-            raise HTTPException(409, f"{PER_ADDRESS} searches from your network are already waiting; try again when they end.")
-        if turn == "timeout":  # other visitors' searches ahead of it took RANK_WAIT_S (ADR-0055)
-            raise HTTPException(
-                503,
-                f"The server is busy with other visitors' searches: yours waited {RANK_WAIT_S:.0f} s for its turn. "
-                "Try again in a moment.",
-                headers={"Retry-After": "5"},
-            )
-        try:
-            hours = reach = None
-            if body.max_hours is not None:
-                max_hours = body.max_hours
-                client = drive_client(max_hours)
-                hours = drive_reach(origin, max_hours, client)
 
-                def reach(places: list[tuple[float, float]]) -> list[float | None]:
-                    return data.drive_hours(origin, max_hours, client, places)
+        def work() -> tuple:
+            try:
+                hours = reach = None
+                if body.max_hours is not None:
+                    max_hours = body.max_hours
+                    client = drive_client(max_hours)
+                    hours = drive_reach(origin, max_hours, client)
 
-            results = data.rank(
-                seed,
-                weights,
-                month=body.month,
-                allowed_rows=in_regions if hours is None else sorted(hours),
-                limit=POOL,
-                return_to_start=body.return_to_start,
-                reach=reach,
-                loops=body.loops,
-                near=near,
-                group_m=group_m,
-                after=[(place.lat, place.lon) for place in body.after],
-                origin=origin,
-                draw=body.draw,
-            )
-        except (urllib.error.URLError, ConnectionError, TimeoutError):
-            raise HTTPException(503, "the drive-time service is not answering; try again") from None
-        except ValueError as error:  # a RouteError too
-            raise HTTPException(400, str(error)) from None
-        finally:
-            rankings.leave()
+                    def reach(places: list[tuple[float, float]]) -> list[float | None]:
+                        return data.drive_hours(origin, max_hours, client, places)
+
+                results = data.rank(
+                    seed,
+                    weights,
+                    month=body.month,
+                    allowed_rows=in_regions if hours is None else sorted(hours),
+                    limit=POOL,
+                    return_to_start=body.return_to_start,
+                    reach=reach,
+                    loops=body.loops,
+                    near=near,
+                    group_m=group_m,
+                    after=[(place.lat, place.lon) for place in body.after],
+                    origin=origin,
+                    draw=body.draw,
+                )
+            except (urllib.error.URLError, ConnectionError, TimeoutError):
+                raise HTTPException(503, "the drive-time service is not answering; try again") from None
+            except ValueError as error:  # a RouteError too
+                raise HTTPException(400, str(error)) from None
+            return hours, results
+
+        hours, results = ranked(request, "rank", started, work)
         listed = [hike for row in results for hike in (row, *row["versions"])]
         for result in listed:
             if result["id"] is not None:  # a SuggestedLoop has the hours to its own start
@@ -960,6 +1110,130 @@ def create_app(
             # The multi-day routes come after the day hikes: the page draws its rows so too (ADR-0056).
             "day_first": results.day_first,
             "elapsed_ms": round((time.monotonic() - started) * 1000),
+        }
+
+    def finder(reach: int | None = None):
+        """``dayhike.bases``: 404 on a site without Bases, 422 for a Reach it keeps no band of."""
+        if base_finder is None:
+            raise HTTPException(404, "finding a base is not available on this server")
+        if reach is not None and reach not in base_finder.REACHES:
+            raise HTTPException(422, f"reach is one of {', '.join(map(str, base_finder.REACHES))} minutes")
+        return base_finder
+
+    def base_of(place: int) -> int:
+        try:
+            return base_finder.base_row(data.bases, place)
+        except KeyError:
+            raise HTTPException(
+                404, "No town with hikes in reach has this link's number: the link may be old or mistyped. Search for the town by its name."
+            ) from None
+
+    def described(found, rows: list[int]) -> list[dict]:
+        """``describe_bases`` with the big town each is near, to tell towns of one name apart."""
+        return [{**place, "near": near} for place, near in zip(found.describe_bases(data, rows), found.near_towns(data, rows))]
+
+    # "Find a base" (ADR-0084): the Hiker's Base by its name ...
+    @app.api_route("/api/bases/search", methods=["GET", "HEAD"])
+    def base_search(q: str = Query(max_length=100), limit: int = Query(5, ge=1, le=20)) -> dict:
+        found = finder()
+        rows, guessed = found.find_bases(data, q, limit)
+        # guess: no name starts so, and these are names one typo away: the page asks "Did you mean …?"
+        return {"results": described(found, rows), "guess": guessed}
+
+    # ... or by its number, as a link names it: the page shows the town of a link at once (ADR-0086) ...
+    @app.api_route("/api/bases/town", methods=["GET", "HEAD"])
+    def base_town(id: int = Query()) -> dict:  # noqa: A002 (the link's name for it)
+        found = finder()
+        return described(found, [base_of(id)])[0]
+
+    # ... or by a pin on the map.
+    @app.api_route("/api/bases/nearest", methods=["GET", "HEAD"])
+    def base_nearest(lat: float = Query(ge=-90, le=90), lon: float = Query(ge=-180, le=180)) -> dict:
+        found = finder()
+        row, metres = found.nearest_base(data.bases, Origin(lat, lon))
+        return {**described(found, [row])[0], "distance_km": round(metres / 1000, 1)}
+
+    # The BaseRanking: the Bases whose hikes in Reach are like the Hiker's, under the HikeFilter and TownTraits.
+    @app.post("/api/bases/rank")
+    def base_rank(body: BaseRankRequest, request: Request) -> dict:
+        started = time.monotonic()
+        found = finder(body.reach)
+        me = base_of(body.seed)
+        hike_filter = body.parsed_filter()
+        mask = hike_mask(data.store, hike_filter) & data.day_hikes()  # a Base's hikes are day hikes (ADR-0086)
+        traits = body.town_traits(body.traits)
+        ranking = ranked(request, "bases", started, lambda: found.rank_bases(data, body.seed, body.reach, mask, traits=traits))
+        rows = ranking.rows[:BASE_ROWS]
+        seed, *listed = found.describe_bases(data, [me, *(row.base for row in rows)], body.reach)
+        others = sorted({town for row in rows for town in row.towns[: found.AREA_TOWNS]} | {row.best for row in rows if row.best >= 0})
+        towns = dict(zip(others, found.describe_bases(data, others)))
+        return {
+            "seed": {**seed, "hike_groups": ranking.seed_groups},
+            "reach": body.reach,
+            "hike_filter": hike_filter.to_mapping(),
+            "traits": {name: choice.model_dump(exclude_defaults=True) for name, choice in body.traits.items()},
+            # Too few of the Hiker's hikes pass the HikeFilter to compare: no row.
+            "too_few": ranking.too_few,
+            # The town filters, and nothing else, leave no town that might be a row.
+            "traits_leave_none": ranking.traits_leave_none,
+            "results": [
+                {
+                    **place,
+                    "region": row.region,
+                    "score": row.score,
+                    "hike_score": row.hike_score,
+                    "mix": row.mix,
+                    "coverage": row.coverage,
+                    "back": row.back,
+                    "enough": row.enough,
+                    "hike_groups": row.hike_groups,
+                    "area_bases": len(row.members),  # the Bases of its area, itself included
+                    # The biggest other towns of its area (ADR-0085).
+                    "area_towns": [
+                        {key: towns[town][key] for key in ("id", "name", "population")}
+                        for town in row.towns[: found.AREA_TOWNS]
+                    ],
+                    # The area's best town, when the row is named after a bigger one about as alike (ADR-0086).
+                    "best_town": None
+                    if row.best in (row.base, -1)
+                    else {"id": towns[row.best]["id"], "name": towns[row.best]["name"], "score": row.best_score},
+                    "sure": row.sure,  # the share left of the hike score when few of the Hiker's hikes compare
+                    "cuts": dict(row.cuts),  # the share each "like mine" TownTrait took off the hike score
+                }
+                for place, row in zip(listed, rows)
+            ],
+            "elapsed_ms": round((time.monotonic() - started) * 1000),
+        }
+
+    # One Base: its hikes in Reach that pass the HikeFilter, with the minutes to each.
+    @app.post("/api/bases/detail")
+    def base_detail(body: BaseDetailRequest) -> dict:
+        found = finder(body.reach)
+        row = base_of(body.base)
+        hike_filter = body.parsed_filter()
+        rows, minutes, groups = found.base_hikes(data.bases, row, body.reach, hike_mask(data.store, hike_filter) & data.day_hikes())
+        ids = [int(i) for i in data.store.ids[rows]]
+        names = data.names(ids)
+        facts = {name: data.store.column(name)[rows] for name in ("length_m", "elevation_gain_m", "highest_m", "peak_summited", "round_trip")}
+
+        def fact(name: str, i: int) -> float | None:
+            value = float(facts[name][i])
+            return None if math.isnan(value) else round(value)
+
+        return {
+            "base": {**found.describe_bases(data, [row], body.reach)[0], "hike_groups": groups},
+            "reach": body.reach,
+            "hike_filter": hike_filter.to_mapping(),
+            # Each hike as walked one way, as a HikeFilter takes it: length, climb and highest point in metres.
+            "hikes": [
+                {
+                    "id": i, "name": names.get(i, ""), "trailhead": [float(x) for x in data.trailheads[r]], "minutes": int(m),
+                    "length_m": fact("length_m", k), "climb_m": fact("elevation_gain_m", k),
+                    "highest_m": fact("highest_m", k), "summit": bool(facts["peak_summited"][k] == 1),
+                    "round_trip": bool(facts["round_trip"][k] == 1),
+                }  # fmt: skip
+                for k, (i, r, m) in enumerate(zip(ids, rows, minutes))
+            ],
         }
 
     @app.post("/api/pair")

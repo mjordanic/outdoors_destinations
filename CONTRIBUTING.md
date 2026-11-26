@@ -23,8 +23,8 @@ pipeline and how everything works are in the
 ## Tests
 
 ```bash
-uv run pytest -n 4                # the whole fast suite on 4 cores: about 70 to 80 seconds
-uv run pytest                     # the same, on one core: about 2.5 minutes
+uv run pytest -n 4                # the whole fast suite on 4 cores: about 3 minutes
+uv run pytest                     # the same, on one core: slower
 uv run pytest tests/test_web.py   # just the file next to your change: seconds
 uv run pytest -k rank             # tests whose name matches
 uv run playwright install chromium   # once, to run tests/test_page.py locally too
@@ -49,9 +49,11 @@ data you built. Checks on real data are opt-in:
 | `src/dayhike/trailgraph.py`, `loops.py` | The trail network: the way back to the start, hikes drawn from segments, suggested loops. |
 | `src/dayhike/dem.py`, `landcover.py`, `climate.py` | Downloading and sampling heights, land cover and climate. |
 | `src/dayhike/similarity.py` | The facts, the Measures, the Calibration and the Ranking. Start here for a scoring bug. |
+| `src/dayhike/bases.py` | "Find a base": the HikeTypes and their score table, the Bases with the HikeGroups in their Reach (`export-bases`, ADR-0084), their population, month temperatures and places to stay and eat (counted from OSM by `town_counts.py`, `count-town-amenities`), the BaseProfiles under a HikeFilter, reading the `bases/` folder (`Bases.open_dir`), the BaseRanking against the Hiker's Base (`rank_bases`), re-ordered by the TownTraits, and the lookups the `/api/bases/` calls make (`find_bases`, `nearest_base`, `base_hikes`). |
+| `src/dayhike/town_traits.py` | TownTraits: per trait ignore, filter or "like mine" with an importance, the size, count and months similarities, and the share of the hike score each "like mine" trait takes off (ADR-0084). |
 | `src/dayhike/valhalla.py`, `highways.py` | Drive time through Valhalla. |
 | `src/dayhike/serving.py`, `cut.py` | The serving export the web demo reads, the text of the score explanations, and cutting an export into a Europe, US or demo site. |
-| `src/dayhike/web/__init__.py`, `web/static/` | The web API and the page (`app.js`, the HTML pages, `style.css`). Start here for a page bug. |
+| `src/dayhike/web/__init__.py`, `web/static/` | The web API and the page (`app.js`, its "Find a base" mode in `bases.js`, the HTML pages, `style.css`). Start here for a page bug. |
 | `src/dayhike/coverage.py`, `extracts.py`, `parallel.py` | The coverage map, the Geofabrik downloads, worker processes. |
 | `web/` | The container (data and web Dockerfiles, Cloud Build config, compose file, start script), `smoke.py` and `shell.py` (the loading shell). |
 | `tests/` | The test suite and its small fixtures. |

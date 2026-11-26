@@ -71,6 +71,46 @@ a `bounds` box; the pages name each by its `label`), then
 `--keep path/to/showcase.toml`; a region file works too, as one area of its
 `bounds` (`--keep src/dayhike/data/regions/us-colorado.toml`).
 
+### Find a base: the `bases/` folder
+
+"Find a base" (ADR-0084) reads the export's `bases/` folder. A site without it works as before, without
+that mode (`bases` in `/api/info` is null). The folder is built on the finished Europe and US export. No catalog rebuild is needed,
+and the cuts above keep it. First count places to stay and eat from the OSM extracts (Geofabrik Europe
+and the four US regions, about 47 GB), then estimate the Reach with the highways-only Valhalla of the
+export served on 8002:
+
+```bash
+uv run dayhike count-town-amenities --extract data/osm/europe-latest.osm.pbf --extract data/osm/us-west-latest.osm.pbf \
+  --extract data/osm/us-midwest-latest.osm.pbf --extract data/osm/us-northeast-latest.osm.pbf \
+  --extract data/osm/us-south-latest.osm.pbf --places data/web-serving/places.sqlite --out data/town-counts.npz --workers 4
+uv run dayhike export-bases --out data/web-serving --valhalla-url http://127.0.0.1:8002 --workers 4 \
+  --town-counts data/town-counts.npz
+```
+
+`export-bases` keeps its progress in `bases.work/`, so a stopped run started again goes on from there.
+Measured on the 2026-11-22 export (16 GB M-series Mac, 4 workers, 2026-11-25):
+
+- The count took 5 min 21 s. `export-bases` took 3 h 35 min for 213,003 candidate places, with at most
+  4.3 GB in the Python process.
+- It made 195,220 Bases and 319 million Base-HikeGroup pairs. The folder is 1.7 GB, and the data image
+  grows to 9.26 GB of content (28.7 GB unpacked).
+- In that image (arm64, one CPU, 4 GiB), warm BaseRanking times for Keswick, Chamonix-Mont-Blanc and
+  Moab, two runs each, against the plan's estimate, after the exact speed fix that followed ticket 13
+  (ticket 13's own times in brackets):
+
+  | Reach | No filter | Climb up to 500 m | Climb up to 500 m, size like mine (important), at least 5 places to stay | Plan (Cloud Run 1 vCPU) |
+  | --- | --- | --- | --- | --- |
+  | 15 min | 0.34-0.52 s (0.60-1.23) | 0.38-0.64 s (0.56-0.84) | 0.31-0.48 s (0.64-0.80) | - |
+  | 30 min | 0.36-0.68 s (0.93-2.81) | 0.49-1.11 s (0.88-1.52) | 0.39-0.79 s (0.91-1.97) | 0.2-0.4 s |
+  | 60 min | 0.61-1.08 s (3.23-8.44) | 0.97-2.57 s (3.54-4.04) | 0.89-1.11 s (3.51-3.99) | 0.4-0.7 s |
+
+  The first ranking after a start took 3.2 s at 15 min (a cold start; 5.0 s at ticket 13).
+- The container peaked at 1.1 GB of its 4 GiB after rankings at every Reach (3.3-3.5 GB at ticket 13),
+  so the Europe and US site stays at 4Gi; watch its memory. `bases/` is 1.7 GB (plan 0.5-0.6 GB) and the
+  image 9.26 GB of content (plan about 8.5 GB).
+- Known limit: these times are still over the plan's estimate, about 0.1-0.2 s at 30 min and
+  0.3-0.5 s at 60 min with a hike filter; the captain chose to ship the exact speed fix as it is.
+
 ### Europe only, or Europe and the US
 
 The site serves one export, so it shows the hikes of one Catalog. Two builds
@@ -271,8 +311,8 @@ What the flags do:
 | `--memory 4Gi` | For a Europe or a Europe and US export (section 1), the most Cloud Run gives 1 vCPU; a US-only export fits `2Gi`. The deploy workflow sets it on every deploy from the data image's tag: `2Gi` for a tag ending in `-us` (but not `-eu-us`) or `-demo`, else `4Gi`, or the `DAYHIKE_MEMORY` repository variable when set (section 9). Measured peak of app plus Valhalla in the technical docs table, **Web demo measurements** ([technical.md](technical.md#web-demo-measurements)). The trail network for the way back is memory-mapped from the export's `trailgraph.network/` (an export without it builds it once per instance, a request arriving during the build waiting for it), and the image sets `MALLOC_ARENA_MAX=2`; with both, 8 visitors on 1 vCPU peak near 1.1 GB. Raise to 4Gi if the logs show out-of-memory restarts. |
 | `--min-instances 0` | Scale to zero; the captain accepted the cold start. |
 | `--max-instances 2` | The instance cap: at most two containers ever bill at once. |
-| `--concurrency 8` | Searches and hike pages run side by side; Rankings queue one at a time per instance (in the app). |
-| `--timeout 60` | No request may run longer; a 3 h drive query from the densest origin (Munich) takes about 8 s on one CPU of a Mac and an estimated 30-45 s on 1 vCPU; a Ranking waits at most 12 s for its turn, so the two stay under 60 s. A 4 h one from Munich ran past 60 s, so the drive filter stops at 3 h (ADR-0083). |
+| `--concurrency 8` | Searches and hike pages run side by side; Rankings and BaseRankings run at most two at a time per instance (`RANKINGS_AT_ONCE`, in the app, ADR-0087). |
+| `--timeout 60` | No request may run longer; a 3 h drive query from the densest origin (Munich) takes about 8 s on one CPU of a Mac and an estimated 30-45 s on 1 vCPU; two Rankings at once each run slower, so the app answers a Ranking busy (`503`) 50 s after it came (`RANK_DEADLINE_S`) if it has not finished (ADR-0087). A 4 h one from Munich ran past 60 s, so the drive filter stops at 3 h (ADR-0083). |
 | `DAYHIKE_FORWARDED_HOPS=1` | The rate limit keys on the last `X-Forwarded-For` entry, the one Google's front end adds. Earlier entries are client-supplied and ignored, so the limit cannot be dodged by sending a fake header. If that last entry turns out to be a Google proxy address rather than the visitor, the limit becomes one shared budget per instance: stricter, never looser. |
 | `DAYHIKE_SITE_URL=https://HOST` (optional) | The site's public address (the live site's is `https://hikesalike.com`; before a custom domain, the Cloud Run URL). Each page then names itself in `og:url` and its preview image by full address, so a shared link shows the preview, and `/robots.txt` and `/sitemap.xml` name pages at it; unset, the image address stays relative and most link previews show none. |
 | `DAYHIKE_GOATCOUNTER=CODE` (optional) | Cookieless visit counts at `https://CODE.goatcounter.com`: every page loads the self-hosted `vendor/goatcounter/count.js`, and "Find" is counted as an event. Unset, no page loads analytics. Not set yet: no GoatCounter account. |
@@ -300,10 +340,12 @@ curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
 The app limits each client to **20 Rankings and 300 other API calls per
 minute per instance** (`HTTP 429` past that; the counter lives in each
 instance's memory, so with `--max-instances 2` a client whose requests reach
-both instances gets up to 2x that), runs one Ranking at a time per instance, in
-the order they came (others wait up to 12 s, then get `503`; with the slowest
-Ranking, a 3 h drive from Munich of up to about 45 s, that still ends inside the 60 s request timeout,
-so a visitor gets the app's `503` rather than Cloud Run's `504`; with this short wait, more
+both instances gets up to 2x that), runs at most two Rankings (hike Rankings and BaseRankings together,
+`RANKINGS_AT_ONCE`) at a time per instance, in
+the order they came (others wait up to 12 s, then get `503`; a Ranking not finished 50 s after it came,
+such as a 3 h drive from Munich of up to about 45 s alone running beside another, is answered `503` then and
+ends in the background, keeping its turn, so a visitor gets the app's `503` rather than Cloud Run's `504`
+(ADR-0087); with this short wait, more
 concurrent searches get the busy `503` message sooner; a Valhalla call
 stalled past 50 s also ends in `503` and frees the slot), lets a client (a browser
 tab at an address) have one Ranking queued or running at a time, and an address

@@ -550,6 +550,42 @@ def main(argv: list[str] | None = None) -> int:
         help="GeoNames allCountries.zip; downloaded there when missing",
     )
     places.add_argument("--out", type=Path, default=Path("data/web-serving"))
+    bases = subparsers.add_parser(
+        "export-bases",
+        help="Add the Bases and the HikeGroups in their Reach beside an existing serving export (ADR-0084); "
+        "a stopped run started again goes on where it stopped",
+    )
+    bases.add_argument("--out", type=Path, default=Path("data/web-serving"))
+    bases.add_argument(
+        "--valhalla-url", required=True, help="Running highways-only Valhalla the Reach is estimated with"
+    )
+    bases.add_argument(
+        "--workers",
+        dest="valhalla_workers",
+        type=_parse_workers,
+        default=1,
+        metavar="N",
+        help="Places whose Reach is asked of Valhalla at a time, the same result with any number (default: 1)",
+    )
+    bases.add_argument(
+        "--town-counts",
+        type=Path,
+        help="Places to stay and eat from count-town-amenities: a place with 3 places to stay is a candidate "
+        "Base whatever its population, and every Base keeps its counts (default: population only, counts unknown)",
+    )
+    town = subparsers.add_parser(
+        "count-town-amenities",
+        help="Count the OSM places to stay and to eat within 2 km of every place of a places.sqlite (ADR-0084)",
+    )
+    town.add_argument(
+        "--extract", dest="extracts", type=Path, action="append", required=True, help="OSM extract, repeatable"
+    )
+    town.add_argument("--places", type=Path, default=Path("data/web-serving/places.sqlite"))
+    town.add_argument("--out", type=Path, required=True, help="The counts file (.npz) to write")
+    town.add_argument(
+        "--workers", dest="extract_workers", type=_parse_workers, required=True, metavar="N",
+        help="Extracts read at a time",
+    )
     cut = subparsers.add_parser(
         "cut-serving",
         help="Cut a finished serving export down to Europe, the US or a cut file's areas, as an export of its own",
@@ -691,6 +727,25 @@ def main(argv: list[str] | None = None) -> int:
         geonames = fetch_geonames(args.geonames)
         print(export_places(geonames, args.out))
         print(export_landmarks(args.out, geonames))
+        return 0
+    if args.command == "export-bases":
+        from dayhike.bases import export_bases
+
+        try:
+            print(
+                export_bases(
+                    args.out, args.valhalla_url, workers=args.valhalla_workers, progress=_progress,
+                    town_counts=args.town_counts,
+                )
+            )  # fmt: skip
+        except StaleSimilarity as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        return 0
+    if args.command == "count-town-amenities":
+        from dayhike.town_counts import count_town_amenities
+
+        print(count_town_amenities(args.extracts, args.places, workers=args.extract_workers).save(args.out))
         return 0
     if args.command == "cut-serving":
         from dayhike.cut import CutError, cut_serving, load_keep

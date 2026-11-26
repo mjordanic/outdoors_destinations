@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="dayhike-fixture">
+  <!-- A second extract: an alpine hut 100 m north of the town at (45, 15.1). -->
+  <node id="9001" lat="45.0008993" lon="15.1000000" version="1"><tag k="tourism" v="alpine_hut"/></node>
+</osm>
