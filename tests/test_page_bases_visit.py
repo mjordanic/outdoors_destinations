@@ -489,7 +489,7 @@ def test_back_to_the_list_is_above_a_towns_hikes(browser, server) -> None:
 
     top = page.get_by_role("button", name="Back to the list")
     assert top.bounding_box()["y"] < page.locator("#base-hikes h2").bounding_box()["y"]
-    assert page.get_by_role("button", name="Leave Find a base").is_visible()
+    assert page.locator("#tool-switch").get_by_role("link", name="Find a hike").is_visible()
 
 
 # C6: a map click at a wide zoom still picks a town near it, and the town box says it.

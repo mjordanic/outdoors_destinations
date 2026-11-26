@@ -328,10 +328,9 @@ button.help:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 }
 
 /* "Find a base" (ADR-0084, bases.js): its panel and card in place of everything that finds hikes. */
-.finding-bases .controls > :not(#base-panel), .finding-bases .content > :not(#base-card) { display: none !important; }
+.finding-bases .controls > :not(#base-panel), .finding-bases .content > :not(#base-card):not(#base-intro) { display: none !important; }
 .reaches { border: none; margin: 8px 0 0; padding: 0; }
 .reaches .check { display: inline-flex; margin-right: 12px; }
-#base-panel .mode-switch { margin-top: 10px; }
 #base-table { border-collapse: collapse; font-size: 0.85rem; min-width: 100%; }
 #base-table th, #base-table td { padding: 5px 6px; border-bottom: 1px solid #eef0ec; text-align: left; vertical-align: top; }
 #base-table thead th { background: #f3f6f2; font-weight: 600; }
@@ -398,3 +397,27 @@ button.help:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 }
 .base-trait .trait-error { display: block; margin-top: 2px; }
 #base-panel .what { color: var(--muted); font-size: 0.85em; }
+
+/* A site with Bases (bases.js): it opens on a landing of both tools, each with a switch to the other at the top. */
+.on-landing .layout { display: none; }
+.landing { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding: 16px; max-width: 1100px; margin: 0 auto; }
+.landing[hidden] { display: none; }
+.tool-card { display: flex; flex-direction: column; padding: 20px; }
+.tool-card h2 { font-size: 1.3rem; color: var(--green-dark); margin-bottom: 4px; }
+.tool-card p { margin: 6px 0; }
+.tool-card .start { align-self: flex-start; margin-top: auto; padding: 10px 18px; border-radius: 6px; background: var(--green);
+  color: #fff; font-weight: 600; text-decoration: none; }
+.tool-card .start:hover { background: var(--green-dark); }
+.tool-card p:last-of-type { margin-bottom: 16px; }
+.tool-switch { display: flex; border: 1px solid var(--green); border-radius: 6px; overflow: hidden; }
+.tool-switch[hidden] { display: none; }
+.tool-switch a { padding: 6px 14px; color: var(--green-dark); font-size: 0.9rem; font-weight: 600; text-decoration: none; white-space: nowrap; }
+.tool-switch a + a { border-left: 1px solid var(--green); }
+.tool-switch a:hover { background: #e8f1ea; }
+.tool-switch a[aria-current="page"] { background: var(--green); color: #fff; }
+@media (max-width: 700px) {
+  .landing { grid-template-columns: minmax(0, 1fr); padding: 10px; gap: 10px; }
+  .top { flex-wrap: wrap; }
+  .tool-switch { order: 1; flex-basis: 100%; }
+  .tool-switch a { flex: 1; text-align: center; }
+}

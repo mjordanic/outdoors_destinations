@@ -71,9 +71,9 @@ def edited(change):
 
 
 def open_bases(browser, server: str, **options):
-    """The page in "Find a base" mode."""
+    """The page in "Find a base" mode, from the landing."""
     page = open_page(browser, server, Api({}), **options)
-    page.get_by_role("button", name="Find a base").click()
+    page.get_by_role("link", name="Start with a town").click()
     page.locator("#base-panel").wait_for()
     return page
 
@@ -103,13 +103,13 @@ def asked(page, action) -> dict:
 def test_the_mode_is_offered_only_by_a_site_with_bases(browser, server, plain_server) -> None:
     plain = open_page(browser, plain_server, Api({}))
 
-    assert plain.get_by_role("button", name="Find a base").is_hidden()
+    assert plain.get_by_role("link", name="Find a base").is_hidden()
 
     page = open_bases(browser, server)
 
     assert page.locator("#seed-pick").is_hidden()
     assert page.locator("#liked").is_hidden()
-    page.get_by_role("button", name="Leave Find a base").click()
+    page.locator("#tool-switch").get_by_role("link", name="Find a hike").click()
     assert page.locator("#base-panel").is_hidden()
     assert page.locator("#seed-pick").is_visible()
     assert page.locator("#liked").is_visible()
@@ -377,7 +377,7 @@ def test_leaving_find_a_base_leaves_the_base_address(browser, server) -> None:
     page = open_bases(browser, server)
     keswick_in_60(page)
 
-    page.get_by_role("button", name="Leave Find a base").click()
+    page.locator("#tool-switch").get_by_role("link", name="Find a hike").click()
 
     assert "base" not in page.evaluate("() => location.hash")
 

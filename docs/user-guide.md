@@ -10,6 +10,11 @@ You give it a hike you liked. It finds the hikes most like it.
 Don't have a hike in mind? Describe the one you want instead, and it finds
 hikes that fit.
 
+The site opens on a choice of two: **Find a hike you like**, and **Find a
+hiking base you like**, which starts from a town you stayed in and finds
+other towns with hikes like those within a drive of it. The switch at the top
+of the page goes from one to the other.
+
 - It looks at length, climbing, the highest point, the landscape, the
   typical temperature in the month you pick, and whether the hike runs beside
   a lake or the sea. If you ask for more, it also looks at rain and sunshine.

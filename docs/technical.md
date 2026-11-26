@@ -2732,6 +2732,12 @@ instead. A row's town, or its numbered dot on the map, opens that Base: its pass
 length, climb and highest point, nearest first, on the map at their Trailheads, each with a link into the hike
 search (`#hike=<id>`, the hike as the liked one), from which a button comes back to the Base.
 
+A site with Bases opens, at its bare address, on a landing of both tools side by side, "Find a hike you like"
+and "Find a hiking base you like", each with what it does; an address naming either skips it (`#base…`, a hike,
+composed hike or wish link, or `#hikes`, the hike search with nothing chosen, which it keeps as its address
+instead of the bare one). At the top of either tool a switch opens the other as it was left, as a step of the
+history; a site without Bases opens on the hike search, with no landing and no switch.
+
 The page shows a hundred rows at a time ("Show more"), the Hiker's own town with its mild months and trait
 values over them, and a line under each score whose parts multiply to it: how alike the hikes are (mix, and
 how many of each town's kinds the other has), the cut for fewer hikes, the cut for few of the Hiker's hikes to
