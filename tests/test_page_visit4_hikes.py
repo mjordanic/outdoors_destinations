@@ -66,6 +66,32 @@ def test_back_from_a_row_opened_over_a_list_of_other_settings_only_closes_it(bro
     assert len(api.ranked) == 1
 
 
+def test_an_address_changed_to_name_another_row_of_the_list_opens_it(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+    page.locator("#results-table tbody tr").first.click()
+    page.locator("#selected").wait_for()
+    other, name = page.evaluate("[state.results[1].id, state.results[1].name]")
+
+    page.evaluate("(id) => { location.hash = location.hash.replace(/&open=[^&]*/, `&open=${id}`); }", other)
+
+    page.locator("#selected h2", has_text=name).wait_for()
+    assert page.locator("#results").is_visible()
+
+
+def test_an_address_changed_to_name_a_row_opens_it_when_none_is_open(browser, server) -> None:
+    page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}")
+    page.get_by_text("Chosen: Ridge Walk").wait_for()
+    _find(page)
+    other, name = page.evaluate("[state.results[1].id, state.results[1].name]")
+
+    page.evaluate("(id) => { location.hash += `&open=${id}`; }", other)
+
+    page.locator("#selected h2", has_text=name).wait_for()
+    assert page.locator("#results").is_visible()
+
+
 def test_an_address_naming_an_opened_hike_opens_it_over_the_list(browser, server) -> None:
     page = open_page(browser, server, Api({}), hash=f"#hike={RIDGE_WALK_ID}&list&open={VALLEY_PATH_ID}")
 

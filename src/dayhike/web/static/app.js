@@ -4343,7 +4343,9 @@ async function start() {
     syncFind();
   };
   window.addEventListener("hashchange", (event) => {
-    if (closed(new URL(event.oldURL).hash) !== closed(location.hash)) openAddress(true);
+    const open = readLink(location.hash).get("open"), row = history.state?.row;
+    const stepped = open == null ? row == null : row != null && decoded(open) === String(row);
+    if (!stepped || closed(new URL(event.oldURL).hash) !== closed(location.hash)) openAddress(true);
   });
   openAddress(false);
 }
