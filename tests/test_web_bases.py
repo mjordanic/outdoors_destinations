@@ -188,6 +188,21 @@ def test_base_search_offers_a_name_one_typo_away_when_none_starts_so(client: Tes
     assert [place["id"] for place in _search(client, "keswik")] == [KESWICK]
     assert [place["id"] for place in _search(client, "Bethseda")] == [BETHESDA]
     assert _search(client, "kesxyz") == []
+    # said to be guesses, so the page asks "Did you mean …?" instead of taking one on Enter (ADR-0086)
+    assert client.get("/api/bases/search", params={"q": "keswik"}).json()["guess"] is True
+    assert client.get("/api/bases/search", params={"q": "Kes"}).json()["guess"] is False
+
+
+def test_a_town_is_described_by_its_number_without_a_ranking(data: ServingData) -> None:
+    """A shared link names its town even when rankings are refused for a while (ADR-0086)."""
+    client = TestClient(create_app(data, base_rank_rate=1))
+    client.post("/api/bases/rank", json={"seed": KESWICK, "reach": 30})
+    assert client.post("/api/bases/rank", json={"seed": KESWICK, "reach": 60}).status_code == 429
+
+    found = client.get("/api/bases/town", params={"id": KESWICK})
+    assert found.status_code == 200
+    assert found.json()["name"] == "Keswick" and found.json()["near"] == {"name": "Chamonix-Mont-Blanc", "km": 445}
+    assert client.get("/api/bases/town", params={"id": KESSEL}).status_code == 404
 
 
 def test_nearest_base_to_a_point_with_its_distance(client: TestClient) -> None:
@@ -238,6 +253,20 @@ def test_a_row_names_the_other_towns_of_its_area_and_how_sure_its_score_is(
     assert next(row for row in rows if row["id"] == MOAB)["area_towns"] == []
 
 
+def test_a_row_named_after_a_bigger_town_names_its_best_town_and_score(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("dayhike.bases.AREA_REACHES", 100)  # Bethesda and Chamonix in one area
+    monkeypatch.setattr("dayhike.bases.NAME_WITHIN", 1.0)  # named after Chamonix, the bigger
+
+    rows = _rank(client)["results"]
+
+    area = next(row for row in rows if row["id"] == CHAMONIX)
+    assert area["best_town"] == {"id": BETHESDA, "name": "Bethesda", "score": pytest.approx(1)}
+    assert area["area_towns"][0]["id"] == BETHESDA
+    assert next(row for row in rows if row["id"] == MOAB)["best_town"] is None
+
+
 def test_a_shorter_reach_counts_only_the_hikes_within_it(client: TestClient) -> None:
     body = _rank(client, reach=15)
 
@@ -271,6 +300,25 @@ def test_a_town_trait_filter_leaves_out_the_bases_that_fail_it(client: TestClien
     assert BETHESDA not in [row["id"] for row in bigger["results"]]
     assert CHAMONIX in [row["id"] for row in bigger["results"]]
     assert MOAB not in [row["id"] for row in mild["results"]]
+
+
+def test_a_ranking_says_how_many_towns_pass_the_town_choices(client: TestClient) -> None:
+    """A town filter no town passes is said as that, not as no town being alike (ADR-0086)."""
+    none = _rank(client, traits={"stays": {"at_least": 99_999}})
+    some = _rank(client, traits={"size": {"at_least": 5_000}})
+
+    assert none["results"] == [] and none["towns_passing"] == 0
+    assert some["towns_passing"] == 2  # Chamonix and Moab
+    assert _rank(client)["towns_passing"] == 3
+
+
+def test_a_multi_day_route_is_no_hike_of_a_base(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Cape Wrath Trail and 130-mile coast paths counted as day hikes and passed a climb filter (ADR-0086)."""
+    monkeypatch.setattr("dayhike.serving.MULTI_DAY_M", 8_000.0)  # hike 0, 10 km one way, is a multi-day route here
+
+    assert _rank(client)["seed"]["hike_groups"] == 3
+    detail = client.post("/api/bases/detail", json={"base": KESWICK, "reach": 60}).json()
+    assert len(detail["hikes"]) == 3 and detail["base"]["hike_groups"] == 3
 
 
 def test_like_mine_cuts_the_score_and_says_by_how_much(client: TestClient) -> None:

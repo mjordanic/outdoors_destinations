@@ -8,7 +8,8 @@ import numpy as np
 import pytest
 
 import dayhike.bases as bases_module
-from dayhike.bases import REACHES, BaseFacts, Bases, HikeTypes, _write_bases, rank_bases
+from dayhike.bases import REACHES, BaseFacts, Bases, HikeTypes, _write_bases, find_bases, near_towns, rank_bases
+from dayhike.serving import _fold
 
 SEED_AT = (45.0, 7.0)
 FAR = 1.0  # degrees of latitude between Bases that are not near: 111 km, past every Reach's area
@@ -68,6 +69,12 @@ def _data(
             for i, t in zip(place_ids, towns)
         ]
         + [(count + 1 + i, name, "GB", people, lat, lon) for i, (name, people, lat, lon) in enumerate(places)],
+    )
+    db.execute("CREATE TABLE place_names (name TEXT, place INTEGER, alternate INTEGER, PRIMARY KEY (name, place))")
+    db.executemany(
+        "INSERT INTO place_names VALUES (?, ?, 0)",
+        [(_fold(t.get("name", "P")), int(i)) for i, t in zip(place_ids, towns)]
+        + [(_fold(name), count + 1 + i) for i, (name, *_) in enumerate(places)],
     )
     db.commit()
     db.close()
@@ -260,7 +267,8 @@ def _formula(data, me: int, base: int) -> tuple[float, float, float]:
 
 
 @pytest.mark.parametrize("seed", range(3))
-def test_every_row_is_scored_by_the_formula(tmp_path, seed):
+def test_every_row_is_scored_by_the_formula(tmp_path, seed, monkeypatch):
+    monkeypatch.setattr(bases_module, "MIN_ROW_SCORE", 0.0)  # every Base past a random pair's is a row
     rng = np.random.default_rng(seed)
     types = 40
     table = rng.random((types, types)).astype(np.float32)
@@ -390,6 +398,9 @@ NOT_TOWNS = (
     "Burningham Industrial", "Collegio Santa Croce", "Cantoniera della Presolana", "Continental Townhouse Condominium",
     "Aspen Park Condo", "Gateway Trailer Park", "Camelot Mobile Home Park", "Foxcroft Apartments",
     "Carter Subdivision", "Stobcross (historical)",
+    # ADR-0086, the second visitor check
+    ("Holloman Air Force Base", "US"), ("Soapstone Summer Home Area", "US"), "Drumcroy Lodges",
+    "Hafan y Mor Holiday Park", "Riverside Caravan Park",
 )  # fmt: skip
 TOWNS = (
     "Braunau am Inn", "Potters Bar", "Bar-sur-Seine", "San Martino Buon Albergo", "Red Lodge", "Hütte",
@@ -467,3 +478,166 @@ def test_warming_reads_the_places_before_the_first_ranking(tmp_path, monkeypatch
     data = _data(tmp_path, [_town(ALIKE, 0), _town(ALIKE, 1, name="Gasthof")])
     bases_module.warm_bases(data)
     assert bases_module._PLACES[id(data.bases)][1][1].tolist() == [True, False]
+
+
+# Round 2 of the visitor check (ADR-0086).
+def test_a_row_is_named_after_a_town_even_when_a_hamlet_of_its_area_is_more_alike(tmp_path):
+    """Thanei (16 people) over Silandro: the row is the town's, with the town's own score."""
+    north = SEED_AT[0] + 3 * FAR
+    data = _data(
+        tmp_path,
+        [
+            _town(ALIKE, 0),
+            {"types": ALIKE, "at": (north, SEED_AT[1]), "population": 16},  # the hamlet, the area's best
+            {"types": {0: 20, 1: 10, 2: 10}, "at": (north + 0.1, SEED_AT[1]), "population": 4_500},  # far less alike
+        ],
+    )
+    (row,) = rank_bases(data, 1, 30, _all(data)).rows
+    assert row.base == 2
+    assert row.score == pytest.approx(_stretched(0.4 * 0.75 + 0.3 * 1 + 0.3 * 0.75))
+    assert row.members == (1, 2) and row.towns == (1,)
+
+
+def test_a_village_names_a_row_with_no_town_in_its_area_and_a_hamlet_only_with_neither(tmp_path):
+    north = SEED_AT[0] + 3 * FAR
+    data = _data(
+        tmp_path,
+        [
+            _town(ALIKE, 0),
+            {"types": ALIKE, "at": (north, SEED_AT[1])},  # unknown size, the best
+            {"types": {0: 20, 1: 14, 2: 6}, "at": (north + 0.1, SEED_AT[1]), "population": 333},  # a village
+            {"types": {0: 20, 1: 18, 2: 2}, "at": (north + 0.2, SEED_AT[1]), "population": 40},
+            _town(ALIKE, 6),  # alone, of unknown size: names its own row
+        ],
+    )
+    rows = rank_bases(data, 1, 30, _all(data)).rows
+    assert [row.base for row in rows] == [4, 2]
+    assert set(rows[1].members) == {1, 2, 3}
+
+
+def test_two_rows_are_never_named_after_neighbours(tmp_path):
+    """Joppa Pans and Brunstane, 800 m apart, each named a row of its own area."""
+    reach_km = 30 / 60 * 28.0
+    north = lambda km: SEED_AT[0] + 3 * FAR + km / 111.2  # noqa: E731
+    data = _data(
+        tmp_path,
+        [
+            _town(ALIKE, 0),
+            {"types": ALIKE, "at": (north(0), SEED_AT[1])},  # a hamlet, the best
+            {"types": {0: 20, 1: 18, 2: 2}, "at": (north(1.5 * reach_km), SEED_AT[1]), "population": 2_000},
+            {"types": {0: 20, 1: 18, 2: 3}, "at": (north(-2.5 * reach_km), SEED_AT[1])},  # a second area
+            {"types": {0: 20, 1: 17, 2: 3}, "at": (north(1.6 * reach_km), SEED_AT[1]), "population": 3_000},
+        ],
+    )
+    rows = rank_bases(data, 1, 30, _all(data)).rows
+    named = [row.base for row in rows]
+    assert len(rows) == 2 and len({2, 4} & set(named)) == 1  # one of the two towns names the row, the other joins it
+
+
+def test_a_row_scoring_next_to_nothing_is_not_listed(tmp_path):
+    """Moab at 15 min listed rows of 0.00 to 0.06: a row under MIN_ROW_SCORE (0.1) is none."""
+    data = _data(
+        tmp_path,
+        [
+            _town(ALIKE, 0),
+            _town({0: 20, 2: 20}, 1),  # mix 0.5, coverage 0.5, back 0.5: 0.5 raw, 0.17 as shown
+            _town({0: 16, 2: 24}, 2),  # mix 0.4, coverage 0.5, back 0.4: 0.43 raw, 0.05 as shown
+        ],
+    )
+    rows = rank_bases(data, 1, 30, _all(data)).rows
+    assert [row.base for row in rows] == [1]
+    assert rows[0].score == pytest.approx(_stretched(0.5))
+
+
+def test_a_district_of_a_big_city_beyond_its_centre_or_a_suburb_of_a_sprawl_is_left_out(tmp_path):
+    """Joppa Pans, 6.8 km from Edinburgh's point, and Summerlin South, in Las Vegas' sprawl, are in a city;
+    Glossop, 31,000 people within 8 km, is not."""
+    km = 1 / 111.2
+    data = _data(
+        tmp_path,
+        [
+            _town(ALIKE, 0),
+            _town(ALIKE, 1),  # a district: 6.8 km from a city of 514,000, under 100,000 within 5 km
+            _town(ALIKE, 2),  # a suburb: 160,000 people 7 km off, none within 5 km
+            _town(ALIKE, 3, population=17_825),  # a town by a city's edge
+            _town(ALIKE, 4),
+        ],
+        places=(
+            ("Edinburgh", 514_000, SEED_AT[0] + FAR + 6.8 * km, SEED_AT[1]),
+            ("Spring Valley", 80_000, SEED_AT[0] + 2 * FAR + 7 * km, SEED_AT[1]),
+            ("Paradise", 80_000, SEED_AT[0] + 2 * FAR - 7 * km, SEED_AT[1]),
+            ("Hyde", 31_000, SEED_AT[0] + 3 * FAR + 7 * km, SEED_AT[1]),
+            ("Manchester", 395_000, SEED_AT[0] + 3 * FAR + 20 * km, SEED_AT[1]),
+        ),
+    )
+    assert sorted(row.base for row in rank_bases(data, 1, 30, _all(data)).rows) == [3, 4]
+
+
+def test_a_town_typed_is_found_before_a_hamlet_of_its_name_and_the_one_with_beds_first(tmp_path):
+    """"Cortina" took a hamlet of 44 people near Verona before Cortina d'Ampezzo, "Interlaken" the US one."""
+    data = _data(
+        tmp_path,
+        [
+            _town(ALIKE, 0, name="Cortina", population=44, stays=3),
+            _town(ALIKE, 1, name="Cortina d'Ampezzo", population=5_423, stays=51),
+            _town(ALIKE, 2, name="Interlaken", population=7_321, stays=0, country="US"),
+            _town(ALIKE, 3, name="Interlaken", population=5_067, stays=78, country="CH"),
+        ],
+    )
+    assert find_bases(data, "Cortina", 5) == ([1, 0], False)
+    assert find_bases(data, "interlaken", 5) == ([3, 2], False)
+
+
+def test_a_name_one_typo_away_is_said_to_be_a_guess(tmp_path):
+    data = _data(tmp_path, [_town(ALIKE, 0, name="Keswick", population=4_658), _town(ALIKE, 1, name="Kendal")])
+    assert find_bases(data, "keswik", 5) == ([0], True)
+    assert find_bases(data, "kes", 5) == ([0], False)
+
+
+def test_a_town_is_said_to_be_near_a_bigger_town_not_a_district_of_its_own(tmp_path):
+    """"Munich · near Bogenhausen", "London · near Soho": the town named is bigger, and not far off."""
+    data = _data(
+        tmp_path,
+        [
+            _town(ALIKE, 0, name="Munich", population=1_505_005),
+            {"types": ALIKE, "at": (SEED_AT[0] + 0.03, SEED_AT[1]), "name": "Bogenhausen", "population": 80_000},
+            _town(ALIKE, 5, name="Faraway", population=3_000),  # the nearest bigger, Bogenhausen, is 555 km off
+            {"types": ALIKE, "at": (SEED_AT[0] + 5 * FAR + 0.3, SEED_AT[1]), "name": "Midtown", "population": 20_000},
+        ],
+    )
+    near = near_towns(data, [0, 1, 2])
+    assert near[0] is None  # no bigger town anywhere near Munich
+    assert near[1] == {"name": "Munich", "km": 3}
+    assert near[2] == {"name": "Midtown", "km": 33}
+
+
+def test_a_row_named_after_a_bigger_town_says_which_town_of_it_is_the_best(tmp_path):
+    """Blaenau-Ffestiniog (0.88) inside a row named Caernarfon (0.86): the row says so, so the best is not hidden."""
+    north = SEED_AT[0] + 3 * FAR
+    data = _data(
+        tmp_path,
+        [
+            _town(ALIKE, 0),
+            {"types": ALIKE, "at": (north, SEED_AT[1]), "population": 4_800},  # the best town
+            {"types": {0: 20, 1: 19, 2: 1}, "at": (north + 0.1, SEED_AT[1]), "population": 9_700},  # bigger, about as alike
+            {"types": {0: 20, 1: 19, 2: 1}, "at": (north + 0.2, SEED_AT[1]), "population": 20_000, "minutes": 10},
+        ],
+    )
+    (row,) = rank_bases(data, 1, 30, _all(data)).rows
+    assert row.base == 3 and row.best == 1 and row.best_score == pytest.approx(1)
+    assert row.towns == (1, 2)  # the best first, then the biggest
+
+
+def test_a_big_town_with_almost_no_places_to_stay_is_left_out(tmp_path):
+    """Dakota Ridge (33,892 people, 2 places to stay) and Parker, Denver's suburbs, led Estes Park's list."""
+    data = _data(
+        tmp_path,
+        [
+            _town(ALIKE, 0),
+            _town(ALIKE, 1, population=33_892, stays=2),  # where people live, not where visitors stay
+            _town(ALIKE, 2, population=33_892, stays=12),
+            _town(ALIKE, 3, population=33_892),  # its places to stay not counted
+            _town(ALIKE, 4, population=15_000, stays=0),  # a small town
+        ],
+    )
+    assert sorted(row.base for row in rank_bases(data, 1, 30, _all(data)).rows) == [2, 3, 4]

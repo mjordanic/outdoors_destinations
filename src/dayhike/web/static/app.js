@@ -3901,7 +3901,6 @@ async function start() {
   $("#results-scores").innerHTML = `<strong>Score:</strong> ${escapeHtml(state.scoreHelp.overall)}
     <strong>Measure cells:</strong> ${escapeHtml(state.scoreHelp.measure)} ${helpButton("measures")}`;
   scoreHelp.listen();
-  document.dispatchEvent(new Event("hikesalike:info")); // state.info is in: "Find a base" (bases.js) starts
   buildWeights();
   buildRegions();
   $("#wish-on").hidden = !state.measures.some(wishable);
@@ -3923,6 +3922,8 @@ async function start() {
     setUnits(event.target.value);
     syncAddress();
   });
+  // state.info is in and the units set: "Find a base" (bases.js) starts, and a link's units then win
+  document.dispatchEvent(new Event("hikesalike:info"));
   showGroupDefault();
   for (const id of ["#hours", "#km", "#hours-on", "#km-on"]) OPENED[id] = { value: $(id).value, checked: $(id).checked };
   OPENED["#km"].km = limitKm("#km");

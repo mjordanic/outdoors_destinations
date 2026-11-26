@@ -2698,25 +2698,33 @@ the score under which the page says even the best row is not much alike; null wi
 base" (ADR-0084) has its own calls and its own page mode in `bases.js`. A Base is named by its
 GeoNames place id and answers as `{"id", "name", "country", "population", "stays", "eats", "lat", "lon"}`
 (population and the places to stay and to eat null when unknown); `GET /api/bases/search?q=&limit=` (up to 20,
-default 5) finds Bases by name as `/api/place` finds places, a Base whose own name starts with the query before
-one only an alternate name does, passing over places that are no Base; a query whose spaces or hyphens the name
+default 5) finds Bases by name as `/api/place` finds places: towns of 1,000 people first, then villages of 100,
+then the rest, and in each a Base named exactly so, then one whose own name starts with the query before one
+only an alternate name does, then the most places to stay ("Cortina" is Cortina d'Ampezzo before a hamlet, and
+"Interlaken" the Swiss one), passing over places that are no Base; a query whose spaces or hyphens the name
 writes otherwise ("chamonix mont blanc", "st moritz") finds it too, and with none found it offers names one typo
-away ("keswik"). `GET /api/bases/nearest?lat=&lon=` gives the nearest Base in a straight line with its
-`distance_km`. Both say for each Base the nearest other Base of at least 10,000 (`near`:
-`{"name", "km"}`, else null), so towns of one name can be told apart. `POST /api/bases/rank` takes `{"seed": place id, "reach": 15, 30 or 60,
+away ("keswik") with `guess` true, which the page asks about ("Did you mean …?") instead of taking on Enter.
+`GET /api/bases/nearest?lat=&lon=` gives the nearest Base in a straight line with its `distance_km`, and
+`GET /api/bases/town?id=` the Base of a link's number, so a link names its town whatever happens to its list.
+They say for each Base the nearest other Base of at least 10,000 people and more than its own (`near`:
+`{"name", "km"}`, else null; for a Base of 10,000 itself only one within 250 km), so towns of one name can be
+told apart. `POST /api/bases/rank` takes `{"seed": place id, "reach": 15, 30 or 60,
 "hike_filter": {...}, "traits": {...}}`: `hike_filter` as `HikeFilter.to_mapping` writes it (`climb_min_m`,
 `climb_max_m`, `length_min_km`, `length_max_km`, `highest_min_m`, `highest_max_m`, and `summit`, `waterside`,
 `round_trip` true), `traits` per TownTrait (`size`, `stays`, `eats`, `months`) one of `{"like_mine": 1-3}`,
 `{"at_least", "up_to"}` (size and counts) or `{"mild_in": [months]}` (months), a trait left out ignored; anything
 else is a 422, and a seed that is no Base a 404. It answers `seed` (the Base with its passing `hike_groups`),
-`too_few` (under 10 of them: no row), and up to 300 `results`, one per area, each a Base with `region`,
+`too_few` (under 10 of them: no row), `towns_passing` (how many Bases pass the town filters: 0 when they leave
+none), and up to 300 `results`, one per area, each a Base with `region`,
 `score`, `hike_score`, `mix`, `coverage`, `back`, `enough`, `sure`, `hike_groups`, `area_bases`, `area_towns`
-(up to 5 other towns of its area, biggest first, each `{"id", "name", "population"}`) and `cuts`, the share
+(up to 5 other towns of its area, its best first when that is not the row's, then biggest first, each
+`{"id", "name", "population"}`), `best_town` (`{"id", "name", "score"}` of that best town, else null) and `cuts`, the share
 each "like mine" trait took off the hike score; the seed and each row have `months`, the median temperature of
 the hikes in Reach each month (null when unknown). `POST /api/bases/detail` takes `{"base": place id, "reach",
 "hike_filter"}` and answers the Base with its passing `hike_groups` and `hikes`, each `{"id", "name",
 "trailhead", "minutes", "length_m", "climb_m", "highest_m", "summit", "round_trip"}` (one way, as the hike filter
-measures them; null when unknown), nearest first. A seed or Base that is no Base is a 404 that says the link may
+measures them; null when unknown), nearest first. Both count day hikes only: a multi-day route (over 40 km one
+way, ADR-0056) is no hike of a Base (ADR-0086). A seed or Base that is no Base is a 404 that says the link may
 be old. BaseRankings have their own queue, apart from the hike Rankings' and with the same rules, and their own
 limit of 20 a minute per client; town-name lookups and a Base's hikes count against the general API limit
 instead. A row's town, or its numbered dot on the map, opens that Base: its passing hikes with their minutes,
@@ -2727,18 +2735,24 @@ The page shows a hundred rows at a time ("Show more"), the Hiker's own town with
 values over them, and a line under each score whose parts multiply to it: how alike the hikes are (mix, and
 how many of each town's kinds the other has), the cut for fewer hikes, the cut for few of the Hiker's hikes to
 compare (`sure`), then each "like mine" trait's; a row standing for an area names its biggest other towns
-(`area_towns`). Every step
+(`area_towns`), all of them or "among them" the biggest, and its best town with its score when the row is named
+after a bigger one; a line with a cut ends with the score it comes to. Every step
 (entering the mode, a town chosen, the Reach or a choice changed, a Base opened or closed) is a step of the
 browser's history, so Back undoes it; the answers of the last 30 lists and Bases are kept, so going back asks the
 server nothing. Choices changed in a row ask for one list once they settle (0.6 s, 0.9 s while a number is
 typed). A refused or failed list is said above it, and the list left on screen is greyed as being for the
-earlier choices. The ranges show in the Units chosen and are sent in metres and km. The mode sets the hike filter and each trait (ignore, filter,
+earlier choices; a range the wrong way round, or a number under 0, is said beside its field and never written
+into the address, and a name not found is said under the town box. The ranges show in the Units chosen and are
+sent in metres and km; a number shown keeps the metres it was set with until it is typed again. The mode sets the hike filter and each trait (ignore, filter,
 or "like mine" with *a little*, *matters* or *important*; town size starts as a filter up to 50,000 people, the
 others ignored). Its address is `#base=<seed>&reach=<minutes>&open=<id>` (`#base` alone before a town is
 chosen), then the hike filter's keys (`&climb_max_m=500&summit`) and each trait not at its default
 (`&size=ignore`, `&eats=like-mine-important`, `&stays=3-`, `&size=-5000`, `&months=7,8`; "like mine" is
-`like-mine-a-little`, `like-mine` or `like-mine-important`); like a hike link it sets every setting it does
-not name to its default (ADR-0073), on load or in a tab already open, and opens the sections holding a choice not at its default.
+`like-mine-a-little`, `like-mine` or `like-mine-important`), then `&units=imperial` as the hike search keeps
+it; like a hike link it sets every setting it does not name, or names with no valid value, to its default
+(ADR-0073), on load or in a tab already open, and opens the sections holding a choice not at its default. On a
+phone, the list or a linked town's page is scrolled to once it is in, and "Finding bases…" shows at the foot of
+the screen. A click on the map chooses a town only on the list, not among a town's hikes.
 
 A BaseRanking (`rank_bases`) counts every Base's BaseProfile under the hike filter in one numba pass over
 the stored pairs. It then scores back (cheap) for every Base with at least 10 passing HikeGroups, and mix
@@ -2755,10 +2769,15 @@ of Bases at that Reach (0.36, 0.40 and 0.48 at 15, 30 and 60 min), up to 1, and 
 `enough` scores down a Base with under half the Hiker's HikeGroups only while it has under
 `ENOUGH_GROUPS` (30), and `sure` scores every row down when the Hiker's Base has under 30. Left out besides
 the Bases near the Hiker's: those whose nearest HikeGroups are mostly within 60 min of it (its region), those
-with 100,000 people living in the towns of `places.sqlite` within 5 km (a city), places whose name says they
-are no town (`NOT_A_TOWN`: a hut, an inn, an industrial estate, a condo, a trailer park, "(historical)"), and
-west of the Atlantic, Bases outside the United States. A row is named after the biggest Base of its area
-(population, then places to stay) within 0.05 of its best score, and rows are ordered by that Base's score.
+in a city (100,000 people living in the towns of `places.sqlite` within 5 km or 150,000 within 8 km, or within
+a city of 100,000's own reach of its point, 5 km times the square root of its people over 100,000), towns of
+20,000 people with under 3 places to stay (where people live, not where visitors stay), places whose
+name says they are no town (`NOT_A_TOWN`: a hut, an inn, an industrial estate, a condo, a trailer park, an air
+force base, a holiday or caravan park, "(historical)"), and west of the Atlantic, Bases outside the United
+States. After the second visitor check (ADR-0086), areas form around the best towns of 1,000 people first, then
+villages of 100, then the rest; a row is named after the biggest Base (population, then places to stay) of its
+best's kind within 0.05 of its score, with its own score, rows are ordered by that score, and a row under 0.1 is
+none.
 
 On the real Europe and US build, the preselection kept the best 20 rows of every ranking the same, for
 Keswick, Chamonix, Bohinjska Bistrica and Moab at 15, 30 and 60 min, with and without "climb up to 500 m"
