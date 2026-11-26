@@ -419,6 +419,39 @@ def test_a_base_ranking_does_not_wait_for_a_hike_ranking(data: ServingData, monk
     assert response.status_code == 200, response.text
 
 
+def test_a_base_ranking_waits_its_turn_behind_two_hike_rankings(data: ServingData, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Hike Rankings and BaseRankings share RANKINGS_AT_ONCE: two heavy searches at a time per instance.
+    monkeypatch.setattr("dayhike.web.RANK_WAIT_S", 0.05)
+    client = TestClient(create_app(data))
+    started, release = threading.Semaphore(0), threading.Event()
+    rank = data.rank
+
+    def held(*args, **kwargs):
+        started.release()
+        release.wait(10)
+        return rank(*args, **kwargs)
+
+    monkeypatch.setattr(data, "rank", held)
+    hike_rankings = [
+        threading.Thread(
+            target=lambda tab=tab: client.post("/api/rank", json={"seed": int(data.store.ids[0])}, headers={TAB_HEADER: tab})
+        )
+        for tab in ("tab-1", "tab-2")
+    ]
+    for thread in hike_rankings:
+        thread.start()
+    try:
+        assert started.acquire(timeout=10) and started.acquire(timeout=10)
+        response = client.post("/api/bases/rank", json={"seed": KESWICK, "reach": 30}, headers={TAB_HEADER: "tab-3"})
+    finally:
+        release.set()
+        for thread in hike_rankings:
+            thread.join()
+
+    assert response.status_code == 503, response.text
+    assert response.json()["detail"].startswith("The server is busy with other visitors' searches")
+
+
 def test_a_ranking_lists_more_than_a_hundred_rows(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     from dataclasses import replace
 
