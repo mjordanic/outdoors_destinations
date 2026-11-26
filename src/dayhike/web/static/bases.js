@@ -83,6 +83,7 @@ const bases = {
     // The landing and the switch at the top open a tool as it was left, as a step of its own.
     for (const link of document.querySelectorAll("#landing a.start, #tool-switch a")) {
       link.addEventListener("click", (event) => {
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
         event.preventDefault();
         const on = link.getAttribute("href") === "#base";
         if (!$("#landing").hidden || on === $("#base-panel").hidden) this.toggle(on);

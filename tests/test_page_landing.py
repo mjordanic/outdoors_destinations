@@ -50,6 +50,17 @@ def test_the_landing_opens_find_a_base_and_back_returns_to_it(browser, server) -
     assert page.locator("#base-panel").is_hidden()
 
 
+def test_a_modified_click_on_a_landing_link_leaves_this_tab_on_the_landing(browser, server) -> None:
+    page = open_page(browser, server, Api({}))
+
+    with page.context.expect_page():
+        page.get_by_role("link", name="Start with a town").click(modifiers=["ControlOrMeta"])
+
+    assert landing(page)
+    assert page.locator("#base-panel").is_hidden()
+    assert page.evaluate("() => location.hash") == ""
+
+
 def test_the_landing_opens_find_a_hike(browser, server) -> None:
     page = open_page(browser, server, Api({}))
 
