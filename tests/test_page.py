@@ -2641,7 +2641,7 @@ def test_the_broken_link_message_goes_once_the_hiker_looks_for_another_hike(brow
         page.locator("#map-pick-on").check()
 
     message.wait_for(state="detached")
-    assert page.get_by_text("Search for a hike by name, or select one on the map.").is_visible()
+    assert page.locator("#liked").get_by_text("Search for a hike by name, or select one on the map.").is_visible()
     assert page.locator("#liked-name").inner_text() == "No hike chosen yet."
 
 
