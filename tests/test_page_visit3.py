@@ -338,4 +338,3 @@ def test_a_row_named_after_a_bigger_town_says_whose_figures_it_shows(browser, se
     page.locator(".base-marker").first.hover()
     tooltip = page.locator(".leaflet-tooltip").filter(has_text="1. ")
     assert tooltip.inner_text() == f"1. Dumfries (figures for {first['name']}) · {first['score']:.2f}"
-
