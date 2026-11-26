@@ -45,8 +45,9 @@ be short.
 way, ADR-0056), as the hike list's day hikes do. A town page no longer lists a 300 km long-distance trail as
 "a hike".
 
-**Names come from towns of real size.** The town search orders towns of 1,000 first, then villages of 100,
-and in each an exact name before a prefix ("Cortina" is Cortina d'Ampezzo, "Interlaken" the Swiss one). A
+**Names come from towns of real size.** The town search puts an exact name of a town of 1,000 or a village of
+100 first, then towns before villages and a prefix after, and places of fewer people last ("Alta" is the
+village before Altamura, "Cortina" is Cortina d'Ampezzo before a hamlet, "Interlaken" the Swiss one). A
 row or search result says it is near another Base only when that Base is bigger and has 10,000 people, so
 Munich is not "near" anything.
 
