@@ -936,19 +936,64 @@ def test_place_search_puts_its_name_then_another_exact_name_before_a_more_populo
 
 def test_place_choices_are_the_places_named_so_or_one_typo_away(placed: ServingData) -> None:
     names = lambda found: [place["name"] for place in found[0]]  # noqa: E731
-    assert placed.place_choices("zag") == (placed.find_place("zag"), False)
+    assert (names(placed.place_choices("zag")), placed.place_choices("zag")[1]) == (["Zagreb"], False)
     # A country after a comma keeps the places there; any other words after it (a county, a region) are left out.
     assert names(placed.place_choices("Zagreb, Croatia")) == ["Zagreb"]
     assert names(placed.place_choices("Vrh, Slovenia")) == ["Vrhnika"] and placed.place_choices("Vrh, Austria") == ([], False)
     assert names(placed.place_choices("Zagreb, Grad Zagreb")) == ["Zagreb"]
     # With no name starting so, the names one typo away are offered as guesses.
-    assert placed.place_choices("Zagerb") == (placed.find_place("zagreb"), True)
+    assert (names(placed.place_choices("Zagerb")), placed.place_choices("Zagerb")[1]) == (["Zagreb"], True)
     assert placed.place_choices("Ogullin")[1] is True and names(placed.place_choices("Ogullin")) == ["Ogulin"]
     assert placed.place_choices("Qqqqqq") == ([], False)
     # A typo before a country is guessed among the places there.
-    assert placed.place_choices("Zagerb, Croatia") == (placed.find_place("zagreb"), True)
+    assert (names(placed.place_choices("Zagerb, Croatia")), placed.place_choices("Zagerb, Croatia")[1]) == (["Zagreb"], True)
     assert placed.place_choices("Zagerb, Austria") == ([], False)
-    assert placed.place_choices("Volkermakt, Austria") == (placed.find_place("volkermarkt"), True)
+    assert (names(placed.place_choices("Volkermakt, Austria")), placed.place_choices("Volkermakt, Austria")[1]) == (["Völkermarkt"], True)
+
+
+def _geonames_line(place: int, name: str, country: str, lat: float, lon: float, population: int) -> str:
+    return "\t".join([str(place), name, name, "", str(lat), str(lon), "P", "PPL", country, "", "", "", "", "", str(population), "", "", "", ""])
+
+
+@pytest.fixture(scope="module")
+def crowded(catalog_path: Path, tmp_path_factory: pytest.TempPathFactory) -> ServingData:
+    """``placed`` with two Springfields in one country, two Keswicks (one in a country with no hikes) and two
+    towns bigger than the Springfields near each (visitor check round 4, items 2 and 11)."""
+    directory = tmp_path_factory.mktemp("crowded")
+    cities = directory / "geonames.txt"
+    extra = [
+        _geonames_line(9001, "Springfield", "HR", 45.45, 15.45, 30_000),
+        _geonames_line(9002, "Springfield", "HR", 45.10, 15.30, 20_000),
+        _geonames_line(9003, "Karlovac", "HR", 45.49, 15.55, 55_000),
+        _geonames_line(9004, "Gospic", "HR", 44.90, 15.25, 25_000),
+        _geonames_line(9005, "Keswick", "CA", 46.50, 13.50, 21_000),
+        _geonames_line(9006, "Keswick", "HR", 45.32, 15.22, 4_658),
+        _geonames_line(9007, "Farville", "HR", 46.40, 13.40, 40_000),  # in a country with hikes, far from all
+        _geonames_line(9008, "Farville", "HR", 45.05, 15.05, 1_000),
+    ]
+    cities.write_text(CITIES.read_text() + "\n".join(extra) + "\n")
+    return ServingData(export_serving(catalog_path, directory / "export", geonames_path=cities))
+
+
+def test_place_choices_put_places_with_no_hikes_in_their_country_last_marked_so(crowded: ServingData) -> None:
+    found, guess = crowded.place_choices("Keswick")
+
+    assert not guess
+    assert [(place["country"], place["covered"]) for place in found] == [("HR", True), ("CA", False)]
+
+
+def test_place_choices_put_a_place_with_no_hike_near_it_last_though_its_country_has_hikes(crowded: ServingData) -> None:
+    """Round 4 (B10): Keswick, Ontario came first, Canada having hikes along the border; none is near it."""
+    found, _ = crowded.place_choices("Farville")
+
+    assert [(place["population"], place["covered"]) for place in found] == [(1_000, True), (40_000, False)]
+
+
+def test_place_choices_of_one_name_in_one_country_say_the_bigger_town_each_is_near(crowded: ServingData) -> None:
+    found, _ = crowded.place_choices("Springfield")
+
+    assert [(place["population"], place["near"]) for place in found] == [(30_000, "Karlovac"), (20_000, "Gospic")]
+    assert "near" not in crowded.place_choices("Ogulin")[0][0]  # one of its name: nothing to tell apart
 
 
 def test_place_file_can_be_added_beside_an_existing_export(catalog_path: Path, tmp_path: Path, capsys) -> None:

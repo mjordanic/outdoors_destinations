@@ -135,6 +135,29 @@ def test_info_says_whether_the_site_has_bases(exports: tuple[Path, Path], client
     assert plain.post("/api/bases/detail", json={"base": KESWICK, "reach": 30}).status_code == 404
 
 
+def test_the_base_score_help_says_plainly_who_loses_for_fewer_hikes(client: TestClient) -> None:
+    """Round 4 (P9): "…but not one with 30 or more, enough for a week; with fewer than 30 of yours, every town does."
+    could not be parsed; the hamlets left out by the default town size are said (ADR-0089)."""
+    sections = client.get("/api/info").json()["bases"]["score_help"]["sections"]
+    text = " ".join(section["text"] for section in sections)
+
+    assert "every town does" not in text
+    assert "unless it has 30 or more" in text
+    assert "under 1,000 people" in text and "step 4" in text
+    assert "named after" not in text  # nor the round-3 naming
+
+
+def test_a_ranking_refused_for_too_many_says_the_site_is_busy_not_the_visitor(data: ServingData) -> None:
+    """Round 4 (H2, B11): "Too many requests; wait a minute." blamed the visitor, and Try again worked at once."""
+    client = TestClient(create_app(data, base_rank_rate=1))
+    client.post("/api/bases/rank", json={"seed": KESWICK, "reach": 30})
+
+    refused = client.post("/api/bases/rank", json={"seed": KESWICK, "reach": 60})
+
+    assert refused.status_code == 429
+    assert refused.json()["detail"] == "The site is busy right now; try again in a moment."
+
+
 def test_a_rebuilt_bases_folder_changes_the_etag(exports: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch) -> None:
     def etag(data: ServingData) -> str:
         return TestClient(create_app(data)).get("/api/bases/search", params={"q": "Kes"}).headers["etag"]
@@ -172,7 +195,7 @@ def test_base_search_finds_only_places_that_are_bases(client: TestClient) -> Non
     assert [place["id"] for place in found] == [KESWICK, CHAMONIX]
     assert found[0] == {
         "id": KESWICK, "name": "Keswick", "country": "GB", "population": 4_658, "stays": None, "eats": None,
-        "lat": 45.0, "lon": 7.0, "near": {"name": "Chamonix-Mont-Blanc", "km": 445},
+        "lat": 45.0, "lon": 7.0, "near": None,  # Chamonix, the nearest bigger, is 445 km off and in France
     }  # fmt: skip
     assert _search(client, "cham")[0]["id"] == CHAMONIX
     assert _search(client, "cham")[0]["near"] is None  # no other town of 10,000 people
@@ -201,7 +224,7 @@ def test_a_town_is_described_by_its_number_without_a_ranking(data: ServingData) 
 
     found = client.get("/api/bases/town", params={"id": KESWICK})
     assert found.status_code == 200
-    assert found.json()["name"] == "Keswick" and found.json()["near"] == {"name": "Chamonix-Mont-Blanc", "km": 445}
+    assert found.json()["name"] == "Keswick" and "near" in found.json()
     assert client.get("/api/bases/town", params={"id": KESSEL}).status_code == 404
 
 
@@ -210,7 +233,7 @@ def test_nearest_base_to_a_point_with_its_distance(client: TestClient) -> None:
 
     assert found["id"] == BETHESDA
     assert found["name"] == "Bethesda"
-    assert found["near"] == {"name": "Chamonix-Mont-Blanc", "km": 222}
+    assert found["near"] is None  # Chamonix is 222 km off, in France
     assert found["distance_km"] == pytest.approx(11.1, abs=0.1)
     assert client.get("/api/bases/nearest", params={"lat": 91, "lon": 7}).status_code == 422
 
@@ -245,11 +268,11 @@ def test_a_row_names_the_other_towns_of_its_area_and_how_sure_its_score_is(
 
     rows = _rank(client)["results"]
 
-    area = next(row for row in rows if row["id"] == BETHESDA)  # the figures of Bethesda, the best town
-    assert area["named"] == {"id": CHAMONIX, "name": "Chamonix-Mont-Blanc"}  # named after the bigger of the two
+    area = next(row for row in rows if row["id"] == BETHESDA)  # named after Bethesda, the best town, with its figures
+    assert "named" not in area  # round 4 (ADR-0089): no other name than the town it is scored as
     assert (area["name"], area["population"], area["hike_groups"]) == ("Bethesda", 4_735, 4)
     assert area["area_bases"] == 2
-    assert area["area_towns"] == [{"id": BETHESDA, "name": "Bethesda", "population": 4_735}]
+    assert area["area_towns"] == [{"id": CHAMONIX, "name": "Chamonix-Mont-Blanc", "population": 10_614}]
     assert area["sure"] == pytest.approx(0.5)
     assert area["score"] == pytest.approx(0.5)
     assert next(row for row in rows if row["id"] == MOAB)["area_towns"] == []
@@ -264,7 +287,7 @@ def test_a_row_named_after_a_bigger_town_names_its_best_town_and_score(
     rows = _rank(client)["results"]
 
     area = next(row for row in rows if row["id"] == CHAMONIX)
-    assert area["named"] is None
+    assert "named" not in area
     assert area["best_town"] == {"id": BETHESDA, "name": "Bethesda", "score": pytest.approx(1)}
     assert area["area_towns"][0]["id"] == BETHESDA
     assert next(row for row in rows if row["id"] == MOAB)["best_town"] is None
@@ -517,5 +540,6 @@ def test_town_name_lookups_do_not_count_against_base_rankings(data: ServingData)
 
 def test_a_big_town_says_the_other_big_town_it_is_near(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("dayhike.bases.NEAR_TOWN_PEOPLE", 4_000)  # Keswick, Bethesda, Chamonix and Moab are big
+    monkeypatch.setattr("dayhike.bases.NEAR_TOWN_M", 300_000)  # and Bethesda, in Keswick's country, close enough
 
     assert _search(client, "Keswick")[0]["near"] == {"name": "Bethesda", "km": 222}  # not itself

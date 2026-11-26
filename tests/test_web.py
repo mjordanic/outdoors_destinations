@@ -1381,7 +1381,7 @@ def test_place_search_answers_from_the_export_and_is_credited(tmp_path: Path, ma
     assert info["place_search"] is True
     assert "GeoNames" in info["attribution"]["geonames"]
     assert placed.get("/api/place", params={"q": "zag", "limit": 1}).json() == {
-        "results": [{"name": "Zagreb", "country": "HR", "lat": 45.81444, "lon": 15.97798, "population": 698966}],
+        "results": [{"name": "Zagreb", "country": "HR", "lat": 45.81444, "lon": 15.97798, "population": 698966, "covered": True}],
         "guess": False,
     }
     assert placed.get("/api/place", params={"q": "zagerb"}).json()["guess"] is True  # "Did you mean Zagreb?"
