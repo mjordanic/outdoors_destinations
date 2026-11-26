@@ -2649,8 +2649,8 @@ the country the hike starts in (`country`, `name`, `numbers`, `rescue`, `rescue_
 They also have `border_emergency`, the same row for the country across the border a DayHike's
 route crosses or its Trailhead is within 2 km of, or the one Natural Earth put a start the OSM borders
 moved in (`borders.npy`); null for every other hike, a
-ComposedHike, or an export without it. A Ranking that waits 12 s for its turn answers 503 with
-`Retry-After: 5`. Detail, compose, rank and pair take
+ComposedHike, or an export without it. A Ranking that waits 12 s for its turn, or is not answered 50 s
+after it came (it ends in the background), answers 503 with `Retry-After: 5` (ADR-0087). Detail, compose, rank and pair take
 `return_to_start` (default true; `?return_to_start=false` on `GET
 /api/hikes/{id}`): true measures every hike with its way back to its start
 (facts, `climb_m`, `descent_m` and the listed `length_m` included, with
@@ -2684,8 +2684,9 @@ loops also start near it (ADR-0036), and with `max_hours` only loops starting
 within the drive, each with its `drive_hours`. Every row has its `line` and `versions`, the other hikes of its
 area (DayHikes or loops starting within the GroupingRadius of it, at most three hikes per
 row) in the same shape. With `max_km` only loops starting within it are listed. Loop work stops at 5 s. The GET routes also answer HEAD. Each client gets 20 Rankings and
-300 other calls a minute; one Ranking runs at a time per process, in the order they came, waiting at most 12 s
-(then 503), and a client, a browser tab at an address (the page names its tab in `X-HikesAlike-Tab`), has
+300 other calls a minute; at most two Rankings run at a time per process (`RANKINGS_AT_ONCE`, BaseRankings
+included), in the order they came, waiting at most 12 s (then 503) and answered within 50 s (`RANK_DEADLINE_S`,
+then 503 while it ends in the background, keeping its turn; ADR-0087), and a client, a browser tab at an address (the page names its tab in `X-HikesAlike-Tab`), has
 at most one queued or running (another is a 409, which the page waits out), and an address at most 4 (ADR-0054). A request body over 256 KB, or one sent
 without a `Content-Length`, is refused unread (413, 411); `weights` and `excluded` name each Measure at most once,
 and an unknown Measure name in `weights` is a 422.
@@ -2726,11 +2727,17 @@ the hikes in Reach each month (null when unknown). `POST /api/bases/detail` take
 "trailhead", "minutes", "length_m", "climb_m", "highest_m", "summit", "round_trip"}` (one way, as the hike filter
 measures them; null when unknown), nearest first. Both count day hikes only: a multi-day route (over 40 km one
 way, ADR-0056) is no hike of a Base (ADR-0086). A seed or Base that is no Base is a 404 that says the link may
-be old. BaseRankings have their own queue, apart from the hike Rankings' and with the same rules, and their own
-limit of 20 a minute per client; town-name lookups and a Base's hikes count against the general API limit
+be old. BaseRankings share the hike Rankings' two turns with the same rules (a tab may have one of each
+queued or running; ADR-0087), and have their own limit of 20 a minute per client; town-name lookups and a Base's hikes count against the general API limit
 instead. A row's town, or its numbered dot on the map, opens that Base: its passing hikes with their minutes,
 length, climb and highest point, nearest first, on the map at their Trailheads, each with a link into the hike
 search (`#hike=<id>`, the hike as the liked one), from which a button comes back to the Base.
+
+A site with Bases opens, at its bare address, on a landing of both tools side by side, "Find a hike you like"
+and "Find a hiking base you like", each with what it does; an address naming either skips it (`#base…`, a hike,
+composed hike or wish link, or `#hikes`, the hike search with nothing chosen, which it keeps as its address
+instead of the bare one). At the top of either tool a switch opens the other as it was left, as a step of the
+history; a site without Bases opens on the hike search, with no landing and no switch.
 
 The page shows a hundred rows at a time ("Show more"), the Hiker's own town with its mild months and trait
 values over them, and a line under each score whose parts multiply to it: how alike the hikes are (mix, and

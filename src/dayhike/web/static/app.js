@@ -652,6 +652,12 @@ function shownAddress() {
   return state.wishing ? wishHash() : state.liked ? likedHash(state.liked) : "";
 }
 
+// The address of the hike search with nothing chosen: "#hikes" on a site with Bases, whose bare address is the
+// landing of both tools (bases.js). The landing's own address stays as it is, when going to it resets the search.
+function hikesHome() {
+  return location.pathname + location.search + (state.info.bases && location.hash ? "#hikes" : "");
+}
+
 // Fills the search settings an address's ``parts`` (readLink) name; those it does not name stay as they
 // are (on a page just opened, their defaults). ``weights``: also the weights (not a wish's).
 function applySettings(parts, weights) {
@@ -1813,7 +1819,7 @@ function setWishing(on, { keepPlace = false } = {}) {
     pick.close();
     setStatus("");
   }
-  history.replaceState(null, "", on ? wishHash() : state.liked ? likedHash(state.liked) : location.pathname + location.search);
+  history.replaceState(null, "", on ? wishHash() : state.liked ? likedHash(state.liked) : hikesHome());
   const liked = state.liked;
   if (!on && liked && (liked.way_back != null) !== measuredBack(liked)) remeasure(liked);
 }
@@ -2869,7 +2875,7 @@ const compose = {
     if (liked) {
       chosen++; // drops a hike still loading
       unchoose();
-      history.replaceState(null, "", location.pathname + location.search);
+      history.replaceState(null, "", hikesHome());
       pick.hint(CLEARED_HINT);
     }
   },

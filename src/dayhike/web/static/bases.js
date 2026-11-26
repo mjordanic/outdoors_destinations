@@ -4,6 +4,7 @@
 // foldName, addBaseLayer, readLink, shownAddress), which loads first; it starts once app.js has /api/info. The address
 // names the town, the Reach and the Base opened, so a reload or a shared link opens them again (ADR-0073);
 // each step the Hiker takes is a step of the browser's history, so Back undoes it.
+// A site with Bases opens on a landing of both tools; an address naming either opens it, under a switch to the other.
 
 const BASE_PIN_KM = 5; // a click on the map chooses the nearest Base at least this close to it,
 const BASE_PIN_PX = 40; // or within this many pixels of it at the map's zoom,
@@ -78,9 +79,16 @@ const bases = {
     });
     this.unchosen = $("#base-chosen").innerHTML;
     this.pinHint = $("#base-pin-hint").textContent;
-    $("#bases-on").hidden = false;
-    $("#bases-on").addEventListener("click", () => this.toggle(true));
-    $("#bases-off").addEventListener("click", () => this.toggle(false));
+    $("#base-intro").innerHTML = [...$("#landing-base").parentElement.querySelectorAll("p")].map((p) => p.outerHTML).join("");
+    // The landing and the switch at the top open a tool as it was left, as a step of its own.
+    for (const link of document.querySelectorAll("#landing a.start, #tool-switch a")) {
+      link.addEventListener("click", (event) => {
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+        event.preventDefault();
+        const on = link.getAttribute("href") === "#base";
+        if (!$("#landing").hidden || on === $("#base-panel").hidden) this.toggle(on);
+      });
+    }
     $("#base-find").addEventListener("click", () => this.find());
     $("#base-table").addEventListener("click", (event) => {
       const button = event.target.closest("button[data-base]");
@@ -117,8 +125,9 @@ const bases = {
   toggle(on, address = true) {
     document.body.classList.toggle("finding-bases", on);
     $("#base-panel").hidden = $("#base-card").hidden = !on;
+    this.showTool(on ? "bases" : "hikes");
     if (on) $("#bases-back").hidden = true;
-    if (address) history.pushState(null, "", on ? this.hash() : shownAddress() || location.pathname + location.search);
+    if (address) history.pushState(null, "", on ? this.hash() : shownAddress() || "#hikes");
     if (!on) return;
     if (!this.map) {
       this.map = L.map($("#base-map"));
@@ -130,6 +139,24 @@ const bases = {
     }
     this.map.invalidateSize();
     $("#base-search").focus();
+  },
+
+  // What the page shows: "landing", both tools to choose from (an address naming nothing), or "bases" or
+  // "hikes" with the switch to the other at the top.
+  showTool(tool) {
+    document.body.classList.toggle("on-landing", tool === "landing");
+    $("#landing").hidden = tool !== "landing";
+    $("#tool-switch").hidden = tool === "landing";
+    for (const [id, its] of [["#switch-hike", "hikes"], ["#switch-base", "bases"]]) {
+      if (tool === its) $(id).setAttribute("aria-current", "page");
+      else $(id).removeAttribute("aria-current");
+    }
+    this.intro();
+  },
+
+  // What Find a base does, until a town is chosen.
+  intro() {
+    $("#base-intro").hidden = $("#base-panel").hidden || Boolean(this.seed);
   },
 
   // A hike of an opened Base was followed into the hike search: a button there comes back to it.
@@ -147,6 +174,7 @@ const bases = {
   // ``base`` is the Hiker's: the list is asked for at once.
   choose(base, via = "search") {
     this.seed = base;
+    this.intro();
     this.searchProblem("");
     this.say(base);
     $("#base-search").value = base.name;
@@ -478,11 +506,13 @@ const bases = {
 
   // An address naming the mode opens it with every setting at its default but those it names (ADR-0073);
   // ``changed`` (a hashchange: Back, Forward, or a link) to one that does not leaves the mode for app.js to
-  // open it. A list or a Base already asked for is shown again from the answers kept.
+  // open it, or for the landing when it names nothing. A list or a Base already asked for is shown again
+  // from the answers kept.
   follow(changed) {
     const parts = readLink(location.hash);
     if (!parts.has("base")) {
       if (changed && !$("#base-panel").hidden) this.toggle(false, false);
+      this.showTool(location.hash ? "hikes" : "landing");
       return;
     }
     const id = (decoded(parts.get("base")) ?? "").trim(), open = (decoded(parts.get("open") ?? "") ?? "").trim();

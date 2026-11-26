@@ -2641,7 +2641,7 @@ def test_the_broken_link_message_goes_once_the_hiker_looks_for_another_hike(brow
         page.locator("#map-pick-on").check()
 
     message.wait_for(state="detached")
-    assert page.get_by_text("Search for a hike by name, or select one on the map.").is_visible()
+    assert page.locator("#liked").get_by_text("Search for a hike by name, or select one on the map.").is_visible()
     assert page.locator("#liked-name").inner_text() == "No hike chosen yet."
 
 
@@ -3657,7 +3657,7 @@ def test_a_map_the_hiker_has_touched_is_not_zoomed_in_by_itself(browser, server)
     spans = dense_hikes(server, page, drawable_span=0.0)  # never drawable
     page.locator("#search").fill("Ridge Lake")
     page.locator("#suggestions li.landmark").get_by_role("button", name="Show on map").dispatch_event("mousedown")
-    page.wait_for_function("() => pick.fitting")
+    page.wait_for_function("() => pick.fitting && pick.map.getZoom() >= PICK_ZOOM")  # the zoom animation is over
     zoom = page.evaluate("pick.map.getZoom()")
 
     page.locator("#map-pick .pick-map").dispatch_event("pointerdown")

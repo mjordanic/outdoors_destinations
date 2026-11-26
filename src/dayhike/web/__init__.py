@@ -3,8 +3,9 @@
 ``create_app`` serves ``ServingData`` (``dayhike.serving``): name search, place
 search when the export has GeoNames places (ADR-0029), the hikes in a map view,
 hike detail, the Measure list, the score of any two hikes, and Ranking with an
-optional highways-only DriveTime pre-filter and a straight-line distance limit, ten rows at a time (ADR-0032). Every client gets a request budget per minute, and one Ranking
-runs at a time per instance, so a small container holds its memory, first come first served and at most one
+optional highways-only DriveTime pre-filter and a straight-line distance limit, ten rows at a time (ADR-0032). Every client gets a request budget per minute, and at most
+``RANKINGS_AT_ONCE`` Rankings and BaseRankings run at a time per instance, so a small container holds its memory,
+first come first served, each answered within ``RANK_DEADLINE_S`` (ADR-0087), and at most one of each
 per browser tab queued or running (a few per address, so people behind one address do not wait on each other
 and no address holds it for everyone); the trail network the way back is
 searched on is memory-mapped from the export (built once, a request arriving during that build waiting for it, in an export without it). When the export has a TrailGraph,
@@ -37,6 +38,7 @@ import threading
 import time
 import unicodedata
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor
 from typing import Literal
 from collections import OrderedDict, deque
 from collections.abc import Callable, Mapping, Sequence
@@ -107,9 +109,15 @@ RANK_RATE = 20
 BASE_RANK_RATE = 20
 API_RATE = 300
 RATE_WINDOW_S = 60.0
-# A Ranking waits this long for its turn: with the slowest run (a 3 h drive from Munich, up to about 45 s on 1 vCPU, docs/deploy.md)
-# it still ends before Cloud Run's 60 s request timeout, so a visitor gets the app's 503, not Cloud Run's 504.
+# The most Rankings and BaseRankings that run at once per instance (ADR-0087): the heavy ones (a 3 h drive from Munich,
+# up to about 45 s alone on 1 vCPU, docs/deploy.md; a BaseRanking, a few seconds) wait for one of them to end.
+RANKINGS_AT_ONCE = 2
+# A Ranking waits this long for its turn, then the visitor is told the server is busy (ADR-0055).
 RANK_WAIT_S = 12.0
+# A Ranking not answered this long after its request came, waiting and running, is answered busy instead, well before
+# Cloud Run's 60 s request timeout, so the visitor gets the app's message, not Cloud Run's 504. Two heavy Rankings
+# side by side on 1 vCPU each run slower than one alone; the late one ends in the background and keeps its turn.
+RANK_DEADLINE_S = 50.0
 # The page names its tab in this header: one Ranking queued or running per tab, at most PER_ADDRESS per address.
 TAB_HEADER = "X-HikesAlike-Tab"
 TAB_NAME = re.compile(r"[A-Za-z0-9-]{1,64}")
@@ -598,19 +606,20 @@ class RateLimiter:
 
 
 class RankingQueue:
-    """One Ranking runs at a time, in the order they came; a client (a browser tab at an address) has at
-    most one queued or running, and an address at most ``per_address``.
+    """At most ``at_once`` Rankings run at a time, in the order they came; a client (a browser tab at an
+    address) has at most one queued or running, and an address at most ``per_address``.
 
     So a client within its rate limit cannot keep the Ranking busy for everyone: it waits its turn
     behind every other client queued before its next Ranking. People behind one address (a home, an
     office, a phone network) each have their own turn, up to ``per_address`` at once.
     """
 
-    def __init__(self, per_address: int = PER_ADDRESS) -> None:
+    def __init__(self, per_address: int = PER_ADDRESS, at_once: int = RANKINGS_AT_ONCE) -> None:
         self.per_address = per_address
+        self.at_once = at_once
         self._turn = threading.Condition()
         self._queue: deque[tuple[str, str]] = deque()  # the (address, tab) clients waiting, first in line first
-        self._running: tuple[str, str] | None = None  # the client whose Ranking runs
+        self._running: list[tuple[str, str]] = []  # the clients whose Rankings run
 
     def enter(self, address: str, tab: str, timeout: float) -> str:
         """Wait for this client's turn: "run" once it runs, "timeout" after ``timeout`` seconds; at once
@@ -618,23 +627,23 @@ class RankingQueue:
         ``per_address``."""
         key = (address, tab)
         with self._turn:
-            if key in self._queue or key == self._running:
+            if key in self._queue or key in self._running:
                 return "own"
-            held = [client for client in (*self._queue, self._running) if client is not None and client[0] == address]
+            held = [client for client in (*self._queue, *self._running) if client[0] == address]
             if len(held) >= self.per_address:
                 return "address"
             self._queue.append(key)
-            if self._turn.wait_for(lambda: self._running is None and self._queue[0] == key, timeout):
-                self._running = self._queue.popleft()
+            if self._turn.wait_for(lambda: len(self._running) < self.at_once and self._queue[0] == key, timeout):
+                self._running.append(self._queue.popleft())
                 return "run"
             self._queue.remove(key)
             self._turn.notify_all()  # it may have been first in line
             return "timeout"
 
-    def leave(self) -> None:
-        """The running Ranking ended: the next in line runs."""
+    def leave(self, address: str, tab: str) -> None:
+        """This client's Ranking ended: the next in line runs."""
         with self._turn:
-            self._running = None
+            self._running.remove((address, tab))
             self._turn.notify_all()
 
 
@@ -685,8 +694,10 @@ def create_app(
         "bases": RateLimiter(base_rank_rate, RATE_WINDOW_S),
         "api": RateLimiter(api_rate, RATE_WINDOW_S),
     }
-    rankings = RankingQueue()
-    base_rankings = RankingQueue()  # a BaseRanking waits for the one before it, not for the hike Rankings (ADR-0084)
+    # Hike Rankings and BaseRankings share the turns (ADR-0087); a tab may have one of each.
+    rankings = RankingQueue(at_once=RANKINGS_AT_ONCE)
+    # Runs each Ranking off the request's thread, so the request can be answered at RANK_DEADLINE_S while it ends.
+    runner = ThreadPoolExecutor(max_workers=RANKINGS_AT_ONCE, thread_name_prefix="ranking")
     base_finder = None
     if data.bases is not None:  # imported only for an export with Bases, as ``ServingData`` does
         from dayhike import bases as base_finder
@@ -949,10 +960,13 @@ def create_app(
             return hours
         return dict(zip(kept[0].tolist(), kept[1].tolist()))
 
-    def take_turn(queue: RankingQueue, request: Request) -> None:
-        """Wait for this client's turn in ``queue``; refused at once or after ``RANK_WAIT_S`` (ADR-0055)."""
+    def ranked[T](request: Request, kind: str, started: float, work: Callable[[], T]) -> T:
+        """``work`` run in this client's turn (``kind`` "rank" or "bases": a tab may have one of each);
+        refused at once or after ``RANK_WAIT_S`` (ADR-0055), and answered busy at ``RANK_DEADLINE_S`` after
+        ``started`` while it ends in the background, keeping its turn until then (ADR-0087)."""
         tab = request.headers.get(TAB_HEADER, "")
-        turn = queue.enter(client_key(request), tab if TAB_NAME.fullmatch(tab) else "", RANK_WAIT_S)
+        client = (client_key(request), f"{tab if TAB_NAME.fullmatch(tab) else ''}/{kind}")
+        turn = rankings.enter(*client, RANK_WAIT_S)
         if turn == "own":
             raise HTTPException(409, "Your previous search is still running; try again when it ends.")
         if turn == "address":
@@ -964,6 +978,25 @@ def create_app(
                 "Try again in a moment.",
                 headers={"Retry-After": "5"},
             )
+
+        def run() -> T:
+            try:
+                return work()
+            finally:
+                rankings.leave(*client)
+
+        future = runner.submit(run)
+        try:
+            return future.result(timeout=max(0.0, started + RANK_DEADLINE_S - time.monotonic()))
+        except TimeoutError:
+            if future.done():  # the work's own TimeoutError
+                raise
+            # Still running: Cloud Run would cut it off with its own 504.
+            raise HTTPException(
+                503,
+                "The server is busy with other visitors' searches, and yours did not finish in time. Try again in a moment.",
+                headers={"Retry-After": "5"},
+            ) from None
 
     @app.post("/api/rank")
     def rank(body: RankRequest, request: Request) -> dict:
@@ -980,38 +1013,40 @@ def create_app(
         if body.regions is not None and not set(body.regions) <= set(data.regions):
             raise HTTPException(400, f"this catalog has hikes in {', '.join(data.regions)} only")
         in_regions = None if body.regions is None else data.region_rows(body.regions)
-        take_turn(rankings, request)
-        try:
-            hours = reach = None
-            if body.max_hours is not None:
-                max_hours = body.max_hours
-                client = drive_client(max_hours)
-                hours = drive_reach(origin, max_hours, client)
 
-                def reach(places: list[tuple[float, float]]) -> list[float | None]:
-                    return data.drive_hours(origin, max_hours, client, places)
+        def work() -> tuple:
+            try:
+                hours = reach = None
+                if body.max_hours is not None:
+                    max_hours = body.max_hours
+                    client = drive_client(max_hours)
+                    hours = drive_reach(origin, max_hours, client)
 
-            results = data.rank(
-                seed,
-                weights,
-                month=body.month,
-                allowed_rows=in_regions if hours is None else sorted(hours),
-                limit=POOL,
-                return_to_start=body.return_to_start,
-                reach=reach,
-                loops=body.loops,
-                near=near,
-                group_m=group_m,
-                after=[(place.lat, place.lon) for place in body.after],
-                origin=origin,
-                draw=body.draw,
-            )
-        except (urllib.error.URLError, ConnectionError, TimeoutError):
-            raise HTTPException(503, "the drive-time service is not answering; try again") from None
-        except ValueError as error:  # a RouteError too
-            raise HTTPException(400, str(error)) from None
-        finally:
-            rankings.leave()
+                    def reach(places: list[tuple[float, float]]) -> list[float | None]:
+                        return data.drive_hours(origin, max_hours, client, places)
+
+                results = data.rank(
+                    seed,
+                    weights,
+                    month=body.month,
+                    allowed_rows=in_regions if hours is None else sorted(hours),
+                    limit=POOL,
+                    return_to_start=body.return_to_start,
+                    reach=reach,
+                    loops=body.loops,
+                    near=near,
+                    group_m=group_m,
+                    after=[(place.lat, place.lon) for place in body.after],
+                    origin=origin,
+                    draw=body.draw,
+                )
+            except (urllib.error.URLError, ConnectionError, TimeoutError):
+                raise HTTPException(503, "the drive-time service is not answering; try again") from None
+            except ValueError as error:  # a RouteError too
+                raise HTTPException(400, str(error)) from None
+            return hours, results
+
+        hours, results = ranked(request, "rank", started, work)
         listed = [hike for row in results for hike in (row, *row["versions"])]
         for result in listed:
             if result["id"] is not None:  # a SuggestedLoop has the hours to its own start
@@ -1099,11 +1134,8 @@ def create_app(
         me = base_of(body.seed)
         hike_filter = body.parsed_filter()
         mask = hike_mask(data.store, hike_filter) & data.day_hikes()  # a Base's hikes are day hikes (ADR-0086)
-        take_turn(base_rankings, request)
-        try:
-            ranking = found.rank_bases(data, body.seed, body.reach, mask, traits=body.town_traits(body.traits))
-        finally:
-            base_rankings.leave()
+        traits = body.town_traits(body.traits)
+        ranking = ranked(request, "bases", started, lambda: found.rank_bases(data, body.seed, body.reach, mask, traits=traits))
         rows = ranking.rows[:BASE_ROWS]
         seed, *listed = found.describe_bases(data, [me, *(row.base for row in rows)], body.reach)
         others = sorted({town for row in rows for town in row.towns[: found.AREA_TOWNS]} | {row.best for row in rows if row.best >= 0})

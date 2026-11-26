@@ -10,6 +10,11 @@ You give it a hike you liked. It finds the hikes most like it.
 Don't have a hike in mind? Describe the one you want instead, and it finds
 hikes that fit.
 
+The site opens on a choice of two: **Find a hike you like**, and **Find a
+hiking base you like**, which starts from a town you stayed in and finds
+other towns with hikes like those within a drive of it. The switch at the top
+of the page goes from one to the other.
+
 - It looks at length, climbing, the highest point, the landscape, the
   typical temperature in the month you pick, and whether the hike runs beside
   a lake or the sea. If you ask for more, it also looks at rain and sunshine.
@@ -347,10 +352,14 @@ the button you pressed (Find similar, or Show 10 more beside it), with a
 **Try again** button, and above the list it leaves, which is still the list
 from before.
 
-The server runs one search at a time for everyone, in turn. When other
+The server runs two searches at a time for everyone, in turn. When other
 visitors' searches are ahead of yours for 12 seconds, it says "The server is
 busy with other visitors' searches: yours waited 12 s for its turn. Try again
-in a moment." Your search itself is quick: press **Try again**.
+in a moment." Your search itself is quick: press **Try again**. A long search,
+such as a 3 h drive from a busy region, that has not finished within 50 seconds
+says "The server is busy with other visitors' searches, and yours did not
+finish in time. Try again in a moment." It keeps running on the server, so try
+again a little later.
 
 Each browser tab runs one search at a time. If you press Find again while your
 earlier search is still running on the server, the page says "Waiting for your

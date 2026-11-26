@@ -413,7 +413,7 @@ def test_a_towns_hikes_say_one_way_and_link_to_hikes_like_them(browser, server) 
 def phone(browser, server: str, hash: str = ""):
     page = open_page(browser, server, Api({}), width=390, touch=True, hash=hash)
     if not hash:
-        page.get_by_role("button", name="Find a base").click()
+        page.get_by_role("link", name="Start with a town").click()
     page.locator("#base-panel").wait_for()
     return page
 

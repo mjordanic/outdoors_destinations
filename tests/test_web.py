@@ -1465,36 +1465,51 @@ def test_a_client_with_a_ranking_running_waits_its_turn_behind_the_others() -> N
     def rank(key: str) -> None:
         assert queue.enter(key, "", 5.0) == "run"
         order.append(key)
-        queue.leave()
+        queue.leave(key, "")
 
     assert queue.enter("busy", "", 5.0) == "run"
     assert queue.enter("busy", "", 5.0) == "own"  # one queued or running per client: its next is refused at once
+    assert queue.enter("long", "", 5.0) == "run"  # the second of RANKINGS_AT_ONCE
     other = threading.Thread(target=rank, args=("other",))
     other.start()
     while ("other", "") not in queue._queue:
         time.sleep(0.001)
-    queue.leave()
+    queue.leave("busy", "")
     again = threading.Thread(target=rank, args=("busy",))  # its next Ranking, sent the moment the first ended
     again.start()
     other.join(5)
     again.join(5)
+    queue.leave("long", "")
 
     assert order == ["other", "busy"]
 
 
 def test_a_ranking_that_waits_too_long_gives_up_its_place_in_line() -> None:
-    queue = web.RankingQueue()
+    queue = web.RankingQueue(at_once=1)
     assert queue.enter("running", "", 5.0) == "run"
 
     assert queue.enter("late", "", 0.01) == "timeout"
-    queue.leave()
+    queue.leave("running", "")
     assert queue.enter("late", "", 0.01) == "run"
+
+
+def test_two_rankings_run_at_once_and_a_third_waits_for_one_of_them_to_end() -> None:
+    # A heavy Ranking (a long drive limit, Find a base) takes tens of seconds on 1 vCPU: two run side by
+    # side, so one visitor's does not hold up everyone's, and no more, so the instance keeps its memory.
+    assert web.RANKINGS_AT_ONCE == 2
+    queue = web.RankingQueue()
+    assert queue.enter("first", "", 5.0) == "run"
+    assert queue.enter("second", "", 5.0) == "run"  # does not wait for the first
+
+    assert queue.enter("third", "", 0.01) == "timeout"
+    queue.leave("first", "")
+    assert queue.enter("third", "", 0.01) == "run"
 
 
 def test_tabs_behind_one_address_each_take_their_own_turn_up_to_a_few() -> None:
     # Visitors behind one address (a home, an office, a test machine) do not wait on each other's
     # searches, but one address cannot fill the line (ADR-0054).
-    queue = web.RankingQueue(per_address=3)
+    queue = web.RankingQueue(per_address=3, at_once=1)
     assert queue.enter("1.2.3.4", "tab-a", 5.0) == "run"
     waiting = [threading.Thread(target=queue.enter, args=("1.2.3.4", tab, 5.0)) for tab in ("tab-b", "tab-c")]
     for thread in waiting:
@@ -1505,9 +1520,10 @@ def test_tabs_behind_one_address_each_take_their_own_turn_up_to_a_few() -> None:
     assert queue.enter("1.2.3.4", "tab-a", 5.0) == "own"  # its own previous search still runs
     assert queue.enter("1.2.3.4", "tab-d", 5.0) == "address"  # three from this address already
     assert queue.enter("5.6.7.8", "tab-a", 0.01) == "timeout"  # another address queues as before
-    for _ in range(3):
-        queue.leave()
-        time.sleep(0.01)
+    for tab in ("tab-a", "tab-b", "tab-c"):
+        while ("1.2.3.4", tab) not in queue._running:
+            time.sleep(0.001)
+        queue.leave("1.2.3.4", tab)
     for thread in waiting:
         thread.join(5)
 
@@ -1528,7 +1544,8 @@ def test_a_ranking_names_its_tab_so_another_tab_at_one_address_is_not_refused(da
             assert client.post("/api/rank", json={"seed": 1001}, headers={web.TAB_HEADER: tab}).status_code == 200
     finally:
         web.RankingQueue = queue
-    assert [tab for _, tab in entered] == ["tab-1", "", ""]  # a name that is no plain name counts as none
+    # a name that is no plain name counts as none; a tab has one hike Ranking and one BaseRanking
+    assert [tab for _, tab in entered] == ["tab-1/rank", "/rank", "/rank"]
 
 
 def test_a_ranking_that_waited_its_turn_too_long_says_others_are_ahead_and_when_to_retry(data: ServingData) -> None:
@@ -1556,9 +1573,74 @@ def test_a_ranking_says_whether_its_multi_day_routes_come_after_its_day_hikes(cl
     assert {row["id"]: row["multi_day"] for row in body["results"]} == {1001: False, 1003: False, 1007: False}
 
 
-def test_a_ranking_that_waited_its_longest_still_ends_before_cloud_runs_timeout() -> None:
-    slowest_run_s = 45  # a 3 h drive Ranking from Munich on 1 vCPU, upper estimate (docs/deploy.md, ADR-0083)
-    assert web.RANK_WAIT_S + slowest_run_s < 60  # Cloud Run's --timeout: else the visitor gets its 504, not our 503
+def test_a_ranking_is_answered_before_cloud_runs_timeout_however_long_it_waits_and_runs() -> None:
+    # Cloud Run's --timeout is 60 s: past it the visitor gets Cloud Run's 504, not the app's busy message.
+    assert web.RANK_WAIT_S < web.RANK_DEADLINE_S <= 50
+
+
+def _held_rank(data: ServingData, monkeypatch: pytest.MonkeyPatch) -> tuple[threading.Semaphore, threading.Event]:
+    """``data.rank`` held until the Event is set; the Semaphore is released as each one starts."""
+    started, release = threading.Semaphore(0), threading.Event()
+    rank = data.rank
+
+    def held(*args, **kwargs):
+        started.release()
+        release.wait(10)
+        return rank(*args, **kwargs)
+
+    monkeypatch.setattr(data, "rank", held)
+    return started, release
+
+
+def test_two_visitors_rankings_run_side_by_side_and_a_third_is_told_the_server_is_busy(
+    data: ServingData, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(web, "RANK_WAIT_S", 0.05)
+    client = TestClient(create_app(data))
+    started, release = _held_rank(data, monkeypatch)
+    answers: dict[str, int] = {}
+
+    def rank(tab: str) -> None:
+        answers[tab] = client.post("/api/rank", json={"seed": 1001}, headers={web.TAB_HEADER: tab}).status_code
+
+    running = [threading.Thread(target=rank, args=(tab,)) for tab in ("tab-1", "tab-2")]
+    for thread in running:
+        thread.start()
+    try:
+        assert started.acquire(timeout=10) and started.acquire(timeout=10)  # both run before either ends
+        third = client.post("/api/rank", json={"seed": 1001}, headers={web.TAB_HEADER: "tab-3"})
+    finally:
+        release.set()
+        for thread in running:
+            thread.join(10)
+
+    assert answers == {"tab-1": 200, "tab-2": 200}
+    assert third.status_code == 503 and third.json()["detail"].startswith("The server is busy with other visitors' searches")
+
+
+def test_a_ranking_still_running_near_cloud_runs_timeout_is_answered_busy_and_ends_in_the_background(
+    data: ServingData, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(web, "RANK_DEADLINE_S", 0.2)
+    client = TestClient(create_app(data))
+    _, release = _held_rank(data, monkeypatch)
+    headers = {web.TAB_HEADER: "tab-1"}
+    try:
+        late = client.post("/api/rank", json={"seed": 1001}, headers=headers)
+        again = client.post("/api/rank", json={"seed": 1001}, headers=headers)  # while the first still runs
+    finally:
+        release.set()
+
+    assert late.status_code == 503 and late.headers["retry-after"] == "5"
+    assert late.json()["detail"] == (
+        "The server is busy with other visitors' searches, and yours did not finish in time. Try again in a moment."
+    )
+    assert again.status_code == 409  # not run twice: it keeps its turn until it ends
+    for _ in range(500):  # it ends in the background and gives its turn back
+        if (after := client.post("/api/rank", json={"seed": 1001}, headers=headers)).status_code != 409:
+            break
+        time.sleep(0.01)
+    assert after.status_code == 200
 
 
 def test_with_the_site_url_each_page_names_itself_and_its_preview_image_by_full_address(data: ServingData) -> None:
