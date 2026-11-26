@@ -2555,6 +2555,7 @@ short:
 | POST | `/api/pair` | the score of two given hikes |
 | GET | `/api/bases/search?q=` | Bases (towns to stay in) by name, for "Find a base" |
 | GET | `/api/bases/nearest?lat=&lon=` | the Base nearest a pin on the map |
+| GET | `/api/bases/town?id=` | the Base of a link's number |
 | POST | `/api/bases/rank` | a BaseRanking for the Hiker's Base, with a HikeFilter and TownTraits |
 | POST | `/api/bases/detail` | one Base: its hikes in Reach that pass the HikeFilter, with minutes |
 
