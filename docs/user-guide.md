@@ -255,8 +255,10 @@ whose hikes within a drive are like those of a town you stayed in.
    *matters* or *important*). Town size starts as a filter up to 50,000
    people.
 
-**Find bases** also takes a name typed but not picked. Each row is a town
-with its score and the months that are mild for hiking there; if too few of
+**Find bases** is greyed out while the box holds a name not picked from the
+list: pick one, or press Enter to look the name up. Each row is a town with
+its score, its hikes counted beside yours ("12 hikes counted (yours: 40)")
+and the months that are mild for hiking there; if too few of
 your town's hikes are in reach, the page says so and suggests loosening the
 hike choices or a longer drive. Open a town to see its hikes in reach,
 nearest first, on the map; "Find hikes like this" on one starts a hike search
