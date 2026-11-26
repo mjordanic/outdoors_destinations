@@ -2175,18 +2175,19 @@ class ServingData:
         the country the words name when they name one ("Keswick, United Kingdom"), anywhere when they name
         none (a county or a region: "Keswick, Cumbria" offers every Keswick); else the places whose name
         shares its first ``PLACE_TYPO_START`` letters and is ``PLACE_TYPO_RATIO`` alike to it ("Innsbruk"),
-        the most alike first, then the most populous, said to be guesses.
+        in that country when one is named ("Innsbruk, Austria"), the most alike first, then the most
+        populous, said to be guesses.
         """
         found = self.find_place(query, limit)
         needle = _fold(query).strip()
         if found or self.places is None or not needle:
             return found, False
         head, comma, tail = needle.rpartition(",")
+        country = None
         if comma and head.strip():
             needle, country = head.strip(), _place_names().get(tail.strip())
             found = self.find_place(needle, PLACE_SCAN if country else limit)
-            if country:
-                return [place for place in found if place["country"] == country][:limit], False
+            found = [place for place in found if not country or place["country"] == country][:limit]
             if found:
                 return found, False
         if len(needle) <= PLACE_TYPO_START:
@@ -2201,11 +2202,12 @@ class ServingData:
                 ratio = difflib.SequenceMatcher(None, needle, name).ratio()
                 if ratio >= PLACE_TYPO_RATIO and ratio > alike.get(place, (0.0, 0))[0]:
                     alike[place] = (ratio, population or 0)
-            best = sorted(alike, key=lambda place: (-alike[place][0], -alike[place][1], place))[:limit]
+            best = sorted(alike, key=lambda place: (-alike[place][0], -alike[place][1], place))
             rows = {row[0]: row[1:] for row in db.execute(
                 f"SELECT id, name, country, lat, lon, population FROM places WHERE id IN ({','.join('?' * len(best))})", best
             )} if best else {}
         found = [dict(zip(("name", "country", "lat", "lon", "population"), rows[place])) for place in best]
+        found = [place for place in found if not country or place["country"] == country][:limit]
         return found, bool(found)
 
     def find_landmarks(self, query: str, limit: int = 5) -> list[dict]:

@@ -733,6 +733,7 @@ function resetSettings() {
   placed++; // drops a place lookup still running
   $("#origin").value = $("#origin-found").textContent = "";
   state.origin = state.missed = null;
+  $("#origin-choices").hidden = true;
   for (const [id, { value, checked, km }] of Object.entries(OPENED)) {
     if (km != null) fill($(id), km, value);
     else $(id).value = value;
@@ -3100,7 +3101,6 @@ async function findPlace() {
       const one = answer.guess ? null : found.length === 1 ? found[0] : named.length === 1 ? named[0] : null;
       if (one) origin = { lat: one.lat, lon: one.lon, label: `${one.name}, ${one.country}` };
       else if (found.length) {
-        state.missed = text; // no start until one is chosen
         offerPlaces(named.length > 1 ? named : found, answer.guess ? `No place named “${text}”. Did you mean:` : `Which place named “${text}”? Choose one:`, text);
         return;
       }
@@ -3362,6 +3362,7 @@ async function findSimilar() {
       if (warning) throw new Error(warning);
       const origin = typed || state.origin;
       if (!origin) {
+        if (!$("#origin-choices").hidden) throw new Error("Choose one of the places under the box first.");
         throw new Error(state.missed ? `No start: ${state.missed} was not found.` : "Set a starting place.");
       }
       const wrong = driveProblem();

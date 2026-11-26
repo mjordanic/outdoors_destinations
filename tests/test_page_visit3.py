@@ -103,6 +103,7 @@ def test_share_sends_the_list_with_the_liked_hike_only_once_it_is_found(browser,
 
 def test_a_place_named_by_several_offers_a_choice_with_their_countries(browser, server) -> None:
     page = start_with_a_hike(browser, server)
+    choose_hike(page, "Ridge", "Ridge Walk")
     page.get_by_label("Only hikes near a starting place").check()
     page.get_by_label("From", exact=True).fill("Ke")  # Keswick and Kessel
     page.get_by_role("button", name="Find place").click()
@@ -111,6 +112,9 @@ def test_a_place_named_by_several_offers_a_choice_with_their_countries(browser, 
     choices.get_by_role("button", name="Kessel").wait_for()
     assert "Germany" in choices.inner_text() and "United Kingdom" in choices.inner_text()
     assert page.locator("#origin-found").inner_text().startswith("Which place")
+    # Found and waiting to be chosen, the place is not "not found".
+    page.get_by_role("button", name="Find hikes").click()
+    page.get_by_text("Choose one of the places under the box first.").wait_for()
     choices.get_by_role("button", name="Keswick").click()
 
     page.get_by_text("Start: Keswick, GB").wait_for()

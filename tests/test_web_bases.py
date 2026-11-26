@@ -245,9 +245,9 @@ def test_a_row_names_the_other_towns_of_its_area_and_how_sure_its_score_is(
 
     rows = _rank(client)["results"]
 
-    area = next(row for row in rows if row["id"] == BETHESDA)
+    area = next(row for row in rows if row["id"] == CHAMONIX)  # named after the bigger town of the two
     assert area["area_bases"] == 2
-    assert area["area_towns"] == [{"id": CHAMONIX, "name": "Chamonix-Mont-Blanc", "population": 10_614}]
+    assert area["area_towns"] == [{"id": BETHESDA, "name": "Bethesda", "population": 4_735}]
     assert area["sure"] == pytest.approx(0.5)
     assert area["score"] == pytest.approx(0.5)
     assert next(row for row in rows if row["id"] == MOAB)["area_towns"] == []
@@ -256,8 +256,7 @@ def test_a_row_names_the_other_towns_of_its_area_and_how_sure_its_score_is(
 def test_a_row_named_after_a_bigger_town_names_its_best_town_and_score(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("dayhike.bases.AREA_REACHES", 100)  # Bethesda and Chamonix in one area
-    monkeypatch.setattr("dayhike.bases.NAME_WITHIN", 1.0)  # named after Chamonix, the bigger
+    monkeypatch.setattr("dayhike.bases.AREA_REACHES", 100)  # Bethesda and Chamonix in one area: named after Chamonix
 
     rows = _rank(client)["results"]
 
