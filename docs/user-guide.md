@@ -233,7 +233,8 @@ without it.
 Where the site has it, **Find a base** (under the hike search) lists towns
 whose hikes within a drive are like those of a town you stayed in.
 
-1. Type the town's name, or click the map within 5 km of it.
+1. Type the town's name, or click the map near it. Picking it lists towns
+   at once; changing a choice later lists them again.
 2. Pick the drive to where each hike starts (about 15, 30 or 60 minutes). It
    is an estimate, made once for every town.
 3. **Which hikes count** (optional): limit climb, length or highest point, or
@@ -245,9 +246,10 @@ whose hikes within a drive are like those of a town you stayed in.
    *matters* or *important*). Town size starts as a filter up to 50,000
    people.
 
-Press **Find bases**. Each row is a town with its score and the months that are
-mild for hiking there; if too few of your town's hikes are in reach, the page
-says so and suggests a longer drive. Open a town to see its hikes in reach,
+**Find bases** also takes a name typed but not picked. Each row is a town
+with its score and the months that are mild for hiking there; if too few of
+your town's hikes are in reach, the page says so and suggests loosening the
+hike choices or a longer drive. Open a town to see its hikes in reach,
 nearest first, on the map; "Find hikes like this" on one starts a hike search
 from it. **Back to finding hikes** leaves the mode. A link to the page keeps
 the town, the drive and every choice.
