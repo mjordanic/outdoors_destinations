@@ -967,7 +967,7 @@ const bases = {
         icon: L.divIcon({ className: "base-marker", html: `<span>${i + 1}</span>`, iconSize: narrow ? [18, 18] : [22, 22] }),
         keyboard: false,
         zIndexOffset: (rows.length - i) * 1000, // the best on top
-      }).bindTooltip(`${i + 1}. ${escapeHtml(row.name)} · ${row.score.toFixed(2)}`)
+      }).bindTooltip(`${i + 1}. ${escapeHtml(row.named ? `${row.named.name} (figures for ${row.name})` : row.name)} · ${row.score.toFixed(2)}`)
         .on("click", () => this.open(row))),
     ];
     L.featureGroup(this.markers).addTo(this.layer);

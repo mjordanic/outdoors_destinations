@@ -2721,10 +2721,12 @@ told apart. `POST /api/bases/rank` takes `{"seed": place id, "reach": 15, 30 or 
 `{"at_least", "up_to"}` (size and counts) or `{"mild_in": [months]}` (months), a trait left out ignored; anything
 else is a 422, and a seed that is no Base a 404. It answers `seed` (the Base with its passing `hike_groups`),
 `too_few` (under 10 of them: no row), `traits_leave_none` (true when there are Bases that might be rows and the
-town filters leave none of them), and up to 300 `results`, one per area, each a Base with `region`,
-`score`, `hike_score`, `mix`, `coverage`, `back`, `enough`, `sure`, `hike_groups`, `area_bases`, `area_towns`
+town filters leave none of them), and up to 300 `results`, one per area, each the Base it is scored as (its
+`id`, `name` and every figure are that town's) with `named` (`{"id", "name"}` of the area's biggest town,
+which names the row, when that is not the scored one, else null), `region`, `score`, `hike_score`, `mix`, `coverage`, `back`, `enough`, `sure`, `hike_groups`, `area_bases`, `area_towns`
 (up to 5 other towns of its area, its best first when that is not the row's, then biggest first, each
-`{"id", "name", "population"}`), `best_town` (`{"id", "name", "score"}` of that best town, else null) and `cuts`, the share
+`{"id", "name", "population"}`), `best_town` (`{"id", "name", "score"}` of that best town when the row is scored as
+another, else null) and `cuts`, the share
 each "like mine" trait took off the hike score; the seed and each row have `months`, the median temperature of
 the hikes in Reach each month (null when unknown). `POST /api/bases/detail` takes `{"base": place id, "reach",
 "hike_filter"}` and answers the Base with its passing `hike_groups` and `hikes`, each `{"id", "name",
@@ -2747,8 +2749,9 @@ The page shows a hundred rows at a time ("Show more"), the Hiker's own town with
 values over them, and a line under each score whose parts multiply to it: how alike the hikes are (mix, and
 how many of each town's kinds the other has), the cut for fewer hikes, the cut for few of the Hiker's hikes to
 compare (`sure`), then each "like mine" trait's; a row standing for an area names its biggest other towns
-(`area_towns`), all of them or "among them" the biggest, and its best town with its score when the row is named
-after a bigger one; a line with a cut ends with the score it comes to. Every step
+(`area_towns`), all of them or "among them" the biggest, and its best town with its score when the row is scored
+as a bigger one; a row named after a bigger town than the one it is scored as says "figures for" that one on
+its place line and on its dot on the map; a line with a cut ends with the score it comes to. Every step
 (entering the mode, a town chosen, the Reach or a choice changed, a Base opened or closed) is a step of the
 browser's history, so Back undoes it; the answers of the last 30 lists and Bases are kept, so going back asks the
 server nothing. Choices changed in a row ask for one list once they settle (0.6 s, 0.9 s while a number is
@@ -2787,9 +2790,10 @@ a city of 100,000's own reach of its point, 5 km times the square root of its pe
 name says they are no town (`NOT_A_TOWN`: a hut, an inn, an industrial estate, a condo, a trailer park, an air
 force base, a holiday or caravan park, "(historical)"), and west of the Atlantic, Bases outside the United
 States. After the second visitor check (ADR-0086), areas form around the best towns of 1,000 people first, then
-villages of 100, then the rest; a row is named after the biggest Base (population, then places to stay) of its
-best's kind within 0.05 of its score, with its own score, rows are ordered by that score, and a row under 0.1 is
-none.
+villages of 100, then the rest; a row is scored as the biggest Base (population, then places to stay) of its
+best's kind within 0.05 of its score, with that Base's figures, rows are ordered by that score, and a row under
+0.1 is none. After the third (ADR-0088), the row is named after the biggest town or village of its area (100
+people or more; else after the Base it is scored as), and says whose figures it shows when the two differ.
 
 On the real Europe and US build, the preselection kept the best 20 rows of every ranking the same, for
 Keswick, Chamonix, Bohinjska Bistrica and Moab at 15, 30 and 60 min, with and without "climb up to 500 m"
