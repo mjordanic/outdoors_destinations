@@ -119,7 +119,7 @@ CORE_SHARE = 0.8
 # The API reads a browser keeps API_MAX_AGE_S seconds; after that the ETag revalidates them.
 CACHED_READS = (
     "/api/info", "/api/measures", "/api/search", "/api/landmarks", "/api/hikes", "/api/segments",
-    "/api/bases/search", "/api/bases/nearest",
+    "/api/bases/search", "/api/bases/nearest", "/api/bases/town",
 )  # fmt: skip
 # The metadata the page's shape depends on: a browser revalidates it every time, so new code never reads old metadata.
 REVALIDATED_READS = ("/api/info", "/api/measures")
@@ -1074,7 +1074,15 @@ def create_app(
     @app.api_route("/api/bases/search", methods=["GET", "HEAD"])
     def base_search(q: str = Query(max_length=100), limit: int = Query(5, ge=1, le=20)) -> dict:
         found = finder()
-        return {"results": described(found, found.find_bases(data, q, limit))}
+        rows, guessed = found.find_bases(data, q, limit)
+        # guess: no name starts so, and these are names one typo away: the page asks "Did you mean …?"
+        return {"results": described(found, rows), "guess": guessed}
+
+    # ... or by its number, as a link names it: the page shows the town of a link at once (ADR-0086) ...
+    @app.api_route("/api/bases/town", methods=["GET", "HEAD"])
+    def base_town(id: int = Query()) -> dict:  # noqa: A002 (the link's name for it)
+        found = finder()
+        return described(found, [base_of(id)])[0]
 
     # ... or by a pin on the map.
     @app.api_route("/api/bases/nearest", methods=["GET", "HEAD"])
@@ -1090,7 +1098,7 @@ def create_app(
         found = finder(body.reach)
         me = base_of(body.seed)
         hike_filter = body.parsed_filter()
-        mask = hike_mask(data.store, hike_filter)
+        mask = hike_mask(data.store, hike_filter) & data.day_hikes()  # a Base's hikes are day hikes (ADR-0086)
         take_turn(base_rankings, request)
         try:
             ranking = found.rank_bases(data, body.seed, body.reach, mask, traits=body.town_traits(body.traits))
@@ -1098,7 +1106,7 @@ def create_app(
             base_rankings.leave()
         rows = ranking.rows[:BASE_ROWS]
         seed, *listed = found.describe_bases(data, [me, *(row.base for row in rows)], body.reach)
-        others = sorted({town for row in rows for town in row.towns[: found.AREA_TOWNS]})
+        others = sorted({town for row in rows for town in row.towns[: found.AREA_TOWNS]} | {row.best for row in rows if row.best >= 0})
         towns = dict(zip(others, found.describe_bases(data, others)))
         return {
             "seed": {**seed, "hike_groups": ranking.seed_groups},
@@ -1107,6 +1115,8 @@ def create_app(
             "traits": {name: choice.model_dump(exclude_defaults=True) for name, choice in body.traits.items()},
             # Too few of the Hiker's hikes pass the HikeFilter to compare: no row.
             "too_few": ranking.too_few,
+            # The town filters, and nothing else, leave no town that might be a row.
+            "traits_leave_none": ranking.traits_leave_none,
             "results": [
                 {
                     **place,
@@ -1124,6 +1134,10 @@ def create_app(
                         {key: towns[town][key] for key in ("id", "name", "population")}
                         for town in row.towns[: found.AREA_TOWNS]
                     ],
+                    # The area's best town, when the row is named after a bigger one about as alike (ADR-0086).
+                    "best_town": None
+                    if row.best in (row.base, -1)
+                    else {"id": towns[row.best]["id"], "name": towns[row.best]["name"], "score": row.best_score},
                     "sure": row.sure,  # the share left of the hike score when few of the Hiker's hikes compare
                     "cuts": dict(row.cuts),  # the share each "like mine" TownTrait took off the hike score
                 }
@@ -1138,7 +1152,7 @@ def create_app(
         found = finder(body.reach)
         row = base_of(body.base)
         hike_filter = body.parsed_filter()
-        rows, minutes, groups = found.base_hikes(data.bases, row, body.reach, hike_mask(data.store, hike_filter))
+        rows, minutes, groups = found.base_hikes(data.bases, row, body.reach, hike_mask(data.store, hike_filter) & data.day_hikes())
         ids = [int(i) for i in data.store.ids[rows]]
         names = data.names(ids)
         facts = {name: data.store.column(name)[rows] for name in ("length_m", "elevation_gain_m", "highest_m", "peak_summited", "round_trip")}

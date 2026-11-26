@@ -539,7 +539,7 @@ def test_an_area_row_says_its_nearby_towns_and_one_person_is_singular(browser, s
     assert "1 person" in row.inner_text()
     assert "1 people" not in row.inner_text()
     area = row.locator(".area")
-    assert area.inner_text() == "and 2 nearby towns with much the same hikes, among them Betws-y-Coed, Llanberis"
+    assert area.inner_text() == "and 2 nearby towns with much the same hikes: Betws-y-Coed, Llanberis"  # all of them (ADR-0086)
     assert "share a row" in area.get_attribute("title")
 
 
@@ -554,7 +554,7 @@ def test_the_hike_choices_say_what_they_measure_and_a_short_list_says_why(browse
     choices = page.locator("#base-hike-filter").inner_text()
     assert "Length (one way, as mapped)" in choices
     assert "Round trip (ends where it starts" in choices
-    assert "3 areas: with a longer drive more towns share their hikes" in page.locator("#base-note").inner_text()
+    assert "3 areas: towns close together share a row" in page.locator("#base-note").inner_text()  # ADR-0086
 
 
 # Wishes.
@@ -570,7 +570,7 @@ def test_a_towns_hikes_say_their_length_climb_and_summit(browser, server) -> Non
     keswick_in_60(page)
     open_base(page, "Bethesda")
 
-    assert page.locator("#base-hike-list .hike-facts").first.inner_text() == "6.2 km · ↑ 540 m · top 1,100 m · summit · round trip"
+    assert page.locator("#base-hike-list .hike-facts").first.inner_text() == "one way: 6.2 km · ↑ 540 m · top 1,100 m · summit · round trip"  # A2 (ADR-0086)
 
 
 def test_a_row_shows_the_places_to_stay_when_that_trait_is_chosen(browser, server) -> None:

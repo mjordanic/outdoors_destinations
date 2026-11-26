@@ -236,3 +236,85 @@ def test_a_stays_filter_still_fills_a_page_of_rows(
         assert len(ranking.rows) >= min(20, len(every.rows)), (seed[0], len(ranking.rows), len(every.rows))
         if seed is not MOAB:
             assert len(ranking.rows) >= 20, (seed[0], len(ranking.rows))
+
+
+# The second visitor check (ADR-0086): the rows its visitors named, with the page's default size filter.
+ZERMATT = ("Zermatt", "CH", (46.02, 7.75))
+GRINDELWALD = ("Grindelwald", "CH", (46.62, 8.04))
+ESTES_PARK = ("Estes Park", "US", (40.38, -105.52))
+DEFAULT_SIZE = TownTraits(size=TraitSetting(up_to=50_000))
+STAYS_EATS = TownTraits(
+    size=TraitSetting(up_to=50_000), stays=TraitSetting(like_mine=3), eats=TraitSetting(like_mine=3)
+)
+
+
+def _names(data: ServingData, bases: list[int]) -> list[str]:
+    ids = [int(data.bases.place_ids[base]) for base in bases]
+    with sqlite3.connect(f"file:{data.directory / 'places.sqlite'}?mode=ro", uri=True) as db:
+        names = dict(db.execute(f"SELECT id, name FROM places WHERE id IN ({','.join('?' * len(ids))})", ids))
+    return [names[i] for i in ids]
+
+
+def _row_with(data: ServingData, ranking: BaseRanking, town: tuple):
+    base = base_row(data.bases, _place(data, town))
+    return next((row for row in ranking.rows if base in row.members), None)
+
+
+@pytest.mark.parametrize(
+    ("seed", "reach", "traits", "hamlets", "towns"),
+    [
+        # Thanei (16 people) over Silandro, Pian Falzarego (1) over Cortina d'Ampezzo, Gemmipass, a pass
+        (ZERMATT, 15, DEFAULT_SIZE, ("Thanei", "Pian Falzarego", "Gemmipass"), (("Silandro", "IT", (46.63, 10.77)),)),
+        # Plangeross (234) over Merano, Telfs and Imst; Bärgli over Schruns and Lech
+        (ZERMATT, 60, DEFAULT_SIZE, ("Plangeross", "Bärgli"), ()),
+        # Lair over Pitlochry and Blairgowrie
+        (KESWICK, 30, DEFAULT_SIZE, ("Lair",), (("Pitlochry", "GB", (56.70, -3.73)),)),
+        # Edinburgh's Joppa Pans and Brunstane over Musselburgh; Tromsø's Hungeren over Tromsø; Smeaheia; Vickerstown
+        (KESWICK, 30, STAYS_EATS, ("Joppa Pans", "Brunstane", "Hungeren", "Smeaheia", "Vickerstown", "Ytrebygda"),
+         (("Tromsø", "NO", (69.65, 18.96)),)),
+        # Denver's suburbs, Dakota Ridge and Stonegate, first and third
+        (ESTES_PARK, 60, DEFAULT_SIZE, ("Dakota Ridge", "Stonegate", "Parker", "Security-Widefield"), ()),
+    ],
+    ids=["Zermatt 15", "Zermatt 60", "Keswick 30", "Keswick 30, stays and eats like mine", "Estes Park 60"],
+)  # fmt: skip
+def test_rows_are_named_after_towns_not_hamlets_passes_districts_or_suburbs(
+    data: ServingData, all_hikes: np.ndarray, seed, reach, traits, hamlets, towns
+) -> None:
+    ranking = _ranking(data, seed, reach, all_hikes, traits)
+    names = _names(data, [row.base for row in ranking.rows])
+
+    assert not set(hamlets) & set(names), sorted(set(hamlets) & set(names))
+    for town in towns:  # its row is named after a town, if it has one
+        row = _row_with(data, ranking, town)
+        if row is not None:
+            assert np.asarray(data.bases.population)[row.base] >= bases_module.NAME_PEOPLE[0], (town[0], _names(data, [row.base]))
+
+
+def test_cortina_d_ampezzo_names_its_row_for_zermatt(data: ServingData, all_hikes: np.ndarray) -> None:
+    """It was "Pian Falzarego · 1 person … among them Cortina d'Ampezzo"."""
+    ranking = _ranking(data, ZERMATT, 15, all_hikes, DEFAULT_SIZE)
+    assert "Cortina d'Ampezzo" in _names(data, [row.base for row in ranking.rows])
+
+
+def test_no_row_scores_next_to_nothing(data: ServingData, all_hikes: np.ndarray) -> None:
+    """Moab at 15 and 60 min listed rows of 0.00 to 0.06."""
+    for reach in (15, 60):
+        ranking = _ranking(data, MOAB, reach, all_hikes, DEFAULT_SIZE)
+        assert ranking.rows and min(row.score for row in ranking.rows) >= bases_module.MIN_ROW_SCORE
+
+
+@pytest.mark.parametrize(
+    ("seed", "reach", "bases"),
+    [
+        (KESWICK, 30, {"Caernarfon", "Brecon", "Ballater", "Peebles", "Fort William", "Aviemore"}),
+        (CHAMONIX, 15, {"Moûtiers", "Barcelonnette", "Modane", "Schladming"}),
+        (GRINDELWALD, 30, {"Klosters Serneus", "Lenzerheide", "Zweisimmen", "Airolo"}),
+    ],
+    ids=["Keswick 30", "Chamonix 15", "Grindelwald 30"],
+)
+def test_the_lists_the_visitors_called_good_keep_their_bases(
+    data: ServingData, all_hikes: np.ndarray, seed, reach, bases
+) -> None:
+    ranking = _ranking(data, seed, reach, all_hikes, DEFAULT_SIZE)
+    names = set(_names(data, [row.base for row in ranking.rows[:30]]))
+    assert bases <= names, sorted(bases - names)
