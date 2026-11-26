@@ -131,6 +131,47 @@ def test_snaps_kept_in_memory_are_capped_least_recently_asked_first(tmp_path: Pa
     assert len(snaps._learned) == 2
 
 
+def test_snaps_asked_by_two_rankings_at_once_are_kept_and_written_one_at_a_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A server runs two Rankings at once (ADR-0087), both asking its one HighwaySnaps for new places.
+    import time
+
+    from dayhike import highways
+
+    both_asked = threading.Barrier(2, timeout=5)
+
+    def located(base_url, places, cutoff=None):
+        both_asked.wait()  # each asked Valhalla before either keeps its answers
+        return list(places)
+
+    writing, overlapped = [0], [False]
+    lock = threading.Lock()
+
+    def save(path, **columns):
+        with lock:
+            writing[0] += 1
+            overlapped[0] |= writing[0] > 1
+        time.sleep(0.05)
+        with lock:
+            writing[0] -= 1
+
+    monkeypatch.setattr(highways, "locate", located)
+    monkeypatch.setattr(highways.np, "savez_compressed", save)
+    snaps = HighwaySnaps("http://valhalla", tmp_path / "snaps.npz", keep=3)
+    found: dict[float, list] = {}
+    ranks = [threading.Thread(target=lambda lat=lat: found.update({lat: snaps.of([(lat, 15.0), (lat + 0.5, 15.0)])}))
+             for lat in (45.0, 46.0)]
+    for thread in ranks:
+        thread.start()
+    for thread in ranks:
+        thread.join(10)
+
+    assert not overlapped[0]  # never two writes of snaps.npz at once
+    assert [s[:2] for s in found[45.0]] == [(45.0, 15.0), (45.5, 15.0)]
+    assert [s[:2] for s in found[46.0]] == [(46.0, 15.0), (46.5, 15.0)]
+    assert len(snaps._learned) == 3
+
 def test_client_bands_by_isochrone_and_asks_the_matrix_only_near_the_limit() -> None:
     asked: list[list[dict]] = []
 
