@@ -578,8 +578,9 @@ def _regions_of(results: list[dict]) -> set[str]:
 
 def test_info_lists_the_regions_a_catalog_has_hikes_in(client: TestClient, two_regions: TestClient) -> None:
     europe = {"name": "europe", "label": "Europe", "named": "Europe"}
-    assert client.get("/api/info").json()["regions"] == [europe]
-    assert two_regions.get("/api/info").json()["regions"] == [
+    without_core = lambda info: [{k: v for k, v in region.items() if k != "core"} for region in info["regions"]]  # noqa: E731
+    assert without_core(client.get("/api/info").json()) == [europe]
+    assert without_core(two_regions.get("/api/info").json()) == [
         europe,
         {"name": "us", "label": "United States", "named": "the United States"},
     ]
@@ -939,7 +940,7 @@ def test_the_page_and_its_assets_are_served(client: TestClient) -> None:
     page = client.get("/")
 
     assert page.status_code == 200
-    assert "Find similar" in page.text
+    assert "Find hikes" in page.text
     for asset in ("app.js", "style.css", "coverage.svg", "mark.svg"):
         assert client.get(f"/{asset}").status_code == 200
 
@@ -1045,6 +1046,21 @@ def test_info_gives_where_most_hikes_are_and_what_a_typical_pair_scores(client: 
     assert info["typical_pair"] == serving.TYPICAL_PAIR == 0.47
 
 
+def test_each_region_gives_where_most_of_its_hikes_are_so_a_map_opens_on_land(client: TestClient) -> None:
+    # A map of Europe and the US opened on both boxes at once opened over the Atlantic (visitor check round 3).
+    points = np.array([[46.0 + i / 10, 10.0 + i / 10] for i in range(10)] + [[39.0 + i / 10, -105.0 - i / 10] for i in range(10)])
+
+    cores = web.region_cores(points)
+
+    assert set(cores) == {"europe", "us"}
+    south, west, north, east = cores["europe"]
+    assert 46.0 <= south <= north <= 46.9 and 10.0 <= west <= east <= 10.9
+    south, west, north, east = cores["us"]
+    assert 39.0 <= south <= north <= 39.9 and -105.9 <= west <= east <= -105.0
+    info = client.get("/api/info").json()
+    assert [region["core"] for region in info["regions"]] == [info["core"]]  # one region: where most hikes are
+
+
 def test_the_about_page_shows_the_wordmark_and_the_tagline(client: TestClient) -> None:
     about = client.get("/about.html").text
 
@@ -1053,6 +1069,20 @@ def test_the_about_page_shows_the_wordmark_and_the_tagline(client: TestClient) -
     assert client.get("/wordmark.svg").status_code == 200
     assert '<p class="tagline">Hikes like the ones you love.</p>' in about
     assert ">Hike catalog</a>" in about and "DayHike catalog" not in about
+
+
+def test_every_page_of_a_site_with_bases_has_the_switch_to_both_tools_and_names_them() -> None:
+    # Visitor check round 3: the switch was only on the tool pages, the footer said "Find hikes", About was hike-only.
+    with_bases, plain = site_pages(None, bases=True), site_pages(None)
+
+    for name in ("about", "credits", "privacy", "terms"):
+        assert '<a href="/#hikes">Find a hike</a><a href="/#base">Find a base</a>' in with_bases[name], name
+        assert "Find a base</a>" not in plain[name], name
+    for pages in (with_bases, plain):
+        for name, html in pages.items():
+            assert '<a class="home" href="/">Home</a>' in html and ">Find hikes</a>" not in html, name
+    assert "two tools" in with_bases["about"] and "two tools" not in plain["about"]
+    assert "and towns to hike from" in with_bases["index"] and "and towns to hike from" not in plain["index"]
 
 
 def test_the_about_page_says_who_runs_the_site_and_where_its_code_is(client: TestClient) -> None:
@@ -1351,8 +1381,10 @@ def test_place_search_answers_from_the_export_and_is_credited(tmp_path: Path, ma
     assert info["place_search"] is True
     assert "GeoNames" in info["attribution"]["geonames"]
     assert placed.get("/api/place", params={"q": "zag", "limit": 1}).json() == {
-        "results": [{"name": "Zagreb", "country": "HR", "lat": 45.81444, "lon": 15.97798, "population": 698966}]
+        "results": [{"name": "Zagreb", "country": "HR", "lat": 45.81444, "lon": 15.97798, "population": 698966}],
+        "guess": False,
     }
+    assert placed.get("/api/place", params={"q": "zagerb"}).json()["guess"] is True  # "Did you mean Zagreb?"
     assert placed.get("/api/place", params={"q": "x" * 101}).status_code == 422
     assert placed.head("/api/place", params={"q": "zag"}).status_code == 200
     privacy = placed.get("/privacy.html").text

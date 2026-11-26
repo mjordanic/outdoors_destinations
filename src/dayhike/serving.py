@@ -62,6 +62,7 @@ lists them among them (``dayhike.loops``, ADR-0020).
 from __future__ import annotations
 
 import csv
+import difflib
 import functools
 import heapq
 import itertools
@@ -215,6 +216,10 @@ LANDMARK_PLACE_SCAN = 500  # Landmarks a search narrowed to a country looks thro
 # A word a name is often shortened to, and the word it is short for: what search compares (ADR-0079)
 SHORT_WORDS = {"mt": "mount"}
 FUZZY_MIN_LETTERS = 4  # a shorter query word is found only as typed
+PLACE_SCAN = 20_000  # names a place choice looks at, for a country after a comma or for a typo
+PLACE_TYPO_START = 3  # a place name typed with a typo is looked for among those starting with its first letters
+PLACE_TYPO_RATIO = 0.8  # and as alike to it as this (``difflib``), as Find a base's town box does
+JOINED_PART = 3  # a word typed as two run together ("catbells" for Cat Bells) splits into parts this long or longer
 FUZZY_SPELLINGS = 3  # the nearest words a word with a typo is tried as
 FUZZY_QUERIES = 6  # the respelled queries a search tries, fewest typos first
 NAME_INDEX = "names.npz"  # the name search's index, written by the export (``export_name_index``)
@@ -2029,6 +2034,8 @@ class ServingData:
         by_name[:SEARCH_SUMMIT_CAP] = self._summits_first(by_name[:SEARCH_SUMMIT_CAP], needle, words)
         rows += by_name
         similar = {row for row in by_name if _relevance(self._folded[row], needle, words) == 4}
+        if not by_name and (joined := self._joined(words)):  # "Catbells" is Cat Bells: a name, not a typo
+            rows += self._rows_with_words(joined, " ".join(joined), set(rows), there)
         if len(rows) < limit:
             for spelled in self._spellings.respelled(words):
                 found = self._rows_with_words(spelled, " ".join(spelled), set(rows), there)
@@ -2089,6 +2096,21 @@ class ServingData:
         found.sort(key=lambda row: (_relevance(self._folded[row], needle, words), len(self._folded[row]), row))
         return found
 
+    def _joined(self, words: list[str]) -> list[str] | None:
+        """``words`` with one of them written as the two words names hold most often run together
+        ("catbells": cat bells), each part ``JOINED_PART`` letters or more; None when no name holds any."""
+        for i, word in enumerate(words):
+            splits = [f"{word[:at]} {word[at:]}" for at in range(JOINED_PART, len(word) - JOINED_PART + 1)]
+            if not splits:
+                continue
+            hits = re.finditer("|".join(map(re.escape, splits)), self._haystack)
+            counts: dict[str, int] = {}
+            for hit in itertools.islice(hits, SEARCH_SCAN_CAP):
+                counts[hit.group()] = counts.get(hit.group(), 0) + 1
+            if counts:
+                return [*words[:i], *max(counts, key=counts.__getitem__).split(), *words[i + 1 :]]
+        return None
+
     def _summits_first(self, rows: list[int], needle: str, words: list[str]) -> list[int]:
         """``rows`` (best first) with, after the exact name, those reaching the
         top of a Peak named from the query's start first, and those named
@@ -2146,6 +2168,46 @@ class ServingData:
             ).fetchall()
         return [dict(zip(("name", "country", "lat", "lon", "population"), row)) for row in rows]
 
+    def place_choices(self, query: str, limit: int = 5) -> tuple[list[dict], bool]:
+        """The places "Find place" offers for ``query``, and whether they are only guesses.
+
+        Those ``find_place`` finds; else, for words after a comma, those named by the words before it, in
+        the country the words name when they name one ("Keswick, United Kingdom"), anywhere when they name
+        none (a county or a region: "Keswick, Cumbria" offers every Keswick); else the places whose name
+        shares its first ``PLACE_TYPO_START`` letters and is ``PLACE_TYPO_RATIO`` alike to it ("Innsbruk"),
+        the most alike first, then the most populous, said to be guesses.
+        """
+        found = self.find_place(query, limit)
+        needle = _fold(query).strip()
+        if found or self.places is None or not needle:
+            return found, False
+        head, comma, tail = needle.rpartition(",")
+        if comma and head.strip():
+            needle, country = head.strip(), _place_names().get(tail.strip())
+            found = self.find_place(needle, PLACE_SCAN if country else limit)
+            if country:
+                return [place for place in found if place["country"] == country][:limit], False
+            if found:
+                return found, False
+        if len(needle) <= PLACE_TYPO_START:
+            return [], False
+        alike: dict[int, tuple[float, int]] = {}
+        with scoped(sqlite3.connect(self.places, uri=True)) as db:
+            for name, place, population in db.execute(
+                "SELECT n.name, p.id, p.population FROM place_names n JOIN places p ON p.id = n.place "
+                "WHERE n.name >= ? AND n.name < ? LIMIT ?",
+                (needle[:PLACE_TYPO_START], needle[:PLACE_TYPO_START] + "\U0010ffff", PLACE_SCAN),
+            ):
+                ratio = difflib.SequenceMatcher(None, needle, name).ratio()
+                if ratio >= PLACE_TYPO_RATIO and ratio > alike.get(place, (0.0, 0))[0]:
+                    alike[place] = (ratio, population or 0)
+            best = sorted(alike, key=lambda place: (-alike[place][0], -alike[place][1], place))[:limit]
+            rows = {row[0]: row[1:] for row in db.execute(
+                f"SELECT id, name, country, lat, lon, population FROM places WHERE id IN ({','.join('?' * len(best))})", best
+            )} if best else {}
+        found = [dict(zip(("name", "country", "lat", "lon", "population"), rows[place])) for place in best]
+        return found, bool(found)
+
     def find_landmarks(self, query: str, limit: int = 5) -> list[dict]:
         """Landmarks (peaks, huts, lakes, towns ...) with a name holding the
         query from a word's start, each with its nearest hikes (ADR-0053).
@@ -2180,6 +2242,9 @@ class ServingData:
         with scoped(sqlite3.connect(self.landmarks, uri=True)) as db:
             needle, where = tail or (needle, None)
             found, match = self._landmarks_in(db, _shortened(needle), limit, where), "words"
+            if not found and " " not in needle:  # a name of two words typed as one ("catbells")
+                joined = [f"{needle[:at]} {needle[at:]}" for at in range(JOINED_PART, len(needle) - JOINED_PART + 1)]
+                found = self._landmarks_in(db, [short for spelled in joined for short in _shortened(spelled)], limit, where) if joined else []
             if not found:
                 for spelled in self._landmark_spellings.respelled(needle.split()):
                     found, match = self._landmarks_in(db, _shortened(" ".join(spelled)), limit, where), "similar"

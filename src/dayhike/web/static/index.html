@@ -54,7 +54,7 @@
   <a class="home" href="/" tabindex="-1" aria-hidden="true"><img class="mark" src="mark.svg" alt="" width="44" height="44"></a>
   <div class="brand">
     <h1><a class="home" href="/">HikesAlike</a></h1>
-    <p class="tagline">Hikes like the ones you love, out of <span id="count"><!--dayhikes-->160,000<!--/dayhikes--></span> hikes across <!--regions-->Europe<!--/regions-->.</p>
+    <p class="tagline">Hikes like the ones you love<!--if-bases-->, and towns to hike from<!--/if-bases-->, out of <span id="count"><!--dayhikes-->160,000<!--/dayhikes--></span> hikes across <!--regions-->Europe<!--/regions-->.</p>
   </div>
   <!-- Shown in either tool of a site with Bases (bases.js): the way to the other one. -->
   <nav id="tool-switch" class="tool-switch" aria-label="Tools" hidden>
@@ -71,13 +71,13 @@
   <section class="card tool-card" aria-labelledby="landing-hike">
     <h2 id="landing-hike">Find a hike you like</h2>
     <p>Guidebooks list hikes by region, but a great day out is about the kind of hike: how steep, how long, how wild, how high. HikesAlike starts from a hike you already know and finds others that feel the same, wherever they are.</p>
-    <p>Search for a hike by name, or select one on the map. Its route, elevation, water, huts, landscape and weather appear here — everything the similarity looks at. Adjust what “similar” means in step 2, and limit it to hikes within driving distance in step 3 if you like.</p>
+    <p>Search for a hike by name, or select one on the map, and see its route, elevation, water, huts, landscape and weather — everything the similarity looks at. Adjust what “similar” means, and limit it to hikes within driving distance if you like.</p>
     <a class="start" href="#hikes">Start with a hike</a>
   </section>
   <section class="card tool-card" aria-labelledby="landing-base">
     <h2 id="landing-base">Find a hiking base you like</h2>
-    <p>A good hiking holiday depends on where you stay. Some towns have dozens of great hikes within an easy drive; others look perfect on the map but leave you in the car all week. HikesAlike starts from a town you already know works for you and finds other towns that offer the same: as many hikes, of the same kind, within the same drive — and, if you want, similar places to stay and eat, town size and mild months.</p>
-    <p>Type your town's name, or pick it on the map. Towns whose hikes within that drive are most like yours appear here, with what makes each a good base. Choose what matters to you in steps 3 and 4, and set how far you are willing to drive each day in step 2.</p>
+    <p>A good hiking holiday depends on where you stay. Some towns have dozens of great hikes within an easy drive; others look perfect on the map but leave you in the car all week. HikesAlike starts from a town you already know works for you and finds other towns that offer the same: the same kinds of hike, enough of them for a week, within the same drive — and, if you want, similar places to stay and eat, town size and mild months.</p>
+    <p>Type your town's name, or pick it on the map, and see the towns whose hikes within that drive are most like yours, with what makes each a good base. Set how far you are willing to drive each day, and choose what matters to you.</p>
     <a class="start" href="#base">Start with a town</a>
   </section>
 </main>
@@ -169,7 +169,8 @@
           <button type="button" id="origin-find" class="secondary">Find place</button>
           <button type="button" id="origin-here" class="secondary">Use my location</button>
         </div>
-        <p id="origin-found" class="hint"></p>
+        <p id="origin-found" class="hint" role="status" aria-live="polite"></p>
+        <div id="origin-choices" class="place-choices" hidden></div>
         <div class="row limit">
           <label class="check"><input type="checkbox" id="hours-on" checked autocomplete="off"> Max drive hours</label>
           <input id="hours" type="number" autocomplete="off" min="0.5" max="3" step="0.5" value="2" aria-label="Max drive hours value">
@@ -203,7 +204,7 @@
       <input type="checkbox" id="return-on" checked autocomplete="off">
       Return to start: compare every hike with its way back (untick to compare them one way)
     </label>
-    <button type="button" id="find" class="primary" disabled aria-describedby="find-why status">Find similar</button>
+    <button type="button" id="find" class="primary" disabled aria-describedby="find-why status">Find hikes</button>
     <p id="find-why" class="hint find-why">Choose a hike first: search for one by name or select one on the map.</p>
     <p id="status" class="status" role="status" aria-live="polite"></p>
 
@@ -220,8 +221,10 @@
   </aside>
 
   <section class="content">
-    <!-- Find a base before a town is chosen: what it does, in the landing's words (bases.js). -->
-    <article id="base-intro" class="card empty" hidden></article>
+    <!-- Find a base before a town is chosen: what it does, the landing's first words (bases.js), then its steps. -->
+    <article id="base-intro" class="card empty" hidden>
+      <p>Type your town's name in step 1, or pick it on the map. Towns whose hikes within that drive are most like yours appear here, with what makes each a good base. Set how far you are willing to drive each day in step 2, and choose what matters to you in steps 3 and 4.</p>
+    </article>
     <section id="base-card" class="card" hidden>
       <div id="base-map" class="map pick-map"></div>
       <p class="hint" id="base-pin-hint" role="status" aria-live="polite">Click the map near where you stayed to choose the town nearest to it; zoom in first to pick it closely. A numbered dot opens that town.</p>
@@ -229,6 +232,7 @@
       <section id="base-results" hidden>
         <h2 id="base-title"></h2>
         <p id="base-mine"></p>
+        <ul id="base-chips" class="filter-chips" aria-label="Your choices (steps 3 and 4)" hidden></ul>
         <p class="hint" id="base-note"></p>
         <div class="table-wrap"><table id="base-table"></table></div>
         <button type="button" id="base-more" class="secondary" hidden>Show more</button>
@@ -274,6 +278,7 @@
       <p class="poor-note" id="results-unmeasured" hidden></p>
       <p class="poor-note" id="results-poor" hidden></p>
       <p class="hint"><span id="results-note"></span><span id="results-region"></span><span id="results-left-out"></span><span id="results-loops-note"></span> <button type="button" class="secondary" id="list-loop" hidden>List the best loop</button></p>
+      <p class="hint" id="results-words">How to read the list: “3 versions” are other routes of one hike, shown as var 1, var 2 and var 3 when you click its row; “picked” marks a hike drawn in for variety from just below the best (Redraw draws others, and Strict order lists only the best, in the order of their scores); “more good matches start here” are hikes starting near that one that score almost as well.</p>
       <p id="results-draw" hidden><button type="button" class="secondary" id="redraw" title="Draw other hikes from the same results, closer matches more often">Redraw</button> <label class="check" title="List the best hikes in the exact order of their scores, with nothing drawn"><input type="checkbox" id="strict" autocomplete="off"> Strict order</label> <span class="hint" id="results-draw-note"></span></p>
       <p class="stale-note" id="results-stale" hidden>The query changed since this ranking; press Find again to update it.</p>
       <p id="results-columns" hidden><button type="button" class="secondary" id="toggle-measures" aria-expanded="false">Show the score of every measure</button></p>
@@ -292,7 +297,7 @@
   <p>Map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors (<a href="https://opendatacommons.org/licenses/odbl/">ODbL</a>) · elevation <!--elevation--><a href="https://doi.org/10.5523/bris.s5hqmjcdj8yo2ibzi9b4ew3sn">FABDEM</a> (<a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">CC BY-NC-SA 4.0</a>)<!--/elevation--> · <a href="credits.html">full credits</a></p>
   <p class="hint">Elevation, climate and land cover are missing for some regions; those measures then show “no data” and count as 0 against a hike you like that has them, or when you describe the hike you want and ask a value of them. When the hike you like has no data for one, it drops out of the score. Drive times are estimates, not routes. Check conditions and maps before you go.</p>
   <nav class="site-nav" aria-label="Site">
-    <a href="/">Find hikes</a> · <a href="about.html">About</a> · <a href="credits.html">Data and credits</a> · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms and safety</a>
+    <a class="home" href="/">Home</a> · <a href="about.html">About</a> · <a href="credits.html">Data and credits</a> · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms and safety</a>
   </nav>
 </footer>
 <div id="score-help" class="score-help" role="dialog" aria-labelledby="score-help-title" tabindex="-1" hidden></div>

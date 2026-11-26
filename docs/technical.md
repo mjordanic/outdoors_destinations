@@ -2235,7 +2235,7 @@ distance limit, or of the drive limit at 50 km per hour, the smaller, at least
 to 100 rows, loops included when they were asked; each added block is headed by its row numbers
 and, unless in Strict order, that its rows are drawn from the areas not listed above, in score order
 among themselves only (ADR-0047). A loop that mostly walks the liked hike again is not suggested. The "Return to start" tick
-box above "Find similar" (on by default) measures the liked hike and every hike
+box above "Find hikes" (on by default) measures the liked hike and every hike
 compared with it with its way back to its start, so a summit line is compared
 up and back; off, every hike is compared one way. While it is on, Round trip
 is left out (every hike is then a round trip; ADR-0022). Turning it changes the
@@ -2245,7 +2245,9 @@ liked hike. Every shown hike has "Link to this hike" (`#hike=<id>` for a
 catalog or built hike, its `#compose=` link for a composed one, with `&oneway`
 when set, and the search settings: `&month=`, `&w=` (the weights moved from their defaults, `name:weight`
 comma-separated), `&adv`, `&regions=`, `&group=` and `&units=`, but not the starting place (`&from=lat,lon`, `&place=`, `&hours=`,
-`&km=`), which only the address bar keeps (ADR-0075); a plain click on it copies it as Share does rather than opening it in the same tab, which would drop the starting place and the list; a wish link carries the same but its own weights; ADR-0054) and two buttons: Share sends that address to a touch screen's share
+`&km=`), which only the address bar keeps (ADR-0075); the liked hike's link, and the address bar, end in `&list` while
+its list is shown, and such an address opens with the list, kept or found again (ADR-0088); a hike picked, a list
+found and a result opened are each a step of the history; a plain click on it copies it as Share does rather than opening it in the same tab, which would drop the starting place and the list; a wish link carries the same but its own weights; ADR-0054) and two buttons: Share sends that address to a touch screen's share
 sheet, or copies it on a computer or where the sheet fails (a line beside the
 button then says "Link copied", or shows the link when it cannot be copied),
 and Download GPX saves the hike as drawn (the served line, simplified to within 10 m, so 1 % or
@@ -2541,7 +2543,7 @@ short:
 | Method | Path | Answers |
 | --- | --- | --- |
 | GET | `/api/health` | that the server is up |
-| GET | `/api/info` | hike count, coverage box, `core` (the box of the middle 80 % of Trailheads, where the map opens), `typical_pair` (0.47: below it the page calls a list's matches weak), `covered` (what the site covers, as its pages say it), attribution, which features are on |
+| GET | `/api/info` | hike count, coverage box, `core` (the box of the middle 80 % of Trailheads), each region's own `core` in `regions` (where a map opens: the region ticked alone, else the browser's time zone's, ADR-0088), `typical_pair` (0.47: below it the page calls a list's matches weak), `covered` (what the site covers, as its pages say it), attribution, which features are on |
 | GET | `/api/measures` | the Measures, grouped, with their plain descriptions |
 | GET | `/api/search?q=` | hikes by name |
 | GET | `/api/landmarks?q=` | Landmarks (peaks, huts, lakes, towns) by name, each with its nearest hikes |
@@ -2595,7 +2597,10 @@ Ranking answers with and the temperature the page draws its `results` rows of
 them with),
 `GET /api/place?q=&limit=` (GeoNames places with a name starting with the
 query, folded like search: the place named exactly that, then one with it as an
-alternate name, then the most populous; 404 without `places.sqlite`),
+alternate name, then the most populous; with none, for words after a comma, the places named by the words
+before it, in the country the words name or anywhere; else names one typo away, with `"guess": true`, and the
+page asks "Did you mean"; 404 without `places.sqlite`. The page takes the one place named exactly as typed, and
+offers several to choose, with their countries, ADR-0088),
 `GET /api/landmarks?q=&limit=` (up to 10, default 5, Landmarks with a folded name holding the query from a
 word's start, typos as search: the one named exactly first, then the one with the most names, the highest,
 the most hikes; each with `name`, `kind`, `town` (the nearest other town within 30 km, to tell equal names

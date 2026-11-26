@@ -189,6 +189,7 @@ def test_every_row_explains_its_score(browser, server) -> None:
     box = page.locator("#score-help")
     assert box.is_visible()
     assert "Base score" in box.locator("h3").inner_text()
+    box.get_by_text("How the score is made").click()  # each section opens on its title (ADR-0088)
     assert "40 %" in box.inner_text()  # the mix's share of the hike score
     page.keyboard.press("Escape")
     assert box.is_hidden()

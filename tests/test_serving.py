@@ -290,6 +290,18 @@ def test_search_finds_a_name_typed_with_a_typo_and_says_it_is_only_similar(data:
     assert data.search("Rid") == data.search("rid")  # a short word only as typed: nothing near it
 
 
+def test_search_finds_two_words_typed_as_one(data: ServingData) -> None:
+    # "Catbells" is how most people write Cat Bells (holiday visitor, round 3).
+    assert [(hit["name"], hit["match"]) for hit in data.search("Ridgewalk")] == [("Ridge Walk", "words")]
+    assert [hit["name"] for hit in data.search("valleypath")] == ["Valley Path"]
+    assert [hit["name"] for hit in data.search("ridgewalk, croatia")] == ["Ridge Walk"]
+    assert data.search("ridgeways") == []
+
+
+def test_a_landmark_typed_as_one_word_is_found_by_its_two(data: ServingData) -> None:
+    assert [(landmark["name"], landmark["match"]) for landmark in data.find_landmarks("Ridgepeak")] == [("Ridge Peak", "words")]
+
+
 def test_a_word_only_inside_a_longer_word_is_a_similar_name(data: ServingData) -> None:
     # As Rappenloch is only inside Krappenlochklamm: the name has no such word.
     assert [(hit["name"], hit["match"]) for hit in data.search("idge")] == [("Ridge Walk", "similar")]
@@ -920,6 +932,19 @@ def test_place_search_puts_its_name_then_another_exact_name_before_a_more_populo
 ) -> None:
     assert [place["name"] for place in placed.find_place("vrh")] == ["Vrh", "Vrhnika"]
     assert [place["name"] for place in placed.find_place("velikovec")] == ["Völkermarkt", "Velikovecki Breg"]
+
+
+def test_place_choices_are_the_places_named_so_or_one_typo_away(placed: ServingData) -> None:
+    names = lambda found: [place["name"] for place in found[0]]  # noqa: E731
+    assert placed.place_choices("zag") == (placed.find_place("zag"), False)
+    # A country after a comma keeps the places there; any other words after it (a county, a region) are left out.
+    assert names(placed.place_choices("Zagreb, Croatia")) == ["Zagreb"]
+    assert names(placed.place_choices("Vrh, Slovenia")) == ["Vrhnika"] and placed.place_choices("Vrh, Austria") == ([], False)
+    assert names(placed.place_choices("Zagreb, Grad Zagreb")) == ["Zagreb"]
+    # With no name starting so, the names one typo away are offered as guesses.
+    assert placed.place_choices("Zagerb") == (placed.find_place("zagreb"), True)
+    assert placed.place_choices("Ogullin")[1] is True and names(placed.place_choices("Ogullin")) == ["Ogulin"]
+    assert placed.place_choices("Qqqqqq") == ([], False)
 
 
 def test_place_file_can_be_added_beside_an_existing_export(catalog_path: Path, tmp_path: Path, capsys) -> None:

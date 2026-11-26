@@ -150,13 +150,14 @@ def test_enter_takes_the_first_suggestion_when_none_is_highlighted(browser, serv
     page.locator("#base-chosen").get_by_text("Bethesda").wait_for()
 
 
-def test_find_bases_uses_the_town_typed_but_not_picked(browser, server) -> None:
+def test_enter_uses_the_town_typed_but_not_picked(browser, server) -> None:
     page = open_bases(browser, server)
     keswick_in_60(page)
     settled(page)
     page.get_by_label("A town you stayed in").fill("Bethesda")
 
-    body = asked(page, lambda: page.get_by_role("button", name="Find bases").click())
+    assert page.get_by_role("button", name="Find bases").is_disabled()  # for the town chosen only (ADR-0088)
+    body = asked(page, lambda: page.get_by_label("A town you stayed in").press("Enter"))
 
     assert body["seed"] == BETHESDA
     page.locator("#base-chosen").get_by_text("Bethesda").wait_for()
@@ -378,7 +379,7 @@ def test_a_town_not_found_by_find_bases_marks_the_list_as_for_the_town_before(br
     keswick_in_60(page)
     settled(page)
     page.get_by_label("A town you stayed in").fill("Lundy")
-    page.get_by_role("button", name="Find bases").click()
+    page.get_by_label("A town you stayed in").press("Enter")  # Find bases waits for a town chosen (ADR-0088)
 
     problem = page.locator("#base-problem")
     problem.get_by_text("No town found named").wait_for()

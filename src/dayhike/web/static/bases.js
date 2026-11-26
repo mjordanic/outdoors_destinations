@@ -79,7 +79,8 @@ const bases = {
     });
     this.unchosen = $("#base-chosen").innerHTML;
     this.pinHint = $("#base-pin-hint").textContent;
-    $("#base-intro").innerHTML = [...$("#landing-base").parentElement.querySelectorAll("p")].map((p) => p.outerHTML).join("");
+    // What it does in the landing's words, then its steps in the tool's (the landing names none, C9).
+    $("#base-intro").prepend($("#landing-base").parentElement.querySelector("p").cloneNode(true));
     // The landing and the switch at the top open a tool as it was left, as a step of its own.
     for (const link of document.querySelectorAll("#landing a.start, #tool-switch a")) {
       link.addEventListener("click", (event) => {
@@ -87,6 +88,18 @@ const bases = {
         event.preventDefault();
         const on = link.getAttribute("href") === "#base";
         if (!$("#landing").hidden || on === $("#base-panel").hidden) this.toggle(on);
+      });
+    }
+    // The site's name, the mark and Home go to the landing in the page, which keeps each tool as it was
+    // left for its buttons to go back to (C12); a modified click opens it in a new tab.
+    for (const link of document.querySelectorAll("a.home")) {
+      link.addEventListener("click", (event) => {
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+        event.preventDefault();
+        if (!location.hash) return;
+        history.pushState(null, "", location.pathname + location.search);
+        this.follow(true);
+        window.scrollTo(0, 0);
       });
     }
     $("#base-find").addEventListener("click", () => this.find());
@@ -128,17 +141,20 @@ const bases = {
     this.showTool(on ? "bases" : "hikes");
     if (on) $("#bases-back").hidden = true;
     if (address) history.pushState(null, "", on ? this.hash() : shownAddress() || "#hikes");
-    if (!on) return;
+    if (!on) {
+      if (address && !state.wishing) $("#search").focus({ preventScroll: true }); // as the town box is (H33)
+      return;
+    }
     if (!this.map) {
       this.map = L.map($("#base-map"));
       this.layer = L.layerGroup().addTo(this.map);
       addBaseLayer(this.map);
-      const [south, west, north, east] = state.info.core ?? state.info.coverage;
+      const [south, west, north, east] = homeBox();
       this.map.fitBounds([[south, west], [north, east]]);
       this.map.on("click", (event) => this.pin(event.latlng));
     }
     this.map.invalidateSize();
-    $("#base-search").focus();
+    $("#base-search").focus({ preventScroll: true });
   },
 
   // What the page shows: "landing", both tools to choose from (an address naming nothing), or "bases" or
@@ -146,7 +162,8 @@ const bases = {
   showTool(tool) {
     document.body.classList.toggle("on-landing", tool === "landing");
     $("#landing").hidden = tool !== "landing";
-    $("#tool-switch").hidden = tool === "landing";
+    $("#tool-switch").hidden = false; // on the landing too, naming neither as the one shown (C11)
+    $(".controls").scrollTop = 0; // the panel scrolls on its own: a tool opens at its step 1 (B5)
     for (const [id, its] of [["#switch-hike", "hikes"], ["#switch-base", "bases"]]) {
       if (tool === its) $(id).setAttribute("aria-current", "page");
       else $(id).removeAttribute("aria-current");
@@ -179,7 +196,7 @@ const bases = {
     this.say(base);
     $("#base-search").value = base.name;
     if (via !== "map") $("#base-pin-hint").textContent = this.pinHint;
-    $("#base-find").disabled = false;
+    this.syncFind();
     this.opening++;
     this.opened = null;
     this.openedBody = null;
@@ -188,6 +205,18 @@ const bases = {
     this.mark([]);
     this.toList = true; // P2: on a phone the list is far below the form
     this.rank({ push: true });
+  },
+
+  // Find bases is for the town chosen: greyed out without one, or while the box names another, which
+  // is chosen from the list or looked up with Enter first (B4). ``busy``: a list is being found.
+  syncFind(busy = false) {
+    $("#base-find").disabled = busy || !this.seed || this.typedOther();
+  },
+
+  // The town box holds a name other than the town chosen's.
+  typedOther() {
+    const typed = $("#base-search").value.trim();
+    return typed !== "" && foldName(typed) !== foldName(this.seed?.name ?? "");
   },
 
   // Find bases: the town typed, when the box names another than the one chosen, then the list.
@@ -538,7 +567,7 @@ const bases = {
     this.ranked = false;
     this.rows = null;
     if (["metric", "imperial"].includes(parts.get("units"))) setUnits(parts.get("units"));
-    $("#base-find").disabled = !this.seed;
+    this.syncFind();
     $("#base-status").textContent = "";
     $("#base-pin-hint").textContent = this.pinHint;
     this.problem("");
@@ -629,7 +658,8 @@ const bases = {
       close();
       this.searchProblem("");
       const q = input.value.trim();
-      $("#base-find").disabled = !this.seed && !q; // Find bases looks a typed name up
+      this.syncFind();
+      if (this.typedOther() && this.seed?.name != null) this.searchProblem("Choose a town from the list, or press Enter to look it up.");
       if (q.length < 2) return;
       timer = setTimeout(async () => {
         asking = new AbortController();
@@ -703,7 +733,7 @@ const bases = {
       this.ranked = true;
       this.asked++;
       $("#base-status").textContent = "";
-      $("#base-find").disabled = false;
+      this.syncFind();
       this.problem(wrong.join(" "));
       return;
     }
@@ -711,7 +741,7 @@ const bases = {
     const status = $("#base-status");
     status.classList.remove("error");
     status.textContent = "Finding bases…";
-    $("#base-find").disabled = true;
+    this.syncFind(true);
     this.ranked = true;
     const request = { seed: this.seed.id, reach: this.reach }, filter = this.hikeFilter(), traits = this.traits();
     if (Object.keys(filter).length) request.hike_filter = filter;
@@ -726,14 +756,15 @@ const bases = {
       this.show(body, back);
     } catch (error) {
       if (!current()) return;
-      status.textContent = "Not updated: see the list.";
+      // Only beside a list it leaves; a link to no town has none (B4).
+      status.textContent = this.rows && error.status !== 404 ? "Not updated: see the list." : "";
       if (error.status === 404) {
         this.rows = null;
         $("#base-results").hidden = true;
         this.problem(error.message);
       } else this.problem(error.message, error.status === 422 ? null : () => this.rank({ fresh: true }));
     } finally {
-      if (current()) $("#base-find").disabled = false;
+      if (current()) this.syncFind();
     }
   },
 
@@ -759,6 +790,7 @@ const bases = {
     $("#base-mine").innerHTML = mineLine(seed, body);
     const choices = this.choiceWords();
     const choiceLine = choices.length ? ` Your choices: ${choices.join("; ")}.` : "";
+    this.chips(choices);
     if (body.too_few) {
       $("#base-note").textContent = tooFewText(seed, body, Object.keys(this.hikeFilter()).length > 0) + choiceLine;
       $("#base-table").innerHTML = "";
@@ -782,6 +814,18 @@ const bases = {
     $("#base-note").textContent = notes.join(" ");
     this.table(back);
     if (!this.opened) this.scrollTo("#base-results");
+  },
+
+  // The choices the list is for, over it, a default in use too: "Town size up to 50,000 people (the
+  // default)" was said nowhere while step 4 was folded away (C15).
+  chips(choices) {
+    const words = [...choices];
+    const size = this.traits().size;
+    if (size && JSON.stringify(size) === JSON.stringify(TRAIT_DEFAULTS.size)) {
+      words.unshift(`town size up to ${TRAIT_DEFAULTS.size.up_to.toLocaleString("en")} people (the default)`);
+    }
+    $("#base-chips").innerHTML = words.map((text) => `<li>${escapeHtml(text[0].toUpperCase() + text.slice(1))}</li>`).join("");
+    $("#base-chips").hidden = !words.length;
   },
 
   // On a phone, once a list asked for by picking a town or Find bases is in, or a town's page from a
@@ -1024,8 +1068,8 @@ function baseRow(row, number, seed, traits) {
   const counts = (traits.stays || traits.eats) && townCounts(row);
   return `<tr>
     <td><span class="number">${number}</span></td>
-    <td class="name"><button type="button" class="base-name" data-base="${row.id}">${escapeHtml(row.name)}</button> <span class="hint place">${escapeHtml(placeLine(row))}</span> ${area}
-      <span class="figure-line">${row.hike_groups} hikes counted${counts ? ` · ${escapeHtml(counts)}` : ""}</span></td>
+    <td class="name"><button type="button" class="base-name" data-base="${row.id}">${escapeHtml(row.name)}</button> <span class="hint place">${escapeHtml([placeLine(row), row.population == null && "population not known"].filter(Boolean).join(" · "))}</span> ${area}
+      <span class="figure-line">${row.hike_groups} hikes counted (yours: ${seed.hike_groups})${counts ? ` · ${escapeHtml(counts)}` : ""}</span></td>
     <td class="score">${row.score.toFixed(2)} ${helpButton("base")}<span class="why">${escapeHtml(why.join("; ") + total)}</span></td>
     <td>${monthsStrip(row.months)}</td>
   </tr>`;

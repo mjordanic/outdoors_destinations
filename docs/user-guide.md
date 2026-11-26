@@ -13,7 +13,8 @@ hikes that fit.
 The site opens on a choice of two: **Find a hike you like**, and **Find a
 hiking base you like**, which starts from a town you stayed in and finds
 other towns with hikes like those within a drive of it. The switch at the top
-of the page goes from one to the other.
+of every page goes from one to the other, and the site's name or **Home**
+goes back to the choice; each tool opens as you left it.
 
 - It looks at length, climbing, the highest point, the landscape, the
   typical temperature in the month you pick, and whether the hike runs beside
@@ -101,7 +102,7 @@ Pick one of three ways:
    "Your hike along" the trails it follows most, "from" a named place at its
    start, so it does not read as a catalog hike of that trail's name.
 
-Then press **Find similar**. You get 10 hikes from among the most similar
+Then press **Find hikes**. You get 10 hikes from among the most similar
 (see "Why the list changes from visit to visit" below), and the page moves to
 the list. The list shows each hike's score, length and climb (and its drive
 or distance when you set one); on a phone the length and climb sit under the
@@ -111,17 +112,17 @@ them away again. Whenever the list is wider than the screen, a line above it
 says to scroll it sideways.
 
 If you change a setting after a search, or while it is still running, a line
-under **Find similar** says the list is from before your change, so you see it
+under **Find hikes** says the list is from before your change, so you see it
 where you are on a phone.
 
-While **Find similar** is greyed out, the line under it says why: no hike is
+While **Find hikes** is greyed out, the line under it says why: no hike is
 chosen yet (choose one first), a hike is still loading, a search is still
 running, every measure is at weight 0, a drive limit is out of range
 (or neither Max drive hours nor Max km is ticked), the grouping distance
 under More options is not a number from 0.1 to 50 km, or no region is ticked
 under **Hikes in**. If your hike cannot be
 measured again after you change Return to start, that line says so and
-**Find similar** stays usable: pressing it measures your hike again, then
+**Find hikes** stays usable: pressing it measures your hike again, then
 finds.
 
 If hikes on the list score below 0.47, what a typical pair of random hikes
@@ -196,7 +197,9 @@ the hut slider to 100. Turn Length down to 30.
   to 3 hours), a maximum distance in a straight line (up to 200 km), or both.
   Only hikes that start within those limits are kept. Type the place as
   "lat, lon", use your browser's location, or use "Find place" to look up a
-  town or village. The drive time is an estimate based on main roads, so
+  town or village. When several places have that name ("Keswick" is in
+  England, Canada and the United States), or none has it but one is a letter
+  off, it lists them with their countries for you to choose one. The drive time is an estimate based on main roads, so
   treat it as a rough guide. The limits stay set when you open another hike
   from the results, the search box or the map in the same tab, and the note
   above the results always names them, for example "within a 2 h drive of
@@ -207,7 +210,7 @@ the hut slider to 100. Turn Length down to 30.
   liked turns "Only hikes near a starting place" off; the place stays in its
   box for ticking again.
 - **Hikes in.** Where the site has hikes in both Europe and the United
-  States, a checkbox for each, just above **Find similar**, keeps the list to
+  States, a checkbox for each, just above **Find hikes**, keeps the list to
   hikes starting there. Both are ticked at first: hikes anywhere. With "Only
   hikes near a starting place" ticked and a place given, the place decides
   instead: the boxes are greyed out, keep their ticks, and count again once
@@ -276,7 +279,9 @@ Advanced search being open, Return to start, Strict order, the regions ticked
 under Hikes in, and the grouping distance. It leaves out your starting place,
 its coordinates and its drive or distance limit: they are yours, and a friend
 starts from somewhere else. Whoever opens it sees the same search, ready for
-**Find similar**. A link to a hike you described works the same way. The
+**Find hikes**; once you have found the list, the link of the hike you like
+opens with the list too (its address ends in "&list"). A link to a hike you
+described works the same way. The
 address in your browser keeps every setting up to date, your starting place
 too, so a reload keeps them. A link opened in a tab that is already open (typed, pasted,
 or gone Back or Forward to) sets every setting it does not name to its
@@ -287,10 +292,13 @@ A link that has been cut short or changed by hand says "This link could not be
 opened" beside the search box. A part of a link the page does not know is
 ignored, and the hike still opens. If you edit the address to other settings,
 or go Back or Forward to one, a list found with other settings goes, as it would
-on a reload of that address: press **Find similar** for the list of those
+on a reload of that address: press **Find hikes** for the list of those
 settings. An address of the list's own settings keeps the list, no longer
-marked as from before. Back to the home address shows the page as it opens, with no hike and
-no list.
+marked as from before. Each step is a step of your browser's history: Back
+closes a hike of the list you opened, then hides the list, then drops the hike
+you picked. On a site with both tools, going back to the front page keeps
+each tool as you left it; elsewhere, Back to the home address shows the page
+as it opens, with no hike and no list.
 
 Good to know: the GPX file holds the line of the hike as you see it on the
 map, with a height at every point. With Return to start on, it also holds the
@@ -322,7 +330,7 @@ hike's panel ("↑ 54 m ↓ 59 m, as measured").
 
 If the server does not answer within a minute, or cannot be reached, the
 page says so instead of waiting forever. A search that fails says so under
-the button you pressed (Find similar, or Show 10 more beside it), with a
+the button you pressed (Find hikes, or Show 10 more beside it), with a
 **Try again** button, and above the list it leaves, which is still the list
 from before.
 
@@ -501,7 +509,7 @@ it. The designer opens zoomed in on the loop. Your liked hike and the list stay
 as they are until you press **Use this hike**, which measures the drawing and
 makes it your hike. **Undo** takes back only your own clicks, never a segment of
 the loop you opened; **Clear** starts over. When the drawing is your liked hike
-itself, Clear removes that hike too, so Find similar never uses a walk that is
+itself, Clear removes that hike too, so Find hikes never uses a walk that is
 no longer drawn.
 
 A loop that mostly walks your liked hike again is not suggested.
