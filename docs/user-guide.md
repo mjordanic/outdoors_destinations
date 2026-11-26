@@ -235,7 +235,8 @@ without it.
 
 ### Or find a town to stay in
 
-Where the site has it, **Find a base** (under the hike search) lists towns
+Where the site has it, **Find a base** (the second choice the site opens on, or
+the switch at the top of the page) lists towns
 whose hikes within a drive are like those of a town you stayed in.
 
 1. Type the town's name, or click the map near it. Picking it lists towns
@@ -256,7 +257,7 @@ with its score and the months that are mild for hiking there; if too few of
 your town's hikes are in reach, the page says so and suggests loosening the
 hike choices or a longer drive. Open a town to see its hikes in reach,
 nearest first, on the map; "Find hikes like this" on one starts a hike search
-from it. **Back to finding hikes** leaves the mode. A link to the page keeps
+from it. The switch at the top goes back to **Find a hike**. A link to the page keeps
 the town, the drive and every choice.
 
 ## What a hike's panel shows
