@@ -427,7 +427,7 @@ def test_a_town_whose_name_has_such_a_word_is_listed(tmp_path, name):
 
 
 def test_a_row_is_named_after_its_biggest_town_and_scored_as_the_biggest_about_as_alike_as_its_best(tmp_path):
-    """Round 3 of the visitor check (ADR-0088): the name is the area's biggest town, the score unchanged."""
+    """Round 3 of the visitor check (ADR-0088): the name is the area's biggest town, the figures unchanged."""
     north = SEED_AT[0] + 3 * FAR
     data = _data(
         tmp_path,
@@ -440,7 +440,7 @@ def test_a_row_is_named_after_its_biggest_town_and_scored_as_the_biggest_about_a
         ],
     )
     (row,) = rank_bases(data, 1, 30, _all(data)).rows
-    assert row.base == 3 and row.place_id == 4
+    assert row.named == 3 and row.base == 2 and row.place_id == 3
     assert row.score == pytest.approx(_stretched(0.4 * 0.975 + 0.3 * 1 + 0.3 * 0.975)) and row.hike_groups == 40
     assert set(row.members) == {1, 2, 3, 4}
     assert row.best == 2 and row.towns == (2, 4, 1)  # the other towns of the area, its best town first, then the biggest
@@ -458,7 +458,7 @@ def test_a_row_with_no_village_in_its_area_keeps_the_name_it_is_scored_as(tmp_pa
         ],
     )
     (row,) = rank_bases(data, 1, 30, _all(data)).rows
-    assert row.base == 2
+    assert row.base == 2 and row.named == -1
     assert row.towns == (1, 3)
 
 

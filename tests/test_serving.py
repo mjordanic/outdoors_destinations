@@ -948,6 +948,7 @@ def test_place_choices_are_the_places_named_so_or_one_typo_away(placed: ServingD
     # A typo before a country is guessed among the places there.
     assert placed.place_choices("Zagerb, Croatia") == (placed.find_place("zagreb"), True)
     assert placed.place_choices("Zagerb, Austria") == ([], False)
+    assert placed.place_choices("Volkermakt, Austria") == (placed.find_place("volkermarkt"), True)
 
 
 def test_place_file_can_be_added_beside_an_existing_export(catalog_path: Path, tmp_path: Path, capsys) -> None:

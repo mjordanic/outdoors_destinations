@@ -9,7 +9,7 @@ from test_page import RIDGE_WALK_ID, WISHABLE, Api, open_page
 from test_page import _close_what_a_test_opened, browser, data  # noqa: F401 (fixtures)
 from test_page import server as places_server  # noqa: F401 (a fixture)
 from test_page_bases import _few_hikes, exports, server  # noqa: F401 (fixtures)
-from test_page_bases import SETTLE_MS, choose_base, keswick_in_60
+from test_page_bases import SETTLE_MS, choose_base, edited, keswick_in_60, open_bases
 from test_web_bases import KESWICK
 
 
@@ -314,4 +314,25 @@ def test_the_base_score_help_opens_short(browser, server) -> None:
     box.wait_for()
     assert box.locator("details").count() >= 1
     assert box.evaluate("node => node.scrollHeight") <= 900
+
+
+# C15 (ADR-0088): a row named after its area's biggest town says whose figures it shows.
+
+
+def test_a_row_named_after_a_bigger_town_says_whose_figures_it_shows(browser, server) -> None:
+    page = open_bases(browser, server)
+    scored = []
+
+    def named(body: dict) -> None:
+        body["results"][0]["named"] = {"id": 9, "name": "Dumfries"}
+        scored.append(body["results"][0])
+
+    page.route("**/api/bases/rank", edited(named))
+    keswick_in_60(page)
+
+    row = page.locator("#base-results tbody tr").first
+    first = scored[-1]
+    assert row.locator(".base-name").inner_text() == "Dumfries"
+    assert row.locator(".place").inner_text().startswith(f"figures for {first['name']} · ")
+    assert row.locator(".figure-line").inner_text().startswith(f"{first['hike_groups']} hikes counted")
 

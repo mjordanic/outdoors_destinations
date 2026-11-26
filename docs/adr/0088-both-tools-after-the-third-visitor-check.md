@@ -34,10 +34,13 @@ with Bases, open each tool as it was left. Back to the landing no longer empties
 liked hike and "Find hikes" for one described.
 
 **A row of Find a base is named after the biggest town of its area.** The area is still formed around its
-best town (ADR-0086), and the row still has the score, and the place in the list, of the biggest town about
-as alike as that best one; only its name is that of the biggest town or village of the area (100 people or
-more), with the others under it ("and 2 nearby towns …") and the best town beside it, as before. Before, a
-bigger town scoring more than `NAME_WITHIN` under the best was listed under a smaller one's name.
+best town (ADR-0086), and every figure of the row (its score and how it is made, its hikes counted, its
+country, people, places to stay and eat, its months, the page it opens) is still that of the biggest town
+about as alike as that best one, the town it is scored as. Only its name is that of the biggest town or
+village of the area (100 people or more), with the others under it ("and 2 nearby towns …") and the best
+town beside it, as before; when that is not the town it is scored as, its place line starts "figures for …"
+that town, so a row never mixes two towns unsaid. Before, a bigger town scoring more than `NAME_WITHIN`
+under the best was listed under a smaller one's name.
 
 **Find a base:** Find bases is greyed out while the town box holds a name that is not the town chosen (choose
 from the list, or Enter looks it up); each row says its hikes beside the visitor's ("12 hikes counted (yours:

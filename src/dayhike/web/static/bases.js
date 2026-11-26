@@ -1068,7 +1068,7 @@ function baseRow(row, number, seed, traits) {
   const counts = (traits.stays || traits.eats) && townCounts(row);
   return `<tr>
     <td><span class="number">${number}</span></td>
-    <td class="name"><button type="button" class="base-name" data-base="${row.id}">${escapeHtml(row.name)}</button> <span class="hint place">${escapeHtml([placeLine(row), row.population == null && "population not known"].filter(Boolean).join(" · "))}</span> ${area}
+    <td class="name"><button type="button" class="base-name" data-base="${row.id}">${escapeHtml(row.named?.name ?? row.name)}</button> <span class="hint place">${escapeHtml([row.named && `figures for ${row.name}`, placeLine(row), row.population == null && "population not known"].filter(Boolean).join(" · "))}</span> ${area}
       <span class="figure-line">${row.hike_groups} hikes counted (yours: ${seed.hike_groups})${counts ? ` · ${escapeHtml(counts)}` : ""}</span></td>
     <td class="score">${row.score.toFixed(2)} ${helpButton("base")}<span class="why">${escapeHtml(why.join("; ") + total)}</span></td>
     <td>${monthsStrip(row.months)}</td>

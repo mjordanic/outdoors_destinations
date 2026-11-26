@@ -2193,21 +2193,21 @@ class ServingData:
         if len(needle) <= PLACE_TYPO_START:
             return [], False
         alike: dict[int, tuple[float, int]] = {}
+        start = (needle[:PLACE_TYPO_START], needle[:PLACE_TYPO_START] + "\U0010ffff")
         with scoped(sqlite3.connect(self.places, uri=True)) as db:
             for name, place, population in db.execute(
                 "SELECT n.name, p.id, p.population FROM place_names n JOIN places p ON p.id = n.place "
-                "WHERE n.name >= ? AND n.name < ? LIMIT ?",
-                (needle[:PLACE_TYPO_START], needle[:PLACE_TYPO_START] + "\U0010ffff", PLACE_SCAN),
+                f"WHERE n.name >= ? AND n.name < ?{' AND p.country = ?' if country else ''} LIMIT ?",
+                (*start, *([country] if country else []), PLACE_SCAN),
             ):
                 ratio = difflib.SequenceMatcher(None, needle, name).ratio()
                 if ratio >= PLACE_TYPO_RATIO and ratio > alike.get(place, (0.0, 0))[0]:
                     alike[place] = (ratio, population or 0)
-            best = sorted(alike, key=lambda place: (-alike[place][0], -alike[place][1], place))
+            best = sorted(alike, key=lambda place: (-alike[place][0], -alike[place][1], place))[:limit]
             rows = {row[0]: row[1:] for row in db.execute(
                 f"SELECT id, name, country, lat, lon, population FROM places WHERE id IN ({','.join('?' * len(best))})", best
             )} if best else {}
         found = [dict(zip(("name", "country", "lat", "lon", "population"), rows[place])) for place in best]
-        found = [place for place in found if not country or place["country"] == country][:limit]
         return found, bool(found)
 
     def find_landmarks(self, query: str, limit: int = 5) -> list[dict]:

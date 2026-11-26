@@ -403,10 +403,11 @@ class BaseMatch:
     ``hike_score`` is ``(mix, coverage, back)`` weighed 40, 30, 30, run from the Reach's
     ``SCORE_FLOOR`` (0) up to 1, times ``enough`` and ``sure``; ``score`` the hike score after
     the "like mine" TownTraits, each taking its share in ``cuts`` (trait name, share) off, all
-    those of the area's biggest Base about as alike as its best; ``hike_groups`` the HikeGroups
-    of ``base`` that pass; ``members`` the Bases of its area, best
-    first, ``base`` the one it is named after, and ``towns`` the others, its ``best`` first
-    (with ``best_score``) when that is not ``base``, then biggest first. Bases are rows of the
+    those of ``base``, the area's biggest Base about as alike as its best; ``hike_groups`` the
+    HikeGroups of ``base`` that pass; ``members`` the Bases of its area, best
+    first, ``named`` the bigger one the row is named after when that is not ``base`` (else -1),
+    and ``towns`` the others than the one it is named after, its ``best`` first (with
+    ``best_score``) when that is not ``base``, then biggest first. Bases are rows of the
     ``bases/`` folder.
     """
 
@@ -427,6 +428,7 @@ class BaseMatch:
     towns: tuple[int, ...] = ()
     best: int = -1  # the area's best town, which the area is formed around, and its score
     best_score: float = 0.0
+    named: int = -1  # the area's biggest town, which the row is named after, when that is not ``base``
 
 
 @dataclass(frozen=True)
@@ -557,7 +559,7 @@ def rank_bases(
         if size[candidates[named]] < NAME_PEOPLE[1]:
             named = i
         area = sorted(area, key=lambda j: (-score[j], candidates[j]))
-        base = int(candidates[named])
+        base = int(candidates[i])
         found.append(
             BaseMatch(
                 base=base, place_id=int(bases.place_ids[base]), score=float(score[i]),
@@ -568,6 +570,7 @@ def rank_bases(
                 cuts=tuple((name, float(cut[i])) for name, cut in cuts), sure=sure,
                 towns=tuple(int(candidates[j]) for j in sorted(area, key=lambda j: (j == lead, *bigger(j)), reverse=True) if j != named),
                 best=int(candidates[lead]), best_score=float(score[lead]),
+                named=-1 if named == i else int(candidates[named]),
             )  # fmt: skip
         )
     found.sort(key=lambda row: (-row.score, row.base))
