@@ -2592,7 +2592,7 @@ const pick = {
         // Its click shows the result, and stays off the map: no hike under it is chosen as well.
         L.polyline(decodePolyline(version.line), { ...(k ? VERSION_LINE : version.route ? LOOP_LINE : RESULT_LINE), bubblingMouseEvents: false })
           .bindTooltip(`<strong>Similar hike #${i + 1}${kind}${label}</strong><br>${escapeHtml(version.name)}<br>${fmt.km(version.length_m)}`, { sticky: true })
-          .on("click", () => showResult(i, k))
+          .on("click", () => showResult(i, k, true))
           .addTo(this.loops);
       });
     });

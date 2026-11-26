@@ -775,6 +775,9 @@ const bases = {
           await this.running.catch(() => {});
           if (!current()) return;
         }
+        body = !fresh && this.answers.get(key);
+      }
+      if (!body) {
         const sent = postRank(request, current, "/api/bases/rank", (text) => { status.textContent = text; });
         this.running = sent;
         try {
